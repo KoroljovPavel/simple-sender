@@ -194,6 +194,19 @@ Agent reports on completed tasks. Each entry is written by the agent that execut
 
 ---
 
+## Task 11: Pre-deploy QA
+
+**Status:** Done
+**Verdict:** PASS
+**Agent:** main agent
+**Report:** [logs/working/task-11/qa-report.md](logs/working/task-11/qa-report.md)
+
+**Summary:** 21/21 automated criteria verified. Gradle build: BUILD SUCCESSFUL, all 3 tests green. Runtime: `GET /health` → 200 + `{"status":"ok"}` + `Content-Type: application/json`; `GET /api/nonexistent` → 401. Static: SecurityConfig annotations and rule ordering correct, devtools as developmentOnly, .gitignore covers all patterns, .env.example clean, hooks executable. Docker ports 27017/6379 accessible (existing containers on localhost — same edge case as Task 4). User confirmed frontend (http://localhost:3000 Hello World loads).
+
+**Deferred to user:** Frontend browser check ✅ (user confirmed), gitleaks blocking test (gitleaks not installed locally — soft-failure documented behavior).
+
+---
+
 ## Task 7: Developer documentation
 
 **Status:** Done

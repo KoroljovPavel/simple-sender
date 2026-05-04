@@ -1,3 +1,9 @@
+# LOCAL DEVELOPMENT ONLY — do not deploy to any server or cloud environment.
+# Both services run without authentication; 127.0.0.1 binding is the
+# security compensating control (Decision 9).
+
+name: simple-sender-infra
+
 services:
   mongodb:
     image: mongo:8.0
@@ -5,6 +11,17 @@ services:
       - "127.0.0.1:27017:27017"
     volumes:
       - mongodb_data:/data/db
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
 
   redis:
     image: redis:7.4
@@ -12,6 +29,16 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 128m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   mongodb_data:

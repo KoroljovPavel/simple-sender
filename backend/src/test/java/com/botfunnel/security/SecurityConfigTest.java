@@ -1,4 +1,4 @@
-package com.botfunnel;
+package com.botfunnel.security;
 
 import com.mongodb.reactivestreams.client.MongoClient;
 import org.jobrunr.storage.StorageProvider;
@@ -7,19 +7,17 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
 import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-class HealthEndpointTest {
+class SecurityConfigTest {
 
     @Autowired
     WebTestClient webTestClient;
 
-    // Decision 6: mocked to prevent auto-config from requiring live DB connections in tests
     @MockitoBean
     MongoClient mongoClient;
 
@@ -33,12 +31,9 @@ class HealthEndpointTest {
     StorageProvider storageProvider;
 
     @Test
-    void healthEndpointReturns200WithOkBody() {
-        webTestClient.get().uri("/health")
+    void unauthenticated_protectedEndpoint_returns401() {
+        webTestClient.get().uri("/api/profile")
                 .exchange()
-                .expectStatus().isOk()
-                .expectHeader().contentType(MediaType.APPLICATION_JSON)
-                .expectBody()
-                .jsonPath("$.status").isEqualTo("ok");
+                .expectStatus().isUnauthorized();
     }
 }

@@ -61,7 +61,7 @@ REDIS_URL=redis://localhost:6379
 docker compose -f infra/docker-compose.yml up -d
 ```
 
-Starts MongoDB 8.0 on `:27017` and Redis 7.4 on `:6379`, both bound to `127.0.0.1` only. Both services have healthchecks configured — wait ~20 seconds after startup before connecting.
+Starts MongoDB 8.0 on `:27017` and Redis 7.4 on `:6379`, both bound to `127.0.0.1` only. Both services have healthchecks — MongoDB takes up to ~20 seconds to report healthy (configured `start_period`); Redis is typically ready within a few seconds.
 
 ### Step 4 — Start the backend
 
@@ -117,7 +117,7 @@ Change the host port in `infra/docker-compose.yml` (left side of the mapping):
 - "127.0.0.1:27018:27017"
 ```
 
-Update `REDIS_URL` and `MONGODB_URI` in `.env` to match the new port.
+Update `MONGODB_URI` in `.env` to match the new port.
 
 ### Redis — port 6379
 

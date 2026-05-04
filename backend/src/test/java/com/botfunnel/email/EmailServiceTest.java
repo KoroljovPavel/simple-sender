@@ -17,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 @ExtendWith(MockitoExtension.class)
@@ -37,7 +38,7 @@ class EmailServiceTest {
     }
 
     @Test
-    void sendVerificationEmail_callsJavaMailSenderWithCorrectRecipient() throws Exception {
+    void sendVerificationEmail_callsJavaMailSenderWithCorrectRecipientAndFrom() throws Exception {
         MimeMessage mimeMessage = newMimeMessage();
         when(javaMailSender.createMimeMessage()).thenReturn(mimeMessage);
 
@@ -49,14 +50,21 @@ class EmailServiceTest {
 
         assertThat(mimeMessage.getAllRecipients()).hasSize(1);
         assertThat(mimeMessage.getAllRecipients()[0].toString()).isEqualTo("user@example.com");
+        assertThat(mimeMessage.getFrom()[0].toString()).isEqualTo("noreply@test.com");
     }
 
     @Test
     void sendVerificationEmail_htmlEscapesNameWithSpecialChars() {
-        // htmlEscape is package-private — verified directly since sendVerificationEmail delegates to it
-        String escaped = EmailService.htmlEscape("<script>alert('xss')</script>");
-        assertThat(escaped).contains("&lt;script&gt;");
-        assertThat(escaped).doesNotContain("<script>");
+        // buildVerificationBody is what sendVerificationEmail delegates to — verifies htmlEscape is wired
+        String body = emailService.buildVerificationBody("<script>alert('xss')</script>", "token123");
+        assertThat(body).contains("&lt;script&gt;");
+        assertThat(body).doesNotContain("<script>");
+    }
+
+    @Test
+    void sendVerificationEmail_bodyContainsVerificationUrl() {
+        String body = emailService.buildVerificationBody("Alice", "mytoken");
+        assertThat(body).contains("http://localhost:3000/auth/verify-email?token=mytoken");
     }
 
     @Test
@@ -70,24 +78,46 @@ class EmailServiceTest {
     }
 
     @Test
-    void sendPasswordResetEmail_callsJavaMailSender() {
-        when(javaMailSender.createMimeMessage()).thenReturn(newMimeMessage());
+    void sendPasswordResetEmail_callsJavaMailSenderWithCorrectResetUrl() throws Exception {
+        MimeMessage mimeMessage = newMimeMessage();
+        when(javaMailSender.createMimeMessage()).thenReturn(mimeMessage);
 
         emailService.sendPasswordResetEmail("user@example.com", "Alice", "resettoken");
 
         await().atMost(2, SECONDS).untilAsserted(() ->
             verify(javaMailSender).send(any(MimeMessage.class))
         );
+
+        assertThat(mimeMessage.getAllRecipients()[0].toString()).isEqualTo("user@example.com");
+        assertThat(mimeMessage.getSubject()).isEqualTo("Скидання пароля");
+        assertThat(emailService.buildPasswordResetBody("Alice", "resettoken"))
+                .contains("http://localhost:3000/auth/reset-password?token=resettoken");
     }
 
     @Test
-    void sendAccountBlockedEmail_callsJavaMailSender() {
-        when(javaMailSender.createMimeMessage()).thenReturn(newMimeMessage());
+    void sendAccountBlockedEmail_callsJavaMailSenderWithSupportEmail() throws Exception {
+        MimeMessage mimeMessage = newMimeMessage();
+        when(javaMailSender.createMimeMessage()).thenReturn(mimeMessage);
 
         emailService.sendAccountBlockedEmail("user@example.com", "Alice", "support@test.com");
 
         await().atMost(2, SECONDS).untilAsserted(() ->
             verify(javaMailSender).send(any(MimeMessage.class))
         );
+
+        assertThat(mimeMessage.getAllRecipients()[0].toString()).isEqualTo("user@example.com");
+        assertThat(mimeMessage.getSubject()).isEqualTo("Ваш акаунт заблоковано");
+        assertThat(emailService.buildAccountBlockedBody("Alice", "support@test.com"))
+                .contains("support@test.com");
+    }
+
+    @Test
+    void sendVerificationEmail_templateNotFound_noEmailSent() {
+        EmailService spyService = spy(emailService);
+        doReturn("").when(spyService).loadTemplate(anyString());
+
+        spyService.sendVerificationEmail("user@example.com", "Alice", "token123");
+
+        verify(javaMailSender, never()).createMimeMessage();
     }
 }

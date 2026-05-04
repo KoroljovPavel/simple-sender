@@ -32,27 +32,47 @@ public class EmailService {
     }
 
     public void sendVerificationEmail(String to, String name, String token) {
-        String body = buildBody("/templates/email/verify-email.html", name)
-                .replace("{TOKEN}", token)
-                .replace("{APP_URL}", appUrl);
+        String body = buildVerificationBody(name, token);
+        if (body.isEmpty()) return;
         sendAsync(to, "Підтвердіть email", body);
     }
 
     public void sendPasswordResetEmail(String to, String name, String token) {
-        String body = buildBody("/templates/email/reset-password.html", name)
-                .replace("{TOKEN}", token)
-                .replace("{APP_URL}", appUrl);
+        String body = buildPasswordResetBody(name, token);
+        if (body.isEmpty()) return;
         sendAsync(to, "Скидання пароля", body);
     }
 
     public void sendAccountBlockedEmail(String to, String name, String supportEmail) {
-        String body = buildBody("/templates/email/account-blocked.html", name)
-                .replace("{SUPPORT_EMAIL}", supportEmail);
+        String body = buildAccountBlockedBody(name, supportEmail);
+        if (body.isEmpty()) return;
         sendAsync(to, "Ваш акаунт заблоковано", body);
     }
 
-    private String buildBody(String templatePath, String name) {
-        return loadTemplate(templatePath).replace("{NAME}", htmlEscape(name));
+    String buildVerificationBody(String name, String token) {
+        String template = loadTemplate("/templates/email/verify-email.html");
+        if (template.isEmpty()) return "";
+        return template
+                .replace("{NAME}", htmlEscape(name))
+                .replace("{TOKEN}", htmlEscape(token))
+                .replace("{APP_URL}", appUrl);
+    }
+
+    String buildPasswordResetBody(String name, String token) {
+        String template = loadTemplate("/templates/email/reset-password.html");
+        if (template.isEmpty()) return "";
+        return template
+                .replace("{NAME}", htmlEscape(name))
+                .replace("{TOKEN}", htmlEscape(token))
+                .replace("{APP_URL}", appUrl);
+    }
+
+    String buildAccountBlockedBody(String name, String supportEmail) {
+        String template = loadTemplate("/templates/email/account-blocked.html");
+        if (template.isEmpty()) return "";
+        return template
+                .replace("{NAME}", htmlEscape(name))
+                .replace("{SUPPORT_EMAIL}", htmlEscape(supportEmail));
     }
 
     private void sendAsync(String to, String subject, String htmlBody) {
@@ -67,10 +87,10 @@ public class EmailService {
             return null;
         })
         .subscribeOn(Schedulers.boundedElastic())
-        .subscribe(null, err -> log.error("Email send failed to {}: {}", to, err.getMessage()));
+        .subscribe(null, err -> log.error("Email send failed: {}", err.getMessage()));
     }
 
-    private String loadTemplate(String path) {
+    String loadTemplate(String path) {
         try (InputStream is = getClass().getResourceAsStream(path)) {
             if (is == null) {
                 log.error("Email template not found: {}", path);
@@ -88,6 +108,7 @@ public class EmailService {
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;")
-                .replace("\"", "&quot;");
+                .replace("\"", "&quot;")
+                .replace("'", "&#39;");
     }
 }

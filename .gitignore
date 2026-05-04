@@ -2,6 +2,7 @@
 CLAUDE.md
 project.md
 workflow/
+work/
 # Security & credentials
 ide/
 statsig/
@@ -38,3 +39,28 @@ tmp/
 # Local settings
 settings.json
 settings.local.json
+
+# ─── Project: Java/Gradle ─────────────────────────────────────────────────────
+backend/build/
+backend/.gradle/
+*.class
+*.jar
+!backend/gradle/wrapper/gradle-wrapper.jar
+*.war
+
+# ─── Project: Node/Nuxt ───────────────────────────────────────────────────────
+frontend/node_modules/
+frontend/.nuxt/
+frontend/.output/
+frontend/dist/
+
+# ─── Project: Secrets & credentials ──────────────────────────────────────────
+.env
+*.key
+secrets/
+*.pem
+*.p12
+*.jks
+
+# ─── IDE ──────────────────────────────────────────────────────────────────────
+.idea/

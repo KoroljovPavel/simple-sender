@@ -1,0 +1,123 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 1,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context file for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context file for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context file for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 4,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context file for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context file for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 1,
+      "section": "Reviewers",
+      "issue": "Reviewer log paths use absolute filesystem paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/...`) instead of project-relative paths. All other tasks (2–5) correctly use relative paths (`work/01-foundation-infrastructure/logs/working/task-N/...`).",
+      "fix": "Change reviewer paths to `work/01-foundation-infrastructure/logs/working/task-1/code-reviewer-1.json` (and same for security-auditor and infrastructure-reviewer)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 1,
+      "section": "Context Files",
+      "issue": "testing.md and patterns.md are absent from Context Files. These are not mandatory for non-code tasks, but patterns.md is relevant to Task 1 because the gitignore patterns and project conventions are described there.",
+      "fix": "Consider adding `- [patterns.md](../../../.claude/skills/project-knowledge/references/patterns.md)` if patterns.md contains gitignore or project conventions relevant to this task."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "Details",
+      "issue": "Details section contains complete Java class source code (full BotFunnelApplication.java and SecurityConfig.java implementations as code blocks). The template specifies 'Implementation hints: hints, not pseudocode'. Full copy-paste implementations are beyond hints and cross into HOW territory — they belong in the task description only when the implementation is non-obvious and cannot be derived from the spec.",
+      "fix": "Trim the Java code blocks in Details to key structural hints only (e.g., annotation requirements, method signatures). Preserve the critical Decision 5 warning about annotation and rule ordering — that is genuinely non-obvious. Remove the verbatim class bodies."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "Context Files section uses non-standard sub-headers ('Feature:', 'Project knowledge:', 'Code files to create:', 'Code files to read:') that do not appear in the task template. This makes the section harder to parse by automated tooling and reviewer agents.",
+      "fix": "Flatten the Context Files section to a single flat list of markdown links without sub-headers, matching the template format."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Required Skills",
+      "issue": "The SKILL.md path uses an absolute filesystem path (`/Users/pavlokorolov/IdeaProjects/simple-sender/.claude/skills/infrastructure-setup/SKILL.md`) instead of the tilde shorthand (`~/.claude/skills/infrastructure-setup/SKILL.md`) or a relative path used by Tasks 1, 2, 4, and 5.",
+      "fix": "Change the SKILL.md link to use `~/.claude/skills/infrastructure-setup/SKILL.md` for consistency with other tasks."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "Project knowledge files (project.md, architecture.md) use absolute filesystem paths instead of the tilde shorthand or relative paths used by other tasks.",
+      "fix": "Change paths to use `~/.claude/skills/project-knowledge/references/project.md` and `~/.claude/skills/project-knowledge/references/architecture.md` for consistency."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Verification Steps",
+      "issue": "The Automated section and the Smoke section contain the exact same command (`cd backend && ./gradlew build`). This is redundant — both sections serve the same verification purpose for this task. The duplication may confuse the executing agent about whether it needs to run the build twice.",
+      "fix": "Keep the build command only in the Automated section (since it runs integration tests). Either remove the Smoke section or replace it with a lighter pre-build check (e.g., `./gradlew compileJava`) that does not require the full test suite."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "TDD Anchor",
+      "issue": "The TDD Anchor entry for SecurityBlockTest uses the test method name `undefinedPathBlockedWithout401` which is slightly misleading — the '401' in the name conflates the expected status code with the name rather than describing the scenario. More critically, the description 'May already pass once SecurityConfig from Task 2 is in place' embeds conditional execution logic in the anchor description, which is out of place for a TDD anchor.",
+      "fix": "Rename the test to `undefinedPathRequiresAuthentication` or `blockedPathReturns401` for clarity. Move the conditional note about Task 2 to the Details or What to do section — the TDD Anchor should only contain: path, test name, and what behavior it verifies."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 5,
+      "section": "Frontmatter",
+      "issue": "Task 5 declares `depends_on: [1, 2]` but does NOT declare a dependency on Task 4 (Docker Compose). At runtime, `./gradlew build` triggers integration tests that start a Spring context. With `@MockBean` the tests do not require Docker, so this is technically correct per Decision 6. However, the omission is non-obvious and could confuse future maintainers who might expect Task 5 to depend on the infrastructure task.",
+      "fix": "Add a comment in the Details section explicitly noting that Task 4 is NOT a dependency because `@MockBean` eliminates the need for live Docker containers during `./gradlew build`. (No change to depends_on needed — current value is intentionally correct.)"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 14
+  }
+}

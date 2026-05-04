@@ -1,0 +1,153 @@
+metadata:
+  feature_name: 01-foundation-infrastructure
+  work_type: feature
+  status: completed
+  started: "2026-05-03"
+  last_updated: "2026-05-03T12:00:00"
+  current_question_num: 0
+  feature_size: L
+  notes: |
+    Epic 01 — foundation and infrastructure setup. Java 21 + Spring WebFlux + MongoDB + Redis + Nuxt. workflow/* files are reference only.
+    DEFERRED: seed script (Super Admin + test project with bot stub) — to be done after auth + projects epics are implemented.
+    OUT OF SCOPE for this epic: CI/CD, production deploy, monitoring (deferred until hosting platform is chosen).
+    OUT OF SCOPE: email provider integration (removed entirely for now).
+
+phase1_feature_overview:
+  feature_name:
+    score: 100
+    value: "01-foundation-infrastructure — Epic 01, base infrastructure for Bot Funnel Service"
+    gaps: []
+    status: done
+  work_type:
+    score: 100
+    value: "feature — new project setup from scratch"
+    gaps: []
+    status: done
+  problem_statement:
+    score: 95
+    value: |
+      No backend or frontend services exist yet. Epic 01 creates the skeleton:
+      - backend/: Spring Boot 3.x + Spring WebFlux, Gradle, Java 21, GET /health endpoint
+      - frontend/: Nuxt (Vue 3 + TypeScript), pnpm, basic Hello World page
+      - infra/: docker-compose.yml with MongoDB + Redis only (app runs locally in IDE/terminal)
+      - docs/: local-setup.md
+      - .env.example, .nvmrc
+      OUT: CI/CD, production deploy, monitoring, email, seed script
+    gaps: []
+    status: done
+  success_criteria:
+    score: 85
+    value: |
+      - Backend (Spring WebFlux) starts in IntelliJ, GET /health returns 200
+      - Frontend (Nuxt) starts with `pnpm dev`, shows basic page
+      - MongoDB and Redis run via docker compose up
+      - Monorepo structure: backend/, frontend/, infra/, docs/
+      - .env.example with all required variables
+      - .nvmrc for Node.js version
+    gaps: []
+    status: done
+  target_users:
+    score: 90
+    value: "Development team — this epic has no direct end-user value, it enables all subsequent epics"
+    gaps: []
+    status: done
+  feature_size:
+    score: 90
+    value: "L — new architecture, multiple components, full-stack setup"
+    gaps: []
+    status: done
+  tech_decisions:
+    score: 95
+    value: |
+      Backend: Java 21, Spring Boot 4.0.6, Spring WebFlux, Gradle
+      Frontend: Nuxt (Vue 3 + TypeScript), pnpm, latest Node.js LTS
+      Infra (local): docker-compose.yml with MongoDB + Redis only (no app containers in Epic 01)
+      Package root: com.botfunnel
+      Backend modules created in Epic 01 (only what's needed):
+        - security: SecurityConfig.java — allows /health without auth, baseline Spring Security config
+        - common: shared config/utilities placeholder
+      Other modules (auth, project, bot, etc.) — created in their respective epics. Names TBD.
+      NO spring-boot-devtools (Spring Boot 4 / Spring Framework 7 compatibility issues)
+      Health endpoint: GET /health → {"status":"ok"}, no connectivity checks
+      .env.example: MINIMAL — MONGODB_URI + REDIS_URL only for Epic 01
+      Gitleaks pre-commit hook: included in Epic 01 (greenfield setup is the right moment)
+      Note: Spring Boot 4.0 = Spring Framework 7.x, some breaking changes from 3.x
+    gaps: []
+    status: done
+  testing_strategy:
+    score: 90
+    value: |
+      Skeleton epic — minimal testing needed.
+      Backend: one WebFlux integration test for GET /health → 200 {"status":"ok"}.
+      Frontend: no tests at skeleton stage.
+      Confirmed acceptable by user.
+    gaps: []
+    status: done
+
+phase2_user_experience:
+  user_flows:
+    score: 90
+    value: |
+      Developer flow (documented in docs/local-setup.md):
+      Prerequisites: Java 21, Node.js LTS, Docker, pnpm
+      1. Clone repo
+      2. Copy .env.example → .env (MONGODB_URI + REDIS_URL defaults work as-is)
+      3. docker compose up → MongoDB :27017 + Redis :6379
+      4. Run backend in IntelliJ or ./gradlew bootRun → :8080
+      5. pnpm install && pnpm dev → frontend :3000
+      6. Verify: GET http://localhost:8080/health → {"status":"ok"}
+      No end-user flows in this epic.
+    gaps: []
+    status: done
+  edge_cases:
+    score: 80
+    value: |
+      - Docker not installed → docs/local-setup.md links to docs.docker.com
+      - Port 27017 or 6379 already in use → docs show how to change port mapping in .env (MONGODB_PORT, REDIS_PORT vars or docker-compose.override.yml)
+      - Windows → warning in docs that Linux/Mac is recommended; WSL2 suggested
+    gaps: []
+    status: done
+  error_scenarios:
+    score: 90
+    value: |
+      Epic 01 is skeleton only — default Spring Boot behavior is sufficient.
+      If MongoDB/Redis not running: Spring Boot logs connection error and exits. No custom handling needed.
+      Documented in local-setup.md: run docker compose up before starting the backend.
+    gaps: []
+    status: done
+
+phase3_integration:
+  external_dependencies:
+    score: 85
+    value: |
+      Required for local dev: MongoDB (27017) + Redis (6379) via Docker Compose.
+      Email provider: OUT OF SCOPE for Epic 01.
+      Telegram Bot API: OUT OF SCOPE for Epic 01.
+      All required vars for Epic 01: MONGODB_URI + REDIS_URL only.
+    gaps: []
+    status: done
+  deploy_approach:
+    score: 90
+    value: |
+      Epic 01 = local development only.
+      docker compose up starts MongoDB + Redis only (no app containers in Epic 01).
+      Backend runs in IntelliJ/terminal on :8080.
+      Frontend runs via `pnpm dev` on :3000.
+      CI/CD, production deploy, monitoring — OUT OF SCOPE for Epic 01.
+    gaps: []
+    status: done
+  manual_user_actions:
+    score: 90
+    value: |
+      Steps before first run:
+      1. Clone repo
+      2. Install pre-commit hook: gitleaks (script or manual setup)
+      3. Copy .env.example → .env (MONGODB_URI + REDIS_URL defaults work as-is)
+      4. docker compose up → MongoDB :27017 + Redis :6379
+      5. Run backend in IntelliJ or ./gradlew bootRun → :8080
+      6. pnpm install && pnpm dev → frontend :3000
+      No external service registration needed for Epic 01.
+    gaps: []
+    status: done
+
+conversation_history: []

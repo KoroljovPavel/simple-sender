@@ -144,6 +144,56 @@ Agent reports on completed tasks. Each entry is written by the agent that execut
 
 ---
 
+## Task 10: Test Audit
+
+**Status:** Done
+**Verdict:** PASS
+**Agent:** AI agent (test-master)
+**Finding counts:** 0 CRITICAL, 0 WARNING, 1 SUGGESTION
+**Report:** [logs/working/task-10/test-audit-report.md](logs/working/task-10/test-audit-report.md)
+
+**Summary:** All three integration tests pass (HealthEndpointTest, HealthSecurityTest, SecurityBlockTest). Assertions are meaningful and regression-sensitive: HTTP status + JSON path body in health tests, HTTP 401 in block test. `@MockitoBean` is correct (`MongoClient` from `com.mongodb.reactivestreams.client`, `RedisConnectionFactory`, `ReactiveRedisConnectionFactory` — minimal and necessary for Spring Boot 3.5.x). patterns.md Decision 6 deviation documented and accepted. One suggestion: rename `healthPermittedWithoutAuth()` to better reflect the invalid-token approach (non-blocking).
+
+**No CRITICAL findings** — Task 11 (Pre-deploy QA) may proceed.
+
+---
+
+## Task 8: Code Audit
+
+**Status:** Done
+**Verdict:** PASS
+**Agent:** code-reviewing agent
+**Finding counts:** 0 CRITICAL, 2 WARNING, 4 INFO
+**Report:** [logs/working/task-8/code-audit-report.md](logs/working/task-8/code-audit-report.md)
+
+**Summary:** Full holistic audit of all 20 source files across backend, frontend, infrastructure, scripts, and documentation. Zero critical blockers found. SecurityConfig rule ordering correct (`pathMatchers("/health").permitAll()` before `anyExchange().authenticated()`), both `@Configuration` and `@EnableWebFluxSecurity` present, CSRF disabled, Docker port bindings on `127.0.0.1`, named volumes present, `.gitignore` covers all required patterns, `@MockitoBean` deviations correctly applied and commented, test assertions are meaningful.
+
+**Warnings (non-blocking, address before first epic with live DB):**
+1. `application.properties` does not bind `MONGODB_URI`/`REDIS_URL` env vars to Spring Boot properties — future repository epics will silently use defaults instead of Docker URIs.
+2. `docs/local-setup.md` Step 6 (frontend) omits `nvm use` before `pnpm install`, risking wrong Node version being active.
+
+**No CRITICAL findings** — no fixer agents needed for this audit wave.
+
+---
+
+## Task 9: Security Audit
+
+**Status:** Done
+**Verdict:** PASS
+**Agent:** security-auditor agent
+**Finding counts:** 0 CRITICAL, 0 HIGH, 0 MEDIUM, 2 INFO
+**Report:** [logs/working/task-9/security-audit-report.md](logs/working/task-9/security-audit-report.md)
+
+**Summary:** Full OWASP Top 10 audit of all security-relevant artifacts. SecurityConfig: `@Configuration` + `@EnableWebFluxSecurity` present, `pathMatchers("/health").permitAll()` before `anyExchange().authenticated()`, CSRF explicitly disabled, no unintended open paths. `.gitignore` covers all required secret/artifact patterns. `.env.example` has zero real credentials (only localhost URIs). `install-hooks.sh` has no command injection — variables double-quoted, heredoc single-quoted. `docker-compose.yml` binds both ports to `127.0.0.1`. `docs/local-setup.md` has no real credentials, gitleaks soft-failure behavior documented.
+
+**INFO findings (non-actionable for Epic 01):**
+1. CSRF disable comment could note that bearer-token auth is inherently CSRF-immune — relevant when auth epic arrives.
+2. `*.lock` gitignore pattern — if Gradle dependency locking is introduced, a negation for lock files will be needed.
+
+**Accepted risks confirmed:** gitleaks soft-failure (documented in docs), no MongoDB/Redis auth (mitigated by 127.0.0.1 binding).
+
+---
+
 ## Task 7: Developer documentation
 
 **Status:** Done

@@ -1,0 +1,44 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "tasks",
+      "issue": "Task 1 Reviewers includes `infrastructure-reviewer`, which is not in the Reviewer Agents table in skills-and-reviewers.md.",
+      "fix": "Verify that `~/.claude/agents/infrastructure-reviewer.md` exists. If it does, no action needed — the catalog table may be incomplete. If it does not, replace with a catalog-listed reviewer."
+    }
+  ],
+  "checked_items": [
+    {
+      "item": "1 — patterns.md conflict documented in Decision 6",
+      "result": "fixed",
+      "detail": "Decision 6 contains an explicit 'Note — patterns.md conflict:' block naming the rule, explaining the deviation, and scoping it to Epic 01 only."
+    },
+    {
+      "item": "2 — Task 2 HOW-level details (specific annotations, class names, commands)",
+      "result": "fixed",
+      "detail": "Task 2 description is 3 scope-level sentences. Specific annotations and commands removed. Cross-reference to Decision 5 used for rule-ordering constraint."
+    },
+    {
+      "item": "3 — Task 5 duplicates Decision 6 rationale",
+      "result": "fixed",
+      "detail": "Task 5 description contains only 'See Decision 6 for the @MockBean strategy...' — a pointer, not a repeated rationale. No duplication."
+    },
+    {
+      "item": "4 — Task 6 HOW-level detail (specific flags, etc.)",
+      "result": "fixed",
+      "detail": "Task 6 description is 4 scope-level sentences with no shell flags or implementation commands. Soft-failure behavior referenced via Risk table cross-reference."
+    },
+    {
+      "item": "5 — Decision 3 has [TECHNICAL] marker or user-spec reference",
+      "result": "fixed",
+      "detail": "Decision 3 title contains '[TECHNICAL]' and References field reads '[TECHNICAL] — developer ergonomics improvement; approved by user during tech-spec planning.'"
+    },
+    {
+      "item": "6 — Task 1 has Verify-smoke",
+      "result": "fixed",
+      "detail": "Task 1 Verify-smoke: 'ls backend/ frontend/ infra/ docs/ scripts/ .env.example .nvmrc → all paths exist' — concrete executable command present."
+    }
+  ],
+  "summary": "All 6 previously flagged items are resolved. One minor finding remains: `infrastructure-reviewer` appears in task Reviewers fields but is not listed in the skills-and-reviewers.md Reviewer Agents table — verify the agent file exists at ~/.claude/agents/infrastructure-reviewer.md. No critical findings. Status: approved."
+}

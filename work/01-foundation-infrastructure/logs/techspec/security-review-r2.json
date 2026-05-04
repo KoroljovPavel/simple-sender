@@ -1,0 +1,53 @@
+{
+  "status": "approved",
+  "round": 2,
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "validationResults": [
+    {
+      "id": "R1-CRITICAL-1",
+      "originalSeverity": "critical",
+      "title": "CSRF explicit disable not documented in SecurityWebFilterChain",
+      "status": "fixed",
+      "location": "tech-spec.md — Decision 5, line 82-85",
+      "evidence": "Decision 5 now states: 'CSRF is explicitly disabled (stateless REST API). Spring Security 6 WebFlux enables CSRF protection by default — for a stateless REST API this must be disabled explicitly, otherwise all non-GET requests return 403.'"
+    },
+    {
+      "id": "R1-MAJOR-1",
+      "originalSeverity": "major",
+      "title": "Docker ports exposed on 0.0.0.0 instead of 127.0.0.1",
+      "status": "fixed",
+      "location": "tech-spec.md — Decision 9, line 105-107",
+      "evidence": "Decision 9 now states: 'ports bound to 127.0.0.1 (e.g. 127.0.0.1:27017:27017)' with explicit rationale about preventing unauthenticated MongoDB/Redis from being accessible to other machines on the local network."
+    },
+    {
+      "id": "R1-MAJOR-2",
+      "originalSeverity": "major",
+      "title": "Gitleaks soft-failure not acknowledged as accepted risk",
+      "status": "fixed",
+      "location": "tech-spec.md — Risks table, line 176",
+      "evidence": "Risk row now reads: 'Hook exits 0 with a warning (soft failure) — chosen to not block git commit for new devs who haven't installed it yet. Accepted risk: no CI-side compensating scan in Epic 01 (deferred). docs/local-setup.md provides install instructions.'"
+    },
+    {
+      "id": "R1-MAJOR-3",
+      "originalSeverity": "major",
+      "title": "Security rule ordering (permitAll before anyExchange) not documented",
+      "status": "fixed",
+      "location": "tech-spec.md — Decision 5, line 83",
+      "evidence": "Decision 5 now states: 'Rule ordering is first-match: pathMatchers(\"/health\").permitAll() must appear before anyExchange().authenticated() — swapping them causes all requests including /health to require auth.'"
+    },
+    {
+      "id": "R1-MINOR-1",
+      "originalSeverity": "minor",
+      "title": "*.pem, *.p12, *.jks patterns missing from .gitignore AC",
+      "status": "fixed",
+      "location": "tech-spec.md — Acceptance Criteria, line 200",
+      "evidence": "AC item now explicitly lists: '*.pem, *.p12, *.jks' as required .gitignore entries alongside .env, *.key, secrets/."
+    }
+  ],
+  "findings": []
+}

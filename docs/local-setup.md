@@ -87,6 +87,7 @@ HTTP 200 with this body confirms the backend is running correctly.
 ### Step 6 — Start the frontend
 
 ```bash
+nvm use
 cd frontend && pnpm install && pnpm dev
 ```
 

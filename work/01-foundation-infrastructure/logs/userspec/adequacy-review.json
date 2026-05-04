@@ -1,0 +1,35 @@
+{
+  "status": "changes_required",
+  "findings": [
+    {
+      "category": "underengineering",
+      "severity": "critical",
+      "issue": "Edge cases still not enumerated. Risks section was expanded (port 27017/6379, Windows, gitleaks-not-installed, JobRunr compat), but the foundation epic — sized L — still omits: (1) prerequisite version mismatches (Java 21 not installed / wrong major, Node LTS mismatch, pnpm missing, Docker daemon not running), (2) network/proxy failures during `./gradlew build` (wrapper download), `pnpm install`, or `docker pull`, (3) port conflicts for 8080 (backend) and 3000 (frontend) — only 27017/6379 are addressed, (4) developer running `./gradlew bootRun` before copying `.env` (silent NPE on missing `MONGODB_URI` vs explicit failure), (5) Windows CRLF line endings corrupting any shell snippets in `docs/local-setup.md` or pre-commit hook script.",
+      "why_matters": "Foundation epic defines onboarding for every future contributor. If the very first `git clone` → working backend path silently fails on routine conditions (no Java, corp proxy, port busy), every downstream epic eats time on skeleton debugging. The stated goal of the spec — '10 хвилин без допомоги' — cannot be met without explicit edge-case coverage.",
+      "fix": "Add an explicit Edge Cases section listing: prerequisite version checks documented in local-setup.md (Java 21 / Node LTS / pnpm / Docker), behavior under proxy/offline (wrapper + pnpm + docker), all four ports with port-conflict mitigation (8080, 3000, 27017, 6379), explicit guard or doc note about `.env` being required before `bootRun`, and a `.gitattributes` entry forcing LF for shell scripts."
+    },
+    {
+      "category": "overengineering",
+      "severity": "major",
+      "issue": "Implementation detail still present in user-spec that belongs in tech-spec: exact patch version `Spring Boot 4.0.6` (line 37), exact class name `SecurityConfig.java` (line 40), exact package names `com.botfunnel.security` / `com.botfunnel.common` (lines 40-41), exact JSON body shape `{\"status\":\"ok\"}` (lines 39, 49, 91), exact gradle command `./gradlew build` (lines 38, 90), exact ports 8080/3000/27017/6379 (multiple lines), exact response file `package-info.java` (line 41).",
+      "why_matters": "User-spec defines WHAT and WHY, not HOW. Pinning the patch version, file/class names, JSON shape, and exact commands removes flexibility from tech-spec and forces user-spec edits whenever an implementation detail tweaks (e.g., bumping to 4.0.7, changing response shape to include version field, renaming SecurityConfig). It also blurs the boundary between user-spec and tech-spec, undermining the methodology.",
+      "fix": "In user-spec keep only: 'health-check endpoint exists and returns 200 with a JSON body indicating service liveness', 'security configuration permits the health endpoint unauthenticated', 'package layout follows architecture.md feature-module convention', 'Spring Boot 4.0.x latest stable'. Move to tech-spec: exact patch version, class names, JSON shape, exact gradle commands, exact port numbers (architecture.md / deployment.md already own those)."
+    },
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "SecurityConfig still introduced in Epic 01 with the sole job of permit-all on `/health`. No rationale added in 'Технічні рішення' explaining why starter-security is needed before any authenticated endpoint exists (Epic 02). The 'тільки пакети security і common' decision (line 69) explains scope but not why security must exist now at all.",
+      "why_matters": "YAGNI: a Spring Boot app without starter-security has all endpoints public by default. Adding starter-security in Epic 01 just to immediately permit-all `/health` is configuration churn that Epic 02 (auth) will rewrite. If the intent is to lock CSRF-disabled WebFlux defaults early, that reason should be stated explicitly.",
+      "fix": "Either (a) defer `spring-boot-starter-security` and `SecurityConfig` to Epic 02 and remove the related ACs from Epic 01, or (b) add a one-line rationale in 'Технічні рішення' stating why starter-security must be present in Epic 01 (e.g., 'lock CSRF-off + reactive security defaults so Epic 02 only adds JWT filter on top, no foundational rework')."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "Acceptance criteria contain a duplicate line: line 33 and line 35 both state 'Монорепо структура: backend/, frontend/, infra/, docs/ в корені [репозиторію]'. Minor but indicates the AC list was edited without dedup.",
+      "why_matters": "Duplicate ACs inflate the apparent scope and cause confusion during pre-deploy QA (which one to verify, do they differ subtly).",
+      "fix": "Remove line 33 (the shorter duplicate) and keep line 35 with the fuller wording."
+    }
+  ],
+  "worst_category": "underengineering",
+  "summary": "Round 2 closed the JobRunr-compat, /health-stub-vs-production-contract, .gitignore, and Java-toolchain findings. Three round-1 issues remain: edge cases still not enumerated for a foundation epic (critical), implementation-level detail (patch version, class names, JSON shape, exact commands) still leaks into user-spec (major), and SecurityConfig premature-introduction lacks rationale (minor). One new minor: duplicate AC line."
+}

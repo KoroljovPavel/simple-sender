@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Symlink follow on hook write could overwrite unintended file",
+      "description": "The install script uses `cat > \"$HOOK_PATH\"` which follows symlinks. If `.git/hooks/pre-commit` is a symlink pointing to an arbitrary path, the script will overwrite the symlink target rather than the symlink itself. In a typical developer workflow this is harmless because the actor who can place the symlink already controls the `.git/` directory. However, in shared or containerised build environments where the `.git/` directory is mounted from an untrusted source (e.g. a CI workspace that checks out attacker-controlled code), this could be used to clobber an unrelated file.",
+      "location": "scripts/install-hooks.sh:7",
+      "impact": "File overwrite at an attacker-controlled path in environments where `.git/hooks/` is not fully trusted. Impact is bounded by the permissions of the process running the install script.",
+      "recommendation": "Add a symlink check before the write. Example:\n```sh\nif [ -L \"$HOOK_PATH\" ]; then\n  echo \"ERROR: $HOOK_PATH is a symlink. Aborting to prevent unintended file overwrite.\" >&2\n  exit 1\nfi\n```\nAlternatively, use `ln -sf` followed by a temp-file rename pattern (`cat > tmp && mv tmp dest`) to make the write atomic and symlink-safe.",
+      "cwe": "CWE-59"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "gitleaks binary not integrity-verified — PATH hijacking possible",
+      "description": "The installed hook locates gitleaks via `command -v gitleaks`, relying entirely on the developer's `$PATH` order. A malicious binary named `gitleaks` placed earlier in `$PATH` (e.g. in a compromised project-local `node_modules/.bin/` or a venv) would be executed instead of the real scanner, silently bypassing secret detection. This is an ambient environment trust issue rather than a flaw in the script itself, but it is worth documenting.",
+      "location": "scripts/install-hooks.sh:9 (hook body line 2)",
+      "impact": "Secret scanning silently bypassed if a malicious `gitleaks` shim is present on `$PATH` before the real binary. Secrets could be committed undetected.",
+      "recommendation": "Document in `docs/local-setup.md` (Task 7) that developers should verify the gitleaks installation source (e.g. `which gitleaks` and checksum against the GitHub release). For higher assurance, pin an absolute path to the gitleaks binary in the hook (e.g. `/usr/local/bin/gitleaks`) and document this expected location.",
+      "cwe": "CWE-426"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A09: Security Logging and Monitoring",
+      "title": "Hook scan results are not persisted to an audit log",
+      "description": "Gitleaks output goes only to stdout/stderr of the committing terminal. There is no persistent log of when scans ran, what was detected, or which commits were blocked. In a team environment this makes it impossible to audit whether all developers have the hook active and whether any scan findings were suppressed.",
+      "location": "scripts/install-hooks.sh:15 (hook body — gitleaks invocation)",
+      "impact": "No audit trail for security scanning activity. If a secret is later found in git history, there is no record of whether the hook was active or bypassed at commit time.",
+      "recommendation": "Consider appending gitleaks output to a local log file (ignored by git) and/or enforcing the hook via a server-side CI check (e.g. GitHub Actions gitleaks scan on push) as a compensating control. The CI gate is more reliable than a client-side hook because it cannot be bypassed with `git commit --no-verify`.",
+      "cwe": "CWE-778"
+    }
+  ]
+}

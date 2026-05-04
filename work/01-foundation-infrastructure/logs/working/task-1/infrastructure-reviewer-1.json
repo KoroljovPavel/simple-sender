@@ -1,0 +1,38 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 3,
+    "critical": 0,
+    "major": 1,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "gitignore",
+      "title": ".env.* variants not ignored — only bare .env is covered",
+      "description": "The .gitignore covers `.env` but does not cover `.env.*` variants such as `.env.local`, `.env.production`, `.env.staging`, or `.env.test`. Nuxt 4 reads `.env.local` by default and developers commonly create environment-specific overrides. The infrastructure-setup skill standard explicitly requires both `.env.*` and `!.env.example` to be present.",
+      "location": ".gitignore — Secrets & credentials section (line 58)",
+      "impact": "A developer creating `.env.local` or `.env.production` with real credentials will silently have those files staged and potentially committed. The gap is especially relevant for Nuxt which auto-loads `.env.local`.",
+      "recommendation": "Replace the bare `.env` entry with the three-line block:\n```\n.env\n.env.*\n!.env.example\n```\nThe `!.env.example` negation ensures the template file stays tracked even though `.env.*` would otherwise match it."
+    },
+    {
+      "severity": "minor",
+      "category": "gitignore",
+      "title": "credentials.json not ignored — only .credentials.json (dot-prefixed) variant covered",
+      "description": "The existing gitignore (pre-Task 1) contains `.credentials.json` (dot-prefixed, a Claude Code workspace artifact). The plain `credentials.json` pattern — which is the standard name for Google Cloud service account key files and other OAuth credential exports — is not covered. The infrastructure-setup skill standard lists `credentials.json` as a required security pattern.",
+      "location": ".gitignore line 10 (.credentials.json)",
+      "impact": "A developer who downloads a Google Cloud service account key as `credentials.json` will not have it blocked by git. The file could be staged and committed if the developer does not notice the omission.",
+      "recommendation": "Add `credentials.json` to the Secrets & credentials section of .gitignore:\n```\n# ─── Project: Secrets & credentials ──────────────────────────────────────────\n.env\n.env.*\n!.env.example\n*.key\nsecrets/\n*.pem\n*.p12\n*.jks\ncredentials.json\n```"
+    },
+    {
+      "severity": "minor",
+      "category": "gitignore",
+      "title": "*.jar pattern too broad — may ignore future non-wrapper JARs in non-backend locations",
+      "description": "The Java/Gradle section uses a root-level `*.jar` glob. The exception `!backend/gradle/wrapper/gradle-wrapper.jar` correctly re-includes the Gradle wrapper. However, if any JAR-based tools or libraries are ever placed outside `backend/` (e.g., `scripts/`, `infra/`), they would be silently ignored. The pattern is correct for the current monorepo shape but becomes surprising as the repo grows.",
+      "location": ".gitignore — Java/Gradle section (line 47)",
+      "impact": "Low risk in current state. Could cause confusion or silent omissions if developers add JARs in non-backend directories in future tasks.",
+      "recommendation": "Optionally scope the jar pattern to the backend directory: `backend/**/*.jar` with the same exception `!backend/gradle/wrapper/gradle-wrapper.jar`. This is a low-priority cleanup — the current pattern matches the task spec exactly and is not wrong for Epic 01 scope."
+    }
+  ]
+}

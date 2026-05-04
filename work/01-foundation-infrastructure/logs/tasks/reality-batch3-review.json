@@ -1,0 +1,69 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9, 10, 11],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 8,
+      "issue": "The Details section contains a full prescriptive report template with exact section headings, severity labels, and formatting — a complete implementation blueprint rather than a hint pointing to a pattern. Example: the report format block under '## Executive Summary' prescribes the exact output structure the agent must produce. This crosses from 'hint' into 'prescribed implementation'.",
+      "fix": "Replace the verbatim report format block with a pointer to the code-reviewing skill's output conventions and a brief description of required sections (e.g., 'Write a structured report with an executive summary, per-area findings grouped by severity (CRITICAL/WARNING/INFO), and a PASS/FAIL verdict — follow code-reviewing skill output format')."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Frontmatter declares `wave: Audit` (a string) while Tasks 8 and 9 use `wave: 4` (an integer). The tech-spec groups all three as the 'Audit Wave' but Tasks 8 and 9 normalise this to the integer 4. Inconsistent wave values across sibling tasks in the same wave break wave-based scheduling and parallel execution logic in any tooling that groups by wave value.",
+      "fix": "Change `wave: Audit` in Task 10's frontmatter to `wave: 4` to match Tasks 8 and 9."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 11,
+      "issue": "The 8-step Agent Verification Plan (mirrored from tech-spec) does not include a live curl check of an undefined path returning HTTP 401 (e.g., `curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080/api/nonexistent`). Yet the Acceptance Criteria section explicitly lists `GET /api/nonexistent without auth returns HTTP 401 (anyExchange check)` and `GET any undefined path returns HTTP 401` as runtime verification targets. The only coverage for these criteria is a static code inspection of SecurityConfig — not a live behavioural assertion. A static read cannot catch a runtime misconfiguration (e.g., wrong SecurityWebFilterChain bean scope or conditional bean issue).",
+      "fix": "Add a 9th verification step to the QA sequence: `curl -s -o /dev/null -w \"%{http_code}\" http://localhost:8080/api/nonexistent` (no auth header) — assert result is `401`. This requires the backend started in Step 2 to still be running, which it will be."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "The acceptance criterion 'Step-by-step section covers all 6 steps: install hook, copy .env, docker compose up, backend bootRun, verify health endpoint, frontend pnpm dev' lists only 6 steps but Step 5 in the Details section is 'GET http://localhost:8080/health — verifies backend is up', which is a verification step rather than a setup step. The tech-spec developer flow (steps 1-6 in 'How it works') lists: install hook, copy .env, docker compose, backend bootRun, GET /health, frontend pnpm dev — so including a manual verification curl as a numbered step in setup is a structural choice that may confuse a developer following the guide. Consider whether Step 5 belongs in the Verification Checklist section instead of the numbered setup sequence.",
+      "fix": "Either renumber the step as part of the Verification Checklist section, or note in the Acceptance Criteria that Step 5 is a verification step embedded in the setup sequence — whichever is intended."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "The HealthController package edge case note states 'must be com.botfunnel (root package), not a sub-package — otherwise Spring component scan may miss it depending on @SpringBootApplication placement'. This is accurate but the concern is already resolved by Task 5's explicit file path `backend/src/main/java/com/botfunnel/HealthController.java`. The audit instruction implies re-verifying something that is deterministic from the file path. No bug, but the audit step could be more precise: check that @SpringBootApplication is in com.botfunnel (not a sub-package) so component scan covers com.botfunnel.*.",
+      "fix": "Refine the edge case: 'Verify that @SpringBootApplication is in the com.botfunnel root package — this ensures component scan covers com.botfunnel.* including HealthController and SecurityConfig.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 context file for project.md uses a tilde path `~/.claude/skills/project-knowledge/references/project.md` while Task 8 uses a relative path `../../.claude/skills/project-knowledge/references/project.md`. The tilde path is not resolvable from the task file's location using standard relative path resolution — it expands to the user's home directory only in shell contexts. If the skill or orchestrator resolves paths relative to the task file directory, the tilde form will fail.",
+      "fix": "Replace `~/.claude/skills/project-knowledge/references/project.md` with the relative form `../../.claude/skills/project-knowledge/references/project.md` (same as used in Tasks 8 and other tasks in this feature) or use the absolute path."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 step 1 instructs `cd backend && ./gradlew test` but the standard build command throughout all other tasks is `./gradlew build`. Using `./gradlew test` is correct for test-only execution, but if there is a compile error introduced between waves, `gradlew test` will still fail with a compilation error — the distinction is moot. More importantly, the tech-spec and Task 11 both use `./gradlew build` as the canonical pass/fail command. Using a different command in Task 10 creates a minor inconsistency in what 'the build passes' means across the wave.",
+      "fix": "Change step 1 to `cd backend && ./gradlew build` to stay consistent with the canonical verification command used in tech-spec, Task 5, and Task 11. This catches both compile errors and test failures."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "claims_verified": 41,
+    "issues_found": 7
+  },
+  "notes": {
+    "task_7": "Wave 3, depends_on [1,2,3,4,5,6] — correct. All four port numbers (27017, 6379, 8080, 3000) match tech-spec Risks section. Referenced files (.env.example, infra/docker-compose.yml, scripts/install-hooks.sh) are created by earlier tasks with dependency correctly declared.",
+    "task_8": "Wave 4, depends_on [1,2,3,4,5,6,7] — correct. All 20 file paths in Context Files resolve to files that earlier tasks create. SecurityConfig audit criteria exactly match tech-spec Decision 5. @MockBean targets match tech-spec Decision 6.",
+    "task_9": "Wave 4, depends_on [1,2,3,4,5,6,7] — correct. All security checks are grounded in actual tech-spec decisions (Decision 5, 7, 9). Accepted risks (gitleaks soft-fail, no MongoDB/Redis auth) correctly inherited from tech-spec Risk table.",
+    "task_10": "depends_on [1,2,3,4,5,6,7] — correct (audit tasks 8/9 run in parallel). Test class names HealthEndpointTest, HealthSecurityTest, SecurityBlockTest match exactly what Task 5 creates. @MockBean class names (com.mongodb.reactivestreams.client.MongoClient, ReactiveRedisConnectionFactory) match tech-spec Decision 6 precisely.",
+    "task_11": "Wave 5, depends_on [8,9,10] — correct. All 8 AVP steps match tech-spec Agent Verification Plan verbatim (commands, expected outputs). Approved deviations (Boot 3.5.x, Nuxt 4, devtools, @MockBean) all documented."
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 5,
+    "critical": 0,
+    "major": 1,
+    "minor": 4
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "testing",
+      "title": "No tests exist in this task — smoke verification is compile-only",
+      "description": "The test source directory backend/src/test/java/com/botfunnel/ is empty — no Java test files were created. Task 2 acceptance criteria deliberately defers test writing to Task 5 (HealthEndpointTest, HealthSecurityTest, SecurityBlockTest). The smoke criterion for Task 2 is only `./gradlew compileJava` (not `./gradlew build`). This is architecturally acceptable per the task spec, but it means the testing infrastructure is incomplete at this stage: the `testRuntimeOnly 'org.junit.platform:junit-platform-launcher'` dependency exists with no tests to run, and `tasks.named('test') { useJUnitPlatform() }` is configured for a suite that does not yet exist.",
+      "location": "backend/src/test/java/com/botfunnel/",
+      "impact": "If Task 5 is not completed, there will be zero test coverage for the security configuration and health endpoint. The build passes at the compile stage only — `./gradlew build` would run a vacuous test suite (0 tests). No regression protection exists for SecurityConfig.",
+      "recommendation": "This is a known and accepted split between Task 2 and Task 5. Ensure Task 5 is not skipped or deferred further. Task 2 itself is correctly scoped. No action needed in Task 2."
+    },
+    {
+      "severity": "minor",
+      "category": "pre-commit",
+      "title": "Pre-commit hook not yet installed — scripts/install-hooks.sh is absent",
+      "description": "The scripts/ directory contains only a .gitkeep placeholder. The gitleaks pre-commit hook is defined in tech-spec Decision 7 and assigned to Task 6. At the point Task 2 was committed, no actual pre-commit hook script exists. The .git/hooks/ directory contains only .sample files — no active pre-commit hook is installed.",
+      "location": "scripts/install-hooks.sh (absent)",
+      "impact": "Commits made before Task 6 completes are not protected by secret scanning. The Task 2 commit itself was not scanned by gitleaks. Low risk for this specific commit (no secrets added), but the window of unprotected commits is a process concern.",
+      "recommendation": "Task 6 (Gitleaks pre-commit hook) must be completed and the hook installed before any further secrets-sensitive commits. This is a known wave dependency in the spec — ensure Task 6 is not deferred past Wave 2."
+    },
+    {
+      "severity": "minor",
+      "category": "folder-structure",
+      "title": "Missing .gitattributes — gradlew.bat has CRLF line endings without enforcement policy",
+      "description": "gradlew.bat is a DOS batch file with CRLF line terminators (confirmed via `file` command). No .gitattributes file exists in the repository root or in backend/. Without .gitattributes specifying `* text=auto` and `*.bat text eol=crlf` / `gradlew text eol=lf`, git may normalize line endings differently across developer platforms (macOS, Linux, Windows). A CRLF warning appeared during commit, indicating git detected the issue but no policy is enforced.",
+      "location": "backend/gradlew.bat (no .gitattributes present)",
+      "impact": "On Linux/macOS developer machines with `core.autocrlf=false`, gradlew.bat retains CRLF (correct). On Windows machines with `core.autocrlf=input`, git may strip CRLFs from .bat files, breaking them for Windows users. Inconsistent behavior across team.",
+      "recommendation": "Add a .gitattributes file at the repository root: `* text=auto`, `*.bat text eol=crlf`, `gradlew text eol=lf`, `*.jar binary`. Spring Initializr generates this file by default — it was likely dropped during manual project assembly."
+    },
+    {
+      "severity": "minor",
+      "category": "folder-structure",
+      "title": "testRuntimeOnly junit-platform-launcher added beyond task spec — minor deviation",
+      "description": "build.gradle includes `testRuntimeOnly 'org.junit.platform:junit-platform-launcher'` which is not listed in the 8 required dependencies in Task 2 Details or tech-spec Dependencies section. Spring Boot 3.5.x with `spring-boot-starter-test` already pulls in the JUnit Platform Launcher transitively. The explicit declaration is a standard Spring Initializr idiom (added since Gradle 8.x to avoid classloader issues with the Gradle test worker), so it is not harmful and aligns with current Spring Initializr output.",
+      "location": "backend/build.gradle line 29",
+      "impact": "No functional impact. Dependency is correct and follows current Spring Initializr convention. Minor undocumented deviation from the task spec dependency list.",
+      "recommendation": "Document the addition in the task's Post-completion deviation note. No code change needed — the dependency is correct."
+    },
+    {
+      "severity": "minor",
+      "category": "folder-structure",
+      "title": "Foojay resolver 0.8.0 — verify compatibility with Gradle 8.14.4",
+      "description": "settings.gradle uses Foojay resolver plugin version 0.8.0. The task spec explicitly specifies this version. Foojay 0.8.0 was released for Gradle 8.x and is known-compatible up to Gradle 8.13. Gradle 8.14.4 (used in gradle-wrapper.properties) is newer than what was current when Foojay 0.8.0 was released. The plugin's compatibility matrix at time of review (May 2026) shows 0.9.0 as the latest release with Gradle 8.14 support. However, Foojay uses a stable plugin API (`toolchains {}`) that rarely breaks across patch versions — the combination likely works in practice as confirmed by the successful `./gradlew compileJava` run.",
+      "location": "backend/settings.gradle line 2, backend/gradle/wrapper/gradle-wrapper.properties",
+      "impact": "If Foojay 0.8.0 has an incompatibility with Gradle 8.14.x, JDK auto-provisioning would fail silently or error on developer machines that do not have Java 21 installed locally. The build would still succeed if Java 21 is already installed, explaining why `compileJava` passed.",
+      "recommendation": "Upgrade Foojay resolver to the latest compatible version (check https://plugins.gradle.org/plugin/org.gradle.toolchains.foojay-resolver-convention for current version). As of early 2026, version 0.9.0 is available and declares explicit Gradle 8.x compatibility. Update settings.gradle: `id 'org.gradle.toolchains.foojay-resolver-convention' version '0.9.0'`."
+    }
+  ]
+}

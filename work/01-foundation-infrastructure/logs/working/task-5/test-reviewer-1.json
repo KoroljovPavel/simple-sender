@@ -1,0 +1,42 @@
+{
+  "status": "needs_improvement",
+  "summary": "Three integration tests pass and cover the core acceptance criteria (HTTP 200 on /health, security permit without auth, 401 on undefined paths). Assertions are meaningful and the litmus test passes for all three. One major issue: HealthSecurityTest is byte-for-byte identical to HealthEndpointTest — same URI, same HTTP method, same assertions — making it redundant; it cannot fail independently. Two minor issues: Content-Type header is not asserted (AC specifies application/json), and all three test classes carry 3 @MockBean fields (documented deviation from the 3-mock rule, acceptable given Decision 6 rationale).",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "redundant_testing",
+      "location": "backend/src/test/java/com/botfunnel/HealthSecurityTest.java:28",
+      "issue": "HealthSecurityTest.healthPermittedWithoutAuth is byte-for-byte identical to HealthEndpointTest.healthEndpointReturns200WithOkBody: same URI (/health), same HTTP method (GET), same assertions (isOk + jsonPath $.status == ok). The two tests cannot fail independently — if one passes, the other passes. The intended distinction (verifying SecurityWebFilterChain permits /health without an Authorization header) is not expressed in code. WebTestClient by default sends no Authorization header, so neither test actually contrasts an authorized vs. unauthorized request on /health. The test provides zero additional regression coverage over HealthEndpointTest.",
+      "recommendation": "Differentiate HealthSecurityTest to express its security-specific intent. Option A (minimal): add an explicit Authorization header with a fake bearer token to HealthEndpointTest (to show the endpoint works with auth too), then leave HealthSecurityTest as-is (no auth header) with a code comment — at least the two tests would differ in request construction. Option B (preferred): restructure HealthSecurityTest to contrast behavior: call GET /health with no header (assert 200) AND call a secured path like /api/secured with no header (assert 401) in the same test — this makes the security-permit contract explicit in one focused test. The test should then also assert the body: .expectBody().jsonPath(\"$.status\").isEqualTo(\"ok\"). Either way, remove the current duplicate and replace it with a test that catches at least one distinct failure scenario."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/HealthEndpointTest.java:28",
+      "issue": "None of the three tests assert Content-Type: application/json. The tech-spec acceptance criteria (tech-spec.md line 192) and task acceptance criteria (tasks/5.md line 56) both specify that GET /health must return Content-Type: application/json. If HealthController accidentally returned text/plain or if the @RestController annotation were misconfigured to produce a different media type, all three tests would still pass.",
+      "recommendation": "Add a Content-Type assertion to HealthEndpointTest (it is the canonical endpoint behavior test): .expectHeader().contentType(MediaType.APPLICATION_JSON). Example chain: webTestClient.get().uri(\"/health\").exchange().expectStatus().isOk().expectHeader().contentType(MediaType.APPLICATION_JSON).expectBody().jsonPath(\"$.status\").isEqualTo(\"ok\");"
+    },
+    {
+      "severity": "minor",
+      "category": "excessive_mocking",
+      "location": "backend/src/test/java/com/botfunnel/HealthEndpointTest.java:18",
+      "issue": "All three test classes declare 3 @MockBean fields (MongoClient, RedisConnectionFactory, ReactiveRedisConnectionFactory). The test-master rule flags tests mocking 3+ dependencies as candidates for the wrong test type. This is a documented justified deviation (tech-spec Decision 6): the mocks prevent Spring context startup failures caused by auto-configuration, not to isolate business logic. The actual test behavior exercises real HTTP routing and Spring Security filters. However, the 3rd mock (RedisConnectionFactory) was not in the original task spec (which listed only 2 mocks) and was added as a deviation — the deviation is described in the task report but not in a code comment.",
+      "recommendation": "Add an inline comment above the @MockBean declarations in each test class explaining why 3 mocks are required, referencing Decision 6 from tech-spec.md. This prevents future reviewers from removing mocks or questioning the deviation. Example: // @MockBean prevents Spring auto-config from failing without docker compose (Decision 6, tech-spec.md). RedisConnectionFactory needed by RedisAutoConfiguration in Spring Boot 3.5.x in addition to ReactiveRedisConnectionFactory. No business logic is mocked — tests exercise HTTP routing and security filters only."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "litmusTest": {
+      "checked": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 3,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

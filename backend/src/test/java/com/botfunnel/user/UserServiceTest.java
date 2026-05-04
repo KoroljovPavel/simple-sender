@@ -1,11 +1,13 @@
 package com.botfunnel.user;
 
+import com.botfunnel.common.AppException;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import reactor.core.publisher.Mono;
+import reactor.test.StepVerifier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -33,6 +35,16 @@ class UserServiceTest {
 
         assertThat(result.getStatus()).isEqualTo(UserStatus.deleted);
         assertThat(result.getDeletedAt()).isNotNull();
+        assertThat(result.getUpdatedAt()).isNotNull();
+    }
+
+    @Test
+    void softDelete_userNotFound_returnsError() {
+        when(userRepository.findById("missing")).thenReturn(Mono.empty());
+
+        StepVerifier.create(userService.softDelete("missing"))
+                .expectError(AppException.class)
+                .verify();
     }
 
     @Test
@@ -41,5 +53,21 @@ class UserServiceTest {
         user.setStatus(UserStatus.blocked);
 
         assertThat(userService.canActivate(user)).isFalse();
+    }
+
+    @Test
+    void canActivate_activeUser_returnsTrue() {
+        User user = new User();
+        user.setStatus(UserStatus.active);
+
+        assertThat(userService.canActivate(user)).isTrue();
+    }
+
+    @Test
+    void canActivate_pendingUser_returnsTrue() {
+        User user = new User();
+        user.setStatus(UserStatus.pending);
+
+        assertThat(userService.canActivate(user)).isTrue();
     }
 }

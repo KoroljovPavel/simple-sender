@@ -18,6 +18,7 @@ class SecurityConfigTest {
     @Autowired
     WebTestClient webTestClient;
 
+    // Mock infrastructure to prevent auto-config from connecting to live services
     @MockitoBean
     MongoClient mongoClient;
 
@@ -27,6 +28,7 @@ class SecurityConfigTest {
     @MockitoBean
     ReactiveRedisConnectionFactory reactiveRedisConnectionFactory;
 
+    // JobRunr requires StorageProvider; mock it since MongoDB is not available in this test slice
     @MockitoBean
     StorageProvider storageProvider;
 
@@ -35,5 +37,12 @@ class SecurityConfigTest {
         webTestClient.get().uri("/api/profile")
                 .exchange()
                 .expectStatus().isUnauthorized();
+    }
+
+    @Test
+    void authEndpoints_permitWithoutAuthentication() {
+        webTestClient.get().uri("/api/auth/me")
+                .exchange()
+                .expectStatus().isNotFound();
     }
 }

@@ -10,6 +10,7 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.context.WebSessionServerSecurityContextRepository;
 import org.springframework.security.web.server.csrf.CookieServerCsrfTokenRepository;
+import org.springframework.security.web.server.csrf.XorServerCsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
@@ -28,8 +29,13 @@ public class SecurityConfig {
         return http
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieServerCsrfTokenRepository.withHttpOnlyFalse())
+                        // XorServerCsrfTokenRequestAttributeHandler is required in Spring Security 6
+                        // to subscribe to the CSRF token so it is committed to the XSRF-TOKEN cookie
+                        .csrfTokenRequestHandler(new XorServerCsrfTokenRequestAttributeHandler())
                 )
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                // WebSessionServerSecurityContextRepository.getInstance() does not exist in
+                // Spring Security 6.x; new is the correct form (verified at compile time)
                 .securityContextRepository(new WebSessionServerSecurityContextRepository())
                 .authorizeExchange(exchanges -> exchanges
                         .pathMatchers("/health").permitAll()
@@ -51,7 +57,8 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(List.of(appUrl));
         config.setAllowedMethods(List.of("GET", "POST", "PATCH", "DELETE", "OPTIONS"));
-        config.setAllowedHeaders(List.of("Content-Type", "X-Requested-With"));
+        // X-XSRF-TOKEN is required for CookieServerCsrfTokenRepository — client must send it
+        config.setAllowedHeaders(List.of("Content-Type", "X-Requested-With", "X-XSRF-TOKEN"));
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

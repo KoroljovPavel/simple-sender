@@ -1,5 +1,7 @@
 package com.botfunnel.user;
 
+import com.botfunnel.common.AppException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
@@ -24,6 +26,7 @@ public class UserService {
 
     public Mono<User> softDelete(String userId) {
         return userRepository.findById(userId)
+                .switchIfEmpty(Mono.error(new AppException(HttpStatus.NOT_FOUND, null, "User not found")))
                 .flatMap(user -> {
                     user.setStatus(UserStatus.deleted);
                     user.setDeletedAt(Instant.now());

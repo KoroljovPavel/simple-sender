@@ -104,6 +104,7 @@ public class EmailService {
     }
 
     static String htmlEscape(String input) {
+        if (input == null) return "";
         return input
                 .replace("&", "&amp;")
                 .replace("<", "&lt;")

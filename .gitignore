@@ -56,11 +56,19 @@ frontend/dist/
 
 # ─── Project: Secrets & credentials ──────────────────────────────────────────
 .env
+.env.*
+!.env.example
 *.key
 secrets/
 *.pem
 *.p12
 *.jks
+credentials.json
+service-account*.json
+*-credentials.json
+# Spring Boot profile-specific properties with local overrides
+application-local.properties
+application-local.yml
 
 # ─── IDE ──────────────────────────────────────────────────────────────────────
 .idea/

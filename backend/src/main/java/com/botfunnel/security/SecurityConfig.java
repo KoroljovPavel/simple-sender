@@ -13,9 +13,11 @@ public class SecurityConfig {
     @Bean
     public SecurityWebFilterChain springSecurityFilterChain(ServerHttpSecurity http) {
         return http
+            // Stateless API — no session-based features; CSRF protection is unnecessary
             .csrf(csrf -> csrf.disable())
             .authorizeExchange(exchanges -> exchanges
                 .pathMatchers("/health").permitAll()
+                // TODO: wire JWT/OAuth2 in auth epic; until then, authenticated() blocks all other paths
                 .anyExchange().authenticated()
             )
             .build();

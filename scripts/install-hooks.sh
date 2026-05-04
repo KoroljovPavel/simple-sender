@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# Must be run from within a git repository (any subdirectory works).
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -12,7 +13,8 @@ if ! command -v gitleaks >/dev/null 2>&1; then
   exit 0
 fi
 
-gitleaks detect --staged --verbose --no-banner
+gitleaks detect --staged --verbose --no-banner --redact
+exit $?
 EOF
 
 chmod +x "$HOOK_PATH"

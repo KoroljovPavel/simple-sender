@@ -15,6 +15,9 @@ import com.botfunnel.user.UserStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
@@ -51,6 +54,7 @@ public class AuthService {
 
     private static final Duration SOFT_DELETE_WINDOW = Duration.ofDays(30);
     private static final Duration EMAIL_VERIFICATION_TTL = Duration.ofHours(24);
+    private static final Duration PASSWORD_RESET_TTL = Duration.ofHours(1);
     private static final Duration RESEND_RATE_TTL = Duration.ofSeconds(60);
     private static final Duration REGISTER_RATE_TTL = Duration.ofSeconds(60);
     private static final int REGISTER_IP_THRESHOLD = 10;
@@ -58,6 +62,10 @@ public class AuthService {
     private static final String EVENT_LOGIN_SUCCESS = "login_success";
     private static final String EVENT_LOGIN_FAILED = "login_failed";
     private static final String EVENT_EMAIL_VERIFIED = "email_verified";
+    private static final String EVENT_PASSWORD_RESET_REQUESTED = "password_reset_requested";
+    private static final String EVENT_PASSWORD_CHANGED = "password_changed";
+
+    private static final String INVALID_RESET_LINK = "Посилання недійсне або прострочено";
 
     private final UserRepository userRepository;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
@@ -66,6 +74,7 @@ public class AuthService {
     private final EventService eventService;
     private final EmailService emailService;
     private final TokenService tokenService;
+    private final ReactiveMongoTemplate reactiveMongoTemplate;
     private final String supportEmail;
     private final long defaultHours;
     private final long rememberMeDays;
@@ -77,6 +86,7 @@ public class AuthService {
                        EventService eventService,
                        EmailService emailService,
                        TokenService tokenService,
+                       ReactiveMongoTemplate reactiveMongoTemplate,
                        @Value("${app.support-email}") String supportEmail,
                        @Value("${app.session.ttl-default-hours:24}") long defaultHours,
                        @Value("${app.session.ttl-remember-me-days:30}") long rememberMeDays) {
@@ -87,6 +97,7 @@ public class AuthService {
         this.eventService = eventService;
         this.emailService = emailService;
         this.tokenService = tokenService;
+        this.reactiveMongoTemplate = reactiveMongoTemplate;
         this.supportEmail = supportEmail;
         this.defaultHours = defaultHours;
         this.rememberMeDays = rememberMeDays;
@@ -218,6 +229,111 @@ public class AuthService {
                             })
                             .then();
                 });
+    }
+
+    public Mono<Void> logout(ServerWebExchange exchange) {
+        // Only the current WebSession is invalidated. spring-session-data-mongodb removes the
+        // matching `sessions` document on invalidate; other-device sessions for the same user
+        // are NOT touched (per user-spec line 53). Use terminate-all-sessions for the global case.
+        return exchange.getSession().flatMap(WebSession::invalidate);
+    }
+
+    public Mono<Void> forgotPassword(String emailRaw, ServerWebExchange exchange) {
+        String email = canonicalize(emailRaw);
+        String ip = extractIp(exchange);
+        String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
+
+        // Anti-enumeration: response is identical for known, unknown, and deleted emails.
+        // Audit logs use userId=null when the email does not match an active/pending account so
+        // that the events log itself cannot be used to enumerate (per task spec lines 41-42).
+        // Wrapping in Optional lets a single flatMap distinguish missing-user from deleted-user
+        // without the switchIfEmpty double-firing on a deliberately-empty downstream branch.
+        return userRepository.findByEmail(email)
+                .map(java.util.Optional::of)
+                .defaultIfEmpty(java.util.Optional.empty())
+                .flatMap(opt -> {
+                    if (opt.isEmpty() || opt.get().getStatus() == UserStatus.deleted) {
+                        return Mono.<Void>fromRunnable(() -> eventService.logEvent(
+                                null, EVENT_PASSWORD_RESET_REQUESTED, ip, userAgent,
+                                Map.of("email", email)));
+                    }
+                    User user = opt.get();
+                    String raw = tokenService.generateRawToken();
+                    user.setPasswordResetTokenHash(tokenService.hashToken(raw));
+                    user.setPasswordResetExpiresAt(Instant.now().plus(PASSWORD_RESET_TTL));
+                    user.setPasswordResetUsedAt(null);
+                    user.setUpdatedAt(Instant.now());
+                    return userRepository.save(user)
+                            .doOnSuccess(saved -> {
+                                try {
+                                    emailService.sendPasswordResetEmail(saved.getEmail(), saved.getName(), raw);
+                                } catch (RuntimeException ex) {
+                                    log.warn("Reset email dispatch failed for {}: {}",
+                                            saved.getEmail(), ex.getMessage());
+                                }
+                                eventService.logEvent(saved.getId(), EVENT_PASSWORD_RESET_REQUESTED,
+                                        ip, userAgent, null);
+                            })
+                            .then();
+                });
+    }
+
+    public Mono<Void> resetPassword(String rawToken, String newPassword, ServerWebExchange exchange) {
+        if (rawToken == null || rawToken.isBlank()) {
+            return Mono.error(AppException.badRequest(INVALID_RESET_LINK));
+        }
+        String hash = tokenService.hashToken(rawToken);
+        String ip = extractIp(exchange);
+        String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
+
+        return userRepository.findByPasswordResetTokenHash(hash)
+                .switchIfEmpty(Mono.error(AppException.badRequest(INVALID_RESET_LINK)))
+                .flatMap(user -> {
+                    // Expiry check first — gives the most relevant error message before the
+                    // already-used check (per Details/edge-cases note in the task).
+                    if (user.getPasswordResetExpiresAt() == null
+                            || !user.getPasswordResetExpiresAt().isAfter(Instant.now())) {
+                        return Mono.<Void>error(AppException.badRequest(INVALID_RESET_LINK));
+                    }
+                    if (user.getPasswordResetUsedAt() != null) {
+                        return Mono.<Void>error(AppException.badRequest(INVALID_RESET_LINK));
+                    }
+                    return rotatePasswordAndTerminateSessions(user, newPassword, ip, userAgent);
+                });
+    }
+
+    private Mono<Void> rotatePasswordAndTerminateSessions(User user, String newPassword,
+                                                          String ip, String userAgent) {
+        // BCrypt cost-12 takes ~250ms; pin to boundedElastic so the Reactor event loop is not blocked
+        // (mirrors the login + register patterns).
+        return Mono.fromCallable(() -> passwordEncoder.encode(newPassword))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMap(newHash -> {
+                    Instant now = Instant.now();
+                    user.setPasswordHash(newHash);
+                    // Both clear the hash AND mark usedAt — defense in depth: even if a stored
+                    // copy of the token is somehow re-attached to the document, the lookup-by-hash
+                    // returns nothing because the hash field is cleared.
+                    user.setPasswordResetTokenHash(null);
+                    user.setPasswordResetExpiresAt(null);
+                    user.setPasswordResetUsedAt(now);
+                    user.setUpdatedAt(now);
+                    return userRepository.save(user);
+                })
+                .flatMap(saved -> terminateAllSessions(saved.getId())
+                        .doOnSuccess(deleted -> eventService.logEvent(
+                                saved.getId(), EVENT_PASSWORD_CHANGED, ip, userAgent, null)))
+                .then();
+    }
+
+    // Sessions collection field path verified at runtime by the IT
+    // `sessionsCollection_principalFieldPath_isAtTopLevel` (Task 6 risk area). spring-session-data-mongodb
+    // 3.x indexes the principal name at the top-level `principal` field; AppUserDetails.getUsername()
+    // returns the user id, which is what Spring Session writes there.
+    private Mono<Long> terminateAllSessions(String userId) {
+        Query q = Query.query(Criteria.where("principal").is(userId));
+        return reactiveMongoTemplate.remove(q, "sessions")
+                .map(result -> result.getDeletedCount());
     }
 
     private Mono<RegistrationSlot> resolveRegistrationSlot(String email) {

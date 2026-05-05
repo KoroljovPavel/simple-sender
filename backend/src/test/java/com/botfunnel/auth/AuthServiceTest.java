@@ -14,6 +14,7 @@ import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
@@ -71,13 +72,16 @@ class AuthServiceTest {
     @Mock
     EmailService emailService;
 
+    @Mock
+    ReactiveMongoTemplate reactiveMongoTemplate;
+
     AuthService authService;
 
     @BeforeEach
     void setUp() {
         authService = new AuthService(userRepository, redisTemplate, passwordEncoder,
                 securityContextRepository, eventService, emailService, new TokenService(),
-                SUPPORT_EMAIL, 24L, 30L);
+                reactiveMongoTemplate, SUPPORT_EMAIL, 24L, 30L);
     }
 
     private ServerWebExchange exchangeWithIp(String ip) {

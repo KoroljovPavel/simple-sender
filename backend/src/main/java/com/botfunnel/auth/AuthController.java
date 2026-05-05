@@ -1,11 +1,13 @@
 package com.botfunnel.auth;
 
 import com.botfunnel.auth.dto.AuthResponse;
+import com.botfunnel.auth.dto.ForgotPasswordRequest;
 import com.botfunnel.auth.dto.LoginRequest;
 import com.botfunnel.auth.dto.MeResponse;
 import com.botfunnel.auth.dto.RegisterRequest;
 import com.botfunnel.auth.dto.RegisterResponse;
 import com.botfunnel.auth.dto.ResendVerificationRequest;
+import com.botfunnel.auth.dto.ResetPasswordRequest;
 import com.botfunnel.auth.dto.VerifyEmailResponse;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -56,6 +58,26 @@ public class AuthController {
     @PostMapping("/resend-verification")
     public Mono<ResponseEntity<Void>> resendVerification(@Valid @RequestBody ResendVerificationRequest request) {
         return authService.resendVerification(request.getEmail())
+                .then(Mono.just(ResponseEntity.ok().<Void>build()));
+    }
+
+    @PostMapping("/logout")
+    public Mono<ResponseEntity<Void>> logout(ServerWebExchange exchange) {
+        return authService.logout(exchange)
+                .then(Mono.just(ResponseEntity.ok().<Void>build()));
+    }
+
+    @PostMapping("/forgot-password")
+    public Mono<ResponseEntity<Void>> forgotPassword(@Valid @RequestBody ForgotPasswordRequest request,
+                                                     ServerWebExchange exchange) {
+        return authService.forgotPassword(request.getEmail(), exchange)
+                .then(Mono.just(ResponseEntity.ok().<Void>build()));
+    }
+
+    @PostMapping("/reset-password")
+    public Mono<ResponseEntity<Void>> resetPassword(@Valid @RequestBody ResetPasswordRequest request,
+                                                    ServerWebExchange exchange) {
+        return authService.resetPassword(request.getToken(), request.getNewPassword(), exchange)
                 .then(Mono.just(ResponseEntity.ok().<Void>build()));
     }
 }

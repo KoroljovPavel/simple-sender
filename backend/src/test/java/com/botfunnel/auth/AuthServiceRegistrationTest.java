@@ -14,6 +14,7 @@ import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
@@ -60,6 +61,9 @@ class AuthServiceRegistrationTest {
     @Mock
     EmailService emailService;
 
+    @Mock
+    ReactiveMongoTemplate reactiveMongoTemplate;
+
     TokenService tokenService;
 
     AuthService authService;
@@ -70,7 +74,7 @@ class AuthServiceRegistrationTest {
         tokenService = new TokenService();
         authService = new AuthService(userRepository, redisTemplate, passwordEncoder,
                 securityContextRepository, eventService, emailService, tokenService,
-                SUPPORT_EMAIL, 24L, 30L);
+                reactiveMongoTemplate, SUPPORT_EMAIL, 24L, 30L);
         // Permissive default for the per-IP register rate-limit (Redis INCR + EXPIRE). Tests that
         // exercise the rate-limit branch override these explicitly.
         org.mockito.Mockito.lenient().when(redisTemplate.opsForValue().increment(org.mockito.ArgumentMatchers.anyString()))

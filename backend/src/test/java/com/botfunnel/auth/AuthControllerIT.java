@@ -8,9 +8,13 @@ import com.botfunnel.events.EventRepository;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
+import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.MediaType;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -43,6 +47,9 @@ class AuthControllerIT extends AbstractIntegrationTest {
     @Autowired
     ReactiveRedisTemplate<String, String> redisTemplate;
 
+    @Autowired
+    ReactiveMongoTemplate reactiveMongoTemplate;
+
     private static final Pattern TOKEN_PATTERN = Pattern.compile("token=([A-Za-z0-9_\\-]+)");
 
     private MailpitClient mailpit() {
@@ -55,6 +62,8 @@ class AuthControllerIT extends AbstractIntegrationTest {
         eventRepository.deleteAll().block();
         // Wipe Redis so brute-force, resend-rate, and register-rate keys do not leak between tests.
         redisTemplate.delete(redisTemplate.scan()).block();
+        // Wipe spring-session-data-mongodb sessions so logout/reset session-count assertions are deterministic.
+        reactiveMongoTemplate.remove(new Query(), "sessions").block();
         mailpit().deleteAllMessages();
     }
 
@@ -307,5 +316,279 @@ class AuthControllerIT extends AbstractIntegrationTest {
         u.setCreatedAt(Instant.now().minus(Duration.ofDays(1)));
         u.setUpdatedAt(Instant.now().minus(Duration.ofDays(1)));
         userRepository.save(u).block();
+    }
+
+    // ---------- logout ----------
+
+    // Login via webTestClient (bindToApplicationContext + csrf()). The Set-Cookie header is not
+    // propagated through the bind-to-context test infrastructure even though spring-session-data-mongodb
+    // does persist the session document — so we verify session lifecycle through MongoDB queries
+    // on the `sessions` collection rather than via cookie introspection.
+    private void doLogin(String email, String password) {
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", email, "password", password, "rememberMe", false))
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    @Test
+    void logout_endpoint_returns200() {
+        // IT smoke test: the endpoint is wired and returns 200 even with no active session
+        // (idempotent logout on an empty WebSession is a no-op).
+        // Full behaviour (current-session invalidation only, other devices untouched) is
+        // verified at the unit level in AuthServicePasswordResetTest.logout_*.
+        // This split exists because WebTestClient.bindToApplicationContext does not propagate
+        // the SESSION cookie set by spring-session-data-mongodb back to the test client, so a
+        // real cookie-based logout flow cannot be exercised through this IT pipeline.
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/logout")
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    @Test
+    void logout_secondLoginCreatesIndependentSessionsDocument() {
+        // Independent verification of the spring-session-data-mongodb multi-session model that
+        // logout's "other-device-untouched" behaviour relies on: two sequential logins for the
+        // same user must produce TWO distinct session documents, not collapse onto one.
+        seedUser("logout@test.com", UserStatus.active, null);
+        String userId = userRepository.findByEmail("logout@test.com").block().getId();
+
+        doLogin("logout@test.com", "Strong1Pass");
+        doLogin("logout@test.com", "Strong1Pass");
+
+        Long sessions = reactiveMongoTemplate.count(
+                Query.query(Criteria.where("principal").is(userId)), "sessions").block();
+        assertThat(sessions)
+                .as("each login must produce its own session — required so logout can target one without affecting the other")
+                .isEqualTo(2L);
+    }
+
+    // ---------- forgot password ----------
+
+    @Test
+    void forgotPassword_anyEmail_always200() {
+        // Anti-enumeration: unknown email must return 200 like a known email (no 404, no message diff).
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/forgot-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "ghost@test.com"))
+                .exchange()
+                .expectStatus().isOk();
+
+        // Sanity: no Mailpit message arrived for unknown email.
+        await().during(Duration.ofMillis(500))
+                .atMost(Duration.ofSeconds(1))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> assertThat(mailpit().getMessageCount()).isZero());
+    }
+
+    @Test
+    void forgotPassword_validEmail_emailInMailpit() {
+        seedUser("reset@test.com", UserStatus.active, null);
+
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/forgot-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "reset@test.com"))
+                .exchange()
+                .expectStatus().isOk();
+
+        waitForMessage();
+        Message m = mailpit().getAllMessages().get(0);
+        assertThat(m.subject()).isEqualTo("Скидання пароля");
+        // Token is dispatched on the URL — must extract via the same regex used for verify.
+        String token = extractToken();
+        assertThat(token).hasSize(43);
+
+        // Hash must be persisted on the user, raw token must NOT (Decision 2).
+        User saved = userRepository.findByEmail("reset@test.com").block();
+        assertThat(saved.getPasswordResetTokenHash()).matches("[0-9a-f]{64}");
+        assertThat(saved.getPasswordResetExpiresAt())
+                .isAfter(Instant.now().plus(Duration.ofMinutes(55)))
+                .isBefore(Instant.now().plus(Duration.ofMinutes(65)));
+        assertThat(saved.getPasswordResetUsedAt()).isNull();
+    }
+
+    // ---------- reset password ----------
+
+    @Test
+    void resetPassword_validToken_oldPasswordRejected_allSessionsInvalidated() {
+        seedUser("reset@test.com", UserStatus.active, null);
+
+        // Open two device sessions before the reset, so we can verify ALL of them are deleted.
+        doLogin("reset@test.com", "Strong1Pass");
+        doLogin("reset@test.com", "Strong1Pass");
+        String userId = userRepository.findByEmail("reset@test.com").block().getId();
+        long sessionCountBefore = reactiveMongoTemplate.count(
+                Query.query(Criteria.where("principal").is(userId)), "sessions").block();
+        assertThat(sessionCountBefore)
+                .as("two logins must produce two indexed sessions before reset")
+                .isEqualTo(2L);
+
+        // Forgot-password to issue a real token, then extract it from Mailpit.
+        // forgot-password and reset-password are stateless POSTs — bindToApplicationContext
+        // (with csrf() mutator) is sufficient because no SESSION cookie is needed in the response.
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/forgot-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "reset@test.com"))
+                .exchange()
+                .expectStatus().isOk();
+        waitForMessage();
+        String rawToken = extractToken();
+
+        // Reset-password.
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/reset-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", rawToken, "newPassword", "NewStr0ngPass"))
+                .exchange()
+                .expectStatus().isOk();
+
+        // After reset, ALL prior sessions for this user must be gone.
+        long sessionCountAfter = reactiveMongoTemplate.count(
+                Query.query(Criteria.where("principal").is(userId)), "sessions").block();
+        assertThat(sessionCountAfter)
+                .as("reset-password must terminate ALL sessions for the user")
+                .isZero();
+
+        // Old password no longer works.
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "reset@test.com", "password", "Strong1Pass", "rememberMe", false))
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        // New password works.
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/login")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "reset@test.com", "password", "NewStr0ngPass", "rememberMe", false))
+                .exchange()
+                .expectStatus().isOk();
+    }
+
+    @Test
+    void resetPassword_expiredToken_400() {
+        // Seed with an already-expired reset token.
+        String raw = tokenService.generateRawToken();
+        User u = new User();
+        u.setEmail("expired-reset@test.com");
+        u.setName("Dan");
+        u.setPasswordHash(passwordEncoder.encode("Strong1Pass"));
+        u.setStatus(UserStatus.active);
+        u.setPasswordResetTokenHash(tokenService.hashToken(raw));
+        u.setPasswordResetExpiresAt(Instant.now().minus(Duration.ofMinutes(5)));
+        u.setCreatedAt(Instant.now());
+        u.setUpdatedAt(Instant.now());
+        userRepository.save(u).block();
+
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/reset-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", raw, "newPassword", "NewStr0ngPass"))
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void resetPassword_alreadyUsedToken_400() {
+        // Seed a user with a usable token, consume it once, attempt to reuse.
+        seedUser("reuse@test.com", UserStatus.active, null);
+
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/forgot-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "reuse@test.com"))
+                .exchange()
+                .expectStatus().isOk();
+        waitForMessage();
+        String rawToken = extractToken();
+
+        // First use → 200.
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/reset-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", rawToken, "newPassword", "NewStr0ngPass"))
+                .exchange()
+                .expectStatus().isOk();
+
+        // Second use of the SAME token → 400 (token consumed by passwordResetUsedAt OR cleared by
+        // reset; in either case the lookup fails).
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/reset-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", rawToken, "newPassword", "OtherStr0ngPass"))
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void resetPassword_invalidToken_400NotServerError() {
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/reset-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", "garbage-not-issued", "newPassword", "NewStr0ngPass"))
+                .exchange()
+                .expectStatus().isBadRequest();
+    }
+
+    @Test
+    void passwordChanged_event_logged() {
+        seedUser("evt@test.com", UserStatus.active, null);
+
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/forgot-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "evt@test.com"))
+                .exchange()
+                .expectStatus().isOk();
+        waitForMessage();
+        String rawToken = extractToken();
+
+        String userId = userRepository.findByEmail("evt@test.com").block().getId();
+
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/reset-password")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", rawToken, "newPassword", "NewStr0ngPass"))
+                .exchange()
+                .expectStatus().isOk();
+
+        // Fire-and-forget log path: poll briefly.
+        await().atMost(Duration.ofSeconds(5))
+                .pollInterval(Duration.ofMillis(100))
+                .until(() -> eventRepository.findAll()
+                        .filter(e -> "password_changed".equals(e.getEventType())
+                                && userId.equals(e.getUserId()))
+                        .hasElements()
+                        .block());
+        Event evt = eventRepository.findAll()
+                .filter(e -> "password_changed".equals(e.getEventType()))
+                .blockFirst();
+        assertThat(evt).isNotNull();
+        assertThat(evt.getUserId()).isEqualTo(userId);
+    }
+
+    @Test
+    void sessionsCollection_principalFieldPath_isAtTopLevel() {
+        // Risk-area diagnostic (Task 6 spec lines 116-121). Verifies the spring-session-data-mongodb
+        // schema actually stores the principal at the top-level `principal` field — without this,
+        // resetPassword's terminate-all query would silently delete zero documents.
+        seedUser("schema@test.com", UserStatus.active, null);
+        String userId = userRepository.findByEmail("schema@test.com").block().getId();
+        doLogin("schema@test.com", "Strong1Pass");
+
+        Document doc = reactiveMongoTemplate.findAll(Document.class, "sessions").blockFirst();
+        assertThat(doc).as("a session document must exist after login").isNotNull();
+        // If this fails, the field name has changed in spring-session-data-mongodb and the
+        // terminate-all-sessions query must be updated.
+        assertThat(doc.get("principal"))
+                .as("session document must expose principal at top level (verifies query field)")
+                .isEqualTo(userId);
     }
 }

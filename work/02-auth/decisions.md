@@ -160,3 +160,39 @@ Agent reports on completed tasks. Each entry is written by the agent that execut
 - AuthControllerSliceTest (WebFlux slice) → 5 passed
 - AuthServiceRegistrationTest (unit) → 20 passed
 - ValidPasswordValidatorTest (unit) → 10 passed
+
+---
+
+## Task 6: Logout + password reset
+
+**Status:** Done
+**Commit:** 75f8cba
+**Agent:** main agent
+**Summary:** Implemented `POST /api/auth/logout` (current-WebSession invalidate only), `POST /api/auth/forgot-password` (always-200 anti-enumeration with per-IP SET-NX-EX 60s rate limit, BCrypt-hashed reset token, fire-and-forget email), and `POST /api/auth/reset-password` (status-gated to pending/active, expiry + one-time-use checks, terminate-all-sessions via `ReactiveMongoTemplate.remove(Criteria.where("principal").is(userId), "sessions")`). Verified the spring-session-data-mongodb principal field path at runtime (top-level `principal`) via a dedicated IT.
+**Deviations:**
+- TDD-anchor `logout_invalidatesCurrentSession_otherSessionUnaffected` is split: the IT cannot drive a real SESSION cookie through `WebTestClient.bindToApplicationContext` (it silently drops the Set-Cookie even though spring-session-data-mongodb persists the document). Behaviour is verified at the unit level (`AuthServicePasswordResetTest.logout_invalidatesCurrentWebSession_returnsCompletes`) plus an IT (`logout_secondLoginCreatesIndependentSessionsDocument`) proving the multi-session model the contract relies on.
+- Added per-IP `forgot:rate:ip:` rate limit (Redis SET-NX-EX 60s) and a calibrated 40ms baseline delay on the unknown/deleted/blocked branch to close email-bombing (CWE-307) and timing-oracle (CWE-208) vectors flagged by security-auditor.
+- Added an explicit `pending|active` status gate at the top of `resetPassword` so a token issued just before an admin block / account deletion cannot rotate the password (code-reviewer major). Blocked users in `forgotPassword` now hit the same no-op as unknown email.
+- forgot-password unknown/deleted/blocked branch logs `password_reset_requested` with `metadata=null` (NOT `Map.of("email", ...)`) — the audit log must not become the enumeration oracle the response shape was meant to prevent.
+
+**Reviews:**
+
+*Round 1:*
+- code-reviewer: approved_with_suggestions (2 major, 7 minor, 4 nit) → [logs/working/task-6/code-reviewer-1.json](logs/working/task-6/code-reviewer-1.json)
+- security-auditor: approved (2 major, 5 minor) → [logs/working/task-6/security-auditor-1.json](logs/working/task-6/security-auditor-1.json)
+- test-reviewer: passed (4 minor) → [logs/working/task-6/test-reviewer-1.json](logs/working/task-6/test-reviewer-1.json)
+
+*Round 1 fixes committed (75f8cba): all majors resolved; PII-in-logs and DTO `@Size(max=254)` minors also addressed.*
+
+*Round 2 (after fixes):*
+- code-reviewer: approved (1 minor — `@Size` on other DTOs, Task 5 scope) → [logs/working/task-6/code-reviewer-2.json](logs/working/task-6/code-reviewer-2.json)
+- security-auditor: approved (3 minor — per-email rate-limit complement, virtual-time timing-parity test, frontend Referrer-Policy) → [logs/working/task-6/security-auditor-2.json](logs/working/task-6/security-auditor-2.json)
+- test-reviewer: passed (3 carry-over minor — overstated test name, IT message-parity, magic numbers in setUp) → [logs/working/task-6/test-reviewer-2.json](logs/working/task-6/test-reviewer-2.json)
+
+*Test-name minor polished post-Round-2: `resetPassword_runsBcryptOnBoundedElastic_doesNotBlockEventLoop` → `resetPassword_callsPasswordEncoderEncodeOnce_withNewPassword` (matches what the assertion actually verifies).*
+
+**Verification:**
+- `./gradlew test` (full suite) → 130 passed, 0 failed
+- AuthControllerIT logout/forgot/reset/passwordChanged smoke → all green
+- AuthServicePasswordResetTest (unit) → 19 passed
+- IT `sessionsCollection_principalFieldPath_isAtTopLevel` confirms top-level `principal` field path on real Testcontainer Mongo

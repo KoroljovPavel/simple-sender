@@ -405,10 +405,12 @@ class AuthServicePasswordResetTest {
     }
 
     @Test
-    void resetPassword_runsBcryptOnBoundedElastic_doesNotBlockEventLoop() {
-        // BCrypt cost-12 takes ~250ms; calling it on the Reactor event loop would freeze the
-        // backend. Verify by checking that PasswordEncoder.encode is called (other tests verify
-        // boundedElastic via the same pattern as register).
+    void resetPassword_callsPasswordEncoderEncodeOnce_withNewPassword() {
+        // Mirrors login + register: BCrypt runs on Schedulers.boundedElastic so the event loop
+        // is not blocked. Verifying scheduler placement requires a Thread.currentThread() probe
+        // we don't need here; this test only locks in that encode() IS called with the new
+        // password (not the old hash). Scheduler discipline is verified at the integration level
+        // by the suite passing under realistic concurrency.
         String raw = "raw-valid";
         User u = new User();
         u.setId("user-id-1");

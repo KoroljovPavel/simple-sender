@@ -41,8 +41,10 @@ class SecurityConfigTest {
 
     @Test
     void authEndpoints_permitWithoutAuthentication() {
+        // /api/auth/me reaches the controller without filter-level auth;
+        // the controller itself returns 401 when no session is present.
         webTestClient.get().uri("/api/auth/me")
                 .exchange()
-                .expectStatus().isNotFound();
+                .expectStatus().isUnauthorized();
     }
 }

@@ -8,6 +8,7 @@ import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.server.SecurityWebFilterChain;
+import org.springframework.security.web.server.context.ServerSecurityContextRepository;
 import org.springframework.security.web.server.context.WebSessionServerSecurityContextRepository;
 import org.springframework.security.web.server.csrf.CookieServerCsrfTokenRepository;
 import org.springframework.security.web.server.csrf.XorServerCsrfTokenRequestAttributeHandler;
@@ -25,7 +26,16 @@ public class SecurityConfig {
     private String appUrl;
 
     @Bean
-    public SecurityWebFilterChain springSecurityFilterChain(ServerHttpSecurity http) {
+    public ServerSecurityContextRepository securityContextRepository() {
+        // WebSessionServerSecurityContextRepository.getInstance() does not exist in
+        // Spring Security 6.x; new is the correct form. Exposed as a bean so AuthService
+        // can save the SecurityContext on login (manual auth — see Decision 11).
+        return new WebSessionServerSecurityContextRepository();
+    }
+
+    @Bean
+    public SecurityWebFilterChain springSecurityFilterChain(ServerHttpSecurity http,
+                                                            ServerSecurityContextRepository securityContextRepository) {
         return http
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieServerCsrfTokenRepository.withHttpOnlyFalse())
@@ -34,9 +44,7 @@ public class SecurityConfig {
                         .csrfTokenRequestHandler(new XorServerCsrfTokenRequestAttributeHandler())
                 )
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
-                // WebSessionServerSecurityContextRepository.getInstance() does not exist in
-                // Spring Security 6.x; new is the correct form (verified at compile time)
-                .securityContextRepository(new WebSessionServerSecurityContextRepository())
+                .securityContextRepository(securityContextRepository)
                 .authorizeExchange(exchanges -> exchanges
                         .pathMatchers("/health").permitAll()
                         .pathMatchers("/api/auth/**").permitAll()

@@ -28,7 +28,6 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebSession;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
-import reactor.util.context.Context;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
@@ -239,6 +238,43 @@ class AuthServiceTest {
     }
 
     @Test
+    void login_emailBruteForceLimitReached_logsBruteForceEvent() {
+        // Audit the threshold-trip moment — highest-signal indicator of an attack.
+        stubBruteCounters("5", "0");
+
+        StepVerifier.create(authService.login(new LoginRequest(EMAIL, "anything", false), exchangeWithIp(IP)))
+                .expectError(AppException.class)
+                .verify();
+
+        verify(eventService).logEvent(isNull(), eq("login_failed"), eq(IP), eq("JUnit-Test"),
+                eq(Map.of("reason", "brute_force", "email", EMAIL)));
+    }
+
+    @Test
+    void login_success_redisDeleteFails_stillReturnsAuthResponse() {
+        // Decision 4: fail-open also covers the success-path counter reset.
+        stubBruteCounters(null, null);
+        User user = activeUser();
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
+        when(passwordEncoder.matches("rightpass", user.getPasswordHash())).thenReturn(true);
+        when(redisTemplate.delete(EMAIL_KEY, IP_KEY))
+                .thenReturn(Mono.error(new RuntimeException("redis down")));
+        when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
+
+        WebSession s1 = org.mockito.Mockito.mock(WebSession.class);
+        WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
+        when(s1.invalidate()).thenReturn(Mono.empty());
+
+        ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
+
+        StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", false), exchange))
+                .assertNext(r -> assertThat(r.id()).isEqualTo("user-id-1"))
+                .verifyComplete();
+
+        verify(eventService).logEvent(eq("user-id-1"), eq("login_success"), eq(IP), eq("JUnit"), isNull());
+    }
+
+    @Test
     void login_redisCheckFails_failsOpen_andContinuesToUserLookup() {
         // Decision 4: Redis unavailability must not block login. With both GETs erroring, the
         // service must skip the threshold check and proceed to the user lookup.
@@ -441,7 +477,11 @@ class AuthServiceTest {
 
     @Test
     void me_unauthenticatedToken_returns401() {
-        Authentication unauth = new UsernamePasswordAuthenticationToken("x", "y");
+        // Use AppUserDetails as principal AND set isAuthenticated=false — this isolates the
+        // isAuthenticated() filter so that removing it would let the test fall through to a
+        // success response (litmus test).
+        AppUserDetails principal = new AppUserDetails("u-1", "x@y.z", "X", "active");
+        Authentication unauth = new UsernamePasswordAuthenticationToken(principal, null);
         unauth.setAuthenticated(false);
         SecurityContext ctx = new SecurityContextImpl(unauth);
 

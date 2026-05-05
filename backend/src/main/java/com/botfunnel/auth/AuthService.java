@@ -26,6 +26,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.Locale;
 import java.util.Map;
 
 @Service
@@ -76,14 +77,15 @@ public class AuthService {
         // Email is canonicalized to lowercase so case variants share a single brute-force bucket
         // and a single user lookup. Without this, "User@x.com" and "user@x.com" would consume
         // independent attempt budgets.
-        String email = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase();
+        // Locale.ROOT prevents Turkish-locale dotless-i folding from re-opening the case-variant bypass.
+        String email = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase(Locale.ROOT);
         String ip = extractIp(exchange);
         String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
         String emailKey = bruteEmailKey(email);
         String ipKey = bruteIpKey(ip);
 
         // Mono.defer wraps findByEmail so the user lookup is skipped entirely when brute-force rejects the request.
-        return checkBruteForce(emailKey, ipKey)
+        return checkBruteForce(emailKey, ipKey, email, ip, userAgent)
                 .then(Mono.defer(() -> userRepository.findByEmail(email)
                         .switchIfEmpty(Mono.defer(() -> handleUserNotFound(
                                 request.getPassword(), emailKey, ipKey, ip, userAgent)))))
@@ -99,12 +101,16 @@ public class AuthService {
                 .map(p -> new MeResponse(p.id(), p.email(), p.name(), p.status()));
     }
 
-    private Mono<Void> checkBruteForce(String emailKey, String ipKey) {
+    private Mono<Void> checkBruteForce(String emailKey, String ipKey, String email, String ip, String userAgent) {
         return Mono.zip(currentCount(emailKey), currentCount(ipKey))
                 .flatMap(t -> {
                     if (t.getT1() >= EMAIL_THRESHOLD || t.getT2() >= IP_THRESHOLD) {
-                        return Mono.<Void>error(AppException.tooManyRequests(
-                                "Too many login attempts. Try again later."));
+                        // Audit the threshold-trip — this is the highest-signal attack indicator.
+                        return Mono.<Void>fromRunnable(() -> eventService.logEvent(
+                                        null, EVENT_LOGIN_FAILED, ip, userAgent,
+                                        Map.of("reason", "brute_force", "email", email)))
+                                .then(Mono.<Void>error(AppException.tooManyRequests(
+                                        "Too many login attempts. Try again later.")));
                     }
                     return Mono.<Void>empty();
                 })

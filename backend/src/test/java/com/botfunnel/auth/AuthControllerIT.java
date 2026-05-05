@@ -3,6 +3,8 @@ package com.botfunnel.auth;
 import ch.martinelli.oss.testcontainers.mailpit.MailpitClient;
 import ch.martinelli.oss.testcontainers.mailpit.Message;
 import com.botfunnel.AbstractIntegrationTest;
+import com.botfunnel.events.Event;
+import com.botfunnel.events.EventRepository;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
@@ -30,6 +32,9 @@ class AuthControllerIT extends AbstractIntegrationTest {
     UserRepository userRepository;
 
     @Autowired
+    EventRepository eventRepository;
+
+    @Autowired
     PasswordEncoder passwordEncoder;
 
     @Autowired
@@ -47,13 +52,10 @@ class AuthControllerIT extends AbstractIntegrationTest {
     @BeforeEach
     void cleanState() {
         userRepository.deleteAll().block();
-        // Wipe Redis so brute-force and resend-rate keys do not leak between tests.
+        eventRepository.deleteAll().block();
+        // Wipe Redis so brute-force, resend-rate, and register-rate keys do not leak between tests.
         redisTemplate.delete(redisTemplate.scan()).block();
-        try {
-            mailpit().deleteAllMessages();
-        } catch (Exception ignore) {
-            // Mailpit boot lag — retried by next test seeding.
-        }
+        mailpit().deleteAllMessages();
     }
 
     private void waitForMessage() {
@@ -158,6 +160,57 @@ class AuthControllerIT extends AbstractIntegrationTest {
         assertThat(saved.getStatus()).isEqualTo(UserStatus.active);
         assertThat(saved.getEmailVerificationTokenHash()).isNull();
         assertThat(saved.getEmailVerificationExpiresAt()).isNull();
+
+        // End-to-end audit assertion: EventService -> EventRepository -> Mongo. Acceptance
+        // criterion line 97: "email_verified event logged in events collection after successful
+        // verification". The fire-and-forget logEvent path can lag, so poll briefly.
+        await().atMost(Duration.ofSeconds(5))
+                .pollInterval(Duration.ofMillis(100))
+                .until(() -> eventRepository.findAll()
+                        .filter(e -> "email_verified".equals(e.getEventType())
+                                && saved.getId().equals(e.getUserId()))
+                        .hasElements()
+                        .block());
+        Event evt = eventRepository.findAll()
+                .filter(e -> "email_verified".equals(e.getEventType()))
+                .blockFirst();
+        assertThat(evt).isNotNull();
+        assertThat(evt.getUserId()).isEqualTo(saved.getId());
+    }
+
+    @Test
+    void register_softDeletedEmail_olderThan30Days_succeeds_andRepurposesDocument() {
+        // IT-level coverage of the >30-day repurpose edge case (test-reviewer finding).
+        // Verifies that the unique-email index does NOT block re-registration and that
+        // carry-over fields (deletedAt, isSuperAdmin) are reset on the existing document.
+        User existing = new User();
+        existing.setEmail("repurpose@test.com");
+        existing.setName("OldName");
+        existing.setPasswordHash(passwordEncoder.encode("OldPass1!"));
+        existing.setStatus(UserStatus.deleted);
+        existing.setSuperAdmin(true);
+        existing.setDeletedAt(Instant.now().minus(Duration.ofDays(31)));
+        existing.setCreatedAt(Instant.now().minus(Duration.ofDays(60)));
+        existing.setUpdatedAt(Instant.now().minus(Duration.ofDays(31)));
+        String oldId = userRepository.save(existing).block().getId();
+
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/register")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "repurpose@test.com", "name", "NewName", "password", "Strong1Pass"))
+                .exchange()
+                .expectStatus().isCreated()
+                .expectBody().jsonPath("$.id").isEqualTo(oldId);
+
+        User saved = userRepository.findByEmail("repurpose@test.com").block();
+        assertThat(saved).isNotNull();
+        assertThat(saved.getId()).isEqualTo(oldId);
+        assertThat(saved.getStatus()).isEqualTo(UserStatus.pending);
+        assertThat(saved.getName()).isEqualTo("NewName");
+        assertThat(saved.getDeletedAt()).isNull();
+        assertThat(saved.isSuperAdmin())
+                .as("superadmin flag must NOT carry over from a soft-deleted account")
+                .isFalse();
     }
 
     @Test
@@ -185,7 +238,12 @@ class AuthControllerIT extends AbstractIntegrationTest {
     void verifyEmail_invalidToken_400NotServerError() {
         webTestClient.get().uri("/api/auth/verify-email?token=garbage-not-issued")
                 .exchange()
-                .expectStatus().isBadRequest();
+                .expectStatus().isBadRequest()
+                // Lock in identical message + missing TOKEN_EXPIRED code so the response
+                // does not become an invalid-vs-expired enumeration oracle.
+                .expectBody()
+                .jsonPath("$.message").isEqualTo("Посилання недійсне")
+                .jsonPath("$.code").doesNotExist();
     }
 
     // ---------- resendVerification ----------
@@ -207,6 +265,27 @@ class AuthControllerIT extends AbstractIntegrationTest {
                 .bodyValue(Map.of("email", "resend@test.com"))
                 .exchange()
                 .expectStatus().isEqualTo(429);
+    }
+
+    @Test
+    void resendVerification_unknownEmail_returns200_andSendsNoEmail_andSetsRedisKey() {
+        // Anti-enumeration: unknown email must (a) return 200 like a known email, (b) NOT
+        // dispatch a real email, and (c) STILL set the Redis rate-limit key to remove the
+        // timing oracle on subsequent requests (Decision 7).
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/auth/resend-verification")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("email", "ghost@test.com"))
+                .exchange()
+                .expectStatus().isOk();
+
+        // Sanity: no Mailpit message arrived. We give a brief window to rule out async lag.
+        try { Thread.sleep(500); } catch (InterruptedException ignore) { Thread.currentThread().interrupt(); }
+        assertThat(mailpit().getMessageCount()).isZero();
+
+        // Redis key must be set so the next call within 60s returns 429 even for unknown email.
+        Boolean keyExists = redisTemplate.hasKey("resend:rate:ghost@test.com").block();
+        assertThat(keyExists).isTrue();
     }
 
     private void seedUser(String email, UserStatus status, Instant deletedAt) {

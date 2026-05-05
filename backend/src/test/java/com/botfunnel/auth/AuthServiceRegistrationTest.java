@@ -71,12 +71,20 @@ class AuthServiceRegistrationTest {
         authService = new AuthService(userRepository, redisTemplate, passwordEncoder,
                 securityContextRepository, eventService, emailService, tokenService,
                 SUPPORT_EMAIL, 24L, 30L);
+        // Permissive default for the per-IP register rate-limit (Redis INCR + EXPIRE). Tests that
+        // exercise the rate-limit branch override these explicitly.
+        org.mockito.Mockito.lenient().when(redisTemplate.opsForValue().increment(org.mockito.ArgumentMatchers.anyString()))
+                .thenReturn(Mono.just(1L));
+        org.mockito.Mockito.lenient().when(redisTemplate.expire(org.mockito.ArgumentMatchers.anyString(),
+                        org.mockito.ArgumentMatchers.any(Duration.class)))
+                .thenReturn(Mono.just(true));
     }
 
     private ServerWebExchange exchange() {
         return MockServerWebExchange.from(MockServerHttpRequest
                 .post("/api/auth/register")
                 .header("User-Agent", "JUnit")
+                .remoteAddress(new java.net.InetSocketAddress("127.0.0.1", 12345))
                 .build());
     }
 
@@ -212,6 +220,65 @@ class AuthServiceRegistrationTest {
     }
 
     @Test
+    void register_softDeletedSuperAdmin_olderThan30Days_doesNotInheritSuperAdminFlag() {
+        // Privilege-escalation regression guard (security-auditor finding): if a superadmin
+        // was soft-deleted >30 days ago, a fresh registration on the same email must NOT
+        // inherit isSuperAdmin=true. Only SuperAdminSeeder may grant the flag.
+        User existing = new User();
+        existing.setId("old-admin-id");
+        existing.setEmail(EMAIL);
+        existing.setStatus(UserStatus.deleted);
+        existing.setDeletedAt(Instant.now().minus(Duration.ofDays(31)));
+        existing.setSuperAdmin(true);
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(existing));
+        when(passwordEncoder.encode("Strong1Pass")).thenReturn("hashed-pw");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
+        verify(userRepository).save(cap.capture());
+        assertThat(cap.getValue().isSuperAdmin())
+                .as("superadmin flag must be reset on repurposed registration")
+                .isFalse();
+    }
+
+    @Test
+    void register_perIpRateLimit_returns429_andSkipsBcrypt() {
+        // 11th attempt from same IP within window must be rejected before BCrypt runs.
+        when(redisTemplate.opsForValue().increment("register:rate:ip:127.0.0.1"))
+                .thenReturn(Mono.just(11L));
+
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+                .expectErrorMatches(e -> e instanceof AppException
+                        && ((AppException) e).getStatus() == HttpStatus.TOO_MANY_REQUESTS)
+                .verify();
+
+        verify(passwordEncoder, never()).encode(anyString());
+        verify(userRepository, never()).findByEmail(anyString());
+    }
+
+    @Test
+    void register_redisDown_failsOpen_andProceeds() {
+        // Decision 4 fail-open: Redis outage must not block legitimate registration.
+        when(redisTemplate.opsForValue().increment(anyString()))
+                .thenReturn(Mono.error(new RuntimeException("redis down")));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(passwordEncoder.encode(anyString())).thenReturn("hashed-pw");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setId("user-id-1");
+            return Mono.just(u);
+        });
+
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+                .expectNextCount(1)
+                .verifyComplete();
+    }
+
+    @Test
     void register_emailDispatchFailure_doesNotPropagate_returns201() {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
         when(passwordEncoder.encode(anyString())).thenReturn("hashed-pw");
@@ -262,6 +329,16 @@ class AuthServiceRegistrationTest {
         verify(eventService).logEvent(eq("user-id-1"), eq("email_verified"),
                 org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
                 org.mockito.ArgumentMatchers.any());
+    }
+
+    @Test
+    void verifyEmail_blankToken_returns400_withoutDbCall() {
+        // Guard against NPE / blank-token path that would otherwise propagate to a 500.
+        StepVerifier.create(authService.verifyEmail("", exchange()))
+                .expectErrorMatches(e -> e instanceof AppException
+                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
+                .verify();
+        verifyNoInteractions(userRepository);
     }
 
     @Test

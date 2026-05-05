@@ -52,10 +52,12 @@ public class EmailService {
     String buildVerificationBody(String name, String token) {
         String template = loadTemplate("/templates/email/verify-email.html");
         if (template.isEmpty()) return "";
+        // {APP_URL} comes from configuration so XSS via misconfiguration is unlikely, but
+        // defense-in-depth: escape every templated value on the way out.
         return template
                 .replace("{NAME}", htmlEscape(name))
                 .replace("{TOKEN}", htmlEscape(token))
-                .replace("{APP_URL}", appUrl);
+                .replace("{APP_URL}", htmlEscape(appUrl));
     }
 
     String buildPasswordResetBody(String name, String token) {
@@ -64,7 +66,7 @@ public class EmailService {
         return template
                 .replace("{NAME}", htmlEscape(name))
                 .replace("{TOKEN}", htmlEscape(token))
-                .replace("{APP_URL}", appUrl);
+                .replace("{APP_URL}", htmlEscape(appUrl));
     }
 
     String buildAccountBlockedBody(String name, String supportEmail) {

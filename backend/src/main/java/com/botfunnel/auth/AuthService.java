@@ -52,6 +52,8 @@ public class AuthService {
     private static final Duration SOFT_DELETE_WINDOW = Duration.ofDays(30);
     private static final Duration EMAIL_VERIFICATION_TTL = Duration.ofHours(24);
     private static final Duration RESEND_RATE_TTL = Duration.ofSeconds(60);
+    private static final Duration REGISTER_RATE_TTL = Duration.ofSeconds(60);
+    private static final int REGISTER_IP_THRESHOLD = 10;
 
     private static final String EVENT_LOGIN_SUCCESS = "login_success";
     private static final String EVENT_LOGIN_FAILED = "login_failed";
@@ -120,8 +122,14 @@ public class AuthService {
 
     public Mono<RegisterResponse> register(RegisterRequest request, ServerWebExchange exchange) {
         String email = canonicalize(request.getEmail());
-        return resolveRegistrationSlot(email)
-                .map(slot -> applyRegistration(slot, request, email))
+        String ip = extractIp(exchange);
+        // Per-IP register rate limit gates BCrypt CPU before it runs — without this an attacker
+        // could spend all backend CPU on cost-12 hashes (security-auditor finding).
+        // Mono.defer wraps resolveRegistrationSlot so the DB lookup is skipped entirely when the
+        // rate-limit aborts the chain — otherwise the call would be evaluated eagerly.
+        return checkRegisterRate(ip)
+                .then(Mono.defer(() -> resolveRegistrationSlot(email)))
+                .flatMap(slot -> applyRegistrationAsync(slot, request, email))
                 .flatMap(prep -> userRepository.save(prep.user())
                         .map(saved -> {
                             // Fire-and-forget: EmailService never throws on its own, but if a synchronous
@@ -171,8 +179,15 @@ public class AuthService {
         String email = canonicalize(emailRaw);
         // SET NX EX 60 is performed unconditionally — otherwise the request time would leak whether
         // the email exists (timing oracle). Decision 7 / Risks: anti-enumeration.
+        // Decision 4: Redis fail-open for the rate-limit branch — a Redis outage must not let an
+        // attacker bypass the rate limit OR block legitimate resends. Treating Redis-unavailable as
+        // "no rate-limit hit, proceed" mirrors the login-path semantics.
         return redisTemplate.opsForValue()
                 .setIfAbsent(resendKey(email), "1", RESEND_RATE_TTL)
+                .onErrorResume(err -> {
+                    log.warn("Redis resend rate-limit check failed, allowing: {}", err.getMessage());
+                    return Mono.just(true);
+                })
                 .flatMap(success -> {
                     if (Boolean.FALSE.equals(success)) {
                         return Mono.<Void>error(AppException.tooManyRequests(
@@ -225,27 +240,64 @@ public class AuthService {
                 .switchIfEmpty(Mono.fromSupplier(() -> new RegistrationSlot(new User(), false)));
     }
 
-    private RegistrationPrep applyRegistration(RegistrationSlot slot, RegisterRequest req, String email) {
-        User user = slot.user();
-        Instant now = Instant.now();
-        String rawToken = tokenService.generateRawToken();
+    private Mono<RegistrationPrep> applyRegistrationAsync(RegistrationSlot slot, RegisterRequest req, String email) {
+        // BCrypt cost-12 takes ~250ms on modern hardware. Running it on the event loop would
+        // monopolise a Reactor thread and starve all other concurrent requests. Pin to
+        // boundedElastic, mirroring the login-path pattern.
+        return Mono.fromCallable(() -> passwordEncoder.encode(req.getPassword()))
+                .subscribeOn(Schedulers.boundedElastic())
+                .map(hash -> {
+                    User user = slot.user();
+                    Instant now = Instant.now();
+                    String rawToken = tokenService.generateRawToken();
 
-        user.setEmail(email);
-        user.setName(req.getName());
-        user.setPasswordHash(passwordEncoder.encode(req.getPassword()));
-        user.setStatus(UserStatus.pending);
-        user.setEmailVerificationTokenHash(tokenService.hashToken(rawToken));
-        user.setEmailVerificationExpiresAt(now.plus(EMAIL_VERIFICATION_TTL));
-        user.setUpdatedAt(now);
-        if (!slot.repurposed()) {
-            user.setCreatedAt(now);
-        }
-        // Reset fields that may carry over from a soft-deleted document.
-        user.setDeletedAt(null);
-        user.setPasswordResetTokenHash(null);
-        user.setPasswordResetExpiresAt(null);
-        user.setPasswordResetUsedAt(null);
-        return new RegistrationPrep(user, rawToken);
+                    user.setEmail(email);
+                    user.setName(req.getName());
+                    user.setPasswordHash(hash);
+                    user.setStatus(UserStatus.pending);
+                    user.setEmailVerificationTokenHash(tokenService.hashToken(rawToken));
+                    user.setEmailVerificationExpiresAt(now.plus(EMAIL_VERIFICATION_TTL));
+                    user.setUpdatedAt(now);
+                    if (!slot.repurposed()) {
+                        user.setCreatedAt(now);
+                    }
+                    // Reset fields that may carry over from a soft-deleted document.
+                    user.setDeletedAt(null);
+                    user.setPasswordResetTokenHash(null);
+                    user.setPasswordResetExpiresAt(null);
+                    user.setPasswordResetUsedAt(null);
+                    // CRITICAL: a soft-deleted superadmin must not pass admin rights to whoever
+                    // re-registers the email after the 30-day window. Reset on every register path
+                    // — only SuperAdminSeeder can grant superadmin (Task 7).
+                    user.setSuperAdmin(false);
+                    return new RegistrationPrep(user, rawToken);
+                });
+    }
+
+    private Mono<Void> checkRegisterRate(String ip) {
+        String key = registerIpKey(ip);
+        return redisTemplate.opsForValue().increment(key)
+                .flatMap(count -> {
+                    if (count != null && count == 1L) {
+                        // Only set TTL on first hit — same window-stability semantic as login brute-force.
+                        return redisTemplate.expire(key, REGISTER_RATE_TTL).then(Mono.just(count));
+                    }
+                    return Mono.just(count);
+                })
+                .flatMap(count -> count > REGISTER_IP_THRESHOLD
+                        ? Mono.<Void>error(AppException.tooManyRequests(
+                                "Забагато спроб реєстрації з цієї IP. Спробуйте за хвилину."))
+                        : Mono.<Void>empty())
+                // Decision 4 fail-open: Redis outage allows registration through (Bean Validation
+                // and the unique-email index still gate abuse).
+                .onErrorResume(err -> err instanceof AppException
+                        ? Mono.error(err)
+                        : Mono.fromRunnable(() ->
+                                log.warn("Redis register rate-limit check failed, allowing: {}", err.getMessage())));
+    }
+
+    private static String registerIpKey(String ip) {
+        return "register:rate:ip:" + ip;
     }
 
     private static String canonicalize(String email) {

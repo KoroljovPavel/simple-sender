@@ -1,6 +1,5 @@
 package com.botfunnel.auth;
 
-import com.botfunnel.auth.dto.AuthResponse;
 import com.botfunnel.auth.dto.LoginRequest;
 import com.botfunnel.common.AppException;
 import com.botfunnel.events.EventService;
@@ -18,6 +17,10 @@ import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.ReactiveSecurityContextHolder;
+import org.springframework.security.core.context.SecurityContextImpl;
 import org.springframework.security.core.context.SecurityContext;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.server.context.ServerSecurityContextRepository;
@@ -25,14 +28,17 @@ import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebSession;
 import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
+import reactor.util.context.Context;
 
 import java.net.InetSocketAddress;
 import java.time.Duration;
+import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -86,6 +92,12 @@ class AuthServiceTest {
                 .thenReturn(ipValue == null ? Mono.empty() : Mono.just(ipValue));
     }
 
+    private void stubIncrement(long emailNew, long ipNew) {
+        when(redisTemplate.opsForValue().increment(EMAIL_KEY)).thenReturn(Mono.just(emailNew));
+        when(redisTemplate.opsForValue().increment(IP_KEY)).thenReturn(Mono.just(ipNew));
+        when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+    }
+
     private User activeUser() {
         User user = new User();
         user.setId("user-id-1");
@@ -96,11 +108,23 @@ class AuthServiceTest {
         return user;
     }
 
+    private ServerWebExchange mockExchangeWithSessions(WebSession preAuth, WebSession fresh) {
+        ServerWebExchange exchange = org.mockito.Mockito.mock(ServerWebExchange.class);
+        when(exchange.getRequest()).thenReturn(MockServerHttpRequest
+                .post("/api/auth/login")
+                .header("User-Agent", "JUnit")
+                .remoteAddress(new InetSocketAddress(IP, 12345))
+                .build());
+        when(exchange.getSession()).thenReturn(Mono.just(preAuth), Mono.just(fresh));
+        return exchange;
+    }
+
     @Test
-    void login_nonExistentEmail_runsDummyBcrypt_returns401() {
+    void login_nonExistentEmail_runsDummyBcrypt_andIncrementsCounters_returns401() {
         stubBruteCounters(null, null);
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
         when(passwordEncoder.matches(eq("anyPassword"), eq(AuthService.DUMMY_HASH))).thenReturn(false);
+        stubIncrement(1L, 1L);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "anyPassword", false), exchangeWithIp(IP)))
                 .expectErrorMatches(e -> e instanceof AppException
@@ -108,18 +132,38 @@ class AuthServiceTest {
                 .verify();
 
         verify(passwordEncoder).matches("anyPassword", AuthService.DUMMY_HASH);
-        verify(passwordEncoder, never()).matches(eq("anyPassword"), eq("$2a$12$realhashplaceholder"));
+        // Increment-on-not-found closes the 429 status oracle (security-auditor finding #1).
+        verify(redisTemplate.opsForValue()).increment(EMAIL_KEY);
+        verify(redisTemplate.opsForValue()).increment(IP_KEY);
+        verify(eventService).logEvent(isNull(), eq("login_failed"), eq(IP), eq("JUnit-Test"),
+                eq(Map.of("reason", "user_not_found")));
     }
 
     @Test
-    void login_wrongPassword_incrementsRedisCounters() {
+    void login_canonicalizesEmailToLowercase_forBruteForceKeyAndLookup() {
+        // Mixed-case email must produce the same Redis bucket as lowercase to prevent case-variant bypass.
+        when(redisTemplate.opsForValue().get(EMAIL_KEY)).thenReturn(Mono.empty());
+        when(redisTemplate.opsForValue().get(IP_KEY)).thenReturn(Mono.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(passwordEncoder.matches(any(), eq(AuthService.DUMMY_HASH))).thenReturn(false);
+        stubIncrement(1L, 1L);
+
+        StepVerifier.create(authService.login(
+                new LoginRequest("USER@Test.com", "anyPassword", false), exchangeWithIp(IP)))
+                .expectError(AppException.class)
+                .verify();
+
+        verify(userRepository).findByEmail(EMAIL);
+        verify(redisTemplate.opsForValue()).get(EMAIL_KEY);
+    }
+
+    @Test
+    void login_wrongPassword_incrementsRedisCounters_andLogsFailedEvent() {
         stubBruteCounters(null, null);
         User user = activeUser();
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
         when(passwordEncoder.matches("badpass", user.getPasswordHash())).thenReturn(false);
-        when(redisTemplate.opsForValue().increment(EMAIL_KEY)).thenReturn(Mono.just(1L));
-        when(redisTemplate.opsForValue().increment(IP_KEY)).thenReturn(Mono.just(1L));
-        when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+        stubIncrement(1L, 1L);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "badpass", false), exchangeWithIp(IP)))
                 .expectErrorMatches(e -> e instanceof AppException
@@ -130,6 +174,8 @@ class AuthServiceTest {
         verify(redisTemplate.opsForValue()).increment(IP_KEY);
         verify(redisTemplate).expire(eq(EMAIL_KEY), eq(Duration.ofSeconds(900)));
         verify(redisTemplate).expire(eq(IP_KEY), eq(Duration.ofSeconds(900)));
+        verify(eventService).logEvent(eq("user-id-1"), eq("login_failed"), eq(IP), eq("JUnit-Test"),
+                eq(Map.of("reason", "wrong_password")));
     }
 
     @Test
@@ -139,8 +185,7 @@ class AuthServiceTest {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
         when(passwordEncoder.matches("badpass", user.getPasswordHash())).thenReturn(false);
         // Second failure: counter already exists, INCR returns 2, EXPIRE must NOT be called.
-        when(redisTemplate.opsForValue().increment(EMAIL_KEY)).thenReturn(Mono.just(2L));
-        when(redisTemplate.opsForValue().increment(IP_KEY)).thenReturn(Mono.just(2L));
+        stubIncrement(2L, 2L);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "badpass", false), exchangeWithIp(IP)))
                 .expectError(AppException.class)
@@ -150,7 +195,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void login_blockedUser_returns403WithSupportEmail() {
+    void login_blockedUser_returns403WithSupportEmail_andLogsFailedEvent() {
         stubBruteCounters(null, null);
         User user = activeUser();
         user.setStatus(UserStatus.blocked);
@@ -164,6 +209,9 @@ class AuthServiceTest {
                             && ae.getMessage().contains(SUPPORT_EMAIL);
                 })
                 .verify();
+
+        verify(eventService).logEvent(eq("user-id-1"), eq("login_failed"), eq(IP), eq("JUnit-Test"),
+                eq(Map.of("reason", "blocked")));
     }
 
     @Test
@@ -191,6 +239,25 @@ class AuthServiceTest {
     }
 
     @Test
+    void login_redisCheckFails_failsOpen_andContinuesToUserLookup() {
+        // Decision 4: Redis unavailability must not block login. With both GETs erroring, the
+        // service must skip the threshold check and proceed to the user lookup.
+        when(redisTemplate.opsForValue().get(anyString()))
+                .thenReturn(Mono.error(new RuntimeException("redis down")));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(passwordEncoder.matches(any(), eq(AuthService.DUMMY_HASH))).thenReturn(false);
+        when(redisTemplate.opsForValue().increment(anyString()))
+                .thenReturn(Mono.error(new RuntimeException("redis down")));
+
+        StepVerifier.create(authService.login(new LoginRequest(EMAIL, "x", false), exchangeWithIp(IP)))
+                .expectErrorMatches(e -> e instanceof AppException
+                        && ((AppException) e).getStatus() == HttpStatus.UNAUTHORIZED)
+                .verify();
+
+        verify(userRepository).findByEmail(EMAIL);
+    }
+
+    @Test
     void login_success_invalidatesPreAuthSession_andSetsRememberMeTtl() {
         stubBruteCounters(null, null);
         User user = activeUser();
@@ -199,16 +266,11 @@ class AuthServiceTest {
         when(redisTemplate.delete(EMAIL_KEY, IP_KEY)).thenReturn(Mono.just(2L));
         when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
 
-        WebSession preAuthSession = org.mockito.Mockito.mock(WebSession.class);
-        WebSession newSession = org.mockito.Mockito.mock(WebSession.class);
-        when(preAuthSession.invalidate()).thenReturn(Mono.empty());
+        WebSession preAuth = org.mockito.Mockito.mock(WebSession.class);
+        WebSession fresh = org.mockito.Mockito.mock(WebSession.class);
+        when(preAuth.invalidate()).thenReturn(Mono.empty());
 
-        ServerWebExchange exchange = org.mockito.Mockito.mock(ServerWebExchange.class);
-        when(exchange.getRequest()).thenReturn(MockServerHttpRequest
-                .post("/api/auth/login").header("User-Agent", "JUnit").remoteAddress(new InetSocketAddress(IP, 12345)).build());
-        // First getSession() call returns the pre-auth session (for invalidation),
-        // second call returns the freshly created post-invalidate session.
-        when(exchange.getSession()).thenReturn(Mono.just(preAuthSession), Mono.just(newSession));
+        ServerWebExchange exchange = mockExchangeWithSessions(preAuth, fresh);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", true), exchange))
                 .assertNext(resp -> {
@@ -217,11 +279,20 @@ class AuthServiceTest {
                 })
                 .verifyComplete();
 
-        verify(preAuthSession).invalidate();
+        verify(preAuth).invalidate();
         ArgumentCaptor<Duration> ttl = ArgumentCaptor.forClass(Duration.class);
-        verify(newSession).setMaxIdleTime(ttl.capture());
+        verify(fresh).setMaxIdleTime(ttl.capture());
         assertThat(ttl.getValue()).isEqualTo(Duration.ofDays(30));
-        verify(securityContextRepository).save(eq(exchange), any(SecurityContext.class));
+
+        ArgumentCaptor<SecurityContext> ctxCap = ArgumentCaptor.forClass(SecurityContext.class);
+        verify(securityContextRepository).save(eq(exchange), ctxCap.capture());
+        Object principal = ctxCap.getValue().getAuthentication().getPrincipal();
+        assertThat(principal).isInstanceOf(AppUserDetails.class);
+        AppUserDetails p = (AppUserDetails) principal;
+        // Principal must NOT carry credentials material — sessions collection in MongoDB serializes this.
+        assertThat(p.getPassword()).isNull();
+        assertThat(p.id()).isEqualTo("user-id-1");
+        assertThat(p.email()).isEqualTo(EMAIL);
     }
 
     @Test
@@ -233,21 +304,18 @@ class AuthServiceTest {
         when(redisTemplate.delete(EMAIL_KEY, IP_KEY)).thenReturn(Mono.just(2L));
         when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
 
-        WebSession preAuthSession = org.mockito.Mockito.mock(WebSession.class);
-        WebSession newSession = org.mockito.Mockito.mock(WebSession.class);
-        when(preAuthSession.invalidate()).thenReturn(Mono.empty());
+        WebSession preAuth = org.mockito.Mockito.mock(WebSession.class);
+        WebSession fresh = org.mockito.Mockito.mock(WebSession.class);
+        when(preAuth.invalidate()).thenReturn(Mono.empty());
 
-        ServerWebExchange exchange = org.mockito.Mockito.mock(ServerWebExchange.class);
-        when(exchange.getRequest()).thenReturn(MockServerHttpRequest
-                .post("/api/auth/login").header("User-Agent", "JUnit").remoteAddress(new InetSocketAddress(IP, 12345)).build());
-        when(exchange.getSession()).thenReturn(Mono.just(preAuthSession), Mono.just(newSession));
+        ServerWebExchange exchange = mockExchangeWithSessions(preAuth, fresh);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", false), exchange))
                 .assertNext(r -> assertThat(r.warning()).isNull())
                 .verifyComplete();
 
         ArgumentCaptor<Duration> ttl = ArgumentCaptor.forClass(Duration.class);
-        verify(newSession).setMaxIdleTime(ttl.capture());
+        verify(fresh).setMaxIdleTime(ttl.capture());
         assertThat(ttl.getValue()).isEqualTo(Duration.ofHours(24));
     }
 
@@ -264,17 +332,14 @@ class AuthServiceTest {
         WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
         when(s1.invalidate()).thenReturn(Mono.empty());
 
-        ServerWebExchange exchange = org.mockito.Mockito.mock(ServerWebExchange.class);
-        when(exchange.getRequest()).thenReturn(MockServerHttpRequest
-                .post("/api/auth/login").header("User-Agent", "JUnit").remoteAddress(new InetSocketAddress(IP, 12345)).build());
-        when(exchange.getSession()).thenReturn(Mono.just(s1), Mono.just(s2));
+        ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", false), exchange))
                 .expectNextCount(1)
                 .verifyComplete();
 
         verify(redisTemplate, atLeastOnce()).delete(EMAIL_KEY, IP_KEY);
-        verify(eventService).logEvent(eq("user-id-1"), eq("login_success"), eq(IP), eq("JUnit"), eq(null));
+        verify(eventService).logEvent(eq("user-id-1"), eq("login_success"), eq(IP), eq("JUnit"), isNull());
     }
 
     @Test
@@ -291,10 +356,7 @@ class AuthServiceTest {
         WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
         when(s1.invalidate()).thenReturn(Mono.empty());
 
-        ServerWebExchange exchange = org.mockito.Mockito.mock(ServerWebExchange.class);
-        when(exchange.getRequest()).thenReturn(MockServerHttpRequest
-                .post("/api/auth/login").header("User-Agent", "JUnit").remoteAddress(new InetSocketAddress(IP, 12345)).build());
-        when(exchange.getSession()).thenReturn(Mono.just(s1), Mono.just(s2));
+        ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", false), exchange))
                 .assertNext(r -> {
@@ -305,7 +367,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void login_deletedUser_returns401() {
+    void login_deletedUser_returns401_andLogsFailedEvent() {
         stubBruteCounters(null, null);
         User user = activeUser();
         user.setStatus(UserStatus.deleted);
@@ -316,6 +378,9 @@ class AuthServiceTest {
                 .expectErrorMatches(e -> e instanceof AppException
                         && ((AppException) e).getStatus() == HttpStatus.UNAUTHORIZED)
                 .verify();
+
+        verify(eventService).logEvent(eq("user-id-1"), eq("login_failed"), eq(IP), eq("JUnit-Test"),
+                eq(Map.of("reason", "deleted")));
     }
 
     @Test
@@ -324,6 +389,8 @@ class AuthServiceTest {
         when(redisTemplate.opsForValue().get("brute:fail:ip:203.0.113.99")).thenReturn(Mono.empty());
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
         when(passwordEncoder.matches(any(), eq(AuthService.DUMMY_HASH))).thenReturn(false);
+        when(redisTemplate.opsForValue().increment(anyString())).thenReturn(Mono.just(1L));
+        when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
 
         MockServerHttpRequest request = MockServerHttpRequest
                 .post("/api/auth/login")
@@ -338,5 +405,81 @@ class AuthServiceTest {
 
         verify(redisTemplate.opsForValue()).get("brute:fail:ip:203.0.113.99");
         verify(redisTemplate.opsForValue(), never()).get("brute:fail:ip:10.0.0.5");
+    }
+
+    @Test
+    void login_fallsBackToRemoteAddress_whenXffAbsent() {
+        when(redisTemplate.opsForValue().get("brute:fail:" + EMAIL)).thenReturn(Mono.empty());
+        when(redisTemplate.opsForValue().get("brute:fail:ip:10.0.0.5")).thenReturn(Mono.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(passwordEncoder.matches(any(), eq(AuthService.DUMMY_HASH))).thenReturn(false);
+        when(redisTemplate.opsForValue().increment(anyString())).thenReturn(Mono.just(1L));
+        when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+
+        MockServerHttpRequest request = MockServerHttpRequest
+                .post("/api/auth/login")
+                .remoteAddress(new InetSocketAddress("10.0.0.5", 12345))
+                .build();
+        ServerWebExchange exchange = MockServerWebExchange.from(request);
+
+        StepVerifier.create(authService.login(new LoginRequest(EMAIL, "x", false), exchange))
+                .expectError(AppException.class)
+                .verify();
+
+        verify(redisTemplate.opsForValue()).get("brute:fail:ip:10.0.0.5");
+    }
+
+    // -------- me() unit tests (4 branches) --------
+
+    @Test
+    void me_emptySecurityContext_returns401() {
+        StepVerifier.create(authService.me())
+                .expectErrorMatches(e -> e instanceof AppException
+                        && ((AppException) e).getStatus() == HttpStatus.UNAUTHORIZED)
+                .verify();
+    }
+
+    @Test
+    void me_unauthenticatedToken_returns401() {
+        Authentication unauth = new UsernamePasswordAuthenticationToken("x", "y");
+        unauth.setAuthenticated(false);
+        SecurityContext ctx = new SecurityContextImpl(unauth);
+
+        StepVerifier.create(authService.me().contextWrite(
+                        ReactiveSecurityContextHolder.withSecurityContext(Mono.just(ctx))))
+                .expectErrorMatches(e -> e instanceof AppException
+                        && ((AppException) e).getStatus() == HttpStatus.UNAUTHORIZED)
+                .verify();
+    }
+
+    @Test
+    void me_principalNotAppUserDetails_returns401() {
+        Authentication auth = UsernamePasswordAuthenticationToken.authenticated(
+                "string-principal", null, java.util.Collections.emptyList());
+        SecurityContext ctx = new SecurityContextImpl(auth);
+
+        StepVerifier.create(authService.me().contextWrite(
+                        ReactiveSecurityContextHolder.withSecurityContext(Mono.just(ctx))))
+                .expectErrorMatches(e -> e instanceof AppException
+                        && ((AppException) e).getStatus() == HttpStatus.UNAUTHORIZED)
+                .verify();
+    }
+
+    @Test
+    void me_validAppUserDetails_returnsMeResponse() {
+        AppUserDetails principal = new AppUserDetails("u-1", "user@test.com", "Alice", "active");
+        Authentication auth = UsernamePasswordAuthenticationToken.authenticated(
+                principal, null, principal.getAuthorities());
+        SecurityContext ctx = new SecurityContextImpl(auth);
+
+        StepVerifier.create(authService.me().contextWrite(
+                        ReactiveSecurityContextHolder.withSecurityContext(Mono.just(ctx))))
+                .assertNext(r -> {
+                    assertThat(r.id()).isEqualTo("u-1");
+                    assertThat(r.email()).isEqualTo("user@test.com");
+                    assertThat(r.name()).isEqualTo("Alice");
+                    assertThat(r.status()).isEqualTo("active");
+                })
+                .verifyComplete();
     }
 }

@@ -7,6 +7,8 @@ import org.springframework.data.mongodb.core.mapping.Document;
 import java.time.Instant;
 import java.util.Map;
 
+// Note: @CompoundIndex requires manual index creation in production when
+// spring.data.mongodb.auto-index-creation=false (the current global setting).
 @Document(collection = "events")
 @CompoundIndex(name = "userId_createdAt_desc", def = "{'userId': 1, 'createdAt': -1}")
 public class Event {

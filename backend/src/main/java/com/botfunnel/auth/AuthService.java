@@ -26,6 +26,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.util.Map;
 
 @Service
 public class AuthService {
@@ -34,13 +35,15 @@ public class AuthService {
 
     // Pre-computed bcrypt(cost=12) hash. Used only to consume ~250ms when a user is not found,
     // so non-existent-email response time matches wrong-password response time (Decision 13).
-    // Never matches any real password — the hash input is unrelated to any real account.
     static final String DUMMY_HASH = "$2a$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMQJqhN8/LewdBPj/nGYG/U.1S";
 
     private static final int EMAIL_THRESHOLD = 5;
     private static final int IP_THRESHOLD = 20;
     private static final Duration BRUTE_TTL = Duration.ofSeconds(900);
+    private static final int USER_AGENT_MAX = 500;
+
     private static final String EVENT_LOGIN_SUCCESS = "login_success";
+    private static final String EVENT_LOGIN_FAILED = "login_failed";
 
     private final UserRepository userRepository;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
@@ -70,16 +73,20 @@ public class AuthService {
     }
 
     public Mono<AuthResponse> login(LoginRequest request, ServerWebExchange exchange) {
-        String email = request.getEmail();
+        // Email is canonicalized to lowercase so case variants share a single brute-force bucket
+        // and a single user lookup. Without this, "User@x.com" and "user@x.com" would consume
+        // independent attempt budgets.
+        String email = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase();
         String ip = extractIp(exchange);
-        String userAgent = exchange.getRequest().getHeaders().getFirst("User-Agent");
+        String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
         String emailKey = bruteEmailKey(email);
         String ipKey = bruteIpKey(ip);
 
         // Mono.defer wraps findByEmail so the user lookup is skipped entirely when brute-force rejects the request.
         return checkBruteForce(emailKey, ipKey)
                 .then(Mono.defer(() -> userRepository.findByEmail(email)
-                        .switchIfEmpty(Mono.defer(() -> handleUserNotFound(request.getPassword())))))
+                        .switchIfEmpty(Mono.defer(() -> handleUserNotFound(
+                                request.getPassword(), emailKey, ipKey, ip, userAgent)))))
                 .flatMap(user -> authenticate(user, request, exchange, emailKey, ipKey, ip, userAgent));
     }
 
@@ -87,9 +94,9 @@ public class AuthService {
         return ReactiveSecurityContextHolder.getContext()
                 .map(SecurityContext::getAuthentication)
                 .filter(a -> a != null && a.isAuthenticated() && a.getPrincipal() instanceof AppUserDetails)
-                .map(a -> ((AppUserDetails) a.getPrincipal()).user())
+                .map(a -> (AppUserDetails) a.getPrincipal())
                 .switchIfEmpty(Mono.error(AppException.unauthorized("Not authenticated")))
-                .map(u -> new MeResponse(u.getId(), u.getEmail(), u.getName(), u.getStatus().name()));
+                .map(p -> new MeResponse(p.id(), p.email(), p.name(), p.status()));
     }
 
     private Mono<Void> checkBruteForce(String emailKey, String ipKey) {
@@ -104,7 +111,8 @@ public class AuthService {
                 // Decision 4: fail open if Redis is unreachable — brute-force is DoS mitigation, not auth gate.
                 .onErrorResume(err -> err instanceof AppException
                         ? Mono.error(err)
-                        : Mono.fromRunnable(() -> log.warn("Redis brute-force check failed, allowing: {}", err.getMessage())));
+                        : Mono.fromRunnable(() ->
+                                log.warn("Redis brute-force check failed, allowing: {}", err.getMessage())));
     }
 
     private Mono<Long> currentCount(String key) {
@@ -113,9 +121,17 @@ public class AuthService {
                 .defaultIfEmpty(0L);
     }
 
-    private Mono<User> handleUserNotFound(String password) {
+    private Mono<User> handleUserNotFound(String password, String emailKey, String ipKey,
+                                          String ip, String userAgent) {
+        // (1) consume ~250ms in bcrypt to match wrong-password timing,
+        // (2) increment brute-force counters so the response code (429 vs 401) does not become an
+        //     "email exists" oracle once the threshold is reached, and
+        // (3) log a login_failed event with reason=user_not_found for audit.
         return Mono.fromCallable(() -> passwordEncoder.matches(password, DUMMY_HASH))
                 .subscribeOn(Schedulers.boundedElastic())
+                .then(registerFailure(emailKey, ipKey))
+                .then(Mono.fromRunnable(() -> eventService.logEvent(
+                        null, EVENT_LOGIN_FAILED, ip, userAgent, Map.of("reason", "user_not_found"))))
                 .then(Mono.error(AppException.unauthorized("Invalid credentials")));
     }
 
@@ -126,6 +142,9 @@ public class AuthService {
                 .flatMap(matches -> {
                     if (Boolean.FALSE.equals(matches)) {
                         return registerFailure(emailKey, ipKey)
+                                .then(Mono.fromRunnable(() -> eventService.logEvent(
+                                        user.getId(), EVENT_LOGIN_FAILED, ip, userAgent,
+                                        Map.of("reason", "wrong_password"))))
                                 .then(Mono.error(AppException.unauthorized("Invalid credentials")));
                     }
                     return checkStatusAndAuthorize(user, request, exchange, emailKey, ipKey, ip, userAgent);
@@ -144,6 +163,8 @@ public class AuthService {
         return redisTemplate.opsForValue().increment(key)
                 .flatMap(count -> {
                     // Only set TTL on the first increment so the window isn't reset on each failure.
+                    // Crash between INCR and EXPIRE is a known small race (no Lua); on next failure
+                    // the counter just keeps growing without TTL — Redis MEMORY-policy still bounds it.
                     if (count != null && count == 1L) {
                         return redisTemplate.expire(key, BRUTE_TTL).then();
                     }
@@ -155,11 +176,15 @@ public class AuthService {
                                                        String emailKey, String ipKey, String ip, String userAgent) {
         UserStatus status = user.getStatus();
         if (status == UserStatus.blocked) {
-            return Mono.error(AppException.forbidden(
-                    "Your account has been blocked. Contact " + supportEmail));
+            return Mono.fromRunnable(() -> eventService.logEvent(
+                            user.getId(), EVENT_LOGIN_FAILED, ip, userAgent, Map.of("reason", "blocked")))
+                    .then(Mono.error(AppException.forbidden(
+                            "Your account has been blocked. Contact " + supportEmail)));
         }
         if (status == UserStatus.deleted) {
-            return Mono.error(AppException.unauthorized("Invalid credentials"));
+            return Mono.fromRunnable(() -> eventService.logEvent(
+                            user.getId(), EVENT_LOGIN_FAILED, ip, userAgent, Map.of("reason", "deleted")))
+                    .then(Mono.error(AppException.unauthorized("Invalid credentials")));
         }
         String warning = status == UserStatus.pending ? "email_not_verified" : null;
 
@@ -173,7 +198,8 @@ public class AuthService {
 
     private Mono<Void> openSession(User user, boolean rememberMe, ServerWebExchange exchange) {
         Duration ttl = rememberMe ? Duration.ofDays(rememberMeDays) : Duration.ofHours(defaultHours);
-        AppUserDetails principal = new AppUserDetails(user);
+        AppUserDetails principal = new AppUserDetails(
+                user.getId(), user.getEmail(), user.getName(), user.getStatus().name());
         Authentication auth = UsernamePasswordAuthenticationToken.authenticated(
                 principal, null, principal.getAuthorities());
         SecurityContext context = new SecurityContextImpl(auth);
@@ -204,10 +230,18 @@ public class AuthService {
         return "brute:fail:ip:" + ip;
     }
 
+    private static String capUserAgent(String userAgent) {
+        if (userAgent == null) return null;
+        return userAgent.length() > USER_AGENT_MAX ? userAgent.substring(0, USER_AGENT_MAX) : userAgent;
+    }
+
+    // Trust note: X-Forwarded-For is honoured unconditionally. Production deployments must front
+    // the backend with a reverse proxy (nginx/traefik) that overwrites this header — without one,
+    // clients can forge it and bypass the per-IP brute-force counter (per task Security note).
     private static String extractIp(ServerWebExchange exchange) {
         String xff = exchange.getRequest().getHeaders().getFirst("X-Forwarded-For");
         if (xff != null && !xff.isBlank()) {
-            // X-Forwarded-For may chain through multiple proxies; the leftmost entry is the original client.
+            // X-Forwarded-For chains through proxies; the leftmost entry is the original client.
             int comma = xff.indexOf(',');
             return (comma > 0 ? xff.substring(0, comma) : xff).trim();
         }

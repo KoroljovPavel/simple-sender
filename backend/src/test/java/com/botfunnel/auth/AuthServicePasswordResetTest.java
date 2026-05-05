@@ -9,8 +9,8 @@ import com.botfunnel.user.UserStatus;
 import com.mongodb.client.result.DeleteResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Answers;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
@@ -31,7 +31,6 @@ import reactor.test.StepVerifier;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.time.Instant;
-import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -79,6 +78,11 @@ class AuthServicePasswordResetTest {
         authService = new AuthService(userRepository, redisTemplate, passwordEncoder,
                 securityContextRepository, eventService, emailService, tokenService,
                 reactiveMongoTemplate, SUPPORT_EMAIL, 24L, 30L);
+        // Default-allow forgot-password rate limiter (Redis SET NX returns true ⇒ first hit).
+        // Tests that exercise the over-limit branch override this stub explicitly.
+        org.mockito.Mockito.lenient().when(redisTemplate.opsForValue()
+                        .setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenReturn(Mono.just(true));
     }
 
     private ServerWebExchange exchange() {
@@ -107,16 +111,18 @@ class AuthServicePasswordResetTest {
     // ---------- forgotPassword ----------
 
     @Test
-    void forgotPassword_unknownEmail_completes_doesNotEmail_logsAnonymousEvent() {
+    void forgotPassword_unknownEmail_completes_doesNotEmail_logsAnonymousEventWithNullMetadata() {
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
 
         StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
 
         verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString(), anyString());
         verify(userRepository, never()).save(any());
-        // Audit log fires with userId=null (per task spec): prevents enumeration via the events log.
+        // userId=null AND metadata=null: storing the user-supplied email in the audit log would
+        // turn the events collection itself into the enumeration oracle the response shape was
+        // meant to prevent (security-auditor finding #3 / code-reviewer major #1).
         verify(eventService).logEvent(eq(null), eq("password_reset_requested"),
-                eq(IP), eq("JUnit"), any());
+                eq(IP), eq("JUnit"), eq(null));
     }
 
     @Test
@@ -154,9 +160,9 @@ class AuthServicePasswordResetTest {
     }
 
     @Test
-    void forgotPassword_deletedUser_doesNotEmail_logsAnonymousEvent() {
-        // Soft-deleted accounts must not receive a reset email — but the response remains 200
-        // and the events log records userId=null to prevent enumeration.
+    void forgotPassword_deletedUser_doesNotEmail_logsAnonymousEventWithNullMetadata() {
+        // Soft-deleted accounts must not receive a reset email — and the events log records
+        // userId=null AND metadata=null (no leaked email) to prevent enumeration.
         User user = new User();
         user.setId("user-id-1");
         user.setEmail(EMAIL);
@@ -168,7 +174,53 @@ class AuthServicePasswordResetTest {
         verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString(), anyString());
         verify(userRepository, never()).save(any());
         verify(eventService).logEvent(eq(null), eq("password_reset_requested"),
-                eq(IP), eq("JUnit"), any());
+                eq(IP), eq("JUnit"), eq(null));
+    }
+
+    @Test
+    void forgotPassword_blockedUser_doesNotEmail_logsAnonymousEvent() {
+        // Blocked accounts must NOT be allowed to reset — login already gates blocked status, and
+        // reset must mirror that or admins lose the block (a malicious actor with the account's
+        // email could regain access by changing the password). Same anti-enumeration response.
+        User user = new User();
+        user.setId("user-id-1");
+        user.setEmail(EMAIL);
+        user.setStatus(UserStatus.blocked);
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
+
+        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+
+        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString(), anyString());
+        verify(userRepository, never()).save(any());
+        verify(eventService).logEvent(eq(null), eq("password_reset_requested"),
+                eq(IP), eq("JUnit"), eq(null));
+    }
+
+    @Test
+    void forgotPassword_perIpRateLimit_returns200Silently_andSkipsLookup() {
+        // Over-limit returns 200 (anti-enumeration) but does NOT touch the DB or email service.
+        when(redisTemplate.opsForValue()
+                .setIfAbsent(eq("forgot:rate:ip:" + IP), eq("1"), eq(Duration.ofSeconds(60))))
+                .thenReturn(Mono.just(false));
+
+        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+
+        verifyNoInteractions(userRepository);
+        verifyNoInteractions(emailService);
+        verifyNoInteractions(eventService);
+    }
+
+    @Test
+    void forgotPassword_redisDown_failsOpen_andProceedsWithLookup() {
+        // Decision 4 fail-open: Redis outage must not block legitimate reset attempts.
+        when(redisTemplate.opsForValue()
+                .setIfAbsent(anyString(), anyString(), any(Duration.class)))
+                .thenReturn(Mono.error(new RuntimeException("redis down")));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+
+        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+
+        verify(userRepository).findByEmail(EMAIL);
     }
 
     @Test
@@ -181,7 +233,9 @@ class AuthServicePasswordResetTest {
     }
 
     @Test
-    void forgotPassword_emailDispatchFailure_doesNotPropagate_returnsComplete() {
+    void forgotPassword_emailDispatchFailure_doesNotPropagate_andStillLogsAuditEvent() {
+        // SMTP failure must not (a) fail the API response or (b) skip the audit event — operators
+        // need the audit trail even when delivery breaks.
         User user = new User();
         user.setId("user-id-1");
         user.setEmail(EMAIL);
@@ -193,6 +247,9 @@ class AuthServicePasswordResetTest {
                 .when(emailService).sendPasswordResetEmail(anyString(), anyString(), anyString());
 
         StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+
+        verify(eventService).logEvent(eq("user-id-1"), eq("password_reset_requested"),
+                eq(IP), eq("JUnit"), eq(null));
     }
 
     // ---------- resetPassword ----------
@@ -218,6 +275,48 @@ class AuthServicePasswordResetTest {
                 .verify();
 
         verify(userRepository, never()).save(any());
+    }
+
+    @Test
+    void resetPassword_blockedUser_returns400_doesNotRotate() {
+        // Token issued just before admin block. Reset must NOT bypass the block.
+        String raw = "raw-blocked";
+        User u = new User();
+        u.setId("user-id-1");
+        u.setStatus(UserStatus.blocked);
+        u.setPasswordResetTokenHash(tokenService.hashToken(raw));
+        u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
+        when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
+                .thenReturn(Mono.just(u));
+
+        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
+                .expectErrorMatches(e -> e instanceof AppException
+                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
+                .verify();
+
+        verify(userRepository, never()).save(any());
+        verifyNoInteractions(reactiveMongoTemplate);
+    }
+
+    @Test
+    void resetPassword_deletedUser_returns400_doesNotRotate() {
+        // Token issued just before user deletion. Same gate: deleted accounts can never reset.
+        String raw = "raw-deleted";
+        User u = new User();
+        u.setId("user-id-1");
+        u.setStatus(UserStatus.deleted);
+        u.setPasswordResetTokenHash(tokenService.hashToken(raw));
+        u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
+        when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
+                .thenReturn(Mono.just(u));
+
+        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
+                .expectErrorMatches(e -> e instanceof AppException
+                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
+                .verify();
+
+        verify(userRepository, never()).save(any());
+        verifyNoInteractions(reactiveMongoTemplate);
     }
 
     @Test

@@ -57,7 +57,13 @@ public class AuthService {
     private static final Duration PASSWORD_RESET_TTL = Duration.ofHours(1);
     private static final Duration RESEND_RATE_TTL = Duration.ofSeconds(60);
     private static final Duration REGISTER_RATE_TTL = Duration.ofSeconds(60);
+    private static final Duration FORGOT_RATE_TTL = Duration.ofSeconds(60);
     private static final int REGISTER_IP_THRESHOLD = 10;
+    // Calibrated baseline for the forgot-password unknown/deleted branch. Without this, the
+    // known-user path incurs the Mongo save round-trip (~10–50ms) while the unknown path returns
+    // in ~0ms — a reliable enumeration oracle. The delay does not need to match exactly; it just
+    // needs to be of the same order so timing differences fall below practical measurement noise.
+    private static final Duration FORGOT_DUMMY_DELAY = Duration.ofMillis(40);
 
     private static final String EVENT_LOGIN_SUCCESS = "login_success";
     private static final String EVENT_LOGIN_FAILED = "login_failed";
@@ -243,19 +249,46 @@ public class AuthService {
         String ip = extractIp(exchange);
         String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
 
+        // Per-IP rate limit BEFORE the user lookup. Forgot-password is unauthenticated and
+        // triggers an outbound email + a DB write — without throttling, it is a vector for
+        // email-bombing a known victim, silent reset-token DoS by overwriting the pending token,
+        // and SMTP-egress abuse. Mirrors the SET-NX-EX 60s pattern used by resend-verification
+        // (Decision 7). Over-limit requests still return 200 so the response is identical to the
+        // success path (anti-enumeration). Decision 4 fail-open: if Redis is unreachable we
+        // proceed; brute-force DoS is preferable to blocking legitimate resets.
+        return redisTemplate.opsForValue()
+                .setIfAbsent(forgotKey(ip), "1", FORGOT_RATE_TTL)
+                .onErrorResume(err -> {
+                    log.warn("Redis forgot-password rate-limit check failed, allowing: {}", err.getMessage());
+                    return Mono.just(true);
+                })
+                .flatMap(allowed -> Boolean.FALSE.equals(allowed)
+                        ? Mono.empty()
+                        : doForgotPassword(email, ip, userAgent));
+    }
+
+    private Mono<Void> doForgotPassword(String email, String ip, String userAgent) {
         // Anti-enumeration: response is identical for known, unknown, and deleted emails.
-        // Audit logs use userId=null when the email does not match an active/pending account so
-        // that the events log itself cannot be used to enumerate (per task spec lines 41-42).
+        // Audit logs use userId=null AND null metadata when the email does not match an active
+        // account, so the events log itself cannot be used to enumerate (per task spec lines 41-42
+        // and security-auditor finding #3 — never persist user-supplied email into events.metadata).
         // Wrapping in Optional lets a single flatMap distinguish missing-user from deleted-user
         // without the switchIfEmpty double-firing on a deliberately-empty downstream branch.
         return userRepository.findByEmail(email)
                 .map(java.util.Optional::of)
                 .defaultIfEmpty(java.util.Optional.empty())
                 .flatMap(opt -> {
-                    if (opt.isEmpty() || opt.get().getStatus() == UserStatus.deleted) {
-                        return Mono.<Void>fromRunnable(() -> eventService.logEvent(
-                                null, EVENT_PASSWORD_RESET_REQUESTED, ip, userAgent,
-                                Map.of("email", email)));
+                    // pending users CAN reset (forgot password before verifying email is a normal flow).
+                    // blocked + deleted users get the same no-op as unknown email — anti-enumeration.
+                    if (opt.isEmpty()
+                            || opt.get().getStatus() == UserStatus.deleted
+                            || opt.get().getStatus() == UserStatus.blocked) {
+                        // Calibrated delay equalises wall-clock with the known-user save path —
+                        // closes the timing oracle (security-auditor finding #2 / CWE-208).
+                        return Mono.<Void>delay(FORGOT_DUMMY_DELAY)
+                                .doOnSuccess(v -> eventService.logEvent(
+                                        null, EVENT_PASSWORD_RESET_REQUESTED, ip, userAgent, null))
+                                .then();
                     }
                     User user = opt.get();
                     String raw = tokenService.generateRawToken();
@@ -268,14 +301,19 @@ public class AuthService {
                                 try {
                                     emailService.sendPasswordResetEmail(saved.getEmail(), saved.getName(), raw);
                                 } catch (RuntimeException ex) {
-                                    log.warn("Reset email dispatch failed for {}: {}",
-                                            saved.getEmail(), ex.getMessage());
+                                    // Log userId, NOT email — avoid PII in warn-level logs (security-auditor #4).
+                                    log.warn("Reset email dispatch failed for userId={}: {}",
+                                            saved.getId(), ex.getMessage());
                                 }
                                 eventService.logEvent(saved.getId(), EVENT_PASSWORD_RESET_REQUESTED,
                                         ip, userAgent, null);
                             })
                             .then();
                 });
+    }
+
+    private static String forgotKey(String ip) {
+        return "forgot:rate:ip:" + ip;
     }
 
     public Mono<Void> resetPassword(String rawToken, String newPassword, ServerWebExchange exchange) {
@@ -289,7 +327,15 @@ public class AuthService {
         return userRepository.findByPasswordResetTokenHash(hash)
                 .switchIfEmpty(Mono.error(AppException.badRequest(INVALID_RESET_LINK)))
                 .flatMap(user -> {
-                    // Expiry check first — gives the most relevant error message before the
+                    // Status gate (code-reviewer major finding): a token issued just before an
+                    // admin blocked or a user deleted the account must NOT rotate the password.
+                    // Login already gates these statuses; reset must mirror that to keep the same
+                    // account-lifecycle invariant. Same generic message — no enumeration oracle.
+                    if (user.getStatus() != UserStatus.pending
+                            && user.getStatus() != UserStatus.active) {
+                        return Mono.<Void>error(AppException.badRequest(INVALID_RESET_LINK));
+                    }
+                    // Expiry check next — gives the most relevant error message before the
                     // already-used check (per Details/edge-cases note in the task).
                     if (user.getPasswordResetExpiresAt() == null
                             || !user.getPasswordResetExpiresAt().isAfter(Instant.now())) {

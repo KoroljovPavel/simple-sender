@@ -78,3 +78,44 @@ Agent reports on completed tasks. Each entry is written by the agent that execut
 
 **Verification:**
 - `./gradlew test --tests "com.botfunnel.email.*"` → 11 passed, 0 failed
+
+---
+
+## Task 4: Login + brute-force + session management
+
+**Status:** Done
+**Commit:** a2efb06
+**Agent:** main agent
+**Summary:** Implemented `POST /api/auth/login` and `GET /api/auth/me` with the full security envelope: dual brute-force counters (per-email ≥5, per-IP ≥20), dummy bcrypt + INCR on missing email (closing the 429 status oracle and timing leak), session fixation prevention via WebSession invalidate-and-recreate, rememberMe-aware TTL (30d / 24h), Decision-4 fail-open Redis semantics, and audited login_failed events on every failure path (user_not_found, wrong_password, blocked, deleted, brute_force). Created the entire `events` package (Event @Document, EventRepository, EventService) used by all subsequent auth flows.
+**Deviations:**
+- `AppUserDetails` is a `record(id, email, name, status)` — not the full `User` entity originally implied by the task. Reason: Spring Session serializes the SecurityContext into MongoDB `sessions.attributes`; carrying the full User would make the sessions collection a secondary store of `passwordHash` and token hashes. Round-1 critical security finding.
+- Email is canonicalized via `toLowerCase(Locale.ROOT)` at login() entry. Reason: the brute-force key was case-sensitive, allowing a 5x attempt budget per case variant. Locale.ROOT avoids Turkish dotless-i drift.
+- `AuthService.me()` does not take `ServerWebExchange` — uses `ReactiveSecurityContextHolder` instead. Functionally equivalent, structurally cleaner.
+- `WebSession.setMaxIdleTime(Duration)` is the WebFlux API; persisted as `maxInactiveInterval` (seconds) in `sessions` collection (the spec's terminology was Servlet-flavoured).
+- `ServerSecurityContextRepository` extracted as `@Bean` in `SecurityConfig` so `AuthService` can inject the same instance the filter chain uses.
+- `SecurityConfigTest::authEndpoints_permitWithoutAuthentication` updated: `/api/auth/me` now returns 401 (controller-level) instead of 404 (path didn't exist before).
+- 4 TDD-anchor tests deferred to the `AbstractIntegrationTest` task (per task hint): `login_success_sessionFixation_newSessionId`, `login_rememberMe_sessionTtlIs30Days`, `login_noRememberMe_sessionTtlIs24H`, `login_success_loginSuccessEventInDB`. They require Testcontainer-backed real MongoDB to query the `sessions` and `events` collections. Equivalent behaviour is verified at the unit level via WebSession mocks and `verify(eventService).logEvent(...)` argument capture.
+- `AuthControllerIT` is a `@WebFluxTest` slice (not full Testcontainers IT) for the same reason. Filename retained per task spec; will become full IT when AbstractIntegrationTest lands.
+- Cookie `Secure`/`SameSite` defaults remain `false`/`lax` (dev-friendly). Production must override via `SESSION_COOKIE_SECURE=true` / `SESSION_COOKIE_SAME_SITE=strict` — to be enforced via `deployment.md` in Task 9 per Decision 12.
+- INCR + conditional EXPIRE is not Lua-atomic. Acknowledged inline; small race window only relevant on Redis crash between INCR and EXPIRE, with the worst case being a TTL-less stuck counter.
+
+**Reviews:**
+
+*Round 1:*
+- code-reviewer: approved_with_suggestions (14 minor) → [logs/working/task-4/code-reviewer-1.json](logs/working/task-4/code-reviewer-1.json)
+- security-auditor: changes_required (4 critical, 5 major, 3 minor) → [logs/working/task-4/security-auditor-1.json](logs/working/task-4/security-auditor-1.json)
+- test-reviewer: needs_improvement (3 major, 6 minor) → [logs/working/task-4/test-reviewer-1.json](logs/working/task-4/test-reviewer-1.json)
+
+*Round 2 (after fixes — commit 1b4dcf8):*
+- code-reviewer: approved (12 minor) → [logs/working/task-4/code-reviewer-2.json](logs/working/task-4/code-reviewer-2.json)
+- security-auditor: changes_required (1 critical, 1 major) → [logs/working/task-4/security-auditor-2.json](logs/working/task-4/security-auditor-2.json)
+- test-reviewer: passed (2 minor accepted) → [logs/working/task-4/test-reviewer-2.json](logs/working/task-4/test-reviewer-2.json)
+
+*Round 3 (after fixes — commit a2efb06):*
+- code-reviewer: approved (3 minor accepted) → [logs/working/task-4/code-reviewer-3.json](logs/working/task-4/code-reviewer-3.json)
+- security-auditor: approved → [logs/working/task-4/security-auditor-3.json](logs/working/task-4/security-auditor-3.json)
+
+**Verification:**
+- `./gradlew test --tests "com.botfunnel.auth.*" --tests "com.botfunnel.events.*"` → 34 passed, 0 failed
+  (AuthServiceTest 21, AuthControllerIT 5, TokenServiceTest 6, EventServiceTest 2)
+- `./gradlew test` (full suite, regression) → 56 passed, 0 failed

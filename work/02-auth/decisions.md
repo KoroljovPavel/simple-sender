@@ -119,3 +119,44 @@ Agent reports on completed tasks. Each entry is written by the agent that execut
 - `./gradlew test --tests "com.botfunnel.auth.*" --tests "com.botfunnel.events.*"` → 34 passed, 0 failed
   (AuthServiceTest 21, AuthControllerIT 5, TokenServiceTest 6, EventServiceTest 2)
 - `./gradlew test` (full suite, regression) → 56 passed, 0 failed
+
+---
+
+## Task 5: Registration + email verification + resend
+
+**Status:** Done
+**Commit:** 9d99c34
+**Agent:** main agent
+**Summary:** Implemented `POST /api/auth/register`, `GET /api/auth/verify-email`, and `POST /api/auth/resend-verification` with `@ValidPassword` Bean Validation constraint, SHA-256-hashed token storage (Decision 2), 30-day soft-delete window, per-IP register rate-limit (Redis INCR/EXPIRE 10/min, fail-open per Decision 4), and SET-NX-EX-60 resend rate-limit (called unconditionally to close timing oracle, Decision 7). Created `AbstractIntegrationTest` base (MongoDB + Redis + Mailpit testcontainers) and converted `AuthControllerIT` into a real Testcontainers IT covering register / verify / resend end-to-end (HTTP + Mongo + Mailpit + events collection assertions). Existing login slice tests moved to `AuthControllerSliceTest`.
+**Deviations:**
+- BCrypt encode in registration runs on `Schedulers.boundedElastic` (mirrors login path) — required to avoid blocking the Reactor Netty event loop on the cost-12 ~250ms hash.
+- Soft-delete repurpose path explicitly resets `isSuperAdmin=false` and clears all password-reset fields on every register, closing a privilege-escalation regression where a re-registered email would have inherited the previous account's superadmin flag.
+- Per-IP register rate-limit (10/min) added beyond the task spec, gating BCrypt CPU before it runs (security-auditor finding). Threshold tuneable; start loose to avoid blocking legitimate teammate signups.
+- `AbstractIntegrationTest` ships a `@Primary JavaMailSender` bean instead of relying on `@DynamicPropertySource` for `spring.mail.host/port` — `MailSenderAutoConfiguration` binds those keys at bean-creation time and the dynamic override does not consistently win for them (Mongo + Redis URIs work fine via DynamicPropertySource). Documented inline.
+- `@WebFluxTest` slice tests moved to a new `AuthControllerSliceTest` so `AuthControllerIT` could become a real IT with the file path called out by the TDD anchors.
+- WebTestClient in IT is rebuilt per test from the application context (not bound-to-server) so `SecurityMockServerConfigurers.csrf()` works under WebFlux RANDOM_PORT.
+- Audit events for register and resend are NOT logged — the existing events-collection enum (login_success, login_failed, password_changed, email_verified, account_blocked, account_unblocked, account_deleted) does not define register / resend events; logging them would require extending the schema, out of scope here.
+- Distinct 409 messages for "already exists" vs "recently deleted" kept per explicit user-spec requirement (lines 25-26), even though the security audit flagged the variance as anti-enumeration noise.
+
+**Reviews:**
+
+*Round 1:*
+- code-reviewer: changes_required (1 critical, 2 major, 6 minor) → [logs/working/task-5/code-reviewer-1.json](logs/working/task-5/code-reviewer-1.json)
+- security-auditor: changes_required (1 critical, 2 major, 5 minor) → [logs/working/task-5/security-auditor-1.json](logs/working/task-5/security-auditor-1.json)
+- test-reviewer: needs_improvement (0 critical, 2 major, 6 minor) → [logs/working/task-5/test-reviewer-1.json](logs/working/task-5/test-reviewer-1.json)
+
+*Round 1 fixes committed (963d61f): all critical and major findings resolved, several minors addressed inline.*
+
+*Round 2 (after fixes):*
+- code-reviewer: approved (0 critical, 0 major, 6 optional minor) → [logs/working/task-5/code-reviewer-2.json](logs/working/task-5/code-reviewer-2.json)
+- security-auditor: approved (0 critical, 0 major, 1 minor — register-rate threshold tuning) → [logs/working/task-5/security-auditor-2.json](logs/working/task-5/security-auditor-2.json)
+- test-reviewer: passed (0 critical, 0 major, 2 minor) → [logs/working/task-5/test-reviewer-2.json](logs/working/task-5/test-reviewer-2.json)
+
+*Round 2 minor polish committed (9d99c34): replaced Thread.sleep with Awaitility during(); repurpose IT now also asserts password-reset fields cleared.*
+
+**Verification:**
+- `./gradlew test` (full suite) → 101 passed, 0 failed
+- AuthControllerIT (Testcontainers MongoDB + Redis + Mailpit) → 10 passed
+- AuthControllerSliceTest (WebFlux slice) → 5 passed
+- AuthServiceRegistrationTest (unit) → 20 passed
+- ValidPasswordValidatorTest (unit) → 10 passed

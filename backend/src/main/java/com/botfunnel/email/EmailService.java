@@ -76,18 +76,21 @@ public class EmailService {
     }
 
     private void sendAsync(String to, String subject, String htmlBody) {
-        Mono.fromCallable(() -> {
+        Mono.<Void>fromRunnable(() -> {
             MimeMessage msg = javaMailSender.createMimeMessage();
-            MimeMessageHelper helper = new MimeMessageHelper(msg, true, "UTF-8");
-            helper.setFrom(from);
-            helper.setTo(to);
-            helper.setSubject(subject);
-            helper.setText(htmlBody, true);
+            try {
+                MimeMessageHelper helper = new MimeMessageHelper(msg, true, "UTF-8");
+                helper.setFrom(from);
+                helper.setTo(to);
+                helper.setSubject(subject);
+                helper.setText(htmlBody, true);
+            } catch (jakarta.mail.MessagingException e) {
+                throw new IllegalStateException("Failed to build email", e);
+            }
             javaMailSender.send(msg);
-            return null;
         })
         .subscribeOn(Schedulers.boundedElastic())
-        .subscribe(null, err -> log.error("Email send failed: {}", err.getMessage()));
+        .subscribe(null, err -> log.error("Email send failed to {}: {}", to, err.toString()));
     }
 
     String loadTemplate(String path) {

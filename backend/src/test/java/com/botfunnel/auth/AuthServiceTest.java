@@ -2,6 +2,7 @@ package com.botfunnel.auth;
 
 import com.botfunnel.auth.dto.LoginRequest;
 import com.botfunnel.common.AppException;
+import com.botfunnel.email.EmailService;
 import com.botfunnel.events.EventService;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
@@ -67,12 +68,16 @@ class AuthServiceTest {
     @Mock
     EventService eventService;
 
+    @Mock
+    EmailService emailService;
+
     AuthService authService;
 
     @BeforeEach
     void setUp() {
         authService = new AuthService(userRepository, redisTemplate, passwordEncoder,
-                securityContextRepository, eventService, SUPPORT_EMAIL, 24L, 30L);
+                securityContextRepository, eventService, emailService, new TokenService(),
+                SUPPORT_EMAIL, 24L, 30L);
     }
 
     private ServerWebExchange exchangeWithIp(String ip) {

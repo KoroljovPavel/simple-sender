@@ -3,7 +3,11 @@ package com.botfunnel.auth;
 import com.botfunnel.auth.dto.AuthResponse;
 import com.botfunnel.auth.dto.LoginRequest;
 import com.botfunnel.auth.dto.MeResponse;
+import com.botfunnel.auth.dto.RegisterRequest;
+import com.botfunnel.auth.dto.RegisterResponse;
+import com.botfunnel.auth.dto.VerifyEmailResponse;
 import com.botfunnel.common.AppException;
+import com.botfunnel.email.EmailService;
 import com.botfunnel.events.EventService;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
@@ -12,6 +16,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
@@ -26,6 +31,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Locale;
 import java.util.Map;
 
@@ -43,14 +49,21 @@ public class AuthService {
     private static final Duration BRUTE_TTL = Duration.ofSeconds(900);
     private static final int USER_AGENT_MAX = 500;
 
+    private static final Duration SOFT_DELETE_WINDOW = Duration.ofDays(30);
+    private static final Duration EMAIL_VERIFICATION_TTL = Duration.ofHours(24);
+    private static final Duration RESEND_RATE_TTL = Duration.ofSeconds(60);
+
     private static final String EVENT_LOGIN_SUCCESS = "login_success";
     private static final String EVENT_LOGIN_FAILED = "login_failed";
+    private static final String EVENT_EMAIL_VERIFIED = "email_verified";
 
     private final UserRepository userRepository;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final PasswordEncoder passwordEncoder;
     private final ServerSecurityContextRepository securityContextRepository;
     private final EventService eventService;
+    private final EmailService emailService;
+    private final TokenService tokenService;
     private final String supportEmail;
     private final long defaultHours;
     private final long rememberMeDays;
@@ -60,6 +73,8 @@ public class AuthService {
                        PasswordEncoder passwordEncoder,
                        ServerSecurityContextRepository securityContextRepository,
                        EventService eventService,
+                       EmailService emailService,
+                       TokenService tokenService,
                        @Value("${app.support-email}") String supportEmail,
                        @Value("${app.session.ttl-default-hours:24}") long defaultHours,
                        @Value("${app.session.ttl-remember-me-days:30}") long rememberMeDays) {
@@ -68,6 +83,8 @@ public class AuthService {
         this.passwordEncoder = passwordEncoder;
         this.securityContextRepository = securityContextRepository;
         this.eventService = eventService;
+        this.emailService = emailService;
+        this.tokenService = tokenService;
         this.supportEmail = supportEmail;
         this.defaultHours = defaultHours;
         this.rememberMeDays = rememberMeDays;
@@ -78,7 +95,7 @@ public class AuthService {
         // and a single user lookup. Without this, "User@x.com" and "user@x.com" would consume
         // independent attempt budgets.
         // Locale.ROOT prevents Turkish-locale dotless-i folding from re-opening the case-variant bypass.
-        String email = request.getEmail() == null ? "" : request.getEmail().trim().toLowerCase(Locale.ROOT);
+        String email = canonicalize(request.getEmail());
         String ip = extractIp(exchange);
         String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
         String emailKey = bruteEmailKey(email);
@@ -100,6 +117,148 @@ public class AuthService {
                 .switchIfEmpty(Mono.error(AppException.unauthorized("Not authenticated")))
                 .map(p -> new MeResponse(p.id(), p.email(), p.name(), p.status()));
     }
+
+    public Mono<RegisterResponse> register(RegisterRequest request, ServerWebExchange exchange) {
+        String email = canonicalize(request.getEmail());
+        return resolveRegistrationSlot(email)
+                .map(slot -> applyRegistration(slot, request, email))
+                .flatMap(prep -> userRepository.save(prep.user())
+                        .map(saved -> {
+                            // Fire-and-forget: EmailService never throws on its own, but if a synchronous
+                            // failure ever bubbled up, it must not break a successful registration.
+                            try {
+                                emailService.sendVerificationEmail(saved.getEmail(), saved.getName(), prep.rawToken());
+                            } catch (RuntimeException ex) {
+                                log.warn("Verification email dispatch failed for {}: {}", saved.getEmail(), ex.getMessage());
+                            }
+                            return new RegisterResponse(saved.getId());
+                        }));
+    }
+
+    public Mono<VerifyEmailResponse> verifyEmail(String rawToken, ServerWebExchange exchange) {
+        if (rawToken == null || rawToken.isBlank()) {
+            return Mono.error(AppException.badRequest("Посилання недійсне"));
+        }
+        String hash = tokenService.hashToken(rawToken);
+        String ip = extractIp(exchange);
+        String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
+
+        return userRepository.findByEmailVerificationTokenHash(hash)
+                .switchIfEmpty(Mono.error(AppException.badRequest("Посилання недійсне")))
+                .flatMap(user -> {
+                    // Status filter is applied here (not in the repository query) so that the same lookup
+                    // can detect the deleted-user case and fall through to the same generic 400 response.
+                    if (user.getStatus() != UserStatus.pending && user.getStatus() != UserStatus.active) {
+                        return Mono.<VerifyEmailResponse>error(AppException.badRequest("Посилання недійсне"));
+                    }
+                    if (user.getEmailVerificationExpiresAt() == null
+                            || !user.getEmailVerificationExpiresAt().isAfter(Instant.now())) {
+                        return Mono.<VerifyEmailResponse>error(new AppException(
+                                HttpStatus.BAD_REQUEST, "TOKEN_EXPIRED", "Посилання прострочено"));
+                    }
+                    user.setStatus(UserStatus.active);
+                    user.setEmailVerificationTokenHash(null);
+                    user.setEmailVerificationExpiresAt(null);
+                    user.setUpdatedAt(Instant.now());
+                    return userRepository.save(user)
+                            .doOnSuccess(saved -> eventService.logEvent(
+                                    saved.getId(), EVENT_EMAIL_VERIFIED, ip, userAgent, null))
+                            .thenReturn(new VerifyEmailResponse("/login"));
+                });
+    }
+
+    public Mono<Void> resendVerification(String emailRaw) {
+        String email = canonicalize(emailRaw);
+        // SET NX EX 60 is performed unconditionally — otherwise the request time would leak whether
+        // the email exists (timing oracle). Decision 7 / Risks: anti-enumeration.
+        return redisTemplate.opsForValue()
+                .setIfAbsent(resendKey(email), "1", RESEND_RATE_TTL)
+                .flatMap(success -> {
+                    if (Boolean.FALSE.equals(success)) {
+                        return Mono.<Void>error(AppException.tooManyRequests(
+                                "Зачекайте 60 секунд перед повторною відправкою"));
+                    }
+                    return userRepository.findByEmail(email)
+                            .flatMap(user -> {
+                                // Only pending users can have a fresh verification token issued. Active /
+                                // blocked / deleted accounts are silently ignored — the response is identical.
+                                if (user.getStatus() != UserStatus.pending) {
+                                    return Mono.<Void>empty();
+                                }
+                                String raw = tokenService.generateRawToken();
+                                user.setEmailVerificationTokenHash(tokenService.hashToken(raw));
+                                user.setEmailVerificationExpiresAt(Instant.now().plus(EMAIL_VERIFICATION_TTL));
+                                user.setUpdatedAt(Instant.now());
+                                return userRepository.save(user)
+                                        .doOnSuccess(saved -> {
+                                            try {
+                                                emailService.sendVerificationEmail(
+                                                        saved.getEmail(), saved.getName(), raw);
+                                            } catch (RuntimeException ex) {
+                                                log.warn("Resend verification email dispatch failed for {}: {}",
+                                                        saved.getEmail(), ex.getMessage());
+                                            }
+                                        })
+                                        .then();
+                            })
+                            .then();
+                });
+    }
+
+    private Mono<RegistrationSlot> resolveRegistrationSlot(String email) {
+        return userRepository.findByEmail(email)
+                .flatMap(existing -> {
+                    if (existing.getStatus() != UserStatus.deleted) {
+                        return Mono.<RegistrationSlot>error(AppException.conflict(
+                                "Користувач з таким email вже існує"));
+                    }
+                    Instant deletedAt = existing.getDeletedAt();
+                    if (deletedAt != null && deletedAt.isAfter(Instant.now().minus(SOFT_DELETE_WINDOW))) {
+                        return Mono.<RegistrationSlot>error(AppException.conflict(
+                                "Акаунт з таким email вже існує або був нещодавно видалений. "
+                                        + "Зверніться до підтримки: " + supportEmail));
+                    }
+                    // Soft-deleted longer than 30 days — repurpose the existing document so the
+                    // unique-email index is not violated.
+                    return Mono.just(new RegistrationSlot(existing, true));
+                })
+                .switchIfEmpty(Mono.fromSupplier(() -> new RegistrationSlot(new User(), false)));
+    }
+
+    private RegistrationPrep applyRegistration(RegistrationSlot slot, RegisterRequest req, String email) {
+        User user = slot.user();
+        Instant now = Instant.now();
+        String rawToken = tokenService.generateRawToken();
+
+        user.setEmail(email);
+        user.setName(req.getName());
+        user.setPasswordHash(passwordEncoder.encode(req.getPassword()));
+        user.setStatus(UserStatus.pending);
+        user.setEmailVerificationTokenHash(tokenService.hashToken(rawToken));
+        user.setEmailVerificationExpiresAt(now.plus(EMAIL_VERIFICATION_TTL));
+        user.setUpdatedAt(now);
+        if (!slot.repurposed()) {
+            user.setCreatedAt(now);
+        }
+        // Reset fields that may carry over from a soft-deleted document.
+        user.setDeletedAt(null);
+        user.setPasswordResetTokenHash(null);
+        user.setPasswordResetExpiresAt(null);
+        user.setPasswordResetUsedAt(null);
+        return new RegistrationPrep(user, rawToken);
+    }
+
+    private static String canonicalize(String email) {
+        return email == null ? "" : email.trim().toLowerCase(Locale.ROOT);
+    }
+
+    private static String resendKey(String email) {
+        return "resend:rate:" + email;
+    }
+
+    private record RegistrationSlot(User user, boolean repurposed) {}
+
+    private record RegistrationPrep(User user, String rawToken) {}
 
     private Mono<Void> checkBruteForce(String emailKey, String ipKey, String email, String ip, String userAgent) {
         return Mono.zip(currentCount(emailKey), currentCount(ipKey))

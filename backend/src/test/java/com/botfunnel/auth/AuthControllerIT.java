@@ -211,6 +211,11 @@ class AuthControllerIT extends AbstractIntegrationTest {
         assertThat(saved.isSuperAdmin())
                 .as("superadmin flag must NOT carry over from a soft-deleted account")
                 .isFalse();
+        // Defense-in-depth: any stale password-reset state from the prior account must be
+        // cleared so a leaked old reset link cannot affect the new account.
+        assertThat(saved.getPasswordResetTokenHash()).isNull();
+        assertThat(saved.getPasswordResetExpiresAt()).isNull();
+        assertThat(saved.getPasswordResetUsedAt()).isNull();
     }
 
     @Test
@@ -279,9 +284,13 @@ class AuthControllerIT extends AbstractIntegrationTest {
                 .exchange()
                 .expectStatus().isOk();
 
-        // Sanity: no Mailpit message arrived. We give a brief window to rule out async lag.
-        try { Thread.sleep(500); } catch (InterruptedException ignore) { Thread.currentThread().interrupt(); }
-        assertThat(mailpit().getMessageCount()).isZero();
+        // Sanity: no Mailpit message arrived. The unknown-email branch never enters EmailService,
+        // so any message would indicate a real defect. Asserting "stays at zero for a short
+        // window" rules out an asynchronous send leaking through.
+        await().during(Duration.ofMillis(500))
+                .atMost(Duration.ofSeconds(1))
+                .pollInterval(Duration.ofMillis(100))
+                .untilAsserted(() -> assertThat(mailpit().getMessageCount()).isZero());
 
         // Redis key must be set so the next call within 60s returns 429 even for unknown email.
         Boolean keyExists = redisTemplate.hasKey("resend:rate:ghost@test.com").block();

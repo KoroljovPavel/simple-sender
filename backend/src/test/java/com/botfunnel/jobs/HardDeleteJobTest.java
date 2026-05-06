@@ -77,4 +77,19 @@ class HardDeleteJobTest extends AbstractIntegrationTest {
         hardDeleteJob.hardDeleteSoftDeletedUsers();
         assertThat(userRepository.count().block()).isZero();
     }
+
+    @Test
+    void hardDelete_exactly30DaysAgo_isRemoved() {
+        // AC line 81: deletedAt <= now - 30d. The job adds 1ns to the cutoff so a user whose
+        // deletedAt timestamp is within "30 days minus 1ns to 30 days plus 1ns" of the current
+        // time is correctly captured by the strict-less-than finder. Without the +1ns bump,
+        // a user soft-deleted 30d ago to the second would survive an extra day.
+        User exactly = seedDeleted("exact@test.com", Instant.now().minus(Duration.ofDays(30)));
+
+        hardDeleteJob.hardDeleteSoftDeletedUsers();
+
+        assertThat(userRepository.findById(exactly.getId()).block())
+                .as("user soft-deleted exactly 30d ago must be hard-deleted on this run")
+                .isNull();
+    }
 }

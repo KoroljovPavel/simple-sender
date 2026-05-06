@@ -144,7 +144,14 @@ class ProfileControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void deleteAccount_setsStatusDeleted_invalidatesSession() {
+    void deleteAccount_setsStatusDeleted_terminatesAllSessions_logsEvent() {
+        // Seed sibling sessions on "other devices" + an unrelated user's session that must
+        // survive (security-auditor major: deleteAccount must invalidate ALL the user's
+        // sessions, not just the current one).
+        seedSession("sess-laptop", USER_ID);
+        seedSession("sess-phone", USER_ID);
+        seedSession("sess-other-user", "another-user-id");
+
         webTestClient.mutateWith(csrf())
                 .delete().uri("/api/profile")
                 .exchange()
@@ -153,6 +160,14 @@ class ProfileControllerIT extends AbstractIntegrationTest {
         User reread = userRepository.findById(USER_ID).block();
         assertThat(reread.getStatus()).isEqualTo(UserStatus.deleted);
         assertThat(reread.getDeletedAt()).isNotNull();
+
+        // ALL of this user's sessions across every device must be gone.
+        long mySessions = reactiveMongoTemplate.count(
+                Query.query(Criteria.where("principal").is(USER_ID)), "sessions").block();
+        long otherUserSessions = reactiveMongoTemplate.count(
+                Query.query(Criteria.where("principal").is("another-user-id")), "sessions").block();
+        assertThat(mySessions).as("all of this user's sessions must be terminated on account delete").isZero();
+        assertThat(otherUserSessions).as("other users' sessions must NOT be touched").isEqualTo(1L);
 
         // Audit event must be logged.
         await().atMost(Duration.ofSeconds(5))
@@ -167,6 +182,13 @@ class ProfileControllerIT extends AbstractIntegrationTest {
                 .blockFirst();
         assertThat(evt).isNotNull();
         assertThat(evt.getUserId()).isEqualTo(USER_ID);
+
+        // Re-issuing GET /api/profile with a still-authenticated SecurityContext (in @WithMockAppUser
+        // we never actually had a server-side cookie, but the user is now soft-deleted) must
+        // return 401 due to the status gate in loadActiveUser.
+        webTestClient.get().uri("/api/profile")
+                .exchange()
+                .expectStatus().isUnauthorized();
     }
 
     // ---------- Auth gate ----------
@@ -200,7 +222,17 @@ class ProfileControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void changePassword_correctCurrent_passwordRotated_eventLogged() {
+    void changePassword_correctCurrent_passwordRotated_otherSessionsKilled_eventLogged() {
+        // Seed two sibling sessions (other devices) + an unrelated user's session that must
+        // survive. The request's own session is not persisted under @WithMockAppUser
+        // (no real cookie flow), so we cannot assert "current session survives" at the
+        // document level here — the unit test ProfileServiceTest pins the `_id != currentSessionId`
+        // clause of the terminate query. What this IT proves end-to-end is that the integration
+        // delete path actually runs and removes the seeded sibling sessions.
+        seedSession("sess-laptop", USER_ID);
+        seedSession("sess-phone", USER_ID);
+        seedSession("sess-other-user", "another-user-id");
+
         webTestClient.mutateWith(csrf())
                 .post().uri("/api/profile/change-password")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -211,6 +243,23 @@ class ProfileControllerIT extends AbstractIntegrationTest {
         User reread = userRepository.findById(USER_ID).block();
         assertThat(passwordEncoder.matches("NewStr0ngPass", reread.getPasswordHash())).isTrue();
         assertThat(passwordEncoder.matches("Strong1Pass", reread.getPasswordHash())).isFalse();
+
+        // Other-user session must NOT be touched (Decision 14).
+        long otherUserSessions = reactiveMongoTemplate.count(
+                Query.query(Criteria.where("principal").is("another-user-id")), "sessions").block();
+        assertThat(otherUserSessions)
+                .as("change-password must only target the acting user's sessions")
+                .isEqualTo(1L);
+
+        // Both seeded sibling sessions for the acting user must be removed (their _id values
+        // do not match the request's current session id, so they fall under the "except current"
+        // delete).
+        long surviving = reactiveMongoTemplate.count(
+                Query.query(Criteria.where("principal").is(USER_ID)
+                        .and("_id").in("sess-laptop", "sess-phone")), "sessions").block();
+        assertThat(surviving)
+                .as("sibling sessions must be invalidated by change-password")
+                .isZero();
 
         await().atMost(Duration.ofSeconds(5))
                 .pollInterval(Duration.ofMillis(100))

@@ -33,7 +33,11 @@ public class HardDeleteJob {
     @Recurring(id = "hard-delete-users", cron = "0 3 * * *")
     @Job(name = "Hard delete soft-deleted users")
     public void hardDeleteSoftDeletedUsers() {
-        Instant cutoff = Instant.now().minus(RETENTION);
+        // AC line 81: deletedAt <= now - 30d. The repository finder is `Before` (strict <).
+        // Bumping the cutoff by 1 nanosecond converts the strict comparison to inclusive at the
+        // exact-30-days boundary so a user soft-deleted 30 days ago to the second is removed
+        // on the next run (instead of surviving one more day).
+        Instant cutoff = Instant.now().minus(RETENTION).plusNanos(1);
         // .collectList() materialises the candidate set so the IDs can be logged BEFORE deletion
         // (GDPR audit trail per tech-spec line 95). The set is naturally bounded by the daily
         // job cadence × 30-day retention window — no streaming needed at this volume.

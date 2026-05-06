@@ -236,3 +236,38 @@ Agent reports on completed tasks. Each entry is written by the agent that execut
 - ProfileControllerIT (Testcontainers, MongoDB + Redis) → 8 passed
 - SuperAdminSeederTest (Testcontainers) → 5 passed
 - HardDeleteJobTest (Testcontainers) → 4 passed
+
+---
+
+## Task 8: Frontend bootstrap
+
+**Status:** Done
+**Commit:** 477048b (round 1 fixes), final polish in next chore commit
+**Agent:** main agent
+**Summary:** Bootstrapped Nuxt 4 frontend: installed Pinia, Vue Query, vee-validate/zod, shadcn-vue toolkit (radix-vue, CVA, clsx, tailwind-merge, lucide), Tailwind, vitest 3 + @nuxt/test-utils. Created SSR-safe Pinia auth store backed by `useState('auth-user')`, global auth middleware with hydrate-then-route logic for both protected and `/auth/**` routes, `useApi` $fetch wrapper that propagates `XSRF-TOKEN` cookie as `X-XSRF-TOKEN` header on non-safe methods (Decision 12 alignment), Vue Query SSR plugin, default and auth layouts, and updated `app.vue` to render `<NuxtLayout><NuxtPage /></NuxtLayout>`. 12 unit tests cover store and middleware flows.
+**Deviations:**
+- Upgraded vitest from spec-implied `^2` to `^3.2.4` — Nuxt 4.4's vite-builder calls `viteServer.environments.client` which only exists in Vite 6 (vitest 3+). Vitest 2 fails at startup with "Cannot read properties of undefined (reading 'client')".
+- Removed explicit `vue` from `package.json` deps — code-reviewer flagged it as a duplicate-Vue-copies risk; pulled transitively via `nuxt`.
+- Updated `app.vue` from "Hello World" stub to `<NuxtLayout><NuxtPage />` — required for layouts/pages to render at all (tasks 10/11). Bootstrap-scope addition.
+- Added CSRF token forwarding in `useApi.ts` (security-auditor critical round 1) — was not explicit in task spec but required by Decision 12 (`CookieCsrfTokenRepository.withHttpOnlyFalse`).
+- Added `!frontend/plugins/` exception to root `.gitignore` — `plugins/` was globally ignored (Claude Code convention) and was hiding the new Vue Query plugin.
+
+**Reviews:**
+
+*Round 1:*
+- code-reviewer: changes_required (0 critical, 2 major, 5 minor) → [logs/working/task-8/code-reviewer-1.json](logs/working/task-8/code-reviewer-1.json)
+- security-auditor: changes_required (1 critical, 3 major, 3 minor, 1 low) → [logs/working/task-8/security-auditor-1.json](logs/working/task-8/security-auditor-1.json)
+- test-reviewer: needs_improvement (1 major, 4 minor) → [logs/working/task-8/test-reviewer-1.json](logs/working/task-8/test-reviewer-1.json)
+
+*Round 1 fixes committed (477048b): CSRF header, middleware always-hydrate + non-401 swallow, layout logout error swallow, vue dep removed, requiresAuth helper inlined, 401 test pre-arms user, +3 new tests (500 propagation, logout error, valid-session-on-/auth/login, middleware backend-error).*
+
+*Round 2 (after fixes):*
+- code-reviewer: approved_with_suggestions (0 critical, 0 major, 4 minor) → [logs/working/task-8/code-reviewer-2.json](logs/working/task-8/code-reviewer-2.json)
+- security-auditor: approved (0 critical, 0 major; 5 round-1 items deferred — apiBase prod fallback, fetchUser stale-state on 5xx, useState SSR leak, missing CSP, happy-dom advisory) → [logs/working/task-8/security-auditor-2.json](logs/working/task-8/security-auditor-2.json)
+- test-reviewer: passed (0 critical, 0 major, 2 minor carry-over) → [logs/working/task-8/test-reviewer-2.json](logs/working/task-8/test-reviewer-2.json)
+
+**Verification:**
+- `cd frontend && pnpm test` → 12 passed (auth.spec: 6, auth.global.spec: 6)
+- `pnpm nuxt build` → BUILD SUCCESSFUL (3.6 MB total, 846 kB gzip)
+- `pnpm dev` smoke (curl) → `/` → 302 `/auth/login`; `/dashboard` → 302 `/auth/login`; `/auth/login` → 200; no errors in dev log
+- User check → confirmed by user ("так все добре")

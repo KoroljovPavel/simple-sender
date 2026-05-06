@@ -4,7 +4,11 @@ import { useAuthStore } from '~/stores/auth'
 const authStore = useAuthStore()
 
 async function onLogout() {
-  await authStore.logout()
+  try {
+    await authStore.logout()
+  } catch {
+    // logout() always clears local user state via finally; ignore network errors so we always redirect.
+  }
   await navigateTo('/auth/login')
 }
 </script>

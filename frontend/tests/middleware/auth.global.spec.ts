@@ -13,6 +13,8 @@ mockNuxtImport('useApi', () => () => apiMock)
 import middleware from '../../middleware/auth.global'
 import { useAuthStore } from '../../stores/auth'
 
+const ACTIVE_USER = { id: '1', email: 'a@b.com', name: 'A', status: 'active' as const }
+
 function makeRoute(path: string, meta: Record<string, unknown> = {}) {
   return { path, fullPath: path, meta } as never
 }
@@ -28,41 +30,55 @@ describe('auth.global middleware', () => {
   it('unauthenticated_protectedRoute_redirectsToLogin', async () => {
     apiMock.mockRejectedValueOnce({ statusCode: 401 })
 
-    const to = makeRoute('/dashboard')
-    const from = makeRoute('/')
-    await middleware(to, from)
+    await middleware(makeRoute('/dashboard'), makeRoute('/'))
 
+    expect(apiMock).toHaveBeenCalledWith('/api/auth/me')
     expect(navigateToMock).toHaveBeenCalledWith('/auth/login')
   })
 
   it('authenticated_authRoute_redirectsToDashboard', async () => {
-    const store = useAuthStore()
-    store.user = { id: '1', email: 'a@b.com', name: 'A', status: 'active' }
+    useState<unknown>('auth-user').value = ACTIVE_USER
 
-    const to = makeRoute('/auth/login')
-    const from = makeRoute('/')
-    await middleware(to, from)
+    await middleware(makeRoute('/auth/login'), makeRoute('/'))
 
     expect(navigateToMock).toHaveBeenCalledWith('/dashboard')
     expect(apiMock).not.toHaveBeenCalled()
   })
 
-  it('authenticated_protectedRoute_passesThrough', async () => {
-    const store = useAuthStore()
-    store.user = { id: '1', email: 'a@b.com', name: 'A', status: 'active' }
+  it('unauthenticatedWithValidSession_authRoute_hydratesAndRedirectsToDashboard', async () => {
+    // User lands on /auth/login with a valid session cookie — middleware must hydrate
+    // and redirect to /dashboard, not pass through.
+    apiMock.mockResolvedValueOnce(ACTIVE_USER)
 
-    const to = makeRoute('/dashboard')
-    const from = makeRoute('/')
-    await middleware(to, from)
+    await middleware(makeRoute('/auth/login'), makeRoute('/'))
+
+    expect(apiMock).toHaveBeenCalledWith('/api/auth/me')
+    expect(navigateToMock).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('authenticated_protectedRoute_passesThrough', async () => {
+    useState<unknown>('auth-user').value = ACTIVE_USER
+
+    await middleware(makeRoute('/dashboard'), makeRoute('/'))
+
+    expect(navigateToMock).not.toHaveBeenCalled()
+    expect(apiMock).not.toHaveBeenCalled()
+  })
+
+  it('unauthenticated_publicAuthRoute_passesThrough', async () => {
+    apiMock.mockRejectedValueOnce({ statusCode: 401 })
+
+    await middleware(makeRoute('/auth/login'), makeRoute('/'))
 
     expect(navigateToMock).not.toHaveBeenCalled()
   })
 
-  it('unauthenticated_publicAuthRoute_passesThrough', async () => {
-    const to = makeRoute('/auth/login')
-    const from = makeRoute('/')
-    await middleware(to, from)
+  it('backendError_protectedRoute_redirectsToLogin', async () => {
+    // Non-401 error during fetchUser must not crash the middleware.
+    apiMock.mockRejectedValueOnce({ statusCode: 500 })
 
-    expect(navigateToMock).not.toHaveBeenCalled()
+    await middleware(makeRoute('/dashboard'), makeRoute('/'))
+
+    expect(navigateToMock).toHaveBeenCalledWith('/auth/login')
   })
 })

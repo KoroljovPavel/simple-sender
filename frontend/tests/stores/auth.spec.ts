@@ -7,6 +7,8 @@ mockNuxtImport('useApi', () => () => apiMock)
 
 import { useAuthStore } from '../../stores/auth'
 
+const ACTIVE_USER = { id: '1', email: 'a@b.com', name: 'A', status: 'active' as const }
+
 describe('auth store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -15,30 +17,41 @@ describe('auth store', () => {
   })
 
   it('fetchUser_successResponse_setsUser', async () => {
-    const user = { id: '1', email: 'a@b.com', name: 'A', status: 'active' as const }
-    apiMock.mockResolvedValueOnce(user)
+    apiMock.mockResolvedValueOnce(ACTIVE_USER)
 
     const store = useAuthStore()
     await store.fetchUser()
 
-    expect(store.user).toEqual(user)
+    expect(store.user).toEqual(ACTIVE_USER)
     expect(store.isAuthenticated).toBe(true)
     expect(store.isPending).toBe(false)
   })
 
   it('fetchUser_401Response_setsUserNull', async () => {
+    // Pre-arm with an authenticated user so the assertion proves the catch branch ran.
+    useState<unknown>('auth-user').value = ACTIVE_USER
     apiMock.mockRejectedValueOnce({ statusCode: 401 })
 
     const store = useAuthStore()
+    expect(store.user).toEqual(ACTIVE_USER)
     await store.fetchUser()
 
     expect(store.user).toBeNull()
     expect(store.isAuthenticated).toBe(false)
   })
 
+  it('fetchUser_500Response_propagatesErrorAndKeepsUser', async () => {
+    useState<unknown>('auth-user').value = ACTIVE_USER
+    apiMock.mockRejectedValueOnce({ statusCode: 500 })
+
+    const store = useAuthStore()
+    await expect(store.fetchUser()).rejects.toMatchObject({ statusCode: 500 })
+
+    expect(store.user).toEqual(ACTIVE_USER)
+  })
+
   it('logout_callsLogoutEndpoint_clearsUser', async () => {
-    const user = { id: '1', email: 'a@b.com', name: 'A', status: 'active' as const }
-    apiMock.mockResolvedValueOnce(user)
+    apiMock.mockResolvedValueOnce(ACTIVE_USER)
     apiMock.mockResolvedValueOnce(undefined)
 
     const store = useAuthStore()
@@ -48,6 +61,16 @@ describe('auth store', () => {
     await store.logout()
 
     expect(apiMock).toHaveBeenLastCalledWith('/api/auth/logout', { method: 'POST' })
+    expect(store.user).toBeNull()
+  })
+
+  it('logout_apiError_stillClearsUser', async () => {
+    useState<unknown>('auth-user').value = ACTIVE_USER
+    apiMock.mockRejectedValueOnce(new Error('network down'))
+
+    const store = useAuthStore()
+    await expect(store.logout()).rejects.toThrow('network down')
+
     expect(store.user).toBeNull()
   })
 

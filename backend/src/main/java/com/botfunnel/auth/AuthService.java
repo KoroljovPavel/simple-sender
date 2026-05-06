@@ -154,7 +154,10 @@ public class AuthService {
                             try {
                                 emailService.sendVerificationEmail(saved.getEmail(), saved.getName(), prep.rawToken());
                             } catch (RuntimeException ex) {
-                                log.warn("Verification email dispatch failed for {}: {}", saved.getEmail(), ex.getMessage());
+                                // Log userId, NOT email — avoid PII in warn-level logs (matches the
+                                // pattern locked down for forgotPassword in Task 6 / security-auditor #4).
+                                log.warn("Verification email dispatch failed for userId={}: {}",
+                                        saved.getId(), ex.getMessage());
                             }
                             return new RegisterResponse(saved.getId());
                         }));
@@ -227,8 +230,9 @@ public class AuthService {
                                                 emailService.sendVerificationEmail(
                                                         saved.getEmail(), saved.getName(), raw);
                                             } catch (RuntimeException ex) {
-                                                log.warn("Resend verification email dispatch failed for {}: {}",
-                                                        saved.getEmail(), ex.getMessage());
+                                                // Log userId, NOT email — see register() for rationale.
+                                                log.warn("Resend verification email dispatch failed for userId={}: {}",
+                                                        saved.getId(), ex.getMessage());
                                             }
                                         })
                                         .then();

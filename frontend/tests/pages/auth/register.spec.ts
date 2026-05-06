@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
-import { flushPromises } from '@vue/test-utils'
+import { settle } from '../../helpers/settle'
 
 const { apiMock, navigateToMock } = vi.hoisted(() => ({
   apiMock: vi.fn(),
@@ -13,10 +13,11 @@ mockNuxtImport('navigateTo', () => navigateToMock)
 
 import RegisterPage from '../../../pages/auth/register.vue'
 
-const settle = async () => {
-  await flushPromises()
-  await new Promise((r) => setTimeout(r, 50))
-  await flushPromises()
+async function fillValidForm(wrapper: Awaited<ReturnType<typeof mountSuspended>>) {
+  await wrapper.find('input[name="email"]').setValue('user@example.com')
+  await wrapper.find('input[name="name"]').setValue('User')
+  await wrapper.find('input[name="password"]').setValue('Password1')
+  await wrapper.find('input[name="confirmPassword"]').setValue('Password1')
 }
 
 describe('register page', () => {
@@ -37,7 +38,9 @@ describe('register page', () => {
     await wrapper.find('form').trigger('submit')
     await settle()
 
-    expect(wrapper.find('[data-test="confirm-password-error"]').exists()).toBe(true)
+    const error = wrapper.find('[data-test="confirm-password-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toMatch(/не співпадають/i)
     expect(apiMock).not.toHaveBeenCalled()
   })
 
@@ -51,7 +54,45 @@ describe('register page', () => {
     await wrapper.find('form').trigger('submit')
     await settle()
 
-    expect(wrapper.find('[data-test="password-error"]').exists()).toBe(true)
+    const error = wrapper.find('[data-test="password-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toMatch(/цифр/i)
     expect(apiMock).not.toHaveBeenCalled()
+  })
+
+  it('registerForm_validData_submitsBodyAndNavigatesToLogin', async () => {
+    apiMock.mockResolvedValueOnce(undefined)
+
+    const wrapper = await mountSuspended(RegisterPage)
+    await fillValidForm(wrapper)
+    await wrapper.find('form').trigger('submit')
+    await settle()
+
+    expect(apiMock).toHaveBeenCalledWith('/api/auth/register', {
+      method: 'POST',
+      body: {
+        email: 'user@example.com',
+        name: 'User',
+        password: 'Password1',
+      },
+    })
+    expect(navigateToMock).toHaveBeenCalledWith({
+      path: '/auth/login',
+      query: { registered: '1' },
+    })
+  })
+
+  it('registerForm_409Response_showsExistingEmailMessage', async () => {
+    apiMock.mockRejectedValueOnce({ statusCode: 409 })
+
+    const wrapper = await mountSuspended(RegisterPage)
+    await fillValidForm(wrapper)
+    await wrapper.find('form').trigger('submit')
+    await settle()
+
+    const error = wrapper.find('[data-test="submit-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toMatch(/вже існує/i)
+    expect(navigateToMock).not.toHaveBeenCalled()
   })
 })

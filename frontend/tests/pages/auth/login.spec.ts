@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
-import { flushPromises } from '@vue/test-utils'
+import { settle } from '../../helpers/settle'
 
 const { apiMock, navigateToMock, fetchUserMock } = vi.hoisted(() => ({
   apiMock: vi.fn(),
@@ -21,12 +21,6 @@ mockNuxtImport('useAuthStore', () => () => ({
 
 import LoginPage from '../../../pages/auth/login.vue'
 
-const settle = async () => {
-  await flushPromises()
-  await new Promise((r) => setTimeout(r, 50))
-  await flushPromises()
-}
-
 describe('login page', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -45,7 +39,9 @@ describe('login page', () => {
     await wrapper.find('form').trigger('submit')
     await settle()
 
-    expect(wrapper.find('[data-test="email-error"]').exists()).toBe(true)
+    const emailError = wrapper.find('[data-test="email-error"]')
+    expect(emailError.exists()).toBe(true)
+    expect(emailError.text()).toMatch(/коректний email/i)
     expect(apiMock).not.toHaveBeenCalled()
   })
 
@@ -57,7 +53,9 @@ describe('login page', () => {
     await wrapper.find('form').trigger('submit')
     await settle()
 
-    expect(wrapper.find('[data-test="password-error"]').exists()).toBe(true)
+    const pwdError = wrapper.find('[data-test="password-error"]')
+    expect(pwdError.exists()).toBe(true)
+    expect(pwdError.text()).toMatch(/8/)
     expect(apiMock).not.toHaveBeenCalled()
   })
 
@@ -73,11 +71,45 @@ describe('login page', () => {
 
     expect(apiMock).toHaveBeenCalledWith('/api/auth/login', expect.objectContaining({
       method: 'POST',
-      body: expect.objectContaining({
+      body: {
         email: 'user@example.com',
         password: 'password1',
-      }),
+        rememberMe: false,
+      },
     }))
+    expect(fetchUserMock).toHaveBeenCalled()
     expect(navigateToMock).toHaveBeenCalledWith('/dashboard')
+  })
+
+  it('loginForm_429Response_showsCooldownMessage', async () => {
+    apiMock.mockRejectedValueOnce({ statusCode: 429 })
+
+    const wrapper = await mountSuspended(LoginPage)
+
+    await wrapper.find('input[type="email"]').setValue('user@example.com')
+    await wrapper.find('input[type="password"]').setValue('password1')
+    await wrapper.find('form').trigger('submit')
+    await settle()
+
+    const submitError = wrapper.find('[data-test="submit-error"]')
+    expect(submitError.exists()).toBe(true)
+    expect(submitError.text()).toMatch(/15 хв/)
+    expect(navigateToMock).not.toHaveBeenCalled()
+  })
+
+  it('loginForm_401Response_showsInvalidCredentialsMessage', async () => {
+    apiMock.mockRejectedValueOnce({ statusCode: 401 })
+
+    const wrapper = await mountSuspended(LoginPage)
+
+    await wrapper.find('input[type="email"]').setValue('user@example.com')
+    await wrapper.find('input[type="password"]').setValue('password1')
+    await wrapper.find('form').trigger('submit')
+    await settle()
+
+    const submitError = wrapper.find('[data-test="submit-error"]')
+    expect(submitError.exists()).toBe(true)
+    expect(submitError.text()).toMatch(/невірний/i)
+    expect(navigateToMock).not.toHaveBeenCalled()
   })
 })

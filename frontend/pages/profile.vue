@@ -251,7 +251,7 @@ async function confirmDelete() {
         </p>
       </div>
 
-      <form v-else class="space-y-2" @submit.prevent="saveName">
+      <form v-else data-test="name-edit-form" class="space-y-2" @submit.prevent="saveName">
         <label for="profile-name-input" class="block text-xs font-medium text-gray-600 mb-1">Ім'я</label>
         <input
           id="profile-name-input"

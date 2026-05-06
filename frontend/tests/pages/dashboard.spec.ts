@@ -40,7 +40,9 @@ describe('dashboard page', () => {
     const banner = wrapper.find('[data-test="pending-banner"]')
     expect(banner.exists()).toBe(true)
     expect(banner.text()).toMatch(/Підтвердіть email/i)
-    expect(banner.find('a[href="/profile"]').exists()).toBe(true)
+    const link = banner.find('a[href="/profile"]')
+    expect(link.exists()).toBe(true)
+    expect(link.text()).toMatch(/Перейти до профілю/i)
   })
 
   it('dashboard_activeUser_noBanner', async () => {

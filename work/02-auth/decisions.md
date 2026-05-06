@@ -196,3 +196,43 @@ Agent reports on completed tasks. Each entry is written by the agent that execut
 - AuthControllerIT logout/forgot/reset/passwordChanged smoke → all green
 - AuthServicePasswordResetTest (unit) → 19 passed
 - IT `sessionsCollection_principalFieldPath_isAtTopLevel` confirms top-level `principal` field path on real Testcontainer Mongo
+
+---
+
+## Task 7: Profile endpoints + Super Admin seed + JobRunr hard-delete
+
+**Status:** Done
+**Commit:** 8cc1b7c
+**Agent:** main agent
+**Summary:** Implemented `ProfileController`/`ProfileService` for the five profile endpoints (GET/PATCH /api/profile, change-password with terminate-other-sessions per Decision 14, terminate-all-sessions, DELETE /api/profile with full session termination), idempotent `SuperAdminSeeder` (ApplicationRunner), and `HardDeleteJob` (JobRunr `@Recurring` daily at 03:00, GDPR audit log, 30d-inclusive cutoff). Added a Redis brute-force counter on change-password (`change-pwd:fail:{userId}`, threshold 5 / 15min, fail-open) to close the BCrypt-grinding window from a hijacked session, plus a status gate in `loadActiveUser` that rejects blocked/deleted users with 401 even when the session principal still says active.
+**Deviations:**
+- `deleteAccount` now invalidates ALL sessions for the user (not just the current one). The task spec wording said "invalidate session" — security-auditor major found that leaving sibling sessions alive defeats the intent of "delete account." `terminateAllSessions(userId)` runs before `session.invalidate()`.
+- `loadActiveUser` adds a status gate that mirrors `AuthService.login` — non-active/non-pending users get 401 from every profile endpoint. The original task spec did not explicitly require this; security-auditor critical (#1).
+- Per-userId Redis brute-force counter on change-password (security-auditor major #4). Not in the task spec, but mirrors the login-side primitive and uses the same fail-open semantic per Decision 4.
+- `HardDeleteJob` cutoff uses `Instant.now().minus(30d).plusNanos(1)` so the strict-less-than finder behaves inclusively at the 30d boundary (AC line 81). Without the bump, a user soft-deleted exactly 30 days ago to the second would survive an extra day.
+- Failed change-password attempts are NOT logged as `password_change_failed` events — the events enum is closed (Task 5 deviation precedent). The Redis brute-force counter is the active defense; visibility gap accepted.
+- `terminateAllSessions(userId)` is duplicated between `AuthService` (reset-password) and `ProfileService` — accepted; the Task 6 IT pins the single field path, and a shared helper would pull AuthService into ProfileService's dep graph for one query. Documented inline.
+- IT cannot drive a real persisted SESSION cookie under `@WithMockAppUser` (no real cookie flow), so "current session survives change-password" is verified at the unit level (Query.toJson() pinning of `_id != currentSessionId`). The IT instead seeds sibling sessions and asserts they are removed. Documented in test comments.
+- New shared `JobRunrInMemoryConfig` test bean replaces the previous `@MockitoBean StorageProvider` pattern — `@Recurring` post-processor needs a non-null storage to register the job at startup; an InMemory provider plus `org.jobrunr.background-job-server.enabled=false` keeps tests fast and deterministic.
+- `WithMockAppUser` custom `@WithSecurityContext` annotation injects an `AppUserDetails`-principal `Authentication` into the test SecurityContext. Required because the controller checks `instanceof AppUserDetails` and standard `@WithMockUser` injects a Spring Security `User` instead.
+
+**Reviews:**
+
+*Round 1:*
+- code-reviewer: approved_with_suggestions (0 critical, 2 major, 8 minor, 2 nitpick) → [logs/working/task-7/code-reviewer-1.json](logs/working/task-7/code-reviewer-1.json)
+- security-auditor: changes_required (1 critical, 3 major, 3 minor) → [logs/working/task-7/security-auditor-1.json](logs/working/task-7/security-auditor-1.json)
+- test-reviewer: needs_improvement (3 major, 3 minor) → [logs/working/task-7/test-reviewer-1.json](logs/working/task-7/test-reviewer-1.json)
+
+*Round 1 fixes committed (8cc1b7c): critical and majors resolved across all three reviewers.*
+
+*Round 2 (after fixes):*
+- code-reviewer: approved_with_suggestions (0 critical, 0 major, 4 minor, 3 nitpick — all optional) → [logs/working/task-7/code-reviewer-2.json](logs/working/task-7/code-reviewer-2.json)
+- security-auditor: approved_with_suggestions (0 critical, 0 major, 4 minor — non-blocking) → [logs/working/task-7/security-auditor-2.json](logs/working/task-7/security-auditor-2.json)
+- test-reviewer: passed (0 major, 2 minor — accepted) → [logs/working/task-7/test-reviewer-2.json](logs/working/task-7/test-reviewer-2.json)
+
+**Verification:**
+- `./gradlew test` (full suite) → 156 passed, 0 failed
+- ProfileServiceTest (unit) → 9 passed
+- ProfileControllerIT (Testcontainers, MongoDB + Redis) → 8 passed
+- SuperAdminSeederTest (Testcontainers) → 5 passed
+- HardDeleteJobTest (Testcontainers) → 4 passed

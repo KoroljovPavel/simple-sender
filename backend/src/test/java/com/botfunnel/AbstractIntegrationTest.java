@@ -1,7 +1,6 @@
 package com.botfunnel;
 
 import ch.martinelli.oss.testcontainers.mailpit.MailpitContainer;
-import org.jobrunr.storage.StorageProvider;
 import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -15,7 +14,6 @@ import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MongoDBContainer;
@@ -28,7 +26,7 @@ import org.testcontainers.utility.DockerImageName;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @Testcontainers
-@Import(AbstractIntegrationTest.MailpitTestConfig.class)
+@Import({AbstractIntegrationTest.MailpitTestConfig.class, JobRunrInMemoryConfig.class})
 public abstract class AbstractIntegrationTest {
 
     // Boot's MailSenderAutoConfiguration binds spring.mail.host/port at bean creation. The
@@ -67,11 +65,10 @@ public abstract class AbstractIntegrationTest {
         MAILPIT.start();
     }
 
-    // JobRunr autoconfig requires a StorageProvider bean; in IT we mock it out so we don't
-    // need a separate JobRunr storage container just to boot the app context.
-    @MockitoBean
-    StorageProvider storageProvider;
-
+    // JobRunr StorageProvider: supplied as an InMemoryStorageProvider by JobRunrInMemoryConfig.
+    // The background-job-server is disabled in test profile (application-test.properties) so no
+    // worker threads spawn. Recurring-job registration still runs at startup and is verified by
+    // HardDeleteJobTest invoking the @Recurring method directly.
     @Autowired
     private ApplicationContext applicationContext;
 

@@ -21,12 +21,16 @@ describe('verify-email page', () => {
     useState<unknown>('auth-user').value = null
   })
 
-  it('verifyEmail_validToken_showsSuccessState', async () => {
+  it('verifyEmail_validToken_callsBackendAndShowsSuccessState', async () => {
     apiMock.mockResolvedValueOnce(undefined)
 
     const wrapper = await mountSuspended(VerifyEmailPage)
     await settle()
 
+    expect(apiMock).toHaveBeenCalledWith('/api/auth/verify-email', {
+      method: 'GET',
+      query: { token: 'sometoken' },
+    })
     expect(wrapper.find('[data-test="success"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="invalid"]').exists()).toBe(false)
   })

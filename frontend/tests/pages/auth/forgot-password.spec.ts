@@ -50,7 +50,9 @@ describe('forgot-password page', () => {
     await wrapper.find('form').trigger('submit')
     await settle()
 
-    expect(wrapper.find('[data-test="email-error"]').exists()).toBe(true)
+    const error = wrapper.find('[data-test="email-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toMatch(/коректний email/i)
     expect(wrapper.find('[data-test="success-message"]').exists()).toBe(false)
     expect(apiMock).not.toHaveBeenCalled()
   })

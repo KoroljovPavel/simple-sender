@@ -73,7 +73,9 @@ describe('reset-password page', () => {
     await wrapper.find('form').trigger('submit')
     await settle()
 
-    expect(wrapper.find('[data-test="confirm-password-error"]').exists()).toBe(true)
+    const error = wrapper.find('[data-test="confirm-password-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text()).toMatch(/не співпадають/i)
     expect(apiMock).not.toHaveBeenCalled()
   })
 })

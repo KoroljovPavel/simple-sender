@@ -1,0 +1,38 @@
+{
+  "validator": "reality-checker",
+  "batch": [9, 10, 11],
+  "iteration": 2,
+  "status": "approved",
+  "previous_criticals_resolved": {
+    "task9_const_t_collision": "RESOLVED — Task 9 step 5 now explicitly calls out the const t collision inside the token computed and prescribes renaming the inner variable to rawToken/tokenParam. The fix text is concrete: 'Rename the inner local from t to rawToken (or tokenParam) and update the two references inside the computed body.' Verified against verify-email.vue lines 11-13 which still has the pre-fix collision — the task correctly describes what must change.",
+    "task9_useLocalePath_mocks": "RESOLVED — Task 9 step 7 now specifies exactly which three specs need the mock (login.spec.ts, register.spec.ts, reset-password.spec.ts), provides the exact mockNuxtImport call form, and explains the authorized-exception scope. Forgot-password and verify-email are handled conditionally with correct reasoning. The authorized exception to AC18/Decision 16 is documented in the task Description section.",
+    "task10_dashboard_profile_spec_breaks": "RESOLVED — Task 10 step 4 now explicitly adds the useLocalePath identity-passthrough mock to both dashboard.spec.ts and profile.spec.ts. The task calls out profile.spec.ts lines 184 and 233 and dashboard.spec.ts line 43 by name, explains the exact identity-passthrough semantics, and classifies these as authorized exceptions to Decision 16 / AC18. The acceptance criteria list (line 79) and verification steps (line 113) both confirm the mock is the only authorized change.",
+    "task10_toTypedSchema_unref_reactivity": "RESOLVED — Task 10 now explicitly forbids unref() at validationSchema assignment. Step 2 Section 3 says: 'передаємо саме ComputedRef, без unref()'. The Acceptance Criteria (line 74) codifies this. The Smoke verification (line 122) adds a grep sanity: 'unref( у profile.vue — НЕ має зустрітися біля toTypedSchema/schemaComputed/validationSchema'. The Implementation hints (lines 169-187) show the correct pattern with validationSchema: schemaComputed (not unref). This is the correct vee-validate reactive schema approach.",
+    "task10_429_cooldown_cannot_use_useApiError": "RESOLVED — Task 10 now documents this as a planned deviation (Description line 31: 'Decision 10 (часткове застосування у onResend): 429-гілка лишається імперативною'). Step 2 Section 2 (line 47) explicitly keeps the 429 branch imperative and uses useApiError only for the generic error branch. Acceptance Criteria line 77 codifies both behaviors.",
+    "task11_depends_on_incomplete": "RESOLVED — Task 11 depends_on is now [1, 4, 6, 8, 9, 10] (line 3), which adds Tasks 1, 4, and 6 that were missing from the prior iteration."
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 10,
+      "issue": "Task 10 'What to do' step 2 Section 2 (line 47) contains pseudocode for the onResend generic-error branch: `resendErrorText = useApiError(err, 'profile.resend')`. This has two errors: (1) useApiError is the factory — it must be called once in setup as `const apiError = useApiError()`, then used in catch as `apiError(err, 'profile.resend')`. Calling useApiError() inside a catch block violates the Vue lifecycle contract (useI18n called outside setup) — the exact antipattern that the edge cases section (line 158) explicitly forbids. (2) `resendErrorText` is a new ref that does not exist in the current profile.vue — it must be introduced alongside a template binding to `resendStatus === 'error'`, but the task does not mention creating this ref explicitly. The edge cases section (line 158) gives the correct `apiError(err, ...)` form, so the implementor can reconcile, but the 'What to do' pseudocode directly contradicts it and could cause a lifecycle violation if followed literally.",
+      "fix": "In step 2 Section 2, replace `resendErrorText = useApiError(err, 'profile.resend')` with `resendErrorText.value = apiError(err, 'profile.resend')` (where `apiError` is the handler returned by `const apiError = useApiError()` at the top of setup). Also add a note that `resendErrorText` is a new `ref<string | null>(null)` to be declared in script setup alongside the other resend refs, and that the template's `resend-error` paragraph should bind `{{ resendErrorText }}` instead of a hardcoded string."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 10,
+      "issue": "Task 10 line 47 references `resendCooldownTimer` as the name of the interval variable in the 429 branch. The actual variable in profile.vue is `resendTimer` (lines 65, 69-74, 81). The task's pseudocode says 'стартує таймер resendCooldownTimer' but the real function to call is `startResendCooldown(60)` (line 67 of profile.vue). An implementor following the pseudocode literally would reference a non-existent variable name.",
+      "fix": "Replace `resendCooldownTimer` with `resendTimer` in line 47, and clarify that the imperative 429 branch calls the existing `startResendCooldown(60)` function (not a new timer setup)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 28,
+    "issues_found": 2,
+    "critical": 0,
+    "major": 1,
+    "minor": 1
+  }
+}

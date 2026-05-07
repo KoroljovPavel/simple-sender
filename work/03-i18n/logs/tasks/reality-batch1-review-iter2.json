@@ -1,0 +1,47 @@
+{
+  "validator": "reality-checker",
+  "batch": [2, 3, 6],
+  "iteration": 2,
+  "status": "approved",
+  "previously_flagged_criticals": [
+    {
+      "original_issue": "Task 2: langDir path under Nuxt 4 unverified",
+      "resolution": "RESOLVED — Task 2 now has explicit Edge Cases entry (line 135-136) explaining Nuxt 4 restructureDir behavior: langDir: 'locales' resolves relative to the module's own restructureDir='i18n', placing files at frontend/i18n/locales/. A documented fallback strategy is provided (switch to langDir: 'i18n/locales' if startup fails). AC now includes a dedicated 'langDir resolution verified' criterion requiring smoke-check confirmation."
+    },
+    {
+      "original_issue": "Task 3: wave deviation from tech-spec",
+      "resolution": "RESOLVED — Task 3 header now shows wave: 3 (previously was grouped in Wave 2 alongside Task 2). A 'Wave deviation note' in the Description section explicitly explains the rationale: middleware imports NON_DEFAULT_LOCALES from Task 2's output file, making true parallelism impossible. depends_on: [2] and wave: 3 are now consistent."
+    },
+    {
+      "original_issue": "Task 3: Nitro ~/  alias resolution",
+      "resolution": "RESOLVED — Task 3 now explicitly addresses ~/  alias resolution risk in both Edge Cases (line 142) and Implementation Hints (line 148). Both sections provide the same fallback: if import { NON_DEFAULT_LOCALES } from '~/shared/i18n-locales' fails under Nitro context, switch to relative path '../../shared/i18n-locales'. This is the correct relative path from frontend/server/middleware/ to frontend/shared/."
+    },
+    {
+      "original_issue": "Task 3: missing %2F-encoded TDD cases",
+      "resolution": "RESOLVED — TDD Anchor now includes four percent-encoding security cases: (1) malformed percent-encoding rejected (URIError → 400), (2) test_percent_encoded_double_slash (/fr/%2Fevil.com → redirect /evil.com, not //evil.com), (3) test_percent_encoded_backslash (/fr/%5Cevil.com → reject 400), (4) test_double_encoded_payload (/fr/%252F%252Fevil.com → no protocol-relative bypass). AC line 87 explicitly references these as required passing cases."
+    },
+    {
+      "original_issue": "Task 6: settle import path wrong ('../../helpers/settle')",
+      "resolution": "RESOLVED — Task 6 now correctly specifies import { settle } from '../helpers/settle' (line 121). The spec lives at frontend/tests/components/LangSwitcher.spec.ts; one level up is frontend/tests/, so ../helpers/settle resolves to frontend/tests/helpers/settle.ts — which exists at that exact path."
+    },
+    {
+      "original_issue": "Task 6: vi.hoisted factory wrapper missing",
+      "resolution": "RESOLVED — Task 6 What to do section (line 30) explicitly requires 'factory form', and the Implementation Hints (line 118) show: vi.hoisted(() => ({ setLocaleSpy: vi.fn(), localeRef: ref('uk'), cookieRef: ref('uk') })). The factory-wrapper form matches the pattern used in frontend/tests/pages/auth/login.spec.ts line 6."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 6,
+      "issue": "Task 6 Implementation Hints line 118 instructs using Vue ref() inside vi.hoisted(): 'const { setLocaleSpy, localeRef, cookieRef } = vi.hoisted(() => ({ setLocaleSpy: vi.fn(), localeRef: ref(\"uk\"), cookieRef: ref(\"uk\") }))'. vi.hoisted() is hoisted before any module imports are evaluated by Vitest, which means Vue's ref() is not yet loaded when the factory executes. All 9 existing specs in this project only use vi.fn() (not reactive primitives) inside vi.hoisted(). Using ref() from 'vue' inside vi.hoisted() will likely throw 'ref is not defined' or similar at test startup. The correct pattern is to define refs outside vi.hoisted() (after import { ref } from 'vue') and only hoist vi.fn() spies.",
+      "fix": "In the Implementation Hints, change the vi.hoisted() block to only contain vi.fn() spies: 'const { setLocaleSpy } = vi.hoisted(() => ({ setLocaleSpy: vi.fn() }))'. Then define localeRef and cookieRef as module-level refs after the import block: 'import { ref } from \"vue\"; ... const localeRef = ref(\"uk\"); const cookieRef = ref(\"uk\");'. Reset them in beforeEach instead of relying on hoisting. This matches the actual test-utils runtime behavior and project patterns."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 28,
+    "previously_flagged_criticals_resolved": 6,
+    "new_issues_found": 1
+  }
+}

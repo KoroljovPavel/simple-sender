@@ -1,0 +1,41 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 6,
+      "issue": "Task 6 Details section specifies settle import path as `'../../helpers/settle'` from `frontend/tests/components/LangSwitcher.spec.ts`. Two levels up from `tests/components/` lands at `frontend/` — so the resolved path would be `frontend/helpers/settle`, which does not exist. The correct relative path is `'../helpers/settle'` (one level up → `tests/helpers/settle.ts`). Existing analogous tests confirm the pattern: `tests/pages/dashboard.spec.ts` uses `'../helpers/settle'`, `tests/pages/profile.spec.ts` uses `'../helpers/settle'`. The only deeper-nested tests (`tests/pages/auth/*.spec.ts`) use `'../../helpers/settle'` because they sit two levels below `tests/`. A component spec sits only one level below `tests/`, so `../helpers/settle` is correct.",
+      "fix": "In Task 6 Details section line 101, change `settle з '../../helpers/settle'` to `settle з '../helpers/settle'`. Also update any code snippet in the hints that shows this import path."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 6,
+      "issue": "Task 6 Implementation hints (line 116) show: `vi.hoisted({ setLocaleSpy: vi.fn(), localeRef: ref('uk'), cookieRef: ref('uk') })`. This is incorrect API usage — `vi.hoisted()` requires a factory function argument, not a plain object. The correct call is `vi.hoisted(() => ({ setLocaleSpy: vi.fn(), localeRef: ref('uk'), cookieRef: ref('uk') }))`. Every existing test in the codebase uses the factory form: `vi.hoisted(() => ({...}))`. The hint also references `login.spec.ts ll. 6-10` as the source pattern — those lines show the factory form correctly, so the hint directly contradicts the very example it cites.",
+      "fix": "Replace `vi.hoisted({ setLocaleSpy: vi.fn(), localeRef: ref('uk'), cookieRef: ref('uk') })` with `vi.hoisted(() => ({ setLocaleSpy: vi.fn(), localeRef: ref('uk'), cookieRef: ref('uk') }))` in the Implementation hints section."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 says 'mock pattern для тестів — за tests/middleware/auth.global.spec.ts:1-15'. However, `auth.global.spec.ts` lines 1-15 do not contain any `useI18n` mock — they mock `navigateTo` and `useApi`. The TECHNIQUE (vi.hoisted + mockNuxtImport) is demonstrated there, but an implementor looking for a `useI18n` mock example will not find one. There is no existing `useI18n` mock anywhere in the test suite (`grep -rn 'useI18n' tests/` → 0 results). The hints section of Task 5 does show the correct mock snippet inline (lines 110-114), so the implementor is not blocked, but the cross-reference is misleading.",
+      "fix": "Change the reference from 'auth.global.spec.ts:1-15' to 'tests/pages/auth/login.spec.ts' and clarify that it demonstrates the vi.hoisted + mockNuxtImport technique generally, not a useI18n mock specifically. The inline mock snippet in the hints is the authoritative example."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 Step 1 lists specific error codes to map as '(401, 403, 409, 429)' but omits HTTP 400. Code-research §2 explicitly documents 400-responses that produce user-visible messages: `register.vue:54` (HTTP 400 → 'Перевірте правильність даних') and `profile.vue:157` (changePassword HTTP 400 → 'Невірний поточний пароль'). Both are verified in actual source files. An implementor following only the parenthetical code list would create locale files missing `errors.register.400` and `errors.changePassword.400` keys, causing the fallback chain to degrade to the generic message for those cases. The task does say 'per code-research §2 mapping table' which is the authoritative source, so a careful implementor will find 400 there — but the discrepancy in the summary creates ambiguity.",
+      "fix": "Update Step 1 error-code list from '(401, 403, 409, 429)' to '(400, 401, 403, 409, 429)'. Alternatively add a note: 'включно з 400 для контекстів register і changePassword — per §2 table'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 4
+  }
+}

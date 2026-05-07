@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round 2 review of REWRITTEN tech-spec for 03-i18n. All Round 1 findings addressed: (1) Decision 5 / Task 3 contradiction resolved — allow-list now explicitly = ['en'] only, uk also stripped, smoke-checks aligned (line 95, 297); (2) AC5 + AC6 smoke-checks added in Task 2 verify-smoke (line 289 covers EN-cookie redirect; AC6 invalid-cookie path still covered narratively but added curl could strengthen); (3) LangSwitcher mock concern fixed — strategy now asserts on setLocale + navigateTo (observable behavior), explicitly notes 'Не асертимо на cookie-mock' (line 197); (4) check-locales unit spec added (line 200, scripts/check-locales.test.mjs marked optional with key-divergence + prototype-pollution cases); (5) strip-invalid-locale unit spec now in Testing Strategy summary (line 199); (6) Testing Strategy pyramid summary aligned with reality (4 new + 1 updated). New tests are reasonable and right-sized for size M frontend-only refactor. E2E scope (single i18n.spec.ts) appropriate. AC18 respected with documented exception for auth.global.spec.ts (Decision 16). Pyramid balance healthy: 4 unit + 1 updated unit + 1 E2E.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Task 2 Verify-smoke / AC6",
+      "issue": "AC6 (invalid cookie value `i18n_lang=xx` → ignored, fallback to Accept-Language) still has no explicit smoke-check. Round 1 suggested adding curl with `Cookie: i18n_lang=xx` to verify cookie is ignored. Behavior is delegated to @nuxtjs/i18n internals but is an explicit user-spec AC. Current Task 2 smoke covers Accept-Language detection (line 289) but not the invalid-cookie-ignored path. Not a blocker — module behavior is well-documented — but a 1-line curl would lock the AC.",
+      "recommendation": "Optional: add to Task 2 Verify-smoke: `curl -sI -H 'Cookie: i18n_lang=xx' -H 'Accept-Language: en-US' localhost:3000/dashboard` → expect 302 to /en/auth/login (cookie ignored, Accept-Language wins). Or accept that AC6 is covered transitively by the existing Accept-Language smoke + module's documented behavior. Either is acceptable for size M."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 4,
+      "integration": 0,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

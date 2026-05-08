@@ -14,6 +14,13 @@ export default defineNuxtConfig({
   typescript: {
     strict: true,
   },
+  // Disable Nuxt DevTools — its `@vue/devtools-api` ships only as CJS and is
+  // not pre-bundled by Vite in this stack, which means it throws
+  // `ReferenceError: exports is not defined` in the browser at hydration and
+  // silently breaks every client-side handler (LangSwitcher's setLocale,
+  // form submissions, etc.). DevTools is dev-only ergonomics, not feature-
+  // critical, so we turn it off rather than fight the bundling.
+  devtools: { enabled: false },
   modules: [
     '@pinia/nuxt',
     '@nuxtjs/tailwindcss',
@@ -34,6 +41,8 @@ export default defineNuxtConfig({
     strategy: 'prefix_except_default',
     langDir: 'locales',
     vueI18n: './i18n.config.ts',
+    // Suppress upstream deprecation warning; we don't use the v-t directive.
+    bundle: { optimizeTranslationDirective: false },
     // Disable browser-language detection under Vitest — happy-dom defaults
     // `navigator.language` to 'en-US', which would otherwise flip the locale
     // away from `uk` in unit tests and break the AC18 UA-literal asserts.

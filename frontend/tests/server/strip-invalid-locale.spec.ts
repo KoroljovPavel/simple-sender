@@ -114,4 +114,30 @@ describe('decideLocaleStrip', () => {
       isAuthZone: true,
     })
   })
+
+  it('query-only path /?foo=bar passes through', () => {
+    expect(decideLocaleStrip('/?foo=bar', allowList)).toEqual({
+      kind: 'passthrough',
+    })
+  })
+
+  it('root path / passes through', () => {
+    expect(decideLocaleStrip('/', allowList)).toEqual({
+      kind: 'passthrough',
+    })
+  })
+
+  it('multi-locale allow-list: /de/dashboard passes through when de is allowed', () => {
+    expect(decideLocaleStrip('/de/dashboard', ['en', 'de'] as const)).toEqual({
+      kind: 'passthrough',
+    })
+  })
+
+  it('/fr/auth?token=x flags isAuthZone (auth via query, no path segment)', () => {
+    expect(decideLocaleStrip('/fr/auth?token=x', allowList)).toEqual({
+      kind: 'redirect',
+      target: '/auth?token=x',
+      isAuthZone: true,
+    })
+  })
 })

@@ -1,12 +1,18 @@
 import type { RouteLocationNormalized } from 'vue-router'
 import { useAuthStore } from '~/stores/auth'
 
-function isPublicAuthRoute(path: string): boolean {
-  return path.startsWith('/auth/')
-}
+const PUBLIC_ROUTE_NAMES = [
+  'auth-login',
+  'auth-register',
+  'auth-forgot-password',
+  'auth-reset-password',
+  'auth-verify-email',
+] as const
 
 export default defineNuxtRouteMiddleware(async (to: RouteLocationNormalized) => {
   const authStore = useAuthStore()
+  const getBaseName = useRouteBaseName()
+  const localePath = useLocalePath()
 
   if (authStore.user === null) {
     try {
@@ -17,13 +23,19 @@ export default defineNuxtRouteMiddleware(async (to: RouteLocationNormalized) => 
     }
   }
 
-  const publicAuth = isPublicAuthRoute(to.path)
+  const baseName = getBaseName(to)
+  const isPublicAuth =
+    baseName !== undefined &&
+    (PUBLIC_ROUTE_NAMES as readonly string[]).includes(baseName)
 
-  if (publicAuth && authStore.user !== null) {
-    return navigateTo('/dashboard')
+  if (isPublicAuth && authStore.user !== null) {
+    return navigateTo(localePath('/dashboard'))
   }
 
-  if (!publicAuth && authStore.user === null) {
-    return navigateTo('/auth/login')
+  // Fail-closed: if baseName could not be resolved (catch-all / unknown route)
+  // and the user is unauthenticated, redirect to login. Authenticated users
+  // pass through so they can land on whatever the unknown route resolves to.
+  if (!isPublicAuth && authStore.user === null) {
+    return navigateTo(localePath('/auth/login'))
   }
 })

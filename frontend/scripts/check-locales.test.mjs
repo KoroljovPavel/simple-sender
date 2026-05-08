@@ -46,7 +46,7 @@ describe('check-locales script', () => {
     try {
       const result = runScript(dir)
       assert.equal(result.status, 1)
-      assert.match(result.stderr, /not found|missing|ENOENT|en\.json/i)
+      assert.match(result.stderr, /not found.*en\.json/i)
     } finally {
       rmSync(dir, { recursive: true, force: true })
     }
@@ -83,9 +83,33 @@ describe('check-locales script', () => {
   it('prototype-pollution payload is safe — Object.prototype not polluted', () => {
     const payload = JSON.parse('{"__proto__": {"polluted": "yes"}, "real": "ok"}')
     const keys = collectKeySet(payload)
-    assert.equal(({}).polluted, undefined, 'Object.prototype was polluted')
+    // Catches removal of Object.create(null) on the accumulator.
+    assert.equal(Object.getPrototypeOf(keys), null, 'accumulator must have null prototype')
+    // Catches removal of the UNSAFE_KEYS filter — without the filter, recursion
+    // would descend into the JSON __proto__ payload and emit '__proto__.polluted'.
+    const collected = Object.keys(keys)
+    assert.ok(
+      !collected.some((k) => k.startsWith('__proto__')),
+      `__proto__ payload leaked into key set: ${collected.join(', ')}`,
+    )
+    assert.equal(keys['__proto__.polluted'], undefined)
+    // Sanity: the legitimate sibling key was still collected.
     assert.equal(keys.real, true)
-    assert.equal(keys.polluted, undefined, 'unsafe key __proto__.polluted leaked into key set')
+    // The classic prototype-chain assertion (defensive — would fail only if some
+    // future refactor swapped JSON.parse for an unsafe merge like Object.assign).
+    assert.equal(({}).polluted, undefined, 'Object.prototype was polluted')
+  })
+
+  it('prototype-pollution via constructor key is filtered', () => {
+    const payload = JSON.parse('{"constructor": {"prototype": {"polluted": "yes"}}, "real": "ok"}')
+    const keys = collectKeySet(payload)
+    const collected = Object.keys(keys)
+    assert.ok(
+      !collected.some((k) => k.startsWith('constructor') || k.startsWith('prototype')),
+      `constructor/prototype payload leaked: ${collected.join(', ')}`,
+    )
+    assert.equal(keys.real, true)
+    assert.equal(({}).polluted, undefined)
   })
 
   it('compareKeySets reports both sides of divergence', () => {

@@ -1,6 +1,7 @@
 <script setup lang="ts">
 definePageMeta({ layout: 'default' })
 
+const { t } = useI18n()
 const authStore = useAuthStore()
 </script>
 
@@ -12,21 +13,23 @@ const authStore = useAuthStore()
       class="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-center gap-3"
     >
       <span class="flex-1">
-        Підтвердіть email для повного доступу.
+        {{ t('dashboard.pendingBanner') }}
       </span>
-      <NuxtLink
+      <NuxtLinkLocale
         to="/profile"
         class="font-medium text-amber-900 underline hover:no-underline whitespace-nowrap"
       >
-        Перейти до профілю →
-      </NuxtLink>
+        {{ t('dashboard.goToProfile') }}
+      </NuxtLinkLocale>
     </div>
 
     <h1 class="text-2xl font-semibold">
-      Ласкаво просимо{{ authStore.user?.name ? `, ${authStore.user.name}` : '' }}
+      {{ authStore.user?.name
+        ? t('dashboard.welcomeWithName', { name: authStore.user.name })
+        : t('dashboard.welcomeAnon') }}
     </h1>
     <p class="text-sm text-gray-600">
-      Це ваш дашборд. Більше функцій з'явиться у наступних епіках.
+      {{ t('dashboard.description') }}
     </p>
   </div>
 </template>

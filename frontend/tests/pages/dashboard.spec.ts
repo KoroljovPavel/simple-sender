@@ -15,6 +15,7 @@ const { authStoreMock } = vi.hoisted(() => ({
 }))
 
 mockNuxtImport('useAuthStore', () => () => authStoreMock)
+mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 
 import DashboardPage from '../../pages/dashboard.vue'
 

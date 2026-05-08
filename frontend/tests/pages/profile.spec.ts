@@ -23,6 +23,7 @@ const { apiMock, navigateToMock, authStoreMock } = vi.hoisted(() => ({
 mockNuxtImport('useApi', () => () => apiMock)
 mockNuxtImport('navigateTo', () => navigateToMock)
 mockNuxtImport('useAuthStore', () => () => authStoreMock)
+mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 
 import ProfilePage from '../../pages/profile.vue'
 

@@ -5,24 +5,32 @@ import { z } from 'zod'
 
 definePageMeta({ layout: 'auth' })
 
-const schema = z
-  .object({
-    email: z.string().email('Введіть коректний email'),
-    name: z.string().trim().min(1, 'Ім\'я обов\'язкове'),
-    password: z
-      .string()
-      .min(8, 'Мін. 8 символів')
-      .refine((v) => /[A-Za-z]/.test(v), 'Має містити хоча б одну літеру')
-      .refine((v) => /\d/.test(v), 'Має містити хоча б одну цифру'),
-    confirmPassword: z.string(),
-  })
-  .refine((data) => data.password === data.confirmPassword, {
-    path: ['confirmPassword'],
-    message: 'Паролі не співпадають',
-  })
+const { t } = useI18n()
+const localePath = useLocalePath()
+const apiError = useApiError()
+
+const schemaComputed = computed(() =>
+  toTypedSchema(
+    z
+      .object({
+        email: z.string().email(t('validation.emailFormat')),
+        name: z.string().trim().min(1, t('validation.nameRequired')),
+        password: z
+          .string()
+          .min(8, t('validation.passwordMin8'))
+          .refine((v) => /[A-Za-z]/.test(v), t('validation.passwordHasLetter'))
+          .refine((v) => /\d/.test(v), t('validation.passwordHasDigit')),
+        confirmPassword: z.string(),
+      })
+      .refine((data) => data.password === data.confirmPassword, {
+        path: ['confirmPassword'],
+        message: t('validation.passwordsDoNotMatch'),
+      }),
+  ),
+)
 
 const { defineField, handleSubmit, isSubmitting, errors } = useForm({
-  validationSchema: toTypedSchema(schema),
+  validationSchema: schemaComputed,
   initialValues: { email: '', name: '', password: '', confirmPassword: '' },
 })
 
@@ -44,30 +52,20 @@ const onSubmit = handleSubmit(async (values) => {
         password: values.password,
       },
     })
-    await navigateTo({ path: '/auth/login', query: { registered: '1' } })
+    await navigateTo({ path: localePath('/auth/login'), query: { registered: '1' } })
   } catch (e: unknown) {
-    const status = (e as { statusCode?: number; status?: number; response?: { status?: number } })
-    const code = status?.statusCode ?? status?.status ?? status?.response?.status
-    if (code === 409) {
-      submitError.value = 'Користувач з таким email вже існує. Якщо це ваш акаунт, зверніться до підтримки.'
-    } else if (code === 400) {
-      submitError.value = 'Перевірте правильність даних і спробуйте ще раз'
-    } else if (code === 429) {
-      submitError.value = 'Забагато спроб реєстрації. Спробуйте через хвилину'
-    } else {
-      submitError.value = 'Не вдалося завершити реєстрацію. Спробуйте пізніше'
-    }
+    submitError.value = apiError(e, 'register')
   }
 })
 </script>
 
 <template>
   <div>
-    <h1 class="text-2xl font-semibold text-center mb-6">Реєстрація</h1>
+    <h1 class="text-2xl font-semibold text-center mb-6">{{ t('auth.register.title') }}</h1>
 
     <form novalidate class="space-y-4" @submit.prevent="onSubmit">
       <div>
-        <label for="email" class="block text-sm font-medium mb-1">Email</label>
+        <label for="email" class="block text-sm font-medium mb-1">{{ t('auth.register.emailLabel') }}</label>
         <input
           id="email"
           v-model="email"
@@ -83,7 +81,7 @@ const onSubmit = handleSubmit(async (values) => {
       </div>
 
       <div>
-        <label for="name" class="block text-sm font-medium mb-1">Ім'я</label>
+        <label for="name" class="block text-sm font-medium mb-1">{{ t('auth.register.nameLabel') }}</label>
         <input
           id="name"
           v-model="name"
@@ -99,7 +97,7 @@ const onSubmit = handleSubmit(async (values) => {
       </div>
 
       <div>
-        <label for="password" class="block text-sm font-medium mb-1">Пароль</label>
+        <label for="password" class="block text-sm font-medium mb-1">{{ t('auth.register.passwordLabel') }}</label>
         <input
           id="password"
           v-model="password"
@@ -115,7 +113,7 @@ const onSubmit = handleSubmit(async (values) => {
       </div>
 
       <div>
-        <label for="confirmPassword" class="block text-sm font-medium mb-1">Підтвердження пароля</label>
+        <label for="confirmPassword" class="block text-sm font-medium mb-1">{{ t('auth.register.confirmPasswordLabel') }}</label>
         <input
           id="confirmPassword"
           v-model="confirmPassword"
@@ -139,13 +137,13 @@ const onSubmit = handleSubmit(async (values) => {
         :disabled="isSubmitting"
         class="w-full bg-blue-600 text-white rounded-md py-2 font-medium disabled:opacity-50 hover:bg-blue-700"
       >
-        {{ isSubmitting ? 'Зачекайте…' : 'Зареєструватись' }}
+        {{ isSubmitting ? t('auth.register.submitting') : t('auth.register.submit') }}
       </button>
     </form>
 
     <p class="mt-6 text-sm text-center">
-      Вже маєте акаунт?
-      <NuxtLink to="/auth/login" class="text-blue-600 hover:underline">Увійти</NuxtLink>
+      {{ t('auth.register.haveAccount') }}
+      <NuxtLinkLocale to="/auth/login" class="text-blue-600 hover:underline">{{ t('auth.register.loginLink') }}</NuxtLinkLocale>
     </p>
   </div>
 </template>

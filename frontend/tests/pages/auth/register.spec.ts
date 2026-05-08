@@ -10,6 +10,7 @@ const { apiMock, navigateToMock } = vi.hoisted(() => ({
 
 mockNuxtImport('useApi', () => () => apiMock)
 mockNuxtImport('navigateTo', () => navigateToMock)
+mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 
 import RegisterPage from '../../../pages/auth/register.vue'
 

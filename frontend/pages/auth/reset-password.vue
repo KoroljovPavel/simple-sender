@@ -5,28 +5,36 @@ import { z } from 'zod'
 
 definePageMeta({ layout: 'auth' })
 
+const { t } = useI18n()
+const localePath = useLocalePath()
+const apiError = useApiError()
+
 const route = useRoute()
 const token = computed(() => {
-  const t = route.query.token
-  return typeof t === 'string' && t.length > 0 ? t : null
+  const raw = route.query.token
+  return typeof raw === 'string' && raw.length > 0 ? raw : null
 })
 
-const schema = z
-  .object({
-    newPassword: z
-      .string()
-      .min(8, 'Мін. 8 символів')
-      .refine((v) => /[A-Za-z]/.test(v), 'Має містити хоча б одну літеру')
-      .refine((v) => /\d/.test(v), 'Має містити хоча б одну цифру'),
-    confirmPassword: z.string(),
-  })
-  .refine((data) => data.newPassword === data.confirmPassword, {
-    path: ['confirmPassword'],
-    message: 'Паролі не співпадають',
-  })
+const schemaComputed = computed(() =>
+  toTypedSchema(
+    z
+      .object({
+        newPassword: z
+          .string()
+          .min(8, t('validation.passwordMin8'))
+          .refine((v) => /[A-Za-z]/.test(v), t('validation.passwordHasLetter'))
+          .refine((v) => /\d/.test(v), t('validation.passwordHasDigit')),
+        confirmPassword: z.string(),
+      })
+      .refine((data) => data.newPassword === data.confirmPassword, {
+        path: ['confirmPassword'],
+        message: t('validation.passwordsDoNotMatch'),
+      }),
+  ),
+)
 
 const { defineField, handleSubmit, isSubmitting, errors } = useForm({
-  validationSchema: toTypedSchema(schema),
+  validationSchema: schemaComputed,
   initialValues: { newPassword: '', confirmPassword: '' },
 })
 
@@ -47,14 +55,14 @@ const onSubmit = handleSubmit(async (values) => {
       method: 'POST',
       body: { token: token.value, newPassword: values.newPassword },
     })
-    await navigateTo({ path: '/auth/login', query: { reset: '1' } })
+    await navigateTo({ path: localePath('/auth/login'), query: { reset: '1' } })
   } catch (e: unknown) {
     const status = (e as { statusCode?: number; status?: number; response?: { status?: number } })
     const code = status?.statusCode ?? status?.status ?? status?.response?.status
     if (code === 400) {
       linkInvalid.value = true
     } else {
-      submitError.value = 'Не вдалося оновити пароль. Спробуйте ще раз пізніше'
+      submitError.value = apiError(e, 'resetPassword')
     }
   }
 })
@@ -62,23 +70,23 @@ const onSubmit = handleSubmit(async (values) => {
 
 <template>
   <div>
-    <h1 class="text-2xl font-semibold text-center mb-6">Новий пароль</h1>
+    <h1 class="text-2xl font-semibold text-center mb-6">{{ t('auth.resetPassword.title') }}</h1>
 
     <div v-if="!token || linkInvalid" data-test="invalid-link" class="space-y-4">
       <p class="text-sm text-gray-700">
-        Посилання недійсне або прострочено. Запросіть нове посилання для скидання пароля.
+        {{ t('auth.resetPassword.linkInvalidOrExpired') }}
       </p>
-      <NuxtLink
+      <NuxtLinkLocale
         to="/auth/forgot-password"
         class="block w-full text-center bg-blue-600 text-white rounded-md py-2 font-medium hover:bg-blue-700"
       >
-        Запросити нове посилання
-      </NuxtLink>
+        {{ t('auth.resetPassword.requestNewLink') }}
+      </NuxtLinkLocale>
     </div>
 
     <form v-else novalidate class="space-y-4" @submit.prevent="onSubmit">
       <div>
-        <label for="newPassword" class="block text-sm font-medium mb-1">Новий пароль</label>
+        <label for="newPassword" class="block text-sm font-medium mb-1">{{ t('auth.resetPassword.newPasswordLabel') }}</label>
         <input
           id="newPassword"
           v-model="newPassword"
@@ -94,7 +102,7 @@ const onSubmit = handleSubmit(async (values) => {
       </div>
 
       <div>
-        <label for="confirmPassword" class="block text-sm font-medium mb-1">Підтвердження пароля</label>
+        <label for="confirmPassword" class="block text-sm font-medium mb-1">{{ t('auth.resetPassword.confirmPasswordLabel') }}</label>
         <input
           id="confirmPassword"
           v-model="confirmPassword"
@@ -118,7 +126,7 @@ const onSubmit = handleSubmit(async (values) => {
         :disabled="isSubmitting"
         class="w-full bg-blue-600 text-white rounded-md py-2 font-medium disabled:opacity-50 hover:bg-blue-700"
       >
-        {{ isSubmitting ? 'Оновлюємо…' : 'Оновити пароль' }}
+        {{ isSubmitting ? t('auth.resetPassword.submitting') : t('auth.resetPassword.submit') }}
       </button>
     </form>
   </div>

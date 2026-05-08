@@ -12,6 +12,7 @@ const { apiMock, navigateToMock, useRouteMock } = vi.hoisted(() => ({
 mockNuxtImport('useApi', () => () => apiMock)
 mockNuxtImport('navigateTo', () => navigateToMock)
 mockNuxtImport('useRoute', () => useRouteMock)
+mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 
 import ResetPasswordPage from '../../../pages/auth/reset-password.vue'
 

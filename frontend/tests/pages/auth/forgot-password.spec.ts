@@ -6,6 +6,7 @@ import { settle } from '../../helpers/settle'
 const { apiMock } = vi.hoisted(() => ({ apiMock: vi.fn() }))
 
 mockNuxtImport('useApi', () => () => apiMock)
+mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 
 import ForgotPasswordPage from '../../../pages/auth/forgot-password.vue'
 

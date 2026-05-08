@@ -7,10 +7,12 @@ definePageMeta({ layout: 'auth' })
 
 type State = 'loading' | 'success' | 'invalid' | 'expired' | 'no-token'
 
+const { t } = useI18n()
+
 const route = useRoute()
 const token = computed(() => {
-  const t = route.query.token
-  return typeof t === 'string' && t.length > 0 ? t : null
+  const rawToken = route.query.token
+  return typeof rawToken === 'string' && rawToken.length > 0 ? rawToken : null
 })
 
 const state = ref<State>(token.value ? 'loading' : 'no-token')
@@ -48,9 +50,13 @@ onMounted(() => {
   void verify()
 })
 
-const resendSchema = z.object({
-  email: z.string().email('Введіть коректний email'),
-})
+const resendSchemaComputed = computed(() =>
+  toTypedSchema(
+    z.object({
+      email: z.string().email(t('validation.emailFormat')),
+    }),
+  ),
+)
 
 const {
   defineField: defineResendField,
@@ -58,7 +64,7 @@ const {
   isSubmitting: isResending,
   errors: resendErrors,
 } = useForm({
-  validationSchema: toTypedSchema(resendSchema),
+  validationSchema: resendSchemaComputed,
   initialValues: { email: '' },
 })
 
@@ -109,42 +115,42 @@ const onResend = handleResend(async (values) => {
 
 <template>
   <div>
-    <h1 class="text-2xl font-semibold text-center mb-6">Підтвердження email</h1>
+    <h1 class="text-2xl font-semibold text-center mb-6">{{ t('auth.verifyEmail.title') }}</h1>
 
     <div v-if="state === 'loading'" data-test="loading" class="text-center py-8">
       <div class="inline-block w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" />
-      <p class="text-sm text-gray-600 mt-3">Перевіряємо посилання…</p>
+      <p class="text-sm text-gray-600 mt-3">{{ t('auth.verifyEmail.loading') }}</p>
     </div>
 
     <div v-else-if="state === 'success'" data-test="success" class="space-y-4 text-center">
-      <p class="text-sm text-gray-700">Email підтверджено!</p>
-      <NuxtLink
+      <p class="text-sm text-gray-700">{{ t('auth.verifyEmail.successMessage') }}</p>
+      <NuxtLinkLocale
         to="/auth/login"
         class="block w-full bg-blue-600 text-white rounded-md py-2 font-medium hover:bg-blue-700"
       >
-        Увійти →
-      </NuxtLink>
+        {{ t('auth.verifyEmail.loginLink') }}
+      </NuxtLinkLocale>
     </div>
 
     <div v-else-if="state === 'invalid' || state === 'no-token'" data-test="invalid" class="space-y-4 text-center">
-      <p class="text-sm text-gray-700">Посилання недійсне.</p>
-      <NuxtLink
+      <p class="text-sm text-gray-700">{{ t('auth.verifyEmail.invalidMessage') }}</p>
+      <NuxtLinkLocale
         to="/auth/login"
         class="block w-full bg-blue-600 text-white rounded-md py-2 font-medium hover:bg-blue-700"
       >
-        До входу
-      </NuxtLink>
+        {{ t('auth.verifyEmail.backToLogin') }}
+      </NuxtLinkLocale>
     </div>
 
     <div v-else-if="state === 'expired'" data-test="expired" class="space-y-4">
-      <p class="text-sm text-gray-700 text-center">Посилання прострочено.</p>
+      <p class="text-sm text-gray-700 text-center">{{ t('auth.verifyEmail.expiredMessage') }}</p>
 
       <form novalidate class="space-y-3" @submit.prevent="onResend">
         <p class="text-xs text-gray-600">
-          Введіть email, на який ви реєструвалися, щоб отримати новий лист.
+          {{ t('auth.verifyEmail.resendHint') }}
         </p>
         <div>
-          <label for="resend-email" class="block text-sm font-medium mb-1">Email</label>
+          <label for="resend-email" class="block text-sm font-medium mb-1">{{ t('auth.verifyEmail.emailLabel') }}</label>
           <input
             id="resend-email"
             v-model="resendEmail"
@@ -160,13 +166,13 @@ const onResend = handleResend(async (values) => {
         </div>
 
         <p v-if="resendStatus === 'sent'" data-test="resend-sent" class="text-sm text-green-700">
-          Якщо акаунт існує, ви отримаєте лист найближчим часом.
+          {{ t('auth.verifyEmail.resendSent') }}
         </p>
         <p v-if="resendStatus === 'cooldown'" data-test="resend-cooldown" class="text-sm text-gray-600">
-          Спробуйте знову через {{ cooldownSecondsLeft }} с
+          {{ t('auth.verifyEmail.cooldown', { seconds: cooldownSecondsLeft }) }}
         </p>
         <p v-if="resendStatus === 'error'" data-test="resend-error" class="text-sm text-red-600">
-          Не вдалося надіслати лист. Спробуйте пізніше
+          {{ t('auth.verifyEmail.resendError') }}
         </p>
 
         <button
@@ -175,7 +181,7 @@ const onResend = handleResend(async (values) => {
           :disabled="isResending || cooldownSecondsLeft > 0"
           class="w-full bg-blue-600 text-white rounded-md py-2 font-medium disabled:opacity-50 hover:bg-blue-700"
         >
-          {{ cooldownSecondsLeft > 0 ? `Зачекайте ${cooldownSecondsLeft} с` : 'Надіслати новий лист' }}
+          {{ cooldownSecondsLeft > 0 ? t('auth.verifyEmail.resendCooldown', { seconds: cooldownSecondsLeft }) : t('auth.verifyEmail.resendSubmit') }}
         </button>
       </form>
     </div>

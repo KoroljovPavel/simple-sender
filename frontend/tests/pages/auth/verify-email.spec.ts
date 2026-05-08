@@ -10,6 +10,7 @@ const { apiMock, useRouteMock } = vi.hoisted(() => ({
 
 mockNuxtImport('useApi', () => () => apiMock)
 mockNuxtImport('useRoute', () => useRouteMock)
+mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 
 import VerifyEmailPage from '../../../pages/auth/verify-email.vue'
 

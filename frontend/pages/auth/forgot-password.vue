@@ -5,12 +5,18 @@ import { z } from 'zod'
 
 definePageMeta({ layout: 'auth' })
 
-const schema = z.object({
-  email: z.string().email('Введіть коректний email'),
-})
+const { t } = useI18n()
+
+const schemaComputed = computed(() =>
+  toTypedSchema(
+    z.object({
+      email: z.string().email(t('validation.emailFormat')),
+    }),
+  ),
+)
 
 const { defineField, handleSubmit, isSubmitting, errors } = useForm({
-  validationSchema: toTypedSchema(schema),
+  validationSchema: schemaComputed,
   initialValues: { email: '' },
 })
 
@@ -33,27 +39,27 @@ const onSubmit = handleSubmit(async (values) => {
 
 <template>
   <div>
-    <h1 class="text-2xl font-semibold text-center mb-6">Відновлення пароля</h1>
+    <h1 class="text-2xl font-semibold text-center mb-6">{{ t('auth.forgotPassword.title') }}</h1>
 
     <div v-if="submitted" data-test="success-message" class="space-y-4">
       <p class="text-sm text-gray-700">
-        Якщо акаунт з таким email існує, ви отримаєте лист з інструкціями для відновлення пароля.
+        {{ t('auth.forgotPassword.successMessage') }}
       </p>
-      <NuxtLink
+      <NuxtLinkLocale
         to="/auth/login"
         class="block w-full text-center bg-blue-600 text-white rounded-md py-2 font-medium hover:bg-blue-700"
       >
-        Повернутись до входу
-      </NuxtLink>
+        {{ t('auth.forgotPassword.backToLogin') }}
+      </NuxtLinkLocale>
     </div>
 
     <form v-else novalidate class="space-y-4" @submit.prevent="onSubmit">
       <p class="text-sm text-gray-600">
-        Вкажіть email, на який ви реєструвалися. Ми надішлемо посилання для скидання пароля.
+        {{ t('auth.forgotPassword.hint') }}
       </p>
 
       <div>
-        <label for="email" class="block text-sm font-medium mb-1">Email</label>
+        <label for="email" class="block text-sm font-medium mb-1">{{ t('auth.forgotPassword.emailLabel') }}</label>
         <input
           id="email"
           v-model="email"
@@ -73,11 +79,11 @@ const onSubmit = handleSubmit(async (values) => {
         :disabled="isSubmitting"
         class="w-full bg-blue-600 text-white rounded-md py-2 font-medium disabled:opacity-50 hover:bg-blue-700"
       >
-        {{ isSubmitting ? 'Надсилаємо…' : 'Надіслати лист' }}
+        {{ isSubmitting ? t('auth.forgotPassword.submitting') : t('auth.forgotPassword.submit') }}
       </button>
 
       <p class="text-sm text-center">
-        <NuxtLink to="/auth/login" class="text-blue-600 hover:underline">Повернутись до входу</NuxtLink>
+        <NuxtLinkLocale to="/auth/login" class="text-blue-600 hover:underline">{{ t('auth.forgotPassword.backToLogin') }}</NuxtLinkLocale>
       </p>
     </form>
   </div>

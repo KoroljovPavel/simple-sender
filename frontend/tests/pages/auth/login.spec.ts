@@ -11,6 +11,7 @@ const { apiMock, navigateToMock, fetchUserMock } = vi.hoisted(() => ({
 
 mockNuxtImport('useApi', () => () => apiMock)
 mockNuxtImport('navigateTo', () => navigateToMock)
+mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 mockNuxtImport('useAuthStore', () => () => ({
   user: null,
   fetchUser: fetchUserMock,

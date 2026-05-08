@@ -5,14 +5,22 @@ import { z } from 'zod'
 
 definePageMeta({ layout: 'auth' })
 
-const schema = z.object({
-  email: z.string().email('Введіть коректний email'),
-  password: z.string().min(8, 'Пароль має містити щонайменше 8 символів'),
-  rememberMe: z.boolean(),
-})
+const { t } = useI18n()
+const localePath = useLocalePath()
+const apiError = useApiError()
+
+const schemaComputed = computed(() =>
+  toTypedSchema(
+    z.object({
+      email: z.string().email(t('validation.emailFormat')),
+      password: z.string().min(8, t('validation.passwordMin8Login')),
+      rememberMe: z.boolean(),
+    }),
+  ),
+)
 
 const { defineField, handleSubmit, isSubmitting, errors } = useForm({
-  validationSchema: toTypedSchema(schema),
+  validationSchema: schemaComputed,
   initialValues: { email: '', password: '', rememberMe: false },
 })
 
@@ -35,30 +43,20 @@ const onSubmit = handleSubmit(async (values) => {
     })
     const authStore = useAuthStore()
     await authStore.fetchUser()
-    await navigateTo('/dashboard')
+    await navigateTo(localePath('/dashboard'))
   } catch (e: unknown) {
-    const status = (e as { statusCode?: number; status?: number; response?: { status?: number } })
-    const code = status?.statusCode ?? status?.status ?? status?.response?.status
-    if (code === 429) {
-      submitError.value = 'Забагато спроб. Спробуйте через 15 хв'
-    } else if (code === 401) {
-      submitError.value = 'Невірний email або пароль'
-    } else if (code === 403) {
-      submitError.value = 'Доступ заборонено. Зверніться до підтримки'
-    } else {
-      submitError.value = 'Не вдалося увійти. Спробуйте пізніше'
-    }
+    submitError.value = apiError(e, 'login')
   }
 })
 </script>
 
 <template>
   <div>
-    <h1 class="text-2xl font-semibold text-center mb-6">Увійти</h1>
+    <h1 class="text-2xl font-semibold text-center mb-6">{{ t('auth.login.title') }}</h1>
 
     <form novalidate class="space-y-4" @submit.prevent="onSubmit">
       <div>
-        <label for="email" class="block text-sm font-medium mb-1">Email</label>
+        <label for="email" class="block text-sm font-medium mb-1">{{ t('auth.login.emailLabel') }}</label>
         <input
           id="email"
           v-model="email"
@@ -74,7 +72,7 @@ const onSubmit = handleSubmit(async (values) => {
       </div>
 
       <div>
-        <label for="password" class="block text-sm font-medium mb-1">Пароль</label>
+        <label for="password" class="block text-sm font-medium mb-1">{{ t('auth.login.passwordLabel') }}</label>
         <input
           id="password"
           v-model="password"
@@ -91,7 +89,7 @@ const onSubmit = handleSubmit(async (values) => {
 
       <label class="flex items-center gap-2 text-sm">
         <input v-model="rememberMe" v-bind="rememberMeAttrs" type="checkbox" class="rounded border" />
-        Запам'ятати мене
+        {{ t('auth.login.rememberMe') }}
       </label>
 
       <p v-if="submitError" data-test="submit-error" class="text-sm text-red-600">
@@ -103,13 +101,13 @@ const onSubmit = handleSubmit(async (values) => {
         :disabled="isSubmitting"
         class="w-full bg-blue-600 text-white rounded-md py-2 font-medium disabled:opacity-50 hover:bg-blue-700"
       >
-        {{ isSubmitting ? 'Зачекайте…' : 'Увійти' }}
+        {{ isSubmitting ? t('auth.login.submitting') : t('auth.login.submit') }}
       </button>
     </form>
 
     <div class="mt-6 flex justify-between text-sm">
-      <NuxtLink to="/auth/register" class="text-blue-600 hover:underline">Зареєструватись</NuxtLink>
-      <NuxtLink to="/auth/forgot-password" class="text-blue-600 hover:underline">Забули пароль?</NuxtLink>
+      <NuxtLinkLocale to="/auth/register" class="text-blue-600 hover:underline">{{ t('auth.login.registerLink') }}</NuxtLinkLocale>
+      <NuxtLinkLocale to="/auth/forgot-password" class="text-blue-600 hover:underline">{{ t('auth.login.forgotPasswordLink') }}</NuxtLinkLocale>
     </div>
   </div>
 </template>

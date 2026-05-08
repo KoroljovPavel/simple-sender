@@ -34,15 +34,20 @@ export default defineNuxtConfig({
     strategy: 'prefix_except_default',
     langDir: 'locales',
     vueI18n: './i18n.config.ts',
-    detectBrowserLanguage: {
-      useCookie: true,
-      cookieKey: 'i18n_lang',
-      cookieSecure: process.env.NODE_ENV === 'production',
-      cookieCrossOrigin: false,
-      redirectOn: 'no prefix',
-      alwaysRedirect: false,
-      fallbackLocale: 'uk',
-    },
+    // Disable browser-language detection under Vitest — happy-dom defaults
+    // `navigator.language` to 'en-US', which would otherwise flip the locale
+    // away from `uk` in unit tests and break the AC18 UA-literal asserts.
+    detectBrowserLanguage: process.env.VITEST
+      ? false
+      : {
+          useCookie: true,
+          cookieKey: 'i18n_lang',
+          cookieSecure: process.env.NODE_ENV === 'production',
+          cookieCrossOrigin: false,
+          redirectOn: 'no prefix',
+          alwaysRedirect: false,
+          fallbackLocale: 'uk',
+        },
   },
   // Auth pages may receive ?token= in URL (verify-email, reset-password). Block search-engine
   // indexing and strip the Referer header on outbound navigation so tokens cannot leak via

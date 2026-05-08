@@ -1,5 +1,202 @@
 {
+  "brand": {
+    "name": "Bot Funnel"
+  },
   "common": {
-    "placeholder": "x"
+    "cancel": "Cancel",
+    "save": "Save",
+    "edit": "Edit",
+    "email": "Email",
+    "password": "Password"
+  },
+  "layout": {
+    "default": {
+      "logout": "Logout",
+      "dashboard": "Dashboard",
+      "profile": "Profile"
+    }
+  },
+  "validation": {
+    "emailFormat": "Invalid email format",
+    "passwordMin8": "At least 8 characters",
+    "passwordMin8Login": "Password must be at least 8 characters long",
+    "passwordHasLetter": "Must contain at least one letter",
+    "passwordHasDigit": "Must contain at least one digit",
+    "passwordsDoNotMatch": "Passwords do not match",
+    "nameRequired": "Name is required",
+    "nameTooLong": "Name must be 100 characters or less",
+    "currentPasswordRequired": "Enter your current password"
+  },
+  "auth": {
+    "login": {
+      "title": "Sign in",
+      "emailLabel": "Email",
+      "passwordLabel": "Password",
+      "rememberMe": "Remember me",
+      "submit": "Sign in",
+      "submitting": "Please wait…",
+      "registerLink": "Sign up",
+      "forgotPasswordLink": "Forgot password?"
+    },
+    "register": {
+      "title": "Sign up",
+      "emailLabel": "Email",
+      "nameLabel": "Name",
+      "passwordLabel": "Password",
+      "confirmPasswordLabel": "Confirm password",
+      "submit": "Sign up",
+      "submitting": "Please wait…",
+      "haveAccount": "Already have an account?",
+      "loginLink": "Sign in"
+    },
+    "forgotPassword": {
+      "title": "Password recovery",
+      "successMessage": "If an account with that email exists, you will receive a message with reset instructions.",
+      "backToLogin": "Back to sign in",
+      "hint": "Enter the email you signed up with. We will send a password reset link.",
+      "emailLabel": "Email",
+      "submit": "Send reset link",
+      "submitting": "Sending…"
+    },
+    "resetPassword": {
+      "title": "New password",
+      "linkInvalidOrExpired": "This link is invalid or has expired. Request a new password reset link.",
+      "requestNewLink": "Request a new link",
+      "newPasswordLabel": "New password",
+      "confirmPasswordLabel": "Confirm password",
+      "submit": "Update password",
+      "submitting": "Updating…"
+    },
+    "verifyEmail": {
+      "title": "Email verification",
+      "loading": "Verifying the link…",
+      "successMessage": "Email verified!",
+      "loginLink": "Sign in →",
+      "invalidMessage": "This link is invalid.",
+      "backToLogin": "Back to sign in",
+      "expiredMessage": "This link has expired.",
+      "resendHint": "Enter the email you signed up with to receive a new message.",
+      "emailLabel": "Email",
+      "resendSent": "If an account exists, you will receive a message shortly.",
+      "cooldown": "Try again in {seconds}s",
+      "resendError": "Failed to send the message. Try again later",
+      "resendSubmit": "Send a new message",
+      "resendCooldown": "Wait {seconds}s"
+    }
+  },
+  "dashboard": {
+    "pendingBanner": "Verify your email for full access.",
+    "goToProfile": "Go to profile →",
+    "welcome": "Welcome{name}",
+    "description": "This is your dashboard. More features will appear in upcoming epics."
+  },
+  "profile": {
+    "title": "Profile",
+    "personalData": {
+      "title": "Personal data",
+      "emailLabel": "Email",
+      "nameLabel": "Name",
+      "edit": "Edit",
+      "saved": "Name saved",
+      "save": "Save",
+      "saving": "Saving…",
+      "cancel": "Cancel"
+    },
+    "emailVerification": {
+      "title": "Email verification",
+      "notVerified": "Your email is not verified",
+      "sent": "If an account exists, you will receive a message shortly.",
+      "cooldownStatic": "Wait 60 seconds",
+      "error": "Failed to send the message. Try again later",
+      "resend": "Resend the message",
+      "cooldown": "Wait {seconds}s"
+    },
+    "changePassword": {
+      "title": "Change password",
+      "currentLabel": "Current password",
+      "newLabel": "New password",
+      "confirmLabel": "Confirm new password",
+      "success": "Password changed",
+      "submit": "Change password",
+      "submitting": "Please wait…"
+    },
+    "sessions": {
+      "title": "Sessions",
+      "description": "Terminating all sessions will sign you out on this and all other devices.",
+      "submit": "Terminate all sessions",
+      "submitting": "Terminating…"
+    },
+    "deleteAccount": {
+      "title": "Delete account",
+      "description": "This action is irreversible. All your projects, bots, and subscribers will be deleted.",
+      "open": "Delete account",
+      "modalTitle": "Delete account?",
+      "modalIntro": "This will delete:",
+      "modalProjects": "all your projects",
+      "modalBots": "bots",
+      "modalSubscribers": "subscribers",
+      "modalIrreversible": "This action cannot be undone.",
+      "cancel": "Cancel",
+      "confirm": "Delete account",
+      "deleting": "Deleting…"
+    }
+  },
+  "errors": {
+    "generic": "Something went wrong. Try again later",
+    "login": {
+      "401": "Invalid email or password",
+      "403": "Access denied. Contact support",
+      "429": "Too many attempts. Try again in 15 minutes",
+      "generic": "Failed to sign in. Try again later"
+    },
+    "register": {
+      "400": "Check that your details are correct and try again",
+      "409": "A user with this email already exists. If this is your account, contact support.",
+      "429": "Too many registration attempts. Try again in a minute",
+      "generic": "Failed to complete registration. Try again later"
+    },
+    "forgotPassword": {
+      "429": "Too many attempts. Try again later",
+      "generic": "Failed to send the message. Try again later"
+    },
+    "resetPassword": {
+      "400": "This link is invalid or has expired. Request a new password reset link.",
+      "410": "This link has expired. Request a new password reset link.",
+      "generic": "Failed to update the password. Try again later"
+    },
+    "verifyEmail": {
+      "400": "This link is invalid.",
+      "410": "This link has expired.",
+      "429": "Too many attempts. Try again later",
+      "generic": "Failed to send the message. Try again later"
+    },
+    "profile": {
+      "saveName": {
+        "401": "Session ended. Please sign in again",
+        "403": "Action denied. Contact support",
+        "409": "Could not save changes. Refresh the page",
+        "generic": "Failed to save. Try again later"
+      },
+      "changePassword": {
+        "400": "Current password is incorrect",
+        "401": "Session ended. Please sign in again",
+        "403": "Action denied. Contact support",
+        "429": "Too many attempts. Try again in 15 minutes",
+        "generic": "Failed to change password. Try again later"
+      },
+      "resend": {
+        "429": "Try again in a moment",
+        "generic": "Failed to send the message. Try again later"
+      },
+      "terminateSessions": {
+        "401": "Session ended. Please sign in again",
+        "generic": "Failed to terminate sessions. Try again later"
+      },
+      "deleteAccount": {
+        "401": "Session ended. Please sign in again",
+        "403": "Action denied. Contact support",
+        "generic": "Failed to delete account. Try again later"
+      }
+    }
   }
 }

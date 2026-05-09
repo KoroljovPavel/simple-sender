@@ -8,6 +8,18 @@ definePageMeta({ layout: 'auth' })
 const { t } = useI18n()
 const localePath = useLocalePath()
 const apiError = useApiError()
+const route = useRoute()
+
+// One-shot info banner driven by query flags set by sibling auth flows:
+//   ?registered=1 — coming from successful /auth/register (verify-email letter dispatched)
+//   ?reset=1     — coming from successful /auth/reset-password (all sessions invalidated)
+// Computed (not stored): if the user submits login and the URL is rewritten,
+// the banner naturally goes away — no manual dismiss needed.
+const infoBanner = computed<string | null>(() => {
+  if (route.query.registered === '1') return t('auth.login.registeredBanner')
+  if (route.query.reset === '1') return t('auth.login.resetBanner')
+  return null
+})
 
 const schemaComputed = computed(() =>
   toTypedSchema(
@@ -53,6 +65,14 @@ const onSubmit = handleSubmit(async (values) => {
 <template>
   <div>
     <h1 class="text-2xl font-semibold text-center mb-6">{{ t('auth.login.title') }}</h1>
+
+    <p
+      v-if="infoBanner"
+      data-test="info-banner"
+      class="mb-4 rounded-md border border-emerald-300 bg-emerald-50 px-4 py-3 text-sm text-emerald-900"
+    >
+      {{ infoBanner }}
+    </p>
 
     <form novalidate class="space-y-4" @submit.prevent="onSubmit">
       <div>

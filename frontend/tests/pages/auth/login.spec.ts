@@ -3,15 +3,18 @@ import { setActivePinia, createPinia } from 'pinia'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../../helpers/settle'
 
-const { apiMock, navigateToMock, fetchUserMock } = vi.hoisted(() => ({
+const { apiMock, navigateToMock, fetchUserMock, routeQuery } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   navigateToMock: vi.fn(),
   fetchUserMock: vi.fn(),
+  // Mutable query bag — each test sets it before mountSuspended.
+  routeQuery: { current: {} as Record<string, string> },
 }))
 
 mockNuxtImport('useApi', () => () => apiMock)
 mockNuxtImport('navigateTo', () => navigateToMock)
 mockNuxtImport('useLocalePath', () => () => (path: string) => path)
+mockNuxtImport('useRoute', () => () => ({ query: routeQuery.current }))
 mockNuxtImport('useAuthStore', () => () => ({
   user: null,
   fetchUser: fetchUserMock,
@@ -29,7 +32,32 @@ describe('login page', () => {
     navigateToMock.mockReset()
     fetchUserMock.mockReset()
     fetchUserMock.mockResolvedValue(undefined)
+    routeQuery.current = {}
     useState<unknown>('auth-user').value = null
+  })
+
+  it('infoBanner_registeredQueryFlag_showsRegistrationSuccessMessage', async () => {
+    routeQuery.current = { registered: '1' }
+    const wrapper = await mountSuspended(LoginPage)
+
+    const banner = wrapper.find('[data-test="info-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toMatch(/підтвердження/i)
+  })
+
+  it('infoBanner_resetQueryFlag_showsPasswordResetMessage', async () => {
+    routeQuery.current = { reset: '1' }
+    const wrapper = await mountSuspended(LoginPage)
+
+    const banner = wrapper.find('[data-test="info-banner"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toMatch(/новим паролем/i)
+  })
+
+  it('infoBanner_noQueryFlag_hidden', async () => {
+    const wrapper = await mountSuspended(LoginPage)
+
+    expect(wrapper.find('[data-test="info-banner"]').exists()).toBe(false)
   })
 
   it('loginForm_invalidEmail_showsInlineError', async () => {

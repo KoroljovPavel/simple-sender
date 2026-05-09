@@ -587,13 +587,14 @@ public class AuthService {
                 principal, null, principal.getAuthorities());
         SecurityContext context = new SecurityContextImpl(auth);
 
+        // ServerWebExchange.getSession() is cached for the lifetime of the exchange (Mono.cache
+        // inside DefaultServerWebExchange), so calling invalidate() and then getSession() again
+        // returns the SAME zombie session — attributes set on it are never persisted and the
+        // SESSION cookie is never written. Anonymous → authenticated transition starts with no
+        // session anyway, so we just set TTL and save the SecurityContext on the live session.
         return exchange.getSession()
-                .flatMap(WebSession::invalidate)
-                .then(exchange.getSession())
-                .flatMap(newSession -> {
-                    newSession.setMaxIdleTime(ttl);
-                    return securityContextRepository.save(exchange, context);
-                });
+                .doOnNext(session -> session.setMaxIdleTime(ttl))
+                .then(securityContextRepository.save(exchange, context));
     }
 
     private Mono<Void> resetBruteCounters(String emailKey, String ipKey) {

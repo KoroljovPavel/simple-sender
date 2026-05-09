@@ -4,6 +4,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
+import org.springframework.security.config.web.server.SecurityWebFiltersOrder;
 import org.springframework.security.config.web.server.ServerHttpSecurity;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -11,10 +12,13 @@ import org.springframework.security.web.server.SecurityWebFilterChain;
 import org.springframework.security.web.server.context.ServerSecurityContextRepository;
 import org.springframework.security.web.server.context.WebSessionServerSecurityContextRepository;
 import org.springframework.security.web.server.csrf.CookieServerCsrfTokenRepository;
-import org.springframework.security.web.server.csrf.XorServerCsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.server.csrf.CsrfToken;
+import org.springframework.security.web.server.csrf.ServerCsrfTokenRequestAttributeHandler;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
+import org.springframework.web.server.WebFilter;
+import reactor.core.publisher.Mono;
 
 import java.util.List;
 
@@ -39,9 +43,14 @@ public class SecurityConfig {
         return http
                 .csrf(csrf -> csrf
                         .csrfTokenRepository(CookieServerCsrfTokenRepository.withHttpOnlyFalse())
-                        // XorServerCsrfTokenRequestAttributeHandler is required in Spring Security 6
-                        // to subscribe to the CSRF token so it is committed to the XSRF-TOKEN cookie
-                        .csrfTokenRequestHandler(new XorServerCsrfTokenRequestAttributeHandler())
+                        // Plain attribute handler: cookie holds the raw token, SPA echoes the
+                        // same raw value back via X-XSRF-TOKEN, server compares as-is. The
+                        // default in Spring Security 6.x (XorServerCsrfTokenRequestAttributeHandler)
+                        // would BREACH-mask only the form-attribute and break the cookie/header
+                        // round-trip, since the cookie is written raw by CookieServerCsrfTokenRepository.
+                        // BREACH protection is unnecessary here: tokens are only delivered via cookie,
+                        // never rendered into a compressible JSON response body.
+                        .csrfTokenRequestHandler(new ServerCsrfTokenRequestAttributeHandler())
                 )
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .securityContextRepository(securityContextRepository)
@@ -53,7 +62,20 @@ public class SecurityConfig {
                 )
                 .httpBasic(ServerHttpSecurity.HttpBasicSpec::disable)
                 .formLogin(ServerHttpSecurity.FormLoginSpec::disable)
+                .addFilterAfter(csrfCookieMaterializer(), SecurityWebFiltersOrder.CSRF)
                 .build();
+    }
+
+    private WebFilter csrfCookieMaterializer() {
+        // Subscribe to the deferred CsrfToken so CookieServerCsrfTokenRepository writes the
+        // XSRF-TOKEN cookie on every request. Without this the cookie is never set and SPA
+        // POSTs (e.g. /api/auth/login) fail with 403 because the client has no token to send.
+        return (exchange, chain) -> {
+            Mono<CsrfToken> csrfToken = exchange.getAttribute(CsrfToken.class.getName());
+            return csrfToken != null
+                    ? csrfToken.doOnSuccess(token -> {}).then(chain.filter(exchange))
+                    : chain.filter(exchange);
+        };
     }
 
     @Bean

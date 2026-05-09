@@ -1,9 +1,11 @@
 package com.botfunnel.auth;
 
 import com.botfunnel.auth.dto.LoginRequest;
+import com.botfunnel.auth.dto.RegisterRequest;
 import com.botfunnel.common.AppException;
 import com.botfunnel.email.EmailService;
 import com.botfunnel.events.EventService;
+import com.botfunnel.security.RememberMeWebSessionIdResolver;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
@@ -34,6 +36,7 @@ import reactor.test.StepVerifier;
 import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -124,6 +127,9 @@ class AuthServiceTest {
                 .remoteAddress(new InetSocketAddress(IP, 12345))
                 .build());
         when(exchange.getSession()).thenReturn(Mono.just(preAuth), Mono.just(fresh));
+        // Real attribute map so AuthService.openSession can put REMEMBER_ME_ATTR. Tests that
+        // need to assert the attribute read it back via exchange.getAttributes().
+        when(exchange.getAttributes()).thenReturn(new ConcurrentHashMap<>());
         return exchange;
     }
 
@@ -272,7 +278,6 @@ class AuthServiceTest {
 
         WebSession s1 = org.mockito.Mockito.mock(WebSession.class);
         WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
-        when(s1.invalidate()).thenReturn(Mono.empty());
 
         ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
 
@@ -303,7 +308,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void login_success_invalidatesPreAuthSession_andSetsRememberMeTtl() {
+    void login_success_setsRememberMeTtl_andPublishesRememberMeTrueAttribute() {
         stubBruteCounters(null, null);
         User user = activeUser();
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
@@ -313,7 +318,6 @@ class AuthServiceTest {
 
         WebSession preAuth = org.mockito.Mockito.mock(WebSession.class);
         WebSession fresh = org.mockito.Mockito.mock(WebSession.class);
-        when(preAuth.invalidate()).thenReturn(Mono.empty());
 
         ServerWebExchange exchange = mockExchangeWithSessions(preAuth, fresh);
 
@@ -324,10 +328,16 @@ class AuthServiceTest {
                 })
                 .verifyComplete();
 
-        verify(preAuth).invalidate();
+        // ServerWebExchange.getSession() is Mono.cache'd for the request lifetime, so the cached
+        // pre-auth session is what openSession sees and sets TTL on (see AuthService.java:598-602).
+        // No invalidate() is called — that would create a zombie session under cached Mono semantics.
         ArgumentCaptor<Duration> ttl = ArgumentCaptor.forClass(Duration.class);
-        verify(fresh).setMaxIdleTime(ttl.capture());
+        verify(preAuth).setMaxIdleTime(ttl.capture());
         assertThat(ttl.getValue()).isEqualTo(Duration.ofDays(30));
+
+        // Resolver reads this attribute on cookie write — Boolean.TRUE → 30-day Max-Age cookie.
+        assertThat(exchange.getAttributes())
+                .containsEntry(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.TRUE);
 
         ArgumentCaptor<SecurityContext> ctxCap = ArgumentCaptor.forClass(SecurityContext.class);
         verify(securityContextRepository).save(eq(exchange), ctxCap.capture());
@@ -341,7 +351,7 @@ class AuthServiceTest {
     }
 
     @Test
-    void login_success_noRememberMe_setsTtl24Hours() {
+    void login_success_noRememberMe_setsTtl24Hours_andPublishesRememberMeFalseAttribute() {
         stubBruteCounters(null, null);
         User user = activeUser();
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
@@ -351,7 +361,6 @@ class AuthServiceTest {
 
         WebSession preAuth = org.mockito.Mockito.mock(WebSession.class);
         WebSession fresh = org.mockito.Mockito.mock(WebSession.class);
-        when(preAuth.invalidate()).thenReturn(Mono.empty());
 
         ServerWebExchange exchange = mockExchangeWithSessions(preAuth, fresh);
 
@@ -359,9 +368,16 @@ class AuthServiceTest {
                 .assertNext(r -> assertThat(r.warning()).isNull())
                 .verifyComplete();
 
+        // Cached session (preAuth) receives the TTL — see comment on the rememberMe=true case.
         ArgumentCaptor<Duration> ttl = ArgumentCaptor.forClass(Duration.class);
-        verify(fresh).setMaxIdleTime(ttl.capture());
+        verify(preAuth).setMaxIdleTime(ttl.capture());
         assertThat(ttl.getValue()).isEqualTo(Duration.ofHours(24));
+
+        // AC-7 regression lock: rememberMe=false must publish Boolean.FALSE so the resolver writes
+        // a session-only cookie. Absent attribute would also fall through to session-cookie, but
+        // tracking the boolean explicitly catches future changes that might silently flip the flag.
+        assertThat(exchange.getAttributes())
+                .containsEntry(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.FALSE);
     }
 
     @Test
@@ -375,7 +391,6 @@ class AuthServiceTest {
 
         WebSession s1 = org.mockito.Mockito.mock(WebSession.class);
         WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
-        when(s1.invalidate()).thenReturn(Mono.empty());
 
         ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
 
@@ -399,7 +414,6 @@ class AuthServiceTest {
 
         WebSession s1 = org.mockito.Mockito.mock(WebSession.class);
         WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
-        when(s1.invalidate()).thenReturn(Mono.empty());
 
         ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
 
@@ -472,6 +486,46 @@ class AuthServiceTest {
                 .verify();
 
         verify(redisTemplate.opsForValue()).get("brute:fail:ip:10.0.0.5");
+    }
+
+    // -------- register auto-login attribute (AC-6 regression lock) --------
+
+    @Test
+    void register_autoLogin_publishesRememberMeFalseAttribute() {
+        // AC-6: register-auto-login must always be a session-only cookie. Locks the boolean
+        // explicitly so a future change that flips this to TRUE is caught by tests, not by users
+        // unexpectedly staying logged in for 30 days after a register flow.
+        org.mockito.Mockito.lenient().when(redisTemplate.opsForValue().increment(anyString()))
+                .thenReturn(Mono.just(1L));
+        org.mockito.Mockito.lenient().when(redisTemplate.expire(anyString(), any(Duration.class)))
+                .thenReturn(Mono.just(true));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(passwordEncoder.encode(anyString())).thenReturn("hashed-pw");
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> {
+            User u = inv.getArgument(0);
+            u.setId("user-id-1");
+            return Mono.just(u);
+        });
+        when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
+
+        RegisterRequest req = new RegisterRequest();
+        req.setEmail(EMAIL);
+        req.setPassword("Strong1Pass");
+
+        // MockServerWebExchange has a real attribute map (ConcurrentHashMap), so the resolver
+        // contract — exchange.getAttributes().put(REMEMBER_ME_ATTR, ...) — actually persists.
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest
+                .post("/api/auth/register")
+                .header("User-Agent", "JUnit")
+                .remoteAddress(new InetSocketAddress("127.0.0.1", 12345))
+                .build());
+
+        StepVerifier.create(authService.register(req, exchange))
+                .expectNextCount(1)
+                .verifyComplete();
+
+        assertThat(exchange.getAttributes())
+                .containsEntry(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.FALSE);
     }
 
     // -------- me() unit tests (4 branches) --------

@@ -139,8 +139,9 @@ class AuthServiceRegistrationTest {
         assertThat(saved.getUpdatedAt()).isNotNull();
 
         // EmailService receives the RAW token (43 chars base64url), never the hash.
+        // name is null on register (no longer collected — see AuthService.applyRegistrationAsync).
         ArgumentCaptor<String> tokenCap = ArgumentCaptor.forClass(String.class);
-        verify(emailService).sendVerificationEmail(eq(EMAIL), eq("Alice"), tokenCap.capture());
+        verify(emailService).sendVerificationEmail(eq(EMAIL), org.mockito.ArgumentMatchers.isNull(), tokenCap.capture());
         assertThat(tokenCap.getValue()).hasSize(43).doesNotContain("=");
         assertThat(tokenCap.getValue())
                 .as("raw token must not equal stored hash")

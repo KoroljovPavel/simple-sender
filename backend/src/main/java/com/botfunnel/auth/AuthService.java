@@ -9,6 +9,7 @@ import com.botfunnel.auth.dto.VerifyEmailResponse;
 import com.botfunnel.common.AppException;
 import com.botfunnel.email.EmailService;
 import com.botfunnel.events.EventService;
+import com.botfunnel.security.RememberMeWebSessionIdResolver;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
@@ -602,6 +603,13 @@ public class AuthService {
         // session anyway, so we just set TTL and save the SecurityContext on the live session.
         return exchange.getSession()
                 .doOnNext(session -> session.setMaxIdleTime(ttl))
+                // Publish rememberMe to exchange attributes so RememberMeWebSessionIdResolver can
+                // write the cookie with Max-Age=ttl-remember-me-days (true) or session-only (false).
+                // Done as a separate doOnNext so the order — first server-side TTL, then per-request
+                // attribute for the cookie writer — is explicit. Read by the resolver in setSessionId
+                // when WebSessionManager flushes the session at end of request.
+                .doOnNext(session -> exchange.getAttributes().put(
+                        RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.valueOf(rememberMe)))
                 .then(securityContextRepository.save(exchange, context));
     }
 

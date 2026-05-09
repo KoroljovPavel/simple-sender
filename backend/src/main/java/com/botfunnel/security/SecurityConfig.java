@@ -1,6 +1,7 @@
 package com.botfunnel.security;
 
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.web.ServerProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.reactive.EnableWebFluxSecurity;
@@ -18,6 +19,7 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
 import org.springframework.web.server.WebFilter;
+import org.springframework.web.server.session.WebSessionIdResolver;
 import reactor.core.publisher.Mono;
 
 import java.util.List;
@@ -35,6 +37,15 @@ public class SecurityConfig {
         // Spring Security 6.x; new is the correct form. Exposed as a bean so AuthService
         // can save the SecurityContext on login (manual auth — see Decision 11).
         return new WebSessionServerSecurityContextRepository();
+    }
+
+    @Bean
+    public WebSessionIdResolver webSessionIdResolver(
+            ServerProperties serverProperties,
+            @Value("${app.session.ttl-remember-me-days:30}") long rememberMeDays) {
+        // Replaces Boot's auto-configured CookieWebSessionIdResolver (which is @ConditionalOnMissingBean).
+        // Adds per-request Max-Age branching driven by AuthService publishing REMEMBER_ME_ATTR.
+        return new RememberMeWebSessionIdResolver(serverProperties, rememberMeDays);
     }
 
     @Bean

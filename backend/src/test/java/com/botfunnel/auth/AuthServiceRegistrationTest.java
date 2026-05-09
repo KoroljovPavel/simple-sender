@@ -82,6 +82,13 @@ class AuthServiceRegistrationTest {
         org.mockito.Mockito.lenient().when(redisTemplate.expire(org.mockito.ArgumentMatchers.anyString(),
                         org.mockito.ArgumentMatchers.any(Duration.class)))
                 .thenReturn(Mono.just(true));
+        // Auto-login after register opens a session via securityContextRepository.save —
+        // stub it permissively here so every register test doesn't have to repeat it. Tests
+        // that exercise the rate-limit/conflict branches never reach this call, hence lenient.
+        org.mockito.Mockito.lenient().when(securityContextRepository.save(
+                        org.mockito.ArgumentMatchers.any(),
+                        org.mockito.ArgumentMatchers.any()))
+                .thenReturn(Mono.empty());
     }
 
     private ServerWebExchange exchange() {

@@ -49,7 +49,12 @@ const onSubmit = handleSubmit(async (values) => {
         password: values.password,
       },
     })
-    await navigateTo({ path: localePath('/auth/login'), query: { registered: '1' } })
+    // Backend auto-logs the user in (see AuthService.register → openSession), so we already
+    // have a SESSION cookie. Pull the user into the auth store and land on the dashboard;
+    // the pending-banner there carries the "verify your email" reminder.
+    const authStore = useAuthStore()
+    await authStore.fetchUser()
+    await navigateTo(localePath('/dashboard'))
   } catch (e: unknown) {
     submitError.value = apiError(e, 'register')
   }

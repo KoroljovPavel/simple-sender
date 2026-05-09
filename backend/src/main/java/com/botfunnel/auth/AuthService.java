@@ -148,7 +148,7 @@ public class AuthService {
                 .then(Mono.defer(() -> resolveRegistrationSlot(email)))
                 .flatMap(slot -> applyRegistrationAsync(slot, request, email))
                 .flatMap(prep -> userRepository.save(prep.user())
-                        .map(saved -> {
+                        .flatMap(saved -> {
                             // Fire-and-forget: EmailService never throws on its own, but if a synchronous
                             // failure ever bubbled up, it must not break a successful registration.
                             try {
@@ -159,7 +159,13 @@ public class AuthService {
                                 log.warn("Verification email dispatch failed for userId={}: {}",
                                         saved.getId(), ex.getMessage());
                             }
-                            return new RegisterResponse(saved.getId());
+                            // Auto-login after register: open a session right away so the SPA can land
+                            // on /dashboard without a second round-trip through /auth/login. The user
+                            // is in `pending` status — login flow allows pending too (status gate is in
+                            // login, not openSession). rememberMe defaults to false; user can toggle it
+                            // on a later real login.
+                            return openSession(saved, false, exchange)
+                                    .thenReturn(new RegisterResponse(saved.getId()));
                         }));
     }
 

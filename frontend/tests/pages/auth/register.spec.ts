@@ -3,14 +3,22 @@ import { setActivePinia, createPinia } from 'pinia'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../../helpers/settle'
 
-const { apiMock, navigateToMock } = vi.hoisted(() => ({
+const { apiMock, navigateToMock, fetchUserMock } = vi.hoisted(() => ({
   apiMock: vi.fn(),
   navigateToMock: vi.fn(),
+  fetchUserMock: vi.fn(),
 }))
 
 mockNuxtImport('useApi', () => () => apiMock)
 mockNuxtImport('navigateTo', () => navigateToMock)
 mockNuxtImport('useLocalePath', () => () => (path: string) => path)
+mockNuxtImport('useAuthStore', () => () => ({
+  user: null,
+  fetchUser: fetchUserMock,
+  logout: vi.fn(),
+  isAuthenticated: false,
+  isPending: false,
+}))
 
 import RegisterPage from '../../../pages/auth/register.vue'
 
@@ -25,6 +33,8 @@ describe('register page', () => {
     setActivePinia(createPinia())
     apiMock.mockReset()
     navigateToMock.mockReset()
+    fetchUserMock.mockReset()
+    fetchUserMock.mockResolvedValue(undefined)
     useState<unknown>('auth-user').value = null
   })
 
@@ -58,7 +68,7 @@ describe('register page', () => {
     expect(apiMock).not.toHaveBeenCalled()
   })
 
-  it('registerForm_validData_submitsBodyAndNavigatesToLogin', async () => {
+  it('registerForm_validData_submitsBodyAndAutoLoginsToDashboard', async () => {
     apiMock.mockResolvedValueOnce(undefined)
 
     const wrapper = await mountSuspended(RegisterPage)
@@ -73,10 +83,11 @@ describe('register page', () => {
         password: 'Password1',
       },
     })
-    expect(navigateToMock).toHaveBeenCalledWith({
-      path: '/auth/login',
-      query: { registered: '1' },
-    })
+    // Backend opens the session in the same response, so the SPA only needs to populate
+    // the auth store and land on /dashboard. The pending-banner there carries the
+    // verify-your-email reminder; no detour through /auth/login.
+    expect(fetchUserMock).toHaveBeenCalled()
+    expect(navigateToMock).toHaveBeenCalledWith('/dashboard')
   })
 
   it('registerForm_409Response_showsExistingEmailMessage', async () => {

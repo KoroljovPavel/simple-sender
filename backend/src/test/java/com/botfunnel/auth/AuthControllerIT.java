@@ -91,6 +91,9 @@ class AuthControllerIT extends AbstractIntegrationTest {
                 .bodyValue(Map.of("email", "alice@test.com", "name", "Alice", "password", "Strong1Pass"))
                 .exchange()
                 .expectStatus().isCreated()
+                // Auto-login after register: the response must carry a SESSION cookie so the
+                // SPA can land on /dashboard without a separate /api/auth/login round-trip.
+                .expectCookie().exists("SESSION")
                 .expectBody()
                 .jsonPath("$.id").isNotEmpty();
 

@@ -596,6 +596,14 @@ public class AuthService {
                 principal, null, principal.getAuthorities());
         SecurityContext context = new SecurityContextImpl(auth);
 
+        // Publish rememberMe to exchange attributes BEFORE the session pipeline so
+        // RememberMeWebSessionIdResolver sees it on cookie flush regardless of session-fetch
+        // outcome. The attribute is request-scoped, not session-scoped, and the resolver only
+        // reads it when WebSessionManager flushes the session at end of request — so order
+        // relative to setMaxIdleTime / SecurityContext save is irrelevant.
+        exchange.getAttributes().put(
+                RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.valueOf(rememberMe));
+
         // ServerWebExchange.getSession() is cached for the lifetime of the exchange (Mono.cache
         // inside DefaultServerWebExchange), so calling invalidate() and then getSession() again
         // returns the SAME zombie session — attributes set on it are never persisted and the
@@ -603,13 +611,6 @@ public class AuthService {
         // session anyway, so we just set TTL and save the SecurityContext on the live session.
         return exchange.getSession()
                 .doOnNext(session -> session.setMaxIdleTime(ttl))
-                // Publish rememberMe to exchange attributes so RememberMeWebSessionIdResolver can
-                // write the cookie with Max-Age=ttl-remember-me-days (true) or session-only (false).
-                // Done as a separate doOnNext so the order — first server-side TTL, then per-request
-                // attribute for the cookie writer — is explicit. Read by the resolver in setSessionId
-                // when WebSessionManager flushes the session at end of request.
-                .doOnNext(session -> exchange.getAttributes().put(
-                        RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.valueOf(rememberMe)))
                 .then(securityContextRepository.save(exchange, context));
     }
 

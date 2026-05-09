@@ -232,4 +232,39 @@ class RememberMeWebSessionIdResolverTest {
         assertThat(cookie.getMaxAge()).isZero();
         assertThat(cookie.getValue()).isEmpty();
     }
+
+    // -------- Scenario H' — locks the constructor's setCookieName(...) propagation against --------
+    // -------- regression: inherited expireSession must use the configured custom name. -------
+    @Test
+    void expireSession_withCustomCookieName_writesUnderConfiguredName() {
+        ServerProperties p = propsWithDefaults();
+        p.getReactive().getSession().getCookie().setName("ALT");
+        RememberMeWebSessionIdResolver resolver = new RememberMeWebSessionIdResolver(p, 30L);
+        MockServerWebExchange exchange = exchangeFor("/api/auth/logout");
+
+        resolver.expireSession(exchange);
+
+        assertThat(exchange.getResponse().getCookies().getFirst("SESSION")).isNull();
+        ResponseCookie alt = exchange.getResponse().getCookies().getFirst("ALT");
+        assertThat(alt).isNotNull();
+        assertThat(alt.getMaxAge()).isZero();
+    }
+
+    // -------- Scenario F (secure inverse): https-scheme seed=true must yield to config-set false ---
+    @Test
+    void setSessionId_secureExplicitFalse_winsOverHttpsSchemeSeed() {
+        // Seed default for `secure` is request-derived (scheme==https). This guards against a
+        // refactor that drops the PropertyMapper override on `secure` — the false→true direction
+        // (covered above) would still pass while true→false silently regresses.
+        ServerProperties p = propsWithDefaults();
+        p.getReactive().getSession().getCookie().setSecure(false);
+        RememberMeWebSessionIdResolver resolver = new RememberMeWebSessionIdResolver(p, 30L);
+        MockServerWebExchange exchange = MockServerWebExchange.from(
+                MockServerHttpRequest.post("https://localhost/api/auth/login").build());
+
+        resolver.setSessionId(exchange, "id");
+
+        ResponseCookie cookie = exchange.getResponse().getCookies().getFirst("SESSION");
+        assertThat(cookie.isSecure()).isFalse();
+    }
 }

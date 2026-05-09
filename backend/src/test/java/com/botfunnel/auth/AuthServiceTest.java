@@ -119,14 +119,17 @@ class AuthServiceTest {
         return user;
     }
 
-    private ServerWebExchange mockExchangeWithSessions(WebSession preAuth, WebSession fresh) {
+    // ServerWebExchange.getSession() is Mono.cache'd in production, so AuthService.openSession
+    // calls it once per request and gets the same WebSession on any subsequent call. The helper
+    // mirrors that: a single mocked WebSession serves all getSession() invocations.
+    private ServerWebExchange mockExchangeWithCachedSession(WebSession session) {
         ServerWebExchange exchange = org.mockito.Mockito.mock(ServerWebExchange.class);
         when(exchange.getRequest()).thenReturn(MockServerHttpRequest
                 .post("/api/auth/login")
                 .header("User-Agent", "JUnit")
                 .remoteAddress(new InetSocketAddress(IP, 12345))
                 .build());
-        when(exchange.getSession()).thenReturn(Mono.just(preAuth), Mono.just(fresh));
+        when(exchange.getSession()).thenReturn(Mono.just(session));
         // Real attribute map so AuthService.openSession can put REMEMBER_ME_ATTR. Tests that
         // need to assert the attribute read it back via exchange.getAttributes().
         when(exchange.getAttributes()).thenReturn(new ConcurrentHashMap<>());
@@ -276,10 +279,9 @@ class AuthServiceTest {
                 .thenReturn(Mono.error(new RuntimeException("redis down")));
         when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
 
-        WebSession s1 = org.mockito.Mockito.mock(WebSession.class);
-        WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
+        WebSession session = org.mockito.Mockito.mock(WebSession.class);
 
-        ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
+        ServerWebExchange exchange = mockExchangeWithCachedSession(session);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", false), exchange))
                 .assertNext(r -> assertThat(r.id()).isEqualTo("user-id-1"))
@@ -316,10 +318,9 @@ class AuthServiceTest {
         when(redisTemplate.delete(EMAIL_KEY, IP_KEY)).thenReturn(Mono.just(2L));
         when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
 
-        WebSession preAuth = org.mockito.Mockito.mock(WebSession.class);
-        WebSession fresh = org.mockito.Mockito.mock(WebSession.class);
+        WebSession session = org.mockito.Mockito.mock(WebSession.class);
 
-        ServerWebExchange exchange = mockExchangeWithSessions(preAuth, fresh);
+        ServerWebExchange exchange = mockExchangeWithCachedSession(session);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", true), exchange))
                 .assertNext(resp -> {
@@ -329,10 +330,10 @@ class AuthServiceTest {
                 .verifyComplete();
 
         // ServerWebExchange.getSession() is Mono.cache'd for the request lifetime, so the cached
-        // pre-auth session is what openSession sees and sets TTL on (see AuthService.java:598-602).
+        // session is what openSession sees and sets TTL on (see AuthService.java:598-602).
         // No invalidate() is called — that would create a zombie session under cached Mono semantics.
         ArgumentCaptor<Duration> ttl = ArgumentCaptor.forClass(Duration.class);
-        verify(preAuth).setMaxIdleTime(ttl.capture());
+        verify(session).setMaxIdleTime(ttl.capture());
         assertThat(ttl.getValue()).isEqualTo(Duration.ofDays(30));
 
         // Resolver reads this attribute on cookie write — Boolean.TRUE → 30-day Max-Age cookie.
@@ -359,18 +360,17 @@ class AuthServiceTest {
         when(redisTemplate.delete(EMAIL_KEY, IP_KEY)).thenReturn(Mono.just(2L));
         when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
 
-        WebSession preAuth = org.mockito.Mockito.mock(WebSession.class);
-        WebSession fresh = org.mockito.Mockito.mock(WebSession.class);
+        WebSession session = org.mockito.Mockito.mock(WebSession.class);
 
-        ServerWebExchange exchange = mockExchangeWithSessions(preAuth, fresh);
+        ServerWebExchange exchange = mockExchangeWithCachedSession(session);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", false), exchange))
                 .assertNext(r -> assertThat(r.warning()).isNull())
                 .verifyComplete();
 
-        // Cached session (preAuth) receives the TTL — see comment on the rememberMe=true case.
+        // Cached session receives the TTL — see comment on the rememberMe=true case.
         ArgumentCaptor<Duration> ttl = ArgumentCaptor.forClass(Duration.class);
-        verify(preAuth).setMaxIdleTime(ttl.capture());
+        verify(session).setMaxIdleTime(ttl.capture());
         assertThat(ttl.getValue()).isEqualTo(Duration.ofHours(24));
 
         // AC-7 regression lock: rememberMe=false must publish Boolean.FALSE so the resolver writes
@@ -389,10 +389,9 @@ class AuthServiceTest {
         when(redisTemplate.delete(EMAIL_KEY, IP_KEY)).thenReturn(Mono.just(2L));
         when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
 
-        WebSession s1 = org.mockito.Mockito.mock(WebSession.class);
-        WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
+        WebSession session = org.mockito.Mockito.mock(WebSession.class);
 
-        ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
+        ServerWebExchange exchange = mockExchangeWithCachedSession(session);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", false), exchange))
                 .expectNextCount(1)
@@ -412,10 +411,9 @@ class AuthServiceTest {
         when(redisTemplate.delete(EMAIL_KEY, IP_KEY)).thenReturn(Mono.just(2L));
         when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty());
 
-        WebSession s1 = org.mockito.Mockito.mock(WebSession.class);
-        WebSession s2 = org.mockito.Mockito.mock(WebSession.class);
+        WebSession session = org.mockito.Mockito.mock(WebSession.class);
 
-        ServerWebExchange exchange = mockExchangeWithSessions(s1, s2);
+        ServerWebExchange exchange = mockExchangeWithCachedSession(session);
 
         StepVerifier.create(authService.login(new LoginRequest(EMAIL, "rightpass", false), exchange))
                 .assertNext(r -> {

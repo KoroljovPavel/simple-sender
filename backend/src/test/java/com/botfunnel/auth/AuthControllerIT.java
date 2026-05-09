@@ -215,7 +215,7 @@ class AuthControllerIT extends AbstractIntegrationTest {
         assertThat(saved).isNotNull();
         assertThat(saved.getId()).isEqualTo(oldId);
         assertThat(saved.getStatus()).isEqualTo(UserStatus.pending);
-        assertThat(saved.getName()).isEqualTo("NewName");
+        assertThat(saved.getName()).as("name no longer collected on register, must be cleared on repurpose").isNull();
         assertThat(saved.getDeletedAt()).isNull();
         assertThat(saved.isSuperAdmin())
                 .as("superadmin flag must NOT carry over from a soft-deleted account")

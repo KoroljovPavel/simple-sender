@@ -16,7 +16,6 @@ import RegisterPage from '../../../pages/auth/register.vue'
 
 async function fillValidForm(wrapper: Awaited<ReturnType<typeof mountSuspended>>) {
   await wrapper.find('input[name="email"]').setValue('user@example.com')
-  await wrapper.find('input[name="name"]').setValue('User')
   await wrapper.find('input[name="password"]').setValue('Password1')
   await wrapper.find('input[name="confirmPassword"]').setValue('Password1')
 }
@@ -33,7 +32,6 @@ describe('register page', () => {
     const wrapper = await mountSuspended(RegisterPage)
 
     await wrapper.find('input[name="email"]').setValue('user@example.com')
-    await wrapper.find('input[name="name"]').setValue('User')
     await wrapper.find('input[name="password"]').setValue('Password1')
     await wrapper.find('input[name="confirmPassword"]').setValue('Different1')
     await wrapper.find('form').trigger('submit')
@@ -49,7 +47,6 @@ describe('register page', () => {
     const wrapper = await mountSuspended(RegisterPage)
 
     await wrapper.find('input[name="email"]').setValue('user@example.com')
-    await wrapper.find('input[name="name"]').setValue('User')
     await wrapper.find('input[name="password"]').setValue('abcdefgh')
     await wrapper.find('input[name="confirmPassword"]').setValue('abcdefgh')
     await wrapper.find('form').trigger('submit')
@@ -73,7 +70,6 @@ describe('register page', () => {
       method: 'POST',
       body: {
         email: 'user@example.com',
-        name: 'User',
         password: 'Password1',
       },
     })

@@ -418,7 +418,9 @@ public class AuthService {
                     String rawToken = tokenService.generateRawToken();
 
                     user.setEmail(email);
-                    user.setName(req.getName());
+                    // Name is no longer collected at registration. Left null on the new
+                    // document; users can set it later via /profile if/when they want one.
+                    user.setName(null);
                     user.setPasswordHash(hash);
                     user.setStatus(UserStatus.pending);
                     user.setEmailVerificationTokenHash(tokenService.hashToken(rawToken));

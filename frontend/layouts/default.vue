@@ -21,7 +21,7 @@ async function onLogout() {
       <NuxtLinkLocale to="/dashboard" class="font-semibold text-lg">{{ t('brand.name') }}</NuxtLinkLocale>
       <div class="flex items-center gap-3">
         <span v-if="authStore.user" class="text-sm">
-          {{ authStore.user.name }} ({{ authStore.user.email }})
+          {{ authStore.user.name ? `${authStore.user.name} (${authStore.user.email})` : authStore.user.email }}
         </span>
         <button
           type="button"

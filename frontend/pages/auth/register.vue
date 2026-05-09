@@ -14,7 +14,6 @@ const schemaComputed = computed(() =>
     z
       .object({
         email: z.string().email(t('validation.emailFormat')),
-        name: z.string().trim().min(1, t('validation.nameRequired')),
         password: z
           .string()
           .min(8, t('validation.passwordMin8'))
@@ -31,11 +30,10 @@ const schemaComputed = computed(() =>
 
 const { defineField, handleSubmit, isSubmitting, errors } = useForm({
   validationSchema: schemaComputed,
-  initialValues: { email: '', name: '', password: '', confirmPassword: '' },
+  initialValues: { email: '', password: '', confirmPassword: '' },
 })
 
 const [email, emailAttrs] = defineField('email')
-const [name, nameAttrs] = defineField('name')
 const [password, passwordAttrs] = defineField('password')
 const [confirmPassword, confirmPasswordAttrs] = defineField('confirmPassword')
 
@@ -48,7 +46,6 @@ const onSubmit = handleSubmit(async (values) => {
       method: 'POST',
       body: {
         email: values.email,
-        name: values.name,
         password: values.password,
       },
     })
@@ -77,22 +74,6 @@ const onSubmit = handleSubmit(async (values) => {
         />
         <p v-if="errors.email" data-test="email-error" class="text-sm text-red-600 mt-1">
           {{ errors.email }}
-        </p>
-      </div>
-
-      <div>
-        <label for="name" class="block text-sm font-medium mb-1">{{ t('auth.register.nameLabel') }}</label>
-        <input
-          id="name"
-          v-model="name"
-          v-bind="nameAttrs"
-          name="name"
-          type="text"
-          autocomplete="name"
-          class="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <p v-if="errors.name" data-test="name-error" class="text-sm text-red-600 mt-1">
-          {{ errors.name }}
         </p>
       </div>
 

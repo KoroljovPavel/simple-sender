@@ -92,11 +92,10 @@ class AuthServiceRegistrationTest {
                 .build());
     }
 
-    private RegisterRequest request(String email, String password, String name) {
+    private RegisterRequest request(String email, String password) {
         RegisterRequest r = new RegisterRequest();
         r.setEmail(email);
         r.setPassword(password);
-        r.setName(name);
         return r;
     }
 
@@ -112,7 +111,7 @@ class AuthServiceRegistrationTest {
             return Mono.just(u);
         });
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
                 .assertNext(resp -> assertThat(resp.id()).isEqualTo("user-id-1"))
                 .verifyComplete();
 
@@ -120,7 +119,7 @@ class AuthServiceRegistrationTest {
         verify(userRepository).save(userCap.capture());
         User saved = userCap.getValue();
         assertThat(saved.getEmail()).isEqualTo(EMAIL);
-        assertThat(saved.getName()).isEqualTo("Alice");
+        assertThat(saved.getName()).as("name is no longer collected on register").isNull();
         assertThat(saved.getPasswordHash()).isEqualTo("hashed-pw");
         assertThat(saved.getStatus()).isEqualTo(UserStatus.pending);
         assertThat(saved.getEmailVerificationTokenHash())
@@ -151,7 +150,7 @@ class AuthServiceRegistrationTest {
             return Mono.just(u);
         });
 
-        StepVerifier.create(authService.register(request("USER@Test.com", "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request("USER@Test.com", "Strong1Pass"), exchange()))
                 .expectNextCount(1)
                 .verifyComplete();
 
@@ -168,7 +167,7 @@ class AuthServiceRegistrationTest {
         existing.setStatus(UserStatus.active);
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(existing));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
                 .expectErrorMatches(e -> {
                     if (!(e instanceof AppException ae)) return false;
                     return ae.getStatus() == HttpStatus.CONFLICT
@@ -188,7 +187,7 @@ class AuthServiceRegistrationTest {
         existing.setDeletedAt(Instant.now().minus(Duration.ofDays(15)));
         when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(existing));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
                 .expectErrorMatches(e -> {
                     if (!(e instanceof AppException ae)) return false;
                     return ae.getStatus() == HttpStatus.CONFLICT
@@ -211,7 +210,7 @@ class AuthServiceRegistrationTest {
         when(passwordEncoder.encode("Strong1Pass")).thenReturn("hashed-pw");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
                 .assertNext(resp -> assertThat(resp.id()).isEqualTo("old-id"))
                 .verifyComplete();
 
@@ -238,7 +237,7 @@ class AuthServiceRegistrationTest {
         when(passwordEncoder.encode("Strong1Pass")).thenReturn("hashed-pw");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
                 .expectNextCount(1)
                 .verifyComplete();
 
@@ -255,7 +254,7 @@ class AuthServiceRegistrationTest {
         when(redisTemplate.opsForValue().increment("register:rate:ip:127.0.0.1"))
                 .thenReturn(Mono.just(11L));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
                 .expectErrorMatches(e -> e instanceof AppException
                         && ((AppException) e).getStatus() == HttpStatus.TOO_MANY_REQUESTS)
                 .verify();
@@ -277,7 +276,7 @@ class AuthServiceRegistrationTest {
             return Mono.just(u);
         });
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
                 .expectNextCount(1)
                 .verifyComplete();
     }
@@ -296,7 +295,7 @@ class AuthServiceRegistrationTest {
         org.mockito.Mockito.doThrow(new RuntimeException("smtp down"))
                 .when(emailService).sendVerificationEmail(anyString(), anyString(), anyString());
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass", "Alice"), exchange()))
+        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
                 .expectNextCount(1)
                 .verifyComplete();
     }

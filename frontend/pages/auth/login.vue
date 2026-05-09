@@ -10,13 +10,11 @@ const localePath = useLocalePath()
 const apiError = useApiError()
 const route = useRoute()
 
-// One-shot info banner driven by query flags set by sibling auth flows:
-//   ?registered=1 — coming from successful /auth/register (verify-email letter dispatched)
-//   ?reset=1     — coming from successful /auth/reset-password (all sessions invalidated)
-// Computed (not stored): if the user submits login and the URL is rewritten,
-// the banner naturally goes away — no manual dismiss needed.
+// One-shot info banner triggered by `?reset=1` — set by reset-password.vue after a
+// successful password change (all sessions invalidated, user lands here to sign in
+// with the new password). Computed, not stored: when the user submits login and
+// the URL is rewritten, the banner clears itself — no manual dismiss needed.
 const infoBanner = computed<string | null>(() => {
-  if (route.query.registered === '1') return t('auth.login.registeredBanner')
   if (route.query.reset === '1') return t('auth.login.resetBanner')
   return null
 })

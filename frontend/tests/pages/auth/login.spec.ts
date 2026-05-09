@@ -36,15 +36,6 @@ describe('login page', () => {
     useState<unknown>('auth-user').value = null
   })
 
-  it('infoBanner_registeredQueryFlag_showsRegistrationSuccessMessage', async () => {
-    routeQuery.current = { registered: '1' }
-    const wrapper = await mountSuspended(LoginPage)
-
-    const banner = wrapper.find('[data-test="info-banner"]')
-    expect(banner.exists()).toBe(true)
-    expect(banner.text()).toMatch(/підтвердження/i)
-  })
-
   it('infoBanner_resetQueryFlag_showsPasswordResetMessage', async () => {
     routeQuery.current = { reset: '1' }
     const wrapper = await mountSuspended(LoginPage)

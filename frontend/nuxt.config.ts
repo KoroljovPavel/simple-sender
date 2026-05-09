@@ -28,8 +28,23 @@ export default defineNuxtConfig({
   ],
   css: ['~/assets/css/tailwind.css'],
   runtimeConfig: {
+    // Server-side base URL: SSR fetch hits the backend directly. Browser-side
+    // calls go through the dev proxy (see nitro.devProxy below), so the public
+    // base URL is relative — same-origin from the browser's perspective. This
+    // keeps the SESSION cookie attached to the Nuxt origin (:3000) instead of
+    // the cross-origin backend (:8080), so it survives a hard refresh.
+    apiBaseSsr: process.env.NUXT_API_BASE_SSR || 'http://localhost:8080',
     public: {
-      apiBase: process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8080',
+      apiBase: process.env.NUXT_PUBLIC_API_BASE || '',
+    },
+  },
+  nitro: {
+    devProxy: {
+      '/api': {
+        target: 'http://localhost:8080/api',
+        // changeOrigin defaults to false: browser's Origin header (http://localhost:3000)
+        // is forwarded as-is so the backend CORS check in SecurityConfig still passes.
+      },
     },
   },
   i18n: {

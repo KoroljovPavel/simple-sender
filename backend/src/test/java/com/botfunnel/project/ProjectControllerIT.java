@@ -10,7 +10,9 @@ import com.botfunnel.user.UserStatus;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
+import org.springframework.test.web.reactive.server.WebTestClient;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -31,6 +33,7 @@ class ProjectControllerIT extends AbstractIntegrationTest {
     @Autowired UserRepository userRepository;
     @Autowired EventRepository eventRepository;
     @Autowired ProjectRepository projectRepository;
+    @Autowired ApplicationContext applicationContext;
 
     @BeforeEach
     void cleanAndSeed() {
@@ -55,12 +58,16 @@ class ProjectControllerIT extends AbstractIntegrationTest {
     }
 
     private Project saveActive(String ownerId, String name, String timezone) {
+        return saveActiveAt(ownerId, name, timezone, Instant.now());
+    }
+
+    private Project saveActiveAt(String ownerId, String name, String timezone, Instant createdAt) {
         Project p = new Project();
         p.setOwnerId(ownerId);
         p.setName(name);
         p.setTimezone(timezone);
-        p.setCreatedAt(Instant.now());
-        p.setUpdatedAt(Instant.now());
+        p.setCreatedAt(createdAt);
+        p.setUpdatedAt(createdAt);
         return projectRepository.save(p).block();
     }
 
@@ -282,10 +289,11 @@ class ProjectControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void getProjects_returnsOnlyOwnActiveSortedDesc() {
-        Project a = saveActive(USER_ID, "A");
-        // Add a tiny gap so createdAt-desc ordering is deterministic on fast hardware.
-        try { Thread.sleep(10); } catch (InterruptedException ignored) {}
-        Project b = saveActive(USER_ID, "B");
+        // Explicit createdAt timestamps make the desc sort deterministic regardless of clock
+        // resolution on the host (Instant.now() is millisecond-granular on some kernels, so
+        // back-to-back saves can collide and let the repository's tie-break leak through).
+        saveActiveAt(USER_ID, "A", "Europe/Kyiv", Instant.parse("2026-05-10T10:00:00Z"));
+        saveActiveAt(USER_ID, "B", "Europe/Kyiv", Instant.parse("2026-05-10T10:00:01Z"));
         saveSoftDeleted(USER_ID, "Deleted");
         saveActive(OTHER_USER_ID, "Foreign");
 
@@ -313,6 +321,27 @@ class ProjectControllerIT extends AbstractIntegrationTest {
     }
 
     // ---------- GET single ----------
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void getProject_singleHappyPath_returns200WithProjectResponseShape() {
+        // End-to-end response-shape lock against the real DB → entity → DTO path. The slice
+        // test mocks ProjectService and would not catch a regression that serializes the Project
+        // entity directly (leaking ownerId).
+        Project p = saveActive(USER_ID, "Acme");
+
+        webTestClient.get().uri("/api/v1/projects/" + p.getId())
+                .exchange()
+                .expectStatus().isOk()
+                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
+                .expectBody()
+                .jsonPath("$.id").isEqualTo(p.getId())
+                .jsonPath("$.name").isEqualTo("Acme")
+                .jsonPath("$.timezone").isEqualTo("Europe/Kyiv")
+                .jsonPath("$.createdAt").exists()
+                .jsonPath("$.updatedAt").exists()
+                .jsonPath("$.ownerId").doesNotExist();
+    }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
@@ -425,42 +454,45 @@ class ProjectControllerIT extends AbstractIntegrationTest {
 
     @Test
     void anyEndpoint_unauthenticatedBareClient_returns401() {
-        // No @WithMockAppUser → SecurityContext is empty. The shared `webTestClient` from
-        // AbstractIntegrationTest is bound to the application context, so SecurityConfig's
-        // pathMatchers("/api/**").authenticated() rule fires. State-changing verbs without csrf()
-        // mutator may be intercepted by the CSRF filter first, so we only assert "not 200" for
-        // those — the GET case definitively confirms 401 from the auth filter chain.
-        webTestClient.get().uri("/api/v1/projects")
+        // Bare client (no test-time mutators) bound directly to the application context — proves
+        // the production filter chain returns 401 for every verb shape, not the test wiring.
+        // State-changing arms attach the csrf() mutator so the CSRF filter is satisfied; auth
+        // is then expected to fire and produce 401 (Decision 2 anti-enumeration: auth-before-CSRF).
+        WebTestClient bare = WebTestClient.bindToApplicationContext(applicationContext)
+                .configureClient()
+                .build();
+
+        bare.get().uri("/api/v1/projects")
                 .exchange()
                 .expectStatus().isUnauthorized();
 
-        webTestClient.get().uri("/api/v1/projects/any-id")
+        bare.get().uri("/api/v1/projects/any-id")
                 .exchange()
                 .expectStatus().isUnauthorized();
 
-        // For POST/PATCH/DELETE/POST-restore we expect a 4xx security gate (401 from auth, or
-        // 403 from CSRF when the order resolves CSRF first). The point is that the request
-        // never reaches the controller — assert with .is4xxClientError() per anti-enumeration
-        // intent.
-        webTestClient.post().uri("/api/v1/projects")
+        bare.mutateWith(csrf())
+                .post().uri("/api/v1/projects")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))
                 .exchange()
-                .expectStatus().is4xxClientError();
+                .expectStatus().isUnauthorized();
 
-        webTestClient.patch().uri("/api/v1/projects/some-id")
+        bare.mutateWith(csrf())
+                .patch().uri("/api/v1/projects/some-id")
                 .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "X"))
+                .bodyValue(Map.of("name", "Some"))
                 .exchange()
-                .expectStatus().is4xxClientError();
+                .expectStatus().isUnauthorized();
 
-        webTestClient.delete().uri("/api/v1/projects/some-id")
+        bare.mutateWith(csrf())
+                .delete().uri("/api/v1/projects/some-id")
                 .exchange()
-                .expectStatus().is4xxClientError();
+                .expectStatus().isUnauthorized();
 
-        webTestClient.post().uri("/api/v1/projects/some-id/restore")
+        bare.mutateWith(csrf())
+                .post().uri("/api/v1/projects/some-id/restore")
                 .exchange()
-                .expectStatus().is4xxClientError();
+                .expectStatus().isUnauthorized();
     }
 
     // ---------- PATCH happy + audit ----------
@@ -498,7 +530,9 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("description", "fresh"))
                 .exchange()
-                .expectStatus().isOk();
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.ownerId").doesNotExist();
 
         awaitEvent(e -> "project_updated".equals(e.getEventType()));
         Event evt = findEvent(e -> "project_updated".equals(e.getEventType()));
@@ -538,7 +572,8 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody()
-                .jsonPath("$.name").isEqualTo("Acme");
+                .jsonPath("$.name").isEqualTo("Acme")
+                .jsonPath("$.ownerId").doesNotExist();
     }
 
     @Test
@@ -558,7 +593,9 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(buildPatchBody("description", ""))
                 .exchange()
-                .expectStatus().isOk();
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.ownerId").doesNotExist();
 
         Project reread = projectRepository.findById(p.getId()).block();
         assertThat(reread.getDescription()).isNull();
@@ -574,7 +611,9 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(buildPatchBody("timezone", ""))
                 .exchange()
-                .expectStatus().isOk();
+                .expectStatus().isOk()
+                .expectBody()
+                .jsonPath("$.ownerId").doesNotExist();
 
         Project reread = projectRepository.findById(p.getId()).block();
         assertThat(reread.getTimezone()).isEqualTo("Europe/Kyiv");
@@ -637,7 +676,8 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .expectStatus().isOk()
                 .expectBody()
                 .jsonPath("$.deletedAt").doesNotExist()
-                .jsonPath("$.name").isEqualTo("Acme");
+                .jsonPath("$.name").isEqualTo("Acme")
+                .jsonPath("$.ownerId").doesNotExist();
 
         awaitEvent(e -> "project_restored".equals(e.getEventType()));
         Event evt = findEvent(e -> "project_restored".equals(e.getEventType()));
@@ -658,7 +698,8 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .exchange()
                 .expectStatus().isOk()
                 .expectBody()
-                .jsonPath("$.name").isEqualTo("Acme (restored)");
+                .jsonPath("$.name").isEqualTo("Acme (restored)")
+                .jsonPath("$.ownerId").doesNotExist();
 
         awaitEvent(e -> "project_restored".equals(e.getEventType()));
         Event evt = findEvent(e -> "project_restored".equals(e.getEventType()));
@@ -691,13 +732,18 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .exchange()
                 .expectStatus().isNotFound();
 
-        // Decision 14 deletedAt-FIRST guard: NEITHER of these events should be persisted for
-        // this project's id.
+        // Decision 14 deletedAt-FIRST guard: ZERO project_* events should be persisted for this
+        // project's id — the guard short-circuits before the save, so .doOnSuccess never fires.
+        // Broader assertion (any project_* type) catches future regressions where a new event
+        // type is added to the restore path.
         List<Event> all = eventRepository.findAll().collectList().block();
-        assertThat(all).noneMatch(e -> "project_renamed".equals(e.getEventType())
-                && active.getId().equals(e.getMetadata() == null ? null : e.getMetadata().get("projectId")));
-        assertThat(all).noneMatch(e -> "project_restored".equals(e.getEventType())
-                && active.getId().equals(e.getMetadata() == null ? null : e.getMetadata().get("projectId")));
+        assertThat(all).noneMatch(e -> eventMatchesProject(e, active.getId()));
+    }
+
+    private static boolean eventMatchesProject(Event e, String projectId) {
+        if (e.getEventType() == null || !e.getEventType().startsWith("project_")) return false;
+        if (e.getMetadata() == null) return false;
+        return projectId.equals(e.getMetadata().get("projectId"));
     }
 
     // ---------- AC-T1 error body shape ----------
@@ -705,7 +751,7 @@ class ProjectControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void errorBodies_alwaysHaveMessageAndCode() {
-        // 400 (bean validation): message non-blank; code field absent or null.
+        // 400 (bean validation): message non-blank; code null per GlobalErrorHandler contract.
         webTestClient.mutateWith(csrf())
                 .post().uri("/api/v1/projects")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -714,15 +760,19 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .expectStatus().isBadRequest()
                 .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
                 .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank());
+                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank())
+                .jsonPath("$.code").isEqualTo(null);
 
-        // 404 (anti-enumeration): message non-blank; code null.
+        // 404 (anti-enumeration): message non-blank; code null (regression guard against a
+        // future change that adds a code like "project_not_found" — Decision 2 anti-enumeration
+        // requires the body shape stay uniform with Java/JS 404s elsewhere).
         webTestClient.get().uri("/api/v1/projects/zzz-not-an-objectid")
                 .exchange()
                 .expectStatus().isNotFound()
                 .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
                 .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank());
+                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank())
+                .jsonPath("$.code").isEqualTo(null);
 
         // 409 (name conflict): message non-blank; code = project_name_taken.
         saveActive(USER_ID, "Acme");
@@ -735,6 +785,19 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .expectBody()
                 .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank())
                 .jsonPath("$.code").isEqualTo("project_name_taken");
+
+        // 422 (quota): message non-blank; code = project_limit_reached. Seed up to the cap so
+        // the next POST tips into the limit branch.
+        for (int i = 1; i <= 4; i++) saveActive(USER_ID, "Quota" + i);
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/v1/projects")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("name", "Quota5", "timezone", "Europe/Kyiv"))
+                .exchange()
+                .expectStatus().isEqualTo(422)
+                .expectBody()
+                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank())
+                .jsonPath("$.code").isEqualTo("project_limit_reached");
     }
 
     // The Map.of(...) factory rejects null values. PATCH body construction sometimes needs a

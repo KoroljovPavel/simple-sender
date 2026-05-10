@@ -283,7 +283,8 @@ class ProjectServiceTest {
     void update_noOpRenameSameName_doesNotThrow409() {
         // AC-12b allowance: rename to current name does not invoke conflict check (still hits
         // the "no name change" branch via .equals — this also doubles as the "case-equivalent"
-        // no-op assertion).
+        // no-op assertion). Metadata shape is locked to projectId-only and the rename branch
+        // is verified to never fire — distinct from the "name field absent from DTO" path.
         Project before = sampleActive("Acme");
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(before));
         when(projectRepository.save(any(Project.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
@@ -294,7 +295,11 @@ class ProjectServiceTest {
                 .assertNext(saved -> assertThat(saved.getName()).isEqualTo("Acme"))
                 .verifyComplete();
 
+        ArgumentCaptor<Map<String, Object>> meta = metadataCaptor();
         verify(eventService).logEvent(eq(OWNER_ID), eq("project_updated"),
+                eq(IP), eq(UA), meta.capture());
+        assertThat(meta.getValue()).containsOnlyKeys("projectId");
+        verify(eventService, never()).logEvent(anyString(), eq("project_renamed"),
                 anyString(), anyString(), any());
     }
 

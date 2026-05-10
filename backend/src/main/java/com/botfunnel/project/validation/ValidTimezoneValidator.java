@@ -11,6 +11,8 @@ public class ValidTimezoneValidator implements ConstraintValidator<ValidTimezone
     // avoids stacking two error messages for the same missing value (matches ValidPasswordValidator).
     @Override
     public boolean isValid(String tz, ConstraintValidatorContext context) {
+        // .isBlank() (vs ValidPasswordValidator's .isEmpty()) is intentional — a
+        // whitespace-only timezone is meaningless, so let @NotBlank own the message.
         if (tz == null || tz.isBlank()) {
             return true;
         }

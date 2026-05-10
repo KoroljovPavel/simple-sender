@@ -1,8 +1,6 @@
 package com.botfunnel.project.validation;
 
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -20,45 +18,41 @@ class ValidTimezoneValidatorTest {
         assertThat(validator.isValid("UTC", null)).isTrue();
     }
 
-    @ParameterizedTest
-    @ValueSource(strings = {
-            "GMT+5",     // offset format — parses via ZoneId.of but is NOT IANA
-            "+02:00",    // offset format
-            "UT",        // legacy abbreviation parses but is not IANA
-            "NotAZone"   // pure garbage
-    })
-    void offset_or_invalid_returns_false(String tz) {
-        assertThat(validator.isValid(tz, null)).isFalse();
-    }
-
     @Test
-    void offset_format_gmt5_returns_false() {
+    void invalid_offset_format_gmt5_returns_false() {
+        // ZoneId.of("GMT+5") parses; the strict-IANA invariant (Decision 3) rejects it.
         assertThat(validator.isValid("GMT+5", null)).isFalse();
     }
 
     @Test
-    void offset_format_plus_0200_returns_false() {
+    void invalid_offset_format_plus_0200_returns_false() {
         assertThat(validator.isValid("+02:00", null)).isFalse();
     }
 
     @Test
-    void abbreviation_ut_returns_false() {
+    void invalid_abbreviation_ut_returns_false() {
+        // "UT" parses via ZoneId.of as a legacy abbreviation; not in IANA list.
         assertThat(validator.isValid("UT", null)).isFalse();
     }
 
     @Test
-    void nonexistent_zone_returns_false() {
+    void invalid_nonexistent_zone_returns_false() {
         assertThat(validator.isValid("NotAZone", null)).isFalse();
     }
 
     @Test
-    void null_returns_true() {
+    void valid_null_returns_true() {
+        // Delegate to @NotBlank (matches ValidPasswordValidator precedent).
         assertThat(validator.isValid(null, null)).isTrue();
     }
 
     @Test
-    void blank_returns_true() {
+    void valid_empty_returns_true() {
         assertThat(validator.isValid("", null)).isTrue();
+    }
+
+    @Test
+    void valid_whitespace_only_returns_true() {
         assertThat(validator.isValid("   ", null)).isTrue();
     }
 }

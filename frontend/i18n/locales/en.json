@@ -12,7 +12,16 @@
   "layout": {
     "logout": "Logout",
     "dashboard": "Dashboard",
-    "profile": "Profile"
+    "profile": "Profile",
+    "projectSelector": {
+      "placeholder": "Select a project",
+      "createNew": "+ Create new project",
+      "settingsLink": "Project settings",
+      "noActive": "No active projects"
+    },
+    "sidebar": {
+      "settings": "Settings"
+    }
   },
   "validation": {
     "emailFormat": "Invalid email format",
@@ -23,7 +32,12 @@
     "passwordsDoNotMatch": "Passwords do not match",
     "nameRequired": "Name is required",
     "nameTooLong": "Name must be 100 characters or less",
-    "currentPasswordRequired": "Enter your current password"
+    "currentPasswordRequired": "Enter your current password",
+    "projectNameRequired": "Project name is required",
+    "projectNameMin": "At least 3 characters",
+    "projectNameMax": "Maximum 50 characters",
+    "timezoneRequired": "Timezone is required",
+    "timezoneInvalid": "Unknown timezone"
   },
   "auth": {
     "login": {
@@ -141,8 +155,75 @@
       "deleting": "Deleting…"
     }
   },
+  "projects": {
+    "title": "Projects",
+    "activeSection": "Active",
+    "recentlyDeletedSection": "Recently deleted",
+    "daysRemaining": "{count} day(s) remaining",
+    "emptyState": {
+      "title": "Create your first project",
+      "description": "Projects group your bots, subscribers, and broadcasts. Let's start with the first one.",
+      "cta": "Create project"
+    },
+    "create": {
+      "title": "New project",
+      "submit": "Create",
+      "submitting": "Creating…",
+      "nameLabel": "Name",
+      "descriptionLabel": "Description",
+      "timezoneLabel": "Timezone",
+      "limitReachedTooltip": "You've reached the limit of 5 active projects. Delete one to create a new one."
+    },
+    "settings": {
+      "title": "Project settings",
+      "general": "General",
+      "dangerZone": "Danger zone",
+      "rename": "Name",
+      "descriptionLabel": "Description",
+      "timezoneLabel": "Timezone",
+      "save": "Save",
+      "saving": "Saving…",
+      "saved": "Saved",
+      "delete": {
+        "open": "Delete project",
+        "modalTitle": "Delete project?",
+        "modalIntro": "This moves the project to Recently deleted. After 7 days it will be deleted permanently.",
+        "typeNameLabel": "Type the project name to confirm",
+        "confirm": "Delete",
+        "cancel": "Cancel",
+        "deleting": "Deleting…"
+      }
+    },
+    "restore": {
+      "action": "Restore",
+      "success": "Project restored"
+    }
+  },
   "errors": {
     "generic": "Something went wrong. Try again later",
+    "projects": {
+      "generic": "Action failed. Try again later",
+      "unavailable": "This project is no longer available. Refreshing the list.",
+      "create": {
+        "400": "Check the fields and try again",
+        "409": "A project with this name already exists",
+        "422": "You've reached the active project limit"
+      },
+      "update": {
+        "400": "Check the fields and try again",
+        "409": "A project with this name already exists",
+        "404": "Project not found"
+      },
+      "delete": {
+        "404": "Project not found",
+        "confirmTypeName": "Type the project name to confirm"
+      },
+      "restore": {
+        "404": "Project not found",
+        "422": "You've reached the active project limit",
+        "renamedDueToConflict": "The name was changed because a project with this name already exists"
+      }
+    },
     "login": {
       "401": "Invalid email or password",
       "403": "Access denied. Contact support",

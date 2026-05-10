@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { collectKeySet } from '../../scripts/check-locales.mjs'
 
-const localesDir = resolve(__dirname, '../../i18n/locales')
+const localesDir = resolve(process.cwd(), 'i18n/locales')
 
 function loadKeys(file: string): Record<string, true> {
   const raw = readFileSync(resolve(localesDir, file), 'utf8')

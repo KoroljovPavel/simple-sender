@@ -3,8 +3,16 @@ import type { Project } from '~/types/project'
 
 export const LOCAL_STORAGE_KEY = 'bot-funnel.currentProjectId'
 
+// Indirection over `import.meta.client` so the SSR-guard branch (Risk R6) can be
+// exercised under the Nuxt vitest environment, which fixes `import.meta.client = true`
+// at compile time. Production path is unchanged: the default reads `import.meta.client`.
+let isClientGuard: () => boolean = () => import.meta.client
+export const __setClientGuardForTests = (fn: () => boolean) => {
+  isClientGuard = fn
+}
+
 const readPersisted = (): string | null => {
-  if (!import.meta.client) return null
+  if (!isClientGuard()) return null
   try {
     return localStorage.getItem(LOCAL_STORAGE_KEY)
   } catch {
@@ -13,12 +21,13 @@ const readPersisted = (): string | null => {
 }
 
 const writePersisted = (id: string | null) => {
-  if (!import.meta.client) return
+  if (!isClientGuard()) return
   try {
     if (id) localStorage.setItem(LOCAL_STORAGE_KEY, id)
     else localStorage.removeItem(LOCAL_STORAGE_KEY)
-  } catch {
-    // QuotaExceededError or storage disabled — in-memory state still correct.
+  } catch (err) {
+    // QuotaExceededError or storage disabled — in-memory state stays correct.
+    console.warn('[projects] localStorage write failed; in-memory state preserved', err)
   }
 }
 
@@ -82,7 +91,7 @@ export const useProjectsStore = defineStore('projects', () => {
   }
 
   async function softDelete(id: string): Promise<void> {
-    await useApi()(`/api/v1/projects/${id}`, { method: 'DELETE' })
+    await useApi()<void>(`/api/v1/projects/${id}`, { method: 'DELETE' })
     projects.value = projects.value.filter((p) => p.id !== id)
     if (currentProjectId.value === id) runAutoSelect()
   }

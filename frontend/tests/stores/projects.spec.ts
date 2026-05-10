@@ -5,7 +5,7 @@ import { mockNuxtImport } from '@nuxt/test-utils/runtime'
 const { apiMock } = vi.hoisted(() => ({ apiMock: vi.fn() }))
 mockNuxtImport('useApi', () => () => apiMock)
 
-import { useProjectsStore, LOCAL_STORAGE_KEY } from '../../stores/projects'
+import { useProjectsStore, LOCAL_STORAGE_KEY, __setClientGuardForTests } from '../../stores/projects'
 import type { Project } from '../../types/project'
 
 const P1: Project = {
@@ -37,7 +37,9 @@ describe('projects store', () => {
   })
 
   afterEach(() => {
+    __setClientGuardForTests(() => import.meta.client)
     vi.unstubAllGlobals()
+    vi.restoreAllMocks()
   })
 
   it('fetchAll auto-selects per AC-20 when persisted ID is present in active list', async () => {
@@ -236,20 +238,53 @@ describe('projects store', () => {
     expect(localStorage.getItem(LOCAL_STORAGE_KEY)).toBe(P2.id)
   })
 
-  // Risk R6 SSR mitigation: simulate environment where localStorage is unavailable
-  // (under real SSR Nuxt sets import.meta.client=false; here we additionally remove
-  // the global to verify defensive layering).
-  it('SSR context: selectProject does not throw and does not write localStorage', () => {
-    vi.stubGlobal('localStorage', undefined)
+  // Risk R6: simulate SSR by flipping the client-guard. Spies on the real localStorage
+  // prove the early-return branch is taken (not just the defensive try/catch fallback).
+  it('SSR context: store init does not read localStorage', () => {
+    const getSpy = vi.spyOn(localStorage, 'getItem')
+    __setClientGuardForTests(() => false)
 
     const store = useProjectsStore()
-    expect(() => store.selectProject('abc')).not.toThrow()
-    expect(() => store.selectProject(null)).not.toThrow()
+
+    expect(getSpy).not.toHaveBeenCalled()
+    expect(store.currentProjectId).toBeNull()
   })
 
-  it('SSR context: store init does not read localStorage', () => {
-    vi.stubGlobal('localStorage', undefined)
+  it('SSR context: selectProject does not write localStorage', () => {
+    const setSpy = vi.spyOn(localStorage, 'setItem')
+    const removeSpy = vi.spyOn(localStorage, 'removeItem')
+    __setClientGuardForTests(() => false)
 
-    expect(() => useProjectsStore()).not.toThrow()
+    const store = useProjectsStore()
+    store.selectProject('abc')
+    store.selectProject(null)
+
+    expect(setSpy).not.toHaveBeenCalled()
+    expect(removeSpy).not.toHaveBeenCalled()
+    expect(store.currentProjectId).toBeNull()
+  })
+
+  it('selectProject swallows QuotaExceededError and keeps in-memory state', () => {
+    vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new DOMException('quota exceeded', 'QuotaExceededError')
+    })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const store = useProjectsStore()
+    expect(() => store.selectProject('id-1')).not.toThrow()
+
+    expect(store.currentProjectId).toBe('id-1')
+    expect(warnSpy).toHaveBeenCalled()
+  })
+
+  it('fetchAll re-sorts defensively when API returns out-of-order list', async () => {
+    // Backend would return desc, but the store re-sorts to be defensive.
+    apiMock.mockResolvedValueOnce([P1, P2]) // ascending order on createdAt
+
+    const store = useProjectsStore()
+    await store.fetchAll()
+
+    // P2 has the newest createdAt (2026-01-03) — wins after defensive re-sort.
+    expect(store.currentProjectId).toBe(P2.id)
   })
 })

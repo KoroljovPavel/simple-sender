@@ -99,7 +99,7 @@ describe('ProjectSelector', () => {
     expect(wrapper.find('[role="menu"]').exists()).toBe(false)
   })
 
-  it('create button disabled with tooltip when projects.length >= 5', async () => {
+  it('create button disabled with VISIBLE limit text when projects.length >= 5', async () => {
     projectsRef.value = [
       makeProject('p1', 'P1', '2026-01-01T00:00:00Z'),
       makeProject('p2', 'P2', '2026-01-02T00:00:00Z'),
@@ -115,10 +115,19 @@ describe('ProjectSelector', () => {
 
     const createEl = wrapper.find('[data-test="project-selector-create"]')
     expect(createEl.exists()).toBe(true)
-    // At the limit: rendered as disabled (NOT a nav anchor) with aria-disabled + tooltip
+    // At the limit: rendered as disabled (NOT a nav anchor) with aria-disabled.
     expect(createEl.element.tagName.toLowerCase()).not.toBe('a')
     expect(createEl.attributes('aria-disabled')).toBe('true')
-    expect(createEl.attributes('title')).toBe('projects.create.limitReachedTooltip')
+    // Regression: native title is NOT used — it was invisible on disabled buttons
+    // and on mobile (smoke-test 2.1 finding). Limit text must live in the DOM.
+    expect(createEl.attributes('title')).toBeUndefined()
+    // Limit text rendered visibly under the disabled button (i18n key in test env).
+    const limitText = wrapper.find('[data-test="project-selector-create-limit-text"]')
+    expect(limitText.exists()).toBe(true)
+    expect(limitText.text()).toBe('projects.create.limitReachedTooltip')
+    // Linked via aria-describedby so screen readers announce the limit when
+    // the user focuses the disabled item.
+    expect(createEl.attributes('aria-describedby')).toBe('project-selector-create-limit-text')
   })
 
   it('create button enabled when projects.length < 5', async () => {

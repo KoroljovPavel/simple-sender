@@ -42,6 +42,13 @@ async function onLogout() {
         <nav class="flex flex-col gap-2">
           <NuxtLinkLocale to="/dashboard" class="text-sm hover:underline">{{ t('layout.dashboard') }}</NuxtLinkLocale>
           <NuxtLinkLocale
+            to="/projects"
+            data-test="sidebar-all-projects-link"
+            class="text-sm hover:underline"
+          >
+            {{ t('layout.sidebar.allProjects') }}
+          </NuxtLinkLocale>
+          <NuxtLinkLocale
             v-if="projectsStore.currentProject"
             :to="`/projects/${projectsStore.currentProject.id}/settings`"
             class="text-sm hover:underline"

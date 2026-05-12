@@ -7,21 +7,24 @@ import type { Project } from '../../../types/project'
 const PROJECT_ID = 'p1'
 const OTHER_PROJECT_ID = 'p2'
 
-const { projectsStoreMock, navigateToMock, routeMock } = vi.hoisted(() => ({
+const { projectsStoreMock, navigateToMock, routeMock, apiMock } = vi.hoisted(() => ({
   projectsStoreMock: {
     projects: [] as Project[],
     currentProjectId: null as string | null,
     currentProject: null as Project | null,
     isLoaded: true,
+    pendingBannerKey: null as string | null,
     fetchAll: vi.fn(),
     update: vi.fn(),
     softDelete: vi.fn(),
   },
   navigateToMock: vi.fn(),
   routeMock: { params: { projectId: 'p1' } as Record<string, string> },
+  apiMock: vi.fn(),
 }))
 
 mockNuxtImport('useProjectsStore', () => () => projectsStoreMock)
+mockNuxtImport('useApi', () => () => apiMock)
 mockNuxtImport('useRoute', () => () => routeMock)
 mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 mockNuxtImport('navigateTo', () => navigateToMock)
@@ -57,8 +60,13 @@ describe('projects/[projectId]/settings page', () => {
     projectsStoreMock.fetchAll.mockReset()
     projectsStoreMock.update.mockReset()
     projectsStoreMock.softDelete.mockReset()
+    apiMock.mockReset()
+    // Default: explicit project GET on mount succeeds (project exists on server).
+    // Stale/missing scenarios override with mockRejectedValueOnce({statusCode: 404}).
+    apiMock.mockResolvedValue(makeProject())
     navigateToMock.mockReset()
     projectsStoreMock.isLoaded = true
+    projectsStoreMock.pendingBannerKey = null
     seedActive(makeProject())
 
     // Default: update resolves with mutated row + reflects into store mock.
@@ -142,7 +150,11 @@ describe('projects/[projectId]/settings page', () => {
 
     // Both 'Europe/Berlin' (initial) and 'Europe/London' (target) are
     // universally present in Intl.supportedValuesOf across ICU builds.
-    await wrapper.find('[data-test="settings-timezone-select"]').setValue('Europe/London')
+    // TimezonePicker: open via focus, click the option to commit selection.
+    await wrapper.find('[data-test="timezone-picker-input"]').trigger('focus')
+    await settle()
+    await wrapper.find('[data-test="timezone-picker-option-Europe/London"]').trigger('mousedown')
+    await settle()
     await wrapper.find('[data-test="settings-form"]').trigger('submit')
     await settle()
 
@@ -281,15 +293,56 @@ describe('projects/[projectId]/settings page', () => {
     expect(err.text()).toMatch(/вже існує/i)
   })
 
-  it('projectNotInStore_rendersFallback', async () => {
-    routeMock.params = { projectId: 'missing-id' }
+  // ─── Stale-state redirect (smoke-test 2.6 finding) ────────────────────
+  it('mount_apiReturns404_setsBannerKeyAndRedirectsToProjects', async () => {
+    routeMock.params = { projectId: 'p-deleted' }
+    // Store stale-shows the project as active (cross-tab scenario).
+    // In the real app, useApi's 404 interceptor clears the store before this
+    // catch runs; here useApi is fully mocked so the store stays stale and we
+    // assert only the page-level redirect/banner contract.
+    seedActive(makeProject({ id: 'p-deleted', name: 'Stale' }))
+    apiMock.mockReset()
+    apiMock.mockRejectedValueOnce({ statusCode: 404 })
 
+    await mountSuspended(SettingsPage)
+    await settle()
+
+    expect(projectsStoreMock.pendingBannerKey).toBe('errors.projects.unavailable')
+    expect(navigateToMock).toHaveBeenCalledWith('/projects')
+  })
+
+  it('mount_projectNotInStoreAfterFetch_redirectsToProjects', async () => {
+    // Same-tab back-after-delete: store has no record, explicit GET 404s.
+    routeMock.params = { projectId: 'p-gone' }
+    projectsStoreMock.projects = []
+    projectsStoreMock.currentProject = null
+    projectsStoreMock.currentProjectId = null
+    apiMock.mockReset()
+    apiMock.mockRejectedValueOnce({ statusCode: 404 })
+
+    await mountSuspended(SettingsPage)
+    await settle()
+
+    expect(navigateToMock).toHaveBeenCalledWith('/projects')
+  })
+
+  it('mount_apiReturns500_doesNotRedirect_keepsForm', async () => {
+    // Non-404 errors are tolerated — we only redirect for "project gone".
+    apiMock.mockReset()
+    apiMock.mockRejectedValueOnce({ statusCode: 500 })
     const wrapper = await mountSuspended(SettingsPage)
     await settle()
 
-    expect(wrapper.find('[data-test="settings-unavailable"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="settings-form"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="settings-danger-zone"]').exists()).toBe(false)
     expect(navigateToMock).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="settings-form"]').exists()).toBe(true)
+  })
+
+  it('mount_apiResolves_doesNotRedirect_rendersForm', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    await settle()
+
+    expect(navigateToMock).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="settings-form"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-danger-zone"]').exists()).toBe(true)
   })
 })

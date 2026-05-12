@@ -10,9 +10,11 @@ const localePath = useLocalePath()
 const apiError = useApiError()
 const projectsStore = useProjectsStore()
 
-const timezones = Intl.supportedValuesOf('timeZone')
 const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone
-const defaultTz = timezones.includes(browserTz) ? browserTz : 'UTC'
+const defaultTz =
+  typeof Intl.supportedValuesOf === 'function' && Intl.supportedValuesOf('timeZone').includes(browserTz)
+    ? browserTz
+    : 'UTC'
 
 const schemaComputed = computed(() =>
   toTypedSchema(
@@ -99,16 +101,13 @@ const onSubmit = handleSubmit(async (values) => {
 
       <div>
         <label for="timezone" class="block text-sm font-medium mb-1">{{ t('projects.create.timezoneLabel') }}</label>
-        <select
+        <TimezonePicker
           id="timezone"
           v-model="timezone"
           v-bind="timezoneAttrs"
-          data-test="project-timezone-select"
-          name="timezone"
-          class="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option v-for="tz in timezones" :key="tz" :value="tz">{{ tz }}</option>
-        </select>
+          :invalid="!!errors.timezone"
+          data-test="project-timezone"
+        />
         <p v-if="errors.timezone" data-test="project-timezone-error" class="text-sm text-red-600 mt-1">
           {{ errors.timezone }}
         </p>

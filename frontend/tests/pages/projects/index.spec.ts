@@ -16,12 +16,14 @@ const { apiMock, fetchAllSpy, restoreSpy } = vi.hoisted(() => ({
 // Module-level refs created AFTER vue imports are wired.
 const projectsRef = ref<Project[]>([])
 const isLoadedRef = ref(true)
+const pendingBannerKeyRef = ref<string | null>(null)
 
 // reactive() wrapper so refs auto-unwrap on property access — matches the
 // shape of a Pinia setup-store as seen by template/script-setup consumers.
 const mockStore = reactive({
   projects: projectsRef,
   isLoaded: isLoadedRef,
+  pendingBannerKey: pendingBannerKeyRef,
   fetchAll: fetchAllSpy,
   restore: restoreSpy,
 })
@@ -53,6 +55,7 @@ describe('projects index page', () => {
     setActivePinia(createPinia())
     projectsRef.value = []
     isLoadedRef.value = true
+    pendingBannerKeyRef.value = null
     apiMock.mockReset()
     fetchAllSpy.mockReset()
     restoreSpy.mockReset()
@@ -161,7 +164,7 @@ describe('projects index page', () => {
     expect(wrapper.find('[data-test="deleted-row-d1"]').exists()).toBe(true)
   })
 
-  it('index_5activeProjects_disablesCreateButtonWithTooltip', async () => {
+  it('index_5activeProjects_disablesCreateButtonWithVisibleLimitText', async () => {
     projectsRef.value = Array.from({ length: 5 }, (_, i) =>
       makeProject({ id: `p${i}`, name: `P${i}`, createdAt: `2026-01-0${i + 1}T00:00:00Z` }),
     )
@@ -174,8 +177,13 @@ describe('projects index page', () => {
     expect(btn.exists()).toBe(true)
     expect(btn.attributes('disabled')).toBeDefined()
     expect(btn.attributes('aria-disabled')).toBe('true')
-    // uk: "Досягнуто ліміт у 5 активних проектів. Видаліть один, щоб створити новий."
-    expect(btn.attributes('title')).toMatch(/ліміт у 5 активних проектів/i)
+    // Regression: native title is NOT used — smoke-test 2.1 finding.
+    expect(btn.attributes('title')).toBeUndefined()
+    // Limit text rendered visibly next to the disabled button.
+    const limitText = wrapper.find('[data-test="create-project-limit-text"]')
+    expect(limitText.exists()).toBe(true)
+    expect(limitText.text()).toMatch(/ліміт у 5 активних проектів/i)
+    expect(btn.attributes('aria-describedby')).toBe('create-project-limit-text')
   })
 
   it('index_under5Projects_createButtonEnabled', async () => {
@@ -294,6 +302,47 @@ describe('projects index page', () => {
 
     expect(wrapper.find('[data-test="restore-toast"]').exists()).toBe(false)
     vi.useRealTimers()
+  })
+
+  // ─── Staleness banner (smoke-test 2.6 finding) ────────────────────────
+  it('index_pendingBannerKeySet_rendersPersistentStalenessBanner', async () => {
+    pendingBannerKeyRef.value = 'errors.projects.unavailable'
+    apiMock.mockResolvedValueOnce([])
+
+    const wrapper = await mountSuspended(ProjectsIndexPage)
+    await settle()
+
+    const banner = wrapper.find('[data-test="staleness-banner"]')
+    expect(banner.exists()).toBe(true)
+    // uk default: "Цей проект більше недоступний"
+    expect(banner.text()).toMatch(/недоступний/i)
+    expect(banner.attributes('role')).toBe('alert')
+  })
+
+  it('index_pendingBannerKeyNull_doesNotRenderStalenessBanner', async () => {
+    pendingBannerKeyRef.value = null
+    apiMock.mockResolvedValueOnce([])
+
+    const wrapper = await mountSuspended(ProjectsIndexPage)
+    await settle()
+
+    expect(wrapper.find('[data-test="staleness-banner"]').exists()).toBe(false)
+  })
+
+  it('index_dismissStalenessBanner_clearsStoreKey', async () => {
+    pendingBannerKeyRef.value = 'errors.projects.unavailable'
+    apiMock.mockResolvedValueOnce([])
+
+    const wrapper = await mountSuspended(ProjectsIndexPage)
+    await settle()
+
+    expect(wrapper.find('[data-test="staleness-banner"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="staleness-banner-dismiss"]').trigger('click')
+    await settle()
+
+    expect(pendingBannerKeyRef.value).toBe(null)
+    expect(wrapper.find('[data-test="staleness-banner"]').exists()).toBe(false)
   })
 
   it('index_restoreServer500_showsGenericErrorBanner', async () => {

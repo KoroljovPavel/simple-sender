@@ -126,18 +126,26 @@ onBeforeUnmount(() => {
       >
         {{ t('layout.projectSelector.createNew') }}
       </NuxtLinkLocale>
-      <button
-        v-else
-        data-test="project-selector-create"
-        type="button"
-        role="menuitem"
-        disabled
-        aria-disabled="true"
-        :title="t('projects.create.limitReachedTooltip')"
-        class="block w-full text-left px-3 py-2 text-muted-foreground cursor-not-allowed select-none disabled:opacity-100"
-      >
-        {{ t('layout.projectSelector.createNew') }}
-      </button>
+      <div v-else>
+        <button
+          data-test="project-selector-create"
+          type="button"
+          role="menuitem"
+          disabled
+          aria-disabled="true"
+          aria-describedby="project-selector-create-limit-text"
+          class="block w-full text-left px-3 py-2 text-muted-foreground cursor-not-allowed select-none disabled:opacity-100"
+        >
+          {{ t('layout.projectSelector.createNew') }}
+        </button>
+        <p
+          id="project-selector-create-limit-text"
+          data-test="project-selector-create-limit-text"
+          class="px-3 pb-2 text-xs text-muted-foreground leading-snug"
+        >
+          {{ t('projects.create.limitReachedTooltip') }}
+        </p>
+      </div>
 
       <NuxtLinkLocale
         v-if="projectsStore.currentProject"

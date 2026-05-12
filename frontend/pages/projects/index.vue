@@ -99,31 +99,67 @@ const bannerClass = computed(() => {
     default: return ''
   }
 })
+
+// pendingBannerKey is set by useApi 404-interceptor (and by settings.vue on
+// explicit stale detection). Persistent until the user dismisses or navigates
+// away from /projects — unlike the transient restore-toast above, this is the
+// "your project is gone" notice that must not auto-fade.
+function dismissStaleness() {
+  projectsStore.pendingBannerKey = null
+}
 </script>
 
 <template>
   <div class="space-y-8">
-    <div class="flex items-center justify-between gap-4">
+    <div class="flex items-start justify-between gap-4">
       <h1 class="text-2xl font-semibold">{{ t('projects.title') }}</h1>
 
-      <NuxtLinkLocale
-        v-if="!atLimit"
-        :to="localePath('/projects/new')"
-        data-test="create-project-button"
-        class="inline-block rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-      >
-        {{ t('layout.projectSelector.createNew') }}
-      </NuxtLinkLocale>
+      <div class="flex flex-col items-end gap-1">
+        <NuxtLinkLocale
+          v-if="!atLimit"
+          :to="localePath('/projects/new')"
+          data-test="create-project-button"
+          class="inline-block rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+        >
+          {{ t('layout.projectSelector.createNew') }}
+        </NuxtLinkLocale>
+        <template v-else>
+          <button
+            type="button"
+            disabled
+            aria-disabled="true"
+            aria-describedby="create-project-limit-text"
+            data-test="create-project-button"
+            class="inline-block rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white opacity-50 cursor-not-allowed"
+          >
+            {{ t('layout.projectSelector.createNew') }}
+          </button>
+          <p
+            id="create-project-limit-text"
+            data-test="create-project-limit-text"
+            class="max-w-xs text-xs text-gray-600 text-right leading-snug"
+          >
+            {{ t('projects.create.limitReachedTooltip') }}
+          </p>
+        </template>
+      </div>
+    </div>
+
+    <div
+      v-if="projectsStore.pendingBannerKey"
+      data-test="staleness-banner"
+      role="alert"
+      class="flex items-start justify-between gap-3 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+    >
+      <span>{{ t(projectsStore.pendingBannerKey) }}</span>
       <button
-        v-else
         type="button"
-        disabled
-        aria-disabled="true"
-        data-test="create-project-button"
-        :title="t('projects.create.limitReachedTooltip')"
-        class="inline-block rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white opacity-50 cursor-not-allowed"
+        data-test="staleness-banner-dismiss"
+        :aria-label="t('common.dismiss')"
+        class="-mr-1 -mt-0.5 px-2 text-amber-700 hover:text-amber-900"
+        @click="dismissStaleness"
       >
-        {{ t('layout.projectSelector.createNew') }}
+        ×
       </button>
     </div>
 

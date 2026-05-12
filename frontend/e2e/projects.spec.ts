@@ -128,6 +128,11 @@ test('golden path: register → create → switch → rename → soft-delete →
   // remains (project2 is still active).
   await page.waitForURL(/\/projects(?:\?.*)?$/)
 
+  // Sanity: the sidebar "All projects" link is visible and points to /projects.
+  // Confirms the navigation gap surfaced by smoke-test (Restore flow was only
+  // reachable via type-URL) is closed.
+  await expect(page.locator('[data-test="sidebar-all-projects-link"]')).toBeVisible()
+
   // Step 10: /projects shows the "Recently deleted" section with the deleted
   // project (AC-23). The soft-deleted project must NOT appear in the topbar
   // selector anymore.

@@ -2,6 +2,7 @@
 import { toTypedSchema } from '@vee-validate/zod'
 import { useForm } from 'vee-validate'
 import { z } from 'zod'
+import type { Project } from '~/types/project'
 
 definePageMeta({ layout: 'default' })
 
@@ -13,27 +14,56 @@ const projectsStore = useProjectsStore()
 
 const projectId = computed(() => String(route.params.projectId ?? ''))
 
-// Lazy hydration on the client only — fire-and-forget with a guard so we
-// don't crash the page when the listing endpoint is briefly unreachable.
-// Renders the fallback banner via the `project` computed when fetch fails.
-if (import.meta.client && !projectsStore.isLoaded) {
-  projectsStore.fetchAll().catch((err) => {
-    console.warn('[projects/settings] fetchAll failed; rendering fallback', err)
-  })
-}
-
 const project = computed(() =>
   projectsStore.projects.find((p) => p.id === projectId.value && p.deletedAt === null) ?? null,
 )
 
 // Intl.supportedValuesOf may be missing on very old Safari; degrade to the
-// resolved browser zone so the dropdown still has a single valid option.
+// resolved browser zone so validation still admits at least one value.
 const timezones = (() => {
   if (typeof Intl.supportedValuesOf === 'function') return Intl.supportedValuesOf('timeZone')
-  const fallback = Intl.DateTimeFormat().resolvedOptions().timeZone
-  console.warn('[projects/settings] Intl.supportedValuesOf unavailable, falling back to', fallback)
-  return [fallback]
+  return [Intl.DateTimeFormat().resolvedOptions().timeZone]
 })()
+
+// Hydration + staleness guard. Same-tab back-after-delete and cross-tab edits
+// both land here on routes for projects no longer in the active list. The
+// explicit GET surfaces the cross-tab case (where the store is stale-true);
+// for any 404 we surface the persistent banner via pendingBannerKey and bail
+// to /projects so the user sees a useful page instead of an empty form.
+onMounted(async () => {
+  if (!import.meta.client) return
+
+  if (!projectsStore.isLoaded) {
+    try {
+      await projectsStore.fetchAll()
+    } catch (err) {
+      console.warn('[projects/settings] fetchAll failed', err)
+    }
+  }
+
+  try {
+    await useApi()<Project>(`/api/v1/projects/${projectId.value}`)
+  } catch (e: unknown) {
+    if ((e as { statusCode?: number })?.statusCode === 404) {
+      // For currentProjectId case, useApi 404 interceptor already set the
+      // banner key and cleared the store. For other cases (foreign id, deleted
+      // non-current), set it explicitly so /projects renders the same banner.
+      if (!projectsStore.pendingBannerKey) {
+        projectsStore.pendingBannerKey = 'errors.projects.unavailable'
+      }
+      await navigateTo(localePath('/projects'))
+      return
+    }
+    console.warn('[projects/settings] project GET failed', e)
+  }
+
+  if (!project.value) {
+    if (!projectsStore.pendingBannerKey) {
+      projectsStore.pendingBannerKey = 'errors.projects.unavailable'
+    }
+    await navigateTo(localePath('/projects'))
+  }
+})
 
 const schemaComputed = computed(() =>
   toTypedSchema(
@@ -161,18 +191,13 @@ async function confirmDelete() {
   <div class="max-w-2xl space-y-8">
     <h1 class="text-2xl font-semibold">{{ t('projects.settings.title') }}</h1>
 
-    <div
-      v-if="!project"
-      data-test="settings-unavailable"
-      class="rounded-md border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"
-    >
-      <p class="mb-2">{{ t('errors.projects.unavailable') }}</p>
-      <NuxtLinkLocale :to="localePath('/projects')" class="text-blue-700 hover:underline">
-        {{ t('projects.title') }}
-      </NuxtLinkLocale>
-    </div>
-
-    <template v-else>
+    <!--
+      No "project missing" inline fallback: settings.vue redirects to /projects
+      in onMounted when the project is not in the active list (same-tab delete,
+      cross-tab stale, foreign / non-existent id). The /projects page renders
+      a persistent banner keyed off projectsStore.pendingBannerKey.
+    -->
+    <template v-if="project">
       <!-- General section -->
       <section data-test="settings-general" class="rounded-md border p-4 space-y-3">
         <h2 class="text-lg font-medium">{{ t('projects.settings.general') }}</h2>
@@ -223,16 +248,13 @@ async function confirmDelete() {
             <label for="settings-timezone" class="block text-sm font-medium mb-1">
               {{ t('projects.settings.timezoneLabel') }}
             </label>
-            <select
+            <TimezonePicker
               id="settings-timezone"
               v-model="timezoneField"
               v-bind="timezoneAttrs"
-              data-test="settings-timezone-select"
-              name="timezone"
-              class="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option v-for="tz in timezones" :key="tz" :value="tz">{{ tz }}</option>
-            </select>
+              :invalid="!!errors.timezone"
+              data-test="settings-timezone"
+            />
             <p v-if="errors.timezone" data-test="settings-timezone-error" class="text-sm text-red-600 mt-1">
               {{ errors.timezone }}
             </p>

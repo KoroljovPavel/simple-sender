@@ -28,6 +28,20 @@ test('golden path: register → create → switch → rename → soft-delete →
   // Step 1: register fresh user. Email is randomized per run so the spec is
   // idempotent under playwright.config.ts `reuseExistingServer: !CI`.
   await page.goto('/auth/register')
+
+  // Hydration gate. In dev mode SSR HTML is interactive before Vue mounts;
+  // a submit click before @submit.prevent attaches fires a native HTML GET
+  // (/auth/register?email=...&password=...) and the redirect to /dashboard
+  // never happens — this is the AC-28 race that Task 14 caught. We wait for
+  // Vue's root app instance to report mounted before any interaction.
+  // Subsequent navigations are client-side (Vue Router), so no further gate
+  // is needed in this spec. `networkidle` is intentionally NOT used because
+  // Nuxt's HMR WebSocket keeps the channel busy in dev mode.
+  await page.waitForFunction(() => {
+    const root = document.querySelector('#__nuxt') as (Element & { __vue_app__?: { _instance?: { isMounted?: boolean } } }) | null
+    return root?.__vue_app__?._instance?.isMounted === true
+  })
+
   await page.locator('#email').fill(email)
   await page.locator('#password').fill(password)
   await page.locator('#confirmPassword').fill(password)

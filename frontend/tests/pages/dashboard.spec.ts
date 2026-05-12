@@ -128,6 +128,7 @@ describe('dashboard page', () => {
     await mountSuspended(DashboardPage)
     await settle()
 
-    expect(projectsStoreMock.fetchAll).toHaveBeenCalled()
+    expect(projectsStoreMock.fetchAll).toHaveBeenCalledTimes(1)
+    expect(projectsStoreMock.fetchAll).toHaveBeenCalledWith()
   })
 })

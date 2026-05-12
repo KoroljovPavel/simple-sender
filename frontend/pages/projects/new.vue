@@ -22,11 +22,7 @@ const schemaComputed = computed(() =>
         .trim()
         .min(3, t('validation.projectNameMin'))
         .max(50, t('validation.projectNameMax')),
-      description: z
-        .string()
-        .max(200, t('validation.projectDescriptionMax'))
-        .optional()
-        .or(z.literal('')),
+      description: z.string().max(200, t('validation.projectDescriptionMax')),
       timezone: z
         .string()
         .refine(

@@ -93,7 +93,10 @@ describe('projects/new page', () => {
     await wrapper.find('[data-test="project-name-input"]').setValue('Valid name')
     const select = wrapper.find('[data-test="project-timezone-select"]')
       .element as HTMLSelectElement
-    // bypass <option> list by mutating DOM value directly + dispatching input
+    // happy-dom snaps <select>.value back to '' for any value not in <option> list,
+    // so the v-model field receives '' via the dispatched input event. '' isn't
+    // in Intl.supportedValuesOf — refine() rejects it, which is the failure mode
+    // we want to surface (any non-IANA value → validation error).
     select.value = 'Mars/Olympus_Mons'
     select.dispatchEvent(new Event('input', { bubbles: true }))
     select.dispatchEvent(new Event('change', { bubbles: true }))
@@ -136,7 +139,7 @@ describe('projects/new page', () => {
     expect(payload.description).toBeNull()
   })
 
-  it('new_serverError409_showsApiErrorToast', async () => {
+  it('new_serverError409_showsApiErrorInline', async () => {
     projectsStoreMock.create.mockRejectedValueOnce({ statusCode: 409, data: { code: 'project_name_taken' } })
 
     const wrapper = await mountSuspended(NewProjectPage)
@@ -150,7 +153,7 @@ describe('projects/new page', () => {
     expect(navigateToMock).not.toHaveBeenCalled()
   })
 
-  it('new_serverError422LimitReached_showsApiErrorToast', async () => {
+  it('new_serverError422LimitReached_showsApiErrorInline', async () => {
     projectsStoreMock.create.mockRejectedValueOnce({ statusCode: 422, data: { code: 'project_limit_reached' } })
 
     const wrapper = await mountSuspended(NewProjectPage)

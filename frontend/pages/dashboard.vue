@@ -6,7 +6,7 @@ const authStore = useAuthStore()
 const projectsStore = useProjectsStore()
 
 if (import.meta.client) {
-  projectsStore.fetchAll()
+  projectsStore.fetchAll().catch((err) => console.warn('[projects] fetchAll failed', err))
 }
 
 const showEmpty = computed(

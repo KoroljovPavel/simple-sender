@@ -8,8 +8,6 @@ import java.time.Instant;
 
 public interface ProjectRepository extends ReactiveMongoRepository<Project, String> {
 
-    Mono<Project> findByIdAndOwnerId(String id, String ownerId);
-
     Flux<Project> findByOwnerIdAndDeletedAtIsNullOrderByCreatedAtDesc(String ownerId);
 
     Flux<Project> findByOwnerIdOrderByCreatedAtDesc(String ownerId);

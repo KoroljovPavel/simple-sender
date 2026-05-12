@@ -53,7 +53,7 @@ async function refreshSoftDeleted() {
 }
 
 if (import.meta.client) {
-  if (!projectsStore.isLoaded) projectsStore.fetchAll()
+  if (!projectsStore.isLoaded) projectsStore.fetchAll().catch((err) => console.warn('[projects] fetchAll failed', err))
   refreshSoftDeleted()
 }
 

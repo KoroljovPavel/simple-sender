@@ -123,7 +123,45 @@ describe('projects/[projectId]/settings page', () => {
     expect(partial).not.toHaveProperty('timezone')
   })
 
-  it('renameSucceeds_storeReflectsNewName', async () => {
+  it('descriptionUnchanged_omitsFieldFromPartial', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    await settle()
+
+    await wrapper.find('[data-test="settings-name-input"]').setValue('Renamed')
+    await wrapper.find('[data-test="settings-form"]').trigger('submit')
+    await settle()
+
+    expect(projectsStoreMock.update).toHaveBeenCalledTimes(1)
+    const [, partial] = projectsStoreMock.update.mock.calls[0]
+    expect(partial).not.toHaveProperty('description')
+  })
+
+  it('timezoneChanged_includesFieldInPartial', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    await settle()
+
+    // Both 'Europe/Berlin' (initial) and 'Europe/London' (target) are
+    // universally present in Intl.supportedValuesOf across ICU builds.
+    await wrapper.find('[data-test="settings-timezone-select"]').setValue('Europe/London')
+    await wrapper.find('[data-test="settings-form"]').trigger('submit')
+    await settle()
+
+    expect(projectsStoreMock.update).toHaveBeenCalledTimes(1)
+    const [, partial] = projectsStoreMock.update.mock.calls[0]
+    expect(partial).toEqual({ timezone: 'Europe/London' })
+  })
+
+  it('submitWithoutChanges_doesNotCallUpdate', async () => {
+    const wrapper = await mountSuspended(SettingsPage)
+    await settle()
+
+    await wrapper.find('[data-test="settings-form"]').trigger('submit')
+    await settle()
+
+    expect(projectsStoreMock.update).not.toHaveBeenCalled()
+  })
+
+  it('renameSucceeds_showsSavedIndicator', async () => {
     const wrapper = await mountSuspended(SettingsPage)
     await settle()
 
@@ -131,7 +169,8 @@ describe('projects/[projectId]/settings page', () => {
     await wrapper.find('[data-test="settings-form"]').trigger('submit')
     await settle()
 
-    expect(projectsStoreMock.currentProject?.name).toBe('New Name')
+    expect(wrapper.find('[data-test="settings-saved"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="settings-error"]').exists()).toBe(false)
   })
 
   it('deleteModal_buttonDisabledUntilExactNameMatch', async () => {
@@ -164,6 +203,15 @@ describe('projects/[projectId]/settings page', () => {
   })
 
   it('deleteConfirm_redirects_toDashboard_whenNoOtherActive', async () => {
+    // Seed a soft-deleted leftover so the page's defensive
+    // `p.deletedAt === null` filter is load-bearing: after softDelete
+    // removes the active row, projects[] still has a deletedAt entry,
+    // and only the filter (not just length) keeps us on /dashboard.
+    seedActive(
+      makeProject(),
+      makeProject({ id: OTHER_PROJECT_ID, name: 'Old', deletedAt: '2026-05-01T00:00:00Z' }),
+    )
+
     const wrapper = await mountSuspended(SettingsPage)
     await settle()
 
@@ -195,6 +243,28 @@ describe('projects/[projectId]/settings page', () => {
     expect(navigateToMock).toHaveBeenCalledWith('/projects')
   })
 
+  it('deleteConfirm_apiError_showsInlineErrorAndStays', async () => {
+    projectsStoreMock.softDelete.mockReset()
+    projectsStoreMock.softDelete.mockRejectedValueOnce({ statusCode: 404 })
+
+    const wrapper = await mountSuspended(SettingsPage)
+    await settle()
+
+    await wrapper.find('[data-test="delete-project-open"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="delete-project-name-input"]').setValue('Acme')
+    await settle()
+    await wrapper.find('[data-test="delete-project-confirm"]').trigger('click')
+    await settle()
+
+    const err = wrapper.find('[data-test="delete-project-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text().length).toBeGreaterThan(0)
+    expect(navigateToMock).not.toHaveBeenCalled()
+    // Modal stays open so the user can retry / cancel.
+    expect(wrapper.find('[data-test="delete-project-modal"]').exists()).toBe(true)
+  })
+
   it('renameTo409_showsErrorViaUseApiError', async () => {
     projectsStoreMock.update.mockReset()
     projectsStoreMock.update.mockRejectedValueOnce({ statusCode: 409 })
@@ -219,6 +289,7 @@ describe('projects/[projectId]/settings page', () => {
 
     expect(wrapper.find('[data-test="settings-unavailable"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="settings-form"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="settings-danger-zone"]').exists()).toBe(false)
     expect(navigateToMock).not.toHaveBeenCalled()
   })
 })

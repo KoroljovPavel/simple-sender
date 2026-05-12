@@ -13,7 +13,14 @@ const projectsStore = useProjectsStore()
 
 const projectId = computed(() => String(route.params.projectId ?? ''))
 
-if (!projectsStore.isLoaded) projectsStore.fetchAll()
+// Lazy hydration on the client only — fire-and-forget with a guard so we
+// don't crash the page when the listing endpoint is briefly unreachable.
+// Renders the fallback banner via the `project` computed when fetch fails.
+if (import.meta.client && !projectsStore.isLoaded) {
+  projectsStore.fetchAll().catch((err) => {
+    console.warn('[projects/settings] fetchAll failed; rendering fallback', err)
+  })
+}
 
 const project = computed(() =>
   projectsStore.projects.find((p) => p.id === projectId.value && p.deletedAt === null) ?? null,
@@ -283,15 +290,23 @@ async function confirmDelete() {
           </p>
           <div class="space-y-1">
             <label for="delete-project-name" class="block text-sm text-gray-700">
-              {{ t('errors.projects.delete.confirmTypeName', { name: project.name }) }}
+              {{ t('errors.projects.delete.confirmTypeName') }}
             </label>
+            <!--
+              The shipped locale string has no {name} placeholder, so we render
+              the project name explicitly as a separate emphasized element.
+              Avoids editing locales (task AC) and keeps the name visible.
+            -->
+            <p class="text-sm">
+              <strong data-test="delete-project-expected-name">{{ project.name }}</strong>
+            </p>
             <input
               id="delete-project-name"
-              ref="deleteInput"
               v-model="deleteTypedName"
               data-test="delete-project-name-input"
               type="text"
               autocomplete="off"
+              autofocus
               class="w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-red-500"
             />
           </div>

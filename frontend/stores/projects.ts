@@ -38,6 +38,11 @@ export const useProjectsStore = defineStore('projects', () => {
   const projects = ref<Project[]>([])
   const currentProjectId = ref<string | null>(readPersisted())
   const isLoaded = ref(false)
+  // Status surface for cross-cutting layers (e.g. useApi 404 interceptor) that
+  // cannot reach into a page-local ref. The layout/host renders an inline
+  // banner bound to this i18n key and clears it on dismiss/route change.
+  // See work/05-projects/decisions.md Task 5 for the rationale.
+  const pendingBannerKey = ref<string | null>(null)
   let inFlight: Promise<void> | null = null
 
   const currentProject = computed<Project | null>(
@@ -114,6 +119,7 @@ export const useProjectsStore = defineStore('projects', () => {
     projects,
     currentProjectId,
     isLoaded,
+    pendingBannerKey,
     currentProject,
     fetchAll,
     create,

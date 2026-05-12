@@ -24,6 +24,52 @@ function readXsrfCookie(ssrCookieHeader?: string): string | null {
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
+// Matches exactly one path segment after /api/v1/projects/ — i.e. a single
+// resource hit like /api/v1/projects/{id}. Sub-paths (.../bots) and the
+// collection (/api/v1/projects) intentionally do not match. Anchored on
+// both ends to avoid false positives (Decision 11 / Risk R7).
+const PROJECT_RESOURCE_PATH = /^\/api\/v1\/projects\/([^/]+)$/
+
+function extractPath(request: unknown): string | null {
+  // ofetch passes `request` as either a string (relative path or absolute URL)
+  // or a URL instance. Normalize to a pathname; query string is stripped.
+  if (request instanceof URL) return request.pathname
+  if (typeof request !== 'string') return null
+  if (request.startsWith('/')) {
+    const qIdx = request.indexOf('?')
+    return qIdx === -1 ? request : request.slice(0, qIdx)
+  }
+  // Absolute URL string.
+  try {
+    return new URL(request).pathname
+  } catch {
+    return null
+  }
+}
+
+type ResponseErrorCtx = {
+  request: unknown
+  response: { status: number } | undefined
+  options?: unknown
+}
+
+export function handleApiResponseError(ctx: ResponseErrorCtx): void {
+  if (ctx.response?.status !== 404) return
+  const path = extractPath(ctx.request)
+  if (path === null) return
+  const match = path.match(PROJECT_RESOURCE_PATH)
+  if (!match) return
+  // Pinia store is read lazily so the composable does not eagerly require
+  // the store at SSR boot (Pinia may not be installed in early plugins yet).
+  const projectsStore = useProjectsStore()
+  // Race note: a stale-in-flight 404 may resolve AFTER the user manually
+  // switched to a different project. In that case the captured ID does NOT
+  // equal the now-current currentProjectId, so we correctly leave state alone.
+  if (match[1] !== projectsStore.currentProjectId) return
+  projectsStore.handleStaleCurrent()
+  projectsStore.pendingBannerKey = 'errors.projects.unavailable'
+}
+
 export function useApi() {
   const config = useRuntimeConfig()
   // SSR hits the backend directly (apiBaseSsr); browser uses the relative path
@@ -52,5 +98,6 @@ export function useApi() {
       }
       options.headers = headers
     },
+    onResponseError: (ctx) => handleApiResponseError(ctx),
   })
 }

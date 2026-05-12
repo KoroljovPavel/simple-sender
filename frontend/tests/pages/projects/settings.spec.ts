@@ -356,6 +356,26 @@ describe('projects/[projectId]/settings page', () => {
     expect(wrapper.find('[data-test="settings-form"]').exists()).toBe(true)
   })
 
+  it('mount_projectMissingAfterFetch_doesNotOverwriteExistingBannerKey', async () => {
+    // settings.vue has TWO `!pendingBannerKey` guards (around the 404 catch
+    // and the `!project.value` fallback). The 404-branch guard already has
+    // its own test; this guards the symmetric branch.
+    routeMock.params = { projectId: 'p-vanished' }
+    projectsStoreMock.projects = []
+    projectsStoreMock.currentProject = null
+    projectsStoreMock.currentProjectId = null
+    projectsStoreMock.pendingBannerKey = 'errors.projects.staleSpecific'
+    apiMock.mockReset()
+    // Resolves (no 404), but project is still missing from store → second guard fires.
+    apiMock.mockResolvedValueOnce(null)
+
+    await mountSuspended(SettingsPage)
+    await settle()
+
+    expect(projectsStoreMock.pendingBannerKey).toBe('errors.projects.staleSpecific')
+    expect(navigateToMock).toHaveBeenCalledWith('/projects')
+  })
+
   it('mount_apiReturns500_andProjectMissing_stillRedirects', async () => {
     // The asymmetry the previous test silently relied on: when the API
     // fails with 500 AND the project is absent from the store, the

@@ -153,6 +153,23 @@ describe('TimezonePicker', () => {
     expect(emitted![emitted!.length - 1]).toEqual([''])
   })
 
+  it('does NOT emit when the input is cleared but modelValue is already empty', async () => {
+    // Guards the `&& props.modelValue !== ''` clause in the inputValue setter
+    // (TimezonePicker.vue:65). Dropping that guard would cause redundant ''
+    // emits on every keystroke in an already-empty field — wasted reactivity
+    // and a spurious dirty-state in vee-validate.
+    const wrapper = await mountSuspended(TimezonePicker, {
+      props: { modelValue: '' },
+    })
+    const input = wrapper.find('[data-test="timezone-picker-input"]')
+    await input.trigger('focus')
+    await input.setValue('')
+    await settle()
+
+    const emitted = wrapper.emitted('update:modelValue') as string[][] | undefined
+    expect(emitted).toBeUndefined()
+  })
+
   it('opens with the full IANA list when query is empty', async () => {
     // Regression guard: a future refactor that mistakenly filters by
     // props.modelValue (instead of returning allTimezones when query is empty)

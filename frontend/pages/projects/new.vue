@@ -44,7 +44,9 @@ const { defineField, handleSubmit, isSubmitting, errors } = useForm({
 
 const [name, nameAttrs] = defineField('name')
 const [description, descriptionAttrs] = defineField('description')
-const [timezone, timezoneAttrs] = defineField('timezone')
+// TimezonePicker accepts only v-model — vee-validate field attrs would land
+// on the component root <div>, so we deliberately don't destructure them.
+const [timezone] = defineField('timezone')
 
 const submitError = ref<string | null>(null)
 

@@ -113,7 +113,8 @@ watch(project, (next) => {
 
 const [nameField, nameAttrs] = defineField('name')
 const [descriptionField, descriptionAttrs] = defineField('description')
-const [timezoneField, timezoneAttrs] = defineField('timezone')
+// TimezonePicker accepts only v-model — same rationale as new.vue.
+const [timezoneField] = defineField('timezone')
 
 const saveStatus = ref<'idle' | 'saved'>('idle')
 const saveError = ref<string | null>(null)

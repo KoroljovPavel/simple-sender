@@ -119,4 +119,28 @@ describe('useApi 404 interceptor (handleApiResponseError)', () => {
     expect(handleStaleCurrentSpy).not.toHaveBeenCalled()
     expect(pendingBannerKeyRef.value).toBeNull()
   })
+
+  it('swallows handleStaleCurrent rejection and still sets pendingBannerKey', async () => {
+    // useApi.ts wraps `handleStaleCurrent()` with `.catch(...)` (line 72-74)
+    // so a fetchAll() failure inside the store action does not surface as an
+    // unhandled rejection. This test exercises that path: spy rejects, no
+    // unhandled escape, banner still set, log emitted.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const unhandled = vi.fn()
+    process.on('unhandledRejection', unhandled)
+    handleStaleCurrentSpy.mockReset()
+    handleStaleCurrentSpy.mockRejectedValueOnce(new Error('store action failed'))
+
+    handleApiResponseError(makeCtx(`/api/v1/projects/${CURRENT_ID}`, 404))
+    // Let the microtask queue drain so the .catch() runs.
+    await new Promise((r) => setImmediate(r))
+
+    expect(unhandled).not.toHaveBeenCalled()
+    expect(pendingBannerKeyRef.value).toBe('errors.projects.unavailable')
+    expect(warnSpy).toHaveBeenCalled()
+    expect(warnSpy.mock.calls[0][0]).toContain('handleStaleCurrent')
+
+    warnSpy.mockRestore()
+    process.off('unhandledRejection', unhandled)
+  })
 })

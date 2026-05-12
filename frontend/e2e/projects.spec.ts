@@ -15,7 +15,10 @@ import { test, expect } from '@playwright/test'
 // tolerate either /dashboard or /en/dashboard so the spec is locale-agnostic.
 
 test('golden path: register → create → switch → rename → soft-delete → restore', async ({ page }) => {
-  const stamp = Date.now()
+  // Random suffix on top of Date.now() guards against collisions when the
+  // spec runs more than once per millisecond (Playwright retries, parallel
+  // workers). A 409 on register would abort the rest of the flow.
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   const email = `e2e-projects-${stamp}@test.local`
   const password = 'Test1234!'
   const project1Name = `Acme ${stamp}`
@@ -25,7 +28,6 @@ test('golden path: register → create → switch → rename → soft-delete →
   // Step 1: register fresh user. Email is randomized per run so the spec is
   // idempotent under playwright.config.ts `reuseExistingServer: !CI`.
   await page.goto('/auth/register')
-  await page.waitForLoadState('networkidle')
   await page.locator('#email').fill(email)
   await page.locator('#password').fill(password)
   await page.locator('#confirmPassword').fill(password)
@@ -35,30 +37,35 @@ test('golden path: register → create → switch → rename → soft-delete →
   // (AC-18). The CTA is visible only when isLoaded && projects.length === 0,
   // so its visibility implicitly proves the projects store finished its first
   // fetch.
-  await page.waitForURL(/\/dashboard(?:\?.*)?$/, { timeout: 15_000 })
+  await page.waitForURL(/\/dashboard(?:\?.*)?$/)
+  const emptyState = page.locator('[data-test="dashboard-empty-state"]')
   const emptyCta = page.locator('[data-test="dashboard-empty-state-cta"]')
   await expect(emptyCta).toBeVisible()
   await emptyCta.click()
 
   // Step 3: create the first project. Timezone defaults to the browser zone;
   // description is left blank.
-  await page.waitForURL(/\/projects\/new(?:\?.*)?$/, { timeout: 10_000 })
+  await page.waitForURL(/\/projects\/new(?:\?.*)?$/)
   await page.locator('[data-test="project-name-input"]').fill(project1Name)
   await page.locator('[data-test="project-submit"]').click()
 
   // Step 4: redirect to /dashboard with the topbar selector populated (AC-19).
-  await page.waitForURL(/\/dashboard(?:\?.*)?$/, { timeout: 10_000 })
+  // Also assert the empty-state container disappeared — guards the
+  // AC-18 → AC-19 transition (a regression that keeps showing the empty
+  // CTA on a non-empty dashboard would otherwise slip through).
+  await page.waitForURL(/\/dashboard(?:\?.*)?$/)
   const selectorTrigger = page.locator('[data-test="project-selector-trigger"]')
+  await expect(emptyState).toBeHidden()
   await expect(selectorTrigger).toContainText(project1Name)
 
   // Step 5: open the selector and create a second project via the dropdown
   // "+ Create new project" entry.
   await selectorTrigger.click()
   await page.locator('[data-test="project-selector-create"]').click()
-  await page.waitForURL(/\/projects\/new(?:\?.*)?$/, { timeout: 10_000 })
+  await page.waitForURL(/\/projects\/new(?:\?.*)?$/)
   await page.locator('[data-test="project-name-input"]').fill(project2Name)
   await page.locator('[data-test="project-submit"]').click()
-  await page.waitForURL(/\/dashboard(?:\?.*)?$/, { timeout: 10_000 })
+  await page.waitForURL(/\/dashboard(?:\?.*)?$/)
   // After create, the new project becomes current (sortByCreatedAtDesc).
   await expect(selectorTrigger).toContainText(project2Name)
 
@@ -73,7 +80,7 @@ test('golden path: register → create → switch → rename → soft-delete →
   // Step 7: navigate to the current project's settings via the dropdown link.
   await selectorTrigger.click()
   await page.locator('[data-test="project-selector-settings"]').click()
-  await page.waitForURL(/\/projects\/[^/]+\/settings(?:\?.*)?$/, { timeout: 10_000 })
+  await page.waitForURL(/\/projects\/[^/]+\/settings(?:\?.*)?$/)
 
   // Step 8: rename → submit → selector live-updates WITHOUT page.reload
   // (AC-22a, the critical reactive path).
@@ -101,7 +108,7 @@ test('golden path: register → create → switch → rename → soft-delete →
 
   // settings.vue redirects to /projects when at least one active project
   // remains (project2 is still active).
-  await page.waitForURL(/\/projects(?:\?.*)?$/, { timeout: 10_000 })
+  await page.waitForURL(/\/projects(?:\?.*)?$/)
 
   // Step 10: /projects shows the "Recently deleted" section with the deleted
   // project (AC-23). The soft-deleted project must NOT appear in the topbar

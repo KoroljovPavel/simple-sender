@@ -3,6 +3,18 @@ definePageMeta({ layout: 'default' })
 
 const { t } = useI18n()
 const authStore = useAuthStore()
+const projectsStore = useProjectsStore()
+
+if (import.meta.client) {
+  projectsStore.fetchAll()
+}
+
+const showEmpty = computed(
+  () => projectsStore.isLoaded && projectsStore.projects.length === 0,
+)
+const showWelcome = computed(
+  () => projectsStore.isLoaded && projectsStore.projects.length >= 1,
+)
 </script>
 
 <template>
@@ -23,13 +35,35 @@ const authStore = useAuthStore()
       </NuxtLinkLocale>
     </div>
 
-    <h1 class="text-2xl font-semibold">
-      {{ authStore.user?.name
-        ? t('dashboard.welcomeWithName', { name: authStore.user.name })
-        : t('dashboard.welcomeAnon') }}
-    </h1>
-    <p class="text-sm text-gray-600">
-      {{ t('dashboard.description') }}
-    </p>
+    <div
+      v-if="showEmpty"
+      data-test="dashboard-empty-state"
+      class="rounded-lg border border-gray-200 bg-white px-6 py-12 text-center"
+    >
+      <h1 class="text-2xl font-semibold mb-2">
+        {{ t('projects.emptyState.title') }}
+      </h1>
+      <p class="text-sm text-gray-600 mb-6 max-w-xl mx-auto">
+        {{ t('projects.emptyState.description') }}
+      </p>
+      <NuxtLinkLocale
+        to="/projects/new"
+        data-test="dashboard-empty-state-cta"
+        class="inline-block bg-blue-600 text-white rounded-md px-4 py-2 font-medium hover:bg-blue-700"
+      >
+        {{ t('projects.emptyState.cta') }}
+      </NuxtLinkLocale>
+    </div>
+
+    <template v-else-if="showWelcome">
+      <h1 class="text-2xl font-semibold">
+        {{ authStore.user?.name
+          ? t('dashboard.welcomeWithName', { name: authStore.user.name })
+          : t('dashboard.welcomeAnon') }}
+      </h1>
+      <p class="text-sm text-gray-600">
+        {{ t('dashboard.description') }}
+      </p>
+    </template>
   </div>
 </template>

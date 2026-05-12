@@ -3,8 +3,9 @@ import { setActivePinia, createPinia } from 'pinia'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../helpers/settle'
 import type { User } from '../../types/user'
+import type { Project } from '../../types/project'
 
-const { authStoreMock } = vi.hoisted(() => ({
+const { authStoreMock, projectsStoreMock } = vi.hoisted(() => ({
   authStoreMock: {
     user: null as User | null,
     fetchUser: vi.fn(),
@@ -12,9 +13,15 @@ const { authStoreMock } = vi.hoisted(() => ({
     isAuthenticated: false,
     isPending: false,
   },
+  projectsStoreMock: {
+    projects: [] as Project[],
+    isLoaded: false,
+    fetchAll: vi.fn(),
+  },
 }))
 
 mockNuxtImport('useAuthStore', () => () => authStoreMock)
+mockNuxtImport('useProjectsStore', () => () => projectsStoreMock)
 mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 
 import DashboardPage from '../../pages/dashboard.vue'
@@ -25,10 +32,31 @@ function setUser(user: User | null) {
   authStoreMock.isPending = user?.status === 'pending'
 }
 
+function setProjectsState(state: { isLoaded: boolean; projects: Project[] }) {
+  projectsStoreMock.isLoaded = state.isLoaded
+  projectsStoreMock.projects = state.projects
+}
+
+function makeProject(overrides: Partial<Project> = {}): Project {
+  return {
+    id: 'p-1',
+    name: 'My Project',
+    description: null,
+    timezone: 'Europe/Kyiv',
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    deletedAt: null,
+    ...overrides,
+  }
+}
+
 describe('dashboard page', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
     setUser(null)
+    setProjectsState({ isLoaded: true, projects: [makeProject()] })
+    projectsStoreMock.fetchAll.mockReset()
+    projectsStoreMock.fetchAll.mockResolvedValue(undefined)
     useState<unknown>('auth-user').value = null
   })
 
@@ -54,5 +82,52 @@ describe('dashboard page', () => {
 
     expect(wrapper.find('[data-test="pending-banner"]').exists()).toBe(false)
     expect(wrapper.text()).toMatch(/Active User/)
+  })
+
+  it('dashboard_zeroProjectsLoaded_showsEmptyStateCTA', async () => {
+    setUser({ id: '1', email: 'u@example.com', name: 'User', status: 'active' })
+    setProjectsState({ isLoaded: true, projects: [] })
+
+    const wrapper = await mountSuspended(DashboardPage)
+    await settle()
+
+    const empty = wrapper.find('[data-test="dashboard-empty-state"]')
+    expect(empty.exists()).toBe(true)
+    const cta = wrapper.find('[data-test="dashboard-empty-state-cta"]')
+    expect(cta.exists()).toBe(true)
+    expect(cta.attributes('href')).toBe('/projects/new')
+    // welcome content must not render in zero-projects branch
+    expect(wrapper.text()).not.toMatch(/Ласкаво просимо/i)
+  })
+
+  it('dashboard_hasProjects_showsWelcomeNotEmpty', async () => {
+    setUser({ id: '1', email: 'u@example.com', name: 'User', status: 'active' })
+    setProjectsState({ isLoaded: true, projects: [makeProject()] })
+
+    const wrapper = await mountSuspended(DashboardPage)
+    await settle()
+
+    expect(wrapper.find('[data-test="dashboard-empty-state"]').exists()).toBe(false)
+    expect(wrapper.text()).toMatch(/Ласкаво просимо/i)
+  })
+
+  it('dashboard_notLoaded_showsNeitherEmptyNorWelcome', async () => {
+    setUser({ id: '1', email: 'u@example.com', name: 'User', status: 'active' })
+    setProjectsState({ isLoaded: false, projects: [] })
+
+    const wrapper = await mountSuspended(DashboardPage)
+    await settle()
+
+    expect(wrapper.find('[data-test="dashboard-empty-state"]').exists()).toBe(false)
+    expect(wrapper.text()).not.toMatch(/Ласкаво просимо/i)
+  })
+
+  it('dashboard_mount_callsFetchAll', async () => {
+    setUser({ id: '1', email: 'u@example.com', name: 'User', status: 'active' })
+
+    await mountSuspended(DashboardPage)
+    await settle()
+
+    expect(projectsStoreMock.fetchAll).toHaveBeenCalled()
   })
 })

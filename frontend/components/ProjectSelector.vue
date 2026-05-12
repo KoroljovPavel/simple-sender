@@ -11,14 +11,20 @@ const panelRef = ref<HTMLElement | null>(null)
 
 const ACTIVE_LIMIT = 5
 
-// Sorted shallow copy — never mutate the store array.
+// Active-only sorted copy — the store may contain soft-deleted entries when
+// the /projects list page hydrated it via fetchAll(true). AC-19/AC-30 are about
+// active projects. Never mutate the store array.
+const activeProjects = computed<Project[]>(() =>
+  projectsStore.projects.filter((p) => p.deletedAt === null),
+)
+
 const sortedProjects = computed<Project[]>(() =>
-  [...projectsStore.projects].sort((a, b) =>
+  [...activeProjects.value].sort((a, b) =>
     a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0,
   ),
 )
 
-const atLimit = computed(() => projectsStore.projects.length >= ACTIVE_LIMIT)
+const atLimit = computed(() => activeProjects.value.length >= ACTIVE_LIMIT)
 
 function toggle() {
   open.value = !open.value
@@ -31,6 +37,9 @@ function close() {
 function onSelect(id: string) {
   projectsStore.selectProject(id)
   close()
+  // APG menu-button pattern: return focus to the invoking trigger when the
+  // menu closes via item activation (mirrors the Esc-close path below).
+  triggerRef.value?.focus()
 }
 
 function onOutsideClick(event: MouseEvent) {
@@ -117,16 +126,18 @@ onBeforeUnmount(() => {
       >
         {{ t('layout.projectSelector.createNew') }}
       </NuxtLinkLocale>
-      <span
+      <button
         v-else
         data-test="project-selector-create"
+        type="button"
         role="menuitem"
+        disabled
         aria-disabled="true"
         :title="t('projects.create.limitReachedTooltip')"
-        class="block px-3 py-2 text-muted-foreground cursor-not-allowed select-none"
+        class="block w-full text-left px-3 py-2 text-muted-foreground cursor-not-allowed select-none disabled:opacity-100"
       >
         {{ t('layout.projectSelector.createNew') }}
-      </span>
+      </button>
 
       <NuxtLinkLocale
         v-if="projectsStore.currentProject"

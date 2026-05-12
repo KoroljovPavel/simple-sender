@@ -136,15 +136,104 @@ describe('ProjectSelector', () => {
     expect(createEl.attributes('aria-disabled')).toBeUndefined()
   })
 
-  it('settings link hidden when currentProject is null', async () => {
+  it('settings link hidden when currentProject is null; trigger shows placeholder label', async () => {
     projectsRef.value = [P_NEW]
     currentProjectIdRef.value = null
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    const trigger = wrapper.find('[data-test="project-selector-trigger"]')
+    expect(trigger.text()).toContain('layout.projectSelector.placeholder')
+
+    await trigger.trigger('click')
+    await settle()
+
+    expect(wrapper.find('[data-test="project-selector-settings"]').exists()).toBe(false)
+  })
+
+  it('settings link hidden when currentProjectId is set but project missing (mid-fetch race)', async () => {
+    projectsRef.value = [P_NEW]
+    currentProjectIdRef.value = 'not-in-list'
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    const trigger = wrapper.find('[data-test="project-selector-trigger"]')
+    // currentProject computed returns null → trigger renders the placeholder.
+    expect(trigger.text()).toContain('layout.projectSelector.placeholder')
+
+    await trigger.trigger('click')
+    await settle()
+
+    expect(wrapper.find('[data-test="project-selector-settings"]').exists()).toBe(false)
+  })
+
+  it('filters out soft-deleted projects from the dropdown (AC-19)', async () => {
+    const softDeleted: Project = {
+      ...makeProject('zz', 'Zombie', '2026-04-01T00:00:00Z'),
+      deletedAt: '2026-04-02T00:00:00Z',
+    }
+    projectsRef.value = [P_NEW, softDeleted, P_MID]
+    currentProjectIdRef.value = P_NEW.id
 
     const wrapper = await mountSuspended(ProjectSelector)
     await wrapper.find('[data-test="project-selector-trigger"]').trigger('click')
     await settle()
 
-    expect(wrapper.find('[data-test="project-selector-settings"]').exists()).toBe(false)
+    expect(wrapper.find(`[data-test="project-selector-item-${softDeleted.id}"]`).exists()).toBe(false)
+    const items = wrapper.findAll('[data-test^="project-selector-item-"]')
+    expect(items).toHaveLength(2)
+  })
+
+  it('create button stays enabled when 4 active + 2 soft-deleted (AC-30 counts active only)', async () => {
+    const mkSoft = (id: string, created: string): Project => ({
+      ...makeProject(id, id.toUpperCase(), created),
+      deletedAt: '2026-04-10T00:00:00Z',
+    })
+    projectsRef.value = [
+      makeProject('p1', 'P1', '2026-01-01T00:00:00Z'),
+      makeProject('p2', 'P2', '2026-01-02T00:00:00Z'),
+      makeProject('p3', 'P3', '2026-01-03T00:00:00Z'),
+      makeProject('p4', 'P4', '2026-01-04T00:00:00Z'),
+      mkSoft('p5', '2026-01-05T00:00:00Z'),
+      mkSoft('p6', '2026-01-06T00:00:00Z'),
+    ]
+    currentProjectIdRef.value = 'p1'
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    await wrapper.find('[data-test="project-selector-trigger"]').trigger('click')
+    await settle()
+
+    const createEl = wrapper.find('[data-test="project-selector-create"]')
+    // 4 active < 5 → rendered as nav anchor, NOT a disabled button.
+    expect(createEl.element.tagName.toLowerCase()).toBe('a')
+    expect(createEl.attributes('aria-disabled')).toBeUndefined()
+  })
+
+  it('outside-click closes the dropdown', async () => {
+    projectsRef.value = [P_NEW]
+    currentProjectIdRef.value = P_NEW.id
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    await wrapper.find('[data-test="project-selector-trigger"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[role="menu"]').exists()).toBe(true)
+
+    // Dispatch a mousedown on the document body — outside both panel and trigger refs.
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    await settle()
+    expect(wrapper.find('[role="menu"]').exists()).toBe(false)
+  })
+
+  it('Escape closes the dropdown', async () => {
+    projectsRef.value = [P_NEW]
+    currentProjectIdRef.value = P_NEW.id
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    await wrapper.find('[data-test="project-selector-trigger"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[role="menu"]').exists()).toBe(true)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+    await settle()
+    expect(wrapper.find('[role="menu"]').exists()).toBe(false)
   })
 
   it('settings link visible with correct href when currentProject is set', async () => {

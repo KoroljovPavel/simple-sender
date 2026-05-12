@@ -71,6 +71,17 @@ describe('useApi 404 interceptor (handleApiResponseError)', () => {
     expect(pendingBannerKeyRef.value).toBe('errors.projects.unavailable')
   })
 
+  it('404 on current project also triggers when request is an absolute URL string (SSR shape)', () => {
+    // SSR path: $fetch is created with baseURL='http://localhost:8080', so the
+    // request seen by onResponseError is an absolute URL string. This exercises
+    // the `new URL(request).pathname` branch in extractPath().
+    handleApiResponseError(
+      makeCtx(`http://localhost:8080/api/v1/projects/${CURRENT_ID}?x=1`, 404),
+    )
+    expect(handleStaleCurrentSpy).toHaveBeenCalledTimes(1)
+    expect(pendingBannerKeyRef.value).toBe('errors.projects.unavailable')
+  })
+
   it('404 on other project id does NOT trigger', () => {
     handleApiResponseError(makeCtx(`/api/v1/projects/${OTHER_ID}`, 404))
     expect(handleStaleCurrentSpy).not.toHaveBeenCalled()

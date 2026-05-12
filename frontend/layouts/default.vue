@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useAuthStore } from '~/stores/auth'
+import { useProjectsStore } from '~/stores/projects'
 
 const authStore = useAuthStore()
+const projectsStore = useProjectsStore()
 const { t } = useI18n()
 const localePath = useLocalePath()
 
@@ -19,6 +21,7 @@ async function onLogout() {
   <div class="min-h-screen flex flex-col">
     <header class="flex items-center justify-between px-6 py-3 border-b">
       <NuxtLinkLocale to="/dashboard" class="font-semibold text-lg">{{ t('brand.name') }}</NuxtLinkLocale>
+      <ProjectSelector />
       <div class="flex items-center gap-3">
         <span v-if="authStore.user" class="text-sm">
           {{ authStore.user.name ? `${authStore.user.name} (${authStore.user.email})` : authStore.user.email }}
@@ -38,6 +41,13 @@ async function onLogout() {
       <aside class="w-56 border-r p-4">
         <nav class="flex flex-col gap-2">
           <NuxtLinkLocale to="/dashboard" class="text-sm hover:underline">{{ t('layout.dashboard') }}</NuxtLinkLocale>
+          <NuxtLinkLocale
+            v-if="projectsStore.currentProject"
+            :to="`/projects/${projectsStore.currentProject.id}/settings`"
+            class="text-sm hover:underline"
+          >
+            {{ t('layout.sidebar.settings') }}
+          </NuxtLinkLocale>
           <NuxtLinkLocale to="/profile" class="text-sm hover:underline">{{ t('layout.profile') }}</NuxtLinkLocale>
         </nav>
       </aside>

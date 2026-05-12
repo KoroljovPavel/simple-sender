@@ -32,14 +32,18 @@ test('golden path: register → create → switch → rename → soft-delete →
   // Hydration gate. In dev mode SSR HTML is interactive before Vue mounts;
   // a submit click before @submit.prevent attaches fires a native HTML GET
   // (/auth/register?email=...&password=...) and the redirect to /dashboard
-  // never happens — this is the AC-28 race that Task 14 caught. We wait for
-  // Vue's root app instance to report mounted before any interaction.
-  // Subsequent navigations are client-side (Vue Router), so no further gate
-  // is needed in this spec. `networkidle` is intentionally NOT used because
-  // Nuxt's HMR WebSocket keeps the channel busy in dev mode.
+  // never happens — this is the AC-28 race that Task 14 caught. Vue sets
+  // `__vue_app__` on the mount-host element inside `app.mount()`
+  // (Vue 3 runtime-core, render+mount path) in both dev AND production
+  // builds, so this probe works under `pnpm dev` (current webServer) and
+  // `pnpm build && pnpm preview` (deferred QA-28 path). Subsequent
+  // navigations are client-side via Vue Router, so no further gate is
+  // needed. `networkidle` is intentionally NOT used because Nuxt's HMR
+  // WebSocket keeps the channel busy in dev mode (round-1 fix-commit
+  // e10067d already removed it for this reason).
   await page.waitForFunction(() => {
-    const root = document.querySelector('#__nuxt') as (Element & { __vue_app__?: { _instance?: { isMounted?: boolean } } }) | null
-    return root?.__vue_app__?._instance?.isMounted === true
+    const root = document.querySelector('#__nuxt') as { __vue_app__?: unknown } | null
+    return !!root?.__vue_app__
   })
 
   await page.locator('#email').fill(email)

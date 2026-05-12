@@ -345,6 +345,28 @@ describe('projects index page', () => {
     expect(wrapper.find('[data-test="staleness-banner"]').exists()).toBe(false)
   })
 
+  it('index_stalenessBanner_doesNotAutoDismiss', async () => {
+    // The transient restore-toast auto-clears after BANNER_TIMEOUT_MS (4s).
+    // The staleness banner must NOT — it's the "your project is gone" notice
+    // and must remain visible until the user dismisses or navigates away.
+    vi.useRealTimers()
+    vi.useFakeTimers({ now: FAKE_NOW })
+    pendingBannerKeyRef.value = 'errors.projects.unavailable'
+    apiMock.mockResolvedValueOnce([])
+
+    const wrapper = await mountSuspended(ProjectsIndexPage)
+    await Promise.resolve()
+
+    expect(wrapper.find('[data-test="staleness-banner"]').exists()).toBe(true)
+
+    // Advance well past any plausible auto-dismiss timer (10s ≫ 4s).
+    await vi.advanceTimersByTimeAsync(10_000)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="staleness-banner"]').exists()).toBe(true)
+    vi.useRealTimers()
+  })
+
   it('index_restoreServer500_showsGenericErrorBanner', async () => {
     const row = makeProject({ id: 'd1', name: 'Beta', deletedAt: new Date(FAKE_NOW - 2 * DAY_MS).toISOString() })
     apiMock.mockResolvedValueOnce([row])

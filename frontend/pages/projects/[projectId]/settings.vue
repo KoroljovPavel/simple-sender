@@ -41,6 +41,12 @@ onMounted(async () => {
     }
   }
 
+  // No happy-path short-circuit here: the cross-tab smoke-test (2.6) is
+  // precisely the case where `projectsStore.isLoaded && project.value !== null`
+  // is misleading — this tab's store still has the row marked active, but the
+  // server already deleted it. Skipping the GET would let the user interact
+  // with a doomed form until their first PATCH/DELETE triggers the 404. One
+  // extra GET per settings mount is the agreed price for "redirect on entry".
   try {
     await useApi()<Project>(`/api/v1/projects/${projectId.value}`)
   } catch (e: unknown) {
@@ -248,10 +254,13 @@ async function confirmDelete() {
             <label for="settings-timezone" class="block text-sm font-medium mb-1">
               {{ t('projects.settings.timezoneLabel') }}
             </label>
+            <!--
+              See comment in new.vue: omit v-bind="timezoneAttrs" so the field
+              attrs don't fall through to TimezonePicker's root <div>.
+            -->
             <TimezonePicker
               id="settings-timezone"
               v-model="timezoneField"
-              v-bind="timezoneAttrs"
               :invalid="!!errors.timezone"
               data-test="settings-timezone"
             />

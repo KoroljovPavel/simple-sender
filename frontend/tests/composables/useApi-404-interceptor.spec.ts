@@ -44,6 +44,10 @@ describe('useApi 404 interceptor (handleApiResponseError)', () => {
     currentProjectIdRef.value = CURRENT_ID
     pendingBannerKeyRef.value = null
     handleStaleCurrentSpy.mockReset()
+    // The real store returns a Promise; the interceptor now wraps the call
+    // with .catch() to log fire-and-forget failures (useApi.ts:72-74). A
+    // vi.fn() default of `undefined` would break that contract.
+    handleStaleCurrentSpy.mockResolvedValue(undefined)
   })
 
   it('404 on current project triggers handleStaleCurrent and sets pendingBannerKey', () => {

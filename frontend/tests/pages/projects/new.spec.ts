@@ -41,7 +41,14 @@ describe('projects/new page', () => {
   })
 
   it('new_initialValues_timezoneDefaultsToBrowser', async () => {
-    const expected = Intl.DateTimeFormat().resolvedOptions().timeZone
+    // Mirror new.vue's own resolve-or-fallback logic — older ICU may resolve
+    // a browser TZ that supportedValuesOf doesn't list (e.g. legacy Kiev/Kyiv
+    // mismatch), in which case the page falls back to 'UTC'.
+    const browser = Intl.DateTimeFormat().resolvedOptions().timeZone
+    const expected =
+      typeof Intl.supportedValuesOf === 'function' && Intl.supportedValuesOf('timeZone').includes(browser)
+        ? browser
+        : 'UTC'
 
     const wrapper = await mountSuspended(NewProjectPage)
     await settle()
@@ -90,24 +97,43 @@ describe('projects/new page', () => {
     expect(projectsStoreMock.create).not.toHaveBeenCalled()
   })
 
-  it('new_invalidTimezone_showsValidationError', async () => {
+  it('new_pickerTypeWithoutSelect_doesNotCommitInvalidTimezone', async () => {
+    // Positive UI-contract test: TimezonePicker only commits a value via
+    // option click / Enter. Typing into the input updates the internal
+    // `query` (filter) but does NOT emit update:modelValue. So a user that
+    // types garbage and submits should NOT see a validation error from the
+    // schema — the picker prevents reaching that state in the first place.
     const wrapper = await mountSuspended(NewProjectPage)
     await wrapper.find('[data-test="project-name-input"]').setValue('Valid name')
-    // TimezonePicker filters as the user types but only commits a value via
-    // option-click or Enter. Typing a non-IANA query AND blurring without
-    // selecting leaves the field with the previously valid default (browser TZ)
-    // — that scenario can't reach validation failure through the UI.
-    // To exercise the refine() guard we directly write a non-IANA value into
-    // the underlying input as v-model sees it, then submit. The picker's
-    // computed setter writes into `query` (open=true gate), so we open first
-    // and then set value. Submit triggers vee-validate → refine rejects.
     const input = wrapper.find('[data-test="timezone-picker-input"]')
+    const originalValue = (input.element as HTMLInputElement).value
     await input.trigger('focus')
-    await settle()
     await input.setValue('Mars/Olympus_Mons')
-    // Close the dropdown without selecting (Escape), then force commit by
-    // emitting a synthetic update on the picker. Direct v-model write keeps
-    // this test honest about the validation surface even if UI flow disallows.
+    await settle()
+
+    // After typing, the picker has not committed — modelValue is still the
+    // initial valid default. Closing the dropdown via Escape resets query.
+    await input.trigger('keydown', { key: 'Escape' })
+    await settle()
+    expect((input.element as HTMLInputElement).value).toBe(originalValue)
+
+    await wrapper.find('form').trigger('submit')
+    await settle()
+
+    // Submit succeeds with the default (valid) timezone — no error, no
+    // unreachable-state validation message.
+    expect(wrapper.find('[data-test="project-timezone-error"]').exists()).toBe(false)
+    expect(projectsStoreMock.create).toHaveBeenCalledTimes(1)
+  })
+
+  it('new_invalidTimezoneCommittedSynthetically_refineRejects', async () => {
+    // Defense-in-depth: if some external code path mutates timezone to a
+    // non-IANA value (custom integration, dev tools, schema-bypassing test
+    // harness), the form's zod refine() must reject it. We can't reach this
+    // state via the picker UI, so we synthetically emit on the component.
+    // This test guards the schema, not the UI.
+    const wrapper = await mountSuspended(NewProjectPage)
+    await wrapper.find('[data-test="project-name-input"]').setValue('Valid name')
     const picker = wrapper.findComponent({ name: 'TimezonePicker' })
     picker.vm.$emit('update:modelValue', 'Mars/Olympus_Mons')
     await settle()

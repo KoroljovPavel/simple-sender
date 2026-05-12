@@ -66,7 +66,12 @@ export function handleApiResponseError(ctx: ResponseErrorCtx): void {
   // switched to a different project. In that case the captured ID does NOT
   // equal the now-current currentProjectId, so we correctly leave state alone.
   if (match[1] !== projectsStore.currentProjectId) return
-  projectsStore.handleStaleCurrent()
+  // Fire-and-forget by design — the original request's reject still propagates
+  // to the caller; this is best-effort cleanup. But silence isn't the goal:
+  // log so a "banner appears, nothing else happens" failure mode is auditable.
+  projectsStore.handleStaleCurrent().catch((err) => {
+    console.warn('[useApi] handleStaleCurrent post-404 fetch failed', err)
+  })
   projectsStore.pendingBannerKey = 'errors.projects.unavailable'
 }
 

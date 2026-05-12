@@ -10,11 +10,16 @@ const localePath = useLocalePath()
 const apiError = useApiError()
 const projectsStore = useProjectsStore()
 
+// Intl.supportedValuesOf may be missing on very old Safari; mirror the same
+// safe pattern used by settings.vue / TimezonePicker so the refine() below
+// never throws TypeError on submit. Otherwise the friendly inline error is
+// preempted by an uncaught runtime exception.
+const timezones = (() => {
+  if (typeof Intl.supportedValuesOf === 'function') return Intl.supportedValuesOf('timeZone')
+  return [Intl.DateTimeFormat().resolvedOptions().timeZone]
+})()
 const browserTz = Intl.DateTimeFormat().resolvedOptions().timeZone
-const defaultTz =
-  typeof Intl.supportedValuesOf === 'function' && Intl.supportedValuesOf('timeZone').includes(browserTz)
-    ? browserTz
-    : 'UTC'
+const defaultTz = timezones.includes(browserTz) ? browserTz : 'UTC'
 
 const schemaComputed = computed(() =>
   toTypedSchema(
@@ -27,10 +32,7 @@ const schemaComputed = computed(() =>
       description: z.string().max(200, t('validation.projectDescriptionMax')),
       timezone: z
         .string()
-        .refine(
-          (v) => Intl.supportedValuesOf('timeZone').includes(v),
-          t('validation.timezoneInvalid'),
-        ),
+        .refine((v) => timezones.includes(v), t('validation.timezoneInvalid')),
     }),
   ),
 )
@@ -101,10 +103,15 @@ const onSubmit = handleSubmit(async (values) => {
 
       <div>
         <label for="timezone" class="block text-sm font-medium mb-1">{{ t('projects.create.timezoneLabel') }}</label>
+        <!--
+          No v-bind="timezoneAttrs" here: vee-validate's field attrs (name,
+          onBlur) would land on TimezonePicker's root <div>, producing invalid
+          HTML and losing on-blur validation. The component already emits
+          update:modelValue, which is the only attr vee-validate needs.
+        -->
         <TimezonePicker
           id="timezone"
           v-model="timezone"
-          v-bind="timezoneAttrs"
           :invalid="!!errors.timezone"
           data-test="project-timezone"
         />

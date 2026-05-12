@@ -111,22 +111,81 @@ describe('TimezonePicker', () => {
     expect(wrapper.find('[role="listbox"]').exists()).toBe(false)
   })
 
-  it('ArrowDown + Enter selects the next option', async () => {
+  it('ArrowDown + Enter selects the option AFTER the current selection', async () => {
     const wrapper = await mountSuspended(TimezonePicker, {
       props: { modelValue: 'Europe/Berlin' },
     })
     const input = wrapper.find('[data-test="timezone-picker-input"]')
     await input.trigger('focus')
     await settle()
-    // Focus reopens at the current modelValue; ArrowDown advances activeIndex
-    // by 1 within the filtered (== unfiltered, empty query) list.
+    // openDropdown() seeds activeIndex to the currently-selected option's index.
+    // ArrowDown advances by 1; Enter commits. The emitted value must equal
+    // the option that comes right after Berlin in the unfiltered IANA list —
+    // not Berlin itself (which would mean ArrowDown didn't move).
     await input.trigger('keydown', { key: 'ArrowDown' })
     await input.trigger('keydown', { key: 'Enter' })
     await settle()
 
     const emitted = wrapper.emitted('update:modelValue') as string[][] | undefined
     expect(emitted).toBeDefined()
-    expect(emitted!.length).toBeGreaterThan(0)
+    const payload = emitted![emitted!.length - 1][0]
+    const tzList = Intl.supportedValuesOf('timeZone')
+    const berlinIdx = tzList.indexOf('Europe/Berlin')
+    expect(berlinIdx).toBeGreaterThanOrEqual(0)
+    expect(payload).toBe(tzList[berlinIdx + 1])
+    expect(payload).not.toBe('Europe/Berlin')
+  })
+
+  it('emits empty string when the user clears the input', async () => {
+    // Task 15 contract (item 4): "Якщо юзер очистив поле — emit empty string".
+    // Without this, downstream schemas that tolerate '' (settings.vue:80
+    // refine `v === '' || timezones.includes(v)`) cannot see the cleared state.
+    const wrapper = await mountSuspended(TimezonePicker, {
+      props: { modelValue: 'Europe/Berlin' },
+    })
+    const input = wrapper.find('[data-test="timezone-picker-input"]')
+    await input.trigger('focus')
+    await input.setValue('')
+    await settle()
+
+    const emitted = wrapper.emitted('update:modelValue') as string[][] | undefined
+    expect(emitted).toBeDefined()
+    expect(emitted![emitted!.length - 1]).toEqual([''])
+  })
+
+  it('opens with the full IANA list when query is empty', async () => {
+    // Regression guard: a future refactor that mistakenly filters by
+    // props.modelValue (instead of returning allTimezones when query is empty)
+    // would slip past the typeahead and empty-state tests. ~400+ zones is a
+    // safe lower bound across ICU versions.
+    const wrapper = await mountSuspended(TimezonePicker, {
+      props: { modelValue: 'Europe/Berlin' },
+    })
+    await wrapper.find('[data-test="timezone-picker-input"]').trigger('focus')
+    await settle()
+    const options = wrapper.findAll('[data-test^="timezone-picker-option-"]')
+    expect(options.length).toBeGreaterThan(50)
+    expect(wrapper.find('[data-test="timezone-picker-option-Europe/Berlin"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="timezone-picker-option-Europe/London"]').exists()).toBe(true)
+  })
+
+  it('updates aria-activedescendant when navigating with ArrowDown', async () => {
+    // aria-activedescendant is the load-bearing ARIA contract for screen
+    // readers in the combobox pattern — a regression that breaks the binding
+    // or stops activeIndex updates would silently lose accessibility.
+    const wrapper = await mountSuspended(TimezonePicker, {
+      props: { modelValue: 'Europe/Berlin' },
+    })
+    const input = wrapper.find('[data-test="timezone-picker-input"]')
+    await input.trigger('focus')
+    await settle()
+    const before = input.attributes('aria-activedescendant')
+    expect(before).toBeDefined()
+    await input.trigger('keydown', { key: 'ArrowDown' })
+    await settle()
+    const after = input.attributes('aria-activedescendant')
+    expect(after).toBeDefined()
+    expect(after).not.toBe(before)
   })
 
   it('outside-click closes the listbox', async () => {

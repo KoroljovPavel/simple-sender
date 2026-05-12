@@ -44,17 +44,27 @@ const query = ref('')
 const activeIndex = ref(0)
 const inputRef = ref<HTMLInputElement | null>(null)
 const containerRef = ref<HTMLElement | null>(null)
-const listboxId = `tz-picker-list-${Math.random().toString(36).slice(2, 8)}`
+// useId() is SSR-deterministic — hydration sees the same id on server and
+// client, avoiding the mismatch we'd get from Math.random() at module load.
+const listboxId = `tz-picker-list-${useId()}`
 
 // The input shows the selected value when closed (browser-recognizable IANA
 // id, e.g. "Europe/Kyiv"). When the user opens it and starts typing, the
 // query takes over until they pick an option or close without picking.
+// Explicit-clear contract: when the input is emptied (Backspace-to-empty or
+// a Cmd+A → Delete), emit '' on modelValue so v-model reflects "cleared" and
+// downstream zod refines that allow empty (settings.vue:80) see the right
+// state. Otherwise the cleared field would silently revert to the last
+// committed value on close.
 const inputValue = computed({
   get: () => (open.value ? query.value : props.modelValue),
   set: (v: string) => {
     query.value = v
     if (!open.value) open.value = true
     activeIndex.value = 0
+    if (v === '' && props.modelValue !== '') {
+      emit('update:modelValue', '')
+    }
   },
 })
 

@@ -294,12 +294,12 @@ describe('projects/[projectId]/settings page', () => {
   })
 
   // ─── Stale-state redirect (smoke-test 2.6 finding) ────────────────────
-  it('mount_apiReturns404_setsBannerKeyAndRedirectsToProjects', async () => {
+  it('mount_apiReturns404_whileStoreShowsProjectActive_setsBannerAndRedirects', async () => {
+    // Cross-tab scenario: store still thinks the project is active, but the
+    // explicit GET returns 404 first. The 404 branch fires and bails before
+    // the second `!project.value` redirect — so toHaveBeenCalledTimes(1)
+    // guards against double-navigate from a future regression.
     routeMock.params = { projectId: 'p-deleted' }
-    // Store stale-shows the project as active (cross-tab scenario).
-    // In the real app, useApi's 404 interceptor clears the store before this
-    // catch runs; here useApi is fully mocked so the store stays stale and we
-    // assert only the page-level redirect/banner contract.
     seedActive(makeProject({ id: 'p-deleted', name: 'Stale' }))
     apiMock.mockReset()
     apiMock.mockRejectedValueOnce({ statusCode: 404 })
@@ -308,6 +308,23 @@ describe('projects/[projectId]/settings page', () => {
     await settle()
 
     expect(projectsStoreMock.pendingBannerKey).toBe('errors.projects.unavailable')
+    expect(navigateToMock).toHaveBeenCalledWith('/projects')
+    expect(navigateToMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('mount_apiReturns404_doesNotOverwriteExistingBannerKey', async () => {
+    // The `!pendingBannerKey` guard exists so the useApi 404 interceptor's
+    // more specific banner key survives. If a future regression drops the
+    // guard, the page would clobber the interceptor-set key — this catches it.
+    routeMock.params = { projectId: 'p-deleted' }
+    projectsStoreMock.pendingBannerKey = 'errors.projects.staleSpecific'
+    apiMock.mockReset()
+    apiMock.mockRejectedValueOnce({ statusCode: 404 })
+
+    await mountSuspended(SettingsPage)
+    await settle()
+
+    expect(projectsStoreMock.pendingBannerKey).toBe('errors.projects.staleSpecific')
     expect(navigateToMock).toHaveBeenCalledWith('/projects')
   })
 
@@ -326,15 +343,35 @@ describe('projects/[projectId]/settings page', () => {
     expect(navigateToMock).toHaveBeenCalledWith('/projects')
   })
 
-  it('mount_apiReturns500_doesNotRedirect_keepsForm', async () => {
-    // Non-404 errors are tolerated — we only redirect for "project gone".
+  it('mount_apiReturns500_andProjectInStore_doesNotRedirect_keepsForm', async () => {
+    // Non-404 errors fall through to the !project.value check. With the
+    // project present in the store, no redirect happens; form stays.
     apiMock.mockReset()
     apiMock.mockRejectedValueOnce({ statusCode: 500 })
     const wrapper = await mountSuspended(SettingsPage)
     await settle()
 
+    expect(projectsStoreMock.pendingBannerKey).toBe(null)
     expect(navigateToMock).not.toHaveBeenCalled()
     expect(wrapper.find('[data-test="settings-form"]').exists()).toBe(true)
+  })
+
+  it('mount_apiReturns500_andProjectMissing_stillRedirects', async () => {
+    // The asymmetry the previous test silently relied on: when the API
+    // fails with 500 AND the project is absent from the store, the
+    // `!project.value` fallback STILL redirects. Exposes the real branch.
+    routeMock.params = { projectId: 'p-vanished' }
+    projectsStoreMock.projects = []
+    projectsStoreMock.currentProject = null
+    projectsStoreMock.currentProjectId = null
+    apiMock.mockReset()
+    apiMock.mockRejectedValueOnce({ statusCode: 500 })
+
+    await mountSuspended(SettingsPage)
+    await settle()
+
+    expect(projectsStoreMock.pendingBannerKey).toBe('errors.projects.unavailable')
+    expect(navigateToMock).toHaveBeenCalledWith('/projects')
   })
 
   it('mount_apiResolves_doesNotRedirect_rendersForm', async () => {

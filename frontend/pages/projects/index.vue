@@ -37,11 +37,17 @@ async function refreshSoftDeleted() {
     softDeletedProjects.value = (all ?? [])
       .filter((p) => p.deletedAt !== null)
       // Most recently deleted first — UX nicety, backend does not order this slice.
-      .sort((a, b) => ((a.deletedAt ?? '') < (b.deletedAt ?? '') ? 1 : -1))
-  } catch {
+      // Stable tri-valued comparator (matches sortByCreatedAtDesc in stores/projects.ts).
+      .sort((a, b) => {
+        const av = a.deletedAt ?? ''
+        const bv = b.deletedAt ?? ''
+        return av < bv ? 1 : av > bv ? -1 : 0
+      })
+  } catch (err) {
     // Soft-deleted listing is a non-fatal companion fetch; surfacing an error
-    // here would shadow the (working) active list. Keep the section empty if
-    // the call fails — user can refresh.
+    // would shadow the (working) active list. Empty the section but log so
+    // 401/403/5xx remain auditable (telemetry hook — security-auditor R1).
+    console.warn('[projects] failed to fetch soft-deleted list', err)
     softDeletedProjects.value = []
   }
 }
@@ -51,6 +57,9 @@ if (import.meta.client) {
   refreshSoftDeleted()
 }
 
+// Defensive filter: store.fetchAll() (without include_deleted) returns only
+// active rows today, but the store is shared with code paths that may call
+// fetchAll(true). The filter keeps this page correct regardless.
 const activeProjects = computed(() => projectsStore.projects.filter((p) => p.deletedAt === null))
 const atLimit = computed(() => activeProjects.value.length >= ACTIVE_LIMIT)
 
@@ -73,8 +82,10 @@ async function onRestore(project: Project) {
       showBanner({ kind: 'success', message: t('projects.restore.success') })
     }
   } catch (err: unknown) {
-    const msg = apiError(err, 'projects.restore')
-    if (msg) showBanner({ kind: 'error', message: msg })
+    // Resolver returns '' when no key matches; fall back to errors.generic so
+    // the user always sees feedback (mirrors the pattern in pages/profile.vue).
+    const msg = apiError(err, 'projects.restore') || t('errors.generic')
+    showBanner({ kind: 'error', message: msg })
   } finally {
     restoringIds.value.delete(project.id)
   }

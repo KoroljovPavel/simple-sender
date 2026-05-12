@@ -97,9 +97,11 @@ describe('projects index page', () => {
     await settle()
 
     expect(wrapper.find('[data-test="recently-deleted-section"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="days-remaining-d0"]').text()).toMatch(/7/)
-    expect(wrapper.find('[data-test="days-remaining-d4"]').text()).toMatch(/3/)
-    expect(wrapper.find('[data-test="days-remaining-d6"]').text()).toMatch(/1/)
+    // \b\d+\b anchored so /1/ no longer matches "10"/"11" if a future off-by-one
+    // regression reports the wrong count.
+    expect(wrapper.find('[data-test="days-remaining-d0"]').text()).toMatch(/\b7\b/)
+    expect(wrapper.find('[data-test="days-remaining-d4"]').text()).toMatch(/\b3\b/)
+    expect(wrapper.find('[data-test="days-remaining-d6"]').text()).toMatch(/\b1\b/)
   })
 
   it('index_restoreSuccess_callsStoreAndShowsSuccessToast', async () => {
@@ -186,10 +188,11 @@ describe('projects index page', () => {
     const btn = wrapper.find('[data-test="create-project-button"]')
     expect(btn.exists()).toBe(true)
     expect(btn.attributes('disabled')).toBeUndefined()
-    // Rendered as a NuxtLinkLocale → resolves to an <a> with href set via localePath
-    // identity-passthrough mock above. Anchor href should target /projects/new.
-    const href = btn.attributes('href') ?? btn.attributes('to')
-    expect(href).toBe('/projects/new')
+    // Pin BOTH disabled AND aria-disabled so a regression that flips only one
+    // attribute is still caught (test-reviewer R1).
+    expect(btn.attributes('aria-disabled')).toBeUndefined()
+    // NuxtLinkLocale renders as <a href> in the test env; pin the contract.
+    expect(btn.attributes('href')).toBe('/projects/new')
   })
 
   it('index_activeRowSettingsLink_pointsToProjectSettings', async () => {
@@ -204,7 +207,110 @@ describe('projects index page', () => {
     expect(row.exists()).toBe(true)
     const link = row.find('[data-test="active-settings-link-aaa"]')
     expect(link.exists()).toBe(true)
-    const href = link.attributes('href') ?? link.attributes('to')
-    expect(href).toBe('/projects/aaa/settings')
+    expect(link.attributes('href')).toBe('/projects/aaa/settings')
+  })
+
+  // ─── Round 1 follow-ups ──────────────────────────────────────────────────
+  // Added after test-reviewer round 1 flagged uncovered Edge cases listed in
+  // the task: concurrent restore guard, 5-active+deleted coexistence, banner
+  // auto-dismiss, generic-error (non-422) path.
+
+  it('index_concurrentRestoreClicks_callsStoreOnce', async () => {
+    const row = makeProject({ id: 'd1', name: 'Beta', deletedAt: new Date(FAKE_NOW - 2 * DAY_MS).toISOString() })
+    apiMock.mockResolvedValueOnce([row])
+    // Capture the resolver so the promise stays pending across the second click.
+    let resolveRestore: (v: Project) => void = () => {}
+    restoreSpy.mockReturnValueOnce(new Promise<Project>((res) => { resolveRestore = res }))
+
+    const wrapper = await mountSuspended(ProjectsIndexPage)
+    await settle()
+
+    const btn = wrapper.find('[data-test="restore-button-d1"]')
+    await btn.trigger('click')
+    // Click again before the first promise resolves — the in-flight guard
+    // (restoringIds Set) must short-circuit the second invocation.
+    await btn.trigger('click')
+    await settle()
+
+    expect(restoreSpy).toHaveBeenCalledTimes(1)
+    expect(btn.attributes('disabled')).toBeDefined()
+
+    resolveRestore({ ...row, deletedAt: null })
+    await settle()
+  })
+
+  it('index_5activeAndDeletedRow_disablesCreateButRestoreStaysAvailable', async () => {
+    // AC-30 + AC-23 coexistence: even at the active limit, the user can still
+    // click Restore — the server then rejects with 422 and the row stays.
+    projectsRef.value = Array.from({ length: 5 }, (_, i) =>
+      makeProject({ id: `p${i}`, name: `P${i}`, createdAt: `2026-01-0${i + 1}T00:00:00Z` }),
+    )
+    const deletedRow = makeProject({ id: 'd1', name: 'Beta', deletedAt: new Date(FAKE_NOW - 2 * DAY_MS).toISOString() })
+    apiMock.mockResolvedValueOnce([...projectsRef.value, deletedRow])
+    restoreSpy.mockRejectedValueOnce({ statusCode: 422, data: { code: 'project_limit_reached' } })
+
+    const wrapper = await mountSuspended(ProjectsIndexPage)
+    await settle()
+
+    expect(wrapper.find('[data-test="create-project-button"]').attributes('disabled')).toBeDefined()
+    const restoreBtn = wrapper.find('[data-test="restore-button-d1"]')
+    expect(restoreBtn.exists()).toBe(true)
+
+    await restoreBtn.trigger('click')
+    await settle()
+
+    expect(wrapper.find('[data-test="restore-toast"]').text()).toMatch(/ліміт/i)
+    expect(wrapper.find('[data-test="deleted-row-d1"]').exists()).toBe(true)
+  })
+
+  it('index_bannerAutoDismisses_after4Seconds', async () => {
+    // Full fake timers for this test: setSystemTime alone (beforeEach) leaves
+    // setTimeout real, but here we need to control the banner's dismiss timer.
+    // Replace the partial fake state with full fakes and use a Promise-aware
+    // shim of settle() that advances the queued macrotask explicitly.
+    vi.useRealTimers()
+    vi.useFakeTimers({ now: FAKE_NOW })
+    const fakeSettle = async () => {
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(50)
+      await Promise.resolve()
+    }
+
+    const row = makeProject({ id: 'd1', name: 'Beta', deletedAt: new Date(FAKE_NOW - 2 * DAY_MS).toISOString() })
+    apiMock.mockResolvedValueOnce([row])
+    restoreSpy.mockResolvedValueOnce({ ...row, deletedAt: null })
+
+    const wrapper = await mountSuspended(ProjectsIndexPage)
+    await fakeSettle()
+    await wrapper.find('[data-test="restore-button-d1"]').trigger('click')
+    await fakeSettle()
+
+    expect(wrapper.find('[data-test="restore-toast"]').exists()).toBe(true)
+
+    // Past BANNER_TIMEOUT_MS (4000) → showBanner's setTimeout fires and nulls
+    // the banner ref; nextTick lets the v-if re-evaluate.
+    await vi.advanceTimersByTimeAsync(4001)
+    await wrapper.vm.$nextTick()
+
+    expect(wrapper.find('[data-test="restore-toast"]').exists()).toBe(false)
+    vi.useRealTimers()
+  })
+
+  it('index_restoreServer500_showsGenericErrorBanner', async () => {
+    const row = makeProject({ id: 'd1', name: 'Beta', deletedAt: new Date(FAKE_NOW - 2 * DAY_MS).toISOString() })
+    apiMock.mockResolvedValueOnce([row])
+    restoreSpy.mockRejectedValueOnce({ statusCode: 500 })
+
+    const wrapper = await mountSuspended(ProjectsIndexPage)
+    await settle()
+    await wrapper.find('[data-test="restore-button-d1"]').trigger('click')
+    await settle()
+
+    const toast = wrapper.find('[data-test="restore-toast"]')
+    expect(toast.exists()).toBe(true)
+    // No 500-specific key under errors.projects.restore → resolver falls
+    // through to errors.projects.generic ("Не вдалося виконати дію…").
+    expect(toast.text().length).toBeGreaterThan(0)
+    expect(wrapper.find('[data-test="deleted-row-d1"]').exists()).toBe(true)
   })
 })

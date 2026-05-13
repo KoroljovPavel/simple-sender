@@ -66,6 +66,27 @@ describe('projects store', () => {
     expect(localStorage.getItem(LOCAL_STORAGE_KEY)).toBe(P2.id)
   })
 
+  it('fetchAll recovers persisted ID from localStorage when ref init missed it (SSR-stomp recovery)', async () => {
+    // Reproduces the smoke-2.6-follow-up bug: store init's `ref(readPersisted())`
+    // runs server-side too (isClientGuard() = false), where it returns null.
+    // Pinia hydration then replays this null onto the client store, overriding
+    // the localStorage value. Without runAutoSelect re-reading localStorage,
+    // fetchAll would silently overwrite the user's saved selection with
+    // active[0] (newest) — losing their cross-restart preference.
+    localStorage.setItem(LOCAL_STORAGE_KEY, P1.id)
+    __setClientGuardForTests(() => false) // store init runs as if on SSR
+    const store = useProjectsStore()
+    __setClientGuardForTests(() => true)  // back to client for fetchAll
+    apiMock.mockResolvedValueOnce(ACTIVE_LIST)
+
+    await store.fetchAll()
+
+    // P1 is older (createdAt 2026-01-02); without the fix this would be P2
+    // (newest, 2026-01-03). The persisted preference must win.
+    expect(store.currentProjectId).toBe(P1.id)
+    expect(localStorage.getItem(LOCAL_STORAGE_KEY)).toBe(P1.id)
+  })
+
   it('fetchAll falls back to projects[0] when persisted ID is stale (not in fetched list)', async () => {
     localStorage.setItem(LOCAL_STORAGE_KEY, 'stale-id')
     apiMock.mockResolvedValueOnce(ACTIVE_LIST)

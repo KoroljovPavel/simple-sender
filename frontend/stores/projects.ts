@@ -56,7 +56,18 @@ export const useProjectsStore = defineStore('projects', () => {
 
   function runAutoSelect() {
     const active = sortByCreatedAtDesc(projects.value.filter((p) => p.deletedAt === null))
-    const persisted = currentProjectId.value
+    // SSR-snapshot stomp recovery: the ref(readPersisted()) initializer runs
+    // server-side too, where readPersisted() returns null. Pinia's hydration
+    // then replays that null onto the client ref, overriding the client-side
+    // localStorage read. By the time fetchAll lands here (client-only via the
+    // dashboard onMounted etc.), we must re-read localStorage if the ref is
+    // still null — otherwise we lose the user's cross-restart selection and
+    // overwrite it with active[0].
+    // Explicit-clear paths (handleStaleCurrent → selectProject(null) → writePersisted(null))
+    // already remove the localStorage key, so a re-read returns null and the
+    // fallback to active[0] still kicks in correctly.
+    let persisted = currentProjectId.value
+    if (persisted === null) persisted = readPersisted()
     const keep = persisted !== null && active.some((p) => p.id === persisted)
     selectProject(keep ? persisted : (active[0]?.id ?? null))
   }

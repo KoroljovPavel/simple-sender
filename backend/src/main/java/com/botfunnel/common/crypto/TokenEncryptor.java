@@ -66,8 +66,12 @@ public class TokenEncryptor {
         try {
             decoded = HexFormat.of().parseHex(hexKey);
         } catch (IllegalArgumentException e) {
+            // Deliberately drop the JDK message — `HexFormat.parseHex` echoes the offending
+            // character and its index, which would leak a fragment of the misconfigured key
+            // into the boot log. The character-position detail is recoverable at DEBUG by
+            // attaching `e` as the cause.
             throw new IllegalStateException(
-                    failMessage("not valid hex (" + e.getMessage() + ")"), e);
+                    failMessage("not valid hex; expected 0-9 / a-f / A-F only"), e);
         }
         if (decoded.length != KEY_BYTES) {
             throw new IllegalStateException(failMessage(

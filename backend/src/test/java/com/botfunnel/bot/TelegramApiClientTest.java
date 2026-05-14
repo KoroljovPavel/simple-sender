@@ -6,6 +6,8 @@ import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.botfunnel.bot.dto.TelegramUser;
 import com.botfunnel.common.AppException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -18,6 +20,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import reactor.test.StepVerifier;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -65,7 +68,8 @@ class TelegramApiClientTest {
         assertThat(user.first_name()).isEqualTo("x");
         assertThat(user.username()).isEqualTo("x_bot");
 
-        RecordedRequest req = mockServer.takeRequest();
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
         assertThat(req.getPath()).isEqualTo("/bot" + TOKEN + "/getMe");
     }
 
@@ -125,10 +129,68 @@ class TelegramApiClientTest {
                 })
                 .verify();
 
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
         assertThat(logAppender.list)
                 .filteredOn(e -> e.getLevel() == Level.WARN)
                 .extracting(ILoggingEvent::getFormattedMessage)
                 .anyMatch(msg -> msg.contains("HTTPS url must be provided"));
+    }
+
+    @Test
+    void setWebhook_4xxConfigError_scrubsTokenInWarnLog() {
+        String description = "Bad webhook for token " + TOKEN + " on chat";
+        mockServer.enqueue(new MockResponse()
+                .setResponseCode(400)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"ok\":false,\"error_code\":400,\"description\":\"" + description + "\"}"));
+
+        StepVerifier.create(client.setWebhook(TOKEN, "https://example.com/hook", "secret-xyz"))
+                .expectError(AppException.class)
+                .verify();
+
+        assertThat(logAppender.list)
+                .filteredOn(e -> e.getLevel() == Level.WARN)
+                .extracting(ILoggingEvent::getFormattedMessage)
+                .anyMatch(msg -> msg.contains("[REDACTED_TOKEN]") && !msg.contains(TOKEN));
+    }
+
+    @Test
+    void getMe_4xxBlankDescription_fallsBackToBadRequest() {
+        mockServer.enqueue(new MockResponse()
+                .setResponseCode(403)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"ok\":false,\"error_code\":403,\"description\":\"\"}"));
+
+        StepVerifier.create(client.getMe(TOKEN))
+                .expectErrorSatisfies(err -> {
+                    assertThat(err).isInstanceOf(AppException.class);
+                    AppException app = (AppException) err;
+                    assertThat(app.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(app.getMessage()).isEqualTo("Telegram client error");
+                    assertThat(app.getCode()).isNull();
+                })
+                .verify();
+
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
+    }
+
+    @Test
+    void getMe_4xxNonJsonBody_fallsBackToBadRequest() {
+        mockServer.enqueue(new MockResponse()
+                .setResponseCode(418)
+                .setHeader("Content-Type", "text/html")
+                .setBody("<html><body>I am a teapot</body></html>"));
+
+        StepVerifier.create(client.getMe(TOKEN))
+                .expectErrorSatisfies(err -> {
+                    assertThat(err).isInstanceOf(AppException.class);
+                    AppException app = (AppException) err;
+                    assertThat(app.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(app.getMessage()).isEqualTo("Telegram client error");
+                })
+                .verify();
+
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
     }
 
     @Test
@@ -145,6 +207,34 @@ class TelegramApiClientTest {
         assertThat(TelegramApiClient.scrubTokens("no tokens here"))
                 .isEqualTo("no tokens here");
         assertThat(TelegramApiClient.scrubTokens(null)).isNull();
+        assertThat(TelegramApiClient.scrubTokens("")).isEqualTo("");
+        assertThat(TelegramApiClient.scrubTokens("   ")).isEqualTo("   ");
+    }
+
+    @Test
+    void scrubber_regexBoundaries() {
+        String idPrefix = "1234567890";
+        String suffix30 = "a".repeat(30);
+        String suffix29 = "a".repeat(29);
+        String suffix50 = "a".repeat(50);
+        String suffix51 = "a".repeat(51);
+        String digits20 = "12345678901234567890";
+        String digits21 = "123456789012345678901";
+
+        assertThat(TelegramApiClient.scrubTokens(idPrefix + ":" + suffix30))
+                .isEqualTo("[REDACTED_TOKEN]");
+        assertThat(TelegramApiClient.scrubTokens(idPrefix + ":" + suffix29))
+                .isEqualTo(idPrefix + ":" + suffix29);
+        assertThat(TelegramApiClient.scrubTokens(idPrefix + ":" + suffix50))
+                .isEqualTo("[REDACTED_TOKEN]");
+        assertThat(TelegramApiClient.scrubTokens(idPrefix + ":" + suffix51))
+                .isEqualTo("[REDACTED_TOKEN]a");
+        assertThat(TelegramApiClient.scrubTokens(digits20 + ":" + suffix30))
+                .isEqualTo("[REDACTED_TOKEN]");
+        assertThat(TelegramApiClient.scrubTokens(digits21 + ":" + suffix30))
+                .isEqualTo("1[REDACTED_TOKEN]");
+        assertThat(TelegramApiClient.scrubTokens("1234567890:short"))
+                .isEqualTo("1234567890:short");
     }
 
     @Test
@@ -166,6 +256,22 @@ class TelegramApiClientTest {
                 .verify(Duration.ofSeconds(10));
 
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
+    }
+
+    @Test
+    void deleteWebhook_happyPath_returnsTrueAndHitsCorrectPath() throws Exception {
+        mockServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"ok\":true,\"result\":true}"));
+
+        Boolean result = client.deleteWebhook(TOKEN).block();
+
+        assertThat(result).isTrue();
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        assertThat(req.getPath()).isEqualTo("/bot" + TOKEN + "/deleteWebhook");
+        assertThat(req.getMethod()).isEqualTo("POST");
     }
 
     @Test
@@ -208,12 +314,16 @@ class TelegramApiClientTest {
         Boolean ok = client.setWebhook(TOKEN, "https://example.com/hook", "secret-xyz").block();
         assertThat(ok).isTrue();
 
-        RecordedRequest req = mockServer.takeRequest();
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
         assertThat(req.getPath()).isEqualTo("/bot" + TOKEN + "/setWebhook");
-        String body = req.getBody().readUtf8();
-        assertThat(body).contains("\"url\"");
-        assertThat(body).contains("https://example.com/hook");
-        assertThat(body).contains("\"secret_token\"");
-        assertThat(body).contains("secret-xyz");
+
+        Map<String, String> parsed = new ObjectMapper().readValue(
+                req.getBody().readUtf8(),
+                new TypeReference<Map<String, String>>() {});
+        assertThat(parsed)
+                .hasSize(2)
+                .containsEntry("url", "https://example.com/hook")
+                .containsEntry("secret_token", "secret-xyz");
     }
 }

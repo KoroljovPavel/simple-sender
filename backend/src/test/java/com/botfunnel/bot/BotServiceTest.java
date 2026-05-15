@@ -68,7 +68,11 @@ class BotServiceTest {
     private static final String BRUTE_KEY = "brute:bot-connect:" + OWNER_ID;
     private static final String REDIS_FAIL_OPEN_WARN_FRAGMENT =
             "bot-connect brute-force counter Redis failure (fail-open)";
+    private static final String TELEGRAM_DISCONNECT_WARN_FRAGMENT =
+            "Telegram deleteWebhook failed during Disconnect";
     private static final Pattern TOKEN_REGEX = Pattern.compile("^\\d{1,20}:[A-Za-z0-9_-]{30,50}$");
+    // Non-anchored variant for substring scans (e.g. searching for a leaked token inside a log line).
+    private static final Pattern TOKEN_SUBSTRING = Pattern.compile("\\d{1,20}:[A-Za-z0-9_-]{30,50}");
 
     @Mock
     private BotRepository botRepository;
@@ -119,8 +123,13 @@ class BotServiceTest {
     @Test
     void connect_happyPath_runsSideEffectsInDocumentedOrder() {
         stubHappyPathMocks(1L);
+        ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
+        lenient().when(telegramApiClient.setWebhook(eq(TOKEN), urlCaptor.capture(), anyString()))
+                .thenReturn(Mono.just(true));
         ArgumentCaptor<Bot> botCaptor = ArgumentCaptor.forClass(Bot.class);
         when(botRepository.save(botCaptor.capture())).thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
 
         StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
                 .expectNextMatches(bot -> bot.getTelegramBotId().equals(TELEGRAM_BOT_ID))
@@ -130,14 +139,64 @@ class BotServiceTest {
                 telegramApiClient, tokenEncryptor, eventService, redisTemplate);
         order.verify(projectService).requireOwned(OWNER_ID, PROJECT_ID, false);
         order.verify(valueOperations).increment(BRUTE_KEY);
+        // AC11: EXPIRE 900s is applied only when INCR returns 1 (first hit); since stubHappyPath
+        // returns 1L, the conditional expire must fire here in the documented order.
+        order.verify(redisTemplate).expire(BRUTE_KEY, Duration.ofSeconds(900));
         order.verify(botRepository).findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED);
         order.verify(telegramApiClient).getMe(TOKEN);
         order.verify(botRepository).findFirstByTelegramBotIdAndStatus(TELEGRAM_BOT_ID, BotStatus.CONNECTED);
         order.verify(telegramApiClient).setWebhook(eq(TOKEN), anyString(), anyString());
         order.verify(tokenEncryptor).encrypt(TOKEN);
         order.verify(botRepository).save(any(Bot.class));
-        order.verify(eventService).logEvent(eq(OWNER_ID), eq("bot_connected"), eq(IP), eq(UA), anyMap());
+        order.verify(eventService).logEvent(eq(OWNER_ID), eq("bot_connected"), eq(IP), eq(UA),
+                metaCaptor.capture());
         order.verify(redisTemplate).delete(BRUTE_KEY);
+
+        // AC10: webhook URL passed to Telegram equals ${app.url}/webhooks/telegram/{projectId}.
+        assertThat(urlCaptor.getValue()).isEqualTo(APP_URL + "/webhooks/telegram/" + PROJECT_ID);
+        // AC23: bot_connected metadata is exactly {projectId, telegramBotId, telegramUsername}.
+        Map<String, Object> meta = metaCaptor.getValue();
+        assertThat(meta).containsOnlyKeys("projectId", "telegramBotId", "telegramUsername");
+        assertThat(meta)
+                .containsEntry("projectId", PROJECT_ID)
+                .containsEntry("telegramBotId", TELEGRAM_BOT_ID)
+                .containsEntry("telegramUsername", TELEGRAM_USERNAME);
+    }
+
+    @Test
+    void connect_secretIsFreshlyDrawnPerInvocation() {
+        // AC10: the 16-byte secret is freshly drawn per Connect — never derived from a constant.
+        stubHappyPathMocks(1L);
+        ArgumentCaptor<String> secretCaptor = ArgumentCaptor.forClass(String.class);
+        lenient().when(telegramApiClient.setWebhook(eq(TOKEN), anyString(), secretCaptor.capture()))
+                .thenReturn(Mono.just(true));
+        when(botRepository.save(any(Bot.class)))
+                .thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+
+        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
+                .expectNextCount(1).verifyComplete();
+        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
+                .expectNextCount(1).verifyComplete();
+
+        List<String> secrets = secretCaptor.getAllValues();
+        assertThat(secrets).hasSize(2);
+        assertThat(secrets.get(0)).isNotEqualTo(secrets.get(1));
+        assertThat(secrets.get(0)).matches("[0-9a-f]{32}");
+        assertThat(secrets.get(1)).matches("[0-9a-f]{32}");
+    }
+
+    @Test
+    void connect_secondAttemptDoesNotResetTtl() {
+        // AC11: EXPIRE 900s is applied ONLY on the first hit. A 2nd-attempt INCR that returns
+        // count=2 must NOT refresh TTL — otherwise the 15-min window resets every attempt.
+        stubHappyPathMocks(2L);
+        when(botRepository.save(any(Bot.class)))
+                .thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+
+        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
+                .expectNextCount(1).verifyComplete();
+
+        verify(redisTemplate, never()).expire(eq(BRUTE_KEY), any(Duration.class));
     }
 
     @Test
@@ -208,9 +267,17 @@ class BotServiceTest {
                 })
                 .verify();
 
+        // AC16: requireOwned is the FIRST reactive step — even on the 429 short-circuit, the
+        // ownership check must precede the INCR so a foreign / missing project still collapses to 404.
+        InOrder io = inOrder(projectService, valueOperations);
+        io.verify(projectService).requireOwned(OWNER_ID, PROJECT_ID, false);
+        io.verify(valueOperations).increment(BRUTE_KEY);
+
         verifyNoInteractions(telegramApiClient);
         verifyNoInteractions(tokenEncryptor);
         verify(botRepository, never()).save(any());
+        // 11th-attempt path must NOT refresh TTL — count != 1.
+        verify(redisTemplate, never()).expire(eq(BRUTE_KEY), any(Duration.class));
     }
 
     @Test
@@ -228,6 +295,11 @@ class BotServiceTest {
                 .filter(e -> e.getFormattedMessage().contains(REDIS_FAIL_OPEN_WARN_FRAGMENT))
                 .count();
         assertThat(warns).isEqualTo(1);
+
+        // Fail-open litmus: the downstream pipeline must actually run despite INCR errors.
+        verify(telegramApiClient).setWebhook(eq(TOKEN), anyString(), anyString());
+        verify(botRepository).save(any(Bot.class));
+        verify(eventService).logEvent(eq(OWNER_ID), eq("bot_connected"), eq(IP), eq(UA), anyMap());
     }
 
     @Test
@@ -382,8 +454,9 @@ class BotServiceTest {
 
         long warns = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
+                .filter(e -> e.getFormattedMessage().contains(TELEGRAM_DISCONNECT_WARN_FRAGMENT))
                 .count();
-        assertThat(warns).isGreaterThanOrEqualTo(1);
+        assertThat(warns).isEqualTo(1);
 
         Bot saved = botCaptor.getValue();
         assertThat(saved.getStatus()).isEqualTo(BotStatus.DISCONNECTED);
@@ -393,6 +466,37 @@ class BotServiceTest {
         verify(eventService).logEvent(eq(OWNER_ID), eq("bot_disconnected"), eq(IP), eq(UA),
                 metaCaptor.capture());
         assertThat(metaCaptor.getValue()).containsEntry("webhookDeleted", false);
+    }
+
+    @Test
+    void disconnect_telegramErrorMessageWithTokenInUri_isScrubbedInWarnLog() {
+        // S1: WebClient transport-error messages from deleteWebhook embed the request URI which
+        // carries the plaintext token. The WARN log site MUST scrub the token regex before logging.
+        Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
+        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
+                .thenReturn(Mono.just(stubProject()));
+        when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
+                .thenReturn(Mono.just(existing));
+        when(tokenEncryptor.decrypt(any(byte[].class), any(byte[].class))).thenReturn(TOKEN);
+        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(Mono.error(new RuntimeException(
+                "SSL handshake failed for https://api.telegram.org/bot" + TOKEN + "/deleteWebhook")));
+        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+
+        StepVerifier.create(service.disconnect(OWNER_ID, PROJECT_ID, IP, UA)).verifyComplete();
+
+        List<String> warnMessages = logAppender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+        assertThat(warnMessages).anyMatch(m -> m.contains(TELEGRAM_DISCONNECT_WARN_FRAGMENT));
+        for (String msg : warnMessages) {
+            assertThat(msg)
+                    .as("WARN line must not echo the plaintext token: <%s>", msg)
+                    .doesNotContain(TOKEN);
+            assertThat(TOKEN_SUBSTRING.matcher(msg).find())
+                    .as("WARN line must not contain any token-shape substring: <%s>", msg)
+                    .isFalse();
+        }
     }
 
     @Test
@@ -442,6 +546,10 @@ class BotServiceTest {
                 .verify();
 
         verifyNoInteractions(telegramApiClient);
+        // AC16: requireOwned must precede the find call on the negative branch too.
+        InOrder io = inOrder(projectService, botRepository);
+        io.verify(projectService).requireOwned(OWNER_ID, PROJECT_ID, false);
+        io.verify(botRepository).findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED);
     }
 
     // ---------- Send Test Message ----------
@@ -483,6 +591,9 @@ class BotServiceTest {
 
         verifyNoInteractions(telegramApiClient);
         verifyNoInteractions(eventService);
+        InOrder io = inOrder(projectService, botRepository);
+        io.verify(projectService).requireOwned(OWNER_ID, PROJECT_ID, false);
+        io.verify(botRepository).findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED);
     }
 
     // ---------- Get ----------
@@ -518,6 +629,10 @@ class BotServiceTest {
                     assertThat(((AppException) err).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
                 })
                 .verify();
+
+        InOrder io = inOrder(projectService, botRepository);
+        io.verify(projectService).requireOwned(OWNER_ID, PROJECT_ID, false);
+        io.verify(botRepository).findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED);
     }
 
     // ---------- helpers ----------

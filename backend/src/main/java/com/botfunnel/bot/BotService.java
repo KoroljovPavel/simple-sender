@@ -43,6 +43,11 @@ public class BotService {
     static final String REDIS_FAIL_OPEN_WARN =
             "bot-connect brute-force counter Redis failure (fail-open): {}";
 
+    // Pinned WARN message for the Disconnect-with-Telegram-down fail-open path (AC13b). Kept as a
+    // constant so tests can assert it exactly without duplicating the literal across modules.
+    static final String TELEGRAM_DISCONNECT_WARN =
+            "Telegram deleteWebhook failed during Disconnect; proceeding to local update: {}";
+
     private static final String CODE_BOT_ALREADY_IN_PROJECT = "bot_already_in_project";
     private static final String CODE_BOT_ALREADY_CONNECTED = "bot_already_connected";
     private static final String MESSAGE_BOT_ALREADY_IN_PROJECT =
@@ -77,9 +82,7 @@ public class BotService {
     }
 
     public Mono<Bot> getByProject(String ownerId, String projectId) {
-        return projectService.requireOwned(ownerId, projectId, false)
-                .then(Mono.defer(() -> botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)))
-                .switchIfEmpty(Mono.error(AppException.notFound(MESSAGE_BOT_NOT_FOUND)));
+        return requireConnectedBot(ownerId, projectId);
     }
 
     public Mono<Bot> connect(String ownerId, String projectId, String token, String ip, String userAgent) {
@@ -98,22 +101,24 @@ public class BotService {
     }
 
     public Mono<Void> disconnect(String ownerId, String projectId, String ip, String userAgent) {
-        return projectService.requireOwned(ownerId, projectId, false)
-                .then(Mono.defer(() -> botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)))
-                .switchIfEmpty(Mono.error(AppException.notFound(MESSAGE_BOT_NOT_FOUND)))
+        return requireConnectedBot(ownerId, projectId)
                 .flatMap(bot -> doDisconnect(bot, ownerId, projectId, ip, userAgent))
                 .then();
     }
 
     public Mono<Void> sendTestMessage(String ownerId, String projectId, String ip, String userAgent) {
-        return projectService.requireOwned(ownerId, projectId, false)
-                .then(Mono.defer(() -> botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)))
-                .switchIfEmpty(Mono.error(AppException.notFound(MESSAGE_BOT_NOT_FOUND)))
+        return requireConnectedBot(ownerId, projectId)
                 // D7: in feature 06 the endpoint short-circuits with 422 and emits NO event.
                 // The success branch + bot_test_message_sent event arrive in 06b.
                 .flatMap(bot -> Mono.<Void>error(AppException.unprocessableEntity(
                         "owner_chat_id_unknown",
                         "Send /start to your bot in Telegram first, then try again")));
+    }
+
+    private Mono<Bot> requireConnectedBot(String ownerId, String projectId) {
+        return projectService.requireOwned(ownerId, projectId, false)
+                .then(Mono.defer(() -> botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)))
+                .switchIfEmpty(Mono.error(AppException.notFound(MESSAGE_BOT_NOT_FOUND)));
     }
 
     private Mono<Bot> connectAfterPreChecks(String projectId, String token, TelegramUser user) {
@@ -154,11 +159,13 @@ public class BotService {
     private Mono<Bot> compensateAndPropagate(String token, Long telegramBotId, Throwable persistErr) {
         // D4: setWebhook already succeeded — best-effort deleteWebhook to roll Telegram back.
         // The compensation must never shadow the original persist error, so we swallow any
-        // failure from the compensation itself before rethrowing.
+        // failure from the compensation itself before rethrowing. WebClient transport-error
+        // messages from TelegramApiClient typically embed the request URI which carries the
+        // token; scrub at the log site (R1 / AC17).
         return telegramApiClient.deleteWebhook(token)
                 .onErrorResume(compErr -> {
                     log.warn("Compensating deleteWebhook failed during Connect rollback: {}",
-                            compErr.getMessage());
+                            TelegramApiClient.scrubTokens(compErr.getMessage()));
                     return Mono.just(false);
                 })
                 .then(mapPersistError(persistErr, telegramBotId))
@@ -203,17 +210,18 @@ public class BotService {
     }
 
     private Mono<Bot> doDisconnect(Bot bot, String ownerId, String projectId, String ip, String userAgent) {
-        // Plaintext token lives only on this stack frame: decode → decrypt → pass to deleteWebhook.
-        // Never returned, never logged.
+        // Plaintext token: decode → decrypt → pass to deleteWebhook. Closure capture by the
+        // downstream lambdas keeps the reference reachable until the subscription completes —
+        // not stack-only — but the token is never logged, never returned, and never serialized.
         byte[] iv = Base64.getDecoder().decode(bot.getEncryptedTokenIv());
         byte[] ct = Base64.getDecoder().decode(bot.getEncryptedTokenCiphertext());
         String plaintextToken = tokenEncryptor.decrypt(iv, ct);
 
         return telegramApiClient.deleteWebhook(plaintextToken)
                 // AC13b: persistent Telegram failure must NEVER block the local update.
+                // WebClient transport-error messages embed the request URI (with token); scrub.
                 .onErrorResume(err -> {
-                    log.warn("Telegram deleteWebhook failed during Disconnect; proceeding to local update: {}",
-                            err.getMessage());
+                    log.warn(TELEGRAM_DISCONNECT_WARN, TelegramApiClient.scrubTokens(err.getMessage()));
                     return Mono.just(false);
                 })
                 .flatMap(deleted -> {
@@ -232,7 +240,9 @@ public class BotService {
 
     private Mono<Void> incrementBruteForceCounter(String userId) {
         // D14: INCR every attempt (not only on failure) — closes the Connect-then-Disconnect
-        // bypass that an INCR-on-failure-only counter (auth pattern) would leave open.
+        // bypass that an INCR-on-failure-only counter (auth pattern) would leave open. The
+        // `count != null` guards are defensive against a non-spec emit; a genuine null would
+        // still surface via the outer .onErrorResume (fail-open) — never as a 429.
         String key = bruteForceKey(userId);
         return redisTemplate.opsForValue().increment(key)
                 .flatMap(count -> {

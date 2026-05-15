@@ -166,7 +166,9 @@ public class TelegramApiClient {
         return false;
     }
 
-    static String scrubTokens(String input) {
+    // Promoted to public for shared use by BotService log sites — the same regex must scrub
+    // Telegram error messages before they reach any logger, including downstream callers'.
+    public static String scrubTokens(String input) {
         if (input == null) return null;
         return TOKEN_PATTERN.matcher(input).replaceAll("[REDACTED_TOKEN]");
     }

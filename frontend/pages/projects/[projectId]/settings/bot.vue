@@ -127,7 +127,7 @@ async function onSendTest() {
           v-model="tokenInput"
           data-test="bot-connect-input"
           type="password"
-          autocomplete="off"
+          autocomplete="new-password"
           spellcheck="false"
           :placeholder="t('bot.connect.form.tokenPlaceholder')"
           :disabled="connecting"

@@ -1,5 +1,6 @@
 package com.botfunnel.bot;
 
+import com.fasterxml.jackson.annotation.JsonIgnore;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
@@ -27,6 +28,17 @@ import java.time.Instant;
 })
 public class Bot {
 
+    // Defensive class-load assertion: the @CompoundIndex partialFilter literal "CONNECTED" must
+    // stay byte-identical with BotStatus.CONNECTED.name() — Spring Data persists the enum as name(),
+    // and a silent enum rename would void D1/D5 race protections (indexes would match zero rows).
+    static {
+        if (!"CONNECTED".equals(BotStatus.CONNECTED.name())) {
+            throw new IllegalStateException(
+                    "Partial-filter literal 'CONNECTED' diverged from BotStatus.CONNECTED.name() = "
+                            + BotStatus.CONNECTED.name());
+        }
+    }
+
     @Id
     private String id;
 
@@ -38,9 +50,13 @@ public class Bot {
     private String telegramFirstName;
     private BotStatus status;
 
+    @JsonIgnore
     private String encryptedTokenCiphertext;
+    @JsonIgnore
     private String encryptedTokenIv;
+    @JsonIgnore
     private String tokenSuffix;
+    @JsonIgnore
     private String webhookSecretHash;
 
     private Instant connectedAt;

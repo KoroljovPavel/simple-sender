@@ -17,6 +17,7 @@ public enum BotStatus {
 
     @JsonCreator
     public static BotStatus fromString(String s) {
+        if (s == null) return null;
         return BotStatus.valueOf(s.toUpperCase());
     }
 }

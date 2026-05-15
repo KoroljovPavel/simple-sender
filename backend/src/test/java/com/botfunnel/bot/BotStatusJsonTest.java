@@ -7,6 +7,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class BotStatusJsonTest {
 
+    // Deliberately a bare ObjectMapper, not the Spring-configured bean — this test asserts the
+    // enum's own @JsonValue/@JsonCreator contract independent of any global Jackson configuration.
     private final ObjectMapper objectMapper = new ObjectMapper();
 
     @Test

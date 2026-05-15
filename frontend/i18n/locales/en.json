@@ -206,8 +206,71 @@
       "success": "Project restored"
     }
   },
+  "bot": {
+    "subnav": {
+      "general": "General",
+      "bot": "Bot"
+    },
+    "placeholder": "Bot settings will appear here.",
+    "page": {
+      "title": "Connect your Telegram bot",
+      "connectSection": "Connect bot",
+      "connectedSection": "Connected bot"
+    },
+    "connect": {
+      "form": {
+        "tokenLabel": "Bot token",
+        "tokenPlaceholder": "Paste your bot token from BotFather",
+        "tokenHint": "Get one by messaging @BotFather → /newbot",
+        "submit": "Connect",
+        "submitting": "Connecting…",
+        "invalidFormat": "Bot token has invalid format"
+      }
+    },
+    "connected": {
+      "usernameLabel": "Username",
+      "firstNameLabel": "First name",
+      "tokenLabel": "Token",
+      "testMessage": "Send test message",
+      "testMessageHint": "To enable test message, write /start to your bot in Telegram first.",
+      "disconnect": "Disconnect"
+    },
+    "disconnect": {
+      "modal": {
+        "title": "Disconnect bot?",
+        "body": "Disconnect bot @{username}? Incoming messages will stop and the webhook will be removed. You can reconnect anytime.",
+        "cancel": "Cancel",
+        "confirm": "Disconnect"
+      }
+    },
+    "toasts": {
+      "telegramUnavailable": "Telegram is currently unavailable. Try again in a minute.",
+      "webhookConfigError": "Webhook configuration error — contact support."
+    }
+  },
   "errors": {
     "generic": "Something went wrong. Try again later",
+    "bot": {
+      "generic": "Action failed. Try again later",
+      "connect": {
+        "generic": "Connect failed. Try again later",
+        "400": "Bot token has invalid format",
+        "422": "Token is invalid or revoked",
+        "500": "Webhook configuration error — contact support",
+        "502": "Telegram is currently unavailable. Try again in a minute.",
+        "409": "This bot is already connected to another project.",
+        "429": "Too many attempts. Try again in 15 minutes"
+      },
+      "testMessage": {
+        "generic": "Sending test message failed. Try again later",
+        "422": "Send /start to your bot in Telegram first, then try again.",
+        "502": "Telegram is currently unavailable. Try again in a minute."
+      },
+      "disconnect": {
+        "generic": "Disconnect failed. Try again later",
+        "404": "No connected bot to disconnect."
+      }
+    },
     "projects": {
       "generic": "Action failed. Try again later",
       "unavailable": "This project is no longer available. Refreshing the list.",

@@ -20,6 +20,9 @@ importers:
       '@vee-validate/zod':
         specifier: ^4.15.0
         version: 4.15.1(vue@3.5.33(typescript@5.9.3))(zod@3.25.76)
+      '@vueuse/core':
+        specifier: ^14.3.0
+        version: 14.3.0(vue@3.5.33(typescript@5.9.3))
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -38,9 +41,15 @@ importers:
       radix-vue:
         specifier: ^1.9.13
         version: 1.9.17(vue@3.5.33(typescript@5.9.3))
+      reka-ui:
+        specifier: ^2.9.7
+        version: 2.9.7(vue@3.5.33(typescript@5.9.3))
       tailwind-merge:
         specifier: ^2.6.0
         version: 2.6.1
+      tailwindcss-animate:
+        specifier: ^1.0.7
+        version: 1.0.7(tailwindcss@3.4.19(yaml@2.8.4))
       vee-validate:
         specifier: ^4.15.0
         version: 4.15.1(vue@3.5.33(typescript@5.9.3))
@@ -4858,6 +4867,11 @@ packages:
 
   tailwind-merge@2.6.1:
     resolution: {integrity: sha512-Oo6tHdpZsGpkKG88HJ8RR1rg/RdnEkQEfMoEk2x1XRI3F1AxeU+ijRXpiVUF4UbLfcxxRGw6TbUINKYdWVsQTQ==}
+
+  tailwindcss-animate@1.0.7:
+    resolution: {integrity: sha512-bl6mpH3T7I3UFxuvDEXLxy/VuFxBk5bbzplh7tXI68mwMokNYd1t9qPBHlnyTwfa4JGC4zP516I1hYYtQ/vspA==}
+    peerDependencies:
+      tailwindcss: '>=3.0.0 || insiders'
 
   tailwindcss@3.4.19:
     resolution: {integrity: sha512-3ofp+LL8E+pK/JuPLPggVAIaEuhvIz4qNcf3nA1Xn2o/7fb7s/TYpHhwGDv1ZU3PkBluUVaF8PyCHcm48cKLWQ==}
@@ -10520,6 +10534,10 @@ snapshots:
       - supports-color
 
   tailwind-merge@2.6.1: {}
+
+  tailwindcss-animate@1.0.7(tailwindcss@3.4.19(yaml@2.8.4)):
+    dependencies:
+      tailwindcss: 3.4.19(yaml@2.8.4)
 
   tailwindcss@3.4.19(yaml@2.8.4):
     dependencies:

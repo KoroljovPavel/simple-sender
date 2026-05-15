@@ -29,7 +29,7 @@ mockNuxtImport('useRoute', () => () => routeMock)
 mockNuxtImport('useLocalePath', () => () => (path: string) => path)
 mockNuxtImport('navigateTo', () => navigateToMock)
 
-import SettingsPage from '../../../pages/projects/[projectId]/settings.vue'
+import SettingsPage from '../../../pages/projects/[projectId]/settings/index.vue'
 
 function makeProject(overrides: Partial<Project> = {}): Project {
   return {

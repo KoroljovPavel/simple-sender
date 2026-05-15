@@ -196,10 +196,11 @@ async function confirmDelete() {
 
 <template>
   <div class="max-w-2xl space-y-8">
+    <SettingsSubnav :project-id="projectId" />
     <h1 class="text-2xl font-semibold">{{ t('projects.settings.title') }}</h1>
 
     <!--
-      No "project missing" inline fallback: settings.vue redirects to /projects
+      No "project missing" inline fallback: settings/index.vue redirects to /projects
       in onMounted when the project is not in the active list (same-tab delete,
       cross-tab stale, foreign / non-existent id). The /projects page renders
       a persistent banner keyed off projectsStore.pendingBannerKey.

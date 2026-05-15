@@ -54,7 +54,7 @@ public class BotController {
         String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
         return currentUserId()
                 .flatMap(ownerId -> botService.disconnect(ownerId, projectId, ip, userAgent))
-                .then(Mono.fromCallable(() -> ResponseEntity.ok().<Void>build()));
+                .then(Mono.just(ResponseEntity.ok().<Void>build()));
     }
 
     @PostMapping("/test-message")
@@ -64,7 +64,7 @@ public class BotController {
         String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
         return currentUserId()
                 .flatMap(ownerId -> botService.sendTestMessage(ownerId, projectId, ip, userAgent))
-                .then(Mono.fromCallable(() -> ResponseEntity.ok().<Void>build()));
+                .then(Mono.just(ResponseEntity.ok().<Void>build()));
     }
 
     private static BotResponse toResponse(Bot bot) {

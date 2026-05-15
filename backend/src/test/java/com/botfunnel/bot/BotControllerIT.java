@@ -102,6 +102,7 @@ class BotControllerIT extends AbstractIntegrationTest {
     @Autowired ProjectRepository projectRepository;
     @Autowired EventRepository eventRepository;
     @Autowired ReactiveRedisTemplate<String, String> redisTemplate;
+    @Autowired org.springframework.context.ApplicationContext applicationContext;
 
     // @MockitoSpyBean wraps the real bean so Mongo persistence still works for normal tests; only
     // the targeted persist-failure scenario (#postConnect_persistFails…) re-stubs save() to throw.
@@ -389,9 +390,12 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("token", VALID_TOKEN))
                 .exchange()
-                .expectStatus().is5xxServerError()
+                .expectStatus().isEqualTo(500)
                 .expectBody()
                 .jsonPath("$.code").isEqualTo("webhook_config_error");
+
+        // No Bot row may be persisted: the failure happens at setWebhook, before save().
+        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block()).isNull();
     }
 
     @Test
@@ -459,7 +463,7 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(Map.of("token", VALID_TOKEN))
                 .exchange()
-                .expectStatus().is5xxServerError();
+                .expectStatus().isEqualTo(500);
 
         List<RecordedRequest> reqs = drainRequests();
         assertThat(reqs).extracting(RecordedRequest::getPath)
@@ -503,11 +507,16 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .count().block();
         assertThat(connected).isEqualTo(1L);
 
+        // setCount may be 1 or 2: if the loser races the winner past the
+        // ensureTelegramBotIdNotConnectedAnywhere pre-check it will reach setWebhook (setCount=2)
+        // and then need to compensate (delCount=1); if the loser arrives after the winner already
+        // persisted, the pre-check trips early (setCount=1, delCount=0). Either ordering is correct
+        // — the strong invariants are exactly-one CONNECTED row and the {200, 409} status pair.
         List<RecordedRequest> reqs = drainRequests();
         long setCount = reqs.stream().filter(r -> r.getPath().endsWith("/setWebhook")).count();
         long delCount = reqs.stream().filter(r -> r.getPath().endsWith("/deleteWebhook")).count();
-        assertThat(setCount).isEqualTo(2L);
-        assertThat(delCount).isEqualTo(1L);
+        assertThat(setCount).isBetween(1L, 2L);
+        assertThat(delCount).isEqualTo(setCount - 1L);
     }
 
     @Test
@@ -534,11 +543,14 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .count().block();
         assertThat(connected).isEqualTo(1L);
 
+        // setCount may be 1 or 2 depending on race ordering through
+        // ensureNoConnectedBotForProject (see same-token race comment); the strong invariant is
+        // exactly-one CONNECTED row + {200, 409} status pair, with delCount tracking setCount-1.
         List<RecordedRequest> reqs = drainRequests();
         long setCount = reqs.stream().filter(r -> r.getPath().endsWith("/setWebhook")).count();
         long delCount = reqs.stream().filter(r -> r.getPath().endsWith("/deleteWebhook")).count();
-        assertThat(setCount).isEqualTo(2L);
-        assertThat(delCount).isEqualTo(1L);
+        assertThat(setCount).isBetween(1L, 2L);
+        assertThat(delCount).isEqualTo(setCount - 1L);
     }
 
     private Mono<Integer> postConnect(String projectId, String token) {
@@ -791,7 +803,12 @@ class BotControllerIT extends AbstractIntegrationTest {
     @WithMockAppUser(userId = USER_ID)
     void noTokenLeak_inAnyResponseBodyOrEventMetadata() {
         // AC17 / AC23: no HTTP body field and no event-metadata value matches the token regex.
-        // Exercise Connect (success) and Disconnect (success) and scan their bodies + emitted events.
+        // Exercise:
+        //   1. Happy-path Connect + Disconnect (sanity sweep over bodies + emitted events)
+        //   2. setWebhook 4xx with the token echoed inside the Telegram error description —
+        //      a leak-prone scenario where a naive error-mapper might propagate the token into
+        //      the 5xx response body. The DTO contract + scrubTokens at the log site prevent this;
+        //      this assertion would FAIL if either guarantee regressed.
         Project project = saveActiveProject(USER_ID);
         enqueueHappyPathConnect();
 
@@ -825,6 +842,57 @@ class BotControllerIT extends AbstractIntegrationTest {
             assertNoTokenLeak(evt.getIpAddress());
             assertNoTokenLeak(evt.getUserAgent());
         }
+
+        // Leak-prone scenario: Telegram 4xx with the token quoted in `description`. The previous
+        // happy-path sweeps cannot fail because no token ever flows into the response shape they
+        // produce; this branch is what makes the assertion non-vacuous.
+        Project p2 = saveActiveProject(USER_ID);
+        mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID_2, "leakcheck_bot", "Leak"));
+        mockTelegram.enqueue(status(400, "Bad webhook for token " + VALID_TOKEN + " on chat"));
+
+        byte[] errBody = webTestClient.mutateWith(csrf())
+                .post().uri("/api/v1/projects/" + p2.getId() + "/bot/connect")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", VALID_TOKEN))
+                .exchange()
+                .expectStatus().isEqualTo(500)
+                .expectBody().returnResult().getResponseBody();
+        assertNoTokenLeak(errBody == null ? null : new String(errBody));
+    }
+
+    // ---------- Unauthenticated 401 sweep ----------
+
+    @Test
+    void anyEndpoint_unauthenticatedBareClient_returns401() {
+        // Mirrors ProjectControllerIT#anyEndpoint_unauthenticatedBareClient_returns401: a bare
+        // WebTestClient (no @WithMockAppUser, no test-time mutators beyond csrf for state-changing
+        // verbs) bound to the in-memory ApplicationContext proves the production filter chain
+        // returns 401 across every verb shape on /api/v1/projects/{id}/bot/**.
+        var bare = org.springframework.test.web.reactive.server.WebTestClient
+                .bindToApplicationContext(applicationContext)
+                .configureClient()
+                .build();
+
+        bare.get().uri("/api/v1/projects/any-id/bot")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        bare.mutateWith(csrf())
+                .post().uri("/api/v1/projects/any-id/bot/connect")
+                .contentType(MediaType.APPLICATION_JSON)
+                .bodyValue(Map.of("token", VALID_TOKEN))
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        bare.mutateWith(csrf())
+                .post().uri("/api/v1/projects/any-id/bot/disconnect")
+                .exchange()
+                .expectStatus().isUnauthorized();
+
+        bare.mutateWith(csrf())
+                .post().uri("/api/v1/projects/any-id/bot/test-message")
+                .exchange()
+                .expectStatus().isUnauthorized();
     }
 
     // ---------- Webhook secret hashing ----------

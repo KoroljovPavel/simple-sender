@@ -106,7 +106,7 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     // @MockitoSpyBean wraps the real bean so Mongo persistence still works for normal tests; only
     // the targeted persist-failure scenario (#postConnect_persistFails…) re-stubs save() to throw.
-    // Mockito.reset(botRepositorySpy) in @AfterEach restores real delegation for all other tests.
+    // Mockito.reset(...) in @BeforeEach restores real delegation for all subsequent tests.
     @MockitoSpyBean BotRepository botRepositorySpy;
     @MockitoSpyBean ReactiveRedisTemplate<String, String> redisTemplateSpy;
 

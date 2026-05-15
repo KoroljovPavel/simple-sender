@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { reactive } from 'vue'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
-import { config } from '@vue/test-utils'
 import { settle } from '../../../../helpers/settle'
 import type { Bot } from '../../../../../types/bot'
 
@@ -9,10 +8,15 @@ import type { Bot } from '../../../../../types/bot'
 // out of the page subtree by reka-ui's DialogPortal. vue-test-utils' built-in
 // `teleport: true` stub drops the slot (seen empirically — element renders but
 // slot is unmounted). An explicit template stub renders the slot inline so
-// modal data-test attributes are reachable via wrapper.find().
-config.global.stubs = {
-  ...config.global.stubs,
-  teleport: { template: '<div data-test-teleport><slot /></div>' },
+// modal data-test attributes are reachable via wrapper.find(). Passed per-mount
+// via mountSuspended's `global.stubs` to avoid mutating the shared vue-test-utils
+// config and leaking into other spec files in the same worker.
+const mountOptions = {
+  global: {
+    stubs: {
+      teleport: { template: '<div data-test-teleport><slot /></div>' },
+    },
+  },
 }
 
 const PROJECT_ID = 'p1'
@@ -70,7 +74,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   })
 
   it('mounts and fetches bot on mount', async () => {
-    await mountSuspended(BotPage)
+    await mountSuspended(BotPage, mountOptions)
     await settle()
 
     expect(botStoreMock.fetch).toHaveBeenCalledTimes(1)
@@ -78,7 +82,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   })
 
   it('renders Connect form when bot.current is null', async () => {
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     expect(wrapper.find('[data-test="bot-connect-input"]').exists()).toBe(true)
@@ -87,7 +91,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   })
 
   it('renders SettingsSubnav with both routes (AC21 integration)', async () => {
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     expect(wrapper.find('[data-test="settings-subnav"]').exists()).toBe(true)
@@ -98,7 +102,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   })
 
   it('Connect button enables once token is typed', async () => {
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     const input = wrapper.find('[data-test="bot-connect-input"]')
@@ -111,7 +115,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   })
 
   it('Connect button stays disabled when input is whitespace only', async () => {
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue('   ')
@@ -128,7 +132,7 @@ describe('projects/[projectId]/settings/bot page', () => {
       }),
     )
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -152,7 +156,7 @@ describe('projects/[projectId]/settings/bot page', () => {
       return BOT_FIXTURE
     })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -170,7 +174,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('masked token uses literal AC18 form', async () => {
     reactiveStore.current = BOT_FIXTURE
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     expect(wrapper.find('[data-test="bot-masked-token"]').text()).toBe('1234567890:•••...xyz')
@@ -179,7 +183,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('connect 400 resolves errors.bot.connect.400', async () => {
     botStoreMock.connect.mockRejectedValueOnce({ statusCode: 400 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -195,7 +199,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('connect 409 resolves errors.bot.connect.409', async () => {
     botStoreMock.connect.mockRejectedValueOnce({ statusCode: 409 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -209,7 +213,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('connect 422 resolves errors.bot.connect.422', async () => {
     botStoreMock.connect.mockRejectedValueOnce({ statusCode: 422 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -223,7 +227,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('connect 429 resolves errors.bot.connect.429', async () => {
     botStoreMock.connect.mockRejectedValueOnce({ statusCode: 429 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -237,7 +241,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('connect 500 resolves errors.bot.connect.500', async () => {
     botStoreMock.connect.mockRejectedValueOnce({ statusCode: 500 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -251,7 +255,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('connect 502 resolves errors.bot.connect.502', async () => {
     botStoreMock.connect.mockRejectedValueOnce({ statusCode: 502 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -265,7 +269,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('Disconnect click opens modal with AC19 copy', async () => {
     reactiveStore.current = BOT_FIXTURE
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-disconnect-button"]').trigger('click')
@@ -273,15 +277,17 @@ describe('projects/[projectId]/settings/bot page', () => {
 
     const modal = wrapper.find('[data-test="bot-disconnect-modal"]')
     expect(modal.exists()).toBe(true)
-    // AC19 exact copy with {username} interpolated.
-    expect(modal.text()).toContain('@SmokeBot')
-    expect(modal.text()).toMatch(/Вхідні повідомлення припиняться/i)
+    // AC19 demands the *exact* copy with `{username}` interpolated — substring
+    // matches would let a translator drop half the sentence undetected.
+    expect(modal.text()).toContain(
+      'Відключити бота @SmokeBot? Вхідні повідомлення припиняться, а вебхук буде видалено. Підключити знову можна будь-коли.',
+    )
   })
 
   it('Cancel inside modal closes without API call', async () => {
     reactiveStore.current = BOT_FIXTURE
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-disconnect-button"]').trigger('click')
@@ -302,7 +308,7 @@ describe('projects/[projectId]/settings/bot page', () => {
       reactiveStore.current = null
     })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-disconnect-button"]').trigger('click')
@@ -320,7 +326,7 @@ describe('projects/[projectId]/settings/bot page', () => {
     reactiveStore.current = BOT_FIXTURE
     botStoreMock.disconnect.mockRejectedValueOnce({ statusCode: 404 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-disconnect-button"]').trigger('click')
@@ -335,7 +341,7 @@ describe('projects/[projectId]/settings/bot page', () => {
     reactiveStore.current = BOT_FIXTURE
     botStoreMock.sendTestMessage.mockRejectedValueOnce({ statusCode: 422 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-send-test-button"]').trigger('click')
@@ -347,7 +353,7 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('token never appears in error message or DOM (AC17)', async () => {
     botStoreMock.connect.mockRejectedValueOnce({ statusCode: 422 })
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     await wrapper.find('[data-test="bot-connect-input"]').setValue(VALID_TOKEN)
@@ -364,11 +370,33 @@ describe('projects/[projectId]/settings/bot page', () => {
   it('renders Connected view from initial fetch (no Connect interaction)', async () => {
     reactiveStore.current = BOT_FIXTURE
 
-    const wrapper = await mountSuspended(BotPage)
+    const wrapper = await mountSuspended(BotPage, mountOptions)
     await settle()
 
     expect(wrapper.find('[data-test="bot-connected-username"]').text()).toContain('@SmokeBot')
     expect(wrapper.find('[data-test="bot-masked-token"]').text()).toBe('1234567890:•••...xyz')
     expect(wrapper.find('[data-test="bot-connect-input"]').exists()).toBe(false)
+    // AC17 negative assertion on the Connected view path too: a regression
+    // that printed an unmasked token in the Connected section would otherwise
+    // only be caught by the existing error-path token-regex check.
+    expect(wrapper.text()).not.toMatch(TOKEN_REGEX)
+  })
+
+  it('modal closes when bot.current goes null mid-modal (no empty @-prefix)', async () => {
+    reactiveStore.current = BOT_FIXTURE
+
+    const wrapper = await mountSuspended(BotPage, mountOptions)
+    await settle()
+
+    await wrapper.find('[data-test="bot-disconnect-button"]').trigger('click')
+    await settle()
+    expect(wrapper.find('[data-test="bot-disconnect-modal-confirm"]').exists()).toBe(true)
+
+    // Simulate a cross-tab disconnect (or project switch via the store watcher)
+    // that clears `current` while the modal is open. The watcher in the page
+    // must close the modal so the @-prefix line never renders blank.
+    reactiveStore.current = null
+    await settle()
+    expect(wrapper.find('[data-test="bot-disconnect-modal-confirm"]').exists()).toBe(false)
   })
 })

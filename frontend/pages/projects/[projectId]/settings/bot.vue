@@ -26,6 +26,16 @@ const showDisconnectModal = ref(false)
 
 const canConnect = computed(() => tokenInput.value.trim().length > 0 && !connecting.value)
 
+// Defensive: if the bot disappears (e.g. project switch via the store
+// watcher, or concurrent disconnect from another tab) while the modal is
+// open, close it so the AC19 body never renders with an empty `{username}`.
+watch(
+  () => botStore.current,
+  (next) => {
+    if (next === null) showDisconnectModal.value = false
+  },
+)
+
 const maskedToken = computed(() => {
   const bot = botStore.current
   if (!bot) return ''
@@ -46,10 +56,13 @@ async function onConnect() {
   errorMessage.value = ''
   try {
     await botStore.connect(projectId.value, token)
-    tokenInput.value = ''
   } catch (err: unknown) {
     errorMessage.value = apiError(err, 'bot.connect')
   } finally {
+    // Clear the token from the local ref in BOTH success and failure paths so
+    // a rejected secret does not linger in the input / Vue's reactive system
+    // between retries (AC17 defense-in-depth).
+    tokenInput.value = ''
     connecting.value = false
   }
 }
@@ -113,7 +126,7 @@ async function onSendTest() {
           id="bot-token"
           v-model="tokenInput"
           data-test="bot-connect-input"
-          type="text"
+          type="password"
           autocomplete="off"
           spellcheck="false"
           :placeholder="t('bot.connect.form.tokenPlaceholder')"

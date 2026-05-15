@@ -135,9 +135,34 @@ describe('bot store', () => {
     expect(JSON.stringify(store.$state)).not.toContain(TOKEN_MARKER)
   })
 
-  it('connect scrubs token from FetchError.options.body before rethrowing', async () => {
-    // Simulate ofetch's FetchError shape: response status + options.body
-    // carrying the request payload (where our token lives).
+  it('connect scrubs token from FetchError.options.body when body is the serialized JSON string (real ofetch shape)', async () => {
+    // ofetch JSON-stringifies the body before dispatch, so by the time the
+    // error fires `options.body` is the STRING `'{"token":"..."}'`. This is
+    // the only realistic shape in production.
+    apiMock.mockRejectedValueOnce(
+      fetchError(400, 'Bad Request', { options: { body: JSON.stringify({ token: TOKEN }) } }),
+    )
+    const store = useBotStore()
+
+    let caught: unknown
+    try {
+      await store.connect('p1', TOKEN)
+    } catch (e) {
+      caught = e
+    }
+
+    expect(caught).toBeDefined()
+    const errOpts = (caught as { options?: { body?: unknown } }).options
+    expect(errOpts?.body).toBe('[redacted]')
+    // No trace of the token marker anywhere in the propagated error.
+    expect(JSON.stringify(caught)).not.toContain(TOKEN_MARKER)
+    // status preserved for useApiError / 404 interceptor downstream.
+    expect((caught as { response?: { status?: number } }).response?.status).toBe(400)
+  })
+
+  it('connect scrubs token from FetchError.options.body when body is the original object', async () => {
+    // Defensive: handle the case where a future ofetch (or a fixture) keeps
+    // the original body object on the error instead of the serialized form.
     apiMock.mockRejectedValueOnce(
       fetchError(400, 'Bad Request', { options: { body: { token: TOKEN } } }),
     )
@@ -151,10 +176,7 @@ describe('bot store', () => {
     }
 
     expect(caught).toBeDefined()
-    const errOpts = (caught as { options?: { body?: { token?: unknown } } }).options
-    expect(errOpts?.body?.token).toBe('[redacted]')
-    // status preserved for useApiError / 404 interceptor downstream.
-    expect((caught as { response?: { status?: number } }).response?.status).toBe(400)
+    expect(JSON.stringify(caught)).not.toContain(TOKEN_MARKER)
   })
 
   it('disconnect nulls current on success', async () => {
@@ -201,6 +223,37 @@ describe('bot store', () => {
     apiMock.mockRejectedValueOnce(new Error('boom'))
     await expect(store.sendTestMessage('p1')).rejects.toThrow('boom')
     expect(store.current).toEqual(BOT_A)
+  })
+
+  it('rapid A→B→A re-selection: prior fetch resolves but does not stomp current owned by newer same-project fetch', async () => {
+    const projectsStore = useProjectsStore()
+    projectsStore.selectProject('a')
+    const botStore = useBotStore()
+
+    // First fetch for 'a' (slow, manually resolvable).
+    let resolveA1: ((v: Bot) => void) | undefined
+    apiMock.mockImplementationOnce(() => new Promise<Bot>((r) => { resolveA1 = r }))
+    const a1Promise = botStore.fetch('a')
+
+    // Switch to 'b' (watcher fires; keep 'b' pending so it cannot write).
+    apiMock.mockImplementationOnce(() => new Promise(() => {}))
+    projectsStore.selectProject('b')
+    await nextTick()
+
+    // Switch back to 'a' — a fresh fetch('a') becomes the active inFlight.
+    apiMock.mockImplementationOnce(() => new Promise(() => {}))
+    projectsStore.selectProject('a')
+    await nextTick()
+
+    // The ORIGINAL fetch('a') resolves with stale data. Even though the
+    // current selection is 'a' again, this run is not the active inFlight —
+    // a projectId-only guard would incorrectly accept it; the run-identity
+    // guard rejects it.
+    const STALE: Bot = { ...BOT_A, telegramUsername: 'StaleAlpha' }
+    resolveA1!(STALE)
+    await a1Promise
+
+    expect(botStore.current).toBeNull()
   })
 
   it('late-arriving fetch for prior project does not stomp current after project switch', async () => {

@@ -30,12 +30,19 @@ describe('projects/[projectId]/settings/bot placeholder page', () => {
     }
   })
 
-  it('renders SettingsSubnav and placeholder text', async () => {
+  it('renders SettingsSubnav with projectId from route + placeholder text', async () => {
     const wrapper = await mountSuspended(BotPage)
     await settle()
 
+    expect(wrapper.find('[data-test="bot-page"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="settings-subnav"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="bot-placeholder"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="bot-placeholder"]').text()).toBe('bot.placeholder')
+
+    // Wiring check: projectId from route.params must propagate to SettingsSubnav
+    // and out into the rendered hrefs. If the :project-id binding is dropped or
+    // renamed, hrefs collapse to /projects//settings.
+    const general = wrapper.find('[data-test="settings-subnav-general"]')
+    expect(general.attributes('href')).toBe('/projects/p1/settings')
   })
 })

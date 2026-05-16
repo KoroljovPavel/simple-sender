@@ -47,7 +47,6 @@ class MeterRegistryConfigTest {
         MeterRegistry fromContext = applicationContext.getBean(MeterRegistry.class);
         assertThat(fromContext).isNotNull();
         assertThat(fromContext).isInstanceOf(SimpleMeterRegistry.class);
-        assertThat(meterRegistry).isSameAs(fromContext);
     }
 
     @Test

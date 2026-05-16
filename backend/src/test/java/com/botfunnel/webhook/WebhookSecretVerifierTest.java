@@ -32,12 +32,14 @@ class WebhookSecretVerifierTest {
 
     private ListAppender<ILoggingEvent> logAppender;
     private Logger rootLogger;
+    private Level originalLevel;
 
     @BeforeEach
     void attachRootLogAppender() {
         // Capture EVERY log event at ALL levels to assert the "no operand logging" contract
         // (AC: verifier must not log the header value or stored hash at any level).
         rootLogger = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
+        originalLevel = rootLogger.getLevel();
         logAppender = new ListAppender<>();
         logAppender.start();
         rootLogger.addAppender(logAppender);
@@ -46,6 +48,9 @@ class WebhookSecretVerifierTest {
 
     @AfterEach
     void detachLogAppender() {
+        // Restore original ROOT level to avoid leaking TRACE verbosity across test classes
+        // in the same JVM (Logback root config is process-wide).
+        rootLogger.setLevel(originalLevel);
         rootLogger.detachAppender(logAppender);
         logAppender.stop();
     }

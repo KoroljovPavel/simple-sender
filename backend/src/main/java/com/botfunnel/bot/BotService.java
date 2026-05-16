@@ -4,6 +4,7 @@ import com.botfunnel.bot.dto.SentMessage;
 import com.botfunnel.bot.dto.TelegramUser;
 import com.botfunnel.common.AppException;
 import com.botfunnel.common.crypto.EncryptedValue;
+import com.botfunnel.common.crypto.Sha256Hex;
 import com.botfunnel.common.crypto.TokenEncryptor;
 import com.botfunnel.events.EventService;
 import com.botfunnel.project.ProjectService;
@@ -15,9 +16,6 @@ import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import java.time.Duration;
 import java.time.Instant;
@@ -148,7 +146,7 @@ public class BotService {
         byte[] secretBytes = new byte[WEBHOOK_SECRET_BYTES];
         secureRandom.nextBytes(secretBytes);
         String secretHex = HexFormat.of().formatHex(secretBytes);
-        String secretHash = sha256Hex(secretHex);
+        String secretHash = Sha256Hex.hex(secretHex);
         String webhookUrl = appUrl + "/webhooks/telegram/" + projectId;
 
         return telegramApiClient.setWebhook(token, webhookUrl, secretHex)
@@ -328,12 +326,4 @@ public class BotService {
         return meta;
     }
 
-    private static String sha256Hex(String input) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            return HexFormat.of().formatHex(md.digest(input.getBytes(StandardCharsets.UTF_8)));
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 algorithm not available", e);
-        }
-    }
 }

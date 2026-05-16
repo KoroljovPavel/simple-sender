@@ -43,6 +43,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
@@ -557,7 +558,6 @@ class BotServiceTest {
     // ---------- Send Test Message ----------
 
     private static final Long OWNER_CHAT_ID = 12345L;
-    private static final String TEST_MESSAGE_BODY = "Hello from Bot Funnel Service! Bot connected ✅";
 
     @Test
     void sendTestMessage_whenOwnerChatIdNull_returns422_noTelegramCalls_noEvents() {
@@ -602,16 +602,14 @@ class BotServiceTest {
         Long messageId = 100L;
         Instant sentAt = Instant.now();
         when(telegramSender.sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
-                eq(TEST_MESSAGE_BODY), eq(null), eq(OWNER_ID)))
+                eq(BotService.TEST_MESSAGE_BODY), isNull(), eq(OWNER_ID)))
                 .thenReturn(Mono.just(new SentMessage(OWNER_CHAT_ID, messageId, sentAt)));
-        doNothing().when(eventService).logEvent(anyString(), anyString(), anyString(),
-                anyString(), anyMap());
 
         StepVerifier.create(service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
                 .verifyComplete();
 
         verify(telegramSender).sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
-                eq(TEST_MESSAGE_BODY), eq(null), eq(OWNER_ID));
+                eq(BotService.TEST_MESSAGE_BODY), isNull(), eq(OWNER_ID));
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
@@ -642,7 +640,7 @@ class BotServiceTest {
 
         TelegramSendException senderError = new TelegramSendException(null, "scrubbed", 4);
         when(telegramSender.sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
-                eq(TEST_MESSAGE_BODY), eq(null), eq(OWNER_ID)))
+                eq(BotService.TEST_MESSAGE_BODY), isNull(), eq(OWNER_ID)))
                 .thenReturn(Mono.error(senderError));
 
         StepVerifier.create(service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))

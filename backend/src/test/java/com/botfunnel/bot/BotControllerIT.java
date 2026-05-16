@@ -778,7 +778,9 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .exchange()
                 .expectStatus().isEqualTo(422)
                 .expectBody()
-                .jsonPath("$.code").isEqualTo("owner_chat_id_unknown");
+                .jsonPath("$.code").isEqualTo("owner_chat_id_unknown")
+                .jsonPath("$.message")
+                .isEqualTo("Send /start to your bot in Telegram first, then try again");
 
         assertThat(drainRequests()).isEmpty();
         boolean hasTestMessage = eventRepository.findAll()
@@ -819,13 +821,17 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .containsEntry("chatId", ownerChatId)
                 .containsEntry("messageId", 100L);
 
-        // Sanity: the request went to /sendMessage on mockTelegram (proves TelegramSender
-        // actually fired through and the test isn't passing on a bot_test_message_sent left
-        // over from another path).
+        // Sanity: the request went to /sendMessage on mockTelegram with the seeded chatId and
+        // the byte-exact test message body — proves BotService passed the right args to
+        // TelegramSender (the unit test pins this at the sendText boundary; this anchors it at
+        // the HTTP wire).
         List<RecordedRequest> reqs = drainRequests();
         assertThat(reqs).hasSize(1);
         assertThat(reqs.get(0).getPath()).endsWith("/sendMessage");
-        assertThat(seeded.getOwnerChatId()).isEqualTo(ownerChatId);
+        String body = reqs.get(0).getBody().readUtf8();
+        assertThat(body).contains("\"chat_id\":" + ownerChatId);
+        assertThat(body).contains("Hello from Bot Funnel Service! Bot connected ✅");
+        assertThat(seeded).isNotNull();
     }
 
     // ---------- Anti-enumeration ----------

@@ -253,9 +253,15 @@ class TelegramSenderTest {
         assertThat(sm).isNotNull();
         assertThat(sm.messageId()).isEqualTo(42L);
         assertThat(mockServer.getRequestCount()).isEqualTo(2);
-        // attempts=2 on success path is implicit (counter persists across retry); we verify the
-        // attempts-equals-N semantics directly on the failure paths below where attempts is
-        // observable through audit metadata.
+        // Pin success-metadata shape per tech-spec Data Models line 256:
+        // sentMetadata = {botId, chatId, messageId} — NO attempts key on success.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCap = ArgumentCaptor.forClass(Map.class);
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
+                isNull(), isNull(), metaCap.capture());
+        assertThat(metaCap.getValue()).doesNotContainKey("attempts");
+        verify(eventService, never()).logEvent(any(), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                any(), any(), any());
     }
 
     @Test
@@ -296,6 +302,9 @@ class TelegramSenderTest {
 
         assertThat(sm).isNotNull();
         assertThat(mockServer.getRequestCount()).isEqualTo(2);
+        // Success path → no failure event.
+        verify(eventService, never()).logEvent(any(), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                any(), any(), any());
     }
 
     // ---------- 429 rate-limit loop ----------
@@ -404,10 +413,17 @@ class TelegramSenderTest {
                 .block(Duration.ofSeconds(15));
 
         assertThat(sm).isNotNull();
+        // Request count == 4 pins the AtomicInteger semantic: each HTTP attempt increments the
+        // counter via doOnSubscribe, and the counter survives the 429 outer-loop resubscription
+        // (Decision 10: 429 outer wraps 5xx inner). The "no failed event" assertion guards
+        // against accidental double-emission across the retry boundary.
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
-        // No failed-event written on success; success metadata doesn't carry attempts. The
-        // attempts==4 semantic is asserted indirectly by the request-count check above + the
-        // explicit attempts assertions on the terminal-failure tests.
+        // Success-shape: sent-event present without "attempts" key, no failed-event.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCap = ArgumentCaptor.forClass(Map.class);
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
+                isNull(), isNull(), metaCap.capture());
+        assertThat(metaCap.getValue()).doesNotContainKey("attempts");
         verify(eventService, never()).logEvent(any(), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
                 any(), any(), any());
     }
@@ -488,6 +504,18 @@ class TelegramSenderTest {
                 .verify();
 
         assertThat(mockServer.getRequestCount()).isZero();
+
+        // Pre-HTTP BotTokenInvalidException is auditable per tech-spec error-mapping table
+        // (line 265): emits telegram_send_failed WITHOUT errorCode/errorDescription keys.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCap = ArgumentCaptor.forClass(Map.class);
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), metaCap.capture());
+        assertThat(metaCap.getValue())
+                .containsEntry("botId", BOT_ID)
+                .containsEntry("attempts", 0)
+                .doesNotContainKey("errorCode")
+                .doesNotContainKey("errorDescription");
     }
 
     @Test
@@ -508,6 +536,16 @@ class TelegramSenderTest {
                 .verify();
 
         assertThat(mockServer.getRequestCount()).isZero();
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCap = ArgumentCaptor.forClass(Map.class);
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), metaCap.capture());
+        assertThat(metaCap.getValue())
+                .containsEntry("botId", BOT_ID)
+                .containsEntry("attempts", 0)
+                .doesNotContainKey("errorCode")
+                .doesNotContainKey("errorDescription");
     }
 
     @Test
@@ -651,6 +689,7 @@ class TelegramSenderTest {
                 .toList();
         assertThat(warnMessages).isNotEmpty();
         assertThat(warnMessages).noneMatch(m -> m.contains(TOKEN));
+        assertThat(warnMessages).anyMatch(m -> m.contains("[REDACTED_TOKEN]"));
     }
 
     @Test
@@ -688,6 +727,11 @@ class TelegramSenderTest {
                 .toList();
         assertThat(errorMessages).isNotEmpty();
         assertThat(errorMessages).noneMatch(m -> m.contains(TOKEN));
+        // Note: a positive [REDACTED_TOKEN] check is intentionally omitted here. The terminal
+        // ERROR log emits "transient_failure_exhausted" as the exception message (the original
+        // 5xx description was swallowed by the retry loop); there is nothing token-shaped to
+        // redact at THIS site. The WARN-level retry observer (sibling test above) is what
+        // exercises scrubbing of the 5xx body description.
     }
 
     @Test
@@ -706,8 +750,9 @@ class TelegramSenderTest {
                 .expectError(TelegramSendException.class)
                 .verify(Duration.ofSeconds(20));
 
-        // Restart MockWebServer in @AfterEach contract — but tearDown also shuts down. To keep
-        // @AfterEach a no-op shutdown, re-init mockServer to a started instance.
+        // Re-init mockServer so @AfterEach's mockServer.shutdown() is a clean no-op. Without
+        // this, the field still references the already-shut-down instance and the AfterEach
+        // try/catch swallows the resulting IOException — which works, but obscures intent.
         mockServer = new MockWebServer();
         mockServer.start();
 
@@ -717,5 +762,9 @@ class TelegramSenderTest {
                 .toList();
         assertThat(leakSites).isNotEmpty();
         assertThat(leakSites).noneMatch(m -> m.contains(TOKEN));
+        // Negative-only assertion: WebClientRequestException's message format is
+        // "Connection refused: host:port" — no URI segment, no token-shaped content. The
+        // scrubbing call is still defensive at the log site; the assertion that matters here
+        // is the negative one (raw TOKEN absent across WARN+ERROR).
     }
 }

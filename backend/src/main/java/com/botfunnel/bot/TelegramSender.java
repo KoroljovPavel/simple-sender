@@ -274,6 +274,11 @@ public class TelegramSender {
         meta.put("botId", botId);
         meta.put("chatId", chatId);
         meta.put("attempts", attempts);
+        // For TelegramSendException we always insert both keys (errorCode/errorDescription) even
+        // when null — keeps the metadata schema predictable for event consumers that may rely on
+        // .containsKey(...). The "timeout" and "transient_failure_exhausted" sentinel
+        // descriptions are deliberate internal markers (not upstream Telegram strings).
+        // BotTokenInvalidException omits both keys per tech-spec error-mapping table line 265.
         if (ex instanceof TelegramSendException tse) {
             meta.put("errorCode", tse.getErrorCode());
             meta.put("errorDescription", tse.getMessage());

@@ -2,10 +2,11 @@ package com.botfunnel.webhook;
 
 /**
  * Result of parsing a Telegram message text against the {@link TelegramCommandParser} rules.
- * {@code command} is the lowercased-or-original-case command name WITHOUT the leading {@code /}
- * and WITHOUT the {@code @botname} suffix. {@code payload} is the text after the command +
- * optional {@code @botname} with leading whitespace consumed; empty string when absent.
- * Neither field is ever {@code null}.
+ * {@code command} is the command name WITHOUT the leading {@code /} and WITHOUT the
+ * {@code @botname} suffix; original case is PRESERVED (the worker, not the parser, decides
+ * case-folding). {@code payload} is the text after the command + optional {@code @botname}
+ * with leading whitespace consumed; empty string when absent. Neither field is ever
+ * {@code null}.
  */
 public record ParsedCommand(String command, String payload) {
 

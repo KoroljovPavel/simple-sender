@@ -141,8 +141,7 @@ class TelegramCommandParserTest {
 
         ParsedCommand result = TelegramCommandParser.parse("/start " + expected);
 
-        assertThat(result.command()).isEqualTo("start");
-        assertThat(result.payload()).isEqualTo(expected);
+        assertThat(result).isEqualTo(new ParsedCommand("start", expected));
     }
 
     @Test

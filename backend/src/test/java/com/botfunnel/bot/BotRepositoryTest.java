@@ -83,9 +83,10 @@ class BotRepositoryTest extends AbstractIntegrationTest {
 
     @Test
     void findById_legacyDocumentWithoutOwnerChatId_readsAsNull() {
-        // Legacy documents persisted before this field existed are absent in BSON; Spring Data
-        // MongoDB must read them back as null without deserialization error. This pins the
-        // wrapper-Long contract (primitive long would silently default to 0 and mask "absent").
+        // newBot(...) does not call setOwnerChatId, so the field round-trips as null without
+        // deserialization error. Pins the wrapper-Long contract (primitive long would silently
+        // default to 0 and mask the "absent" semantics). Raw-BSON-absent coverage lives in
+        // TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull (Task 4).
         Bot bot = newBot("proj-legacy", 777L, BotStatus.CONNECTED);
 
         StepVerifier.create(botRepository.save(bot).flatMap(saved -> botRepository.findById(saved.getId())))

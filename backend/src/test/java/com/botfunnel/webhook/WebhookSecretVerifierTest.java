@@ -1,8 +1,15 @@
 package com.botfunnel.webhook;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.botfunnel.common.crypto.Sha256Hex;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.MockedStatic;
+import org.slf4j.LoggerFactory;
 
 import java.security.MessageDigest;
 
@@ -10,6 +17,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 
 /**
  * Plain JUnit 5 unit test — WebhookSecretVerifier has no injected collaborators yet, so no
@@ -21,6 +29,26 @@ import static org.mockito.Mockito.mockStatic;
 class WebhookSecretVerifierTest {
 
     private final WebhookSecretVerifier verifier = new WebhookSecretVerifier();
+
+    private ListAppender<ILoggingEvent> logAppender;
+    private Logger rootLogger;
+
+    @BeforeEach
+    void attachRootLogAppender() {
+        // Capture EVERY log event at ALL levels to assert the "no operand logging" contract
+        // (AC: verifier must not log the header value or stored hash at any level).
+        rootLogger = (Logger) LoggerFactory.getLogger(Logger.ROOT_LOGGER_NAME);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        rootLogger.addAppender(logAppender);
+        rootLogger.setLevel(Level.TRACE);
+    }
+
+    @AfterEach
+    void detachLogAppender() {
+        rootLogger.detachAppender(logAppender);
+        logAppender.stop();
+    }
 
     @Test
     void verify_matchingSecret_returnsTrue() {
@@ -84,7 +112,32 @@ class WebhookSecretVerifierTest {
             boolean result = verifier.verify(plaintext, storedHash);
 
             assertThat(result).isTrue();
-            mocked.verify(() -> MessageDigest.isEqual(any(byte[].class), any(byte[].class)));
+            mocked.verify(() -> MessageDigest.isEqual(any(byte[].class), any(byte[].class)), times(1));
         }
+    }
+
+    @Test
+    void verify_anyOutcome_neverLogsHeaderOrStoredHash() {
+        // Regression guard for AC: verifier MUST NOT log the header value or stored hash at
+        // any level. Cover match, mismatch, empty header, null header, null stored, malformed
+        // hex in one sweep — then assert NO captured log event contains either operand.
+        String plaintext = "do-not-log-this-secret";
+        String storedHash = Sha256Hex.hex(plaintext);
+        String malformed = "zzzzzzzz";
+
+        verifier.verify(plaintext, storedHash);
+        verifier.verify("wrong-header", storedHash);
+        verifier.verify("", storedHash);
+        verifier.verify(null, storedHash);
+        verifier.verify(plaintext, null);
+        verifier.verify(plaintext, malformed);
+
+        assertThat(logAppender.list).allSatisfy(event -> {
+            String message = event.getFormattedMessage();
+            assertThat(message).doesNotContain(plaintext);
+            assertThat(message).doesNotContain("wrong-header");
+            assertThat(message).doesNotContain(storedHash);
+            assertThat(message).doesNotContain(malformed);
+        });
     }
 }

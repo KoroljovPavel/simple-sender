@@ -2,35 +2,31 @@ package com.botfunnel.common.crypto;
 
 import org.junit.jupiter.api.Test;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.util.HexFormat;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class Sha256HexTest {
 
     @Test
-    void hex_knownInput_matchesProducerSide() throws Exception {
-        // Parity vector with BotService.connect hashing: re-implement the exact same primitive
-        // chain (MessageDigest.getInstance("SHA-256") + UTF-8 bytes + HexFormat.of()) so the
-        // producer-side persisted hash and the verifier's recomputed hash compare equal.
+    void hex_knownInput_matchesProducerSideVector() {
+        // Hard-coded SHA-256 / UTF-8 / lowercase-hex vector — pinned to a known external value
+        // (verified out-of-band: `echo -n test-webhook-secret-deadbeef | shasum -a 256`).
+        // If anyone swaps the algorithm, charset, or hex case, this fails — that is the point.
         String input = "test-webhook-secret-deadbeef";
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        String expected = HexFormat.of().formatHex(md.digest(input.getBytes(StandardCharsets.UTF_8)));
+        String expected = "95d0a775bfe72a35d3248540e5fe58bb2162230d557cbffa93b8a8e4f0d4a5f1";
 
         assertThat(Sha256Hex.hex(input)).isEqualTo(expected);
     }
 
     @Test
-    void hex_utf8Input_isDeterministic() {
+    void hex_utf8Input_matchesKnownVector() {
+        // UTF-8 byte handling pinned to a known external vector — `кіт` (3 Cyrillic chars,
+        // 6 UTF-8 bytes). A constant-return stub would fail this. Verified out-of-band:
+        // `printf '\xd0\xba\xd1\x96\xd1\x82' | shasum -a 256`.
         String input = "кіт";
+        String expected = "01c405a4ac44e957c3baf7a6ea489049bdbff5c8d69f4a171639ed454e62f70d";
 
-        String first = Sha256Hex.hex(input);
-        String second = Sha256Hex.hex(input);
-
-        assertThat(first).isEqualTo(second);
+        assertThat(Sha256Hex.hex(input)).isEqualTo(expected);
     }
 
     @Test

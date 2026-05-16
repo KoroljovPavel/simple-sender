@@ -48,6 +48,7 @@ public class Bot {
     private Long telegramBotId;
     private String telegramUsername;
     private String telegramFirstName;
+    private Long ownerChatId;
     private BotStatus status;
 
     @JsonIgnore
@@ -76,6 +77,9 @@ public class Bot {
 
     public String getTelegramFirstName() { return telegramFirstName; }
     public void setTelegramFirstName(String telegramFirstName) { this.telegramFirstName = telegramFirstName; }
+
+    public Long getOwnerChatId() { return ownerChatId; }
+    public void setOwnerChatId(Long ownerChatId) { this.ownerChatId = ownerChatId; }
 
     public BotStatus getStatus() { return status; }
     public void setStatus(BotStatus status) { this.status = status; }

@@ -82,6 +82,18 @@ class BotRepositoryTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void findById_legacyDocumentWithoutOwnerChatId_readsAsNull() {
+        // Legacy documents persisted before this field existed are absent in BSON; Spring Data
+        // MongoDB must read them back as null without deserialization error. This pins the
+        // wrapper-Long contract (primitive long would silently default to 0 and mask "absent").
+        Bot bot = newBot("proj-legacy", 777L, BotStatus.CONNECTED);
+
+        StepVerifier.create(botRepository.save(bot).flatMap(saved -> botRepository.findById(saved.getId())))
+                .assertNext(reloaded -> assertThat(reloaded.getOwnerChatId()).isNull())
+                .verifyComplete();
+    }
+
+    @Test
     void findByProjectId_returnsAllStatusesForProject() {
         botRepository.save(newBot("proj-4", 444L, BotStatus.CONNECTED)).block();
         botRepository.save(newBot("proj-4", 555L, BotStatus.DISCONNECTED)).block();

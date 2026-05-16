@@ -5,6 +5,8 @@ import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
 import com.botfunnel.AbstractIntegrationTest;
+import com.botfunnel.common.crypto.EncryptedValue;
+import com.botfunnel.common.crypto.TokenEncryptor;
 import com.botfunnel.events.Event;
 import com.botfunnel.events.EventRepository;
 import com.botfunnel.profile.WithMockAppUser;
@@ -36,6 +38,7 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -102,6 +105,7 @@ class BotControllerIT extends AbstractIntegrationTest {
     @Autowired ProjectRepository projectRepository;
     @Autowired EventRepository eventRepository;
     @Autowired ReactiveRedisTemplate<String, String> redisTemplate;
+    @Autowired TokenEncryptor tokenEncryptor;
     @Autowired org.springframework.context.ApplicationContext applicationContext;
 
     // @MockitoSpyBean wraps the real bean so Mongo persistence still works for normal tests; only
@@ -188,6 +192,28 @@ class BotControllerIT extends AbstractIntegrationTest {
         b.setStatus(BotStatus.CONNECTED);
         b.setEncryptedTokenCiphertext("Zm9v");
         b.setEncryptedTokenIv("YmFy");
+        b.setTokenSuffix("xyz");
+        b.setWebhookSecretHash("a".repeat(64));
+        b.setConnectedAt(Instant.now());
+        return botRepository.save(b).block();
+    }
+
+    // Sibling of seedConnectedBot for tests that exercise paths reaching TokenEncryptor.decrypt
+    // (e.g. TelegramSender.sendText). The placeholder ciphertext from seedConnectedBot decodes to
+    // a 3-byte IV and fails the AES-GCM IV_BYTES (12) length check — so any positive-path test
+    // that actually decrypts must seed REAL ciphertext via tokenEncryptor.encrypt(VALID_TOKEN).
+    // Mirrors TelegramSenderIT.seedConnectedBotWithOwnerChatId established in Task 4.
+    private Bot seedConnectedBotWithRealEncryption(String projectId, Long telegramBotId, Long ownerChatId) {
+        EncryptedValue ev = tokenEncryptor.encrypt(VALID_TOKEN);
+        Bot b = new Bot();
+        b.setProjectId(projectId);
+        b.setTelegramBotId(telegramBotId);
+        b.setTelegramUsername(TELEGRAM_USERNAME);
+        b.setTelegramFirstName(TELEGRAM_FIRST_NAME);
+        b.setOwnerChatId(ownerChatId);
+        b.setStatus(BotStatus.CONNECTED);
+        b.setEncryptedTokenCiphertext(Base64.getEncoder().encodeToString(ev.ciphertext()));
+        b.setEncryptedTokenIv(Base64.getEncoder().encodeToString(ev.iv()));
         b.setTokenSuffix("xyz");
         b.setWebhookSecretHash("a".repeat(64));
         b.setConnectedAt(Instant.now());
@@ -735,13 +761,15 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .expectStatus().isNotFound();
     }
 
-    // ---------- POST /test-message (06 short-circuit) ----------
+    // ---------- POST /test-message ----------
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents() {
-        // AC15 / D7: in feature 06 the test-message endpoint short-circuits with 422 owner_chat_id_unknown.
-        // Zero Telegram calls; zero bot_test_message_sent events.
+        // Null-branch regression (pre-Wave-3 contract): bot.ownerChatId == null → 422
+        // owner_chat_id_unknown; zero Telegram calls; zero bot_test_message_sent events. The
+        // existing seedConnectedBot placeholder ciphertext is fine here — the null branch
+        // short-circuits before any decrypt.
         Project project = saveActiveProject(USER_ID);
         seedConnectedBot(project.getId(), TELEGRAM_BOT_ID);
 
@@ -757,6 +785,47 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .filter(e -> "bot_test_message_sent".equals(e.getEventType()))
                 .hasElements().block();
         assertThat(hasTestMessage).isFalse();
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent() {
+        // Positive-path: ownerChatId set AND real AES-GCM ciphertext (placeholder bytes from
+        // seedConnectedBot would fail the IV length check inside tokenEncryptor.decrypt and
+        // surface as 500). End-to-end: BotService → TelegramSender → MockWebServer; assert
+        // 200 OK and bot_test_message_sent event with full metadata shape.
+        Project project = saveActiveProject(USER_ID);
+        Long ownerChatId = 42L;
+        Bot seeded = seedConnectedBotWithRealEncryption(project.getId(), TELEGRAM_BOT_ID, ownerChatId);
+
+        long ts = Instant.now().getEpochSecond();
+        mockTelegram.enqueue(jsonResponse(200, String.format(
+                "{\"ok\":true,\"result\":{\"message_id\":100,\"chat\":{\"id\":%d,\"type\":\"private\"},\"date\":%d,\"text\":\"Hello\"}}",
+                ownerChatId, ts)));
+
+        webTestClient.mutateWith(csrf())
+                .post().uri("/api/v1/projects/" + project.getId() + "/bot/test-message")
+                .exchange()
+                .expectStatus().isOk()
+                .expectBody().isEmpty();
+
+        awaitEvent(e -> "bot_test_message_sent".equals(e.getEventType()));
+        Event evt = findEvent(e -> "bot_test_message_sent".equals(e.getEventType()));
+        assertThat(evt.getMetadata()).containsOnlyKeys(
+                "projectId", "telegramBotId", "chatId", "messageId");
+        assertThat(evt.getMetadata())
+                .containsEntry("projectId", project.getId())
+                .containsEntry("telegramBotId", TELEGRAM_BOT_ID)
+                .containsEntry("chatId", ownerChatId)
+                .containsEntry("messageId", 100L);
+
+        // Sanity: the request went to /sendMessage on mockTelegram (proves TelegramSender
+        // actually fired through and the test isn't passing on a bot_test_message_sent left
+        // over from another path).
+        List<RecordedRequest> reqs = drainRequests();
+        assertThat(reqs).hasSize(1);
+        assertThat(reqs.get(0).getPath()).endsWith("/sendMessage");
+        assertThat(seeded.getOwnerChatId()).isEqualTo(ownerChatId);
     }
 
     // ---------- Anti-enumeration ----------

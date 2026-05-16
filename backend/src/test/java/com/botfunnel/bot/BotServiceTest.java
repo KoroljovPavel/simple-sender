@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.botfunnel.bot.dto.SentMessage;
 import com.botfunnel.bot.dto.TelegramUser;
 import com.botfunnel.common.AppException;
 import com.botfunnel.common.crypto.EncryptedValue;
@@ -30,6 +31,7 @@ import reactor.test.StepVerifier;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
@@ -84,6 +86,9 @@ class BotServiceTest {
     private TelegramApiClient telegramApiClient;
 
     @Mock
+    private TelegramSender telegramSender;
+
+    @Mock
     private EventService eventService;
 
     @Mock
@@ -99,7 +104,7 @@ class BotServiceTest {
     @BeforeEach
     void setUp() {
         service = new BotService(botRepository, projectService, tokenEncryptor,
-                telegramApiClient, eventService, redisTemplate, APP_URL);
+                telegramApiClient, telegramSender, eventService, redisTemplate, APP_URL);
 
         logger = (Logger) LoggerFactory.getLogger(BotService.class);
         logAppender = new ListAppender<>();
@@ -551,9 +556,16 @@ class BotServiceTest {
 
     // ---------- Send Test Message ----------
 
+    private static final Long OWNER_CHAT_ID = 12345L;
+    private static final String TEST_MESSAGE_BODY = "Hello from Bot Funnel Service! Bot connected ✅";
+
     @Test
-    void sendTestMessage_returns422_noTelegramCalls_noEvents() {
+    void sendTestMessage_whenOwnerChatIdNull_returns422_noTelegramCalls_noEvents() {
+        // Null-branch regression. The 422 stub must remain byte-identical to the pre-Wave-3 contract:
+        // verbatim message string, code = owner_chat_id_unknown, zero TelegramSender invocations,
+        // zero event writes. This is the only branch exercisable in production until Epic 04b lands.
         Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
+        existing.setOwnerChatId(null);
         when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
                 .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
@@ -565,11 +577,81 @@ class BotServiceTest {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
                     assertThat(app.getCode()).isEqualTo("owner_chat_id_unknown");
+                    assertThat(app.getMessage())
+                            .isEqualTo("Send /start to your bot in Telegram first, then try again");
                 })
                 .verify();
 
         verifyNoInteractions(telegramApiClient);
+        verifyNoInteractions(telegramSender);
         verifyNoInteractions(eventService);
+    }
+
+    @Test
+    void sendTestMessage_whenOwnerChatIdPresent_callsSenderAndEmitsEvent() {
+        // Positive branch: ownerChatId set → sender invoked with exact args from spec;
+        // bot_test_message_sent event emitted on success with metadata
+        // {projectId, telegramBotId, chatId, messageId}.
+        Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
+        existing.setOwnerChatId(OWNER_CHAT_ID);
+        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
+                .thenReturn(Mono.just(stubProject()));
+        when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
+                .thenReturn(Mono.just(existing));
+
+        Long messageId = 100L;
+        Instant sentAt = Instant.now();
+        when(telegramSender.sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
+                eq(TEST_MESSAGE_BODY), eq(null), eq(OWNER_ID)))
+                .thenReturn(Mono.just(new SentMessage(OWNER_CHAT_ID, messageId, sentAt)));
+        doNothing().when(eventService).logEvent(anyString(), anyString(), anyString(),
+                anyString(), anyMap());
+
+        StepVerifier.create(service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
+                .verifyComplete();
+
+        verify(telegramSender).sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
+                eq(TEST_MESSAGE_BODY), eq(null), eq(OWNER_ID));
+
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
+        verify(eventService).logEvent(eq(OWNER_ID), eq("bot_test_message_sent"), eq(IP), eq(UA),
+                metaCaptor.capture());
+        Map<String, Object> meta = metaCaptor.getValue();
+        assertThat(meta).containsOnlyKeys("projectId", "telegramBotId", "chatId", "messageId");
+        assertThat(meta)
+                .containsEntry("projectId", PROJECT_ID)
+                .containsEntry("telegramBotId", TELEGRAM_BOT_ID)
+                .containsEntry("chatId", OWNER_CHAT_ID)
+                .containsEntry("messageId", messageId);
+
+        verifyNoInteractions(telegramApiClient);
+    }
+
+    @Test
+    void sendTestMessage_whenOwnerChatIdPresentAndSenderFails_propagatesError_noBotEvent() {
+        // Failure branch on the positive path: sender error propagates to GlobalErrorHandler;
+        // BotService writes NO bot_test_message_sent (sender already wrote its own
+        // telegram_send_failed audit — Decision 3 forbids the double-write).
+        Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
+        existing.setOwnerChatId(OWNER_CHAT_ID);
+        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
+                .thenReturn(Mono.just(stubProject()));
+        when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
+                .thenReturn(Mono.just(existing));
+
+        TelegramSendException senderError = new TelegramSendException(null, "scrubbed", 4);
+        when(telegramSender.sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
+                eq(TEST_MESSAGE_BODY), eq(null), eq(OWNER_ID)))
+                .thenReturn(Mono.error(senderError));
+
+        StepVerifier.create(service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
+                .expectErrorSatisfies(err -> assertThat(err).isInstanceOf(TelegramSendException.class))
+                .verify();
+
+        verify(eventService, never()).logEvent(any(), eq("bot_test_message_sent"),
+                any(), any(), any());
+        verifyNoInteractions(telegramApiClient);
     }
 
     @Test

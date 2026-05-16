@@ -1,5 +1,6 @@
 package com.botfunnel.bot;
 
+import com.botfunnel.bot.dto.SentMessage;
 import com.botfunnel.bot.dto.TelegramUser;
 import com.botfunnel.common.AppException;
 import com.botfunnel.common.crypto.EncryptedValue;
@@ -32,6 +33,11 @@ public class BotService {
 
     private static final String EVENT_BOT_CONNECTED = "bot_connected";
     private static final String EVENT_BOT_DISCONNECTED = "bot_disconnected";
+    private static final String EVENT_BOT_TEST_MESSAGE_SENT = "bot_test_message_sent";
+
+    // Exact string from user-spec Сценарій 2 — trailing space + U+2705 check-mark emoji preserved
+    // byte-for-byte. Editor must keep the codepoint intact (no NFD normalisation).
+    static final String TEST_MESSAGE_BODY = "Hello from Bot Funnel Service! Bot connected ✅";
 
     private static final int BRUTE_FORCE_THRESHOLD = 10;
     private static final Duration BRUTE_TTL = Duration.ofSeconds(900);
@@ -60,6 +66,7 @@ public class BotService {
     private final ProjectService projectService;
     private final TokenEncryptor tokenEncryptor;
     private final TelegramApiClient telegramApiClient;
+    private final TelegramSender telegramSender;
     private final EventService eventService;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final String appUrl;
@@ -69,6 +76,7 @@ public class BotService {
                       ProjectService projectService,
                       TokenEncryptor tokenEncryptor,
                       TelegramApiClient telegramApiClient,
+                      TelegramSender telegramSender,
                       EventService eventService,
                       ReactiveRedisTemplate<String, String> redisTemplate,
                       @Value("${app.url}") String appUrl) {
@@ -76,6 +84,7 @@ public class BotService {
         this.projectService = projectService;
         this.tokenEncryptor = tokenEncryptor;
         this.telegramApiClient = telegramApiClient;
+        this.telegramSender = telegramSender;
         this.eventService = eventService;
         this.redisTemplate = redisTemplate;
         this.appUrl = appUrl;
@@ -108,11 +117,25 @@ public class BotService {
 
     public Mono<Void> sendTestMessage(String ownerId, String projectId, String ip, String userAgent) {
         return requireConnectedBot(ownerId, projectId)
-                // D7: in feature 06 the endpoint short-circuits with 422 and emits NO event.
-                // The success branch + bot_test_message_sent event arrive in 06b.
-                .flatMap(bot -> Mono.<Void>error(AppException.unprocessableEntity(
-                        "owner_chat_id_unknown",
-                        "Send /start to your bot in Telegram first, then try again")));
+                .flatMap(bot -> {
+                    // Null branch preserved until Epic 04b webhook ingestion populates ownerChatId.
+                    // Verbatim 422 contract from the pre-Wave-3 stub — message, code, and HTTP
+                    // status must NOT drift; the regression test pins all three.
+                    if (bot.getOwnerChatId() == null) {
+                        return Mono.<Void>error(AppException.unprocessableEntity(
+                                "owner_chat_id_unknown",
+                                "Send /start to your bot in Telegram first, then try again"));
+                    }
+                    return telegramSender.sendText(bot.getId(), bot.getOwnerChatId(),
+                                    TEST_MESSAGE_BODY, null, ownerId)
+                            // Decision 3: BotService writes bot_test_message_sent ONLY on success.
+                            // On failure the exception propagates; sender already wrote
+                            // telegram_send_failed — no double-write.
+                            .doOnSuccess(sm -> eventService.logEvent(ownerId,
+                                    EVENT_BOT_TEST_MESSAGE_SENT, ip, userAgent,
+                                    testMessageMetadata(bot, sm)))
+                            .then();
+                });
     }
 
     private Mono<Bot> requireConnectedBot(String ownerId, String projectId) {
@@ -291,6 +314,17 @@ public class BotService {
         meta.put("projectId", projectId);
         meta.put("telegramBotId", saved.getTelegramBotId());
         meta.put("webhookDeleted", webhookDeleted);
+        return meta;
+    }
+
+    private static Map<String, Object> testMessageMetadata(Bot bot, SentMessage sm) {
+        // projectId comes from the Bot doc (not the controller path-variable) for consistency
+        // with disconnectedMetadata's pattern — requireConnectedBot has already proven they match.
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("projectId", bot.getProjectId());
+        meta.put("telegramBotId", bot.getTelegramBotId());
+        meta.put("chatId", sm.chatId());
+        meta.put("messageId", sm.messageId());
         return meta;
     }
 

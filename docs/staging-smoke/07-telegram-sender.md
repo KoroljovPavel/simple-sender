@@ -70,7 +70,7 @@ against real Telegram.
 
 - [ ] **6. Click "Send Test Message".** Watch the browser dev tools
       Network tab. The request to
-      `POST {staging-APP_URL}/api/v1/projects/<projectId>/bot/test-message`
+      `POST {staging-APP_URL}/api/v1/projects/{projectId}/bot/test-message`
       MUST return `HTTP 200 OK` with empty body within ~5 seconds. UI
       MUST show a success toast / no error banner. If you see `422
       owner_chat_id_unknown`, the seed from step 3 did not take — go

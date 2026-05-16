@@ -35,9 +35,13 @@ public class TelegramApiClient {
 
     private static final Pattern TOKEN_PATTERN = Pattern.compile("\\d{1,20}:[A-Za-z0-9_-]{30,50}");
     private static final Pattern TOKEN_SHAPE = Pattern.compile("^\\d{1,20}:[A-Za-z0-9_-]{30,50}$");
-    private static final Duration DEFAULT_RESPONSE_TIMEOUT = Duration.ofSeconds(10);
+    // Promoted to public for shared use by TelegramSender WebClient construction —
+    // single source of truth for the response-read timeout.
+    public static final Duration DEFAULT_RESPONSE_TIMEOUT = Duration.ofSeconds(10);
     private static final Duration MONO_TIMEOUT = Duration.ofSeconds(10);
-    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
+    // Promoted to public for shared use by TelegramSender WebClient construction —
+    // single source of truth for the TCP connect timeout.
+    public static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(5);
     private static final int CAUSE_CHAIN_MAX_HOPS = 16;
 
     private final WebClient webClient;
@@ -110,7 +114,9 @@ public class TelegramApiClient {
                 .map(r -> Boolean.TRUE.equals(r.result()));
     }
 
-    private static void requireValidTokenShape(String token) {
+    // Promoted to public for shared use by TelegramSender — single source of truth
+    // for the bot-token regex shape check, invoked after AES-GCM decrypt before WebClient URI build.
+    public static void requireValidTokenShape(String token) {
         if (token == null || !TOKEN_SHAPE.matcher(token).matches()) {
             throw new IllegalArgumentException("invalid token shape");
         }
@@ -151,7 +157,9 @@ public class TelegramApiClient {
                         "Telegram is currently unavailable. Try again in a minute."));
     }
 
-    private static boolean isTransient(Throwable ex) {
+    // Promoted to public for shared use by TelegramSender's 5xx retry filter —
+    // single source of truth for the transient-failure classifier (walks the cause chain).
+    public static boolean isTransient(Throwable ex) {
         Throwable cur = ex;
         int hops = 0;
         while (cur != null && hops++ < CAUSE_CHAIN_MAX_HOPS) {

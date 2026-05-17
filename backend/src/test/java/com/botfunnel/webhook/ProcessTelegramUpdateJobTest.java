@@ -142,12 +142,17 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
     void ownerChatIdPopulate_firstStart_atomicWrite() {
         RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
                 privateStartPayload(555L, 555L, "/start"), 1L);
+        long beforeSuccess = successCount();
 
         job.handle(raw.getId());
 
         Bot reloaded = botRepository.findById(botId).block();
         assertThat(reloaded).isNotNull();
         assertThat(reloaded.getOwnerChatId()).isEqualTo(555L);
+        // AC16 audit T14 F7 — happy-path worker success ticks telegram_worker_outcome_total{outcome=success}.
+        assertThat(successCount())
+                .as("happy-path worker must tick success counter")
+                .isEqualTo(beforeSuccess + 1L);
     }
 
     @Test

@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
@@ -56,6 +57,7 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
     @Autowired StorageProvider storageProvider;
     @Autowired JobScheduler jobScheduler;
     @Autowired TelegramWebhookController controller;
+    @Autowired WebhookPayloadSizeFilter payloadFilter;
 
     private ListAppender<ILoggingEvent> appender;
     private Logger controllerLogger;
@@ -70,8 +72,9 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         storageProvider.deleteJobsPermanently(StateName.FAILED, Instant.now().plusSeconds(60));
         // Reset counters between tests so per-test assertions on counter() == N are deterministic.
         meterRegistry.clear();
-        // Recreate the cached counters in the controller — clear() removed them.
+        // Recreate the cached counters in the controller and filter — clear() removed them.
         controller.cacheCounters();
+        payloadFilter.cacheCounter();
 
         controllerLogger = (Logger) LoggerFactory.getLogger(TelegramWebhookController.class);
         appender = new ListAppender<>();
@@ -471,6 +474,55 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
                     .as("ERROR log must NOT contain a Telegram-token-shaped substring: <%s>", line)
                     .isFalse();
         }
+    }
+
+    // ---------- AC4 — 413 end-to-end (audit T14 F4) ----------
+
+    @Test
+    void receive_chunkedEncoding_returns413_endToEnd() {
+        // AC4 (chunked) end-to-end IT companion to the unit-scope WebhookPayloadSizeFilterTest.
+        // Proves the filter is registered in the chain at the controller's actual path AND that
+        // the SecurityConfig permitAll did not bypass it (filter runs at HIGHEST_PRECEDENCE+10).
+        // The oversize Content-Length case stays in the unit test because WebTestClient (bound to
+        // ApplicationContext) re-computes Content-Length from the materialised body — declared
+        // headers do not survive to the filter. The chunked case does survive end-to-end.
+        Project p = seedProject();
+        seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
+
+        webTestClient.post()
+                .uri("/webhooks/telegram/" + p.getId())
+                .header("X-Telegram-Bot-Api-Secret-Token", SECRET_PLAIN)
+                .contentType(MediaType.APPLICATION_JSON)
+                .header(HttpHeaders.TRANSFER_ENCODING, "chunked")
+                .bodyValue(samplePayload(1L))
+                .exchange()
+                .expectStatus().isEqualTo(413)
+                .expectBody().isEmpty();
+
+        Counter c = meterRegistry.find("telegram_webhook_rejected_total")
+                .tag("reason", "payload_too_large").counter();
+        assertThat(c).isNotNull();
+        assertThat(c.count()).isGreaterThanOrEqualTo(1.0);
+    }
+
+    // ---------- AC16 — Timer present (audit T14 F7) ----------
+
+    @Test
+    void receive_happyPath_recordsDurationTimer() {
+        // AC16 requires telegram_webhook_duration_seconds to be present and recording. The unit
+        // tests cover the rejected counters; this IT pins the Timer's existence + record count.
+        Project p = seedProject();
+        seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
+
+        post(p.getId(), SECRET_PLAIN, samplePayload(1L));
+
+        io.micrometer.core.instrument.Timer timer = meterRegistry
+                .find("telegram_webhook_duration_seconds").timer();
+        assertThat(timer).isNotNull();
+        assertThat(timer.count()).isGreaterThanOrEqualTo(1L);
+        assertThat(timer.totalTime(java.util.concurrent.TimeUnit.NANOSECONDS))
+                .as("Timer must record positive duration")
+                .isGreaterThan(0.0);
     }
 
     @Test

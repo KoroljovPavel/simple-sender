@@ -1,10 +1,16 @@
 package com.botfunnel.webhook;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
@@ -13,6 +19,7 @@ import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -21,14 +28,30 @@ import static org.assertj.core.api.Assertions.assertThat;
 // branch matrix (path scope, chunked, missing/oversize Content-Length, boundary).
 class WebhookPayloadSizeFilterTest {
 
+    private static final Pattern TOKEN_PATTERN = Pattern.compile("\\d{1,20}:[A-Za-z0-9_-]{30,50}");
+
     private MeterRegistry meterRegistry;
     private WebhookPayloadSizeFilter filter;
+    private ListAppender<ILoggingEvent> appender;
+    private Logger filterLogger;
 
     @BeforeEach
     void setUp() {
         meterRegistry = new SimpleMeterRegistry();
         filter = new WebhookPayloadSizeFilter(meterRegistry);
         filter.cacheCounter();
+        filterLogger = (Logger) LoggerFactory.getLogger(WebhookPayloadSizeFilter.class);
+        appender = new ListAppender<>();
+        appender.start();
+        filterLogger.addAppender(appender);
+    }
+
+    @AfterEach
+    void tearDown() {
+        if (filterLogger != null && appender != null) {
+            filterLogger.detachAppender(appender);
+            appender.stop();
+        }
     }
 
     private double counter() {
@@ -140,6 +163,33 @@ class WebhookPayloadSizeFilterTest {
 
         assertThat(downstream.get()).isTrue();
         assertThat(counter()).isZero();
+    }
+
+    @Test
+    void warnLogOn413_noTokenInOutput() {
+        // AC18 per-site filter (audit T14 F1). Even though header values cannot legitimately
+        // carry tokens, the scrubber is defense-in-depth. Plant a token-shaped Transfer-Encoding
+        // value (deliberately non-real) and assert it is redacted by the WARN line.
+        String tokenShaped = "1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789xyz";
+        MockServerWebExchange exchange = exchange(
+                post("/webhooks/telegram/abc")
+                        .header(HttpHeaders.TRANSFER_ENCODING, "chunked, x-" + tokenShaped)
+                        .build());
+
+        StepVerifier.create(filter.filter(exchange, ex -> Mono.empty())).verifyComplete();
+
+        var warnLines = appender.list.stream()
+                .filter(e -> e.getLoggerName()
+                        .equals("com.botfunnel.webhook.WebhookPayloadSizeFilter"))
+                .filter(e -> e.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+        assertThat(warnLines).isNotEmpty();
+        for (String line : warnLines) {
+            assertThat(TOKEN_PATTERN.matcher(line).find())
+                    .as("WARN log must NOT contain a Telegram-token-shaped substring: <%s>", line)
+                    .isFalse();
+        }
     }
 
     @Test

@@ -15,6 +15,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.bson.Document;
 import org.jobrunr.jobs.states.StateName;
+import org.jobrunr.scheduling.JobScheduler;
 import org.jobrunr.storage.StorageProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -22,19 +23,19 @@ import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.reactive.server.WebTestClient;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.csrf;
+import static org.awaitility.Awaitility.await;
 
 // Full-stack IT for T10 — covers user-spec AC1, AC2, AC3, AC5, AC6 (controller-side enqueue
 // assertion only — ownerChatId populate is in ProcessTelegramUpdateJobTest), AC15, AC16, AC18.
@@ -53,6 +54,7 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
     @Autowired RawUpdateRepository rawUpdateRepository;
     @Autowired MeterRegistry meterRegistry;
     @Autowired StorageProvider storageProvider;
+    @Autowired JobScheduler jobScheduler;
     @Autowired TelegramWebhookController controller;
 
     private ListAppender<ILoggingEvent> appender;
@@ -83,9 +85,11 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
             controllerLogger.detachAppender(appender);
             appender.stop();
         }
-        // Restore default enqueuer in case a test swapped it.
+        // Restore default enqueuer in case a test swapped it. Use the autowired JobScheduler
+        // (NOT the static BackgroundJob) so the controller writes into the same StorageProvider
+        // bean the test reads from via @Autowired — see TelegramWebhookController#enqueuer comment.
         controller.setEnqueuer((jobId, rawUpdateId) ->
-                org.jobrunr.scheduling.BackgroundJob.<ProcessTelegramUpdateJob>enqueue(
+                jobScheduler.<ProcessTelegramUpdateJob>enqueue(
                         jobId, j -> j.handle(rawUpdateId)));
     }
 
@@ -137,15 +141,17 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
     }
 
     private long enqueuedCount() {
-        // BackgroundJob.enqueue can return before the InMemoryStorageProvider's notify chain
-        // settles when running under shared-context tests; await briefly until count stabilises.
-        long latest = storageProvider.countJobs(StateName.ENQUEUED);
-        long deadline = System.nanoTime() + 1_000_000_000L; // 1s safety bound
-        while (latest == 0L && System.nanoTime() < deadline) {
-            try { Thread.sleep(20); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; }
-            latest = storageProvider.countJobs(StateName.ENQUEUED);
-        }
-        return latest;
+        return storageProvider.countJobs(StateName.ENQUEUED);
+    }
+
+    // Used by happy-path / dup tests to settle the in-memory JobRunr storage after the controller
+    // returns. BackgroundJob.enqueue can return before the InMemoryStorageProvider's notify chain
+    // settles under shared-context test runs — Awaitility polls deterministically. 5s upper bound
+    // tolerates JVM busy-state when running the full test class against testcontainers.
+    private void awaitEnqueuedCount(long expected) {
+        await().atMost(Duration.ofSeconds(5))
+                .pollInterval(Duration.ofMillis(20))
+                .untilAsserted(() -> assertThat(enqueuedCount()).isEqualTo(expected));
     }
 
     private double counter(String reason) {
@@ -158,6 +164,9 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
 
     @Test
     void receive_happyPath_returns200_persistsAndEnqueues() {
+        // AC6 (controller-side) — single POST → single RawUpdate, single ENQUEUED job, success
+        // counter incremented exactly once. Bigger AC6 (ownerChatId populate) is owned by
+        // ProcessTelegramUpdateJobTest in T9.
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
 
@@ -171,20 +180,10 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
                 .expectBody().isEmpty();
 
         assertThat(rawUpdateRepository.count().block()).isEqualTo(1L);
-        assertThat(enqueuedCount()).isEqualTo(1L);
+        awaitEnqueuedCount(1L);
         Counter rec = meterRegistry.find("telegram_webhook_received_total").counter();
         assertThat(rec).isNotNull();
         assertThat(rec.count()).isEqualTo(1.0);
-    }
-
-    @Test
-    void receive_happyPath_postEnqueuedJobCountEqualsOne() {
-        // AC6 — controller side: enqueue happens exactly once on happy path.
-        Project p = seedProject();
-        seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
-
-        assertThat(post(p.getId(), SECRET_PLAIN, samplePayload(1L))).isEqualTo(200);
-        assertThat(enqueuedCount()).isEqualTo(1L);
     }
 
     // ---------- AC2 — invalid secret ----------
@@ -294,7 +293,7 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
 
         assertThat(statuses).containsOnly(200);
         assertThat(rawUpdateRepository.count().block()).isEqualTo(1L);
-        assertThat(enqueuedCount()).isEqualTo(1L);
+        awaitEnqueuedCount(1L);
     }
 
     @Test
@@ -311,20 +310,21 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
                 firstAttempt[0] = false;
                 throw new RuntimeException("simulated enqueue failure");
             }
-            org.jobrunr.scheduling.BackgroundJob.<ProcessTelegramUpdateJob>enqueue(
+            jobScheduler.<ProcessTelegramUpdateJob>enqueue(
                     jobId, j -> j.handle(rawUpdateId));
         });
 
-        // First POST fails 500 — Telegram retries.
+        // First POST fails 500 — Telegram retries. The controller's onErrorResume converts the
+        // enqueue failure into an empty 500 (Decision 3 forbids GlobalErrorHandler bodies).
         int s1 = post(p.getId(), SECRET_PLAIN, samplePayload(123L));
-        assertThat(s1).isGreaterThanOrEqualTo(500);
+        assertThat(s1).isEqualTo(500);
 
         // Retry — DuplicateKey path re-enqueues successfully.
         int s2 = post(p.getId(), SECRET_PLAIN, samplePayload(123L));
         assertThat(s2).isEqualTo(200);
 
         assertThat(rawUpdateRepository.count().block()).isEqualTo(1L);
-        assertThat(enqueuedCount()).isEqualTo(1L);
+        awaitEnqueuedCount(1L);
         assertThat(counter("duplicate")).isEqualTo(1.0);
     }
 
@@ -412,15 +412,23 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
     // ---------- AC18 — token-scrubber per log site ----------
 
     @Test
-    void warnLogOnDuplicate_noTokenInOutput() {
+    void warnLogOnDuplicate_noTokenInOutput_andNoPayloadEcho() {
+        // Token regex won't naturally match projectId/updateId, so a plain scrub-regex assertion
+        // is too weak (the WARN line could lose scrubTokens entirely and still pass). Two-part
+        // assertion makes the test non-vacuous:
+        //  (a) the WARN line must NOT contain any field from the request body (no payload echo),
+        //  (b) the WARN line must NOT contain a Telegram-token-shaped substring even when one
+        //      sneaks into the projectId via the path (mid-request injection).
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
-        // Embed a Telegram-token-shaped value in projectId-like position is impossible (projectId
-        // is path-derived), but we still ensure the WARN line carries scrubbed output. The token
-        // scrub regex would NOT match plain projectId/updateId; the scrubTokens call site is the
-        // defense-in-depth — assert no token regex appears in the captured log line for this site.
-        post(p.getId(), SECRET_PLAIN, samplePayload(1L));
-        post(p.getId(), SECRET_PLAIN, samplePayload(1L)); // dup → WARN
+        String tokenShaped = "1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789xyz";
+        // Sentinel body field — if any payload-derived bytes leak into the WARN log, this string
+        // would surface in the captured line.
+        Document body = samplePayload(1L);
+        body.put("sentinel_field", "PAYLOAD-SENTINEL-" + tokenShaped);
+
+        post(p.getId(), SECRET_PLAIN, body);
+        post(p.getId(), SECRET_PLAIN, body); // dup → WARN
 
         List<String> warnLines = appender.list.stream()
                 .filter(e -> e.getLoggerName()
@@ -430,6 +438,9 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
                 .toList();
         assertThat(warnLines).isNotEmpty();
         for (String line : warnLines) {
+            assertThat(line)
+                    .as("WARN log must NOT echo the request body: <%s>", line)
+                    .doesNotContain("PAYLOAD-SENTINEL");
             assertThat(TOKEN_PATTERN.matcher(line).find())
                     .as("WARN log must NOT contain a Telegram-token-shaped substring: <%s>", line)
                     .isFalse();

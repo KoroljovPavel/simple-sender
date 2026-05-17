@@ -10,14 +10,17 @@ import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.server.PathContainer;
 import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import org.springframework.web.server.WebFilter;
 import org.springframework.web.server.WebFilterChain;
+import org.springframework.web.util.pattern.PathPattern;
+import org.springframework.web.util.pattern.PathPatternParser;
 import reactor.core.publisher.Mono;
 
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
+import java.util.List;
+import java.util.Locale;
 
 // Decision 13. Path-scoped 413 gate that runs BEFORE the security chain so an attacker cannot
 // exhaust Netty buffers with a chunked or oversize body. Owns the rejected{payload_too_large}
@@ -30,7 +33,12 @@ public class WebhookPayloadSizeFilter implements WebFilter {
     private static final Logger log = LoggerFactory.getLogger(WebhookPayloadSizeFilter.class);
 
     static final long MAX_BODY_BYTES = 1_048_576L;
-    private static final Pattern PATH_PATTERN = Pattern.compile("^/webhooks/telegram/([^/]+)$");
+    // Use Spring's PathPattern (same parser that drives SecurityConfig matchers) so request-path
+    // normalisation rules (percent-decoding, dot-segment handling) match the security chain. A
+    // hand-rolled regex would risk divergence on edge cases (`/webhooks/telegram/%2E%2E`).
+    private static final PathPattern WEBHOOK_PATH = PathPatternParser.defaultInstance
+            .parse("/webhooks/telegram/{projectId}");
+    private static final String PROJECT_ID_VAR = "projectId";
 
     private final MeterRegistry meterRegistry;
     private Counter rejectedPayloadTooLarge;
@@ -47,24 +55,23 @@ public class WebhookPayloadSizeFilter implements WebFilter {
 
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, WebFilterChain chain) {
-        String path = exchange.getRequest().getPath().value();
-        Matcher m = PATH_PATTERN.matcher(path);
-        if (!m.matches()) {
+        PathContainer pathContainer = exchange.getRequest().getPath().pathWithinApplication();
+        if (!WEBHOOK_PATH.matches(pathContainer)) {
             return chain.filter(exchange);
         }
 
         HttpHeaders headers = exchange.getRequest().getHeaders();
-        String transferEncoding = headers.getFirst(HttpHeaders.TRANSFER_ENCODING);
+        List<String> transferEncodings = headers.get(HttpHeaders.TRANSFER_ENCODING);
         long contentLength = headers.getContentLength();
 
-        boolean chunked = transferEncoding != null
-                && transferEncoding.toLowerCase().contains("chunked");
+        // Multi-value Transfer-Encoding (HTTP/1.1 allows comma-separated and repeated headers).
+        // Locale.ROOT for case-fold so a Turkish-locale JVM doesn't dotless-i the "chunked" token.
+        boolean chunked = transferEncodings != null && transferEncodings.stream()
+                .anyMatch(v -> v != null && v.toLowerCase(Locale.ROOT).contains("chunked"));
         // getContentLength() == -1 means missing or unparseable per Spring's HttpHeaders contract.
-        // Telegram always sends a Content-Length per Bot API contract (verified in Telegram docs);
-        // missing it on the webhook path is treated as anomalous and rejected. Note: 0-byte body
-        // (Content-Length: 0) is passed through — the controller's @RequestBody required=true
-        // will surface a Spring default 400 from there, which Telegram retries against. Returning
-        // a 413 for 0 would be misleading.
+        // Telegram always sends a Content-Length per Bot API contract; missing it on the webhook
+        // path is anomalous and rejected. CL: 0 is a valid empty body and passes through — the
+        // controller's @RequestBody required=true surfaces a Spring 400 downstream.
         boolean missingContentLength = contentLength < 0;
         boolean oversize = contentLength > MAX_BODY_BYTES;
 
@@ -72,14 +79,17 @@ public class WebhookPayloadSizeFilter implements WebFilter {
             String reason = chunked ? "chunked"
                     : missingContentLength ? "missing_content_length"
                     : "oversize_" + contentLength;
-            String projectId = m.groupCount() >= 1 ? m.group(1) : "n/a";
+            String projectId = WEBHOOK_PATH.matchAndExtract(pathContainer) != null
+                    ? WEBHOOK_PATH.matchAndExtract(pathContainer).getUriVariables().get(PROJECT_ID_VAR)
+                    : "n/a";
             // Scrubber on the log site — header values cannot legitimately carry tokens but the
             // scrub is defense-in-depth per Risks "Token-scrubber sites" enumeration.
             log.warn("WebhookPayloadSizeFilter - rejecting (projectId={}, reason={}, contentLength={}, transferEncoding={})",
                     TelegramApiClient.scrubTokens(projectId),
                     reason,
                     contentLength,
-                    TelegramApiClient.scrubTokens(transferEncoding));
+                    TelegramApiClient.scrubTokens(transferEncodings == null ? null
+                            : String.join(",", transferEncodings)));
             rejectedPayloadTooLarge.increment();
             exchange.getResponse().setStatusCode(HttpStatus.PAYLOAD_TOO_LARGE);
             return exchange.getResponse().setComplete();

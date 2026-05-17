@@ -4,14 +4,13 @@ import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.bot.TelegramApiClient;
-import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import jakarta.annotation.PostConstruct;
 import org.bson.Document;
-import org.jobrunr.scheduling.BackgroundJob;
+import org.jobrunr.scheduling.JobScheduler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
@@ -52,6 +51,7 @@ public class TelegramWebhookController {
     private final RawUpdateRepository rawUpdateRepository;
     private final WebhookSecretVerifier webhookSecretVerifier;
     private final MeterRegistry meterRegistry;
+    private final JobScheduler jobScheduler;
 
     // Counters cached in @PostConstruct so Tag.of allocations stay off the hot path. The success
     // counter remains tag-per-request (projectId) because user-spec AC16 implies per-project
@@ -61,21 +61,28 @@ public class TelegramWebhookController {
     private Counter rejectedDuplicate;
     private Timer durationTimer;
 
-    // Package-private seam for tests — lets the self-heal IT swap in a failing enqueue without
-    // touching the static BackgroundJob entry point. Production uses the BackgroundJob default.
-    private BiConsumer<UUID, String> enqueuer = (jobId, rawUpdateId) ->
-            BackgroundJob.<ProcessTelegramUpdateJob>enqueue(jobId, j -> j.handle(rawUpdateId));
+    // Package-private seam for tests — lets the self-heal IT swap in a failing enqueue while
+    // production routes through the injected JobScheduler. Injecting JobScheduler (instead of
+    // calling static BackgroundJob.enqueue) keeps the test's autowired StorageProvider on the
+    // hot path; the static API uses whichever JobScheduler was registered last, which under
+    // multi-context Spring Test caching can be a different StorageProvider than the one the
+    // test autowires (silent enqueue → different store → count() returns 0).
+    private BiConsumer<UUID, String> enqueuer;
 
     public TelegramWebhookController(BotRepository botRepository,
                                      ProjectRepository projectRepository,
                                      RawUpdateRepository rawUpdateRepository,
                                      WebhookSecretVerifier webhookSecretVerifier,
-                                     MeterRegistry meterRegistry) {
+                                     MeterRegistry meterRegistry,
+                                     JobScheduler jobScheduler) {
         this.botRepository = botRepository;
         this.projectRepository = projectRepository;
         this.rawUpdateRepository = rawUpdateRepository;
         this.webhookSecretVerifier = webhookSecretVerifier;
         this.meterRegistry = meterRegistry;
+        this.jobScheduler = jobScheduler;
+        this.enqueuer = (jobId, rawUpdateId) ->
+                jobScheduler.<ProcessTelegramUpdateJob>enqueue(jobId, j -> j.handle(rawUpdateId));
     }
 
     @PostConstruct
@@ -110,17 +117,13 @@ public class TelegramWebhookController {
                 .onErrorResume(IllegalArgumentException.class, ex -> Mono.empty())
                 .flatMap(bot -> projectRepository.findById(projectId)
                         .filter(p -> p.getDeletedAt() == null)
-                        .map(p -> new Lookup(bot, p)))
-                .flatMap(lookup -> handleVerified(projectId, headerSecret, body, lookup.bot()))
+                        .map(p -> bot))
+                .flatMap(bot -> handleVerified(projectId, headerSecret, body, bot))
                 .switchIfEmpty(Mono.defer(() -> {
                     rejectedProjectNotFound.increment();
                     return Mono.just(ResponseEntity.notFound().<Void>build());
                 }))
-                .doOnEach(sig -> {
-                    if (sig.isOnNext() || sig.isOnError()) {
-                        sample.stop(durationTimer);
-                    }
-                });
+                .doFinally(signal -> sample.stop(durationTimer));
     }
 
     private Mono<ResponseEntity<Void>> handleVerified(String projectId, String headerSecret,
@@ -131,6 +134,13 @@ public class TelegramWebhookController {
         }
 
         Long updateId = extractUpdateId(body);
+        if (updateId == null) {
+            // Telegram contract guarantees update_id. Without it, the (projectId, updateId)
+            // unique index cannot enforce idempotency — refuse rather than persist a bad row.
+            log.warn("TelegramWebhookController - rejecting payload with missing update_id (projectId={})",
+                    TelegramApiClient.scrubTokens(projectId));
+            return Mono.just(ResponseEntity.badRequest().<Void>build());
+        }
 
         RawUpdate row = new RawUpdate();
         row.setProjectId(projectId);
@@ -141,8 +151,8 @@ public class TelegramWebhookController {
 
         return rawUpdateRepository.save(row)
                 .flatMap(saved -> enqueueIdempotent(saved.getId())
-                        .then(Mono.fromRunnable(() -> meterRegistry.counter(RECEIVED_TOTAL,
-                                "projectId", projectId).increment()))
+                        .doOnSuccess(unused -> meterRegistry.counter(RECEIVED_TOTAL,
+                                "projectId", projectId).increment())
                         .thenReturn(ResponseEntity.ok().<Void>build()))
                 .onErrorResume(DuplicateKeyException.class, ex -> {
                     // Decision 4 self-heal: prior insert succeeded but enqueue may have failed.
@@ -153,21 +163,18 @@ public class TelegramWebhookController {
                     log.warn("TelegramWebhookController - duplicate update (projectId={}, updateId={})",
                             TelegramApiClient.scrubTokens(projectId),
                             TelegramApiClient.scrubTokens(String.valueOf(updateId)));
-                    return findExistingRawUpdate(projectId, updateId)
+                    return rawUpdateRepository.findFirstByProjectIdAndUpdateId(projectId, updateId)
                             .flatMap(existing -> enqueueIdempotent(existing.getId())
                                     .thenReturn(ResponseEntity.ok().<Void>build()));
-                });
-    }
-
-    private Mono<RawUpdate> findExistingRawUpdate(String projectId, Long updateId) {
-        // The repository surfaces no findByProjectIdAndUpdateId; the unique-index race window is
-        // narrow and tests anchor the path. A typed lookup helper here would be more code than
-        // value — derive id via findAll + filter; in practice the prior row exists and is found.
-        return rawUpdateRepository.findAll()
-                .filter(r -> projectId.equals(r.getProjectId())
-                        && updateId != null
-                        && updateId.equals(r.getUpdateId()))
-                .next();
+                })
+                // Per Decision 3, the webhook MUST NOT surface through GlobalErrorHandler — every
+                // response shape stays Mono<ResponseEntity<Void>>. Catch any non-DuplicateKey error
+                // (the most common case: enqueue failed and propagated up from enqueueIdempotent)
+                // and respond with an empty 500 so Telegram retries against an explicit status
+                // rather than receiving the GlobalErrorHandler JSON body — which would also bypass
+                // the scrubber chain. The enqueue site itself has already logged the scrubbed cause.
+                .onErrorResume(ex -> Mono.just(
+                        ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build()));
     }
 
     private Mono<Void> enqueueIdempotent(String rawUpdateId) {
@@ -175,8 +182,12 @@ public class TelegramWebhookController {
         return Mono.fromRunnable(() -> enqueuer.accept(jobId, rawUpdateId))
                 .subscribeOn(Schedulers.boundedElastic())
                 .onErrorResume(ex -> {
-                    // Decision 11: enqueue failure propagates as 5xx so Telegram retries; the
-                    // retry hits the DuplicateKey self-heal path next time. Log scrubbed.
+                    // Decision 11: enqueue failure propagates so Telegram retries (via the
+                    // Mono.error path); the retry hits the DuplicateKey self-heal next time.
+                    // The outer handleVerified.onErrorResume converts the error to an empty 5xx
+                    // so the GlobalErrorHandler never gets a chance to write a body. Token-scrub
+                    // both the rawUpdateId and the exception message (a Telegram-token-shaped
+                    // string could conceivably end up in a payload-derived exception).
                     log.error("TelegramWebhookController - enqueue failed (rawUpdateId={}): {}",
                             TelegramApiClient.scrubTokens(rawUpdateId),
                             TelegramApiClient.scrubTokens(ex.getMessage()));
@@ -194,5 +205,4 @@ public class TelegramWebhookController {
         return Long.valueOf(raw.toString());
     }
 
-    private record Lookup(Bot bot, Project project) {}
 }

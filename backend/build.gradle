@@ -45,5 +45,13 @@ jacocoTestReport {
 }
 
 tasks.named('test') {
-	useJUnitPlatform()
+	useJUnitPlatform {
+		// @Tag("slow") covers the AC1 P99 latency probe — see TelegramWebhookControllerIT.
+		// Excluded from default `gradlew test` because cold-JVM workstation timing is too
+		// flaky to enforce <100ms; pre-deploy QA (T15) runs the slow tag explicitly via
+		// `-PrunSlow=true` to validate the SLA before merge.
+		if (!project.hasProperty('runSlow')) {
+			excludeTags 'slow'
+		}
+	}
 }

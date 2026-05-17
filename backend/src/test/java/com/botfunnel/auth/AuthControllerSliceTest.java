@@ -5,6 +5,7 @@ import com.botfunnel.auth.dto.LoginRequest;
 import com.botfunnel.auth.dto.MeResponse;
 import com.botfunnel.common.AppException;
 import com.botfunnel.common.GlobalErrorHandler;
+import com.botfunnel.common.metrics.MeterRegistryConfig;
 import com.botfunnel.security.SecurityConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
@@ -24,7 +25,7 @@ import static org.springframework.security.test.web.reactive.server.SecurityMock
 // WebFlux slice tests: AuthService is mocked. Verifies the controller wiring and SecurityConfig
 // path matchers. Full end-to-end auth flows are exercised in AuthControllerIT (Testcontainers).
 @WebFluxTest(controllers = AuthController.class)
-@Import({SecurityConfig.class, GlobalErrorHandler.class})
+@Import({SecurityConfig.class, GlobalErrorHandler.class, MeterRegistryConfig.class})
 class AuthControllerSliceTest {
 
     @Autowired

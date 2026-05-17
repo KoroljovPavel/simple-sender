@@ -1,6 +1,7 @@
 package com.botfunnel.project;
 
 import com.botfunnel.common.GlobalErrorHandler;
+import com.botfunnel.common.metrics.MeterRegistryConfig;
 import com.botfunnel.profile.WithMockAppUser;
 import com.botfunnel.security.SecurityConfig;
 import org.junit.jupiter.api.Test;
@@ -24,7 +25,7 @@ import static org.mockito.Mockito.when;
 // mocks. Scope is intentionally narrow: response-shape lock (no ownerId field). Behavioral
 // coverage lives in ProjectControllerIT.
 @WebFluxTest(controllers = ProjectController.class)
-@Import({SecurityConfig.class, GlobalErrorHandler.class})
+@Import({SecurityConfig.class, GlobalErrorHandler.class, MeterRegistryConfig.class})
 class ProjectControllerSliceTest {
 
     @Autowired WebTestClient webTestClient;

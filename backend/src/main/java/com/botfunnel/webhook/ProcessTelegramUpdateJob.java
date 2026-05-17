@@ -23,7 +23,6 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Component;
 
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.Map;
 
@@ -94,6 +93,8 @@ public class ProcessTelegramUpdateJob {
         // processingStatus == PENDING or FAILED — FAILED means the prior attempt failed AFTER our
         // failure-write committed; JobRunr's retry now lands here and re-runs the dispatch matrix.
 
+        log.info("ProcessTelegramUpdateJob - start (rawUpdateId={}, projectId={})",
+                rawUpdateId, rawUpdate.getProjectId());
         try {
             TelegramUpdate update = objectMapper.convertValue(rawUpdate.getPayload(), TelegramUpdate.class);
             Project project = projectRepository.findById(rawUpdate.getProjectId()).block();
@@ -103,6 +104,8 @@ public class ProcessTelegramUpdateJob {
             rawUpdate.setProcessingStatus(RawUpdateStatus.DONE);
             rawUpdateRepository.save(rawUpdate).block();
             meterRegistry.counter(COUNTER, "outcome", "success").increment();
+            log.info("ProcessTelegramUpdateJob - success (rawUpdateId={}, projectId={})",
+                    rawUpdateId, rawUpdate.getProjectId());
         } catch (Throwable t) {
             handleFailure(rawUpdateId, t);
         }
@@ -113,22 +116,25 @@ public class ProcessTelegramUpdateJob {
         String scrubbed = TelegramApiClient.scrubTokens(message);
         String truncated = scrubbed.substring(0, Math.min(scrubbed.length(), ERROR_MAX_LEN));
         // Atomic findAndModify — NEVER findById + setter + save here; two retries could trample
-        // each other in the race window between read and write.
+        // each other in the race window between read and write. Persist enum.name() explicitly:
+        // matches the partial-filter index literal `'FAILED'` byte-identical (Bot precedent
+        // line 210 uses the same pattern).
         reactiveMongoTemplate.findAndModify(
                 Query.query(Criteria.where("_id").is(rawUpdateId)),
                 new Update()
-                        .set("processingStatus", RawUpdateStatus.FAILED)
+                        .set("processingStatus", RawUpdateStatus.FAILED.name())
                         .set("processingError", truncated),
                 RawUpdate.class).block();
         meterRegistry.counter(COUNTER, "outcome", "failure").increment();
         log.error("ProcessTelegramUpdateJob - worker failed (rawUpdateId={}): {}",
-                TelegramApiClient.scrubTokens(rawUpdateId), truncated);
-        // Rethrow so JobRunr's default retry policy (10 attempts, exponential) fires another
-        // handle(...) — that retry lands on the FAILED row, falls through the re-entry guard, and
-        // re-runs the dispatch. Wrap checked exceptions in RuntimeException for JobRunr's API.
-        if (t instanceof RuntimeException re) throw re;
-        if (t instanceof Error e) throw e;
-        throw new RuntimeException(t);
+                rawUpdateId, truncated);
+        // Rethrow a NEW RuntimeException with ONLY the scrubbed+truncated message so JobRunr's
+        // failure pipeline (jobrunr_jobs collection + ERROR log) cannot re-leak the raw token
+        // via t.getMessage() OR t.getCause().getMessage(). Stack trace is copied across for
+        // debuggability; no cause chain by design.
+        RuntimeException toRethrow = new RuntimeException(truncated);
+        toRethrow.setStackTrace(t.getStackTrace());
+        throw toRethrow;
     }
 
     private void dispatch(String projectId, String userId, TelegramUpdate update) {
@@ -196,6 +202,8 @@ public class ProcessTelegramUpdateJob {
         Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).block();
         if (bot == null) {
             // Bot lookup races with a concurrent disconnect — treat as unknown per Edge cases.
+            log.warn("ProcessTelegramUpdateJob - bot lookup missed in /start handler (projectId={}, chatId={})",
+                    projectId, chatId);
             logEventOther(projectId, userId, "unknown");
             return;
         }
@@ -267,7 +275,7 @@ public class ProcessTelegramUpdateJob {
     }
 
     private void logEventOther(String projectId, String userId, String updateKind) {
-        Map<String, Object> metadata = new HashMap<>();
+        Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("projectId", projectId);
         metadata.put("updateKind", updateKind);
         eventService.logEventBlocking(userId, EVT_UPDATE_OTHER, null, null, metadata).block();

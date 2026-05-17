@@ -1,5 +1,9 @@
 package com.botfunnel.webhook;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.botfunnel.AbstractIntegrationTest;
 import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotRepository;
@@ -12,11 +16,13 @@ import com.botfunnel.project.ProjectRepository;
 import com.botfunnel.subscriber.SubscriberService;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.bson.Document;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mockito;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
@@ -57,6 +63,24 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
     private String projectId;
     private String botId;
+    private ListAppender<ILoggingEvent> jobAppender;
+    private Logger jobLogger;
+
+    @BeforeEach
+    void attachLogAppender() {
+        jobLogger = (Logger) LoggerFactory.getLogger(ProcessTelegramUpdateJob.class);
+        jobAppender = new ListAppender<>();
+        jobAppender.start();
+        jobLogger.addAppender(jobAppender);
+    }
+
+    @AfterEach
+    void detachLogAppender() {
+        if (jobLogger != null && jobAppender != null) {
+            jobLogger.detachAppender(jobAppender);
+            jobAppender.stop();
+        }
+    }
 
     @BeforeEach
     void cleanAndSeed() {
@@ -102,6 +126,11 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         verify(funnelTriggerService, never()).fire(any(), any(), any(), any());
         assertThat(successCount()).isEqualTo(beforeSuccess);
         assertThat(failureCount()).isEqualTo(beforeFailure);
+        RawUpdate reloaded = rawUpdateRepository.findById(raw.getId()).block();
+        assertThat(reloaded).isNotNull();
+        assertThat(reloaded.getProcessingStatus())
+                .as("DONE row must stay DONE under re-entry — no status mutation")
+                .isEqualTo(RawUpdateStatus.DONE);
     }
 
     // ─── AC6 — ownerChatId atomic populate ─────────────────────────────────────
@@ -367,8 +396,18 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         long beforeFailure = failureCount();
         long beforeSuccess = successCount();
 
-        assertThatThrownBy(() -> job.handle(raw.getId()))
-                .isInstanceOf(RuntimeException.class);
+        Throwable rethrown = org.assertj.core.api.Assertions.catchThrowable(() -> job.handle(raw.getId()));
+        assertThat(rethrown).isInstanceOf(RuntimeException.class);
+        // Critical: the rethrown exception's message MUST also be scrubbed — JobRunr writes it
+        // into jobrunr_jobs + ERROR log, and we don't want the original token leaking there.
+        assertThat(rethrown.getMessage()).isNotNull();
+        assertThat(rethrown.getMessage().length()).isLessThanOrEqualTo(1024);
+        assertThat(TOKEN_PATTERN.matcher(rethrown.getMessage()).find())
+                .as("rethrown exception message MUST NOT contain a raw bot-token regex match")
+                .isFalse();
+        assertThat(rethrown.getCause())
+                .as("rethrown exception MUST have no cause chain — cause.getMessage() would re-leak the token")
+                .isNull();
 
         RawUpdate reloaded = rawUpdateRepository.findById(raw.getId()).block();
         assertThat(reloaded).isNotNull();
@@ -378,8 +417,83 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         assertThat(TOKEN_PATTERN.matcher(reloaded.getProcessingError()).find())
                 .as("processingError must NOT contain a raw bot-token regex match — scrubber failed")
                 .isFalse();
+        // ListAppender pin: the ERROR log line is the third token-scrubber site — assert no
+        // token regex match appears in any captured log event.
+        assertThat(jobAppender.list)
+                .as("no log event may carry a raw token through the appender")
+                .allSatisfy(e -> assertThat(TOKEN_PATTERN.matcher(e.getFormattedMessage()).find()).isFalse());
         assertThat(failureCount() - beforeFailure).isEqualTo(1L);
         assertThat(successCount()).as("failure path must NOT tick success counter").isEqualTo(beforeSuccess);
+    }
+
+    // ─── added coverage from review round 1 ────────────────────────────────────
+
+    @Test
+    void startPrivateMultiWordPayload_joinedAfterFirstWhitespace() {
+        // AC7 third bullet — `/start ref_a b c` → startPayload="ref_a b c" (everything after the
+        // first whitespace, leading whitespace trimmed by parser).
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "/start ref_a b c"), 1L);
+
+        job.handle(raw.getId());
+
+        Event event = onlyEvent();
+        assertThat(event.getMetadata()).containsEntry("startPayload", "ref_a b c");
+        verify(funnelTriggerService, times(1)).fire(any(), any(), eq("on_start"), eq("ref_a b c"));
+    }
+
+    @Test
+    void stopGroup_eventOnly_noStubCall() {
+        // Symmetric to startGroup test — /stop in a group chat writes the event but invokes no stubs.
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                messagePayload(-100L, "group", 999L, "/stop", 1L), 1L);
+
+        job.handle(raw.getId());
+
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_command_stop");
+        verify(subscriberService, never()).markUnsubscribed(any(), any(), any());
+        verify(funnelTriggerService, never()).cancelActiveFor(any(), any());
+    }
+
+    @Test
+    void startPrivateBotMissing_logsWarnAndWritesUpdateOther() {
+        // Edge case from task: bot lookup races a concurrent disconnect — worker degrades to
+        // telegram_update_other with updateKind="unknown" and emits a WARN log site that must
+        // be scrubber-safe.
+        botRepository.deleteAll().block();
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "/start"), 1L);
+
+        job.handle(raw.getId());
+
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_update_other");
+        assertThat(event.getMetadata()).containsEntry("updateKind", "unknown");
+        verify(subscriberService, never())
+                .upsertFromTelegramUpdate(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(funnelTriggerService, never()).fire(any(), any(), any(), any());
+        boolean warnEmitted = jobAppender.list.stream()
+                .anyMatch(e -> e.getLevel() == Level.WARN
+                        && e.getFormattedMessage().contains("bot lookup missed"));
+        assertThat(warnEmitted).as("bot==null path must emit a WARN log line").isTrue();
+    }
+
+    @Test
+    void mediaOnlyMessagePrivate_updateKindMessage_noStubs() {
+        // Edge case from task Details: a sticker/image/document message has message != null but
+        // text == null. Classify as telegram_update_other with updateKind="message", no stub calls.
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                messagePayload(100L, "private", 100L, null, 1L), 1L);
+
+        job.handle(raw.getId());
+
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_update_other");
+        assertThat(event.getMetadata()).containsEntry("updateKind", "message");
+        verify(subscriberService, never())
+                .upsertFromTelegramUpdate(any(), any(), any(), any(), any(), any(), any(), any(), any());
+        verify(funnelTriggerService, never()).fire(any(), any(), any(), any());
     }
 
     // ─── helpers ───────────────────────────────────────────────────────────────

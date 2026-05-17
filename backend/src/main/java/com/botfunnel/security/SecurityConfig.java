@@ -14,7 +14,11 @@ import org.springframework.security.web.server.context.ServerSecurityContextRepo
 import org.springframework.security.web.server.context.WebSessionServerSecurityContextRepository;
 import org.springframework.security.web.server.csrf.CookieServerCsrfTokenRepository;
 import org.springframework.security.web.server.csrf.CsrfToken;
+import org.springframework.security.web.server.csrf.CsrfWebFilter;
 import org.springframework.security.web.server.csrf.ServerCsrfTokenRequestAttributeHandler;
+import org.springframework.security.web.server.util.matcher.AndServerWebExchangeMatcher;
+import org.springframework.security.web.server.util.matcher.NegatedServerWebExchangeMatcher;
+import org.springframework.security.web.server.util.matcher.PathPatternParserServerWebExchangeMatcher;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.reactive.CorsConfigurationSource;
 import org.springframework.web.cors.reactive.UrlBasedCorsConfigurationSource;
@@ -62,12 +66,29 @@ public class SecurityConfig {
                         // BREACH protection is unnecessary here: tokens are only delivered via cookie,
                         // never rendered into a compressible JSON response body.
                         .csrfTokenRequestHandler(new ServerCsrfTokenRequestAttributeHandler())
+                        // Decision 13: scoped CSRF disable. AND the default verb matcher (which
+                        // restricts CSRF to mutating methods POST/PUT/DELETE/PATCH) with a path
+                        // negation that excludes /webhooks/telegram/{projectId}. Replacing the
+                        // protection matcher with ONLY the path negation would extend CSRF
+                        // enforcement to GET/HEAD/OPTIONS as well — breaking /health and every
+                        // bare GET request (HealthEndpointTest / SecurityConfigTest precedent).
+                        // Single segment ({projectId}) prevents future sub-path leak (security M4);
+                        // CSRF stays active on /api/** mutating verbs.
+                        .requireCsrfProtectionMatcher(new AndServerWebExchangeMatcher(
+                                CsrfWebFilter.DEFAULT_CSRF_MATCHER,
+                                new NegatedServerWebExchangeMatcher(
+                                        new PathPatternParserServerWebExchangeMatcher(
+                                                "/webhooks/telegram/{projectId}"))))
                 )
                 .cors(cors -> cors.configurationSource(corsConfigurationSource()))
                 .securityContextRepository(securityContextRepository)
                 .authorizeExchange(exchanges -> exchanges
                         .pathMatchers("/health").permitAll()
                         .pathMatchers("/api/auth/**").permitAll()
+                        // Decision 13: webhook is unauthenticated; secret-header gate is the
+                        // sole access control. Ordered BEFORE /api/** so the latter does not
+                        // shadow this rule. Single-segment {projectId} prevents sub-path leak.
+                        .pathMatchers("/webhooks/telegram/{projectId}").permitAll()
                         .pathMatchers("/api/**").authenticated()
                         .anyExchange().authenticated()
                 )

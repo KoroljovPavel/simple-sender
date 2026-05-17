@@ -17,6 +17,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+
 class RawUpdateRepositoryTest extends AbstractIntegrationTest {
 
     @Autowired RawUpdateRepository rawUpdateRepository;
@@ -118,13 +119,10 @@ class RawUpdateRepositoryTest extends AbstractIntegrationTest {
         assertThat(reloaded.getProcessingStatus()).isEqualTo(RawUpdateStatus.PENDING);
     }
 
-    private static List<String> indexNames(List<IndexInfo> indexInfos) {
-        return indexInfos.stream().map(IndexInfo::getName).toList();
-    }
-
     private static IndexInfo findByName(List<IndexInfo> indexInfos, String name) {
-        Optional<IndexInfo> match = indexInfos.stream().filter(i -> name.equals(i.getName())).findFirst();
-        assertThat(match).as("index %s present", name).isPresent();
-        return match.get();
+        return indexInfos.stream()
+                .filter(i -> name.equals(i.getName()))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("index %s missing".formatted(name)));
     }
 }

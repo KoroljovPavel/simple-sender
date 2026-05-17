@@ -131,6 +131,9 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         assertThat(reloaded.getProcessingStatus())
                 .as("DONE row must stay DONE under re-entry — no status mutation")
                 .isEqualTo(RawUpdateStatus.DONE);
+        assertThat(reloaded.getProcessingError())
+                .as("DONE row's processingError must not be mutated under re-entry")
+                .isNull();
     }
 
     // ─── AC6 — ownerChatId atomic populate ─────────────────────────────────────

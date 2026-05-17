@@ -131,8 +131,14 @@ public class ProcessTelegramUpdateJob {
         // Rethrow a NEW RuntimeException with ONLY the scrubbed+truncated message so JobRunr's
         // failure pipeline (jobrunr_jobs collection + ERROR log) cannot re-leak the raw token
         // via t.getMessage() OR t.getCause().getMessage(). Stack trace is copied across for
-        // debuggability; no cause chain by design.
-        RuntimeException toRethrow = new RuntimeException(truncated);
+        // debuggability; no cause chain by design. The original simple-class-name is prefixed
+        // (and re-truncated) so operators reading the jobrunr_jobs row still see what TYPE of
+        // failure happened — class names are compile-time constants and can never carry payload.
+        String rethrowMessage = t.getClass().getSimpleName() + ": " + truncated;
+        if (rethrowMessage.length() > ERROR_MAX_LEN) {
+            rethrowMessage = rethrowMessage.substring(0, ERROR_MAX_LEN);
+        }
+        RuntimeException toRethrow = new RuntimeException(rethrowMessage);
         toRethrow.setStackTrace(t.getStackTrace());
         throw toRethrow;
     }

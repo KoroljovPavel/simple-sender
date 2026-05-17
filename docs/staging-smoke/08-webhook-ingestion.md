@@ -33,6 +33,10 @@ happy path AC1, AC5 (опосередковано), AC6, AC7, AC8, AC17. Інш�
   Безкоштовний акаунт достатній, але URL — session-scoped: при
   переконнекті ngrok URL змінюється, і крок **Підключити бот до
   проекту** треба повторити.
+- `<projectId>` — береться з URL frontend сторінки проекту
+  (`/projects/<projectId>/settings/bot`) або з консолі браузера
+  `localStorage.getItem('currentProjectId')`. У командах нижче
+  підставляйте значення без лапок.
 
 ## Кроки
 
@@ -63,7 +67,7 @@ staging-URL напряму.
 
 **Якщо щось пішло не так:** `ngrok: command not found` →
 `brew install ngrok` (macOS) або скачайте з ngrok.com. ngrok вимагає
-acuthtoken на безкоштовному плані — налаштуйте через
+authtoken на безкоштовному плані — налаштуйте через
 `ngrok config add-authtoken <token>` (один раз).
 
 ### 3. Підключити бот до проекту
@@ -87,6 +91,10 @@ runbook 06 крок 7). `errors.bot.connect.422 invalid_token` →
 перевір логи staging — найімовірніше Mongo або Redis недоступні.
 
 ### 4. Перевірити, що webhook зареєстровано у BotFather
+
+*(додатковий крок — Connect flow має це зробити автоматично, але
+ручна перевірка ловить регресії в `setWebhook`-flow до того, як
+Telegram почне ретраїти і шумити в Failed-queue.)*
 
 У `@BotFather`: `/mybots` → виберіть свого бота → **Bot Settings →
 Webhook**. У полі URL має бути `{APP_URL}/webhooks/telegram/{projectId}`
@@ -120,7 +128,7 @@ mongosh mongodb://…/botfunnel --eval \
 
 ```bash
 mongosh mongodb://…/botfunnel --eval \
-  'db.events.find({eventType: "telegram_command_start"}).sort({createdAt: -1}).limit(1).toArray()'
+  'db.events.find({eventType: "telegram_command_start", createdAt: {$gte: new Date(Date.now() - 5*60*1000)}}).sort({createdAt: -1}).limit(1).toArray()'
 ```
 
 Очікуваний документ:
@@ -179,7 +187,7 @@ branch був unobservable, бо `ownerChatId` ніким не виставля�
 
 ```bash
 mongosh mongodb://…/botfunnel --eval \
-  'db.events.find({eventType: "telegram_command_stop"}).sort({createdAt: -1}).limit(1).toArray()'
+  'db.events.find({eventType: "telegram_command_stop", createdAt: {$gte: new Date(Date.now() - 5*60*1000)}}).sort({createdAt: -1}).limit(1).toArray()'
 ```
 
 Очікуваний документ:

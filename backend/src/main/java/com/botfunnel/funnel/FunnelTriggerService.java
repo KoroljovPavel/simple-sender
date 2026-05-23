@@ -1,7 +1,5 @@
 package com.botfunnel.funnel;
 
-import reactor.core.publisher.Mono;
-
 /**
  * Contract consumed by the webhook worker (ProcessTelegramUpdateJob) for funnel side effects.
  * The real implementation is deferred to Epic 06; Epic 04b ships a no-op @Service so the
@@ -9,7 +7,7 @@ import reactor.core.publisher.Mono;
  */
 public interface FunnelTriggerService {
 
-    Mono<Void> fire(String projectId, Long chatId, String triggerType, String payload);
+    void fire(String projectId, Long chatId, String triggerType, String payload);
 
-    Mono<Void> cancelActiveFor(String projectId, Long chatId);
+    void cancelActiveFor(String projectId, Long chatId);
 }

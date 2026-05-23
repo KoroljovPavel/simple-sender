@@ -192,7 +192,7 @@ public class ProcessTelegramUpdateJob {
                     from == null ? null : from.first_name(),
                     from == null ? null : from.last_name(),
                     from == null ? null : from.username(),
-                    from == null ? null : from.language_code()).block();
+                    from == null ? null : from.language_code());
         }
         logEventMessageReceived(projectId, userId, chatId);
     }
@@ -238,8 +238,8 @@ public class ProcessTelegramUpdateJob {
                 from == null ? null : from.first_name(),
                 from == null ? null : from.last_name(),
                 from == null ? null : from.username(),
-                from == null ? null : from.language_code()).block();
-        funnelTriggerService.fire(projectId, chatId, "on_start", startPayload).block();
+                from == null ? null : from.language_code());
+        funnelTriggerService.fire(projectId, chatId, "on_start", startPayload);
         logEventCommandStart(projectId, userId, chatId, chatType, startPayload);
     }
 
@@ -250,8 +250,8 @@ public class ProcessTelegramUpdateJob {
                 logEventOther(projectId, userId, "unknown");
                 return;
             }
-            subscriberService.markUnsubscribed(projectId, bot.getTelegramBotId(), chatId).block();
-            funnelTriggerService.cancelActiveFor(projectId, chatId).block();
+            subscriberService.markUnsubscribed(projectId, bot.getTelegramBotId(), chatId);
+            funnelTriggerService.cancelActiveFor(projectId, chatId);
         }
         logEventCommandStop(projectId, userId, chatId, chatType);
     }

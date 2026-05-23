@@ -3,9 +3,9 @@ package com.botfunnel.auth;
 import com.botfunnel.auth.dto.LoginRequest;
 import com.botfunnel.auth.dto.RegisterRequest;
 import com.botfunnel.common.AppException;
+import com.botfunnel.common.SessionAttributes;
 import com.botfunnel.email.EmailService;
 import com.botfunnel.events.EventService;
-import com.botfunnel.security.RememberMeWebSessionIdResolver;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
@@ -338,7 +338,7 @@ class AuthServiceTest {
 
         // Resolver reads this attribute on cookie write — Boolean.TRUE → 30-day Max-Age cookie.
         assertThat(exchange.getAttributes())
-                .containsEntry(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.TRUE);
+                .containsEntry(SessionAttributes.REMEMBER_ME_ATTR, Boolean.TRUE);
 
         ArgumentCaptor<SecurityContext> ctxCap = ArgumentCaptor.forClass(SecurityContext.class);
         verify(securityContextRepository).save(eq(exchange), ctxCap.capture());
@@ -377,7 +377,7 @@ class AuthServiceTest {
         // a session-only cookie. Absent attribute would also fall through to session-cookie, but
         // tracking the boolean explicitly catches future changes that might silently flip the flag.
         assertThat(exchange.getAttributes())
-                .containsEntry(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.FALSE);
+                .containsEntry(SessionAttributes.REMEMBER_ME_ATTR, Boolean.FALSE);
     }
 
     @Test
@@ -523,7 +523,7 @@ class AuthServiceTest {
                 .verifyComplete();
 
         assertThat(exchange.getAttributes())
-                .containsEntry(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.FALSE);
+                .containsEntry(SessionAttributes.REMEMBER_ME_ATTR, Boolean.FALSE);
     }
 
     // -------- me() unit tests (4 branches) --------

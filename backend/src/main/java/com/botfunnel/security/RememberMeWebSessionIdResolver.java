@@ -1,5 +1,6 @@
 package com.botfunnel.security;
 
+import com.botfunnel.common.SessionAttributes;
 import org.springframework.boot.autoconfigure.web.ServerProperties;
 import org.springframework.boot.context.properties.PropertyMapper;
 import org.springframework.boot.web.server.Cookie;
@@ -19,7 +20,8 @@ import java.time.Duration;
  * rememberMe flag cannot be applied through the standard extension points. Mutating bean state
  * ({@code setCookieMaxAge}) per request is unsafe under WebFlux concurrency. Instead, this class
  * overrides {@code setSessionId} to build the cookie from scratch using {@link ServerProperties}
- * for static flags and the {@link #REMEMBER_ME_ATTR} exchange attribute for {@code Max-Age}.
+ * for static flags and the {@link SessionAttributes#REMEMBER_ME_ATTR} exchange attribute for
+ * {@code Max-Age}.
  *
  * <p>{@code resolveSessionIds} (cookie read) and {@code expireSession} ({@code Max-Age=0} on
  * logout) are inherited from {@link CookieWebSessionIdResolver} unchanged — pre-fix cookies
@@ -32,13 +34,6 @@ import java.time.Duration;
  * request inside {@code setSessionId}.
  */
 public class RememberMeWebSessionIdResolver extends CookieWebSessionIdResolver {
-
-    /**
-     * {@link org.springframework.web.server.ServerWebExchange} attribute key. {@code AuthService}
-     * writes {@link Boolean#TRUE}/{@link Boolean#FALSE}; {@link #setSessionId} reads it on cookie
-     * flush. Absent or {@code FALSE} → session-only cookie (no {@code Max-Age}).
-     */
-    public static final String REMEMBER_ME_ATTR = "com.botfunnel.auth.rememberMe";
 
     private final ServerProperties serverProperties;
     private final long rememberMeDays;
@@ -84,7 +79,7 @@ public class RememberMeWebSessionIdResolver extends CookieWebSessionIdResolver {
         // to set a static cookie Max-Age — but we override Max-Age per request based on the
         // REMEMBER_ME_ATTR exchange attribute below.
 
-        Boolean rememberMe = exchange.getAttribute(REMEMBER_ME_ATTR);
+        Boolean rememberMe = exchange.getAttribute(SessionAttributes.REMEMBER_ME_ATTR);
         if (Boolean.TRUE.equals(rememberMe)) {
             builder.maxAge(Duration.ofDays(rememberMeDays));
         }

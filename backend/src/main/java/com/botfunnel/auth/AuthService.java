@@ -7,9 +7,9 @@ import com.botfunnel.auth.dto.RegisterRequest;
 import com.botfunnel.auth.dto.RegisterResponse;
 import com.botfunnel.auth.dto.VerifyEmailResponse;
 import com.botfunnel.common.AppException;
+import com.botfunnel.common.SessionAttributes;
 import com.botfunnel.email.EmailService;
 import com.botfunnel.events.EventService;
-import com.botfunnel.security.RememberMeWebSessionIdResolver;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
@@ -602,7 +602,7 @@ public class AuthService {
         // reads it when WebSessionManager flushes the session at end of request — so order
         // relative to setMaxIdleTime / SecurityContext save is irrelevant.
         exchange.getAttributes().put(
-                RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.valueOf(rememberMe));
+                SessionAttributes.REMEMBER_ME_ATTR, Boolean.valueOf(rememberMe));
 
         // ServerWebExchange.getSession() is cached for the lifetime of the exchange (Mono.cache
         // inside DefaultServerWebExchange), so calling invalidate() and then getSession() again

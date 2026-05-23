@@ -1,5 +1,6 @@
 package com.botfunnel.security;
 
+import com.botfunnel.common.SessionAttributes;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -41,7 +42,7 @@ class RememberMeWebSessionIdResolverTest {
                 new RememberMeWebSessionIdResolver(propsWithDefaults(), 30L);
         MockServerWebExchange exchange = exchangeFor("/api/auth/login");
         exchange.getAttributes().put(
-                RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.TRUE);
+                SessionAttributes.REMEMBER_ME_ATTR, Boolean.TRUE);
 
         resolver.setSessionId(exchange, "session-id-true");
 
@@ -58,7 +59,7 @@ class RememberMeWebSessionIdResolverTest {
                 new RememberMeWebSessionIdResolver(propsWithDefaults(), 30L);
         MockServerWebExchange exchange = exchangeFor("/api/auth/login");
         exchange.getAttributes().put(
-                RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.FALSE);
+                SessionAttributes.REMEMBER_ME_ATTR, Boolean.FALSE);
 
         resolver.setSessionId(exchange, "session-id-false");
 
@@ -90,11 +91,11 @@ class RememberMeWebSessionIdResolverTest {
                 new RememberMeWebSessionIdResolver(propsWithDefaults(), 30L);
 
         MockServerWebExchange ex1 = exchangeFor("/api/auth/login");
-        ex1.getAttributes().put(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.TRUE);
+        ex1.getAttributes().put(SessionAttributes.REMEMBER_ME_ATTR, Boolean.TRUE);
         resolver.setSessionId(ex1, "id-1");
 
         MockServerWebExchange ex2 = exchangeFor("/api/auth/login");
-        ex2.getAttributes().put(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.FALSE);
+        ex2.getAttributes().put(SessionAttributes.REMEMBER_ME_ATTR, Boolean.FALSE);
         resolver.setSessionId(ex2, "id-2");
 
         ResponseCookie c1 = ex1.getResponse().getCookies().getFirst("SESSION");
@@ -111,7 +112,7 @@ class RememberMeWebSessionIdResolverTest {
                 new RememberMeWebSessionIdResolver(propsWithDefaults(), days);
         MockServerWebExchange exchange = exchangeFor("/api/auth/login");
         exchange.getAttributes().put(
-                RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.TRUE);
+                SessionAttributes.REMEMBER_ME_ATTR, Boolean.TRUE);
 
         resolver.setSessionId(exchange, "id");
 
@@ -127,7 +128,7 @@ class RememberMeWebSessionIdResolverTest {
         p.getReactive().getSession().getCookie().setName("ALT");
         RememberMeWebSessionIdResolver resolver = new RememberMeWebSessionIdResolver(p, 30L);
         MockServerWebExchange exchange = exchangeFor("/api/auth/login");
-        exchange.getAttributes().put(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.TRUE);
+        exchange.getAttributes().put(SessionAttributes.REMEMBER_ME_ATTR, Boolean.TRUE);
 
         resolver.setSessionId(exchange, "id");
 
@@ -223,7 +224,7 @@ class RememberMeWebSessionIdResolverTest {
                 new RememberMeWebSessionIdResolver(propsWithDefaults(), 30L);
         MockServerWebExchange exchange = exchangeFor("/api/auth/logout");
         // Even with rememberMe=TRUE on the attribute, expireSession must clear the cookie.
-        exchange.getAttributes().put(RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR, Boolean.TRUE);
+        exchange.getAttributes().put(SessionAttributes.REMEMBER_ME_ATTR, Boolean.TRUE);
 
         resolver.expireSession(exchange);
 

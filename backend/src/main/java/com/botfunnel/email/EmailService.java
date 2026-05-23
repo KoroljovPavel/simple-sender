@@ -89,7 +89,9 @@ public class EmailService {
             helper.setText(htmlBody, true);
             javaMailSender.send(msg);
         } catch (Exception e) {
-            log.error("Email send failed to {}: {}", to, e.toString());
+            // Trailing throwable arg makes SLF4J append the full stack trace while keeping the
+            // formatted message stable for the silent-fail-log assertion in EmailServiceTest.
+            log.error("Email send failed to {}: {}", to, e.toString(), e);
         }
     }
 

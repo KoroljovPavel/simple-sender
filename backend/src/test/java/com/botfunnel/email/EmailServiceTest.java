@@ -112,12 +112,13 @@ class EmailServiceTest {
 
         emailService.sendVerificationEmail("user@example.com", "Alice", "token123");
 
-        List<ILoggingEvent> errors = logAppender.list.stream()
+        // Filter on the silent-fail message prefix so an unrelated ERROR (e.g. a future
+        // template-loading failure) doesn't make this regress-net brittle.
+        List<ILoggingEvent> sendFailures = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.ERROR)
+                .filter(e -> e.getFormattedMessage().startsWith("Email send failed to user@example.com:"))
                 .toList();
-        assertThat(errors).hasSize(1);
-        assertThat(errors.get(0).getFormattedMessage())
-                .startsWith("Email send failed to user@example.com:");
+        assertThat(sendFailures).hasSize(1);
     }
 
     @Test
@@ -128,12 +129,11 @@ class EmailServiceTest {
                 emailService.sendVerificationEmail("user@example.com", "Alice", "token123")
         );
 
-        List<ILoggingEvent> errors = logAppender.list.stream()
+        List<ILoggingEvent> sendFailures = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.ERROR)
+                .filter(e -> e.getFormattedMessage().startsWith("Email send failed to user@example.com:"))
                 .toList();
-        assertThat(errors).hasSize(1);
-        assertThat(errors.get(0).getFormattedMessage())
-                .startsWith("Email send failed to user@example.com:");
+        assertThat(sendFailures).hasSize(1);
     }
 
     @Test

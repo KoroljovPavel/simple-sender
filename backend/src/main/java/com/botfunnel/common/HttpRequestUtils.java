@@ -37,7 +37,7 @@ public final class HttpRequestUtils {
             return (comma > 0 ? xff.substring(0, comma) : xff).trim();
         }
         String remote = request.getRemoteAddr();
-        return remote != null ? remote : "unknown";
+        return (remote != null && !remote.isEmpty()) ? remote : "unknown";
     }
 
     /**

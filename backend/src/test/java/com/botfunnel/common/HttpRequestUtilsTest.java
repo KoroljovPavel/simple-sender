@@ -6,8 +6,10 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Modifier;
+
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -82,14 +84,15 @@ class HttpRequestUtilsTest {
 
     @Test
     void extractUserAgent_returnsNullWhenHeaderAbsent() {
-        lenient().when(request.getHeader("User-Agent")).thenReturn(null);
+        when(request.getHeader("User-Agent")).thenReturn(null);
 
         assertThat(HttpRequestUtils.extractUserAgent(request)).isNull();
     }
 
     @Test
     void cannotBeInstantiated() throws Exception {
-        var ctor = HttpRequestUtils.class.getDeclaredConstructor();
-        assertThat(ctor.canAccess(null)).isFalse();
+        // D13 anti-instantiation gate: utility class — constructor must be private.
+        Constructor<HttpRequestUtils> ctor = HttpRequestUtils.class.getDeclaredConstructor();
+        assertThat(Modifier.isPrivate(ctor.getModifiers())).isTrue();
     }
 }

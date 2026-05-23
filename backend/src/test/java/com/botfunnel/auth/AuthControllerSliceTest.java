@@ -10,97 +10,99 @@ import com.botfunnel.security.SecurityConfig;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.MediaType;
 import org.springframework.security.test.context.support.WithMockUser;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.reactive.server.WebTestClient;
-import reactor.core.publisher.Mono;
+import org.springframework.test.web.servlet.MockMvc;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
-import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// WebFlux slice tests: AuthService is mocked. Verifies the controller wiring and SecurityConfig
+// MVC slice tests: AuthService is mocked. Verifies the controller wiring and SecurityConfig
 // path matchers. Full end-to-end auth flows are exercised in AuthControllerIT (Testcontainers).
-@WebFluxTest(controllers = AuthController.class)
+@WebMvcTest(controllers = AuthController.class)
 @Import({SecurityConfig.class, GlobalErrorHandler.class, MeterRegistryConfig.class})
 class AuthControllerSliceTest {
 
     @Autowired
-    WebTestClient webTestClient;
+    MockMvc mockMvc;
 
     @MockitoBean
     AuthService authService;
 
     @Test
-    void login_success_returns200WithBody() {
+    void login_success_returns200WithBody() throws Exception {
         AuthResponse response = new AuthResponse("u1", "user@test.com", "Alice", "active", null);
-        when(authService.login(any(LoginRequest.class), any())).thenReturn(Mono.just(response));
+        when(authService.login(any(LoginRequest.class), any(), any())).thenReturn(response);
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/auth/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(new LoginRequest("user@test.com", "password1", false))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.id").isEqualTo("u1")
-                .jsonPath("$.email").isEqualTo("user@test.com")
-                .jsonPath("$.name").isEqualTo("Alice")
-                .jsonPath("$.status").isEqualTo("active");
+        ObjectMapper om = new ObjectMapper();
+        String body = om.writeValueAsString(new LoginRequest("user@test.com", "password1", false));
+
+        mockMvc.perform(post("/api/auth/login")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("u1"))
+                .andExpect(jsonPath("$.email").value("user@test.com"))
+                .andExpect(jsonPath("$.name").value("Alice"))
+                .andExpect(jsonPath("$.status").value("active"));
     }
 
     @Test
-    void login_invalidCreds_returns401() {
-        when(authService.login(any(LoginRequest.class), any()))
-                .thenReturn(Mono.error(AppException.unauthorized("Invalid credentials")));
+    void login_invalidCreds_returns401() throws Exception {
+        when(authService.login(any(LoginRequest.class), any(), any()))
+                .thenThrow(AppException.unauthorized("Invalid credentials"));
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/auth/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(new LoginRequest("user@test.com", "wrong", false))
-                .exchange()
-                .expectStatus().isUnauthorized()
-                .expectBody()
-                .jsonPath("$.message").isEqualTo("Invalid credentials");
+        ObjectMapper om = new ObjectMapper();
+        String body = om.writeValueAsString(new LoginRequest("user@test.com", "wrong", false));
+
+        mockMvc.perform(post("/api/auth/login")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("Invalid credentials"));
     }
 
     @Test
     void login_validationError_blankEmail_returns400() throws Exception {
         ObjectMapper om = new ObjectMapper();
         String body = om.writeValueAsString(new LoginRequest("", "", false));
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/auth/login")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body)
-                .exchange()
-                .expectStatus().isBadRequest();
+        mockMvc.perform(post("/api/auth/login")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
-    void me_withoutSession_returns401() {
-        when(authService.me()).thenReturn(Mono.error(AppException.unauthorized("Not authenticated")));
-
-        webTestClient.get().uri("/api/auth/me")
-                .exchange()
-                .expectStatus().isUnauthorized();
+    void me_withoutSession_returns401() throws Exception {
+        // Without @WithMockUser the request hits the security filter chain first and is rejected
+        // before reaching the controller — the AuthService stub is unnecessary because the chain
+        // returns 401 directly.
+        mockMvc.perform(get("/api/auth/me"))
+                .andExpect(status().isUnauthorized());
     }
 
     @Test
     @WithMockUser
-    void me_withSession_returns200WithUserBody() {
+    void me_withSession_returns200WithUserBody() throws Exception {
         MeResponse me = new MeResponse("u1", "user@test.com", "Alice", "active");
-        when(authService.me()).thenReturn(Mono.just(me));
+        when(authService.me()).thenReturn(me);
 
-        webTestClient.get().uri("/api/auth/me")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.id").isEqualTo("u1")
-                .jsonPath("$.email").isEqualTo("user@test.com")
-                .jsonPath("$.name").isEqualTo("Alice")
-                .jsonPath("$.status").isEqualTo("active");
+        mockMvc.perform(get("/api/auth/me"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("u1"))
+                .andExpect(jsonPath("$.email").value("user@test.com"))
+                .andExpect(jsonPath("$.name").value("Alice"))
+                .andExpect(jsonPath("$.status").value("active"));
     }
 }

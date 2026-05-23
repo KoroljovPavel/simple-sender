@@ -9,30 +9,27 @@ import com.botfunnel.user.UserStatus;
 import com.mongodb.client.result.DeleteResult;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.Answers;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
-import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
-import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.web.server.context.ServerSecurityContextRepository;
-import org.springframework.web.server.ServerWebExchange;
-import org.springframework.web.server.WebSession;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
+import org.springframework.security.web.context.SecurityContextRepository;
 
-import java.net.InetSocketAddress;
 import java.time.Duration;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -52,13 +49,13 @@ class AuthServicePasswordResetTest {
     UserRepository userRepository;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
-    ReactiveRedisTemplate<String, String> redisTemplate;
+    RedisTemplate<String, String> redisTemplate;
 
     @Mock
     PasswordEncoder passwordEncoder;
 
     @Mock
-    ServerSecurityContextRepository securityContextRepository;
+    SecurityContextRepository securityContextRepository;
 
     @Mock
     EventService eventService;
@@ -67,7 +64,7 @@ class AuthServicePasswordResetTest {
     EmailService emailService;
 
     @Mock
-    ReactiveMongoTemplate reactiveMongoTemplate;
+    MongoTemplate mongoTemplate;
 
     TokenService tokenService;
     AuthService authService;
@@ -77,46 +74,60 @@ class AuthServicePasswordResetTest {
         tokenService = new TokenService();
         authService = new AuthService(userRepository, redisTemplate, passwordEncoder,
                 securityContextRepository, eventService, emailService, tokenService,
-                reactiveMongoTemplate, SUPPORT_EMAIL, 24L, 30L);
+                mongoTemplate, SUPPORT_EMAIL, 24L, 30L);
         // Default-allow forgot-password rate limiter (Redis SET NX returns true ⇒ first hit).
         // Tests that exercise the over-limit branch override this stub explicitly.
         org.mockito.Mockito.lenient().when(redisTemplate.opsForValue()
                         .setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(true));
+                .thenReturn(true);
     }
 
-    private ServerWebExchange exchange() {
-        return MockServerWebExchange.from(MockServerHttpRequest
-                .post("/api/auth/anything")
-                .header("User-Agent", "JUnit")
-                .remoteAddress(new InetSocketAddress(IP, 12345))
-                .build());
+    private MockHttpServletRequest request() {
+        MockHttpServletRequest r = new MockHttpServletRequest("POST", "/api/auth/anything");
+        r.addHeader("User-Agent", "JUnit");
+        r.setRemoteAddr(IP);
+        return r;
+    }
+
+    private MockHttpServletResponse response() {
+        return new MockHttpServletResponse();
     }
 
     // ---------- logout ----------
 
     @Test
-    void logout_invalidatesCurrentWebSession_returnsCompletes() {
-        WebSession session = org.mockito.Mockito.mock(WebSession.class);
-        when(session.invalidate()).thenReturn(Mono.empty());
-        ServerWebExchange ex = org.mockito.Mockito.mock(ServerWebExchange.class);
-        when(ex.getSession()).thenReturn(Mono.just(session));
+    void logout_invalidatesCurrentSession_returnsNormally() {
+        MockHttpServletRequest req = request();
+        // Materialise a session so logout has something to invalidate.
+        req.getSession(true);
+        assertThat(req.getSession(false)).isNotNull();
 
-        StepVerifier.create(authService.logout(ex)).verifyComplete();
-        verify(session).invalidate();
+        assertThatCode(() -> authService.logout(req, response())).doesNotThrowAnyException();
+
+        // After invalidate, MockHttpServletRequest returns null from getSession(false).
+        assertThat(req.getSession(false)).isNull();
         // Logout must NOT touch the sessions collection — it only removes the current cookie.
-        verifyNoInteractions(reactiveMongoTemplate);
+        verifyNoInteractions(mongoTemplate);
+    }
+
+    @Test
+    void logout_noActiveSession_isNoOp() {
+        MockHttpServletRequest req = request();
+        assertThat(req.getSession(false)).as("no session before logout").isNull();
+
+        assertThatCode(() -> authService.logout(req, response())).doesNotThrowAnyException();
+        verifyNoInteractions(mongoTemplate);
     }
 
     // ---------- forgotPassword ----------
 
     @Test
     void forgotPassword_unknownEmail_completes_doesNotEmail_logsAnonymousEventWithNullMetadata() {
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
 
-        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+        authService.forgotPassword(EMAIL, request());
 
-        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString(), anyString());
+        verify(emailService, never()).sendPasswordResetEmail(anyString(), any(), anyString());
         verify(userRepository, never()).save(any());
         // userId=null AND metadata=null: storing the user-supplied email in the audit log would
         // turn the events collection itself into the enumeration oracle the response shape was
@@ -132,10 +143,10 @@ class AuthServicePasswordResetTest {
         user.setEmail(EMAIL);
         user.setName("Alice");
         user.setStatus(UserStatus.active);
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+        authService.forgotPassword(EMAIL, request());
 
         ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(cap.capture());
@@ -167,11 +178,11 @@ class AuthServicePasswordResetTest {
         user.setId("user-id-1");
         user.setEmail(EMAIL);
         user.setStatus(UserStatus.deleted);
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(user));
 
-        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+        authService.forgotPassword(EMAIL, request());
 
-        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString(), anyString());
+        verify(emailService, never()).sendPasswordResetEmail(anyString(), any(), anyString());
         verify(userRepository, never()).save(any());
         verify(eventService).logEvent(eq(null), eq("password_reset_requested"),
                 eq(IP), eq("JUnit"), eq(null));
@@ -186,11 +197,11 @@ class AuthServicePasswordResetTest {
         user.setId("user-id-1");
         user.setEmail(EMAIL);
         user.setStatus(UserStatus.blocked);
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(user));
 
-        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+        authService.forgotPassword(EMAIL, request());
 
-        verify(emailService, never()).sendPasswordResetEmail(anyString(), anyString(), anyString());
+        verify(emailService, never()).sendPasswordResetEmail(anyString(), any(), anyString());
         verify(userRepository, never()).save(any());
         verify(eventService).logEvent(eq(null), eq("password_reset_requested"),
                 eq(IP), eq("JUnit"), eq(null));
@@ -201,9 +212,9 @@ class AuthServicePasswordResetTest {
         // Over-limit returns 200 (anti-enumeration) but does NOT touch the DB or email service.
         when(redisTemplate.opsForValue()
                 .setIfAbsent(eq("forgot:rate:ip:" + IP), eq("1"), eq(Duration.ofSeconds(60))))
-                .thenReturn(Mono.just(false));
+                .thenReturn(false);
 
-        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+        authService.forgotPassword(EMAIL, request());
 
         verifyNoInteractions(userRepository);
         verifyNoInteractions(emailService);
@@ -215,21 +226,38 @@ class AuthServicePasswordResetTest {
         // Decision 4 fail-open: Redis outage must not block legitimate reset attempts.
         when(redisTemplate.opsForValue()
                 .setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.error(new RuntimeException("redis down")));
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+                .thenThrow(new RuntimeException("redis down"));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
 
-        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+        authService.forgotPassword(EMAIL, request());
 
         verify(userRepository).findByEmail(EMAIL);
     }
 
     @Test
     void forgotPassword_canonicalizesEmailToLowercase() {
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
 
-        StepVerifier.create(authService.forgotPassword("USER@Test.com", exchange())).verifyComplete();
+        authService.forgotPassword("USER@Test.com", request());
 
         verify(userRepository).findByEmail(EMAIL);
+    }
+
+    @Test
+    void forgotPassword_unknownEmail_incursDummyDelay_forEnumerationOracleSuppression() {
+        // FORGOT_DUMMY_DELAY = 40ms. The unknown-email branch must spend at least that long so
+        // the response wall-clock is comparable to the known-user save path — closing the timing
+        // oracle (security-auditor finding #2 / CWE-208). Lower bound is loose to avoid clock
+        // jitter flakes; the only invariant is "non-trivial delay was incurred".
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
+
+        Instant start = Instant.now();
+        authService.forgotPassword(EMAIL, request());
+        Duration elapsed = Duration.between(start, Instant.now());
+
+        assertThat(elapsed)
+                .as("forgot-password unknown-email branch must run the calibrated dummy delay")
+                .isGreaterThanOrEqualTo(Duration.ofMillis(30));
     }
 
     @Test
@@ -241,12 +269,12 @@ class AuthServicePasswordResetTest {
         user.setEmail(EMAIL);
         user.setName("Alice");
         user.setStatus(UserStatus.active);
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         org.mockito.Mockito.doThrow(new RuntimeException("smtp down"))
-                .when(emailService).sendPasswordResetEmail(anyString(), anyString(), anyString());
+                .when(emailService).sendPasswordResetEmail(anyString(), any(), anyString());
 
-        StepVerifier.create(authService.forgotPassword(EMAIL, exchange())).verifyComplete();
+        authService.forgotPassword(EMAIL, request());
 
         verify(eventService).logEvent(eq("user-id-1"), eq("password_reset_requested"),
                 eq(IP), eq("JUnit"), eq(null));
@@ -256,10 +284,10 @@ class AuthServicePasswordResetTest {
 
     @Test
     void resetPassword_blankToken_returns400_withoutDbCall() {
-        StepVerifier.create(authService.resetPassword("", "NewStr0ngPass", exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.resetPassword("", "NewStr0ngPass", request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
         verifyNoInteractions(userRepository);
     }
 
@@ -267,12 +295,12 @@ class AuthServicePasswordResetTest {
     void resetPassword_unknownTokenHash_returns400() {
         String raw = "garbage";
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.empty());
+                .thenReturn(java.util.Optional.empty());
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.resetPassword(raw, "NewStr0ngPass", request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
 
         verify(userRepository, never()).save(any());
     }
@@ -287,15 +315,15 @@ class AuthServicePasswordResetTest {
         u.setPasswordResetTokenHash(tokenService.hashToken(raw));
         u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.just(u));
+                .thenReturn(java.util.Optional.of(u));
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.resetPassword(raw, "NewStr0ngPass", request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
 
         verify(userRepository, never()).save(any());
-        verifyNoInteractions(reactiveMongoTemplate);
+        verifyNoInteractions(mongoTemplate);
     }
 
     @Test
@@ -308,15 +336,15 @@ class AuthServicePasswordResetTest {
         u.setPasswordResetTokenHash(tokenService.hashToken(raw));
         u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.just(u));
+                .thenReturn(java.util.Optional.of(u));
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.resetPassword(raw, "NewStr0ngPass", request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
 
         verify(userRepository, never()).save(any());
-        verifyNoInteractions(reactiveMongoTemplate);
+        verifyNoInteractions(mongoTemplate);
     }
 
     @Test
@@ -328,12 +356,12 @@ class AuthServicePasswordResetTest {
         u.setPasswordResetTokenHash(tokenService.hashToken(raw));
         u.setPasswordResetExpiresAt(Instant.now().minus(Duration.ofMinutes(1)));
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.just(u));
+                .thenReturn(java.util.Optional.of(u));
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.resetPassword(raw, "NewStr0ngPass", request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
 
         verify(userRepository, never()).save(any());
     }
@@ -348,12 +376,12 @@ class AuthServicePasswordResetTest {
         u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
         u.setPasswordResetUsedAt(Instant.now().minus(Duration.ofMinutes(1)));
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.just(u));
+                .thenReturn(java.util.Optional.of(u));
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.resetPassword(raw, "NewStr0ngPass", request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
 
         verify(userRepository, never()).save(any());
     }
@@ -369,14 +397,13 @@ class AuthServicePasswordResetTest {
         u.setPasswordResetTokenHash(tokenService.hashToken(raw));
         u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.just(u));
+                .thenReturn(java.util.Optional.of(u));
         when(passwordEncoder.encode("NewStr0ngPass")).thenReturn("new-hash");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-        when(reactiveMongoTemplate.remove(any(Query.class), eq("sessions")))
-                .thenReturn(Mono.just(DeleteResult.acknowledged(2L)));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(mongoTemplate.remove(any(Query.class), eq("sessions")))
+                .thenReturn(DeleteResult.acknowledged(2L));
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .verifyComplete();
+        authService.resetPassword(raw, "NewStr0ngPass", request());
 
         ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(cap.capture());
@@ -392,7 +419,7 @@ class AuthServicePasswordResetTest {
         assertThat(saved.getUpdatedAt()).isNotNull();
 
         ArgumentCaptor<Query> queryCap = ArgumentCaptor.forClass(Query.class);
-        verify(reactiveMongoTemplate).remove(queryCap.capture(), eq("sessions"));
+        verify(mongoTemplate).remove(queryCap.capture(), eq("sessions"));
         // The query must filter on the verified principal field path (top-level "principal").
         // Spring Session's MongoIndexedSessionRepository indexes principal name there.
         Query query = queryCap.getValue();
@@ -406,11 +433,9 @@ class AuthServicePasswordResetTest {
 
     @Test
     void resetPassword_callsPasswordEncoderEncodeOnce_withNewPassword() {
-        // Mirrors login + register: BCrypt runs on Schedulers.boundedElastic so the event loop
-        // is not blocked. Verifying scheduler placement requires a Thread.currentThread() probe
-        // we don't need here; this test only locks in that encode() IS called with the new
-        // password (not the old hash). Scheduler discipline is verified at the integration level
-        // by the suite passing under realistic concurrency.
+        // Under the servlet stack BCrypt runs synchronously on the calling VT — no scheduler
+        // gymnastics. This test only locks in that encode() IS called with the new password
+        // (not the old hash).
         String raw = "raw-valid";
         User u = new User();
         u.setId("user-id-1");
@@ -419,14 +444,13 @@ class AuthServicePasswordResetTest {
         u.setPasswordResetTokenHash(tokenService.hashToken(raw));
         u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.just(u));
+                .thenReturn(java.util.Optional.of(u));
         when(passwordEncoder.encode("NewStr0ngPass")).thenReturn("new-hash");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-        when(reactiveMongoTemplate.remove(any(Query.class), eq("sessions")))
-                .thenReturn(Mono.just(DeleteResult.acknowledged(0L)));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(mongoTemplate.remove(any(Query.class), eq("sessions")))
+                .thenReturn(DeleteResult.acknowledged(0L));
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .verifyComplete();
+        authService.resetPassword(raw, "NewStr0ngPass", request());
         verify(passwordEncoder).encode("NewStr0ngPass");
     }
 
@@ -442,14 +466,14 @@ class AuthServicePasswordResetTest {
         u.setPasswordResetTokenHash(tokenService.hashToken(raw));
         u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.just(u));
+                .thenReturn(java.util.Optional.of(u));
         when(passwordEncoder.encode(anyString())).thenReturn("new-hash");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-        when(reactiveMongoTemplate.remove(any(Query.class), eq("sessions")))
-                .thenReturn(Mono.just(DeleteResult.acknowledged(0L)));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(mongoTemplate.remove(any(Query.class), eq("sessions")))
+                .thenReturn(DeleteResult.acknowledged(0L));
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .verifyComplete();
+        assertThatCode(() -> authService.resetPassword(raw, "NewStr0ngPass", request()))
+                .doesNotThrowAnyException();
     }
 
     @Test
@@ -462,18 +486,17 @@ class AuthServicePasswordResetTest {
         u.setPasswordResetTokenHash(tokenService.hashToken(raw));
         u.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofMinutes(30)));
         when(userRepository.findByPasswordResetTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.just(u));
+                .thenReturn(java.util.Optional.of(u));
         when(passwordEncoder.encode(anyString())).thenReturn("new-hash");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
-        when(reactiveMongoTemplate.remove(any(Query.class), eq("sessions")))
-                .thenReturn(Mono.just(DeleteResult.acknowledged(0L)));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
+        when(mongoTemplate.remove(any(Query.class), eq("sessions")))
+                .thenReturn(DeleteResult.acknowledged(0L));
 
-        StepVerifier.create(authService.resetPassword(raw, "NewStr0ngPass", exchange()))
-                .verifyComplete();
+        authService.resetPassword(raw, "NewStr0ngPass", request());
 
         Query expected = Query.query(Criteria.where("principal").is("user-id-1"));
         ArgumentCaptor<Query> cap = ArgumentCaptor.forClass(Query.class);
-        verify(reactiveMongoTemplate).remove(cap.capture(), eq("sessions"));
+        verify(mongoTemplate).remove(cap.capture(), eq("sessions"));
         assertThat(cap.getValue().getQueryObject()).isEqualTo(expected.getQueryObject());
     }
 }

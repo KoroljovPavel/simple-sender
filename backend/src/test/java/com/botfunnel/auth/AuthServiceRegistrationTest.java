@@ -14,21 +14,19 @@ import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.http.HttpStatus;
-import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
-import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.security.web.server.context.ServerSecurityContextRepository;
-import org.springframework.web.server.ServerWebExchange;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
+import org.springframework.security.web.context.SecurityContextRepository;
 
 import java.time.Duration;
 import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -47,13 +45,13 @@ class AuthServiceRegistrationTest {
     UserRepository userRepository;
 
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
-    ReactiveRedisTemplate<String, String> redisTemplate;
+    RedisTemplate<String, String> redisTemplate;
 
     @Mock
     PasswordEncoder passwordEncoder;
 
     @Mock
-    ServerSecurityContextRepository securityContextRepository;
+    SecurityContextRepository securityContextRepository;
 
     @Mock
     EventService eventService;
@@ -62,7 +60,7 @@ class AuthServiceRegistrationTest {
     EmailService emailService;
 
     @Mock
-    ReactiveMongoTemplate reactiveMongoTemplate;
+    MongoTemplate mongoTemplate;
 
     TokenService tokenService;
 
@@ -74,32 +72,27 @@ class AuthServiceRegistrationTest {
         tokenService = new TokenService();
         authService = new AuthService(userRepository, redisTemplate, passwordEncoder,
                 securityContextRepository, eventService, emailService, tokenService,
-                reactiveMongoTemplate, SUPPORT_EMAIL, 24L, 30L);
+                mongoTemplate, SUPPORT_EMAIL, 24L, 30L);
         // Permissive default for the per-IP register rate-limit (Redis INCR + EXPIRE). Tests that
         // exercise the rate-limit branch override these explicitly.
-        org.mockito.Mockito.lenient().when(redisTemplate.opsForValue().increment(org.mockito.ArgumentMatchers.anyString()))
-                .thenReturn(Mono.just(1L));
-        org.mockito.Mockito.lenient().when(redisTemplate.expire(org.mockito.ArgumentMatchers.anyString(),
-                        org.mockito.ArgumentMatchers.any(Duration.class)))
-                .thenReturn(Mono.just(true));
-        // Auto-login after register opens a session via securityContextRepository.save —
-        // stub it permissively here so every register test doesn't have to repeat it. Tests
-        // that exercise the rate-limit/conflict branches never reach this call, hence lenient.
-        org.mockito.Mockito.lenient().when(securityContextRepository.save(
-                        org.mockito.ArgumentMatchers.any(),
-                        org.mockito.ArgumentMatchers.any()))
-                .thenReturn(Mono.empty());
+        org.mockito.Mockito.lenient().when(redisTemplate.opsForValue().increment(anyString()))
+                .thenReturn(1L);
+        org.mockito.Mockito.lenient().when(redisTemplate.expire(anyString(), any()))
+                .thenReturn(true);
     }
 
-    private ServerWebExchange exchange() {
-        return MockServerWebExchange.from(MockServerHttpRequest
-                .post("/api/auth/register")
-                .header("User-Agent", "JUnit")
-                .remoteAddress(new java.net.InetSocketAddress("127.0.0.1", 12345))
-                .build());
+    private MockHttpServletRequest request() {
+        MockHttpServletRequest r = new MockHttpServletRequest("POST", "/api/auth/register");
+        r.addHeader("User-Agent", "JUnit");
+        r.setRemoteAddr("127.0.0.1");
+        return r;
     }
 
-    private RegisterRequest request(String email, String password) {
+    private MockHttpServletResponse response() {
+        return new MockHttpServletResponse();
+    }
+
+    private RegisterRequest registerRequest(String email, String password) {
         RegisterRequest r = new RegisterRequest();
         r.setEmail(email);
         r.setPassword(password);
@@ -110,17 +103,16 @@ class AuthServiceRegistrationTest {
 
     @Test
     void register_newEmail_savesPendingUser_dispatchesEmail_returnsId() {
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
         when(passwordEncoder.encode("Strong1Pass")).thenReturn("hashed-pw");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
             u.setId("user-id-1");
-            return Mono.just(u);
+            return u;
         });
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
-                .assertNext(resp -> assertThat(resp.id()).isEqualTo("user-id-1"))
-                .verifyComplete();
+        var resp = authService.register(registerRequest(EMAIL, "Strong1Pass"), request(), response());
+        assertThat(resp.id()).isEqualTo("user-id-1");
 
         ArgumentCaptor<User> userCap = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(userCap.capture());
@@ -139,7 +131,7 @@ class AuthServiceRegistrationTest {
         assertThat(saved.getUpdatedAt()).isNotNull();
 
         // EmailService receives the RAW token (43 chars base64url), never the hash.
-        // name is null on register (no longer collected — see AuthService.applyRegistrationAsync).
+        // name is null on register (no longer collected — see AuthService.applyRegistration).
         ArgumentCaptor<String> tokenCap = ArgumentCaptor.forClass(String.class);
         verify(emailService).sendVerificationEmail(eq(EMAIL), org.mockito.ArgumentMatchers.isNull(), tokenCap.capture());
         assertThat(tokenCap.getValue()).hasSize(43).doesNotContain("=");
@@ -150,17 +142,15 @@ class AuthServiceRegistrationTest {
 
     @Test
     void register_canonicalizesEmailToLowercase() {
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
         when(passwordEncoder.encode(anyString())).thenReturn("hashed-pw");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
             u.setId("user-id-1");
-            return Mono.just(u);
+            return u;
         });
 
-        StepVerifier.create(authService.register(request("USER@Test.com", "Strong1Pass"), exchange()))
-                .expectNextCount(1)
-                .verifyComplete();
+        authService.register(registerRequest("USER@Test.com", "Strong1Pass"), request(), response());
 
         verify(userRepository).findByEmail(EMAIL);
         ArgumentCaptor<User> userCap = ArgumentCaptor.forClass(User.class);
@@ -173,15 +163,14 @@ class AuthServiceRegistrationTest {
         User existing = new User();
         existing.setEmail(EMAIL);
         existing.setStatus(UserStatus.active);
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(existing));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(existing));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
-                .expectErrorMatches(e -> {
-                    if (!(e instanceof AppException ae)) return false;
-                    return ae.getStatus() == HttpStatus.CONFLICT
-                            && ae.getMessage().equals("Користувач з таким email вже існує");
-                })
-                .verify();
+        assertThatThrownBy(() -> authService.register(
+                registerRequest(EMAIL, "Strong1Pass"), request(), response()))
+                .isInstanceOfSatisfying(AppException.class, ae -> {
+                    assertThat(ae.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(ae.getMessage()).isEqualTo("Користувач з таким email вже існує");
+                });
 
         verify(userRepository, never()).save(any());
         verifyNoInteractions(emailService);
@@ -193,15 +182,14 @@ class AuthServiceRegistrationTest {
         existing.setEmail(EMAIL);
         existing.setStatus(UserStatus.deleted);
         existing.setDeletedAt(Instant.now().minus(Duration.ofDays(15)));
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(existing));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(existing));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
-                .expectErrorMatches(e -> {
-                    if (!(e instanceof AppException ae)) return false;
-                    return ae.getStatus() == HttpStatus.CONFLICT
-                            && ae.getMessage().contains(SUPPORT_EMAIL);
-                })
-                .verify();
+        assertThatThrownBy(() -> authService.register(
+                registerRequest(EMAIL, "Strong1Pass"), request(), response()))
+                .isInstanceOfSatisfying(AppException.class, ae -> {
+                    assertThat(ae.getStatus()).isEqualTo(HttpStatus.CONFLICT);
+                    assertThat(ae.getMessage()).contains(SUPPORT_EMAIL);
+                });
 
         verify(userRepository, never()).save(any());
         verifyNoInteractions(emailService);
@@ -214,13 +202,12 @@ class AuthServiceRegistrationTest {
         existing.setEmail(EMAIL);
         existing.setStatus(UserStatus.deleted);
         existing.setDeletedAt(Instant.now().minus(Duration.ofDays(31)));
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(existing));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(existing));
         when(passwordEncoder.encode("Strong1Pass")).thenReturn("hashed-pw");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
-                .assertNext(resp -> assertThat(resp.id()).isEqualTo("old-id"))
-                .verifyComplete();
+        var resp = authService.register(registerRequest(EMAIL, "Strong1Pass"), request(), response());
+        assertThat(resp.id()).isEqualTo("old-id");
 
         ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(cap.capture());
@@ -241,13 +228,11 @@ class AuthServiceRegistrationTest {
         existing.setStatus(UserStatus.deleted);
         existing.setDeletedAt(Instant.now().minus(Duration.ofDays(31)));
         existing.setSuperAdmin(true);
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(existing));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(existing));
         when(passwordEncoder.encode("Strong1Pass")).thenReturn("hashed-pw");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
-                .expectNextCount(1)
-                .verifyComplete();
+        authService.register(registerRequest(EMAIL, "Strong1Pass"), request(), response());
 
         ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(cap.capture());
@@ -260,12 +245,13 @@ class AuthServiceRegistrationTest {
     void register_perIpRateLimit_returns429_andSkipsBcrypt() {
         // 11th attempt from same IP within window must be rejected before BCrypt runs.
         when(redisTemplate.opsForValue().increment("register:rate:ip:127.0.0.1"))
-                .thenReturn(Mono.just(11L));
+                .thenReturn(11L);
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.TOO_MANY_REQUESTS)
-                .verify();
+        assertThatThrownBy(() -> authService.register(
+                registerRequest(EMAIL, "Strong1Pass"), request(), response()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 
         verify(passwordEncoder, never()).encode(anyString());
         verify(userRepository, never()).findByEmail(anyString());
@@ -275,37 +261,35 @@ class AuthServiceRegistrationTest {
     void register_redisDown_failsOpen_andProceeds() {
         // Decision 4 fail-open: Redis outage must not block legitimate registration.
         when(redisTemplate.opsForValue().increment(anyString()))
-                .thenReturn(Mono.error(new RuntimeException("redis down")));
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+                .thenThrow(new RuntimeException("redis down"));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
         when(passwordEncoder.encode(anyString())).thenReturn("hashed-pw");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
             u.setId("user-id-1");
-            return Mono.just(u);
+            return u;
         });
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
-                .expectNextCount(1)
-                .verifyComplete();
+        var resp = authService.register(registerRequest(EMAIL, "Strong1Pass"), request(), response());
+        assertThat(resp.id()).isEqualTo("user-id-1");
     }
 
     @Test
     void register_emailDispatchFailure_doesNotPropagate_returns201() {
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
         when(passwordEncoder.encode(anyString())).thenReturn("hashed-pw");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {
             User u = inv.getArgument(0);
             u.setId("user-id-1");
-            return Mono.just(u);
+            return u;
         });
         // EmailService.send is fire-and-forget by design; even if the dispatch path threw a
         // synchronous exception (which it should not), the registration must still succeed.
         org.mockito.Mockito.doThrow(new RuntimeException("smtp down"))
-                .when(emailService).sendVerificationEmail(anyString(), anyString(), anyString());
+                .when(emailService).sendVerificationEmail(anyString(), any(), anyString());
 
-        StepVerifier.create(authService.register(request(EMAIL, "Strong1Pass"), exchange()))
-                .expectNextCount(1)
-                .verifyComplete();
+        var resp = authService.register(registerRequest(EMAIL, "Strong1Pass"), request(), response());
+        assertThat(resp.id()).isEqualTo("user-id-1");
     }
 
     // ---------- verifyEmail ----------
@@ -322,12 +306,11 @@ class AuthServiceRegistrationTest {
         user.setEmailVerificationTokenHash(hash);
         user.setEmailVerificationExpiresAt(Instant.now().plus(Duration.ofHours(1)));
 
-        when(userRepository.findByEmailVerificationTokenHash(hash)).thenReturn(Mono.just(user));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.findByEmailVerificationTokenHash(hash)).thenReturn(java.util.Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(authService.verifyEmail(raw, exchange()))
-                .assertNext(resp -> assertThat(resp.redirect()).isEqualTo("/login"))
-                .verifyComplete();
+        var resp = authService.verifyEmail(raw, request());
+        assertThat(resp.redirect()).isEqualTo("/login");
 
         ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(cap.capture());
@@ -338,17 +321,16 @@ class AuthServiceRegistrationTest {
         assertThat(saved.getUpdatedAt()).isNotNull();
 
         verify(eventService).logEvent(eq("user-id-1"), eq("email_verified"),
-                org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.any(),
-                org.mockito.ArgumentMatchers.any());
+                any(), any(), any());
     }
 
     @Test
     void verifyEmail_blankToken_returns400_withoutDbCall() {
         // Guard against NPE / blank-token path that would otherwise propagate to a 500.
-        StepVerifier.create(authService.verifyEmail("", exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.verifyEmail("", request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
         verifyNoInteractions(userRepository);
     }
 
@@ -356,12 +338,12 @@ class AuthServiceRegistrationTest {
     void verifyEmail_invalidToken_returns400_notServerError() {
         String raw = "garbage-token";
         when(userRepository.findByEmailVerificationTokenHash(tokenService.hashToken(raw)))
-                .thenReturn(Mono.empty());
+                .thenReturn(java.util.Optional.empty());
 
-        StepVerifier.create(authService.verifyEmail(raw, exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.verifyEmail(raw, request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
 
         verify(userRepository, never()).save(any());
         verifyNoInteractions(eventService);
@@ -379,15 +361,13 @@ class AuthServiceRegistrationTest {
         // expiresAt before now
         user.setEmailVerificationExpiresAt(Instant.now().minus(Duration.ofMinutes(5)));
 
-        when(userRepository.findByEmailVerificationTokenHash(hash)).thenReturn(Mono.just(user));
+        when(userRepository.findByEmailVerificationTokenHash(hash)).thenReturn(java.util.Optional.of(user));
 
-        StepVerifier.create(authService.verifyEmail(raw, exchange()))
-                .expectErrorMatches(e -> {
-                    if (!(e instanceof AppException ae)) return false;
-                    return ae.getStatus() == HttpStatus.BAD_REQUEST
-                            && "TOKEN_EXPIRED".equals(ae.getCode());
-                })
-                .verify();
+        assertThatThrownBy(() -> authService.verifyEmail(raw, request()))
+                .isInstanceOfSatisfying(AppException.class, ae -> {
+                    assertThat(ae.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
+                    assertThat(ae.getCode()).isEqualTo("TOKEN_EXPIRED");
+                });
 
         verify(userRepository, never()).save(any());
     }
@@ -403,12 +383,12 @@ class AuthServiceRegistrationTest {
         user.setStatus(UserStatus.deleted);
         user.setEmailVerificationTokenHash(hash);
         user.setEmailVerificationExpiresAt(Instant.now().plus(Duration.ofHours(1)));
-        when(userRepository.findByEmailVerificationTokenHash(hash)).thenReturn(Mono.just(user));
+        when(userRepository.findByEmailVerificationTokenHash(hash)).thenReturn(java.util.Optional.of(user));
 
-        StepVerifier.create(authService.verifyEmail(raw, exchange()))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.BAD_REQUEST)
-                .verify();
+        assertThatThrownBy(() -> authService.verifyEmail(raw, request()))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
     }
 
     @Test
@@ -423,12 +403,11 @@ class AuthServiceRegistrationTest {
         user.setStatus(UserStatus.active);
         user.setEmailVerificationTokenHash(hash);
         user.setEmailVerificationExpiresAt(Instant.now().plus(Duration.ofHours(1)));
-        when(userRepository.findByEmailVerificationTokenHash(hash)).thenReturn(Mono.just(user));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.findByEmailVerificationTokenHash(hash)).thenReturn(java.util.Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(authService.verifyEmail(raw, exchange()))
-                .assertNext(resp -> assertThat(resp.redirect()).isEqualTo("/login"))
-                .verifyComplete();
+        var resp = authService.verifyEmail(raw, request());
+        assertThat(resp.redirect()).isEqualTo("/login");
     }
 
     // ---------- resendVerification ----------
@@ -437,18 +416,17 @@ class AuthServiceRegistrationTest {
     void resendVerification_pendingUser_firstCall_setsRateLimitKey_sendsEmail() {
         when(redisTemplate.opsForValue()
                 .setIfAbsent(eq("resend:rate:" + EMAIL), eq("1"), eq(Duration.ofSeconds(60))))
-                .thenReturn(Mono.just(true));
+                .thenReturn(true);
 
         User user = new User();
         user.setId("user-id-1");
         user.setEmail(EMAIL);
         user.setName("Alice");
         user.setStatus(UserStatus.pending);
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(authService.resendVerification(EMAIL))
-                .verifyComplete();
+        authService.resendVerification(EMAIL);
 
         ArgumentCaptor<User> cap = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(cap.capture());
@@ -466,12 +444,12 @@ class AuthServiceRegistrationTest {
     void resendVerification_within60s_returns429() {
         when(redisTemplate.opsForValue()
                 .setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(false));
+                .thenReturn(false);
 
-        StepVerifier.create(authService.resendVerification(EMAIL))
-                .expectErrorMatches(e -> e instanceof AppException
-                        && ((AppException) e).getStatus() == HttpStatus.TOO_MANY_REQUESTS)
-                .verify();
+        assertThatThrownBy(() -> authService.resendVerification(EMAIL))
+                .isInstanceOf(AppException.class)
+                .extracting(e -> ((AppException) e).getStatus())
+                .isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
 
         verifyNoInteractions(userRepository);
         verifyNoInteractions(emailService);
@@ -481,11 +459,10 @@ class AuthServiceRegistrationTest {
     void resendVerification_unknownEmail_completes_doesNotRevealNonExistence() {
         when(redisTemplate.opsForValue()
                 .setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(true));
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+                .thenReturn(true);
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
 
-        StepVerifier.create(authService.resendVerification(EMAIL))
-                .verifyComplete();
+        authService.resendVerification(EMAIL);
 
         verifyNoInteractions(emailService);
     }
@@ -494,15 +471,14 @@ class AuthServiceRegistrationTest {
     void resendVerification_alreadyActiveUser_doesNotSendEmail_completesQuietly() {
         when(redisTemplate.opsForValue()
                 .setIfAbsent(anyString(), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(true));
+                .thenReturn(true);
 
         User user = new User();
         user.setEmail(EMAIL);
         user.setStatus(UserStatus.active);
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user));
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.of(user));
 
-        StepVerifier.create(authService.resendVerification(EMAIL))
-                .verifyComplete();
+        authService.resendVerification(EMAIL);
 
         verify(userRepository, never()).save(any());
         verifyNoInteractions(emailService);
@@ -512,11 +488,10 @@ class AuthServiceRegistrationTest {
     void resendVerification_canonicalizesEmail() {
         when(redisTemplate.opsForValue()
                 .setIfAbsent(eq("resend:rate:" + EMAIL), anyString(), any(Duration.class)))
-                .thenReturn(Mono.just(true));
-        when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.empty());
+                .thenReturn(true);
+        when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
 
-        StepVerifier.create(authService.resendVerification("USER@Test.com"))
-                .verifyComplete();
+        authService.resendVerification("USER@Test.com");
 
         verify(userRepository).findByEmail(EMAIL);
     }

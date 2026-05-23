@@ -171,8 +171,8 @@ public class ProcessTelegramUpdateJob {
             ParsedCommand parsed = TelegramCommandParser.parse(text);
             String command = parsed.command().toLowerCase();
             switch (command) {
-                case "start" -> handleStart(projectId, userId, isPrivate, chatId, message, parsed.payload());
-                case "stop" -> handleStop(projectId, userId, isPrivate, chatId);
+                case "start" -> handleStart(projectId, userId, isPrivate, chatId, chatType, message, parsed.payload());
+                case "stop" -> handleStop(projectId, userId, isPrivate, chatId, chatType);
                 default -> logEventMessageReceived(projectId, userId, chatId);
             }
             return;
@@ -198,10 +198,10 @@ public class ProcessTelegramUpdateJob {
     }
 
     private void handleStart(String projectId, String userId, boolean isPrivate, Long chatId,
-                             Message message, String startPayload) {
+                             String chatType, Message message, String startPayload) {
         if (!isPrivate || chatId == null) {
             // AC9 — group/supergroup/channel /start: event only, NO ownerChatId populate, NO stubs.
-            logEventCommandStart(projectId, userId, chatId, startPayload);
+            logEventCommandStart(projectId, userId, chatId, chatType, startPayload);
             return;
         }
 
@@ -240,10 +240,10 @@ public class ProcessTelegramUpdateJob {
                 from == null ? null : from.username(),
                 from == null ? null : from.language_code()).block();
         funnelTriggerService.fire(projectId, chatId, "on_start", startPayload).block();
-        logEventCommandStart(projectId, userId, chatId, startPayload);
+        logEventCommandStart(projectId, userId, chatId, chatType, startPayload);
     }
 
-    private void handleStop(String projectId, String userId, boolean isPrivate, Long chatId) {
+    private void handleStop(String projectId, String userId, boolean isPrivate, Long chatId, String chatType) {
         if (isPrivate && chatId != null) {
             Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).block();
             if (bot == null) {
@@ -253,23 +253,25 @@ public class ProcessTelegramUpdateJob {
             subscriberService.markUnsubscribed(projectId, bot.getTelegramBotId(), chatId).block();
             funnelTriggerService.cancelActiveFor(projectId, chatId).block();
         }
-        logEventCommandStop(projectId, userId, chatId);
+        logEventCommandStop(projectId, userId, chatId, chatType);
     }
 
-    private void logEventCommandStart(String projectId, String userId, Long chatId, String startPayload) {
+    private void logEventCommandStart(String projectId, String userId, Long chatId, String chatType, String startPayload) {
         // LinkedHashMap allows null values; Map.of does not — chatId can be null in malformed
         // payloads even though our dispatch usually filters those upstream.
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("projectId", projectId);
         metadata.put("startPayload", startPayload);
         metadata.put("chatId", chatId);
+        metadata.put("chatType", chatType);
         eventService.logEventBlocking(userId, EVT_COMMAND_START, null, null, metadata).block();
     }
 
-    private void logEventCommandStop(String projectId, String userId, Long chatId) {
+    private void logEventCommandStop(String projectId, String userId, Long chatId, String chatType) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("projectId", projectId);
         metadata.put("chatId", chatId);
+        metadata.put("chatType", chatType);
         eventService.logEventBlocking(userId, EVT_COMMAND_STOP, null, null, metadata).block();
     }
 

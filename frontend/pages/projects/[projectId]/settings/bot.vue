@@ -14,6 +14,7 @@ const { t } = useI18n()
 const route = useRoute()
 const apiError = useApiError()
 const botStore = useBotStore()
+const projectsStore = useProjectsStore()
 
 const projectId = computed(() => String(route.params.projectId ?? ''))
 
@@ -46,6 +47,9 @@ const maskedToken = computed(() => {
 
 onMounted(() => {
   if (!import.meta.client) return
+  if (!projectsStore.isLoaded) {
+    projectsStore.fetchAll().catch((err) => console.warn('[projects] fetchAll failed', err))
+  }
   void botStore.fetch(projectId.value)
 })
 

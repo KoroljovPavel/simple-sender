@@ -33,13 +33,17 @@ const BOT_FIXTURE: Bot = {
 
 const VALID_TOKEN = '1234567890:AAFakeTokenABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
-const { botStoreMock, routeMock } = vi.hoisted(() => ({
+const { botStoreMock, projectsStoreMock, routeMock } = vi.hoisted(() => ({
   botStoreMock: {
     current: null as Bot | null,
     fetch: vi.fn(),
     connect: vi.fn(),
     disconnect: vi.fn(),
     sendTestMessage: vi.fn(),
+  },
+  projectsStoreMock: {
+    isLoaded: false,
+    fetchAll: vi.fn(),
   },
   routeMock: {
     params: { projectId: 'p1' } as Record<string, string>,
@@ -52,6 +56,7 @@ const { botStoreMock, routeMock } = vi.hoisted(() => ({
 const reactiveStore = reactive(botStoreMock) as typeof botStoreMock
 
 mockNuxtImport('useBotStore', () => () => reactiveStore)
+mockNuxtImport('useProjectsStore', () => () => projectsStoreMock)
 mockNuxtImport('useRoute', () => () => routeMock)
 mockNuxtImport('useLocalePath', () => () => (p: string) => p)
 mockNuxtImport('useApi', () => () => vi.fn())
@@ -64,6 +69,9 @@ function resetMock() {
   botStoreMock.disconnect.mockReset()
   botStoreMock.sendTestMessage.mockReset()
   botStoreMock.fetch.mockResolvedValue(null)
+  projectsStoreMock.fetchAll.mockReset()
+  projectsStoreMock.fetchAll.mockResolvedValue(undefined)
+  projectsStoreMock.isLoaded = false
   reactiveStore.current = null
   routeMock.params = { projectId: PROJECT_ID }
 }
@@ -79,6 +87,24 @@ describe('projects/[projectId]/settings/bot page', () => {
 
     expect(botStoreMock.fetch).toHaveBeenCalledTimes(1)
     expect(botStoreMock.fetch).toHaveBeenCalledWith(PROJECT_ID)
+  })
+
+  it('hydrates projects store on mount when not yet loaded (Bug #1 — F5)', async () => {
+    projectsStoreMock.isLoaded = false
+
+    await mountSuspended(BotPage, mountOptions)
+    await settle()
+
+    expect(projectsStoreMock.fetchAll).toHaveBeenCalledTimes(1)
+  })
+
+  it('skips fetchAll when projects store already loaded', async () => {
+    projectsStoreMock.isLoaded = true
+
+    await mountSuspended(BotPage, mountOptions)
+    await settle()
+
+    expect(projectsStoreMock.fetchAll).not.toHaveBeenCalled()
   })
 
   it('renders Connect form when bot.current is null', async () => {

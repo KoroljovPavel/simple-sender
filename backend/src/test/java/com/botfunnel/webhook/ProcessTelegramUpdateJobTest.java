@@ -189,6 +189,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         assertThat(event.getMetadata()).containsEntry("startPayload", "ref_X");
         assertThat(event.getMetadata()).containsEntry("chatId", 100L);
         assertThat(event.getMetadata()).containsEntry("projectId", projectId);
+        assertThat(event.getMetadata()).containsEntry("chatType", "private");
         verify(subscriberService, times(1)).upsertFromTelegramUpdate(
                 eq(projectId), eq(TELEGRAM_BOT_ID), eq(100L), eq("private"),
                 eq(100L), anyString(), anyString(), anyString(), anyString());
@@ -232,6 +233,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         Event event = onlyEvent();
         assertThat(event.getEventType()).isEqualTo("telegram_command_stop");
         assertThat(event.getMetadata()).containsEntry("chatId", 100L);
+        assertThat(event.getMetadata()).containsEntry("chatType", "private");
         verify(subscriberService, times(1)).markUnsubscribed(projectId, TELEGRAM_BOT_ID, 100L);
         verify(funnelTriggerService, times(1)).cancelActiveFor(projectId, 100L);
         verify(subscriberService, never())
@@ -250,6 +252,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
         Event event = onlyEvent();
         assertThat(event.getEventType()).isEqualTo("telegram_command_start");
+        assertThat(event.getMetadata()).containsEntry("chatType", "group");
         verify(subscriberService, never())
                 .upsertFromTelegramUpdate(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(funnelTriggerService, never()).fire(any(), any(), any(), any());
@@ -460,8 +463,53 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
         Event event = onlyEvent();
         assertThat(event.getEventType()).isEqualTo("telegram_command_stop");
+        assertThat(event.getMetadata()).containsEntry("chatType", "group");
         verify(subscriberService, never()).markUnsubscribed(any(), any(), any());
         verify(funnelTriggerService, never()).cancelActiveFor(any(), any());
+    }
+
+    // ─── Bug #2 — metadata.chatType across all chat.type values ────────────────
+
+    static Stream<String> chatTypeVariants() {
+        return Stream.of("private", "group", "supergroup", "channel");
+    }
+
+    @ParameterizedTest
+    @MethodSource("chatTypeVariants")
+    void commandStart_eventCarriesChatType(String chatType) {
+        // Bug #2 — metadata.chatType MUST be present on telegram_command_start for every chat.type
+        // value Telegram emits. Manual-test checklist 2.6 (private) and 2.15 (group/supergroup)
+        // assert it; AC9 verification depends on the field appearing for non-private chats.
+        Long chatId = "private".equals(chatType) ? 100L : -100200300L;
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                messagePayload(chatId, chatType, 999L, "/start ref_X", 1L), 1L);
+
+        job.handle(raw.getId());
+
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_command_start");
+        assertThat(event.getMetadata())
+                .as("metadata.chatType must mirror chat.type from the Telegram update")
+                .containsEntry("chatType", chatType);
+    }
+
+    @ParameterizedTest
+    @MethodSource("chatTypeVariants")
+    void commandStop_eventCarriesChatType(String chatType) {
+        // Bug #2 mirror — telegram_command_stop must carry metadata.chatType for every chat.type.
+        // Manual-test checklist 2.13 asserts the private variant; group/supergroup/channel are
+        // implied by the same contract.
+        Long chatId = "private".equals(chatType) ? 100L : -100200300L;
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                messagePayload(chatId, chatType, 999L, "/stop", 1L), 1L);
+
+        job.handle(raw.getId());
+
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_command_stop");
+        assertThat(event.getMetadata())
+                .as("metadata.chatType must mirror chat.type from the Telegram update")
+                .containsEntry("chatType", chatType);
     }
 
     @Test

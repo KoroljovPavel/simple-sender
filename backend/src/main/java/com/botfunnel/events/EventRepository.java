@@ -1,6 +1,6 @@
 package com.botfunnel.events;
 
-import org.springframework.data.mongodb.repository.ReactiveMongoRepository;
+import org.springframework.data.mongodb.repository.MongoRepository;
 
-public interface EventRepository extends ReactiveMongoRepository<Event, String> {
+public interface EventRepository extends MongoRepository<Event, String> {
 }

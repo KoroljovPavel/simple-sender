@@ -1,14 +1,15 @@
 package com.botfunnel.bot;
 
-import org.springframework.data.mongodb.repository.ReactiveMongoRepository;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
+import org.springframework.data.mongodb.repository.MongoRepository;
 
-public interface BotRepository extends ReactiveMongoRepository<Bot, String> {
+import java.util.List;
+import java.util.Optional;
 
-    Mono<Bot> findByProjectIdAndStatus(String projectId, BotStatus status);
+public interface BotRepository extends MongoRepository<Bot, String> {
 
-    Flux<Bot> findByProjectId(String projectId);
+    Optional<Bot> findByProjectIdAndStatus(String projectId, BotStatus status);
 
-    Mono<Bot> findFirstByTelegramBotIdAndStatus(Long telegramBotId, BotStatus status);
+    List<Bot> findByProjectId(String projectId);
+
+    Optional<Bot> findFirstByTelegramBotIdAndStatus(Long telegramBotId, BotStatus status);
 }

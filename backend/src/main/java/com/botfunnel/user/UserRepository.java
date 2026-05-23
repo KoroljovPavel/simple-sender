@@ -1,18 +1,18 @@
 package com.botfunnel.user;
 
-import org.springframework.data.mongodb.repository.ReactiveMongoRepository;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
+import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 
-public interface UserRepository extends ReactiveMongoRepository<User, String> {
+public interface UserRepository extends MongoRepository<User, String> {
 
-    Mono<User> findByEmail(String email);
+    Optional<User> findByEmail(String email);
 
-    Mono<User> findByEmailVerificationTokenHash(String hash);
+    Optional<User> findByEmailVerificationTokenHash(String hash);
 
-    Mono<User> findByPasswordResetTokenHash(String hash);
+    Optional<User> findByPasswordResetTokenHash(String hash);
 
-    Flux<User> findByStatusAndDeletedAtBefore(UserStatus status, Instant cutoff);
+    List<User> findByStatusAndDeletedAtBefore(UserStatus status, Instant cutoff);
 }

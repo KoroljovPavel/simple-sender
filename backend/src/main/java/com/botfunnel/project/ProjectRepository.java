@@ -1,22 +1,22 @@
 package com.botfunnel.project;
 
-import org.springframework.data.mongodb.repository.ReactiveMongoRepository;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
+import org.springframework.data.mongodb.repository.MongoRepository;
 
 import java.time.Instant;
+import java.util.List;
+import java.util.Optional;
 
-public interface ProjectRepository extends ReactiveMongoRepository<Project, String> {
+public interface ProjectRepository extends MongoRepository<Project, String> {
 
-    Flux<Project> findByOwnerIdAndDeletedAtIsNullOrderByCreatedAtDesc(String ownerId);
+    List<Project> findByOwnerIdAndDeletedAtIsNullOrderByCreatedAtDesc(String ownerId);
 
-    Flux<Project> findByOwnerIdOrderByCreatedAtDesc(String ownerId);
+    List<Project> findByOwnerIdOrderByCreatedAtDesc(String ownerId);
 
-    Mono<Long> countByOwnerIdAndDeletedAtIsNull(String ownerId);
+    long countByOwnerIdAndDeletedAtIsNull(String ownerId);
 
-    Mono<Project> findByOwnerIdAndNameAndDeletedAtIsNull(String ownerId, String name);
+    Optional<Project> findByOwnerIdAndNameAndDeletedAtIsNull(String ownerId, String name);
 
-    Mono<Project> findByOwnerIdAndNameAndIdNotAndDeletedAtIsNull(String ownerId, String name, String id);
+    Optional<Project> findByOwnerIdAndNameAndIdNotAndDeletedAtIsNull(String ownerId, String name, String id);
 
-    Flux<Project> findByDeletedAtBefore(Instant cutoff);
+    List<Project> findByDeletedAtBefore(Instant cutoff);
 }

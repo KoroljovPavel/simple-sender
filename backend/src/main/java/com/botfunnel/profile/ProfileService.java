@@ -7,17 +7,16 @@ import com.botfunnel.profile.dto.UpdateProfileRequest;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
+import com.mongodb.client.result.DeleteResult;
+import jakarta.servlet.http.HttpSession;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.web.server.WebSession;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -39,170 +38,149 @@ public class ProfileService {
 
     private final UserRepository userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final ReactiveMongoTemplate reactiveMongoTemplate;
-    private final ReactiveRedisTemplate<String, String> redisTemplate;
+    private final MongoTemplate mongoTemplate;
+    private final StringRedisTemplate redisTemplate;
     private final EventService eventService;
 
     public ProfileService(UserRepository userRepository,
                           PasswordEncoder passwordEncoder,
-                          ReactiveMongoTemplate reactiveMongoTemplate,
-                          ReactiveRedisTemplate<String, String> redisTemplate,
+                          MongoTemplate mongoTemplate,
+                          StringRedisTemplate redisTemplate,
                           EventService eventService) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
-        this.reactiveMongoTemplate = reactiveMongoTemplate;
+        this.mongoTemplate = mongoTemplate;
         this.redisTemplate = redisTemplate;
         this.eventService = eventService;
     }
 
-    public Mono<ProfileResponse> getProfile(String userId) {
-        return loadActiveUser(userId).map(ProfileService::toResponse);
+    public ProfileResponse getProfile(String userId) {
+        return toResponse(loadActiveUser(userId));
     }
 
-    public Mono<ProfileResponse> updateProfile(String userId, UpdateProfileRequest req) {
-        return loadActiveUser(userId)
-                .flatMap(user -> {
-                    user.setName(req.getName());
-                    user.setUpdatedAt(Instant.now());
-                    return userRepository.save(user);
-                })
-                .map(ProfileService::toResponse);
+    public ProfileResponse updateProfile(String userId, UpdateProfileRequest req) {
+        User user = loadActiveUser(userId);
+        user.setName(req.getName());
+        user.setUpdatedAt(Instant.now());
+        return toResponse(userRepository.save(user));
     }
 
-    public Mono<Void> changePassword(String userId, String currentPassword, String newPassword,
-                                     WebSession currentSession, String ip, String userAgent) {
-        // Mono.defer wraps loadActiveUser so the user lookup is skipped entirely when the rate
-        // limiter aborts the chain — without defer, the lookup Mono is constructed eagerly.
-        return checkChangePwdRate(userId)
-                .then(Mono.defer(() -> loadActiveUser(userId)))
-                .flatMap(user -> verifyAndRotate(user, currentPassword, newPassword, currentSession, ip, userAgent));
+    public void changePassword(String userId, String currentPassword, String newPassword,
+                               HttpSession currentSession, String ip, String userAgent) {
+        // Rate-limit check first — the user lookup is skipped entirely when the limiter aborts.
+        checkChangePwdRate(userId);
+        User user = loadActiveUser(userId);
+        verifyAndRotate(user, currentPassword, newPassword, currentSession, ip, userAgent);
     }
 
-    private Mono<Void> verifyAndRotate(User user, String currentPassword, String newPassword,
-                                       WebSession currentSession, String ip, String userAgent) {
-        // BCrypt verify and encode are CPU-bound (~250ms each at cost 12); pin to boundedElastic
-        // so the Reactor event loop is not blocked. Mirrors AuthService.login / resetPassword.
-        return Mono.fromCallable(() -> passwordEncoder.matches(currentPassword, user.getPasswordHash()))
-                .subscribeOn(Schedulers.boundedElastic())
-                .flatMap(matches -> {
-                    if (Boolean.FALSE.equals(matches)) {
-                        return registerChangePwdFailure(user.getId())
-                                .then(Mono.<Void>error(AppException.badRequest("Поточний пароль невірний")));
-                    }
-                    return Mono.fromCallable(() -> passwordEncoder.encode(newPassword))
-                            .subscribeOn(Schedulers.boundedElastic())
-                            .flatMap(newHash -> {
-                                Instant now = Instant.now();
-                                user.setPasswordHash(newHash);
-                                user.setUpdatedAt(now);
-                                return userRepository.save(user);
-                            })
-                            .flatMap(saved -> terminateAllSessionsExcept(saved.getId(), currentSession.getId())
-                                    .then(resetChangePwdCounter(saved.getId()))
-                                    .doOnSuccess(v -> eventService.logEvent(
-                                            saved.getId(), EVENT_PASSWORD_CHANGED, ip, userAgent, null)))
-                            .then();
-                });
+    private void verifyAndRotate(User user, String currentPassword, String newPassword,
+                                 HttpSession currentSession, String ip, String userAgent) {
+        // BCrypt verify and encode are CPU-bound (~250ms each at cost 12). On the virtual-thread
+        // servlet stack the carrier-thread pinning is bounded and acceptable per AC7.
+        boolean matches = passwordEncoder.matches(currentPassword, user.getPasswordHash());
+        if (!matches) {
+            registerChangePwdFailure(user.getId());
+            throw AppException.badRequest("Поточний пароль невірний");
+        }
+        String newHash = passwordEncoder.encode(newPassword);
+        Instant now = Instant.now();
+        user.setPasswordHash(newHash);
+        user.setUpdatedAt(now);
+        User saved = userRepository.save(user);
+        terminateAllSessionsExcept(saved.getId(), currentSession.getId());
+        resetChangePwdCounter(saved.getId());
+        eventService.logEvent(saved.getId(), EVENT_PASSWORD_CHANGED, ip, userAgent, null);
     }
 
-    public Mono<Long> terminateAllSessions(String userId) {
+    public long terminateAllSessions(String userId) {
         // sessions.principal field path verified at runtime by the Task 6 IT
         // (sessionsCollection_principalFieldPath_isAtTopLevel). Same query as
         // AuthService.terminateAllSessions used by reset-password — duplication accepted: the
         // single-field-path invariant is locked by the Task 6 IT and a shared helper would
         // pull AuthService into ProfileService's dependency graph for one query.
         Query q = Query.query(Criteria.where("principal").is(userId));
-        return reactiveMongoTemplate.remove(q, "sessions").map(r -> r.getDeletedCount());
+        DeleteResult result = mongoTemplate.remove(q, "sessions");
+        return result.getDeletedCount();
     }
 
-    public Mono<Long> terminateAllSessionsExcept(String userId, String currentSessionId) {
+    public long terminateAllSessionsExcept(String userId, String currentSessionId) {
         // Spring Session stores the session ID literally in the `_id` field of the sessions
         // collection (see MongoSession.MONGO_ID). Excluding by session id keeps the device
         // that initiated change-password logged in while signing out every other device.
         Query q = Query.query(Criteria.where("principal").is(userId)
                 .and("_id").ne(currentSessionId));
-        return reactiveMongoTemplate.remove(q, "sessions").map(r -> r.getDeletedCount());
+        DeleteResult result = mongoTemplate.remove(q, "sessions");
+        return result.getDeletedCount();
     }
 
-    public Mono<Void> deleteAccount(String userId, WebSession session, String ip, String userAgent) {
-        return loadActiveUser(userId)
-                .flatMap(user -> {
-                    Instant now = Instant.now();
-                    user.setStatus(UserStatus.deleted);
-                    user.setDeletedAt(now);
-                    user.setUpdatedAt(now);
-                    return userRepository.save(user);
-                })
-                // Account deletion must invalidate ALL of this user's sessions across every
-                // device — leaving sibling sessions alive defeats the purpose. terminate-all
-                // also removes the current session document; session.invalidate() then becomes
-                // a no-op for the cookie clean-up but is still called for symmetry with the
-                // WebSession lifecycle (downstream Set-Cookie removal etc.).
-                .flatMap(saved -> terminateAllSessions(saved.getId())
-                        .then(session.invalidate())
-                        .doOnSuccess(v -> eventService.logEvent(
-                                saved.getId(), EVENT_ACCOUNT_DELETED, ip, userAgent, null)))
-                .then();
+    public void deleteAccount(String userId, HttpSession session, String ip, String userAgent) {
+        User user = loadActiveUser(userId);
+        Instant now = Instant.now();
+        user.setStatus(UserStatus.deleted);
+        user.setDeletedAt(now);
+        user.setUpdatedAt(now);
+        User saved = userRepository.save(user);
+        // Account deletion must invalidate ALL of this user's sessions across every device —
+        // leaving sibling sessions alive defeats the purpose. terminate-all also removes the
+        // current session document; session.invalidate() then becomes a no-op for the cookie
+        // clean-up but is still called for the Set-Cookie removal signal.
+        terminateAllSessions(saved.getId());
+        session.invalidate();
+        eventService.logEvent(saved.getId(), EVENT_ACCOUNT_DELETED, ip, userAgent, null);
     }
 
     // --- helpers ---
 
-    private Mono<User> loadActiveUser(String userId) {
-        return userRepository.findById(userId)
-                .switchIfEmpty(Mono.error(AppException.unauthorized("Not authenticated")))
-                // Status gate (security-auditor critical): a session whose underlying account
-                // was blocked or soft-deleted on another device or by an admin must NOT retain
-                // profile access. AuthService.login gates these statuses on the way in;
-                // ProfileService mirrors that policy on every authenticated profile call.
-                // Returning 401 forces the client back through login (which will redirect on
-                // the proper status-based message).
-                .flatMap(user -> {
-                    if (user.getStatus() != UserStatus.active && user.getStatus() != UserStatus.pending) {
-                        return Mono.<User>error(AppException.unauthorized("Not authenticated"));
-                    }
-                    return Mono.just(user);
-                });
+    private User loadActiveUser(String userId) {
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> AppException.unauthorized("Not authenticated"));
+        // Status gate (security-auditor critical): a session whose underlying account
+        // was blocked or soft-deleted on another device or by an admin must NOT retain
+        // profile access. AuthService.login gates these statuses on the way in;
+        // ProfileService mirrors that policy on every authenticated profile call.
+        // Returning 401 forces the client back through login (which will redirect on
+        // the proper status-based message).
+        if (user.getStatus() != UserStatus.active && user.getStatus() != UserStatus.pending) {
+            throw AppException.unauthorized("Not authenticated");
+        }
+        return user;
     }
 
-    private Mono<Void> checkChangePwdRate(String userId) {
+    private void checkChangePwdRate(String userId) {
         String key = changePwdKey(userId);
-        return redisTemplate.opsForValue().get(key)
-                .map(Long::parseLong)
-                .defaultIfEmpty(0L)
-                .flatMap(count -> count >= CHANGE_PWD_THRESHOLD
-                        ? Mono.<Void>error(AppException.tooManyRequests(
-                                "Забагато спроб зміни пароля. Спробуйте за 15 хвилин."))
-                        : Mono.<Void>empty())
-                // Decision 4 fail-open: Redis outage must not block legitimate password changes.
-                .onErrorResume(err -> err instanceof AppException
-                        ? Mono.error(err)
-                        : Mono.fromRunnable(() ->
-                                log.warn("Redis change-pwd rate-limit check failed, allowing: {}", err.getMessage())));
+        try {
+            String raw = redisTemplate.opsForValue().get(key);
+            long count = raw == null ? 0L : Long.parseLong(raw);
+            if (count >= CHANGE_PWD_THRESHOLD) {
+                throw AppException.tooManyRequests(
+                        "Забагато спроб зміни пароля. Спробуйте за 15 хвилин.");
+            }
+        } catch (AppException e) {
+            throw e;
+        } catch (Exception err) {
+            // Decision 4 fail-open: Redis outage must not block legitimate password changes.
+            log.warn("Redis change-pwd rate-limit check failed, allowing: {}", err.getMessage());
+        }
     }
 
-    private Mono<Void> registerChangePwdFailure(String userId) {
+    private void registerChangePwdFailure(String userId) {
         String key = changePwdKey(userId);
-        return redisTemplate.opsForValue().increment(key)
-                .flatMap(count -> {
-                    if (count != null && count == 1L) {
-                        return redisTemplate.expire(key, CHANGE_PWD_TTL).then();
-                    }
-                    return Mono.empty();
-                })
-                .onErrorResume(err -> {
-                    log.warn("Redis change-pwd increment failed: {}", err.getMessage());
-                    return Mono.empty();
-                })
-                .then();
+        try {
+            Long count = redisTemplate.opsForValue().increment(key);
+            if (count != null && count == 1L) {
+                redisTemplate.expire(key, CHANGE_PWD_TTL);
+            }
+        } catch (Exception err) {
+            log.warn("Redis change-pwd increment failed: {}", err.getMessage());
+        }
     }
 
-    private Mono<Void> resetChangePwdCounter(String userId) {
-        return redisTemplate.delete(changePwdKey(userId))
-                .then()
-                .onErrorResume(err -> {
-                    log.warn("Redis change-pwd reset failed: {}", err.getMessage());
-                    return Mono.empty();
-                });
+    private void resetChangePwdCounter(String userId) {
+        try {
+            redisTemplate.delete(changePwdKey(userId));
+        } catch (Exception err) {
+            log.warn("Redis change-pwd reset failed: {}", err.getMessage());
+        }
     }
 
     private static String changePwdKey(String userId) {

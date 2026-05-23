@@ -6,24 +6,24 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.index.IndexInfo;
-import reactor.test.StepVerifier;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class BotIndexTest extends AbstractIntegrationTest {
 
     @Autowired BotRepository botRepository;
-    @Autowired ReactiveMongoTemplate mongoTemplate;
+    @Autowired MongoTemplate mongoTemplate;
 
     @BeforeEach
     void clean() {
-        botRepository.deleteAll().block();
+        botRepository.deleteAll();
     }
 
     private Bot connectedBot(String projectId, Long telegramBotId) {
@@ -51,45 +51,39 @@ class BotIndexTest extends AbstractIntegrationTest {
 
     @Test
     void partialUniqueIndex_telegramBotId_rejectsSecondConnectedRowWithSameTelegramId() {
-        botRepository.save(connectedBot("proj-A", 999L)).block();
+        botRepository.save(connectedBot("proj-A", 999L));
 
-        StepVerifier.create(botRepository.save(connectedBot("proj-B", 999L)))
-                .expectError(DuplicateKeyException.class)
-                .verify();
+        assertThatThrownBy(() -> botRepository.save(connectedBot("proj-B", 999L)))
+                .isInstanceOf(DuplicateKeyException.class);
     }
 
     @Test
     void partialUniqueIndex_telegramBotId_allowsDisconnectedDuplicate() {
-        botRepository.save(connectedBot("proj-C", 1001L)).block();
+        botRepository.save(connectedBot("proj-C", 1001L));
 
-        StepVerifier.create(botRepository.save(disconnectedBot("proj-D", 1001L)))
-                .assertNext(saved -> assertThat(saved.getTelegramBotId()).isEqualTo(1001L))
-                .verifyComplete();
+        Bot saved = botRepository.save(disconnectedBot("proj-D", 1001L));
+        assertThat(saved.getTelegramBotId()).isEqualTo(1001L);
     }
 
     @Test
     void partialUniqueIndex_projectId_rejectsSecondConnectedRowForSameProject() {
-        botRepository.save(connectedBot("proj-E", 1111L)).block();
+        botRepository.save(connectedBot("proj-E", 1111L));
 
-        StepVerifier.create(botRepository.save(connectedBot("proj-E", 2222L)))
-                .expectError(DuplicateKeyException.class)
-                .verify();
+        assertThatThrownBy(() -> botRepository.save(connectedBot("proj-E", 2222L)))
+                .isInstanceOf(DuplicateKeyException.class);
     }
 
     @Test
     void partialUniqueIndex_projectId_allowsDisconnectedDuplicate() {
-        botRepository.save(connectedBot("proj-F", 3333L)).block();
+        botRepository.save(connectedBot("proj-F", 3333L));
 
-        StepVerifier.create(botRepository.save(disconnectedBot("proj-F", 4444L)))
-                .assertNext(saved -> assertThat(saved.getProjectId()).isEqualTo("proj-F"))
-                .verifyComplete();
+        Bot saved = botRepository.save(disconnectedBot("proj-F", 4444L));
+        assertThat(saved.getProjectId()).isEqualTo("proj-F");
     }
 
     @Test
     void indexes_areCreatedOnCollection() {
-        List<IndexInfo> indexInfos = mongoTemplate.indexOps(Bot.class).getIndexInfo()
-                .collectList()
-                .block();
+        List<IndexInfo> indexInfos = mongoTemplate.indexOps(Bot.class).getIndexInfo();
         assertThat(indexInfos).isNotNull();
 
         assertThat(indexNames(indexInfos))

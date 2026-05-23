@@ -15,6 +15,7 @@ import com.botfunnel.project.ProjectRepository;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.QueueDispatcher;
@@ -26,13 +27,12 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
-import org.springframework.data.redis.core.ReactiveValueOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
-import reactor.core.publisher.Mono;
 
 import java.io.IOException;
 import java.time.Duration;
@@ -50,19 +50,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doReturn;
-import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.csrf;
+import static org.mockito.Mockito.doThrow;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // IT scope: full HTTP → BotController → BotService → Mongo + Redis stack against the real
 // testcontainer Mongo/Redis, with a class-level MockWebServer standing in for api.telegram.org.
 // MockWebServer is started in a static initializer so @DynamicPropertySource (registered below)
 // can read its URL before the Spring context boots; shut down in @AfterAll so the singleton
 // container survives the entire test class lifecycle.
+//
+// Note: the two race-condition tests live in BotConnectRaceIT (RANDOM_PORT + TestRestTemplate)
+// per D14 — MockMvc's in-process DispatcherServlet does not reliably interleave critical sections.
 class BotControllerIT extends AbstractIntegrationTest {
 
     private static final String USER_ID = "bot-it-user-id";
     private static final String OTHER_USER_ID = "bot-it-other-user-id";
     private static final String VALID_TOKEN = "1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789xyz";
-    private static final String VALID_TOKEN_2 = "9876543210:ZYXwvuTSR_qpoNMLkjiHGFedcba9876543210abc";
     private static final String MALFORMED_TOKEN = "not-a-valid-token";
     private static final Long TELEGRAM_BOT_ID = 9876543210L;
     private static final Long TELEGRAM_BOT_ID_2 = 1234567890L;
@@ -76,9 +83,6 @@ class BotControllerIT extends AbstractIntegrationTest {
     private static final String TELEGRAM_DISCONNECT_WARN_FRAGMENT =
             "Telegram deleteWebhook failed during Disconnect";
 
-    // Class-level MockWebServer started before Spring context boot. The @DynamicPropertySource
-    // needs the URL at registry-build time, so the static initializer must run first; Spring only
-    // calls @DynamicPropertySource methods after class loading completes.
     private static final MockWebServer mockTelegram;
 
     static {
@@ -104,18 +108,23 @@ class BotControllerIT extends AbstractIntegrationTest {
     @Autowired UserRepository userRepository;
     @Autowired ProjectRepository projectRepository;
     @Autowired EventRepository eventRepository;
-    @Autowired ReactiveRedisTemplate<String, String> redisTemplate;
+    @Autowired StringRedisTemplate redisTemplate;
     @Autowired TokenEncryptor tokenEncryptor;
-    @Autowired org.springframework.context.ApplicationContext applicationContext;
 
     // @MockitoSpyBean wraps the real bean so Mongo persistence still works for normal tests; only
     // the targeted persist-failure scenario (#postConnect_persistFails…) re-stubs save() to throw.
     // Mockito.reset(...) in @BeforeEach restores real delegation for all subsequent tests.
     @MockitoSpyBean BotRepository botRepositorySpy;
-    @MockitoSpyBean ReactiveRedisTemplate<String, String> redisTemplateSpy;
+    @MockitoSpyBean StringRedisTemplate redisTemplateSpy;
 
     private ListAppender<ILoggingEvent> botServiceAppender;
     private Logger botServiceLogger;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private String json(Object body) throws Exception {
+        return objectMapper.writeValueAsString(body);
+    }
 
     @BeforeEach
     void cleanAndSeed() {
@@ -132,11 +141,11 @@ class BotControllerIT extends AbstractIntegrationTest {
         Mockito.reset(botRepositorySpy);
         Mockito.reset(redisTemplateSpy);
 
-        botRepository.deleteAll().block();
-        userRepository.deleteAll().block();
-        projectRepository.deleteAll().block();
-        eventRepository.deleteAll().block();
-        redisTemplate.delete(BRUTE_KEY).block();
+        botRepository.deleteAll();
+        userRepository.deleteAll();
+        projectRepository.deleteAll();
+        eventRepository.deleteAll();
+        redisTemplate.delete(BRUTE_KEY);
 
         seedUser(USER_ID, "bot-it@test.com");
 
@@ -164,7 +173,7 @@ class BotControllerIT extends AbstractIntegrationTest {
         u.setSuperAdmin(false);
         u.setCreatedAt(Instant.now());
         u.setUpdatedAt(Instant.now());
-        userRepository.save(u).block();
+        userRepository.save(u);
     }
 
     private Project saveActiveProject(String ownerId) {
@@ -174,13 +183,13 @@ class BotControllerIT extends AbstractIntegrationTest {
         p.setTimezone("Europe/Kyiv");
         p.setCreatedAt(Instant.now());
         p.setUpdatedAt(Instant.now());
-        return projectRepository.save(p).block();
+        return projectRepository.save(p);
     }
 
     private Project saveSoftDeletedProject(String ownerId) {
         Project p = saveActiveProject(ownerId);
         p.setDeletedAt(Instant.now());
-        return projectRepository.save(p).block();
+        return projectRepository.save(p);
     }
 
     private Bot seedConnectedBot(String projectId, Long telegramBotId) {
@@ -195,14 +204,13 @@ class BotControllerIT extends AbstractIntegrationTest {
         b.setTokenSuffix("xyz");
         b.setWebhookSecretHash("a".repeat(64));
         b.setConnectedAt(Instant.now());
-        return botRepository.save(b).block();
+        return botRepository.save(b);
     }
 
     // Sibling of seedConnectedBot for tests that exercise paths reaching TokenEncryptor.decrypt
     // (e.g. TelegramSender.sendText). The placeholder ciphertext from seedConnectedBot decodes to
     // a 3-byte IV and fails the AES-GCM IV_BYTES (12) length check — so any positive-path test
     // that actually decrypts must seed REAL ciphertext via tokenEncryptor.encrypt(VALID_TOKEN).
-    // Mirrors TelegramSenderIT.seedConnectedBotWithOwnerChatId established in Task 4.
     private Bot seedConnectedBotWithRealEncryption(String projectId, Long telegramBotId, Long ownerChatId) {
         EncryptedValue ev = tokenEncryptor.encrypt(VALID_TOKEN);
         Bot b = new Bot();
@@ -217,12 +225,12 @@ class BotControllerIT extends AbstractIntegrationTest {
         b.setTokenSuffix("xyz");
         b.setWebhookSecretHash("a".repeat(64));
         b.setConnectedAt(Instant.now());
-        return botRepository.save(b).block();
+        return botRepository.save(b);
     }
 
-    private static MockResponse jsonResponse(int status, String body) {
+    private static MockResponse jsonResponse(int statusCode, String body) {
         return new MockResponse()
-                .setResponseCode(status)
+                .setResponseCode(statusCode)
                 .setHeader("Content-Type", "application/json")
                 .setBody(body);
     }
@@ -241,7 +249,7 @@ class BotControllerIT extends AbstractIntegrationTest {
         return jsonResponse(200, "{\"ok\":true,\"result\":true}");
     }
 
-    private static MockResponse status(int code, String description) {
+    private static MockResponse statusResponse(int code, String description) {
         return jsonResponse(code, String.format(
                 "{\"ok\":false,\"error_code\":%d,\"description\":\"%s\"}", code, description));
     }
@@ -254,11 +262,11 @@ class BotControllerIT extends AbstractIntegrationTest {
     private void awaitEvent(Predicate<Event> predicate) {
         await().atMost(Duration.ofSeconds(5))
                 .pollInterval(Duration.ofMillis(100))
-                .until(() -> eventRepository.findAll().filter(predicate).hasElements().block());
+                .until(() -> eventRepository.findAll().stream().anyMatch(predicate));
     }
 
     private Event findEvent(Predicate<Event> predicate) {
-        return eventRepository.findAll().filter(predicate).blockFirst();
+        return eventRepository.findAll().stream().filter(predicate).findFirst().orElseThrow();
     }
 
     private List<RecordedRequest> drainRequests() {
@@ -275,9 +283,6 @@ class BotControllerIT extends AbstractIntegrationTest {
     }
 
     private void assertNoTokenLeak(String body) {
-        // A response/event-metadata value matches the Telegram-token regex ⇒ token leaked.
-        // Anchored regex on full strings, plus substring scan, catches both whole-string and
-        // embedded leaks (e.g. an error message that quotes the token).
         if (body == null) return;
         assertThat(TOKEN_REGEX.matcher(body).matches())
                 .as("response payload must not equal a Telegram token: <%s>", body)
@@ -291,34 +296,27 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_validToken_returns200WithBotResponse() {
-        // AC1 / AC8 / AC10. Asserts: 200 + full BotResponse body shape (lowercase status), no token
-        // fields beyond tokenSuffix, persisted Bot row, bot_connected event with correct metadata,
-        // setWebhook URL equals ${app.url}/webhooks/telegram/{projectId}, secret_token form param
-        // present and non-blank.
+    void postConnect_validToken_returns200WithBotResponse() throws Exception {
         Project project = saveActiveProject(USER_ID);
         enqueueHappyPathConnect();
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.telegramBotId").isEqualTo(TELEGRAM_BOT_ID)
-                .jsonPath("$.telegramUsername").isEqualTo(TELEGRAM_USERNAME)
-                .jsonPath("$.telegramFirstName").isEqualTo(TELEGRAM_FIRST_NAME)
-                .jsonPath("$.tokenSuffix").isEqualTo("xyz")
-                .jsonPath("$.status").isEqualTo("connected")
-                .jsonPath("$.connectedAt").exists()
-                .jsonPath("$.encryptedTokenCiphertext").doesNotExist()
-                .jsonPath("$.encryptedTokenIv").doesNotExist()
-                .jsonPath("$.token").doesNotExist()
-                .jsonPath("$.webhookSecretHash").doesNotExist();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.telegramBotId").value(TELEGRAM_BOT_ID))
+                .andExpect(jsonPath("$.telegramUsername").value(TELEGRAM_USERNAME))
+                .andExpect(jsonPath("$.telegramFirstName").value(TELEGRAM_FIRST_NAME))
+                .andExpect(jsonPath("$.tokenSuffix").value("xyz"))
+                .andExpect(jsonPath("$.status").value("connected"))
+                .andExpect(jsonPath("$.connectedAt").exists())
+                .andExpect(jsonPath("$.encryptedTokenCiphertext").doesNotExist())
+                .andExpect(jsonPath("$.encryptedTokenIv").doesNotExist())
+                .andExpect(jsonPath("$.token").doesNotExist())
+                .andExpect(jsonPath("$.webhookSecretHash").doesNotExist());
 
-        Bot persisted = botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block();
-        assertThat(persisted).isNotNull();
+        Bot persisted = botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).orElseThrow();
         assertThat(persisted.getTokenSuffix()).isEqualTo("xyz");
         assertThat(persisted.getEncryptedTokenCiphertext()).isNotBlank();
         assertThat(persisted.getEncryptedTokenIv()).isNotBlank();
@@ -344,106 +342,86 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_malformedToken_returns400WithFieldError_andNoTelegramCall() {
-        // AC2 / D16: bean-validation regex short-circuits before the service runs. MockWebServer
-        // must record zero requests — proves no Telegram call ever fires for a malformed token.
+    void postConnect_malformedToken_returns400WithFieldError_andNoTelegramCall() throws Exception {
         Project project = saveActiveProject(USER_ID);
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", MALFORMED_TOKEN))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("token"));
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", MALFORMED_TOKEN))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("token")));
 
         assertThat(drainRequests()).isEmpty();
-        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block()).isNull();
+        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED)).isEmpty();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_telegramGetMe401_returns422() {
-        // AC3: Telegram 401 → AppException unprocessable_entity / invalid_bot_token. No Bot row.
+    void postConnect_telegramGetMe401_returns422() throws Exception {
         Project project = saveActiveProject(USER_ID);
-        mockTelegram.enqueue(status(401, "Unauthorized"));
+        mockTelegram.enqueue(statusResponse(401, "Unauthorized"));
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isEqualTo(422)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("invalid_bot_token");
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().is(422))
+                .andExpect(jsonPath("$.code").value("invalid_bot_token"));
 
-        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block()).isNull();
+        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED)).isEmpty();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_telegram5xxExhausted_returns502() {
-        // AC4: 5xx retried per TelegramApiClient.buildRetry (3 retries → 4 attempts total). After
-        // exhaustion the chain emits AppException(BAD_GATEWAY, telegram_unavailable).
+    void postConnect_telegram5xxExhausted_returns502() throws Exception {
         Project project = saveActiveProject(USER_ID);
         for (int i = 0; i < 4; i++) {
-            mockTelegram.enqueue(status(503, "Service Unavailable"));
+            mockTelegram.enqueue(statusResponse(503, "Service Unavailable"));
         }
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isEqualTo(502)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("telegram_unavailable");
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().is(502))
+                .andExpect(jsonPath("$.code").value("telegram_unavailable"));
 
-        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block()).isNull();
+        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED)).isEmpty();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_setWebhook4xxConfigError_returns500WithCodeWebhookConfigError() {
-        // AC5 / D8: 4xx with a description on setWebhook → 500 webhook_config_error.
+    void postConnect_setWebhook4xxConfigError_returns500WithCodeWebhookConfigError() throws Exception {
         Project project = saveActiveProject(USER_ID);
         mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID, TELEGRAM_USERNAME, TELEGRAM_FIRST_NAME));
-        mockTelegram.enqueue(status(400, "HTTPS url must be provided for webhook"));
+        mockTelegram.enqueue(statusResponse(400, "HTTPS url must be provided for webhook"));
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isEqualTo(500)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("webhook_config_error");
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().is(500))
+                .andExpect(jsonPath("$.code").value("webhook_config_error"));
 
-        // No Bot row may be persisted: the failure happens at setWebhook, before save().
-        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block()).isNull();
+        assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED)).isEmpty();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_platformBotIdAlreadyConnected_returns409BotAlreadyConnected() {
-        // AC6 / D1: a CONNECTED row exists for the same telegramBotId in another project. The
-        // pre-check (ensureTelegramBotIdNotConnectedAnywhere) trips before setWebhook fires —
-        // so getMe is the only Telegram call recorded.
+    void postConnect_platformBotIdAlreadyConnected_returns409BotAlreadyConnected() throws Exception {
         Project foreignProject = saveActiveProject(OTHER_USER_ID);
         seedConnectedBot(foreignProject.getId(), TELEGRAM_BOT_ID);
 
         Project myProject = saveActiveProject(USER_ID);
         mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID, TELEGRAM_USERNAME, TELEGRAM_FIRST_NAME));
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + myProject.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isEqualTo(409)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("bot_already_connected");
+        mockMvc.perform(post("/api/v1/projects/" + myProject.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().is(409))
+                .andExpect(jsonPath("$.code").value("bot_already_connected"));
 
         List<RecordedRequest> reqs = drainRequests();
         assertThat(reqs).hasSize(1);
@@ -452,50 +430,41 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_projectAlreadyHasConnectedBot_returns409BotAlreadyInProject() {
-        // AC7 / D5: the project already has a CONNECTED bot. ensureNoConnectedBotForProject trips
-        // before any Telegram call, so MockWebServer records zero requests.
+    void postConnect_projectAlreadyHasConnectedBot_returns409BotAlreadyInProject() throws Exception {
         Project project = saveActiveProject(USER_ID);
         seedConnectedBot(project.getId(), TELEGRAM_BOT_ID_2);
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isEqualTo(409)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("bot_already_in_project");
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().is(409))
+                .andExpect(jsonPath("$.code").value("bot_already_in_project"));
 
         assertThat(drainRequests()).isEmpty();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_persistFails_compensatingDeleteWebhookFires_returns500() {
-        // AC9 / D4: simulate a generic persist failure (not a duplicate-key) by stubbing the spy.
-        // The compensating deleteWebhook must fire so Telegram is rolled back; the original error
-        // surfaces as 500 from the GlobalErrorHandler default branch.
+    void postConnect_persistFails_compensatingDeleteWebhookFires_returns500() throws Exception {
         Project project = saveActiveProject(USER_ID);
         mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID, TELEGRAM_USERNAME, TELEGRAM_FIRST_NAME));
         mockTelegram.enqueue(setWebhookOk());
         mockTelegram.enqueue(deleteWebhookOk());
 
-        doReturn(Mono.error(new RuntimeException("persist failure simulated")))
+        doThrow(new RuntimeException("persist failure simulated"))
                 .when(botRepositorySpy).save(Mockito.any(Bot.class));
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isEqualTo(500);
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().is(500));
 
         List<RecordedRequest> reqs = drainRequests();
         assertThat(reqs).extracting(RecordedRequest::getPath)
                 .anySatisfy(p -> assertThat(p).endsWith("/setWebhook"))
                 .anySatisfy(p -> assertThat(p).endsWith("/deleteWebhook"));
-        // Order: setWebhook precedes the compensating deleteWebhook.
         int setIdx = -1;
         int delIdx = -1;
         for (int i = 0; i < reqs.size(); i++) {
@@ -508,153 +477,61 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_parallelSameToken_exactlyOneSucceeds_otherReturns409() {
-        // AC12: two concurrent Connects, same token, different projects. Both call getMe + setWebhook;
-        // the loser hits the platform-wide partial unique index on telegramBotId → DuplicateKeyException
-        // mapped to 409 bot_already_connected; loser's compensating deleteWebhook fires.
-        Project p1 = saveActiveProject(USER_ID);
-        Project p2 = saveActiveProject(USER_ID);
-
-        mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID, TELEGRAM_USERNAME, TELEGRAM_FIRST_NAME));
-        mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID, TELEGRAM_USERNAME, TELEGRAM_FIRST_NAME));
-        mockTelegram.enqueue(setWebhookOk());
-        mockTelegram.enqueue(setWebhookOk());
-        mockTelegram.enqueue(deleteWebhookOk());
-
-        Mono<Integer> r1 = postConnect(p1.getId(), VALID_TOKEN);
-        Mono<Integer> r2 = postConnect(p2.getId(), VALID_TOKEN);
-        List<Integer> statuses = Mono.zip(r1, r2, (a, b) -> List.of(a, b)).block();
-
-        assertThat(statuses).containsExactlyInAnyOrder(200, 409);
-
-        long connected = botRepository.findByProjectId(p1.getId())
-                .mergeWith(botRepository.findByProjectId(p2.getId()))
-                .filter(b -> b.getStatus() == BotStatus.CONNECTED)
-                .count().block();
-        assertThat(connected).isEqualTo(1L);
-
-        // setCount may be 1 or 2: if the loser races the winner past the
-        // ensureTelegramBotIdNotConnectedAnywhere pre-check it will reach setWebhook (setCount=2)
-        // and then need to compensate (delCount=1); if the loser arrives after the winner already
-        // persisted, the pre-check trips early (setCount=1, delCount=0). Either ordering is correct
-        // — the strong invariants are exactly-one CONNECTED row and the {200, 409} status pair.
-        List<RecordedRequest> reqs = drainRequests();
-        long setCount = reqs.stream().filter(r -> r.getPath().endsWith("/setWebhook")).count();
-        long delCount = reqs.stream().filter(r -> r.getPath().endsWith("/deleteWebhook")).count();
-        assertThat(setCount).isBetween(1L, 2L);
-        assertThat(delCount).isEqualTo(setCount - 1L);
-    }
-
-    @Test
-    @WithMockAppUser(userId = USER_ID)
-    void postConnect_parallelSameProjectDifferentTokens_exactlyOneSucceeds_otherReturns409() {
-        // D5: two concurrent Connects, same project, different tokens. Loser hits the per-project
-        // partial unique index → 409 bot_already_in_project; loser's compensating deleteWebhook fires.
-        Project project = saveActiveProject(USER_ID);
-
-        mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID, TELEGRAM_USERNAME, TELEGRAM_FIRST_NAME));
-        mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID_2, "other_bot", "Other"));
-        mockTelegram.enqueue(setWebhookOk());
-        mockTelegram.enqueue(setWebhookOk());
-        mockTelegram.enqueue(deleteWebhookOk());
-
-        Mono<Integer> r1 = postConnect(project.getId(), VALID_TOKEN);
-        Mono<Integer> r2 = postConnect(project.getId(), VALID_TOKEN_2);
-        List<Integer> statuses = Mono.zip(r1, r2, (a, b) -> List.of(a, b)).block();
-
-        assertThat(statuses).containsExactlyInAnyOrder(200, 409);
-
-        long connected = botRepository.findByProjectId(project.getId())
-                .filter(b -> b.getStatus() == BotStatus.CONNECTED)
-                .count().block();
-        assertThat(connected).isEqualTo(1L);
-
-        // setCount may be 1 or 2 depending on race ordering through
-        // ensureNoConnectedBotForProject (see same-token race comment); the strong invariant is
-        // exactly-one CONNECTED row + {200, 409} status pair, with delCount tracking setCount-1.
-        List<RecordedRequest> reqs = drainRequests();
-        long setCount = reqs.stream().filter(r -> r.getPath().endsWith("/setWebhook")).count();
-        long delCount = reqs.stream().filter(r -> r.getPath().endsWith("/deleteWebhook")).count();
-        assertThat(setCount).isBetween(1L, 2L);
-        assertThat(delCount).isEqualTo(setCount - 1L);
-    }
-
-    private Mono<Integer> postConnect(String projectId, String token) {
-        return Mono.fromCallable(() -> webTestClient.mutateWith(csrf())
-                        .post().uri("/api/v1/projects/" + projectId + "/bot/connect")
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .bodyValue(Map.of("token", token))
-                        .exchange()
-                        .returnResult(String.class)
-                        .getStatus().value())
-                .subscribeOn(reactor.core.scheduler.Schedulers.boundedElastic());
-    }
-
-    @Test
-    @WithMockAppUser(userId = USER_ID)
-    void postConnect_eleventhAttemptWithinWindow_returns429_noTelegramCalls() {
-        // AC11 trip: 11 INCRs → counter = 11 > threshold 10 → 429. The 11th attempt issues NO
-        // Telegram calls — verified by an empty drain after the request.
+    void postConnect_eleventhAttemptWithinWindow_returns429_noTelegramCalls() throws Exception {
         Project project = saveActiveProject(USER_ID);
         // Pre-load the brute-force counter to the threshold so the next attempt trips immediately.
         for (int i = 0; i < 10; i++) {
-            redisTemplate.opsForValue().increment(BRUTE_KEY).block();
+            redisTemplate.opsForValue().increment(BRUTE_KEY);
         }
-        redisTemplate.expire(BRUTE_KEY, Duration.ofSeconds(900)).block();
+        redisTemplate.expire(BRUTE_KEY, Duration.ofSeconds(900));
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isEqualTo(429);
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().is(429));
 
         assertThat(drainRequests()).isEmpty();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_successfulConnect_deletesBruteForceKey() {
-        // AC11 DEL: a successful Connect must DEL the brute-force counter. After the call the
-        // key must not exist in Redis.
+    void postConnect_successfulConnect_deletesBruteForceKey() throws Exception {
         Project project = saveActiveProject(USER_ID);
-        // Seed a counter so the DEL is observable.
-        redisTemplate.opsForValue().increment(BRUTE_KEY).block();
-        assertThat(redisTemplate.hasKey(BRUTE_KEY).block()).isTrue();
+        redisTemplate.opsForValue().increment(BRUTE_KEY);
+        assertThat(redisTemplate.hasKey(BRUTE_KEY)).isTrue();
 
         enqueueHappyPathConnect();
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isOk();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isOk());
 
-        assertThat(redisTemplate.hasKey(BRUTE_KEY).block()).isFalse();
+        assertThat(redisTemplate.hasKey(BRUTE_KEY)).isFalse();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postConnect_redisDown_failsOpen_connectSucceeds_warnLogged() {
+    void postConnect_redisDown_failsOpen_connectSucceeds_warnLogged() throws Exception {
         // AC11 fail-open / D14: stub the spied redisTemplate so opsForValue() returns a mock
-        // ReactiveValueOperations whose increment() emits an error. The connect chain's
-        // onErrorResume swallows the error, logs the dedicated WARN line once, and continues.
+        // ValueOperations whose increment() throws. The connect chain's catch swallows the
+        // error, logs the dedicated WARN line once, and continues.
         Project project = saveActiveProject(USER_ID);
         @SuppressWarnings("unchecked")
-        ReactiveValueOperations<String, String> brokenOps = Mockito.mock(ReactiveValueOperations.class);
+        ValueOperations<String, String> brokenOps = Mockito.mock(ValueOperations.class);
         Mockito.when(brokenOps.increment(anyString()))
-                .thenReturn(Mono.error(new RuntimeException("redis down")));
+                .thenThrow(new RuntimeException("redis down"));
         doReturn(brokenOps).when(redisTemplateSpy).opsForValue();
 
         enqueueHappyPathConnect();
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isOk();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isOk());
 
         long warns = botServiceAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
@@ -667,21 +544,15 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postDisconnect_happyPath_returns200_andUpdatesMongoAtomically() {
-        // AC13a / AC13c: disconnect deletes the webhook on Telegram and atomically clears the
-        // sensitive fields (status DISCONNECTED, no ciphertext / iv / tokenSuffix / hash, sets
-        // disconnectedAt). Bot row is updated in place — id is preserved.
+    void postDisconnect_happyPath_returns200_andUpdatesMongoAtomically() throws Exception {
         Project project = saveActiveProject(USER_ID);
         Bot seeded = persistRealConnectedBot(project.getId(), VALID_TOKEN);
         mockTelegram.enqueue(deleteWebhookOk());
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/disconnect")
-                .exchange()
-                .expectStatus().isOk();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/disconnect").with(csrf()))
+                .andExpect(status().isOk());
 
-        Bot disconnected = botRepository.findById(seeded.getId()).block();
-        assertThat(disconnected).isNotNull();
+        Bot disconnected = botRepository.findById(seeded.getId()).orElseThrow();
         assertThat(disconnected.getStatus()).isEqualTo(BotStatus.DISCONNECTED);
         assertThat(disconnected.getEncryptedTokenCiphertext()).isNull();
         assertThat(disconnected.getEncryptedTokenIv()).isNull();
@@ -697,18 +568,15 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postDisconnect_telegramDown_warnLogged_returns200() {
-        // AC13b: persistent Telegram failure must NEVER block the local disconnect update.
+    void postDisconnect_telegramDown_warnLogged_returns200() throws Exception {
         Project project = saveActiveProject(USER_ID);
         Bot seeded = persistRealConnectedBot(project.getId(), VALID_TOKEN);
         for (int i = 0; i < 4; i++) {
-            mockTelegram.enqueue(status(503, "Service Unavailable"));
+            mockTelegram.enqueue(statusResponse(503, "Service Unavailable"));
         }
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/disconnect")
-                .exchange()
-                .expectStatus().isOk();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/disconnect").with(csrf()))
+                .andExpect(status().isOk());
 
         long warns = botServiceAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
@@ -716,7 +584,7 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .count();
         assertThat(warns).isEqualTo(1);
 
-        Bot disconnected = botRepository.findById(seeded.getId()).block();
+        Bot disconnected = botRepository.findById(seeded.getId()).orElseThrow();
         assertThat(disconnected.getStatus()).isEqualTo(BotStatus.DISCONNECTED);
 
         awaitEvent(e -> "bot_disconnected".equals(e.getEventType()));
@@ -726,13 +594,11 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postDisconnect_noConnectedBot_returns404() {
+    void postDisconnect_noConnectedBot_returns404() throws Exception {
         Project project = saveActiveProject(USER_ID);
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/disconnect")
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/disconnect").with(csrf()))
+                .andExpect(status().isNotFound());
 
         assertThat(drainRequests()).isEmpty();
     }
@@ -741,61 +607,44 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void getBot_seededConnected_returns200_noneReturns404() {
-        // AC14: GET / returns the connected bot when present, 404 otherwise. After Disconnect the
-        // GET endpoint must surface 404 (no DISCONNECTED row leaked).
+    void getBot_seededConnected_returns200_noneReturns404() throws Exception {
         Project p1 = saveActiveProject(USER_ID);
         seedConnectedBot(p1.getId(), TELEGRAM_BOT_ID);
 
-        webTestClient.get().uri("/api/v1/projects/" + p1.getId() + "/bot")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.telegramBotId").isEqualTo(TELEGRAM_BOT_ID)
-                .jsonPath("$.status").isEqualTo("connected")
-                .jsonPath("$.encryptedTokenCiphertext").doesNotExist();
+        mockMvc.perform(get("/api/v1/projects/" + p1.getId() + "/bot"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.telegramBotId").value(TELEGRAM_BOT_ID))
+                .andExpect(jsonPath("$.status").value("connected"))
+                .andExpect(jsonPath("$.encryptedTokenCiphertext").doesNotExist());
 
         Project p2 = saveActiveProject(USER_ID);
-        webTestClient.get().uri("/api/v1/projects/" + p2.getId() + "/bot")
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(get("/api/v1/projects/" + p2.getId() + "/bot"))
+                .andExpect(status().isNotFound());
     }
 
     // ---------- POST /test-message ----------
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents() {
-        // Null-branch regression (pre-Wave-3 contract): bot.ownerChatId == null → 422
-        // owner_chat_id_unknown; zero Telegram calls; zero bot_test_message_sent events. The
-        // existing seedConnectedBot placeholder ciphertext is fine here — the null branch
-        // short-circuits before any decrypt.
+    void postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents() throws Exception {
         Project project = saveActiveProject(USER_ID);
         seedConnectedBot(project.getId(), TELEGRAM_BOT_ID);
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/test-message")
-                .exchange()
-                .expectStatus().isEqualTo(422)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("owner_chat_id_unknown")
-                .jsonPath("$.message")
-                .isEqualTo("Send /start to your bot in Telegram first, then try again");
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/test-message").with(csrf()))
+                .andExpect(status().is(422))
+                .andExpect(jsonPath("$.code").value("owner_chat_id_unknown"))
+                .andExpect(jsonPath("$.message")
+                        .value("Send /start to your bot in Telegram first, then try again"));
 
         assertThat(drainRequests()).isEmpty();
-        boolean hasTestMessage = eventRepository.findAll()
-                .filter(e -> "bot_test_message_sent".equals(e.getEventType()))
-                .hasElements().block();
+        boolean hasTestMessage = eventRepository.findAll().stream()
+                .anyMatch(e -> "bot_test_message_sent".equals(e.getEventType()));
         assertThat(hasTestMessage).isFalse();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent() {
-        // Positive-path: ownerChatId set AND real AES-GCM ciphertext (placeholder bytes from
-        // seedConnectedBot would fail the IV length check inside tokenEncryptor.decrypt and
-        // surface as 500). End-to-end: BotService → TelegramSender → MockWebServer; assert
-        // 200 OK and bot_test_message_sent event with full metadata shape.
+    void postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent() throws Exception {
         Project project = saveActiveProject(USER_ID);
         Long ownerChatId = 42L;
         Bot seeded = seedConnectedBotWithRealEncryption(project.getId(), TELEGRAM_BOT_ID, ownerChatId);
@@ -805,11 +654,8 @@ class BotControllerIT extends AbstractIntegrationTest {
                 "{\"ok\":true,\"result\":{\"message_id\":100,\"chat\":{\"id\":%d,\"type\":\"private\"},\"date\":%d,\"text\":\"Hello\"}}",
                 ownerChatId, ts)));
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/test-message")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody().isEmpty();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/test-message").with(csrf()))
+                .andExpect(status().isOk());
 
         awaitEvent(e -> "bot_test_message_sent".equals(e.getEventType()));
         Event evt = findEvent(e -> "bot_test_message_sent".equals(e.getEventType()));
@@ -821,10 +667,6 @@ class BotControllerIT extends AbstractIntegrationTest {
                 .containsEntry("chatId", ownerChatId)
                 .containsEntry("messageId", 100L);
 
-        // Sanity: the request went to /sendMessage on mockTelegram with the seeded chatId and
-        // the byte-exact test message body — proves BotService passed the right args to
-        // TelegramSender (the unit test pins this at the sendText boundary; this anchors it at
-        // the HTTP wire).
         List<RecordedRequest> reqs = drainRequests();
         assertThat(reqs).hasSize(1);
         assertThat(reqs.get(0).getPath()).endsWith("/sendMessage");
@@ -838,9 +680,7 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void antiEnumeration_foreignSoftDeletedMalformedProjectId_returns404_andHostileBodyIgnored() {
-        // AC16: foreign / soft-deleted / malformed all collapse to 404 with no distinguishing body.
-        // Hostile body fields are silently dropped by @JsonIgnoreProperties(ignoreUnknown = true).
+    void antiEnumeration_foreignSoftDeletedMalformedProjectId_returns404_andHostileBodyIgnored() throws Exception {
         Project foreign = saveActiveProject(OTHER_USER_ID);
         Project softDeleted = saveSoftDeletedProject(USER_ID);
 
@@ -848,26 +688,23 @@ class BotControllerIT extends AbstractIntegrationTest {
         hostile.put("token", VALID_TOKEN);
         hostile.put("ownerId", "attacker");
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + foreign.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(hostile)
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(post("/api/v1/projects/" + foreign.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(hostile)))
+                .andExpect(status().isNotFound());
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + softDeleted.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(post("/api/v1/projects/" + softDeleted.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isNotFound());
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/zzz-not-an-objectid/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(post("/api/v1/projects/zzz-not-an-objectid/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isNotFound());
 
         assertThat(drainRequests()).isEmpty();
     }
@@ -876,149 +713,110 @@ class BotControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void noTokenLeak_inAnyResponseBodyOrEventMetadata() {
-        // AC17 / AC23: no HTTP body field and no event-metadata value matches the token regex.
-        // Exercise:
-        //   1. Happy-path Connect + Disconnect (sanity sweep over bodies + emitted events)
-        //   2. setWebhook 4xx with the token echoed inside the Telegram error description —
-        //      a leak-prone scenario where a naive error-mapper might propagate the token into
-        //      the 5xx response body. The DTO contract + scrubTokens at the log site prevent this;
-        //      this assertion would FAIL if either guarantee regressed.
+    void noTokenLeak_inAnyResponseBodyOrEventMetadata() throws Exception {
         Project project = saveActiveProject(USER_ID);
         enqueueHappyPathConnect();
 
-        byte[] connectBody = webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody().returnResult().getResponseBody();
+        byte[] connectBody = mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray();
         assertNoTokenLeak(connectBody == null ? null : new String(connectBody));
 
         mockTelegram.enqueue(deleteWebhookOk());
-        byte[] discBody = webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/disconnect")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody().returnResult().getResponseBody();
+        byte[] discBody = mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/disconnect").with(csrf()))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getContentAsByteArray();
         assertNoTokenLeak(discBody == null ? null : new String(discBody));
 
         awaitEvent(e -> "bot_disconnected".equals(e.getEventType()));
-        List<Event> events = eventRepository.findAll().collectList().block();
+        List<Event> events = eventRepository.findAll();
         for (Event evt : events) {
-            // AC23: the metadata map must never contain a token-shaped value.
             if (evt.getMetadata() != null) {
                 for (Object v : evt.getMetadata().values()) {
                     if (v instanceof String s) assertNoTokenLeak(s);
                 }
             }
-            // ipAddress / userAgent are top-level fields per Event entity.
             assertNoTokenLeak(evt.getIpAddress());
             assertNoTokenLeak(evt.getUserAgent());
         }
 
-        // Leak-prone scenario: Telegram 4xx with the token quoted in `description`. The previous
-        // happy-path sweeps cannot fail because no token ever flows into the response shape they
-        // produce; this branch is what makes the assertion non-vacuous.
         Project p2 = saveActiveProject(USER_ID);
         mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID_2, "leakcheck_bot", "Leak"));
-        mockTelegram.enqueue(status(400, "Bad webhook for token " + VALID_TOKEN + " on chat"));
+        mockTelegram.enqueue(statusResponse(400, "Bad webhook for token " + VALID_TOKEN + " on chat"));
 
-        byte[] errBody = webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + p2.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isEqualTo(500)
-                .expectBody().returnResult().getResponseBody();
+        byte[] errBody = mockMvc.perform(post("/api/v1/projects/" + p2.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().is(500))
+                .andReturn().getResponse().getContentAsByteArray();
         assertNoTokenLeak(errBody == null ? null : new String(errBody));
     }
 
     // ---------- Unauthenticated 401 sweep ----------
 
     @Test
-    void anyEndpoint_unauthenticatedBareClient_returns401() {
-        // Mirrors ProjectControllerIT#anyEndpoint_unauthenticatedBareClient_returns401: a bare
-        // WebTestClient (no @WithMockAppUser, no test-time mutators beyond csrf for state-changing
-        // verbs) bound to the in-memory ApplicationContext proves the production filter chain
-        // returns 401 across every verb shape on /api/v1/projects/{id}/bot/**.
-        var bare = org.springframework.test.web.reactive.server.WebTestClient
-                .bindToApplicationContext(applicationContext)
-                .configureClient()
-                .build();
+    void anyEndpoint_unauthenticated_returns401() throws Exception {
+        // No @WithMockAppUser — the production filter chain must return 401 across every verb
+        // shape on /api/v1/projects/{id}/bot/**.
+        mockMvc.perform(get("/api/v1/projects/any-id/bot"))
+                .andExpect(status().isUnauthorized());
 
-        bare.get().uri("/api/v1/projects/any-id/bot")
-                .exchange()
-                .expectStatus().isUnauthorized();
+        mockMvc.perform(post("/api/v1/projects/any-id/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isUnauthorized());
 
-        bare.mutateWith(csrf())
-                .post().uri("/api/v1/projects/any-id/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isUnauthorized();
+        mockMvc.perform(post("/api/v1/projects/any-id/bot/disconnect").with(csrf()))
+                .andExpect(status().isUnauthorized());
 
-        bare.mutateWith(csrf())
-                .post().uri("/api/v1/projects/any-id/bot/disconnect")
-                .exchange()
-                .expectStatus().isUnauthorized();
-
-        bare.mutateWith(csrf())
-                .post().uri("/api/v1/projects/any-id/bot/test-message")
-                .exchange()
-                .expectStatus().isUnauthorized();
+        mockMvc.perform(post("/api/v1/projects/any-id/bot/test-message").with(csrf()))
+                .andExpect(status().isUnauthorized());
     }
 
     // ---------- Webhook secret hashing ----------
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void webhookSecretInMongo_isSha256Hash() {
-        // AC20 / D2: webhookSecretHash in Mongo is hex-encoded SHA-256 (64 hex chars), not the
-        // plaintext sent to Telegram. The plaintext only travels the wire to api.telegram.org.
+    void webhookSecretInMongo_isSha256Hash() throws Exception {
         Project project = saveActiveProject(USER_ID);
         enqueueHappyPathConnect();
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isOk();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isOk());
 
-        Bot persisted = botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block();
-        assertThat(persisted).isNotNull();
+        Bot persisted = botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).orElseThrow();
         assertThat(persisted.getWebhookSecretHash()).matches("[0-9a-f]{64}");
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void tokenSuffix_persistedAndReturned_clearedOnDisconnect() {
-        // AC18 / D17: tokenSuffix is the last 3 chars of the secret. Persisted and surfaced on the
-        // BotResponse; cleared (set to null) on Disconnect.
+    void tokenSuffix_persistedAndReturned_clearedOnDisconnect() throws Exception {
         Project project = saveActiveProject(USER_ID);
         enqueueHappyPathConnect();
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", VALID_TOKEN))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.tokenSuffix").isEqualTo("xyz");
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", VALID_TOKEN))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.tokenSuffix").value("xyz"));
 
-        Bot connected = botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block();
+        Bot connected = botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).orElseThrow();
         assertThat(connected.getTokenSuffix()).isEqualTo("xyz");
 
         mockTelegram.enqueue(deleteWebhookOk());
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/disconnect")
-                .exchange()
-                .expectStatus().isOk();
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/disconnect").with(csrf()))
+                .andExpect(status().isOk());
 
-        Bot disconnected = botRepository.findById(connected.getId()).block();
+        Bot disconnected = botRepository.findById(connected.getId()).orElseThrow();
         assertThat(disconnected.getTokenSuffix()).isNull();
     }
 
@@ -1027,20 +825,19 @@ class BotControllerIT extends AbstractIntegrationTest {
     // Drives a real Connect through the full pipeline to seed a properly-encrypted Bot row that
     // a subsequent Disconnect can decrypt. Helpers that only stuff fake ciphertext into Mongo
     // would fail the AES-GCM unwrap inside BotService.disconnect.
-    private Bot persistRealConnectedBot(String projectId, String token) {
+    private Bot persistRealConnectedBot(String projectId, String token) throws Exception {
         mockTelegram.enqueue(getMeOk(TELEGRAM_BOT_ID, TELEGRAM_USERNAME, TELEGRAM_FIRST_NAME));
         mockTelegram.enqueue(setWebhookOk());
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + projectId + "/bot/connect")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("token", token))
-                .exchange()
-                .expectStatus().isOk();
+        mockMvc.perform(post("/api/v1/projects/" + projectId + "/bot/connect")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("token", token))))
+                .andExpect(status().isOk());
         // Drain the requests recorded by this seeding round so individual tests start with a
         // clean recorded-request log.
         drainRequests();
         // Reset the brute-force counter; the seeding helper bumps it from 0 → 1.
-        redisTemplate.delete(BRUTE_KEY).block();
-        return botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).block();
+        redisTemplate.delete(BRUTE_KEY);
+        return botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).orElseThrow();
     }
 }

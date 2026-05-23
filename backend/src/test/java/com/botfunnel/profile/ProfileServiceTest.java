@@ -6,6 +6,7 @@ import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
 import com.mongodb.client.result.DeleteResult;
+import jakarta.servlet.http.HttpSession;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -13,18 +14,17 @@ import org.mockito.Answers;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.web.server.WebSession;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -43,21 +43,21 @@ class ProfileServiceTest {
 
     @Mock UserRepository userRepository;
     @Mock PasswordEncoder passwordEncoder;
-    @Mock ReactiveMongoTemplate reactiveMongoTemplate;
+    @Mock MongoTemplate mongoTemplate;
     @Mock(answer = Answers.RETURNS_DEEP_STUBS)
-    ReactiveRedisTemplate<String, String> redisTemplate;
+    StringRedisTemplate redisTemplate;
     @Mock EventService eventService;
-    @Mock WebSession session;
+    @Mock HttpSession session;
 
     ProfileService profileService;
 
     @BeforeEach
     void setUp() {
         profileService = new ProfileService(userRepository, passwordEncoder,
-                reactiveMongoTemplate, redisTemplate, eventService);
-        // Default-allow change-pwd rate limiter (no prior failures): get → empty (count 0).
+                mongoTemplate, redisTemplate, eventService);
+        // Default-allow change-pwd rate limiter (no prior failures): get → null (count 0).
         // Tests that exercise the over-threshold branch override this stub explicitly.
-        lenient().when(redisTemplate.opsForValue().get(anyString())).thenReturn(Mono.empty());
+        lenient().when(redisTemplate.opsForValue().get(anyString())).thenReturn(null);
     }
 
     private User activeUser() {
@@ -73,21 +73,18 @@ class ProfileServiceTest {
     @Test
     void changePassword_wrongCurrentPassword_throwsAppException_andIncrementsCounter() {
         User user = activeUser();
-        when(userRepository.findById(USER_ID)).thenReturn(Mono.just(user));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(eq("WrongCurrent"), eq(user.getPasswordHash()))).thenReturn(false);
-        when(redisTemplate.opsForValue().increment(anyString())).thenReturn(Mono.just(1L));
-        when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true));
+        when(redisTemplate.opsForValue().increment(anyString())).thenReturn(1L);
+        when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(true);
 
-        StepVerifier.create(profileService.changePassword(
+        assertThatThrownBy(() -> profileService.changePassword(
                         USER_ID, "WrongCurrent", "NewStr0ngPass", session, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus().value()).isEqualTo(400);
-                })
-                .verify();
+                .isInstanceOfSatisfying(AppException.class, ex ->
+                        assertThat(ex.getStatus().value()).isEqualTo(400));
 
         verify(userRepository, never()).save(any());
-        verify(reactiveMongoTemplate, never()).remove(any(Query.class), anyString());
+        verify(mongoTemplate, never()).remove(any(Query.class), anyString());
         verify(eventService, never()).logEvent(anyString(), anyString(), anyString(), anyString(), any());
         // Failure must register on the brute-force counter so a hijacked session cannot grind
         // BCrypt verifications without bound.
@@ -97,21 +94,19 @@ class ProfileServiceTest {
     @Test
     void changePassword_correctPassword_excludesCurrentSession_andResetsCounter() {
         User user = activeUser();
-        when(userRepository.findById(USER_ID)).thenReturn(Mono.just(user));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
         when(passwordEncoder.matches(eq("CurrentPass1"), eq(user.getPasswordHash()))).thenReturn(true);
         when(passwordEncoder.encode(eq("NewStr0ngPass"))).thenReturn("$2a$12$newhash");
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         when(session.getId()).thenReturn(SESSION_ID);
         DeleteResult dr = DeleteResult.acknowledged(2L);
-        when(reactiveMongoTemplate.remove(any(Query.class), eq("sessions"))).thenReturn(Mono.just(dr));
-        when(redisTemplate.delete(anyString())).thenReturn(Mono.just(1L));
+        when(mongoTemplate.remove(any(Query.class), eq("sessions"))).thenReturn(dr);
+        when(redisTemplate.delete(anyString())).thenReturn(true);
 
-        StepVerifier.create(profileService.changePassword(
-                        USER_ID, "CurrentPass1", "NewStr0ngPass", session, IP, UA))
-                .verifyComplete();
+        profileService.changePassword(USER_ID, "CurrentPass1", "NewStr0ngPass", session, IP, UA);
 
         ArgumentCaptor<Query> qc = ArgumentCaptor.forClass(Query.class);
-        verify(reactiveMongoTemplate).remove(qc.capture(), eq("sessions"));
+        verify(mongoTemplate).remove(qc.capture(), eq("sessions"));
         // The query must filter by principal=userId AND _id != currentSessionId so the
         // initiating device stays signed in (Decision 14).
         String queryJson = qc.getValue().getQueryObject().toJson();
@@ -131,15 +126,12 @@ class ProfileServiceTest {
         // Pre-existing 5 failures must short-circuit before BCrypt verify is even called —
         // closes the cost-12 grinding window per security audit major.
         when(redisTemplate.opsForValue().get(eq("change-pwd:fail:" + USER_ID)))
-                .thenReturn(Mono.just("5"));
+                .thenReturn("5");
 
-        StepVerifier.create(profileService.changePassword(
+        assertThatThrownBy(() -> profileService.changePassword(
                         USER_ID, "anything", "AlsoStr0ng", session, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus().value()).isEqualTo(429);
-                })
-                .verify();
+                .isInstanceOfSatisfying(AppException.class, ex ->
+                        assertThat(ex.getStatus().value()).isEqualTo(429));
 
         verify(userRepository, never()).findById(anyString());
         verify(passwordEncoder, never()).matches(anyString(), anyString());
@@ -149,11 +141,10 @@ class ProfileServiceTest {
     void terminateAllSessions_deletesAllSessionsForUser() {
         DeleteResult dr = DeleteResult.acknowledged(3L);
         ArgumentCaptor<Query> qc = ArgumentCaptor.forClass(Query.class);
-        when(reactiveMongoTemplate.remove(qc.capture(), eq("sessions"))).thenReturn(Mono.just(dr));
+        when(mongoTemplate.remove(qc.capture(), eq("sessions"))).thenReturn(dr);
 
-        StepVerifier.create(profileService.terminateAllSessions(USER_ID))
-                .expectNext(3L)
-                .verifyComplete();
+        long count = profileService.terminateAllSessions(USER_ID);
+        assertThat(count).isEqualTo(3L);
 
         // Pin the field path — the Task 6 IT verifies this against a real Mongo schema.
         String queryJson = qc.getValue().getQueryObject().toJson();
@@ -164,14 +155,13 @@ class ProfileServiceTest {
     @Test
     void deleteAccount_setsStatusDeleted_terminatesAllSessions_invalidatesSession_logsEvent() {
         User user = activeUser();
-        when(userRepository.findById(USER_ID)).thenReturn(Mono.just(user));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
         DeleteResult dr = DeleteResult.acknowledged(2L);
-        when(reactiveMongoTemplate.remove(any(Query.class), eq("sessions"))).thenReturn(Mono.just(dr));
-        when(session.invalidate()).thenReturn(Mono.empty());
+        when(mongoTemplate.remove(any(Query.class), eq("sessions"))).thenReturn(dr);
+        // HttpSession.invalidate() is void — default Mockito stub is no-op.
 
-        StepVerifier.create(profileService.deleteAccount(USER_ID, session, IP, UA))
-                .verifyComplete();
+        profileService.deleteAccount(USER_ID, session, IP, UA);
 
         ArgumentCaptor<User> uc = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(uc.capture());
@@ -180,7 +170,7 @@ class ProfileServiceTest {
         // Account deletion MUST also kill sibling sessions on other devices, otherwise the
         // session you were "deleting" the account from is gone but the laptop next to you is
         // still authenticated.
-        verify(reactiveMongoTemplate).remove(any(Query.class), eq("sessions"));
+        verify(mongoTemplate).remove(any(Query.class), eq("sessions"));
         verify(session).invalidate();
         verify(eventService).logEvent(eq(USER_ID), eq("account_deleted"), eq(IP), eq(UA), eq(null));
     }
@@ -191,59 +181,47 @@ class ProfileServiceTest {
         // must NOT pull profile data — force re-login through the auth flow which gates blocked.
         User u = activeUser();
         u.setStatus(UserStatus.blocked);
-        when(userRepository.findById(USER_ID)).thenReturn(Mono.just(u));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(u));
 
-        StepVerifier.create(profileService.getProfile(USER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus().value()).isEqualTo(401);
-                })
-                .verify();
+        assertThatThrownBy(() -> profileService.getProfile(USER_ID))
+                .isInstanceOfSatisfying(AppException.class, ex ->
+                        assertThat(ex.getStatus().value()).isEqualTo(401));
     }
 
     @Test
     void getProfile_deletedUser_returns401() {
         User u = activeUser();
         u.setStatus(UserStatus.deleted);
-        when(userRepository.findById(USER_ID)).thenReturn(Mono.just(u));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(u));
 
-        StepVerifier.create(profileService.getProfile(USER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus().value()).isEqualTo(401);
-                })
-                .verify();
+        assertThatThrownBy(() -> profileService.getProfile(USER_ID))
+                .isInstanceOfSatisfying(AppException.class, ex ->
+                        assertThat(ex.getStatus().value()).isEqualTo(401));
     }
 
     @Test
     void getProfile_unknownUser_returns401() {
-        when(userRepository.findById(USER_ID)).thenReturn(Mono.empty());
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.empty());
 
-        StepVerifier.create(profileService.getProfile(USER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus().value()).isEqualTo(401);
-                })
-                .verify();
+        assertThatThrownBy(() -> profileService.getProfile(USER_ID))
+                .isInstanceOfSatisfying(AppException.class, ex ->
+                        assertThat(ex.getStatus().value()).isEqualTo(401));
     }
 
     @Test
     void updateProfile_setsName_doesNotTouchOtherFields() {
         User user = activeUser();
         Instant before = user.getUpdatedAt();
-        when(userRepository.findById(USER_ID)).thenReturn(Mono.just(user));
-        when(userRepository.save(any(User.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(userRepository.findById(USER_ID)).thenReturn(Optional.of(user));
+        when(userRepository.save(any(User.class))).thenAnswer(inv -> inv.getArgument(0));
 
         com.botfunnel.profile.dto.UpdateProfileRequest req = new com.botfunnel.profile.dto.UpdateProfileRequest();
         req.setName("New Name");
 
-        StepVerifier.create(profileService.updateProfile(USER_ID, req))
-                .assertNext(resp -> {
-                    assertThat(resp.name()).isEqualTo("New Name");
-                    assertThat(resp.email()).isEqualTo("user@test.com");
-                    assertThat(resp.status()).isEqualTo("active");
-                })
-                .verifyComplete();
+        com.botfunnel.profile.dto.ProfileResponse resp = profileService.updateProfile(USER_ID, req);
+        assertThat(resp.name()).isEqualTo("New Name");
+        assertThat(resp.email()).isEqualTo("user@test.com");
+        assertThat(resp.status()).isEqualTo("active");
 
         ArgumentCaptor<User> uc = ArgumentCaptor.forClass(User.class);
         verify(userRepository).save(uc.capture());

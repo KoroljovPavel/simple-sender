@@ -12,9 +12,8 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Mono;
 
 import java.security.SecureRandom;
 import java.time.Duration;
@@ -23,6 +22,7 @@ import java.util.Base64;
 import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.Map;
+import java.util.Optional;
 
 @Service
 public class BotService {
@@ -66,7 +66,7 @@ public class BotService {
     private final TelegramApiClient telegramApiClient;
     private final TelegramSender telegramSender;
     private final EventService eventService;
-    private final ReactiveRedisTemplate<String, String> redisTemplate;
+    private final StringRedisTemplate redisTemplate;
     private final String appUrl;
     private final SecureRandom secureRandom = new SecureRandom();
 
@@ -76,7 +76,7 @@ public class BotService {
                       TelegramApiClient telegramApiClient,
                       TelegramSender telegramSender,
                       EventService eventService,
-                      ReactiveRedisTemplate<String, String> redisTemplate,
+                      StringRedisTemplate redisTemplate,
                       @Value("${app.url}") String appUrl) {
         this.botRepository = botRepository;
         this.projectService = projectService;
@@ -88,211 +88,193 @@ public class BotService {
         this.appUrl = appUrl;
     }
 
-    public Mono<Bot> getByProject(String ownerId, String projectId) {
+    public Bot getByProject(String ownerId, String projectId) {
         return requireConnectedBot(ownerId, projectId);
     }
 
-    public Mono<Bot> connect(String ownerId, String projectId, String token, String ip, String userAgent) {
-        // Mono.defer wraps each subsequent step so a short-circuit upstream (e.g. 429 from the
-        // brute-force counter) never constructs the downstream Monos — keeps the no-Telegram-call
-        // guarantee (AC11) testable and mirrors the AuthService chain pattern.
-        return projectService.requireOwned(ownerId, projectId, false)
-                .then(Mono.defer(() -> incrementBruteForceCounter(ownerId)))
-                .then(Mono.defer(() -> ensureNoConnectedBotForProject(projectId)))
-                .then(Mono.defer(() -> telegramApiClient.getMe(token)))
-                .flatMap(user -> ensureTelegramBotIdNotConnectedAnywhere(user.id()).thenReturn(user))
-                .flatMap(user -> connectAfterPreChecks(projectId, token, user))
-                .doOnSuccess(saved -> eventService.logEvent(ownerId, EVENT_BOT_CONNECTED,
-                        ip, userAgent, connectedMetadata(saved)))
-                .flatMap(saved -> resetBruteForceCounter(ownerId).thenReturn(saved));
+    public Bot connect(String ownerId, String projectId, String token, String ip, String userAgent) {
+        // Straight-line sequential calls preserving the documented order from the reactive chain:
+        // (1) ownership guard → (2) brute-force INCR (D14 INCR-every-attempt — closes the
+        // Connect-then-Disconnect bypass) → (3) per-project pre-check → (4) Telegram getMe →
+        // (5) platform-wide telegramBotId pre-check → (6) setWebhook + persist + compensation
+        // → (7) audit event AFTER save success → (8) brute-force counter reset.
+        projectService.requireOwned(ownerId, projectId, false);
+        incrementBruteForceCounter(ownerId);
+        ensureNoConnectedBotForProject(projectId);
+        TelegramUser user = telegramApiClient.getMe(token);
+        ensureTelegramBotIdNotConnectedAnywhere(user.id());
+        Bot saved = connectAfterPreChecks(projectId, token, user);
+        eventService.logEvent(ownerId, EVENT_BOT_CONNECTED, ip, userAgent, connectedMetadata(saved));
+        resetBruteForceCounter(ownerId);
+        return saved;
     }
 
-    public Mono<Void> disconnect(String ownerId, String projectId, String ip, String userAgent) {
-        return requireConnectedBot(ownerId, projectId)
-                .flatMap(bot -> doDisconnect(bot, ownerId, projectId, ip, userAgent))
-                .then();
+    public void disconnect(String ownerId, String projectId, String ip, String userAgent) {
+        Bot bot = requireConnectedBot(ownerId, projectId);
+        doDisconnect(bot, ownerId, projectId, ip, userAgent);
     }
 
-    public Mono<Void> sendTestMessage(String ownerId, String projectId, String ip, String userAgent) {
-        return requireConnectedBot(ownerId, projectId)
-                .flatMap(bot -> {
-                    // Null branch preserved until Epic 04b webhook ingestion populates ownerChatId.
-                    // Verbatim 422 contract from the pre-Wave-3 stub — message, code, and HTTP
-                    // status must NOT drift; the regression test pins all three.
-                    if (bot.getOwnerChatId() == null) {
-                        return Mono.<Void>error(AppException.unprocessableEntity(
-                                "owner_chat_id_unknown",
-                                "Send /start to your bot in Telegram first, then try again"));
-                    }
-                    return telegramSender.sendText(bot.getId(), bot.getOwnerChatId(),
-                                    TEST_MESSAGE_BODY, null, ownerId)
-                            // Decision 3: BotService writes bot_test_message_sent ONLY on success.
-                            // On failure the exception propagates; sender already wrote
-                            // telegram_send_failed — no double-write.
-                            .doOnSuccess(sm -> eventService.logEvent(ownerId,
-                                    EVENT_BOT_TEST_MESSAGE_SENT, ip, userAgent,
-                                    testMessageMetadata(bot, sm)))
-                            .then();
-                });
+    public void sendTestMessage(String ownerId, String projectId, String ip, String userAgent) {
+        Bot bot = requireConnectedBot(ownerId, projectId);
+        // Null branch preserved until Epic 04b webhook ingestion populates ownerChatId.
+        // Verbatim 422 contract from the pre-Wave-3 stub — message, code, and HTTP status
+        // must NOT drift; the regression test pins all three.
+        if (bot.getOwnerChatId() == null) {
+            throw AppException.unprocessableEntity(
+                    "owner_chat_id_unknown",
+                    "Send /start to your bot in Telegram first, then try again");
+        }
+        SentMessage sm = telegramSender.sendText(bot.getId(), bot.getOwnerChatId(),
+                TEST_MESSAGE_BODY, null, ownerId);
+        // Decision 3: BotService writes bot_test_message_sent ONLY on success.
+        // On failure the exception propagates; sender already wrote telegram_send_failed
+        // — no double-write.
+        eventService.logEvent(ownerId, EVENT_BOT_TEST_MESSAGE_SENT, ip, userAgent,
+                testMessageMetadata(bot, sm));
     }
 
-    private Mono<Bot> requireConnectedBot(String ownerId, String projectId) {
-        return projectService.requireOwned(ownerId, projectId, false)
-                .then(Mono.defer(() -> botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)))
-                .switchIfEmpty(Mono.error(AppException.notFound(MESSAGE_BOT_NOT_FOUND)));
+    private Bot requireConnectedBot(String ownerId, String projectId) {
+        projectService.requireOwned(ownerId, projectId, false);
+        return botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)
+                .orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND));
     }
 
-    private Mono<Bot> connectAfterPreChecks(String projectId, String token, TelegramUser user) {
+    private Bot connectAfterPreChecks(String projectId, String token, TelegramUser user) {
         byte[] secretBytes = new byte[WEBHOOK_SECRET_BYTES];
         secureRandom.nextBytes(secretBytes);
         String secretHex = HexFormat.of().formatHex(secretBytes);
         String secretHash = Sha256Hex.hex(secretHex);
         String webhookUrl = appUrl + "/webhooks/telegram/" + projectId;
 
-        return telegramApiClient.setWebhook(token, webhookUrl, secretHex)
-                .then(Mono.defer(() -> {
-                    // BotService owns the Base64 boundary (D15): TokenEncryptor returns raw bytes;
-                    // Bot.encryptedToken{Iv,Ciphertext} are declared as String (Base64) per
-                    // tech-spec Data Models lines 292-293.
-                    EncryptedValue encrypted = tokenEncryptor.encrypt(token);
-                    String ivB64 = Base64.getEncoder().encodeToString(encrypted.iv());
-                    String ctB64 = Base64.getEncoder().encodeToString(encrypted.ciphertext());
-                    String tokenSuffix = token.substring(token.length() - 3);
+        telegramApiClient.setWebhook(token, webhookUrl, secretHex);
 
-                    Bot bot = new Bot();
-                    bot.setProjectId(projectId);
-                    bot.setTelegramBotId(user.id());
-                    bot.setTelegramUsername(user.username());
-                    bot.setTelegramFirstName(user.first_name());
-                    bot.setStatus(BotStatus.CONNECTED);
-                    bot.setEncryptedTokenCiphertext(ctB64);
-                    bot.setEncryptedTokenIv(ivB64);
-                    bot.setTokenSuffix(tokenSuffix);
-                    bot.setWebhookSecretHash(secretHash);
-                    bot.setConnectedAt(Instant.now());
+        // BotService owns the Base64 boundary (D15): TokenEncryptor returns raw bytes;
+        // Bot.encryptedToken{Iv,Ciphertext} are declared as String (Base64) per
+        // tech-spec Data Models lines 292-293.
+        EncryptedValue encrypted = tokenEncryptor.encrypt(token);
+        String ivB64 = Base64.getEncoder().encodeToString(encrypted.iv());
+        String ctB64 = Base64.getEncoder().encodeToString(encrypted.ciphertext());
+        String tokenSuffix = token.substring(token.length() - 3);
 
-                    return botRepository.save(bot)
-                            .onErrorResume(persistErr ->
-                                    compensateAndPropagate(token, user.id(), persistErr));
-                }));
+        Bot bot = new Bot();
+        bot.setProjectId(projectId);
+        bot.setTelegramBotId(user.id());
+        bot.setTelegramUsername(user.username());
+        bot.setTelegramFirstName(user.first_name());
+        bot.setStatus(BotStatus.CONNECTED);
+        bot.setEncryptedTokenCiphertext(ctB64);
+        bot.setEncryptedTokenIv(ivB64);
+        bot.setTokenSuffix(tokenSuffix);
+        bot.setWebhookSecretHash(secretHash);
+        bot.setConnectedAt(Instant.now());
+
+        try {
+            return botRepository.save(bot);
+        } catch (RuntimeException persistErr) {
+            // D4: setWebhook already succeeded — best-effort deleteWebhook to roll Telegram back.
+            // The compensation must never shadow the original persist error, so we swallow any
+            // failure from the compensation itself before rethrowing. RestClient transport-error
+            // messages typically embed the request URI which carries the token; scrub at the log
+            // site (R1 / AC17).
+            try {
+                telegramApiClient.deleteWebhook(token);
+            } catch (Exception compErr) {
+                log.warn("Compensating deleteWebhook failed during Connect rollback: {}",
+                        TelegramApiClient.scrubTokens(compErr.getMessage()));
+            }
+            throw mapPersistError(persistErr, user.id());
+        }
     }
 
-    private Mono<Bot> compensateAndPropagate(String token, Long telegramBotId, Throwable persistErr) {
-        // D4: setWebhook already succeeded — best-effort deleteWebhook to roll Telegram back.
-        // The compensation must never shadow the original persist error, so we swallow any
-        // failure from the compensation itself before rethrowing. WebClient transport-error
-        // messages from TelegramApiClient typically embed the request URI which carries the
-        // token; scrub at the log site (R1 / AC17).
-        return telegramApiClient.deleteWebhook(token)
-                .onErrorResume(compErr -> {
-                    log.warn("Compensating deleteWebhook failed during Connect rollback: {}",
-                            TelegramApiClient.scrubTokens(compErr.getMessage()));
-                    return Mono.just(false);
-                })
-                .then(mapPersistError(persistErr, telegramBotId))
-                .flatMap(Mono::error);
-    }
-
-    private Mono<Throwable> mapPersistError(Throwable persistErr, Long telegramBotId) {
+    private RuntimeException mapPersistError(RuntimeException persistErr, Long telegramBotId) {
         if (!(persistErr instanceof DuplicateKeyException dke)) {
-            return Mono.just(persistErr);
+            return persistErr;
         }
         String message = dke.getMessage() == null ? "" : dke.getMessage();
         if (message.contains("projectId_unique_connected")) {
-            return Mono.just(AppException.conflict(
-                    CODE_BOT_ALREADY_IN_PROJECT, MESSAGE_BOT_ALREADY_IN_PROJECT));
+            return AppException.conflict(CODE_BOT_ALREADY_IN_PROJECT, MESSAGE_BOT_ALREADY_IN_PROJECT);
         }
         if (message.contains("telegramBotId_unique_connected")) {
-            return Mono.just(AppException.conflict(
-                    CODE_BOT_ALREADY_CONNECTED, MESSAGE_BOT_ALREADY_CONNECTED));
+            return AppException.conflict(CODE_BOT_ALREADY_CONNECTED, MESSAGE_BOT_ALREADY_CONNECTED);
         }
         // Driver fallback: if the exception message omits the index name, disambiguate by
         // re-querying the platform-wide partial unique index — a row with this telegramBotId
         // means the platform-wide index fired; otherwise the per-project index fired.
-        return botRepository.findFirstByTelegramBotIdAndStatus(telegramBotId, BotStatus.CONNECTED)
-                .<Throwable>map(existing -> AppException.conflict(
-                        CODE_BOT_ALREADY_CONNECTED, MESSAGE_BOT_ALREADY_CONNECTED))
-                .defaultIfEmpty(AppException.conflict(
-                        CODE_BOT_ALREADY_IN_PROJECT, MESSAGE_BOT_ALREADY_IN_PROJECT));
+        Optional<Bot> existing = botRepository.findFirstByTelegramBotIdAndStatus(telegramBotId, BotStatus.CONNECTED);
+        if (existing.isPresent()) {
+            return AppException.conflict(CODE_BOT_ALREADY_CONNECTED, MESSAGE_BOT_ALREADY_CONNECTED);
+        }
+        return AppException.conflict(CODE_BOT_ALREADY_IN_PROJECT, MESSAGE_BOT_ALREADY_IN_PROJECT);
     }
 
-    private Mono<Void> ensureNoConnectedBotForProject(String projectId) {
-        return botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)
-                .flatMap(existing -> Mono.<Void>error(AppException.conflict(
-                        CODE_BOT_ALREADY_IN_PROJECT, MESSAGE_BOT_ALREADY_IN_PROJECT)))
-                .then();
+    private void ensureNoConnectedBotForProject(String projectId) {
+        if (botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).isPresent()) {
+            throw AppException.conflict(CODE_BOT_ALREADY_IN_PROJECT, MESSAGE_BOT_ALREADY_IN_PROJECT);
+        }
     }
 
-    private Mono<Void> ensureTelegramBotIdNotConnectedAnywhere(Long telegramBotId) {
-        return botRepository.findFirstByTelegramBotIdAndStatus(telegramBotId, BotStatus.CONNECTED)
-                .flatMap(existing -> Mono.<Void>error(AppException.conflict(
-                        CODE_BOT_ALREADY_CONNECTED, MESSAGE_BOT_ALREADY_CONNECTED)))
-                .then();
+    private void ensureTelegramBotIdNotConnectedAnywhere(Long telegramBotId) {
+        if (botRepository.findFirstByTelegramBotIdAndStatus(telegramBotId, BotStatus.CONNECTED).isPresent()) {
+            throw AppException.conflict(CODE_BOT_ALREADY_CONNECTED, MESSAGE_BOT_ALREADY_CONNECTED);
+        }
     }
 
-    private Mono<Bot> doDisconnect(Bot bot, String ownerId, String projectId, String ip, String userAgent) {
-        // Plaintext token: decode → decrypt → pass to deleteWebhook. Closure capture by the
-        // downstream lambdas keeps the reference reachable until the subscription completes —
-        // not stack-only — but the token is never logged, never returned, and never serialized.
+    private void doDisconnect(Bot bot, String ownerId, String projectId, String ip, String userAgent) {
+        // Plaintext token: decode → decrypt → pass to deleteWebhook. Local variable lifetime is
+        // bounded to this method scope; the token is never logged, returned, or serialised.
         byte[] iv = Base64.getDecoder().decode(bot.getEncryptedTokenIv());
         byte[] ct = Base64.getDecoder().decode(bot.getEncryptedTokenCiphertext());
         String plaintextToken = tokenEncryptor.decrypt(iv, ct);
 
-        return telegramApiClient.deleteWebhook(plaintextToken)
-                // AC13b: persistent Telegram failure must NEVER block the local update.
-                // WebClient transport-error messages embed the request URI (with token); scrub.
-                .onErrorResume(err -> {
-                    log.warn(TELEGRAM_DISCONNECT_WARN, TelegramApiClient.scrubTokens(err.getMessage()));
-                    return Mono.just(false);
-                })
-                .flatMap(deleted -> {
-                    bot.setStatus(BotStatus.DISCONNECTED);
-                    bot.setEncryptedTokenCiphertext(null);
-                    bot.setEncryptedTokenIv(null);
-                    bot.setTokenSuffix(null);
-                    bot.setWebhookSecretHash(null);
-                    bot.setDisconnectedAt(Instant.now());
-                    return botRepository.save(bot)
-                            .doOnSuccess(saved -> eventService.logEvent(ownerId, EVENT_BOT_DISCONNECTED,
-                                    ip, userAgent, disconnectedMetadata(saved, projectId,
-                                            Boolean.TRUE.equals(deleted))));
-                });
+        boolean deleted;
+        try {
+            deleted = telegramApiClient.deleteWebhook(plaintextToken);
+        } catch (Exception err) {
+            // AC13b: persistent Telegram failure must NEVER block the local update.
+            // RestClient transport-error messages embed the request URI (with token); scrub.
+            log.warn(TELEGRAM_DISCONNECT_WARN, TelegramApiClient.scrubTokens(err.getMessage()));
+            deleted = false;
+        }
+
+        bot.setStatus(BotStatus.DISCONNECTED);
+        bot.setEncryptedTokenCiphertext(null);
+        bot.setEncryptedTokenIv(null);
+        bot.setTokenSuffix(null);
+        bot.setWebhookSecretHash(null);
+        bot.setDisconnectedAt(Instant.now());
+        Bot saved = botRepository.save(bot);
+        eventService.logEvent(ownerId, EVENT_BOT_DISCONNECTED, ip, userAgent,
+                disconnectedMetadata(saved, projectId, deleted));
     }
 
-    private Mono<Void> incrementBruteForceCounter(String userId) {
+    private void incrementBruteForceCounter(String userId) {
         // D14: INCR every attempt (not only on failure) — closes the Connect-then-Disconnect
         // bypass that an INCR-on-failure-only counter (auth pattern) would leave open. The
-        // `count != null` guards are defensive against a non-spec emit; a genuine null would
-        // still surface via the outer .onErrorResume (fail-open) — never as a 429.
+        // null guards are defensive against a non-spec emit; a genuine null would still surface
+        // via the catch (fail-open) — never as a 429.
         String key = bruteForceKey(userId);
-        return redisTemplate.opsForValue().increment(key)
-                .flatMap(count -> {
-                    Mono<Void> ttl = (count != null && count == 1L)
-                            ? redisTemplate.expire(key, BRUTE_TTL).then()
-                            : Mono.empty();
-                    if (count != null && count > BRUTE_FORCE_THRESHOLD) {
-                        return Mono.<Void>error(AppException.tooManyRequests(
-                                "Too many Connect attempts. Try again later."));
-                    }
-                    return ttl;
-                })
-                .onErrorResume(err -> {
-                    if (err instanceof AppException) {
-                        return Mono.error(err);
-                    }
-                    log.warn(REDIS_FAIL_OPEN_WARN, err.getMessage());
-                    return Mono.empty();
-                });
+        try {
+            Long count = redisTemplate.opsForValue().increment(key);
+            if (count != null && count == 1L) {
+                redisTemplate.expire(key, BRUTE_TTL);
+            }
+            if (count != null && count > BRUTE_FORCE_THRESHOLD) {
+                throw AppException.tooManyRequests("Too many Connect attempts. Try again later.");
+            }
+        } catch (AppException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn(REDIS_FAIL_OPEN_WARN, e.getMessage());
+        }
     }
 
-    private Mono<Void> resetBruteForceCounter(String userId) {
+    private void resetBruteForceCounter(String userId) {
         String key = bruteForceKey(userId);
-        return redisTemplate.delete(key)
-                .then()
-                .onErrorResume(err -> {
-                    log.warn(REDIS_FAIL_OPEN_WARN, err.getMessage());
-                    return Mono.empty();
-                });
+        try {
+            redisTemplate.delete(key);
+        } catch (Exception e) {
+            log.warn(REDIS_FAIL_OPEN_WARN, e.getMessage());
+        }
     }
 
     private static String bruteForceKey(String userId) {

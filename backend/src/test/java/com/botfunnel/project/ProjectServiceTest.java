@@ -11,13 +11,14 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
 
 import java.time.Instant;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -68,93 +69,82 @@ class ProjectServiceTest {
     @Test
     void requireOwned_ownProjectActive_returnsProject() {
         Project p = sampleActive("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(p));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(p));
 
-        StepVerifier.create(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .expectNext(p)
-                .verifyComplete();
+        assertThat(projectService.requireOwned(OWNER_ID, PROJECT_ID, false)).isSameAs(p);
     }
 
     @Test
     void requireOwned_foreignProject_throws404() {
         Project foreign = sampleActive("Foreign");
         foreign.setOwnerId("someone-else");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(foreign));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(foreign));
 
-        StepVerifier.create(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                })
-                .verify();
+        assertThatThrownBy(() -> projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
+                .isInstanceOf(AppException.class)
+                .extracting(t -> ((AppException) t).getStatus())
+                .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test
     void requireOwned_softDeletedWithoutFlag_throws404() {
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(sampleSoftDeleted("Acme")));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(sampleSoftDeleted("Acme")));
 
-        StepVerifier.create(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .expectErrorSatisfies(err -> assertThat(((AppException) err).getStatus())
-                        .isEqualTo(HttpStatus.NOT_FOUND))
-                .verify();
+        assertThatThrownBy(() -> projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
+                .isInstanceOf(AppException.class)
+                .extracting(t -> ((AppException) t).getStatus())
+                .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test
     void requireOwned_softDeletedWithFlag_returnsProject() {
         Project p = sampleSoftDeleted("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(p));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(p));
 
-        StepVerifier.create(projectService.requireOwned(OWNER_ID, PROJECT_ID, true))
-                .expectNext(p)
-                .verifyComplete();
+        assertThat(projectService.requireOwned(OWNER_ID, PROJECT_ID, true)).isSameAs(p);
     }
 
     @Test
     void requireOwned_missingProject_throws404() {
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.empty());
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.empty());
 
-        StepVerifier.create(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .expectErrorSatisfies(err -> assertThat(((AppException) err).getStatus())
-                        .isEqualTo(HttpStatus.NOT_FOUND))
-                .verify();
+        assertThatThrownBy(() -> projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
+                .isInstanceOf(AppException.class)
+                .extracting(t -> ((AppException) t).getStatus())
+                .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     @Test
     void requireOwned_malformedObjectId_throws404() {
         when(projectRepository.findById("malformed"))
-                .thenReturn(Mono.error(new IllegalArgumentException("invalid id")));
+                .thenThrow(new IllegalArgumentException("invalid id"));
 
-        StepVerifier.create(projectService.requireOwned(OWNER_ID, "malformed", false))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                })
-                .verify();
+        assertThatThrownBy(() -> projectService.requireOwned(OWNER_ID, "malformed", false))
+                .isInstanceOf(AppException.class)
+                .extracting(t -> ((AppException) t).getStatus())
+                .isEqualTo(HttpStatus.NOT_FOUND);
     }
 
     // --------- create ---------
 
     @Test
     void create_happyPath_savesAndEmitsProjectCreatedEvent() {
-        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(Mono.just(0L));
+        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(0L);
         when(projectRepository.findByOwnerIdAndNameAndDeletedAtIsNull(OWNER_ID, "Acme"))
-                .thenReturn(Mono.empty());
+                .thenReturn(Optional.empty());
         when(projectRepository.save(any(Project.class))).thenAnswer(inv -> {
             Project p = inv.getArgument(0);
             p.setId(PROJECT_ID);
-            return Mono.just(p);
+            return p;
         });
 
         CreateProjectRequest dto = new CreateProjectRequest("Acme", null, "Europe/Kyiv");
 
-        StepVerifier.create(projectService.create(OWNER_ID, dto, IP, UA))
-                .assertNext(saved -> {
-                    assertThat(saved.getId()).isEqualTo(PROJECT_ID);
-                    assertThat(saved.getOwnerId()).isEqualTo(OWNER_ID);
-                    assertThat(saved.getName()).isEqualTo("Acme");
-                    assertThat(saved.getDeletedAt()).isNull();
-                })
-                .verifyComplete();
+        Project saved = projectService.create(OWNER_ID, dto, IP, UA);
+        assertThat(saved.getId()).isEqualTo(PROJECT_ID);
+        assertThat(saved.getOwnerId()).isEqualTo(OWNER_ID);
+        assertThat(saved.getName()).isEqualTo("Acme");
+        assertThat(saved.getDeletedAt()).isNull();
 
         ArgumentCaptor<Map<String, Object>> meta = metadataCaptor();
         verify(eventService).logEvent(eq(OWNER_ID), eq("project_created"),
@@ -165,55 +155,74 @@ class ProjectServiceTest {
     @Test
     void create_atQuotaLimit_throws422WithProjectLimitReachedCode() {
         when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID))
-                .thenReturn(Mono.just((long) MAX_PER_USER));
+                .thenReturn((long) MAX_PER_USER);
 
         CreateProjectRequest dto = new CreateProjectRequest("Acme", null, "Europe/Kyiv");
 
-        StepVerifier.create(projectService.create(OWNER_ID, dto, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    AppException ex = (AppException) err;
+        assertThatThrownBy(() -> projectService.create(OWNER_ID, dto, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, ex -> {
                     assertThat(ex.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
                     assertThat(ex.getCode()).isEqualTo("project_limit_reached");
-                })
-                .verify();
+                });
         verify(eventService, never()).logEvent(anyString(), anyString(), anyString(), anyString(), any());
     }
 
     @Test
     void create_duplicateActiveName_throws409WithProjectNameTakenCode() {
-        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(Mono.just(2L));
+        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(2L);
         when(projectRepository.findByOwnerIdAndNameAndDeletedAtIsNull(OWNER_ID, "Acme"))
-                .thenReturn(Mono.just(sampleActive("Acme")));
+                .thenReturn(Optional.of(sampleActive("Acme")));
 
         CreateProjectRequest dto = new CreateProjectRequest("Acme", null, "Europe/Kyiv");
 
-        StepVerifier.create(projectService.create(OWNER_ID, dto, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    AppException ex = (AppException) err;
+        assertThatThrownBy(() -> projectService.create(OWNER_ID, dto, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, ex -> {
                     assertThat(ex.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                     assertThat(ex.getCode()).isEqualTo("project_name_taken");
-                })
-                .verify();
+                });
     }
 
     @Test
     void create_duplicateSoftDeletedName_succeeds() {
         // Pre-check (findByOwnerIdAndNameAndDeletedAtIsNull) only matches active rows; an existing
         // soft-deleted row with the same name does not collide — service let it through.
-        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(Mono.just(0L));
+        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(0L);
         when(projectRepository.findByOwnerIdAndNameAndDeletedAtIsNull(OWNER_ID, "Acme"))
-                .thenReturn(Mono.empty());
+                .thenReturn(Optional.empty());
         when(projectRepository.save(any(Project.class))).thenAnswer(inv -> {
             Project p = inv.getArgument(0);
             p.setId(PROJECT_ID);
-            return Mono.just(p);
+            return p;
         });
 
         CreateProjectRequest dto = new CreateProjectRequest("Acme", null, "Europe/Kyiv");
 
-        StepVerifier.create(projectService.create(OWNER_ID, dto, IP, UA))
-                .assertNext(saved -> assertThat(saved.getName()).isEqualTo("Acme"))
-                .verifyComplete();
+        Project saved = projectService.create(OWNER_ID, dto, IP, UA);
+        assertThat(saved.getName()).isEqualTo("Acme");
+    }
+
+    // --------- list ---------
+
+    @Test
+    void list_excludeDeleted_returnsActiveOnly() {
+        Project a = sampleActive("A");
+        Project b = sampleActive("B");
+        when(projectRepository.findByOwnerIdAndDeletedAtIsNullOrderByCreatedAtDesc(OWNER_ID))
+                .thenReturn(List.of(b, a));
+
+        List<Project> result = projectService.list(OWNER_ID, false);
+        assertThat(result).containsExactly(b, a);
+    }
+
+    @Test
+    void list_includeDeleted_returnsAll() {
+        Project a = sampleActive("A");
+        Project deleted = sampleSoftDeleted("Deleted");
+        when(projectRepository.findByOwnerIdOrderByCreatedAtDesc(OWNER_ID))
+                .thenReturn(List.of(a, deleted));
+
+        List<Project> result = projectService.list(OWNER_ID, true);
+        assertThat(result).containsExactly(a, deleted);
     }
 
     // --------- update ---------
@@ -221,16 +230,15 @@ class ProjectServiceTest {
     @Test
     void update_renameHappy_emitsProjectRenamedWithPreviousName() {
         Project before = sampleActive("Old");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(before));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(before));
         when(projectRepository.findByOwnerIdAndNameAndIdNotAndDeletedAtIsNull(OWNER_ID, "New", PROJECT_ID))
-                .thenReturn(Mono.empty());
-        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+                .thenReturn(Optional.empty());
+        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> inv.getArgument(0));
 
         UpdateProjectRequest dto = new UpdateProjectRequest("New", null, null);
 
-        StepVerifier.create(projectService.update(OWNER_ID, PROJECT_ID, dto, IP, UA))
-                .assertNext(saved -> assertThat(saved.getName()).isEqualTo("New"))
-                .verifyComplete();
+        Project saved = projectService.update(OWNER_ID, PROJECT_ID, dto, IP, UA);
+        assertThat(saved.getName()).isEqualTo("New");
 
         ArgumentCaptor<Map<String, Object>> meta = metadataCaptor();
         verify(eventService).logEvent(eq(OWNER_ID), eq("project_renamed"),
@@ -244,14 +252,13 @@ class ProjectServiceTest {
     @Test
     void update_noNameChange_emitsProjectUpdatedWithoutNameOrPreviousName() {
         Project before = sampleActive("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(before));
-        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(before));
+        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> inv.getArgument(0));
 
         UpdateProjectRequest dto = new UpdateProjectRequest(null, "fresh", null);
 
-        StepVerifier.create(projectService.update(OWNER_ID, PROJECT_ID, dto, IP, UA))
-                .assertNext(saved -> assertThat(saved.getDescription()).isEqualTo("fresh"))
-                .verifyComplete();
+        Project saved = projectService.update(OWNER_ID, PROJECT_ID, dto, IP, UA);
+        assertThat(saved.getDescription()).isEqualTo("fresh");
 
         ArgumentCaptor<Map<String, Object>> meta = metadataCaptor();
         verify(eventService).logEvent(eq(OWNER_ID), eq("project_updated"),
@@ -264,19 +271,17 @@ class ProjectServiceTest {
     @Test
     void update_renameToExistingActiveName_throws409WithProjectNameTakenCode() {
         Project before = sampleActive("Old");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(before));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(before));
         when(projectRepository.findByOwnerIdAndNameAndIdNotAndDeletedAtIsNull(OWNER_ID, "Taken", PROJECT_ID))
-                .thenReturn(Mono.just(sampleActive("Taken")));
+                .thenReturn(Optional.of(sampleActive("Taken")));
 
         UpdateProjectRequest dto = new UpdateProjectRequest("Taken", null, null);
 
-        StepVerifier.create(projectService.update(OWNER_ID, PROJECT_ID, dto, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    AppException ex = (AppException) err;
+        assertThatThrownBy(() -> projectService.update(OWNER_ID, PROJECT_ID, dto, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, ex -> {
                     assertThat(ex.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                     assertThat(ex.getCode()).isEqualTo("project_name_taken");
-                })
-                .verify();
+                });
     }
 
     @Test
@@ -286,14 +291,13 @@ class ProjectServiceTest {
         // no-op assertion). Metadata shape is locked to projectId-only and the rename branch
         // is verified to never fire — distinct from the "name field absent from DTO" path.
         Project before = sampleActive("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(before));
-        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(before));
+        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> inv.getArgument(0));
 
         UpdateProjectRequest dto = new UpdateProjectRequest("Acme", null, null);
 
-        StepVerifier.create(projectService.update(OWNER_ID, PROJECT_ID, dto, IP, UA))
-                .assertNext(saved -> assertThat(saved.getName()).isEqualTo("Acme"))
-                .verifyComplete();
+        Project saved = projectService.update(OWNER_ID, PROJECT_ID, dto, IP, UA);
+        assertThat(saved.getName()).isEqualTo("Acme");
 
         ArgumentCaptor<Map<String, Object>> meta = metadataCaptor();
         verify(eventService).logEvent(eq(OWNER_ID), eq("project_updated"),
@@ -308,12 +312,11 @@ class ProjectServiceTest {
     @Test
     void softDelete_happy_setsDeletedAtAndEmitsEvent() {
         Project active = sampleActive("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(active));
-        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(active));
+        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(projectService.softDelete(OWNER_ID, PROJECT_ID, IP, UA))
-                .assertNext(saved -> assertThat(saved.getDeletedAt()).isNotNull())
-                .verifyComplete();
+        Project saved = projectService.softDelete(OWNER_ID, PROJECT_ID, IP, UA);
+        assertThat(saved.getDeletedAt()).isNotNull();
 
         ArgumentCaptor<Map<String, Object>> meta = metadataCaptor();
         verify(eventService).logEvent(eq(OWNER_ID), eq("project_soft_deleted"),
@@ -323,12 +326,11 @@ class ProjectServiceTest {
 
     @Test
     void softDelete_alreadySoftDeleted_throws404() {
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(sampleSoftDeleted("Acme")));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(sampleSoftDeleted("Acme")));
 
-        StepVerifier.create(projectService.softDelete(OWNER_ID, PROJECT_ID, IP, UA))
-                .expectErrorSatisfies(err -> assertThat(((AppException) err).getStatus())
-                        .isEqualTo(HttpStatus.NOT_FOUND))
-                .verify();
+        assertThatThrownBy(() -> projectService.softDelete(OWNER_ID, PROJECT_ID, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, ex ->
+                        assertThat(ex.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
 
         verify(eventService, never()).logEvent(anyString(), anyString(),
                 anyString(), anyString(), any());
@@ -339,18 +341,15 @@ class ProjectServiceTest {
     @Test
     void restore_happyPath_clearsDeletedAtAndEmitsEvent() {
         Project deleted = sampleSoftDeleted("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(deleted));
-        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(Mono.just(0L));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(deleted));
+        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(0L);
         when(projectRepository.findByOwnerIdAndNameAndIdNotAndDeletedAtIsNull(OWNER_ID, "Acme", PROJECT_ID))
-                .thenReturn(Mono.empty());
-        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+                .thenReturn(Optional.empty());
+        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(projectService.restore(OWNER_ID, PROJECT_ID, IP, UA))
-                .assertNext(saved -> {
-                    assertThat(saved.getDeletedAt()).isNull();
-                    assertThat(saved.getName()).isEqualTo("Acme");
-                })
-                .verifyComplete();
+        Project saved = projectService.restore(OWNER_ID, PROJECT_ID, IP, UA);
+        assertThat(saved.getDeletedAt()).isNull();
+        assertThat(saved.getName()).isEqualTo("Acme");
 
         ArgumentCaptor<Map<String, Object>> meta = metadataCaptor();
         verify(eventService).logEvent(eq(OWNER_ID), eq("project_restored"),
@@ -367,12 +366,11 @@ class ProjectServiceTest {
         // ZERO mutations and ZERO audit events — verifies the guard runs BEFORE quota check,
         // BEFORE rename logic, and BEFORE save.
         Project active = sampleActive("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(active));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(active));
 
-        StepVerifier.create(projectService.restore(OWNER_ID, PROJECT_ID, IP, UA))
-                .expectErrorSatisfies(err -> assertThat(((AppException) err).getStatus())
-                        .isEqualTo(HttpStatus.NOT_FOUND))
-                .verify();
+        assertThatThrownBy(() -> projectService.restore(OWNER_ID, PROJECT_ID, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, ex ->
+                        assertThat(ex.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
 
         verify(eventService, never()).logEvent(anyString(), eq("project_renamed"),
                 anyString(), anyString(), any());
@@ -383,17 +381,15 @@ class ProjectServiceTest {
     @Test
     void restore_atQuotaLimit_throws422() {
         Project deleted = sampleSoftDeleted("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(deleted));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(deleted));
         when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID))
-                .thenReturn(Mono.just((long) MAX_PER_USER));
+                .thenReturn((long) MAX_PER_USER);
 
-        StepVerifier.create(projectService.restore(OWNER_ID, PROJECT_ID, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    AppException ex = (AppException) err;
+        assertThatThrownBy(() -> projectService.restore(OWNER_ID, PROJECT_ID, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, ex -> {
                     assertThat(ex.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
                     assertThat(ex.getCode()).isEqualTo("project_limit_reached");
-                })
-                .verify();
+                });
         verify(eventService, never()).logEvent(anyString(), anyString(),
                 anyString(), anyString(), any());
     }
@@ -401,18 +397,15 @@ class ProjectServiceTest {
     @Test
     void restore_withNameConflict_appendsRestoredSuffixAndSetsMetadataFlag() {
         Project deleted = sampleSoftDeleted("Acme");
-        when(projectRepository.findById(PROJECT_ID)).thenReturn(Mono.just(deleted));
-        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(Mono.just(1L));
+        when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(deleted));
+        when(projectRepository.countByOwnerIdAndDeletedAtIsNull(OWNER_ID)).thenReturn(1L);
         when(projectRepository.findByOwnerIdAndNameAndIdNotAndDeletedAtIsNull(OWNER_ID, "Acme", PROJECT_ID))
-                .thenReturn(Mono.just(sampleActive("Acme")));
-        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+                .thenReturn(Optional.of(sampleActive("Acme")));
+        when(projectRepository.save(any(Project.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(projectService.restore(OWNER_ID, PROJECT_ID, IP, UA))
-                .assertNext(saved -> {
-                    assertThat(saved.getName()).isEqualTo("Acme (restored)");
-                    assertThat(saved.getDeletedAt()).isNull();
-                })
-                .verifyComplete();
+        Project saved = projectService.restore(OWNER_ID, PROJECT_ID, IP, UA);
+        assertThat(saved.getName()).isEqualTo("Acme (restored)");
+        assertThat(saved.getDeletedAt()).isNull();
 
         ArgumentCaptor<Map<String, Object>> meta = metadataCaptor();
         verify(eventService).logEvent(eq(OWNER_ID), eq("project_restored"),

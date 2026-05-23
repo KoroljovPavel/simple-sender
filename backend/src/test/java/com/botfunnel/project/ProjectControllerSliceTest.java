@@ -6,11 +6,10 @@ import com.botfunnel.profile.WithMockAppUser;
 import com.botfunnel.security.SecurityConfig;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.reactive.WebFluxTest;
+import org.springframework.boot.test.autoconfigure.web.servlet.WebMvcTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.reactive.server.WebTestClient;
-import reactor.core.publisher.Mono;
+import org.springframework.test.web.servlet.MockMvc;
 
 import java.time.Instant;
 
@@ -18,22 +17,24 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-// Slice test: bootstraps just ProjectController + SecurityConfig + GlobalErrorHandler. No live
-// MongoDB / Redis bootstrap needed because @WebFluxTest disables most autoconfig — the
-// AuthControllerSliceTest in this codebase confirms the pattern works without connection-factory
-// mocks. Scope is intentionally narrow: response-shape lock (no ownerId field). Behavioral
-// coverage lives in ProjectControllerIT.
-@WebFluxTest(controllers = ProjectController.class)
+// MVC slice test: bootstraps just ProjectController + SecurityConfig + GlobalErrorHandler.
+// @WebMvcTest disables most autoconfig — no live MongoDB / Redis bootstrap needed. Scope is
+// intentionally narrow: response-shape lock (no ownerId field). Behavioral coverage lives in
+// ProjectControllerIT.
+@WebMvcTest(controllers = ProjectController.class)
 @Import({SecurityConfig.class, GlobalErrorHandler.class, MeterRegistryConfig.class})
 class ProjectControllerSliceTest {
 
-    @Autowired WebTestClient webTestClient;
+    @Autowired MockMvc mockMvc;
     @MockitoBean ProjectService projectService;
 
     @Test
     @WithMockAppUser
-    void getProject_happyPath_responseShapeMatches() {
+    void getProject_happyPath_responseShapeMatches() throws Exception {
         Project p = new Project();
         p.setId("p-1");
         p.setOwnerId("ignored-by-response");
@@ -44,20 +45,18 @@ class ProjectControllerSliceTest {
         p.setUpdatedAt(Instant.parse("2026-05-10T10:00:00Z"));
         p.setDeletedAt(null);
 
-        when(projectService.requireOwned(anyString(), any(), anyBoolean())).thenReturn(Mono.just(p));
+        when(projectService.requireOwned(anyString(), any(), anyBoolean())).thenReturn(p);
 
-        webTestClient.get().uri("/api/v1/projects/p-1")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.id").isEqualTo("p-1")
-                .jsonPath("$.name").isEqualTo("Acme")
-                .jsonPath("$.description").isEqualTo("desc")
-                .jsonPath("$.timezone").isEqualTo("Europe/Kyiv")
-                .jsonPath("$.createdAt").exists()
-                .jsonPath("$.updatedAt").exists()
-                .jsonPath("$.deletedAt").doesNotExist()
+        mockMvc.perform(get("/api/v1/projects/p-1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value("p-1"))
+                .andExpect(jsonPath("$.name").value("Acme"))
+                .andExpect(jsonPath("$.description").value("desc"))
+                .andExpect(jsonPath("$.timezone").value("Europe/Kyiv"))
+                .andExpect(jsonPath("$.createdAt").exists())
+                .andExpect(jsonPath("$.updatedAt").exists())
+                .andExpect(jsonPath("$.deletedAt").doesNotExist())
                 // Response-shape lock: ownerId must NEVER appear in the response body.
-                .jsonPath("$.ownerId").doesNotExist();
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
     }
 }

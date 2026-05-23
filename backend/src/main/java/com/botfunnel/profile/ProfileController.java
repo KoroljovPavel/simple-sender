@@ -2,13 +2,16 @@ package com.botfunnel.profile;
 
 import com.botfunnel.auth.AppUserDetails;
 import com.botfunnel.common.AppException;
+import com.botfunnel.common.HttpRequestUtils;
 import com.botfunnel.profile.dto.ChangePasswordRequest;
 import com.botfunnel.profile.dto.ProfileResponse;
 import com.botfunnel.profile.dto.UpdateProfileRequest;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpSession;
 import jakarta.validation.Valid;
 import org.springframework.http.ResponseEntity;
-import org.springframework.security.core.context.ReactiveSecurityContextHolder;
-import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
@@ -16,14 +19,10 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.server.ServerWebExchange;
-import reactor.core.publisher.Mono;
 
 @RestController
 @RequestMapping("/api/profile")
 public class ProfileController {
-
-    private static final int USER_AGENT_MAX = 500;
 
     private final ProfileService profileService;
 
@@ -32,68 +31,45 @@ public class ProfileController {
     }
 
     @GetMapping
-    public Mono<ResponseEntity<ProfileResponse>> getProfile() {
-        return currentUserId().flatMap(profileService::getProfile).map(ResponseEntity::ok);
+    public ResponseEntity<ProfileResponse> getProfile() {
+        return ResponseEntity.ok(profileService.getProfile(currentUserId()));
     }
 
     @PatchMapping
-    public Mono<ResponseEntity<ProfileResponse>> updateProfile(@Valid @RequestBody UpdateProfileRequest request) {
-        return currentUserId()
-                .flatMap(userId -> profileService.updateProfile(userId, request))
-                .map(ResponseEntity::ok);
+    public ResponseEntity<ProfileResponse> updateProfile(@Valid @RequestBody UpdateProfileRequest request) {
+        return ResponseEntity.ok(profileService.updateProfile(currentUserId(), request));
     }
 
     @PostMapping("/change-password")
-    public Mono<ResponseEntity<Void>> changePassword(@Valid @RequestBody ChangePasswordRequest request,
-                                                     ServerWebExchange exchange) {
-        String ip = extractIp(exchange);
-        String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
-        return currentUserId()
-                .flatMap(userId -> exchange.getSession().flatMap(session -> profileService.changePassword(
-                        userId, request.getCurrentPassword(), request.getNewPassword(),
-                        session, ip, userAgent)))
-                .then(Mono.just(ResponseEntity.ok().<Void>build()));
+    public ResponseEntity<Void> changePassword(@Valid @RequestBody ChangePasswordRequest request,
+                                               HttpServletRequest httpRequest,
+                                               HttpSession session) {
+        String ip = HttpRequestUtils.extractIp(httpRequest);
+        String userAgent = HttpRequestUtils.extractUserAgent(httpRequest);
+        profileService.changePassword(currentUserId(), request.getCurrentPassword(),
+                request.getNewPassword(), session, ip, userAgent);
+        return ResponseEntity.ok().build();
     }
 
     @PostMapping("/terminate-all-sessions")
-    public Mono<ResponseEntity<Void>> terminateAllSessions() {
-        return currentUserId()
-                .flatMap(profileService::terminateAllSessions)
-                .then(Mono.just(ResponseEntity.ok().<Void>build()));
+    public ResponseEntity<Void> terminateAllSessions() {
+        profileService.terminateAllSessions(currentUserId());
+        return ResponseEntity.ok().build();
     }
 
     @DeleteMapping
-    public Mono<ResponseEntity<Void>> deleteAccount(ServerWebExchange exchange) {
-        String ip = extractIp(exchange);
-        String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst("User-Agent"));
-        return currentUserId()
-                .flatMap(userId -> exchange.getSession().flatMap(session ->
-                        profileService.deleteAccount(userId, session, ip, userAgent)))
-                .then(Mono.just(ResponseEntity.ok().<Void>build()));
+    public ResponseEntity<Void> deleteAccount(HttpServletRequest httpRequest, HttpSession session) {
+        String ip = HttpRequestUtils.extractIp(httpRequest);
+        String userAgent = HttpRequestUtils.extractUserAgent(httpRequest);
+        profileService.deleteAccount(currentUserId(), session, ip, userAgent);
+        return ResponseEntity.ok().build();
     }
 
-    private static Mono<String> currentUserId() {
-        return ReactiveSecurityContextHolder.getContext()
-                .map(SecurityContext::getAuthentication)
-                .filter(a -> a != null && a.isAuthenticated() && a.getPrincipal() instanceof AppUserDetails)
-                .map(a -> ((AppUserDetails) a.getPrincipal()).id())
-                .switchIfEmpty(Mono.error(AppException.unauthorized("Not authenticated")));
-    }
-
-    private static String capUserAgent(String userAgent) {
-        if (userAgent == null) return null;
-        return userAgent.length() > USER_AGENT_MAX ? userAgent.substring(0, USER_AGENT_MAX) : userAgent;
-    }
-
-    private static String extractIp(ServerWebExchange exchange) {
-        String xff = exchange.getRequest().getHeaders().getFirst("X-Forwarded-For");
-        if (xff != null && !xff.isBlank()) {
-            int comma = xff.indexOf(',');
-            return (comma > 0 ? xff.substring(0, comma) : xff).trim();
+    private static String currentUserId() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || !auth.isAuthenticated() || !(auth.getPrincipal() instanceof AppUserDetails details)) {
+            throw AppException.unauthorized("Not authenticated");
         }
-        var remote = exchange.getRequest().getRemoteAddress();
-        return remote != null && remote.getAddress() != null
-                ? remote.getAddress().getHostAddress()
-                : "unknown";
+        return details.id();
     }
 }

@@ -7,12 +7,11 @@ import com.botfunnel.profile.WithMockAppUser;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.context.ApplicationContext;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.reactive.server.WebTestClient;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -23,7 +22,14 @@ import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.patch;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 class ProjectControllerIT extends AbstractIntegrationTest {
 
@@ -33,13 +39,18 @@ class ProjectControllerIT extends AbstractIntegrationTest {
     @Autowired UserRepository userRepository;
     @Autowired EventRepository eventRepository;
     @Autowired ProjectRepository projectRepository;
-    @Autowired ApplicationContext applicationContext;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private String json(Object body) throws Exception {
+        return objectMapper.writeValueAsString(body);
+    }
 
     @BeforeEach
     void cleanAndSeed() {
-        userRepository.deleteAll().block();
-        eventRepository.deleteAll().block();
-        projectRepository.deleteAll().block();
+        userRepository.deleteAll();
+        eventRepository.deleteAll();
+        projectRepository.deleteAll();
 
         User u = new User();
         u.setId(USER_ID);
@@ -50,7 +61,7 @@ class ProjectControllerIT extends AbstractIntegrationTest {
         u.setSuperAdmin(false);
         u.setCreatedAt(Instant.now());
         u.setUpdatedAt(Instant.now());
-        userRepository.save(u).block();
+        userRepository.save(u);
     }
 
     private Project saveActive(String ownerId, String name) {
@@ -68,7 +79,7 @@ class ProjectControllerIT extends AbstractIntegrationTest {
         p.setTimezone(timezone);
         p.setCreatedAt(createdAt);
         p.setUpdatedAt(createdAt);
-        return projectRepository.save(p).block();
+        return projectRepository.save(p);
     }
 
     private Project saveSoftDeleted(String ownerId, String name) {
@@ -79,37 +90,35 @@ class ProjectControllerIT extends AbstractIntegrationTest {
         p.setCreatedAt(Instant.now());
         p.setUpdatedAt(Instant.now());
         p.setDeletedAt(Instant.now());
-        return projectRepository.save(p).block();
+        return projectRepository.save(p);
     }
 
     private void awaitEvent(Predicate<Event> predicate) {
         await().atMost(Duration.ofSeconds(5))
                 .pollInterval(Duration.ofMillis(100))
-                .until(() -> eventRepository.findAll().filter(predicate).hasElements().block());
+                .until(() -> eventRepository.findAll().stream().anyMatch(predicate));
     }
 
     private Event findEvent(Predicate<Event> predicate) {
-        return eventRepository.findAll().filter(predicate).blockFirst();
+        return eventRepository.findAll().stream().filter(predicate).findFirst().orElseThrow();
     }
 
     // ---------- POST happy + validation ----------
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_validBody_returns201AndEmitsProjectCreatedEvent() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isCreated()
-                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
-                .expectBody()
-                .jsonPath("$.id").exists()
-                .jsonPath("$.name").isEqualTo("Acme")
-                .jsonPath("$.timezone").isEqualTo("Europe/Kyiv")
-                .jsonPath("$.deletedAt").doesNotExist()
-                .jsonPath("$.ownerId").doesNotExist();
+    void postProject_validBody_returns201AndEmitsProjectCreatedEvent() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().isCreated())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").exists())
+                .andExpect(jsonPath("$.name").value("Acme"))
+                .andExpect(jsonPath("$.timezone").value("Europe/Kyiv"))
+                .andExpect(jsonPath("$.deletedAt").doesNotExist())
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
         awaitEvent(e -> "project_created".equals(e.getEventType())
                 && USER_ID.equals(e.getUserId()));
@@ -120,175 +129,152 @@ class ProjectControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_blankName_returns400WithNameInMessage() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("name"))
-                .jsonPath("$.code").doesNotExist();
+    void postProject_blankName_returns400WithNameInMessage() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("name")))
+                .andExpect(jsonPath("$.code").doesNotExist());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_nameTooShort_returns400() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "ab", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("name"));
+    void postProject_nameTooShort_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "ab", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("name")));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_nameTooLong_returns400() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "a".repeat(51), "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("name"));
+    void postProject_nameTooLong_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "a".repeat(51), "timezone", "Europe/Kyiv"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("name")));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_invalidTimezoneGmtPlus5_returns400WithTimezoneInMessage() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", "GMT+5"))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("timezone"));
+    void postProject_invalidTimezoneGmtPlus5_returns400WithTimezoneInMessage() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", "GMT+5"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("timezone")));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_invalidTimezoneOffset_returns400() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", "+02:00"))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("timezone"));
+    void postProject_invalidTimezoneOffset_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", "+02:00"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("timezone")));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_invalidTimezoneNotAZone_returns400() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", "NotAZone"))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("timezone"));
+    void postProject_invalidTimezoneNotAZone_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", "NotAZone"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("timezone")));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_blankTimezone_returns400() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", ""))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("timezone"));
+    void postProject_blankTimezone_returns400() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", ""))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("timezone")));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_descriptionTooLong_returns400WithDescriptionInMessage() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", "Europe/Kyiv",
-                        "description", "x".repeat(201)))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).contains("description"));
+    void postProject_descriptionTooLong_returns400WithDescriptionInMessage() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", "Europe/Kyiv",
+                                "description", "x".repeat(201)))))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.containsString("description")));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_sixthProject_returns422WithProjectLimitReachedCode() {
+    void postProject_sixthProject_returns422WithProjectLimitReachedCode() throws Exception {
         for (int i = 1; i <= 5; i++) {
             saveActive(USER_ID, "Proj" + i);
         }
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Proj6", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isEqualTo(422)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("project_limit_reached")
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank());
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Proj6", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().is(422))
+                .andExpect(jsonPath("$.code").value("project_limit_reached"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.blankOrNullString())));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_duplicateActiveName_returns409WithProjectNameTakenCode() {
+    void postProject_duplicateActiveName_returns409WithProjectNameTakenCode() throws Exception {
         saveActive(USER_ID, "Acme");
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isEqualTo(409)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("project_name_taken")
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank());
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().is(409))
+                .andExpect(jsonPath("$.code").value("project_name_taken"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.blankOrNullString())));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void postProject_hostileBodyWithOwnerId_savesAuthenticatedOwnerIdAndResponseHasNoOwnerIdField() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of(
-                        "name", "Acme",
-                        "timezone", "Europe/Kyiv",
-                        "ownerId", OTHER_USER_ID))
-                .exchange()
-                .expectStatus().isCreated()
-                .expectBody()
-                .jsonPath("$.ownerId").doesNotExist();
+    void postProject_hostileBodyWithOwnerId_savesAuthenticatedOwnerIdAndResponseHasNoOwnerIdField() throws Exception {
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of(
+                                "name", "Acme",
+                                "timezone", "Europe/Kyiv",
+                                "ownerId", OTHER_USER_ID))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
-        Project saved = projectRepository.findByOwnerIdAndDeletedAtIsNullOrderByCreatedAtDesc(USER_ID)
-                .blockFirst();
-        assertThat(saved).isNotNull();
-        assertThat(saved.getOwnerId())
+        List<Project> mine = projectRepository.findByOwnerIdAndDeletedAtIsNullOrderByCreatedAtDesc(USER_ID);
+        assertThat(mine).isNotEmpty();
+        assertThat(mine.get(0).getOwnerId())
                 .as("hostile body's ownerId must NOT overwrite authenticated user")
                 .isEqualTo(USER_ID);
 
-        long otherCount = projectRepository.findByOwnerIdOrderByCreatedAtDesc(OTHER_USER_ID).count().block();
-        assertThat(otherCount).isZero();
+        List<Project> others = projectRepository.findByOwnerIdOrderByCreatedAtDesc(OTHER_USER_ID);
+        assertThat(others).isEmpty();
     }
 
     // ---------- GET list ----------
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void getProjects_returnsOnlyOwnActiveSortedDesc() {
+    void getProjects_returnsOnlyOwnActiveSortedDesc() throws Exception {
         // Explicit createdAt timestamps make the desc sort deterministic regardless of clock
         // resolution on the host (Instant.now() is millisecond-granular on some kernels, so
         // back-to-back saves can collide and let the repository's tie-break leak through).
@@ -297,220 +283,181 @@ class ProjectControllerIT extends AbstractIntegrationTest {
         saveSoftDeleted(USER_ID, "Deleted");
         saveActive(OTHER_USER_ID, "Foreign");
 
-        webTestClient.get().uri("/api/v1/projects")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.length()").isEqualTo(2)
-                .jsonPath("$[0].name").isEqualTo("B")
-                .jsonPath("$[1].name").isEqualTo("A")
-                .jsonPath("$[0].ownerId").doesNotExist();
+        mockMvc.perform(get("/api/v1/projects"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[0].name").value("B"))
+                .andExpect(jsonPath("$[1].name").value("A"))
+                .andExpect(jsonPath("$[0].ownerId").doesNotExist());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void getProjects_includeDeletedTrue_returnsActivePlusSoftDeleted() {
+    void getProjects_includeDeletedTrue_returnsActivePlusSoftDeleted() throws Exception {
         saveActive(USER_ID, "Active");
         saveSoftDeleted(USER_ID, "Deleted");
 
-        webTestClient.get().uri("/api/v1/projects?include_deleted=true")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.length()").isEqualTo(2);
+        mockMvc.perform(get("/api/v1/projects").param("include_deleted", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(2));
     }
 
     // ---------- GET single ----------
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void getProject_singleHappyPath_returns200WithProjectResponseShape() {
+    void getProject_singleHappyPath_returns200WithProjectResponseShape() throws Exception {
         // End-to-end response-shape lock against the real DB → entity → DTO path. The slice
         // test mocks ProjectService and would not catch a regression that serializes the Project
         // entity directly (leaking ownerId).
         Project p = saveActive(USER_ID, "Acme");
 
-        webTestClient.get().uri("/api/v1/projects/" + p.getId())
-                .exchange()
-                .expectStatus().isOk()
-                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
-                .expectBody()
-                .jsonPath("$.id").isEqualTo(p.getId())
-                .jsonPath("$.name").isEqualTo("Acme")
-                .jsonPath("$.timezone").isEqualTo("Europe/Kyiv")
-                .jsonPath("$.createdAt").exists()
-                .jsonPath("$.updatedAt").exists()
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(get("/api/v1/projects/" + p.getId()))
+                .andExpect(status().isOk())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.id").value(p.getId()))
+                .andExpect(jsonPath("$.name").value("Acme"))
+                .andExpect(jsonPath("$.timezone").value("Europe/Kyiv"))
+                .andExpect(jsonPath("$.createdAt").exists())
+                .andExpect(jsonPath("$.updatedAt").exists())
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void getProject_foreignId_returns404() {
+    void getProject_foreignId_returns404() throws Exception {
         Project foreign = saveActive(OTHER_USER_ID, "Foreign");
 
-        webTestClient.get().uri("/api/v1/projects/" + foreign.getId())
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(get("/api/v1/projects/" + foreign.getId()))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void getProject_malformedId_returns404() {
-        webTestClient.get().uri("/api/v1/projects/zzz-not-an-objectid")
-                .exchange()
-                .expectStatus().isNotFound();
+    void getProject_malformedId_returns404() throws Exception {
+        mockMvc.perform(get("/api/v1/projects/zzz-not-an-objectid"))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void getProject_softDeletedOwnId_returns404() {
+    void getProject_softDeletedOwnId_returns404() throws Exception {
         Project deleted = saveSoftDeleted(USER_ID, "Gone");
 
-        webTestClient.get().uri("/api/v1/projects/" + deleted.getId())
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(get("/api/v1/projects/" + deleted.getId()))
+                .andExpect(status().isNotFound());
     }
 
     // ---------- PATCH ----------
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_softDeletedOwnId_returns404() {
+    void patchProject_softDeletedOwnId_returns404() throws Exception {
         Project deleted = saveSoftDeleted(USER_ID, "Gone");
 
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/" + deleted.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Renamed"))
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(patch("/api/v1/projects/" + deleted.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Renamed"))))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_foreignId_returns404() {
+    void patchProject_foreignId_returns404() throws Exception {
         Project foreign = saveActive(OTHER_USER_ID, "Foreign");
 
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/" + foreign.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Renamed"))
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(patch("/api/v1/projects/" + foreign.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Renamed"))))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_malformedId_returns404() {
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/zzz-not-an-objectid")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Renamed"))
-                .exchange()
-                .expectStatus().isNotFound();
+    void patchProject_malformedId_returns404() throws Exception {
+        mockMvc.perform(patch("/api/v1/projects/zzz-not-an-objectid")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Renamed"))))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void deleteProject_foreignId_returns404() {
+    void deleteProject_foreignId_returns404() throws Exception {
         Project foreign = saveActive(OTHER_USER_ID, "Foreign");
 
-        webTestClient.mutateWith(csrf())
-                .delete().uri("/api/v1/projects/" + foreign.getId())
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(delete("/api/v1/projects/" + foreign.getId()).with(csrf()))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void deleteProject_malformedId_returns404() {
-        webTestClient.mutateWith(csrf())
-                .delete().uri("/api/v1/projects/zzz-not-an-objectid")
-                .exchange()
-                .expectStatus().isNotFound();
+    void deleteProject_malformedId_returns404() throws Exception {
+        mockMvc.perform(delete("/api/v1/projects/zzz-not-an-objectid").with(csrf()))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void restoreProject_foreignId_returns404() {
+    void restoreProject_foreignId_returns404() throws Exception {
         Project foreign = saveSoftDeleted(OTHER_USER_ID, "Foreign");
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + foreign.getId() + "/restore")
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(post("/api/v1/projects/" + foreign.getId() + "/restore").with(csrf()))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void restoreProject_malformedId_returns404() {
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/zzz-not-an-objectid/restore")
-                .exchange()
-                .expectStatus().isNotFound();
+    void restoreProject_malformedId_returns404() throws Exception {
+        mockMvc.perform(post("/api/v1/projects/zzz-not-an-objectid/restore").with(csrf()))
+                .andExpect(status().isNotFound());
     }
 
     // ---------- 401 unauthenticated ----------
 
     @Test
-    void anyEndpoint_unauthenticatedBareClient_returns401() {
-        // Bare client (no test-time mutators) bound directly to the application context — proves
-        // the production filter chain returns 401 for every verb shape, not the test wiring.
-        // State-changing arms attach the csrf() mutator so the CSRF filter is satisfied; auth
-        // is then expected to fire and produce 401 (Decision 2 anti-enumeration: auth-before-CSRF).
-        WebTestClient bare = WebTestClient.bindToApplicationContext(applicationContext)
-                .configureClient()
-                .build();
+    void anyEndpoint_unauthenticated_returns401() throws Exception {
+        // No @WithMockAppUser — the production filter chain must return 401 across every verb
+        // shape, regardless of test wiring. State-changing arms still attach csrf() so the
+        // CSRF filter is satisfied; auth then fires and produces 401 (Decision 2 anti-enumeration:
+        // auth-before-CSRF semantics on MVC stack — MVC enforces 401 before 403 for unauth users).
+        mockMvc.perform(get("/api/v1/projects")).andExpect(status().isUnauthorized());
+        mockMvc.perform(get("/api/v1/projects/any-id")).andExpect(status().isUnauthorized());
 
-        bare.get().uri("/api/v1/projects")
-                .exchange()
-                .expectStatus().isUnauthorized();
+        mockMvc.perform(post("/api/v1/projects").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().isUnauthorized());
 
-        bare.get().uri("/api/v1/projects/any-id")
-                .exchange()
-                .expectStatus().isUnauthorized();
+        mockMvc.perform(patch("/api/v1/projects/some-id").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Some"))))
+                .andExpect(status().isUnauthorized());
 
-        bare.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isUnauthorized();
+        mockMvc.perform(delete("/api/v1/projects/some-id").with(csrf()))
+                .andExpect(status().isUnauthorized());
 
-        bare.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/some-id")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Some"))
-                .exchange()
-                .expectStatus().isUnauthorized();
-
-        bare.mutateWith(csrf())
-                .delete().uri("/api/v1/projects/some-id")
-                .exchange()
-                .expectStatus().isUnauthorized();
-
-        bare.mutateWith(csrf())
-                .post().uri("/api/v1/projects/some-id/restore")
-                .exchange()
-                .expectStatus().isUnauthorized();
+        mockMvc.perform(post("/api/v1/projects/some-id/restore").with(csrf()))
+                .andExpect(status().isUnauthorized());
     }
 
     // ---------- PATCH happy + audit ----------
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_renameHappy_returns200AndEmitsProjectRenamedWithPreviousName() {
+    void patchProject_renameHappy_returns200AndEmitsProjectRenamedWithPreviousName() throws Exception {
         Project p = saveActive(USER_ID, "Old");
 
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/" + p.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "New"))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.name").isEqualTo("New")
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(patch("/api/v1/projects/" + p.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "New"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("New"))
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
         awaitEvent(e -> "project_renamed".equals(e.getEventType()));
         Event evt = findEvent(e -> "project_renamed".equals(e.getEventType()));
@@ -522,63 +469,57 @@ class ProjectControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_noNameChange_emitsProjectUpdatedWithoutNameInMetadata() {
+    void patchProject_noNameChange_emitsProjectUpdatedWithoutNameInMetadata() throws Exception {
         Project p = saveActive(USER_ID, "Acme");
 
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/" + p.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("description", "fresh"))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(patch("/api/v1/projects/" + p.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("description", "fresh"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
         awaitEvent(e -> "project_updated".equals(e.getEventType()));
         Event evt = findEvent(e -> "project_updated".equals(e.getEventType()));
         assertThat(evt.getMetadata()).containsOnlyKeys("projectId");
 
-        boolean hasRenamed = eventRepository.findAll()
-                .filter(e -> "project_renamed".equals(e.getEventType())).hasElements().block();
+        boolean hasRenamed = eventRepository.findAll().stream()
+                .anyMatch(e -> "project_renamed".equals(e.getEventType()));
         assertThat(hasRenamed).isFalse();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_renameToExistingActiveName_returns409WithProjectNameTakenCode() {
+    void patchProject_renameToExistingActiveName_returns409WithProjectNameTakenCode() throws Exception {
         saveActive(USER_ID, "Taken");
         Project p = saveActive(USER_ID, "Old");
 
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/" + p.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Taken"))
-                .exchange()
-                .expectStatus().isEqualTo(409)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("project_name_taken")
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank());
+        mockMvc.perform(patch("/api/v1/projects/" + p.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Taken"))))
+                .andExpect(status().is(409))
+                .andExpect(jsonPath("$.code").value("project_name_taken"))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.blankOrNullString())));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_noOpRenameSameName_returns200() {
+    void patchProject_noOpRenameSameName_returns200() throws Exception {
         Project p = saveActive(USER_ID, "Acme");
 
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/" + p.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme"))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.name").isEqualTo("Acme")
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(patch("/api/v1/projects/" + p.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Acme"))
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_blankDescription_setsDbDescriptionToNull() {
+    void patchProject_blankDescription_setsDbDescriptionToNull() throws Exception {
         Project p = new Project();
         p.setOwnerId(USER_ID);
         p.setName("Acme");
@@ -586,36 +527,32 @@ class ProjectControllerIT extends AbstractIntegrationTest {
         p.setTimezone("Europe/Kyiv");
         p.setCreatedAt(Instant.now());
         p.setUpdatedAt(Instant.now());
-        p = projectRepository.save(p).block();
+        p = projectRepository.save(p);
 
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/" + p.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(buildPatchBody("description", ""))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(patch("/api/v1/projects/" + p.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(buildPatchBody("description", ""))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
-        Project reread = projectRepository.findById(p.getId()).block();
+        Project reread = projectRepository.findById(p.getId()).orElseThrow();
         assertThat(reread.getDescription()).isNull();
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void patchProject_blankTimezone_doesNotOverwriteExistingTimezone() {
+    void patchProject_blankTimezone_doesNotOverwriteExistingTimezone() throws Exception {
         Project p = saveActive(USER_ID, "Acme", "Europe/Kyiv");
 
-        webTestClient.mutateWith(csrf())
-                .patch().uri("/api/v1/projects/" + p.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(buildPatchBody("timezone", ""))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(patch("/api/v1/projects/" + p.getId())
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(buildPatchBody("timezone", ""))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
-        Project reread = projectRepository.findById(p.getId()).block();
+        Project reread = projectRepository.findById(p.getId()).orElseThrow();
         assertThat(reread.getTimezone()).isEqualTo("Europe/Kyiv");
     }
 
@@ -623,16 +560,13 @@ class ProjectControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void deleteProject_happyPath_returns200AndEmitsProjectSoftDeletedAndAppearsInIncludeDeleted() {
+    void deleteProject_happyPath_returns200AndEmitsProjectSoftDeletedAndAppearsInIncludeDeleted() throws Exception {
         Project p = saveActive(USER_ID, "Acme");
 
-        webTestClient.mutateWith(csrf())
-                .delete().uri("/api/v1/projects/" + p.getId())
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.deletedAt").exists()
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(delete("/api/v1/projects/" + p.getId()).with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.deletedAt").exists())
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
         awaitEvent(e -> "project_soft_deleted".equals(e.getEventType()));
         Event evt = findEvent(e -> "project_soft_deleted".equals(e.getEventType()));
@@ -641,43 +575,34 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .containsEntry("name", "Acme");
 
         // Disappears from default list…
-        webTestClient.get().uri("/api/v1/projects")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.length()").isEqualTo(0);
+        mockMvc.perform(get("/api/v1/projects"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(0));
         // …appears in include_deleted list.
-        webTestClient.get().uri("/api/v1/projects?include_deleted=true")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.length()").isEqualTo(1);
+        mockMvc.perform(get("/api/v1/projects").param("include_deleted", "true"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void deleteProject_alreadySoftDeleted_returns404() {
+    void deleteProject_alreadySoftDeleted_returns404() throws Exception {
         Project deleted = saveSoftDeleted(USER_ID, "Acme");
 
-        webTestClient.mutateWith(csrf())
-                .delete().uri("/api/v1/projects/" + deleted.getId())
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(delete("/api/v1/projects/" + deleted.getId()).with(csrf()))
+                .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void restoreProject_happyPath_returns200AndEmitsProjectRestored() {
+    void restoreProject_happyPath_returns200AndEmitsProjectRestored() throws Exception {
         Project deleted = saveSoftDeleted(USER_ID, "Acme");
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + deleted.getId() + "/restore")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.deletedAt").doesNotExist()
-                .jsonPath("$.name").isEqualTo("Acme")
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(post("/api/v1/projects/" + deleted.getId() + "/restore").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.deletedAt").doesNotExist())
+                .andExpect(jsonPath("$.name").value("Acme"))
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
         awaitEvent(e -> "project_restored".equals(e.getEventType()));
         Event evt = findEvent(e -> "project_restored".equals(e.getEventType()));
@@ -689,17 +614,14 @@ class ProjectControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void restoreProject_withNameCollision_appendsSuffixAndSetsRenamedDueToConflictMetadata() {
+    void restoreProject_withNameCollision_appendsSuffixAndSetsRenamedDueToConflictMetadata() throws Exception {
         saveActive(USER_ID, "Acme");
         Project deleted = saveSoftDeleted(USER_ID, "Acme");
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + deleted.getId() + "/restore")
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody()
-                .jsonPath("$.name").isEqualTo("Acme (restored)")
-                .jsonPath("$.ownerId").doesNotExist();
+        mockMvc.perform(post("/api/v1/projects/" + deleted.getId() + "/restore").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.name").value("Acme (restored)"))
+                .andExpect(jsonPath("$.ownerId").doesNotExist());
 
         awaitEvent(e -> "project_restored".equals(e.getEventType()));
         Event evt = findEvent(e -> "project_restored".equals(e.getEventType()));
@@ -710,33 +632,28 @@ class ProjectControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void restoreProject_atQuotaLimit_returns422() {
+    void restoreProject_atQuotaLimit_returns422() throws Exception {
         for (int i = 1; i <= 5; i++) saveActive(USER_ID, "Proj" + i);
         Project deleted = saveSoftDeleted(USER_ID, "Proj-deleted");
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + deleted.getId() + "/restore")
-                .exchange()
-                .expectStatus().isEqualTo(422)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("project_limit_reached");
+        mockMvc.perform(post("/api/v1/projects/" + deleted.getId() + "/restore").with(csrf()))
+                .andExpect(status().is(422))
+                .andExpect(jsonPath("$.code").value("project_limit_reached"));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void restoreProject_onActiveProject_returns404AndDoesNotEmitRenameOrRestoreEvent() {
+    void restoreProject_onActiveProject_returns404AndDoesNotEmitRenameOrRestoreEvent() throws Exception {
         Project active = saveActive(USER_ID, "Acme");
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + active.getId() + "/restore")
-                .exchange()
-                .expectStatus().isNotFound();
+        mockMvc.perform(post("/api/v1/projects/" + active.getId() + "/restore").with(csrf()))
+                .andExpect(status().isNotFound());
 
         // Decision 14 deletedAt-FIRST guard: ZERO project_* events should be persisted for this
-        // project's id — the guard short-circuits before the save, so .doOnSuccess never fires.
-        // Broader assertion (any project_* type) catches future regressions where a new event
-        // type is added to the restore path.
-        List<Event> all = eventRepository.findAll().collectList().block();
+        // project's id — the guard short-circuits before the save, so the event emission never
+        // fires. Broader assertion (any project_* type) catches future regressions where a new
+        // event type is added to the restore path.
+        List<Event> all = eventRepository.findAll();
         assertThat(all).noneMatch(e -> eventMatchesProject(e, active.getId()));
     }
 
@@ -750,54 +667,46 @@ class ProjectControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void errorBodies_alwaysHaveMessageAndCode() {
+    void errorBodies_alwaysHaveMessageAndCode() throws Exception {
         // 400 (bean validation): message non-blank; code null per GlobalErrorHandler contract.
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isBadRequest()
-                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank())
-                .jsonPath("$.code").isEqualTo(null);
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().isBadRequest())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.blankOrNullString())))
+                .andExpect(jsonPath("$.code").doesNotExist());
 
         // 404 (anti-enumeration): message non-blank; code null (regression guard against a
         // future change that adds a code like "project_not_found" — Decision 2 anti-enumeration
         // requires the body shape stay uniform with Java/JS 404s elsewhere).
-        webTestClient.get().uri("/api/v1/projects/zzz-not-an-objectid")
-                .exchange()
-                .expectStatus().isNotFound()
-                .expectHeader().contentTypeCompatibleWith(MediaType.APPLICATION_JSON)
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank())
-                .jsonPath("$.code").isEqualTo(null);
+        mockMvc.perform(get("/api/v1/projects/zzz-not-an-objectid"))
+                .andExpect(status().isNotFound())
+                .andExpect(content().contentTypeCompatibleWith(MediaType.APPLICATION_JSON))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.blankOrNullString())))
+                .andExpect(jsonPath("$.code").doesNotExist());
 
         // 409 (name conflict): message non-blank; code = project_name_taken.
         saveActive(USER_ID, "Acme");
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isEqualTo(409)
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank())
-                .jsonPath("$.code").isEqualTo("project_name_taken");
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().is(409))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.blankOrNullString())))
+                .andExpect(jsonPath("$.code").value("project_name_taken"));
 
         // 422 (quota): message non-blank; code = project_limit_reached. Seed up to the cap so
         // the next POST tips into the limit branch.
         for (int i = 1; i <= 4; i++) saveActive(USER_ID, "Quota" + i);
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(Map.of("name", "Quota5", "timezone", "Europe/Kyiv"))
-                .exchange()
-                .expectStatus().isEqualTo(422)
-                .expectBody()
-                .jsonPath("$.message").value(s -> assertThat((String) s).isNotBlank())
-                .jsonPath("$.code").isEqualTo("project_limit_reached");
+        mockMvc.perform(post("/api/v1/projects")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Quota5", "timezone", "Europe/Kyiv"))))
+                .andExpect(status().is(422))
+                .andExpect(jsonPath("$.message").value(org.hamcrest.Matchers.not(org.hamcrest.Matchers.blankOrNullString())))
+                .andExpect(jsonPath("$.code").value("project_limit_reached"));
     }
 
     // The Map.of(...) factory rejects null values. PATCH body construction sometimes needs a

@@ -10,23 +10,20 @@ import com.botfunnel.common.AppException;
 import com.botfunnel.common.crypto.EncryptedValue;
 import com.botfunnel.common.crypto.TokenEncryptor;
 import com.botfunnel.events.EventService;
-import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.junit.jupiter.api.extension.ExtendWith;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DuplicateKeyException;
-import org.springframework.data.redis.core.ReactiveRedisTemplate;
-import org.springframework.data.redis.core.ReactiveValueOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
 import org.springframework.http.HttpStatus;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
@@ -36,15 +33,16 @@ import java.util.Base64;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
-import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.never;
@@ -93,10 +91,10 @@ class BotServiceTest {
     private EventService eventService;
 
     @Mock
-    private ReactiveRedisTemplate<String, String> redisTemplate;
+    private StringRedisTemplate redisTemplate;
 
     @Mock
-    private ReactiveValueOperations<String, String> valueOperations;
+    private ValueOperations<String, String> valueOperations;
 
     private BotService service;
     private ListAppender<ILoggingEvent> logAppender;
@@ -128,15 +126,14 @@ class BotServiceTest {
         stubHappyPathMocks(1L);
         ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
         lenient().when(telegramApiClient.setWebhook(eq(TOKEN), urlCaptor.capture(), anyString()))
-                .thenReturn(Mono.just(true));
+                .thenReturn(true);
         ArgumentCaptor<Bot> botCaptor = ArgumentCaptor.forClass(Bot.class);
-        when(botRepository.save(botCaptor.capture())).thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+        when(botRepository.save(botCaptor.capture())).thenAnswer(inv -> withId(inv.getArgument(0)));
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextMatches(bot -> bot.getTelegramBotId().equals(TELEGRAM_BOT_ID))
-                .verifyComplete();
+        Bot result = service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
+        assertThat(result.getTelegramBotId()).isEqualTo(TELEGRAM_BOT_ID);
 
         InOrder order = inOrder(projectService, valueOperations, botRepository,
                 telegramApiClient, tokenEncryptor, eventService, redisTemplate);
@@ -172,14 +169,12 @@ class BotServiceTest {
         stubHappyPathMocks(1L);
         ArgumentCaptor<String> secretCaptor = ArgumentCaptor.forClass(String.class);
         lenient().when(telegramApiClient.setWebhook(eq(TOKEN), anyString(), secretCaptor.capture()))
-                .thenReturn(Mono.just(true));
+                .thenReturn(true);
         when(botRepository.save(any(Bot.class)))
-                .thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+                .thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1).verifyComplete();
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1).verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         List<String> secrets = secretCaptor.getAllValues();
         assertThat(secrets).hasSize(2);
@@ -194,10 +189,9 @@ class BotServiceTest {
         // count=2 must NOT refresh TTL — otherwise the 15-min window resets every attempt.
         stubHappyPathMocks(2L);
         when(botRepository.save(any(Bot.class)))
-                .thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+                .thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1).verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         verify(redisTemplate, never()).expire(eq(BRUTE_KEY), any(Duration.class));
     }
@@ -206,12 +200,11 @@ class BotServiceTest {
     void connect_persistFails_compensatesDeleteWebhookAndPropagatesError() {
         stubHappyPathMocks(1L);
         RuntimeException persistErr = new RuntimeException("mongo down");
-        when(botRepository.save(any(Bot.class))).thenReturn(Mono.error(persistErr));
-        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(Mono.just(true));
+        when(botRepository.save(any(Bot.class))).thenThrow(persistErr);
+        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(true);
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectErrorMatches(err -> err == persistErr)
-                .verify();
+        assertThatThrownBy(() -> service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
+                .isSameAs(persistErr);
 
         InOrder order = inOrder(telegramApiClient);
         order.verify(telegramApiClient).setWebhook(eq(TOKEN), anyString(), anyString());
@@ -222,18 +215,15 @@ class BotServiceTest {
     @Test
     void connect_duplicateKeyOnProjectIndex_returns409BotAlreadyInProject_andCompensates() {
         stubHappyPathMocks(1L);
-        when(botRepository.save(any(Bot.class))).thenReturn(Mono.error(
-                new DuplicateKeyException("E11000 duplicate key error: projectId_unique_connected dup key")));
-        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(Mono.just(true));
+        when(botRepository.save(any(Bot.class))).thenThrow(
+                new DuplicateKeyException("E11000 duplicate key error: projectId_unique_connected dup key"));
+        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(true);
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    AppException app = (AppException) err;
+        assertThatThrownBy(() -> service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, app -> {
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                     assertThat(app.getCode()).isEqualTo("bot_already_in_project");
-                })
-                .verify();
+                });
 
         verify(telegramApiClient, times(1)).deleteWebhook(TOKEN);
     }
@@ -241,37 +231,30 @@ class BotServiceTest {
     @Test
     void connect_duplicateKeyOnTelegramBotIdIndex_returns409BotAlreadyConnected_andCompensates() {
         stubHappyPathMocks(1L);
-        when(botRepository.save(any(Bot.class))).thenReturn(Mono.error(
-                new DuplicateKeyException("E11000 duplicate key error: telegramBotId_unique_connected dup key")));
-        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(Mono.just(true));
+        when(botRepository.save(any(Bot.class))).thenThrow(
+                new DuplicateKeyException("E11000 duplicate key error: telegramBotId_unique_connected dup key"));
+        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(true);
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    AppException app = (AppException) err;
+        assertThatThrownBy(() -> service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, app -> {
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                     assertThat(app.getCode()).isEqualTo("bot_already_connected");
-                })
-                .verify();
+                });
 
         verify(telegramApiClient, times(1)).deleteWebhook(TOKEN);
     }
 
     @Test
     void connect_rateLimitThreshold_returns429OnEleventhAttempt_noTelegramCall() {
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
-        when(valueOperations.increment(BRUTE_KEY)).thenReturn(Mono.just(11L));
+        // projectService is void; default Mockito stub is a no-op.
+        when(valueOperations.increment(BRUTE_KEY)).thenReturn(11L);
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS);
-                })
-                .verify();
+        assertThatThrownBy(() -> service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, app ->
+                        assertThat(app.getStatus()).isEqualTo(HttpStatus.TOO_MANY_REQUESTS));
 
-        // AC16: requireOwned is the FIRST reactive step — even on the 429 short-circuit, the
-        // ownership check must precede the INCR so a foreign / missing project still collapses to 404.
+        // AC16: requireOwned is the FIRST step — even on the 429 short-circuit, the ownership
+        // check must precede the INCR so a foreign / missing project still collapses to 404.
         InOrder io = inOrder(projectService, valueOperations);
         io.verify(projectService).requireOwned(OWNER_ID, PROJECT_ID, false);
         io.verify(valueOperations).increment(BRUTE_KEY);
@@ -286,12 +269,10 @@ class BotServiceTest {
     @Test
     void connect_redisDownOnIncrement_failsOpenAndLogsWarn() {
         stubHappyPathMocks(1L);
-        when(valueOperations.increment(BRUTE_KEY)).thenReturn(Mono.error(new RuntimeException("redis down")));
-        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+        when(valueOperations.increment(BRUTE_KEY)).thenThrow(new RuntimeException("redis down"));
+        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1)
-                .verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         long warns = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
@@ -308,12 +289,10 @@ class BotServiceTest {
     @Test
     void connect_redisDownOnDelete_failsOpenAndLogsWarn() {
         stubHappyPathMocks(1L);
-        when(redisTemplate.delete(BRUTE_KEY)).thenReturn(Mono.error(new RuntimeException("redis down")));
-        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+        when(redisTemplate.delete(BRUTE_KEY)).thenThrow(new RuntimeException("redis down"));
+        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1)
-                .verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         long warns = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
@@ -325,11 +304,9 @@ class BotServiceTest {
     @Test
     void connect_successDelsBruteForceCounter() {
         stubHappyPathMocks(1L);
-        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1)
-                .verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         verify(redisTemplate, times(1)).delete(BRUTE_KEY);
     }
@@ -339,14 +316,12 @@ class BotServiceTest {
         stubHappyPathMocks(1L);
         ArgumentCaptor<String> secretCaptor = ArgumentCaptor.forClass(String.class);
         when(telegramApiClient.setWebhook(eq(TOKEN), anyString(), secretCaptor.capture()))
-                .thenReturn(Mono.just(true));
+                .thenReturn(true);
         ArgumentCaptor<Bot> botCaptor = ArgumentCaptor.forClass(Bot.class);
         when(botRepository.save(botCaptor.capture()))
-                .thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+                .thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1)
-                .verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         String plaintextSecret = secretCaptor.getValue();
         Bot saved = botCaptor.getValue();
@@ -363,11 +338,9 @@ class BotServiceTest {
         stubHappyPathMocks(1L);
         ArgumentCaptor<Bot> botCaptor = ArgumentCaptor.forClass(Bot.class);
         when(botRepository.save(botCaptor.capture()))
-                .thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+                .thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1)
-                .verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         assertThat(botCaptor.getValue().getTokenSuffix()).isEqualTo("xyz");
     }
@@ -380,11 +353,9 @@ class BotServiceTest {
         when(tokenEncryptor.encrypt(TOKEN)).thenReturn(new EncryptedValue(iv, ct));
         ArgumentCaptor<Bot> botCaptor = ArgumentCaptor.forClass(Bot.class);
         when(botRepository.save(botCaptor.capture()))
-                .thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+                .thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1)
-                .verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         Bot saved = botCaptor.getValue();
         assertThat(saved.getEncryptedTokenIv()).isEqualTo(Base64.getEncoder().encodeToString(iv));
@@ -395,11 +366,9 @@ class BotServiceTest {
     void connect_bot_connected_event_metadata_containsNoTokenRegex() {
         stubHappyPathMocks(1L);
         when(botRepository.save(any(Bot.class)))
-                .thenAnswer(inv -> Mono.just(withId(inv.getArgument(0))));
+                .thenAnswer(inv -> withId(inv.getArgument(0)));
 
-        StepVerifier.create(service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA))
-                .expectNextCount(1)
-                .verifyComplete();
+        service.connect(OWNER_ID, PROJECT_ID, TOKEN, IP, UA);
 
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCaptor = ArgumentCaptor.forClass(Map.class);
@@ -423,15 +392,13 @@ class BotServiceTest {
         byte[] ct = new byte[]{4, 5, 6, 7, 8};
         Bot existing = seedConnectedBot(iv, ct);
 
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.just(existing));
+                .thenReturn(Optional.of(existing));
         when(tokenEncryptor.decrypt(any(byte[].class), any(byte[].class))).thenReturn(TOKEN);
-        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(Mono.just(true));
-        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(true);
+        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(service.disconnect(OWNER_ID, PROJECT_ID, IP, UA)).verifyComplete();
+        service.disconnect(OWNER_ID, PROJECT_ID, IP, UA);
 
         ArgumentCaptor<byte[]> ivCap = ArgumentCaptor.forClass(byte[].class);
         ArgumentCaptor<byte[]> ctCap = ArgumentCaptor.forClass(byte[].class);
@@ -443,17 +410,15 @@ class BotServiceTest {
     @Test
     void disconnect_telegramDown_logsWarnAndStillCompletes() {
         Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.just(existing));
+                .thenReturn(Optional.of(existing));
         when(tokenEncryptor.decrypt(any(byte[].class), any(byte[].class))).thenReturn(TOKEN);
         when(telegramApiClient.deleteWebhook(TOKEN))
-                .thenReturn(Mono.error(new RuntimeException("telegram down")));
+                .thenThrow(new RuntimeException("telegram down"));
         ArgumentCaptor<Bot> botCaptor = ArgumentCaptor.forClass(Bot.class);
-        when(botRepository.save(botCaptor.capture())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(botRepository.save(botCaptor.capture())).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(service.disconnect(OWNER_ID, PROJECT_ID, IP, UA)).verifyComplete();
+        service.disconnect(OWNER_ID, PROJECT_ID, IP, UA);
 
         long warns = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
@@ -473,19 +438,17 @@ class BotServiceTest {
 
     @Test
     void disconnect_telegramErrorMessageWithTokenInUri_isScrubbedInWarnLog() {
-        // S1: WebClient transport-error messages from deleteWebhook embed the request URI which
+        // S1: RestClient transport-error messages from deleteWebhook embed the request URI which
         // carries the plaintext token. The WARN log site MUST scrub the token regex before logging.
         Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.just(existing));
+                .thenReturn(Optional.of(existing));
         when(tokenEncryptor.decrypt(any(byte[].class), any(byte[].class))).thenReturn(TOKEN);
-        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(Mono.error(new RuntimeException(
-                "SSL handshake failed for https://api.telegram.org/bot" + TOKEN + "/deleteWebhook")));
-        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(telegramApiClient.deleteWebhook(TOKEN)).thenThrow(new RuntimeException(
+                "SSL handshake failed for https://api.telegram.org/bot" + TOKEN + "/deleteWebhook"));
+        when(botRepository.save(any(Bot.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(service.disconnect(OWNER_ID, PROJECT_ID, IP, UA)).verifyComplete();
+        service.disconnect(OWNER_ID, PROJECT_ID, IP, UA);
 
         List<String> warnMessages = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
@@ -505,16 +468,14 @@ class BotServiceTest {
     @Test
     void disconnect_happyPath_emitsBotDisconnectedEventWithDeletedTrue() {
         Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.just(existing));
+                .thenReturn(Optional.of(existing));
         when(tokenEncryptor.decrypt(any(byte[].class), any(byte[].class))).thenReturn(TOKEN);
-        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(Mono.just(true));
+        when(telegramApiClient.deleteWebhook(TOKEN)).thenReturn(true);
         ArgumentCaptor<Bot> botCaptor = ArgumentCaptor.forClass(Bot.class);
-        when(botRepository.save(botCaptor.capture())).thenAnswer(inv -> Mono.just(inv.getArgument(0)));
+        when(botRepository.save(botCaptor.capture())).thenAnswer(inv -> inv.getArgument(0));
 
-        StepVerifier.create(service.disconnect(OWNER_ID, PROJECT_ID, IP, UA)).verifyComplete();
+        service.disconnect(OWNER_ID, PROJECT_ID, IP, UA);
 
         Bot saved = botCaptor.getValue();
         assertThat(saved.getStatus()).isEqualTo(BotStatus.DISCONNECTED);
@@ -536,17 +497,12 @@ class BotServiceTest {
 
     @Test
     void disconnect_noConnectedBot_returns404() {
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.empty());
+                .thenReturn(Optional.empty());
 
-        StepVerifier.create(service.disconnect(OWNER_ID, PROJECT_ID, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                })
-                .verify();
+        assertThatThrownBy(() -> service.disconnect(OWNER_ID, PROJECT_ID, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, app ->
+                        assertThat(app.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
 
         verifyNoInteractions(telegramApiClient);
         // AC16: requireOwned must precede the find call on the negative branch too.
@@ -566,21 +522,16 @@ class BotServiceTest {
         // zero event writes. This is the only branch exercisable in production until Epic 04b lands.
         Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
         existing.setOwnerChatId(null);
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.just(existing));
+                .thenReturn(Optional.of(existing));
 
-        StepVerifier.create(service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    AppException app = (AppException) err;
+        assertThatThrownBy(() -> service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, app -> {
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
                     assertThat(app.getCode()).isEqualTo("owner_chat_id_unknown");
                     assertThat(app.getMessage())
                             .isEqualTo("Send /start to your bot in Telegram first, then try again");
-                })
-                .verify();
+                });
 
         verifyNoInteractions(telegramApiClient);
         verifyNoInteractions(telegramSender);
@@ -594,19 +545,16 @@ class BotServiceTest {
         // {projectId, telegramBotId, chatId, messageId}.
         Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
         existing.setOwnerChatId(OWNER_CHAT_ID);
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.just(existing));
+                .thenReturn(Optional.of(existing));
 
         Long messageId = 100L;
         Instant sentAt = Instant.now();
         when(telegramSender.sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
                 eq(BotService.TEST_MESSAGE_BODY), isNull(), eq(OWNER_ID)))
-                .thenReturn(Mono.just(new SentMessage(OWNER_CHAT_ID, messageId, sentAt)));
+                .thenReturn(new SentMessage(OWNER_CHAT_ID, messageId, sentAt));
 
-        StepVerifier.create(service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
-                .verifyComplete();
+        service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA);
 
         verify(telegramSender).sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
                 eq(BotService.TEST_MESSAGE_BODY), isNull(), eq(OWNER_ID));
@@ -633,19 +581,16 @@ class BotServiceTest {
         // telegram_send_failed audit — Decision 3 forbids the double-write).
         Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
         existing.setOwnerChatId(OWNER_CHAT_ID);
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.just(existing));
+                .thenReturn(Optional.of(existing));
 
         TelegramSendException senderError = new TelegramSendException(null, "scrubbed", 4);
         when(telegramSender.sendText(eq(existing.getId()), eq(OWNER_CHAT_ID),
                 eq(BotService.TEST_MESSAGE_BODY), isNull(), eq(OWNER_ID)))
-                .thenReturn(Mono.error(senderError));
+                .thenThrow(senderError);
 
-        StepVerifier.create(service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
-                .expectErrorSatisfies(err -> assertThat(err).isInstanceOf(TelegramSendException.class))
-                .verify();
+        assertThatThrownBy(() -> service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
+                .isInstanceOf(TelegramSendException.class);
 
         verify(eventService, never()).logEvent(any(), eq("bot_test_message_sent"),
                 any(), any(), any());
@@ -654,17 +599,12 @@ class BotServiceTest {
 
     @Test
     void sendTestMessage_noConnectedBot_returns404() {
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.empty());
+                .thenReturn(Optional.empty());
 
-        StepVerifier.create(service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                })
-                .verify();
+        assertThatThrownBy(() -> service.sendTestMessage(OWNER_ID, PROJECT_ID, IP, UA))
+                .isInstanceOfSatisfying(AppException.class, app ->
+                        assertThat(app.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
 
         verifyNoInteractions(telegramApiClient);
         verifyNoInteractions(eventService);
@@ -678,16 +618,13 @@ class BotServiceTest {
     @Test
     void getByProject_happyPath_returnsBot_noDecryption() {
         Bot existing = seedConnectedBot(new byte[]{1, 2, 3}, new byte[]{4, 5, 6});
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.just(existing));
+                .thenReturn(Optional.of(existing));
 
-        StepVerifier.create(service.getByProject(OWNER_ID, PROJECT_ID))
-                .expectNextMatches(b -> b.getEncryptedTokenCiphertext() != null
-                        && b.getEncryptedTokenIv() != null
-                        && b.getStatus() == BotStatus.CONNECTED)
-                .verifyComplete();
+        Bot result = service.getByProject(OWNER_ID, PROJECT_ID);
+        assertThat(result.getEncryptedTokenCiphertext()).isNotNull();
+        assertThat(result.getEncryptedTokenIv()).isNotNull();
+        assertThat(result.getStatus()).isEqualTo(BotStatus.CONNECTED);
 
         verifyNoInteractions(tokenEncryptor);
         verifyNoInteractions(telegramApiClient);
@@ -695,17 +632,12 @@ class BotServiceTest {
 
     @Test
     void getByProject_noConnectedBot_returns404() {
-        when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
         when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.empty());
+                .thenReturn(Optional.empty());
 
-        StepVerifier.create(service.getByProject(OWNER_ID, PROJECT_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
-                    assertThat(((AppException) err).getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
-                })
-                .verify();
+        assertThatThrownBy(() -> service.getByProject(OWNER_ID, PROJECT_ID))
+                .isInstanceOfSatisfying(AppException.class, app ->
+                        assertThat(app.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
 
         InOrder io = inOrder(projectService, botRepository);
         io.verify(projectService).requireOwned(OWNER_ID, PROJECT_ID, false);
@@ -718,23 +650,20 @@ class BotServiceTest {
         // Every stub here is lenient: this helper sets up a complete happy-path scaffold; individual
         // tests intentionally re-stub one or two collaborators to inject failure paths or capture
         // arguments. Strict stubbing would treat overridden stubs as "unused".
-        lenient().when(projectService.requireOwned(OWNER_ID, PROJECT_ID, false))
-                .thenReturn(Mono.just(stubProject()));
-        lenient().when(valueOperations.increment(BRUTE_KEY)).thenReturn(Mono.just(incrementValue));
-        lenient().when(redisTemplate.expire(eq(BRUTE_KEY), any(Duration.class))).thenReturn(Mono.just(true));
+        // projectService.requireOwned is void — no stubbing required (default no-op behaviour).
+        lenient().when(valueOperations.increment(BRUTE_KEY)).thenReturn(incrementValue);
+        lenient().when(redisTemplate.expire(eq(BRUTE_KEY), any(Duration.class))).thenReturn(true);
         lenient().when(botRepository.findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.empty());
-        lenient().when(telegramApiClient.getMe(TOKEN)).thenReturn(Mono.just(new TelegramUser(
-                TELEGRAM_BOT_ID, true, TELEGRAM_FIRST_NAME, TELEGRAM_USERNAME)));
+                .thenReturn(Optional.empty());
+        lenient().when(telegramApiClient.getMe(TOKEN)).thenReturn(new TelegramUser(
+                TELEGRAM_BOT_ID, true, TELEGRAM_FIRST_NAME, TELEGRAM_USERNAME));
         lenient().when(botRepository.findFirstByTelegramBotIdAndStatus(TELEGRAM_BOT_ID, BotStatus.CONNECTED))
-                .thenReturn(Mono.empty());
+                .thenReturn(Optional.empty());
         lenient().when(telegramApiClient.setWebhook(eq(TOKEN), anyString(), anyString()))
-                .thenReturn(Mono.just(true));
+                .thenReturn(true);
         lenient().when(tokenEncryptor.encrypt(TOKEN))
                 .thenReturn(new EncryptedValue(new byte[]{9, 9, 9}, new byte[]{8, 8, 8, 8}));
-        lenient().when(redisTemplate.delete(BRUTE_KEY)).thenReturn(Mono.just(1L));
-        lenient().doNothing().when(eventService).logEvent(anyString(), anyString(), anyString(),
-                anyString(), anyMap());
+        lenient().when(redisTemplate.delete(BRUTE_KEY)).thenReturn(true);
     }
 
     private Bot withId(Bot bot) {
@@ -755,13 +684,6 @@ class BotServiceTest {
         bot.setTokenSuffix("xyz");
         bot.setWebhookSecretHash("a".repeat(64));
         return bot;
-    }
-
-    private Project stubProject() {
-        Project p = new Project();
-        p.setId(PROJECT_ID);
-        p.setOwnerId(OWNER_ID);
-        return p;
     }
 
     private static String sha256Hex(String input) {

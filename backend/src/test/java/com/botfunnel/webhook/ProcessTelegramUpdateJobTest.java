@@ -44,7 +44,7 @@ import static org.mockito.Mockito.verify;
 
 // Direct-invocation worker test (mirror of HardDeleteJobTest style) — calls handle(rawUpdateId)
 // directly instead of routing through JobRunr's scheduler. @MockitoSpyBean wraps the real
-// no-op stubs so call-counts can be asserted while the real Mono.empty() returns flow through.
+// no-op stubs so call-counts can be asserted while the real void methods return without effect.
 class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
     private static final String OWNER_ID = "owner-user-id";

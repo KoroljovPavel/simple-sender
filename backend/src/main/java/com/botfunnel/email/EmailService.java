@@ -7,8 +7,6 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.javamail.JavaMailSender;
 import org.springframework.mail.javamail.MimeMessageHelper;
 import org.springframework.stereotype.Service;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -77,22 +75,22 @@ public class EmailService {
                 .replace("{SUPPORT_EMAIL}", htmlEscape(supportEmail));
     }
 
+    // Silent-failure contract: SMTP / MIME build failures must NOT propagate to the caller. The
+    // surrounding flows (register, resend-verification, forgot-password, reset-password) return
+    // 200 even when delivery fails — only an ERROR log signals the regression. Preserves the
+    // visible behaviour of the prior fire-and-forget delivery path.
     private void sendAsync(String to, String subject, String htmlBody) {
-        Mono.<Void>fromRunnable(() -> {
+        try {
             MimeMessage msg = javaMailSender.createMimeMessage();
-            try {
-                MimeMessageHelper helper = new MimeMessageHelper(msg, true, "UTF-8");
-                helper.setFrom(from);
-                helper.setTo(to);
-                helper.setSubject(subject);
-                helper.setText(htmlBody, true);
-            } catch (jakarta.mail.MessagingException e) {
-                throw new IllegalStateException("Failed to build email", e);
-            }
+            MimeMessageHelper helper = new MimeMessageHelper(msg, true, "UTF-8");
+            helper.setFrom(from);
+            helper.setTo(to);
+            helper.setSubject(subject);
+            helper.setText(htmlBody, true);
             javaMailSender.send(msg);
-        })
-        .subscribeOn(Schedulers.boundedElastic())
-        .subscribe(null, err -> log.error("Email send failed to {}: {}", to, err.toString()));
+        } catch (Exception e) {
+            log.error("Email send failed to {}: {}", to, e.toString());
+        }
     }
 
     String loadTemplate(String path) {

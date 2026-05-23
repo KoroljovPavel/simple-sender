@@ -1,24 +1,29 @@
 package com.botfunnel.email;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import jakarta.mail.Session;
 import jakarta.mail.internet.MimeMessage;
 import jakarta.mail.internet.MimeMultipart;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.slf4j.LoggerFactory;
 import org.springframework.mail.MailSendException;
 import org.springframework.mail.javamail.JavaMailSender;
 
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 import java.util.Properties;
 
-import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNoException;
-import static org.awaitility.Awaitility.await;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
@@ -31,9 +36,23 @@ class EmailServiceTest {
 
     EmailService emailService;
 
+    private ListAppender<ILoggingEvent> logAppender;
+    private Logger emailServiceLogger;
+
     @BeforeEach
     void setUp() {
         emailService = new EmailService(javaMailSender, "noreply@test.com", "http://localhost:3000");
+
+        emailServiceLogger = (Logger) LoggerFactory.getLogger(EmailService.class);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        emailServiceLogger.addAppender(logAppender);
+    }
+
+    @AfterEach
+    void tearDown() {
+        emailServiceLogger.detachAppender(logAppender);
+        logAppender.stop();
     }
 
     private MimeMessage newMimeMessage() {
@@ -47,10 +66,7 @@ class EmailServiceTest {
 
         emailService.sendVerificationEmail("user@example.com", "Alice", "token123");
 
-        await().atMost(2, SECONDS).untilAsserted(() ->
-            verify(javaMailSender).send(any(MimeMessage.class))
-        );
-
+        verify(javaMailSender).send(any(MimeMessage.class));
         assertThat(mimeMessage.getAllRecipients()).hasSize(1);
         assertThat(mimeMessage.getAllRecipients()[0].toString()).isEqualTo("user@example.com");
         assertThat(mimeMessage.getFrom()[0].toString()).isEqualTo("noreply@test.com");
@@ -63,10 +79,7 @@ class EmailServiceTest {
 
         emailService.sendVerificationEmail("user@example.com", "<script>alert('xss')</script>", "token123");
 
-        await().atMost(2, SECONDS).untilAsserted(() ->
-            verify(javaMailSender).send(any(MimeMessage.class))
-        );
-
+        verify(javaMailSender).send(any(MimeMessage.class));
         String body = extractHtmlBody(mimeMessage);
         assertThat(body).contains("&lt;script&gt;");
         assertThat(body).doesNotContain("<script>");
@@ -85,13 +98,42 @@ class EmailServiceTest {
         doThrow(new MailSendException("SMTP error")).when(javaMailSender).send(any(MimeMessage.class));
 
         assertThatNoException().isThrownBy(() ->
-            emailService.sendVerificationEmail("user@example.com", "Alice", "token123")
+                emailService.sendVerificationEmail("user@example.com", "Alice", "token123")
         );
 
-        // Verify send was attempted and exception was swallowed by subscriber
-        await().atMost(2, SECONDS).untilAsserted(() ->
-            verify(javaMailSender).send(any(MimeMessage.class))
+        verify(javaMailSender).send(any(MimeMessage.class));
+    }
+
+    @Test
+    void sendVerificationEmail_smtpFailureLogsError() {
+        MimeMessage mimeMessage = newMimeMessage();
+        when(javaMailSender.createMimeMessage()).thenReturn(mimeMessage);
+        doThrow(new MailSendException("SMTP unreachable")).when(javaMailSender).send(any(MimeMessage.class));
+
+        emailService.sendVerificationEmail("user@example.com", "Alice", "token123");
+
+        List<ILoggingEvent> errors = logAppender.list.stream()
+                .filter(e -> e.getLevel() == Level.ERROR)
+                .toList();
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0).getFormattedMessage())
+                .startsWith("Email send failed to user@example.com:");
+    }
+
+    @Test
+    void sendVerificationEmail_buildFailureLogsError() {
+        when(javaMailSender.createMimeMessage()).thenThrow(new IllegalStateException("MIME init failed"));
+
+        assertThatNoException().isThrownBy(() ->
+                emailService.sendVerificationEmail("user@example.com", "Alice", "token123")
         );
+
+        List<ILoggingEvent> errors = logAppender.list.stream()
+                .filter(e -> e.getLevel() == Level.ERROR)
+                .toList();
+        assertThat(errors).hasSize(1);
+        assertThat(errors.get(0).getFormattedMessage())
+                .startsWith("Email send failed to user@example.com:");
     }
 
     @Test
@@ -101,10 +143,7 @@ class EmailServiceTest {
 
         emailService.sendPasswordResetEmail("user@example.com", "Alice", "resettoken");
 
-        await().atMost(2, SECONDS).untilAsserted(() ->
-            verify(javaMailSender).send(any(MimeMessage.class))
-        );
-
+        verify(javaMailSender).send(any(MimeMessage.class));
         assertThat(mimeMessage.getAllRecipients()[0].toString()).isEqualTo("user@example.com");
         assertThat(mimeMessage.getSubject()).isEqualTo("Скидання пароля");
         String body = extractHtmlBody(mimeMessage);
@@ -118,10 +157,7 @@ class EmailServiceTest {
 
         emailService.sendAccountBlockedEmail("user@example.com", "Alice", "support@test.com");
 
-        await().atMost(2, SECONDS).untilAsserted(() ->
-            verify(javaMailSender).send(any(MimeMessage.class))
-        );
-
+        verify(javaMailSender).send(any(MimeMessage.class));
         assertThat(mimeMessage.getAllRecipients()[0].toString()).isEqualTo("user@example.com");
         assertThat(mimeMessage.getSubject()).isEqualTo("Ваш акаунт заблоковано");
         String body = extractHtmlBody(mimeMessage);

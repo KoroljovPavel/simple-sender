@@ -37,6 +37,7 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
@@ -129,6 +130,16 @@ public class AuthService {
     }
 
     public MeResponse me() {
+        // Four orthogonal unauthenticated cases — all collapse to a 401 with the same body so
+        // /me does not become an introspection oracle:
+        //   1. auth == null                              — SecurityContextHolder was cleared
+        //   2. !auth.isAuthenticated()                   — token explicitly marked unauthenticated
+        //   3. auth instanceof AnonymousAuthenticationToken — Spring's default for no session
+        //   4. principal !instanceof AppUserDetails      — defensive against principal-type drift
+        //                                                  (e.g. a String principal from a future
+        //                                                  filter that doesn't follow our contract)
+        // Removing any clause re-opens an enumeration path; mirrors the reactive predecessor's
+        // switchIfEmpty + isAuthenticated + instanceof filter chain.
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null
                 || !auth.isAuthenticated()
@@ -280,6 +291,7 @@ public class AuthService {
     }
 
     private void doForgotPassword(String email, String ip, String userAgent) {
+
         // Anti-enumeration: response is identical for known, unknown, and deleted emails.
         // Audit logs use userId=null AND null metadata when the email does not match an active
         // account, so the events log itself cannot be used to enumerate (per task spec lines 41-42
@@ -317,10 +329,6 @@ public class AuthService {
         eventService.logEvent(saved.getId(), EVENT_PASSWORD_RESET_REQUESTED, ip, userAgent, null);
     }
 
-    private static String forgotKey(String ip) {
-        return "forgot:rate:ip:" + ip;
-    }
-
     public void resetPassword(String rawToken, String newPassword, HttpServletRequest httpRequest) {
         if (rawToken == null || rawToken.isBlank()) {
             throw AppException.badRequest(INVALID_RESET_LINK);
@@ -352,6 +360,16 @@ public class AuthService {
 
     private void rotatePasswordAndTerminateSessions(User user, String newPassword,
                                                     String ip, String userAgent) {
+        // Ordering invariant (load-bearing — do NOT reorder):
+        //   1. encode new password
+        //   2. save user (password rotated)
+        //   3. terminate all sessions (sweep stale auth state)
+        //   4. emit audit event
+        // If the event-write fails after step 2/3 the response is HTTP 500 but the password
+        // rotation + session termination still committed — accepted regression-preservation
+        // tradeoff (mirrors the reactive `.then` chain). Reverse the order and a successful
+        // event with a failed password write would leave the audit trail lying about state.
+        //
         // BCrypt cost-12 takes ~250ms. Under virtual threads this blocks only the current VT —
         // the carrier thread is released to schedule other VTs (D4 — implicit concurrency cap
         // accepted).
@@ -580,6 +598,13 @@ public class AuthService {
         // existing session, so materialise one first if anonymous (mirrors the prior reactive
         // invalidate-and-recreate sequence, which was a no-op only because the cached
         // session-fetch produced the same zombie session).
+        //
+        // Residual-attribute note: no current writer puts state into an anonymous session before
+        // login (verified across SecurityConfig + filter chain + controllers as of this commit),
+        // so a session-id rotation without prior invalidate() is safe. If a future filter starts
+        // writing session-scoped attrs pre-auth, switch to an explicit
+        // `existing.invalidate(); getSession(true);` shape before changeSessionId to drop them
+        // (matches SessionFixationProtectionStrategy migrateSessionAttributes=false).
         HttpSession session = httpRequest.getSession(true);
         httpRequest.changeSessionId();
         session.setMaxInactiveInterval((int) ttl.getSeconds());
@@ -588,7 +613,7 @@ public class AuthService {
 
     private void resetBruteCounters(String emailKey, String ipKey) {
         try {
-            redisTemplate.delete(java.util.List.of(emailKey, ipKey));
+            redisTemplate.delete(List.of(emailKey, ipKey));
         } catch (Exception err) {
             log.warn("Redis brute-force reset failed: {}", err.getMessage());
         }
@@ -600,5 +625,9 @@ public class AuthService {
 
     private static String bruteIpKey(String ip) {
         return "brute:fail:ip:" + ip;
+    }
+
+    private static String forgotKey(String ip) {
+        return "forgot:rate:ip:" + ip;
     }
 }

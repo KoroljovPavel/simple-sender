@@ -247,8 +247,12 @@ class AuthServicePasswordResetTest {
     void forgotPassword_unknownEmail_incursDummyDelay_forEnumerationOracleSuppression() {
         // FORGOT_DUMMY_DELAY = 40ms. The unknown-email branch must spend at least that long so
         // the response wall-clock is comparable to the known-user save path — closing the timing
-        // oracle (security-auditor finding #2 / CWE-208). Lower bound is loose to avoid clock
-        // jitter flakes; the only invariant is "non-trivial delay was incurred".
+        // oracle (security-auditor finding #2 / CWE-208).
+        //
+        // Lower bound 30ms = 40ms target − 10ms slack for clock jitter on a busy CI runner.
+        // Upper bound 500ms catches future regressions that pad the no-op path (e.g. an
+        // accidental Mongo/Redis round-trip slipping in): 500ms is well above 40ms but well
+        // below the ~250ms BCrypt cost that would indicate a real auth path leaked through.
         when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
 
         Instant start = Instant.now();
@@ -257,7 +261,8 @@ class AuthServicePasswordResetTest {
 
         assertThat(elapsed)
                 .as("forgot-password unknown-email branch must run the calibrated dummy delay")
-                .isGreaterThanOrEqualTo(Duration.ofMillis(30));
+                .isGreaterThanOrEqualTo(Duration.ofMillis(30))
+                .isLessThanOrEqualTo(Duration.ofMillis(500));
     }
 
     @Test

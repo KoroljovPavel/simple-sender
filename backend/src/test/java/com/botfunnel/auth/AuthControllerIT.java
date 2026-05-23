@@ -179,15 +179,12 @@ class AuthControllerIT extends AbstractIntegrationTest {
 
         // End-to-end audit assertion: EventService -> EventRepository -> Mongo. Acceptance
         // criterion line 97: "email_verified event logged in events collection after successful
-        // verification". EventService.logEvent is synchronous post-Task-5 — no polling needed,
-        // but a brief wait keeps the assertion stable across test runs.
-        await().atMost(Duration.ofSeconds(5))
-                .pollInterval(Duration.ofMillis(100))
-                .until(() -> eventRepository.findAll().stream()
-                        .anyMatch(e -> "email_verified".equals(e.getEventType())
-                                && saved.getId().equals(e.getUserId())));
+        // verification". EventService.logEvent is synchronous post-Task-5 — by the time
+        // mockMvc.perform() returns, the event write has already committed inside the same
+        // request thread, so a direct assertion is sufficient (no polling needed).
         Event evt = eventRepository.findAll().stream()
-                .filter(e -> "email_verified".equals(e.getEventType()))
+                .filter(e -> "email_verified".equals(e.getEventType())
+                        && saved.getId().equals(e.getUserId()))
                 .findFirst().orElseThrow();
         assertThat(evt.getUserId()).isEqualTo(saved.getId());
     }
@@ -530,15 +527,11 @@ class AuthControllerIT extends AbstractIntegrationTest {
                         .content(json(Map.of("token", rawToken, "newPassword", "NewStr0ngPass"))))
                 .andExpect(status().isOk());
 
-        // EventService.logEvent is synchronous post-Task-5; a brief poll keeps the test stable
-        // against repository write latency.
-        await().atMost(Duration.ofSeconds(5))
-                .pollInterval(Duration.ofMillis(100))
-                .until(() -> eventRepository.findAll().stream()
-                        .anyMatch(e -> "password_changed".equals(e.getEventType())
-                                && userId.equals(e.getUserId())));
+        // EventService.logEvent is synchronous post-Task-5; the event row is committed inside
+        // the request thread before mockMvc.perform() returns, so a direct assertion suffices.
         Event evt = eventRepository.findAll().stream()
-                .filter(e -> "password_changed".equals(e.getEventType()))
+                .filter(e -> "password_changed".equals(e.getEventType())
+                        && userId.equals(e.getUserId()))
                 .findFirst().orElseThrow();
         assertThat(evt.getUserId()).isEqualTo(userId);
     }

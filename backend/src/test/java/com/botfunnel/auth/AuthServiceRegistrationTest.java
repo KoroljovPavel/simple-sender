@@ -275,7 +275,7 @@ class AuthServiceRegistrationTest {
     }
 
     @Test
-    void register_emailDispatchFailure_doesNotPropagate_returns201() {
+    void register_emailDispatchFailure_swallowedByService_callerReceivesNormalResponse() {
         when(userRepository.findByEmail(EMAIL)).thenReturn(java.util.Optional.empty());
         when(passwordEncoder.encode(anyString())).thenReturn("hashed-pw");
         when(userRepository.save(any(User.class))).thenAnswer(inv -> {

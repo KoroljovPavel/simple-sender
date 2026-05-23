@@ -1,8 +1,16 @@
 package com.botfunnel.common;
 
 import org.junit.jupiter.api.Test;
+import org.springframework.core.MethodParameter;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.validation.BeanPropertyBindingResult;
+import org.springframework.validation.FieldError;
+import org.springframework.validation.ObjectError;
+import org.springframework.web.bind.MethodArgumentNotValidException;
+import org.springframework.web.server.ResponseStatusException;
+
+import java.lang.reflect.Method;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -53,5 +61,56 @@ class GlobalErrorHandlerTest {
         assertThat(response.getBody()).isNotNull();
         assertThat(response.getBody().message()).isEqualTo("Internal server error");
         assertThat(response.getBody().message()).doesNotContain("db connection timeout");
+    }
+
+    @Test
+    void handleMethodArgumentNotValid_returnsBadRequestWithJoinedFieldErrors_codeNull() throws Exception {
+        BeanPropertyBindingResult result = new BeanPropertyBindingResult(new Object(), "target");
+        result.addError(new FieldError("target", "email", "must not be blank"));
+        result.addError(new FieldError("target", "password", "size must be between 8 and 64"));
+        MethodArgumentNotValidException ex = new MethodArgumentNotValidException(stubMethodParameter(), result);
+
+        ResponseEntity<ErrorResponse> response = handler.handleBindException(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().code()).isNull();
+        assertThat(response.getBody().message())
+                .isEqualTo("email: must not be blank, password: size must be between 8 and 64");
+    }
+
+    @Test
+    void handleMethodArgumentNotValid_combinesGlobalAndFieldErrors() throws Exception {
+        BeanPropertyBindingResult result = new BeanPropertyBindingResult(new Object(), "target");
+        result.addError(new FieldError("target", "email", "must not be blank"));
+        result.addError(new ObjectError("target", "passwords must match"));
+        MethodArgumentNotValidException ex = new MethodArgumentNotValidException(stubMethodParameter(), result);
+
+        ResponseEntity<ErrorResponse> response = handler.handleBindException(ex);
+
+        // Order: field errors first, then global errors — matches Stream.concat(fieldErrors, globalErrors).
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().message())
+                .isEqualTo("email: must not be blank, target: passwords must match");
+    }
+
+    @Test
+    void handleResponseStatus_propagatesStatusAndReason() {
+        ResponseStatusException ex = new ResponseStatusException(HttpStatus.PAYLOAD_TOO_LARGE, "too big");
+
+        ResponseEntity<ErrorResponse> response = handler.handleResponseStatus(ex);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE);
+        assertThat(response.getBody()).isNotNull();
+        assertThat(response.getBody().message()).isEqualTo("too big");
+        assertThat(response.getBody().code()).isNull();
+    }
+
+    @SuppressWarnings("unused")
+    private void dummyTarget(Object arg) {}
+
+    private MethodParameter stubMethodParameter() throws NoSuchMethodException {
+        Method method = GlobalErrorHandlerTest.class.getDeclaredMethod("dummyTarget", Object.class);
+        return new MethodParameter(method, 0);
     }
 }

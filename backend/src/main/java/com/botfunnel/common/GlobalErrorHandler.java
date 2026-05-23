@@ -4,9 +4,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
-import org.springframework.web.bind.support.WebExchangeBindException;
 import org.springframework.web.server.ResponseStatusException;
 
 import java.util.stream.Collectors;
@@ -23,11 +23,11 @@ public class GlobalErrorHandler {
                 .body(new ErrorResponse(ex.getMessage(), ex.getCode()));
     }
 
-    @ExceptionHandler(WebExchangeBindException.class)
-    public ResponseEntity<ErrorResponse> handleBindException(WebExchangeBindException ex) {
-        Stream<String> fieldErrors = ex.getFieldErrors().stream()
+    @ExceptionHandler(MethodArgumentNotValidException.class)
+    public ResponseEntity<ErrorResponse> handleBindException(MethodArgumentNotValidException ex) {
+        Stream<String> fieldErrors = ex.getBindingResult().getFieldErrors().stream()
                 .map(e -> e.getField() + ": " + e.getDefaultMessage());
-        Stream<String> globalErrors = ex.getGlobalErrors().stream()
+        Stream<String> globalErrors = ex.getBindingResult().getGlobalErrors().stream()
                 .map(e -> e.getObjectName() + ": " + e.getDefaultMessage());
         String message = Stream.concat(fieldErrors, globalErrors)
                 .collect(Collectors.joining(", "));

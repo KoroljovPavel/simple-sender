@@ -10,6 +10,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.security.web.SecurityFilterChain;
@@ -43,6 +44,9 @@ public class SecurityConfig {
         // Exposed as a bean so AuthService can save the SecurityContext on login
         // (manual auth — see Decision 11). Servlet equivalent of the former
         // WebSessionServerSecurityContextRepository.
+        // NOT wired into HttpSecurity — Spring Security 6.x's default servlet chain builds its
+        // own DelegatingSecurityContextRepository for per-request load/save; this bean exists
+        // only for AuthService.saveContext after manual auth.
         return new HttpSessionSecurityContextRepository();
     }
 
@@ -93,14 +97,14 @@ public class SecurityConfig {
                         .requestMatchers("/api/**").authenticated()
                         .anyRequest().authenticated()
                 )
-                .httpBasic(httpBasic -> httpBasic.disable())
-                .formLogin(formLogin -> formLogin.disable())
+                .httpBasic(AbstractHttpConfigurer::disable)
+                .formLogin(AbstractHttpConfigurer::disable)
                 .addFilterAfter(new CsrfCookieMaterializer(), CsrfFilter.class)
                 .build();
     }
 
     /**
-     * Reads the deferred {@link CsrfToken} attribute set by {@link CsrfFilter} and calls
+     * Reads the lazy {@link CsrfToken} attribute set by {@link CsrfFilter} and calls
      * {@link CsrfToken#getToken()} so {@link CookieCsrfTokenRepository} writes the XSRF-TOKEN
      * cookie on every request — including safe-verb GETs. Without this, the cookie is only
      * materialised when a downstream component (typically a controller or view) reads the

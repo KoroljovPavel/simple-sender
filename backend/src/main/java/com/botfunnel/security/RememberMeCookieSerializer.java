@@ -9,12 +9,13 @@ import org.springframework.boot.web.server.Cookie.SameSite;
 import org.springframework.session.web.http.DefaultCookieSerializer;
 
 /**
- * Per-request remember-me cookie writer. Boot's auto-configured {@code DefaultCookieSerializer}
- * supports only a single {@code cookieMaxAge} value (set at bean creation); the per-request
- * remember-me flag must be applied on the {@link CookieValue} before Spring Session writes the
- * cookie. This subclass overrides {@link #writeCookieValue(CookieValue)} to read
- * {@link SessionAttributes#REMEMBER_ME_ATTR} from the current {@link HttpServletRequest} and,
- * when {@code Boolean.TRUE}, override the {@code Max-Age} for that one cookie write.
+ * Per-request remember-me cookie writer. {@link DefaultCookieSerializer} applies a single
+ * {@code cookieMaxAge} value to every cookie write; per-request remember-me requires overriding
+ * {@link #writeCookieValue(CookieValue)} to mutate the {@link CookieValue#setCookieMaxAge(int)
+ * cookie max-age} before the parent writes the {@code Set-Cookie} header. When
+ * {@link SessionAttributes#REMEMBER_ME_ATTR} on the {@link HttpServletRequest} is
+ * {@code Boolean.TRUE}, the cookie carries a Max-Age of {@code rememberMeDays * 86400}.
+ * Absent or {@code Boolean.FALSE} leaves the default {@code Max-Age=-1} (session-scoped).
  *
  * <p>Constructor wires every supported cookie attribute through {@link PropertyMapper} from
  * {@link ServerProperties#getServlet()}'s session/cookie tree so the

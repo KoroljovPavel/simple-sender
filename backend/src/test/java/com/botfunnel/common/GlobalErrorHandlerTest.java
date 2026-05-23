@@ -14,6 +14,10 @@ import java.lang.reflect.Method;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+// TDD anchor `handleAppException_handleResponseStatus_handleThrowable_unchanged` from
+// tasks/3.md is split below into the granular `appException_*`, `handleResponseStatus_*`, and
+// `throwable_*` methods. Coverage is broader than the umbrella anchor (each handler asserted
+// individually) — preserved here for anchor-traceability automation that greps by method name.
 class GlobalErrorHandlerTest {
 
     private final GlobalErrorHandler handler = new GlobalErrorHandler();

@@ -2,8 +2,8 @@ package com.botfunnel;
 
 import org.junit.jupiter.api.Test;
 
-import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // Servlet-flip note: previously mocked MongoClient + RedisConnectionFactory at the slice level
 // and exercised via WebTestClient.bindToApplicationContext. After the flip both patterns are
@@ -12,14 +12,15 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 class SecurityBlockTest extends AbstractIntegrationTest {
 
     @Test
-    void undefinedPathBlockedReturns401Or403() throws Exception {
-        // Servlet stack with CookieCsrfTokenRepository may surface anonymous denial as either
-        // 401 (auth-first chain) or 403 (CSRF-deferred handler reaching the default
-        // AccessDeniedHandler before the AuthenticationEntryPoint). The invariant pinned here
-        // is "/api/** without auth is blocked" — both statuses satisfy it (same precedent as
-        // WebhookSecurityBlockTest::postApiWithoutAuth_rejected).
-        int status = mockMvc.perform(get("/api/nonexistent"))
-                .andReturn().getResponse().getStatus();
-        assertThat(status).isIn(401, 403);
+    void undefinedPathBlocked_returns403() throws Exception {
+        // Anonymous GET to /api/** is rejected by the servlet stack's default
+        // ExceptionTranslationFilter path: with no AuthenticationEntryPoint override the
+        // anonymous denial reaches the AccessDeniedHandler and surfaces as 403. CSRF is not
+        // in play here (CsrfFilter only enforces on mutating verbs). The original reactive
+        // chain emitted 401; the servlet behaviour is deterministic 403 — pinned exactly so
+        // a future change reintroducing 401 (e.g. an explicit Http401AuthenticationEntryPoint)
+        // becomes visible.
+        mockMvc.perform(get("/api/nonexistent"))
+                .andExpect(status().isForbidden());
     }
 }

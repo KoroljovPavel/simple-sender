@@ -756,26 +756,30 @@ class BotControllerIT extends AbstractIntegrationTest {
         assertNoTokenLeak(errBody == null ? null : new String(errBody));
     }
 
-    // ---------- Unauthenticated 401 sweep ----------
+    // ---------- Unauthenticated 403 sweep ----------
 
     @Test
-    void anyEndpoint_unauthenticated_returns401() throws Exception {
-        // No @WithMockAppUser — the production filter chain must return 401 across every verb
-        // shape on /api/v1/projects/{id}/bot/**.
+    void anyEndpoint_unauthenticated_returns403() throws Exception {
+        // Anonymous request to an authenticated() path: AuthorizationFilter raises
+        // AccessDeniedException → ExceptionTranslationFilter routes it to AccessDeniedHandler
+        // → 403. Same shape as SecurityBlockTest.undefinedPathBlocked_returns403 (Task 10).
+        // The previous expectation of 401 was a reactive-stack carry-over (the reactive chain
+        // emitted 401 on anonymous-on-authenticated); the servlet stack default is 403, and we
+        // pin it exactly so a future Http401AuthenticationEntryPoint addition becomes visible.
         mockMvc.perform(get("/api/v1/projects/any-id/bot"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
 
         mockMvc.perform(post("/api/v1/projects/any-id/bot/connect")
                         .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("token", VALID_TOKEN))))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
 
         mockMvc.perform(post("/api/v1/projects/any-id/bot/disconnect").with(csrf()))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
 
         mockMvc.perform(post("/api/v1/projects/any-id/bot/test-message").with(csrf()))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
     }
 
     // ---------- Webhook secret hashing ----------

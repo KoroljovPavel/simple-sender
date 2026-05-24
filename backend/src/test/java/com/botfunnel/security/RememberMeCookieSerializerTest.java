@@ -11,6 +11,8 @@ import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.session.web.http.CookieSerializer.CookieValue;
 
+import java.util.Base64;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 class RememberMeCookieSerializerTest {
@@ -45,7 +47,10 @@ class RememberMeCookieSerializerTest {
 
         Cookie cookie = response.getCookie("SESSION");
         assertThat(cookie).isNotNull();
-        assertThat(cookie.getValue()).isEqualTo("session-id-true");
+        // DefaultCookieSerializer base64-encodes cookie values by default (useBase64Encoding=true).
+        // Decode before asserting the raw session-id round-trips unchanged through writeCookieValue.
+        assertThat(new String(Base64.getDecoder().decode(cookie.getValue())))
+                .isEqualTo("session-id-true");
         assertThat(cookie.getMaxAge()).isEqualTo((int) (30L * 86400L));
     }
 

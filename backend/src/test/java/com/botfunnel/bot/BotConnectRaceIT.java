@@ -30,10 +30,12 @@ import org.springframework.test.context.DynamicPropertySource;
 import java.io.IOException;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -246,24 +248,30 @@ class BotConnectRaceIT extends AbstractIntegrationTest {
     private record SessionState(String cookieHeader, String xsrfToken) {}
 
     // Drives a real /api/auth/login round-trip against the running Tomcat to bind a SESSION cookie
-    // to the seeded test user. The race-tests do NOT exercise the login flow itself — they just
-    // need an authenticated session to ride through the bot/connect race. Pre-fetches XSRF-TOKEN
-    // via a safe GET, echoes it back on the login POST, then collects the final SESSION+XSRF
-    // cookies for the parallel POSTs.
+    // to the seeded test user. Maintains a cookie jar across three round-trips so cookies survive
+    // Spring Security's session-fixation rotation (changeSessionId) AND CSRF-token rotation
+    // (CsrfAuthenticationStrategy emits Set-Cookie: XSRF-TOKEN=; Max-Age=0 on login, a delete
+    // cookie that does NOT carry a fresh token). A post-login session ping forces the
+    // CsrfCookieMaterializer to mint a new XSRF-TOKEN bound to the authenticated session, which
+    // the race POSTs then carry. Per Task 16 audit F-C1 #7/#8.
     private SessionState login() throws Exception {
-        // Step 1: prime the CSRF cookie via a safe GET. Spring Security materialises XSRF-TOKEN on
-        // the first request through the chain.
+        Map<String, String> jar = new LinkedHashMap<>();
+
+        // Step 1: prime cookies via a safe GET. Spring Security materialises XSRF-TOKEN on the
+        // first request through the chain.
         ResponseEntity<String> getResp = restTemplate.exchange(
                 "/api/auth/me", HttpMethod.GET, new HttpEntity<>(new HttpHeaders()), String.class);
-        String primedCookies = String.join("; ",
-                getResp.getHeaders().getOrEmpty(HttpHeaders.SET_COOKIE));
-        String xsrf = extractXsrfToken(primedCookies);
+        mergeSetCookies(jar, getResp.getHeaders().getOrEmpty(HttpHeaders.SET_COOKIE));
+        String primedXsrf = jar.get("XSRF-TOKEN");
 
-        // Step 2: log in with the primed cookies + X-XSRF-TOKEN header.
+        // Step 2: log in carrying primed cookies + X-XSRF-TOKEN header. Login rotates the session
+        // (changeSessionId) and clears the CSRF token cookie via Set-Cookie deletion.
         HttpHeaders loginHeaders = new HttpHeaders();
         loginHeaders.setContentType(MediaType.APPLICATION_JSON);
-        if (xsrf != null) loginHeaders.add("X-XSRF-TOKEN", xsrf);
-        if (!primedCookies.isBlank()) loginHeaders.add("Cookie", primedCookies);
+        if (primedXsrf != null && !primedXsrf.isBlank()) {
+            loginHeaders.add("X-XSRF-TOKEN", primedXsrf);
+        }
+        loginHeaders.add("Cookie", serializeJar(jar));
 
         String loginBody = objectMapper.writeValueAsString(Map.of(
                 "email", EMAIL, "password", PASSWORD, "rememberMe", false));
@@ -273,15 +281,28 @@ class BotConnectRaceIT extends AbstractIntegrationTest {
         assertThat(loginResp.getStatusCode().is2xxSuccessful())
                 .as("seeded login must succeed: %s", loginResp.getBody())
                 .isTrue();
+        mergeSetCookies(jar, loginResp.getHeaders().getOrEmpty(HttpHeaders.SET_COOKIE));
 
-        // Step 3: merge Set-Cookie values from the login response (session-rotated post-login per
-        // Task 6 changeSessionId() defense). XSRF may also rotate, so prefer the post-login token.
-        String postLoginCookies = String.join("; ",
-                loginResp.getHeaders().getOrEmpty(HttpHeaders.SET_COOKIE));
-        String mergedCookies = postLoginCookies.isBlank() ? primedCookies : postLoginCookies;
-        String mergedXsrf = extractXsrfToken(mergedCookies);
-        if (mergedXsrf == null) mergedXsrf = xsrf;
-        return new SessionState(mergedCookies, mergedXsrf);
+        // Step 3: session ping. With the rotated SESSION + (possibly empty) XSRF cookie, hit
+        // /api/auth/me again so the CsrfCookieMaterializer mints a fresh XSRF-TOKEN bound to the
+        // authenticated session. Also confirms the merged jar authenticates — without this gate,
+        // a silent cookie-jar regression would surface as a misleading [403, 403] on the race
+        // POSTs instead of a clear "session not authenticated" failure (Task 16 audit recommendation).
+        HttpHeaders pingHeaders = new HttpHeaders();
+        pingHeaders.add("Cookie", serializeJar(jar));
+        ResponseEntity<String> pingResp = restTemplate.exchange(
+                "/api/auth/me", HttpMethod.GET, new HttpEntity<>(pingHeaders), String.class);
+        assertThat(pingResp.getStatusCode().is2xxSuccessful())
+                .as("post-login session ping must succeed before launching the race (status=%s, body=%s)",
+                        pingResp.getStatusCode(), pingResp.getBody())
+                .isTrue();
+        mergeSetCookies(jar, pingResp.getHeaders().getOrEmpty(HttpHeaders.SET_COOKIE));
+
+        String mergedXsrf = jar.get("XSRF-TOKEN");
+        assertThat(mergedXsrf)
+                .as("post-login session ping must yield a non-blank XSRF-TOKEN cookie")
+                .isNotNull().isNotBlank();
+        return new SessionState(serializeJar(jar), mergedXsrf);
     }
 
     private ResponseEntity<String> postConnect(String projectId, String body, SessionState session) {
@@ -296,17 +317,26 @@ class BotConnectRaceIT extends AbstractIntegrationTest {
                 String.class);
     }
 
-    private static String extractXsrfToken(String cookieHeader) {
-        if (cookieHeader == null) return null;
-        // Split only on ';' — Set-Cookie headers are joined with '; ' by the caller, so ',' may
-        // legitimately appear inside a token value and must not be treated as a delimiter.
-        for (String part : cookieHeader.split(";")) {
-            String p = part.trim();
-            if (p.startsWith("XSRF-TOKEN=")) {
-                return p.substring("XSRF-TOKEN=".length());
-            }
+    // Folds a list of Set-Cookie headers into a name→value jar. Later writes overwrite earlier
+    // values, which matches a browser's cookie store: post-login SESSION rotates the pre-login
+    // SESSION, and the CsrfAuthenticationStrategy deletion cookie (Max-Age=0) clears XSRF-TOKEN
+    // before a downstream materialization sets a new one.
+    private static void mergeSetCookies(Map<String, String> jar, List<String> setCookieHeaders) {
+        for (String setCookie : setCookieHeaders) {
+            int semi = setCookie.indexOf(';');
+            String pair = semi < 0 ? setCookie : setCookie.substring(0, semi);
+            int eq = pair.indexOf('=');
+            if (eq < 0) continue;
+            String name = pair.substring(0, eq).trim();
+            String value = pair.substring(eq + 1).trim();
+            jar.put(name, value);
         }
-        return null;
+    }
+
+    private static String serializeJar(Map<String, String> jar) {
+        return jar.entrySet().stream()
+                .map(e -> e.getKey() + "=" + e.getValue())
+                .collect(Collectors.joining("; "));
     }
 
     private List<RecordedRequest> drainRequests() {

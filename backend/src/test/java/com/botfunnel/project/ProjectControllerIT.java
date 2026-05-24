@@ -416,32 +416,33 @@ class ProjectControllerIT extends AbstractIntegrationTest {
                 .andExpect(status().isNotFound());
     }
 
-    // ---------- 401 unauthenticated ----------
+    // ---------- 403 unauthenticated ----------
 
     @Test
-    void anyEndpoint_unauthenticated_returns401() throws Exception {
-        // No @WithMockAppUser — the production filter chain must return 401 across every verb
-        // shape, regardless of test wiring. State-changing arms still attach csrf() so the
-        // CSRF filter is satisfied; auth then fires and produces 401 (Decision 2 anti-enumeration:
-        // auth-before-CSRF semantics on MVC stack — MVC enforces 401 before 403 for unauth users).
-        mockMvc.perform(get("/api/v1/projects")).andExpect(status().isUnauthorized());
-        mockMvc.perform(get("/api/v1/projects/any-id")).andExpect(status().isUnauthorized());
+    void anyEndpoint_unauthenticated_returns403() throws Exception {
+        // Anonymous on an authenticated() path: AuthorizationFilter raises AccessDeniedException
+        // → AccessDeniedHandler → 403. State-changing arms still attach csrf() so the failure
+        // origin is AuthorizationFilter (not CsrfFilter). Mirrors SecurityBlockTest precedent
+        // (Task 10): the servlet stack default is 403 across every verb shape for anonymous
+        // requests on authenticated() routes.
+        mockMvc.perform(get("/api/v1/projects")).andExpect(status().isForbidden());
+        mockMvc.perform(get("/api/v1/projects/any-id")).andExpect(status().isForbidden());
 
         mockMvc.perform(post("/api/v1/projects").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("name", "Acme", "timezone", "Europe/Kyiv"))))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
 
         mockMvc.perform(patch("/api/v1/projects/some-id").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("name", "Some"))))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
 
         mockMvc.perform(delete("/api/v1/projects/some-id").with(csrf()))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
 
         mockMvc.perform(post("/api/v1/projects/some-id/restore").with(csrf()))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
     }
 
     // ---------- PATCH happy + audit ----------

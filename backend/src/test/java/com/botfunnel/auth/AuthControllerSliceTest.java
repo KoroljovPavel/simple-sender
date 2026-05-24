@@ -85,11 +85,18 @@ class AuthControllerSliceTest {
 
     @Test
     void me_withoutSession_returns401() throws Exception {
-        // Without @WithMockUser the request hits the security filter chain first and is rejected
-        // before reaching the controller — the AuthService stub is unnecessary because the chain
-        // returns 401 directly.
+        // /api/auth/** is permitAll, so the security chain does NOT gate /me — the controller is
+        // reached and delegates to AuthService.me(), which itself raises AppException.unauthorized
+        // when no authenticated principal is present (four-clause check at AuthService.java:143).
+        // Stubbing the mock to throw mirrors that real path so GlobalErrorHandler emits 401 —
+        // exercising the slice's controller-→-handler wiring without relying on the security
+        // chain (the prior assertion silently passed via Mockito's null-return + ResponseEntity.ok,
+        // a slice-fixture defect surfaced by the Task 16 audit, F-C1 #3).
+        when(authService.me()).thenThrow(AppException.unauthorized("Not authenticated"));
+
         mockMvc.perform(get("/api/auth/me"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.message").value("Not authenticated"));
     }
 
     @Test

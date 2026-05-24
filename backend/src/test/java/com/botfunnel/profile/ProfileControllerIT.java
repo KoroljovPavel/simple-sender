@@ -193,9 +193,12 @@ class ProfileControllerIT extends AbstractIntegrationTest {
     // ---------- Auth gate ----------
 
     @Test
-    void getProfile_unauthenticated_401() throws Exception {
+    void getProfile_unauthenticated_403() throws Exception {
+        // Anonymous GET on an authenticated() path: AuthorizationFilter raises
+        // AccessDeniedException → AccessDeniedHandler → 403. Mirrors SecurityBlockTest precedent
+        // (Task 10): the servlet stack default for anonymous-on-authenticated() is 403, not 401.
         mockMvc.perform(get("/api/profile"))
-                .andExpect(status().isUnauthorized());
+                .andExpect(status().isForbidden());
     }
 
     // ---------- change-password ----------

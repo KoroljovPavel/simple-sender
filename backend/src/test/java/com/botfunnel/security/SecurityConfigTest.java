@@ -1,15 +1,12 @@
 package com.botfunnel.security;
 
 import com.botfunnel.AbstractIntegrationTest;
-import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.session.web.http.CookieSerializer;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // Servlet-flip note: the prior slice-style @MockitoBean MongoClient + RedisConnectionFactory
@@ -60,17 +57,10 @@ class SecurityConfigTest extends AbstractIntegrationTest {
                 .andExpect(status().isForbidden());
     }
 
-    @Test
-    void csrfCookie_writtenOnSafeVerbRequest() throws Exception {
-        // Regression guard for the CsrfCookieMaterializer filter: on a safe-verb request to a
-        // CSRF-active path, the XSRF-TOKEN cookie must be materialised so SPAs can pre-fetch
-        // it before their first POST. TC11 (full SESSION + XSRF co-emission) is owned by Task 12.
-        Cookie xsrf = mockMvc.perform(get("/health"))
-                .andExpect(cookie().exists("XSRF-TOKEN"))
-                .andReturn()
-                .getResponse()
-                .getCookie("XSRF-TOKEN");
-        assertThat(xsrf).isNotNull();
-        assertThat(xsrf.getValue()).isNotBlank();
-    }
+    // The CsrfCookieMaterializer regression guard previously lived here as
+    // csrfCookie_writtenOnSafeVerbRequest, but exhibited an occasional context-cache flake when
+    // the full SecurityConfigTest class ran inside the suite (Task 16 audit F-C1 #2). Moved to
+    // CsrfMaterializerIT (a dedicated single-test class with its own context cache key) to make
+    // the materialization deterministic. Same assertion semantics; same coverage of TC11's
+    // XSRF-TOKEN write-path invariant.
 }

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.client.RestClient;
@@ -36,6 +37,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -429,6 +431,52 @@ class TelegramSenderTest {
                 });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
+        // 401 → BotTokenInvalidException IS auditable per isTerminalAuditable; failed event must
+        // fire, success event must not. Metadata omits errorCode/errorDescription keys for
+        // BotTokenInvalidException per error-mapping table.
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Map<String, Object>> metaCap = ArgumentCaptor.forClass(Map.class);
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), metaCap.capture());
+        assertThat(metaCap.getValue())
+                .containsEntry("botId", BOT_ID)
+                .containsEntry("attempts", 1)
+                .doesNotContainKey("errorCode")
+                .doesNotContainKey("errorDescription");
+        verify(eventService, never()).logEvent(any(), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
+                any(), any(), any());
+    }
+
+    @Test
+    void sendText_terminalFailure_emitsErrorLogBeforeAuditEvent() {
+        // TDD anchor: 401 terminal failure must emit log.error BEFORE eventService.logEvent
+        // (EVENT_TELEGRAM_SEND_FAILED). Verified via InOrder on the Logback appender + eventService.
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(jsonResponse(401,
+                "{\"ok\":false,\"error_code\":401,\"description\":\"Unauthorized\"}"));
+
+        // Spy the appender so InOrder can sequence its doAppend against eventService.logEvent.
+        @SuppressWarnings("unchecked")
+        ch.qos.logback.core.Appender<ILoggingEvent> spyAppender =
+                org.mockito.Mockito.mock(ch.qos.logback.core.Appender.class);
+        org.mockito.Mockito.when(spyAppender.getName()).thenReturn("ordering-spy");
+        logger.addAppender(spyAppender);
+        try {
+            assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                    .isInstanceOf(BotTokenInvalidException.class);
+
+            InOrder order = inOrder(spyAppender, eventService);
+            // First: the ERROR log line from the failure path.
+            order.verify(spyAppender).doAppend(org.mockito.ArgumentMatchers.argThat(e ->
+                    e.getLevel() == Level.ERROR
+                            && e.getFormattedMessage().contains("Telegram send terminal failure")));
+            // Then: the audit failure event.
+            order.verify(eventService).logEvent(eq(OWNER_ID),
+                    eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                    isNull(), isNull(), any());
+        } finally {
+            logger.detachAppender(spyAppender);
+        }
     }
 
     @Test
@@ -549,7 +597,7 @@ class TelegramSenderTest {
     }
 
     @Test
-    void sendText_botNotFound_throwsNotFound_noHttp() {
+    void sendText_botNotFound_throwsNotFound_noHttp_noAuditEvent() {
         stubFindEmpty();
 
         assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
@@ -562,10 +610,13 @@ class TelegramSenderTest {
                 });
 
         assertThat(mockServer.getRequestCount()).isZero();
+        // Pre-HTTP AppException(404) is NOT auditable per isTerminalAuditable — neither success
+        // nor failure event must fire.
+        verify(eventService, never()).logEvent(any(), any(), any(), any(), any());
     }
 
     @Test
-    void sendText_botDisconnected_throwsNotFound_noHttp() {
+    void sendText_botDisconnected_throwsNotFound_noHttp_noAuditEvent() {
         Bot bot = connectedBot();
         bot.setStatus(BotStatus.DISCONNECTED);
         stubFindReturns(bot);
@@ -580,6 +631,8 @@ class TelegramSenderTest {
                 });
 
         assertThat(mockServer.getRequestCount()).isZero();
+        // Bot-disconnected is wire-shape-equivalent to bot-not-found and likewise NOT auditable.
+        verify(eventService, never()).logEvent(any(), any(), any(), any(), any());
     }
 
     // ---------- Timeouts ----------

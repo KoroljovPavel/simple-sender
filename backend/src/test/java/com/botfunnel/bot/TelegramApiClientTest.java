@@ -92,6 +92,30 @@ class TelegramApiClientTest {
     }
 
     @Test
+    void getMe_5xxThen200_succeedsAfterRetry_attemptsEqualsThree() throws Exception {
+        // TDD anchor: MockWebServer 500, 500, 200 → succeeds, request count == 3.
+        // Pins the success-recovery branch of the hand-rolled retry loop.
+        mockServer.enqueue(new MockResponse()
+                .setResponseCode(500)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"ok\":false,\"error_code\":500,\"description\":\"Internal Server Error\"}"));
+        mockServer.enqueue(new MockResponse()
+                .setResponseCode(500)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"ok\":false,\"error_code\":500,\"description\":\"Internal Server Error\"}"));
+        mockServer.enqueue(new MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "application/json")
+                .setBody("{\"ok\":true,\"result\":{\"id\":42,\"is_bot\":true,\"first_name\":\"r\",\"username\":\"r_bot\"}}"));
+
+        TelegramUser user = client.getMe(TOKEN);
+
+        assertThat(user).isNotNull();
+        assertThat(user.id()).isEqualTo(42L);
+        assertThat(mockServer.getRequestCount()).isEqualTo(3);
+    }
+
+    @Test
     void getMe_5xxRetryExhausted_returns502TelegramUnavailable() {
         for (int i = 0; i < 4; i++) {
             mockServer.enqueue(new MockResponse()

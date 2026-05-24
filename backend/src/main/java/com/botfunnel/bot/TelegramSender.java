@@ -28,7 +28,6 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -37,9 +36,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * exponential backoff (1s/2s/4s, 3 retries), 429 {@code retry_after} loop wrapping the 5xx loop,
  * overall 30s timeout, typed-exception mapping, audit-event emission, and token-scrubbed logging.
  *
- * <p>Plaintext-token lifetime: decrypted token is captured in a local variable for the duration
- * of one HTTP attempt and reachable until the synchronous call returns. Never stored, never
- * logged, never serialized, never pushed to background schedulers.
+ * <p>Plaintext-token lifetime: decrypted token is captured in a {@link #sendOnce} local variable
+ * for the duration of one HTTP attempt and reachable only until that synchronous call returns.
+ * Never stored as a field, never logged, never serialized, never escapes the calling virtual thread.
  */
 @Component
 public class TelegramSender {
@@ -120,9 +119,9 @@ public class TelegramSender {
         Instant deadline = Instant.now().plus(overallTimeout);
 
         try {
-            Optional<Bot> botOpt = botRepository.findById(botId)
-                    .filter(b -> b.getStatus() == BotStatus.CONNECTED);
-            Bot bot = botOpt.orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND));
+            Bot bot = botRepository.findById(botId)
+                    .filter(b -> b.getStatus() == BotStatus.CONNECTED)
+                    .orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND));
 
             SentMessage sm = sendWithRateLimitRetry(bot, botId, chatId, text, parseMode,
                     attempts, deadline);
@@ -273,8 +272,10 @@ public class TelegramSender {
                                              Long fallbackChatId,
                                              AtomicInteger attempts) {
         if (result == null) {
-            log.warn("Telegram ok=false or missing message_id: {}", "null body");
-            throw new TelegramSendException(null, "null body", attempts.get());
+            // RestClient.body(...) returns null on 204 No Content / empty body. Telegram never
+            // sends this on /sendMessage, but defend defensively rather than NPE.
+            log.warn("Telegram empty response body");
+            throw new TelegramSendException(null, "empty response body", attempts.get());
         }
         JsonNode resultNode = result.result();
         if (result.ok() && resultNode != null && resultNode.has("message_id")) {
@@ -304,13 +305,16 @@ public class TelegramSender {
         }
     }
 
-    // Sleep with deadline check before AND after. Pre-check avoids sleeping past the budget;
-    // post-check guards against clock drift / VT-scheduling latency during the sleep.
+    // Sleep with deadline check before AND after. Pre-check fires if the budget is already past;
+    // sleep is clamped to the remaining budget so a long retry_after never overshoots the 30s
+    // wall-clock ceiling; post-check guards against clock drift / VT-scheduling latency.
     private void sleepWithDeadline(long durationMs, Instant deadline, AtomicInteger attempts) {
         checkDeadline(deadline, attempts);
-        if (durationMs > 0) {
+        long remainingMs = Duration.between(Instant.now(), deadline).toMillis();
+        long actualMs = Math.min(durationMs, remainingMs);
+        if (actualMs > 0) {
             try {
-                Thread.sleep(durationMs);
+                Thread.sleep(actualMs);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
                 throw new TelegramSendException(null, "interrupted", attempts.get());

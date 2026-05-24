@@ -4,6 +4,7 @@ import type { Project } from '~/types/project'
 const projectsStore = useProjectsStore()
 const { t } = useI18n()
 const localePath = useLocalePath()
+const route = useRoute()
 
 const open = ref(false)
 const triggerRef = ref<HTMLElement | null>(null)
@@ -35,6 +36,17 @@ function close() {
 }
 
 function onSelect(id: string) {
+  // Project-scoped routes (/projects/[projectId]/...) embed the project ID in
+  // the URL, and downstream pages/components read it from route.params. Updating
+  // only the Pinia store would leave the URL stale, so subsequent API calls
+  // built from route.params would target the previously-selected project (e.g.
+  // bot disconnect hitting the old project, returning 404). Replace the segment
+  // in-place so the user stays on the same view under the new project.
+  const currentParamId = route.params.projectId
+  if (typeof currentParamId === 'string' && currentParamId !== id) {
+    const newPath = route.path.replace(`/projects/${currentParamId}`, `/projects/${id}`)
+    void navigateTo(newPath)
+  }
   projectsStore.selectProject(id)
   close()
   // APG menu-button pattern: return focus to the invoking trigger when the

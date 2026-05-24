@@ -6,10 +6,11 @@ import type { Project } from '../../types/project'
 
 // Hoist ONLY vi.fn() spies — vi.hoisted runs before imports, so vue's
 // reactivity primitives are not yet available inside the factory.
-const { selectProjectSpy, handleStaleCurrentSpy, tSpy } = vi.hoisted(() => ({
+const { selectProjectSpy, handleStaleCurrentSpy, tSpy, navigateToSpy } = vi.hoisted(() => ({
   selectProjectSpy: vi.fn(),
   handleStaleCurrentSpy: vi.fn(),
   tSpy: vi.fn((key: string) => key),
+  navigateToSpy: vi.fn(),
 }))
 
 // Module-level refs (created AFTER `import { ref } from 'vue'`).
@@ -19,6 +20,13 @@ const pendingBannerKeyRef = ref<string | null>(null)
 const currentProjectComputed = computed<Project | null>(
   () => projectsRef.value.find((p) => p.id === currentProjectIdRef.value) ?? null,
 )
+
+// Route stub — overridden per-test to simulate being on a project-scoped page
+// vs. a flat page like /dashboard.
+const routeStub = reactive<{ path: string; params: Record<string, string | string[]> }>({
+  path: '/dashboard',
+  params: {},
+})
 
 // Wrap with reactive() so refs auto-unwrap on property access — same shape
 // the real Pinia setup-store exposes.
@@ -34,6 +42,8 @@ const mockStore = reactive({
 mockNuxtImport('useProjectsStore', () => () => mockStore)
 mockNuxtImport('useI18n', () => () => ({ t: tSpy }))
 mockNuxtImport('useLocalePath', () => () => (p: string) => p)
+mockNuxtImport('useRoute', () => () => routeStub)
+mockNuxtImport('navigateTo', () => navigateToSpy)
 
 import ProjectSelector from '../../components/ProjectSelector.vue'
 
@@ -58,8 +68,11 @@ describe('ProjectSelector', () => {
     projectsRef.value = []
     currentProjectIdRef.value = null
     pendingBannerKeyRef.value = null
+    routeStub.path = '/dashboard'
+    routeStub.params = {}
     selectProjectSpy.mockReset()
     handleStaleCurrentSpy.mockReset()
+    navigateToSpy.mockReset()
     tSpy.mockReset()
     tSpy.mockImplementation((key: string) => key)
   })
@@ -97,6 +110,73 @@ describe('ProjectSelector', () => {
     expect(selectProjectSpy).toHaveBeenCalledTimes(1)
     expect(selectProjectSpy).toHaveBeenCalledWith(P_MID.id)
     expect(wrapper.find('[role="menu"]').exists()).toBe(false)
+  })
+
+  it('on a flat (non-project-scoped) route, selecting a project does NOT navigate', async () => {
+    routeStub.path = '/dashboard'
+    routeStub.params = {}
+    projectsRef.value = [P_NEW, P_MID]
+    currentProjectIdRef.value = P_NEW.id
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    await wrapper.find('[data-test="project-selector-trigger"]').trigger('click')
+    await settle()
+    await wrapper.find(`[data-test="project-selector-item-${P_MID.id}"]`).trigger('click')
+    await settle()
+
+    expect(selectProjectSpy).toHaveBeenCalledWith(P_MID.id)
+    expect(navigateToSpy).not.toHaveBeenCalled()
+  })
+
+  it('on a project-scoped route, selecting another project navigates to the same view under the new ID', async () => {
+    // Regression for the bug where switching the selector left the URL stale,
+    // so subsequent actions (bot disconnect) hit the previously-selected
+    // project and returned 404. See work history for context.
+    routeStub.path = `/projects/${P_NEW.id}/settings/bot`
+    routeStub.params = { projectId: P_NEW.id }
+    projectsRef.value = [P_NEW, P_MID]
+    currentProjectIdRef.value = P_NEW.id
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    await wrapper.find('[data-test="project-selector-trigger"]').trigger('click')
+    await settle()
+    await wrapper.find(`[data-test="project-selector-item-${P_MID.id}"]`).trigger('click')
+    await settle()
+
+    expect(navigateToSpy).toHaveBeenCalledTimes(1)
+    expect(navigateToSpy).toHaveBeenCalledWith(`/projects/${P_MID.id}/settings/bot`)
+    expect(selectProjectSpy).toHaveBeenCalledWith(P_MID.id)
+  })
+
+  it('on a project-scoped route, re-selecting the SAME project does NOT navigate', async () => {
+    routeStub.path = `/projects/${P_NEW.id}/settings`
+    routeStub.params = { projectId: P_NEW.id }
+    projectsRef.value = [P_NEW, P_MID]
+    currentProjectIdRef.value = P_NEW.id
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    await wrapper.find('[data-test="project-selector-trigger"]').trigger('click')
+    await settle()
+    await wrapper.find(`[data-test="project-selector-item-${P_NEW.id}"]`).trigger('click')
+    await settle()
+
+    expect(navigateToSpy).not.toHaveBeenCalled()
+    expect(selectProjectSpy).toHaveBeenCalledWith(P_NEW.id)
+  })
+
+  it('navigates correctly when the URL is locale-prefixed', async () => {
+    routeStub.path = `/en/projects/${P_NEW.id}/settings/bot`
+    routeStub.params = { projectId: P_NEW.id }
+    projectsRef.value = [P_NEW, P_MID]
+    currentProjectIdRef.value = P_NEW.id
+
+    const wrapper = await mountSuspended(ProjectSelector)
+    await wrapper.find('[data-test="project-selector-trigger"]').trigger('click')
+    await settle()
+    await wrapper.find(`[data-test="project-selector-item-${P_MID.id}"]`).trigger('click')
+    await settle()
+
+    expect(navigateToSpy).toHaveBeenCalledWith(`/en/projects/${P_MID.id}/settings/bot`)
   })
 
   it('create button disabled with VISIBLE limit text when projects.length >= 5', async () => {

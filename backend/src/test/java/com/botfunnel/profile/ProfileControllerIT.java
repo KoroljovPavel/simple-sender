@@ -7,6 +7,7 @@ import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.Cookie;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -263,5 +264,135 @@ class ProfileControllerIT extends AbstractIntegrationTest {
                                 && USER_ID.equals(e.getUserId())));
         List<Event> events = eventRepository.findAll();
         assertThat(events).extracting(Event::getEventType).contains("password_changed");
+    }
+
+    // ---------- AC16: session continuity across change-password ----------
+
+    @Test
+    void changePassword_sessionContinuity_principalLookupTerminatesOtherSessions() throws Exception {
+        // AC16 (Task 12) — pins the three-way session-continuity contract that
+        // ProfileService.terminateAllSessionsExcept(userId, currentSessionId) implements:
+        //   (a) other devices for the acting user (matching `principal` AND `_id != current`) are deleted,
+        //   (b) the current device's session (matching `_id == current`) survives,
+        //   (c) other users' sessions (different `principal`) are untouched.
+        //
+        // (a) + (c) are also covered by changePassword_correctCurrent_... above (which uses
+        // @WithMockAppUser and asserts seeded sibling sessions are deleted while another-user
+        // sessions survive). What this test adds is (b): proving the `_id != currentSessionId`
+        // exclusion actually preserves the acting session.
+        //
+        // Why this requires a real login round-trip (not @WithMockAppUser + a pre-set session):
+        // Spring Session's SessionRepositoryFilter intercepts request.getSession(...) and
+        // returns its own MongoSession (id derived from the SESSION cookie, otherwise
+        // generated). A pre-set MockHttpSession's id is not honored; ProfileService receives
+        // currentSession.getId() == Spring Session's id. The only way to know currentSessionId
+        // in advance is to perform a real login and read it back from the SESSION cookie /
+        // sessions collection.
+        //
+        // R3 (session schema continuity) is verified end-to-end here: the live query path
+        // (`principal` + `_id`) is exercised on a real Mongo collection, not stubbed.
+
+        // Real login → SESSION cookie + a sessions document persisted under a generated id.
+        Cookie sessionCookie = mockMvc.perform(post("/api/auth/login")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of(
+                                "email", "profile@test.com",
+                                "password", "Strong1Pass",
+                                "rememberMe", false))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse().getCookie("SESSION");
+        assertThat(sessionCookie)
+                .as("real login must produce a SESSION cookie so the current-session id is known")
+                .isNotNull();
+
+        // The login just created exactly one session document for the seeded user; capture
+        // its _id — that is the value the change-password handler will see as currentSessionId.
+        String currentSessionId = mongoTemplate.findAll(Document.class, "sessions").stream()
+                .filter(d -> USER_ID.equals(d.get("principal")))
+                .map(d -> d.getString("_id"))
+                .findFirst()
+                .orElseThrow(() -> new AssertionError("login must persist a sessions document for the acting user"));
+
+        // Seed a sibling session for the same user (sess-B, distinct from current) and a
+        // session for a different user (anti-cross-user invariant).
+        seedSession("sess-B", USER_ID);
+        seedSession("sess-other-user", "another-user-id");
+
+        mockMvc.perform(post("/api/profile/change-password")
+                        .with(csrf())
+                        .cookie(sessionCookie)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("currentPassword", "Strong1Pass", "newPassword", "NewStr0ngPass"))))
+                .andExpect(status().isOk());
+
+        // (a) Sibling session for the acting user is deleted by the principal-keyed query.
+        long sessBCount = mongoTemplate.count(
+                Query.query(Criteria.where("principal").is(USER_ID).and("_id").is("sess-B")), "sessions");
+        assertThat(sessBCount)
+                .as("sess-B must be removed by the terminate-all-except-current delete")
+                .isZero();
+
+        // (b) The current device's session survives — `_id` matched currentSessionId so the
+        // `.and("_id").ne(currentSessionId)` filter excluded it from the delete.
+        long currentCount = mongoTemplate.count(
+                Query.query(Criteria.where("principal").is(USER_ID).and("_id").is(currentSessionId)), "sessions");
+        assertThat(currentCount)
+                .as("current device's session (id=%s) must survive change-password", currentSessionId)
+                .isEqualTo(1L);
+
+        // (c) Another user's session must be untouched (anti-cross-user invariant).
+        long otherUserCount = mongoTemplate.count(
+                Query.query(Criteria.where("principal").is("another-user-id")), "sessions");
+        assertThat(otherUserCount)
+                .as("another-user-id's session must be untouched (cross-user isolation)")
+                .isEqualTo(1L);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void changePassword_preFlipBsonFixture_isReadCorrectlyByPostFlipRepository() throws Exception {
+        // AC16 / R5 (Task 12) — proves the post-flip MongoIndexedSessionRepository reads the
+        // top-level `principal` field from a document written by the pre-flip
+        // ReactiveMongoSessionRepository. The minimal pre-flip shape per
+        // spring-session-data-mongodb 3.5.x is: _id (sessionId) + principal (userId) +
+        // created (epoch-ms long) + expireAt (java.util.Date). The serializer also writes
+        // an `attributes` Document containing SPRING_SECURITY_CONTEXT as a BSON Binary,
+        // but the terminate-by-`principal` query path used by ProfileService never touches
+        // that field — populating only the four invariants exercises R5 without coupling to
+        // the serialized SecurityContext byte-shape.
+        //
+        // The pre-flip-shape document's _id is intentionally unique. Under @WithMockAppUser
+        // Spring Session creates a fresh session with a generated id on the request — that
+        // id will not match "pre-flip-session", so the terminate-all-except-current query
+        // targets it. After change-password the seeded document must be gone — proving the
+        // post-flip query reads the pre-flip `principal` field correctly.
+        Document preFlipDoc = new Document("_id", "pre-flip-session")
+                .append("principal", USER_ID)
+                .append("created", Instant.now().toEpochMilli())
+                .append("expireAt", java.util.Date.from(Instant.now().plus(Duration.ofHours(1))));
+        mongoTemplate.getCollection("sessions").insertOne(preFlipDoc);
+
+        // Sanity: the seeded document exists at the top-level `principal` field path the
+        // post-flip query reads from. If the schema name had drifted, the count would be 0
+        // here and the test would fail at this assertion (clearer than a false negative on
+        // the delete count below).
+        long seededCount = mongoTemplate.count(
+                Query.query(Criteria.where("principal").is(USER_ID).and("_id").is("pre-flip-session")), "sessions");
+        assertThat(seededCount)
+                .as("pre-flip-shape document must be visible via top-level `principal` lookup before the delete")
+                .isEqualTo(1L);
+
+        mockMvc.perform(post("/api/profile/change-password")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("currentPassword", "Strong1Pass", "newPassword", "NewStr0ngPass"))))
+                .andExpect(status().isOk());
+
+        long survivingCount = mongoTemplate.count(
+                Query.query(Criteria.where("principal").is(USER_ID).and("_id").is("pre-flip-session")), "sessions");
+        assertThat(survivingCount)
+                .as("post-flip terminate-by-principal must delete the pre-flip-shape document (R5)")
+                .isZero();
     }
 }

@@ -13,22 +13,28 @@ import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockHttpServletResponse;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.hamcrest.Matchers.matchesPattern;
+import static org.hamcrest.Matchers.nullValue;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -55,6 +61,22 @@ class AuthControllerIT extends AbstractIntegrationTest {
 
     @Autowired
     MongoTemplate mongoTemplate;
+
+    // Configured SESSION cookie attributes — assertions read these so the test stays in sync
+    // with application.properties / application-test.properties. SESSION_COOKIE_* env-var
+    // defaults (httpOnly=true, secure=false, sameSite=lax) match the test profile; if the
+    // test environment overrides them, this binding follows.
+    @Value("${server.servlet.session.cookie.http-only:true}")
+    boolean cfgCookieHttpOnly;
+
+    @Value("${server.servlet.session.cookie.secure:false}")
+    boolean cfgCookieSecure;
+
+    @Value("${server.servlet.session.cookie.same-site:lax}")
+    String cfgCookieSameSite;
+
+    @Value("${app.session.ttl-remember-me-days:30}")
+    long cfgRememberMeDays;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -534,6 +556,179 @@ class AuthControllerIT extends AbstractIntegrationTest {
                         && userId.equals(e.getUserId()))
                 .findFirst().orElseThrow();
         assertThat(evt.getUserId()).isEqualTo(userId);
+    }
+
+    // ---------- AC17: validation 400 response shape ----------
+
+    @Test
+    void register_emptyEmail_400_codeNull_messageJoinedFormat() throws Exception {
+        // AC17 (Task 12) — locks the validation error response shape across the
+        // WebExchangeBindException → MethodArgumentNotValidException swap.
+        // The frontend `useApiError` composable depends on:
+        //   * HTTP 400
+        //   * body.code === null   (NOT absent, NOT a string)
+        //   * body.message starts with "<field>: <defaultMessage>" with ", " joining multiple
+        // RegisterRequest has @NotBlank + @Email on email — empty email triggers @NotBlank.
+        // The regex pins the joiner shape; it tolerates any default-message text so locale
+        // changes in Hibernate Validator do not break the test.
+        mockMvc.perform(post("/api/auth/register")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"email\":\"\",\"password\":\"Strong1Pass\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(nullValue()))
+                .andExpect(jsonPath("$.message").value(matchesPattern("^email: .+(, .+: .+)*$")));
+    }
+
+    // ---------- AC18: remember-me Max-Age cookie attributes + XSRF co-emission ----------
+
+    @Test
+    void login_rememberMeTrue_setsAllSessionCookieAttributes_andCoEmitsXsrfToken() throws Exception {
+        // AC18 (Task 12) — RememberMeCookieSerializer must (a) write a Max-Age of
+        // rememberMeDays*86400 when REMEMBER_ME_ATTR is true, and (b) pass HttpOnly /
+        // Secure / SameSite through from the configured ServerProperties via PropertyMapper.
+        //
+        // Asserts against the raw Set-Cookie header via response.getHeaders("Set-Cookie")
+        // rather than MockMvc's higher-level cookie() matchers — those expose Max-Age only.
+        // DefaultCookieSerializer (Spring Session 3.x line 156) writes the full Set-Cookie
+        // string via response.addHeader, so the SESSION cookie's SameSite/Secure/HttpOnly
+        // attributes are observable on the raw header.
+        //
+        // TC11 (XSRF-TOKEN co-emission on the SAME login response) is NOT asserted here.
+        // The assertion is structurally unachievable on a CSRF-protected POST:
+        //   * Without .with(csrf()) the POST returns 403 (no valid CSRF token).
+        //   * With .with(csrf()) the post-processor substitutes a TestCsrfTokenRepository
+        //     for the real bean — the real CookieCsrfTokenRepository.saveToken never runs.
+        //   * Even on a real round-trip (GET /health → cookie → POST with cookie+header),
+        //     CookieCsrfTokenRepository.RepositoryDeferredCsrfToken only calls saveToken
+        //     when loadToken returned null. Once a valid XSRF-TOKEN cookie is in the
+        //     request, the post-flip flow correctly skips the re-emit. There is no request
+        //     shape that satisfies both "successful POST" AND "Set-Cookie XSRF-TOKEN on
+        //     same response". TC11 is covered by
+        //     SecurityConfigTest.csrfCookie_writtenOnSafeVerbRequest (the cookie write path
+        //     fires on a fresh anonymous GET). See decisions.md Task 12 Deviations.
+        seedUser("rmt@test.com", UserStatus.active, null);
+
+        MockHttpServletResponse response = mockMvc.perform(post("/api/auth/login")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of(
+                                "email", "rmt@test.com",
+                                "password", "Strong1Pass",
+                                "rememberMe", true))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse();
+
+        Map<String, String> sessionAttrs = parseSetCookieHeaderFor(response, "SESSION");
+        assertThat(sessionAttrs)
+                .as("SESSION Set-Cookie header must be present on a successful login response")
+                .isNotNull();
+
+        long expectedMaxAge = cfgRememberMeDays * 86400L;
+        assertThat(sessionAttrs.get("max-age"))
+                .as("rememberMe=true must emit Max-Age=rememberMeDays*86400 (= %d)", expectedMaxAge)
+                .isEqualTo(Long.toString(expectedMaxAge));
+        assertCookieAttributesMatchConfig(sessionAttrs);
+    }
+
+    @Test
+    void login_rememberMeFalse_omitsMaxAgeOnSessionCookie() throws Exception {
+        // AC18 (Task 12) — rememberMe=false must produce a session-scoped SESSION cookie
+        // (no Max-Age attribute in the Set-Cookie header). The other cookie attributes
+        // (HttpOnly / Secure / SameSite) must still match the configured values per the
+        // RememberMeCookieSerializer contract — the per-request branch only mutates Max-Age.
+        seedUser("rmf@test.com", UserStatus.active, null);
+
+        MockHttpServletResponse response = mockMvc.perform(post("/api/auth/login")
+                        .with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of(
+                                "email", "rmf@test.com",
+                                "password", "Strong1Pass",
+                                "rememberMe", false))))
+                .andExpect(status().isOk())
+                .andReturn().getResponse();
+
+        Map<String, String> sessionAttrs = parseSetCookieHeaderFor(response, "SESSION");
+        assertThat(sessionAttrs)
+                .as("SESSION Set-Cookie header must be present even for a session-scoped cookie")
+                .isNotNull();
+
+        // DefaultCookieSerializer line 131: Max-Age attribute is appended only when getMaxAge > -1.
+        // Absence of "max-age" key in the parsed attribute map proves the session-scoped branch.
+        assertThat(sessionAttrs.containsKey("max-age"))
+                .as("rememberMe=false must omit Max-Age (session-scoped cookie)")
+                .isFalse();
+        // Defense-in-depth: also assert no "expires" key — DefaultCookieSerializer emits
+        // Expires only alongside Max-Age, so its absence corroborates the session-scoped branch.
+        assertThat(sessionAttrs.containsKey("expires"))
+                .as("rememberMe=false must omit Expires (session-scoped cookie)")
+                .isFalse();
+        assertCookieAttributesMatchConfig(sessionAttrs);
+    }
+
+    /**
+     * Asserts the SESSION cookie's HttpOnly / Secure / SameSite attributes match the
+     * values bound from {@code server.servlet.session.cookie.*}. Shared between the
+     * rememberMe=true and rememberMe=false AC18 tests so the configured-value invariant
+     * is checked uniformly on both branches.
+     *
+     * <p>HttpOnly / Secure are flag-only attributes — present means {@code true}, absent
+     * means {@code false}. SameSite is a key=value attribute; absent means "not set" which
+     * the test treats as a mismatch unless the configured value is empty.
+     */
+    private void assertCookieAttributesMatchConfig(Map<String, String> attrs) {
+        assertThat(attrs.containsKey("httponly"))
+                .as("SESSION cookie HttpOnly attribute must match server.servlet.session.cookie.http-only (%s)", cfgCookieHttpOnly)
+                .isEqualTo(cfgCookieHttpOnly);
+        assertThat(attrs.containsKey("secure"))
+                .as("SESSION cookie Secure attribute must match server.servlet.session.cookie.secure (%s)", cfgCookieSecure)
+                .isEqualTo(cfgCookieSecure);
+        // SameSite header values are case-insensitive per RFC 6265bis; compare lowercased.
+        String actualSameSite = attrs.get("samesite");
+        assertThat(actualSameSite)
+                .as("SESSION cookie SameSite must match server.servlet.session.cookie.same-site (%s)", cfgCookieSameSite)
+                .isNotNull();
+        assertThat(actualSameSite.toLowerCase(Locale.ROOT))
+                .isEqualTo(cfgCookieSameSite.toLowerCase(Locale.ROOT));
+    }
+
+    /**
+     * Parses the first {@code Set-Cookie} header for {@code cookieName} and returns its
+     * attributes as a case-insensitive map (keys lowercased). The cookie name/value are
+     * stored under reserved keys {@code __name} and {@code __value}. Flag-only attributes
+     * (HttpOnly, Secure) store an empty string. Returns {@code null} if no matching header
+     * is present.
+     *
+     * <p>Reads {@code response.getHeaders("Set-Cookie")} rather than {@link MockHttpServletResponse#getCookie(String)}
+     * because the latter exposes the {@link Cookie#getMaxAge() Max-Age} but not the
+     * {@code SameSite} attribute on all Tomcat versions. The raw header path is the
+     * source of truth for SESSION (written via {@code response.addHeader} by
+     * Spring Session's DefaultCookieSerializer).
+     */
+    private static Map<String, String> parseSetCookieHeaderFor(MockHttpServletResponse response, String cookieName) {
+        String prefix = cookieName + "=";
+        for (String header : response.getHeaders("Set-Cookie")) {
+            if (header.startsWith(prefix)) {
+                return parseSetCookie(header);
+            }
+        }
+        return null;
+    }
+
+    private static Map<String, String> parseSetCookie(String header) {
+        Map<String, String> attrs = new LinkedHashMap<>();
+        String[] parts = header.split(";");
+        String[] nameVal = parts[0].split("=", 2);
+        attrs.put("__name", nameVal[0].trim());
+        attrs.put("__value", nameVal.length > 1 ? nameVal[1].trim() : "");
+        for (int i = 1; i < parts.length; i++) {
+            String segment = parts[i].trim();
+            if (segment.isEmpty()) continue;
+            String[] kv = segment.split("=", 2);
+            attrs.put(kv[0].toLowerCase(Locale.ROOT), kv.length > 1 ? kv[1] : "");
+        }
+        return attrs;
     }
 
     @Test

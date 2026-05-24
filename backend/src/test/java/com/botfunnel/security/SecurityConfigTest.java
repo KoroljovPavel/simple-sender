@@ -23,8 +23,11 @@ class SecurityConfigTest extends AbstractIntegrationTest {
     CookieSerializer cookieSerializer;
 
     @Test
-    void cookieSerializer_isRememberMeCookieSerializer_notDefault() {
-        // TC5 — Spring Session's @ConditionalOnMissingBean default does NOT win.
+    void cookieSerializerBean_isRememberMeCookieSerializer_notDefault() {
+        // TC5 (Task 12) — the autowired CookieSerializer must be the RememberMeCookieSerializer
+        // subclass registered by SecurityConfig. A regression that drops the @Bean would let
+        // Spring Session's @ConditionalOnMissingBean default win, silently disabling the
+        // per-request remember-me Max-Age branching that AC18 depends on.
         assertThat(cookieSerializer).isInstanceOf(RememberMeCookieSerializer.class);
     }
 

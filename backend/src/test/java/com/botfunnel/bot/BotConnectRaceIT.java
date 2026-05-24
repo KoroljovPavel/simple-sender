@@ -1,6 +1,6 @@
 package com.botfunnel.bot;
 
-import com.botfunnel.JobRunrInMemoryConfig;
+import com.botfunnel.AbstractIntegrationTest;
 import com.botfunnel.common.test.ConcurrencyTestUtils;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
@@ -16,9 +16,7 @@ import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.client.TestRestTemplate;
-import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -26,7 +24,6 @@ import org.springframework.http.HttpMethod;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
-import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
@@ -45,10 +42,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 // transport (loopback Tomcat at RANDOM_PORT) is required to genuinely race two POSTs through the
 // security filter chain + service layer. Uses ConcurrencyTestUtils.parallelInvoke(...) (D10) to
 // guarantee N VTs are parked at a CountDownLatch barrier before simultaneous release.
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("test")
-@Import(JobRunrInMemoryConfig.class)
-class BotConnectRaceIT {
+//
+// Extends AbstractIntegrationTest to (a) share the singleton Mongo + Redis testcontainers via the
+// parent's @DynamicPropertySource, and (b) inherit the RANDOM_PORT webEnvironment kept by Task 10
+// after the @AutoConfigureMockMvc flip. We deliberately do not use the inherited MockMvc field —
+// MockMvc's in-process dispatch cannot interleave critical sections per D14, so this class wires
+// TestRestTemplate directly against real Tomcat.
+class BotConnectRaceIT extends AbstractIntegrationTest {
 
     private static final String USER_ID = "race-user-id";
     private static final String EMAIL = "race@test.com";
@@ -74,14 +74,8 @@ class BotConnectRaceIT {
     @DynamicPropertySource
     static void registerTelegramBaseUrl(DynamicPropertyRegistry registry) {
         registry.add("app.telegram.base-url", () -> mockTelegram.url("/").toString());
-        // Reuse the singleton Mongo + Redis testcontainers started by AbstractIntegrationTest's
-        // static block. This class deliberately does NOT extend AbstractIntegrationTest because
-        // we need RANDOM_PORT (real Tomcat) instead of the inherited MOCK environment that
-        // Task 10 will set there.
-        registry.add("spring.data.mongodb.uri", com.botfunnel.AbstractIntegrationTest.MONGO_DB::getReplicaSetUrl);
-        registry.add("spring.data.redis.url",
-                () -> "redis://" + com.botfunnel.AbstractIntegrationTest.REDIS.getHost()
-                        + ":" + com.botfunnel.AbstractIntegrationTest.REDIS.getFirstMappedPort());
+        // Mongo + Redis URIs come from AbstractIntegrationTest's @DynamicPropertySource (which
+        // Spring also invokes on subclasses) — no need to redeclare them here.
     }
 
     @AfterAll
@@ -304,13 +298,12 @@ class BotConnectRaceIT {
 
     private static String extractXsrfToken(String cookieHeader) {
         if (cookieHeader == null) return null;
-        for (String part : cookieHeader.split("[;,]")) {
+        // Split only on ';' — Set-Cookie headers are joined with '; ' by the caller, so ',' may
+        // legitimately appear inside a token value and must not be treated as a delimiter.
+        for (String part : cookieHeader.split(";")) {
             String p = part.trim();
             if (p.startsWith("XSRF-TOKEN=")) {
-                int end = p.indexOf(';');
-                return end > 0
-                        ? p.substring("XSRF-TOKEN=".length(), end)
-                        : p.substring("XSRF-TOKEN=".length());
+                return p.substring("XSRF-TOKEN=".length());
             }
         }
         return null;

@@ -35,8 +35,8 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         // RecurringJob list) is intentionally NOT reset between tests — registrations come from
         // @Recurring discovery at Spring context startup and are stable for the JVM lifetime.
         // `recurringJob_registeredWithCorrectIdAndCron` reads that state read-only.
-        projectRepository.deleteAll().block();
-        eventRepository.deleteAll().block();
+        projectRepository.deleteAll();
+        eventRepository.deleteAll();
     }
 
     private Project seedSoftDeletedProject(String ownerId, String name, Instant deletedAt) {
@@ -48,7 +48,7 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         p.setCreatedAt(deletedAt.minus(30, ChronoUnit.DAYS));
         p.setUpdatedAt(deletedAt);
         p.setDeletedAt(deletedAt);
-        return projectRepository.save(p).block();
+        return projectRepository.save(p);
     }
 
     private Event seedEvent(String ownerId, String projectId, String type, Instant createdAt) {
@@ -56,7 +56,7 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         // here — its fire-and-forget .subscribe() makes seed-then-cron timing flaky.
         Map<String, Object> meta = Map.of("projectId", projectId);
         Event e = new Event(ownerId, type, null, null, meta, createdAt);
-        return eventRepository.save(e).block();
+        return eventRepository.save(e);
     }
 
     @Test
@@ -90,10 +90,10 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         Instant preJob = Instant.now();
         job.hardDeleteSoftDeletedProjects();
 
-        assertThat(projectRepository.findById(oldProject.getId()).block()).isNull();
-        assertThat(projectRepository.findById(newProject.getId()).block()).isNotNull();
+        assertThat(projectRepository.findById(oldProject.getId()).orElse(null)).isNull();
+        assertThat(projectRepository.findById(newProject.getId()).orElse(null)).isNotNull();
 
-        List<Event> allEvents = eventRepository.findAll().collectList().block();
+        List<Event> allEvents = eventRepository.findAll();
         assertThat(allEvents).isNotNull();
 
         long newProjectEventCount = allEvents.stream()
@@ -145,11 +145,11 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
 
         job.hardDeleteSoftDeletedProjects();
 
-        assertThat(projectRepository.findById(recent.getId()).block()).isNotNull();
-        assertThat(eventRepository.count().block()).isEqualTo(2L);
-        List<Event> hardDeletedRows = eventRepository.findAll()
+        assertThat(projectRepository.findById(recent.getId()).orElse(null)).isNotNull();
+        assertThat(eventRepository.count()).isEqualTo(2L);
+        List<Event> hardDeletedRows = eventRepository.findAll().stream()
                 .filter(e -> "project_hard_deleted".equals(e.getEventType()))
-                .collectList().block();
+                .toList();
         assertThat(hardDeletedRows).isNotNull().isEmpty();
     }
 
@@ -167,7 +167,7 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
 
         job.hardDeleteSoftDeletedProjects();
 
-        assertThat(projectRepository.findById(exactly.getId()).block())
+        assertThat(projectRepository.findById(exactly.getId()).orElse(null))
                 .as("project soft-deleted exactly 7d ago must be hard-deleted on this run")
                 .isNull();
     }
@@ -181,12 +181,12 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
 
         job.hardDeleteSoftDeletedProjects();
 
-        assertThat(projectRepository.findById(p1.getId()).block()).isNull();
-        assertThat(projectRepository.findById(p2.getId()).block()).isNull();
+        assertThat(projectRepository.findById(p1.getId()).orElse(null)).isNull();
+        assertThat(projectRepository.findById(p2.getId()).orElse(null)).isNull();
 
-        List<Event> hardDeletedEvents = eventRepository.findAll()
+        List<Event> hardDeletedEvents = eventRepository.findAll().stream()
                 .filter(e -> "project_hard_deleted".equals(e.getEventType()))
-                .collectList().block();
+                .toList();
         assertThat(hardDeletedEvents).hasSize(2);
 
         Event evA = hardDeletedEvents.stream()
@@ -213,8 +213,8 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
                 .containsPattern("ProjectHardDeleteJob - run completed: "
                         + "deletedCount=0 eventsRemovedCount=0 runDurationMs=\\d+");
 
-        assertThat(projectRepository.count().block()).isZero();
-        assertThat(eventRepository.count().block()).isZero();
+        assertThat(projectRepository.count()).isZero();
+        assertThat(eventRepository.count()).isZero();
     }
 
     @Test

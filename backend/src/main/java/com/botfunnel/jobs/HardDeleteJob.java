@@ -38,19 +38,13 @@ public class HardDeleteJob {
         // exact-30-days boundary so a user soft-deleted 30 days ago to the second is removed
         // on the next run (instead of surviving one more day).
         Instant cutoff = Instant.now().minus(RETENTION).plusNanos(1);
-        // .collectList() materialises the candidate set so the IDs can be logged BEFORE deletion
-        // (GDPR audit trail per tech-spec line 95). The set is naturally bounded by the daily
-        // job cadence × 30-day retention window — no streaming needed at this volume.
-        List<User> users = userRepository.findByStatusAndDeletedAtBefore(UserStatus.deleted, cutoff)
-                .collectList()
-                .blockOptional()
-                .orElseGet(List::of);
+        List<User> users = userRepository.findByStatusAndDeletedAtBefore(UserStatus.deleted, cutoff);
         if (users.isEmpty()) {
             log.info("Hard-delete job: 0 users removed (cutoff={})", cutoff);
             return;
         }
         List<String> ids = users.stream().map(User::getId).collect(Collectors.toList());
         log.info("Hard-delete job: removing {} users (ids={}, cutoff={})", ids.size(), ids, cutoff);
-        userRepository.deleteAll(users).block();
+        userRepository.deleteAll(users);
     }
 }

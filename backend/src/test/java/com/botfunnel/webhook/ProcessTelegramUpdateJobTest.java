@@ -84,10 +84,10 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
     @BeforeEach
     void cleanAndSeed() {
-        eventRepository.deleteAll().block();
-        rawUpdateRepository.deleteAll().block();
-        botRepository.deleteAll().block();
-        projectRepository.deleteAll().block();
+        eventRepository.deleteAll();
+        rawUpdateRepository.deleteAll();
+        botRepository.deleteAll();
+        projectRepository.deleteAll();
         Mockito.reset(subscriberService, funnelTriggerService);
 
         Project p = new Project();
@@ -96,14 +96,14 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         p.setTimezone("UTC");
         p.setCreatedAt(Instant.now());
         p.setUpdatedAt(Instant.now());
-        projectId = projectRepository.save(p).block().getId();
+        projectId = projectRepository.save(p).getId();
 
         Bot bot = new Bot();
         bot.setProjectId(projectId);
         bot.setTelegramBotId(TELEGRAM_BOT_ID);
         bot.setStatus(BotStatus.CONNECTED);
         bot.setConnectedAt(Instant.now());
-        botId = botRepository.save(bot).block().getId();
+        botId = botRepository.save(bot).getId();
     }
 
     // ─── re-entry guard ────────────────────────────────────────────────────────
@@ -120,13 +120,13 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
         job.handle(raw.getId());
 
-        assertThat(eventRepository.count().block()).isZero();
+        assertThat(eventRepository.count()).isZero();
         verify(subscriberService, never())
                 .upsertFromTelegramUpdate(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(funnelTriggerService, never()).fire(any(), any(), any(), any());
         assertThat(successCount()).isEqualTo(beforeSuccess);
         assertThat(failureCount()).isEqualTo(beforeFailure);
-        RawUpdate reloaded = rawUpdateRepository.findById(raw.getId()).block();
+        RawUpdate reloaded = rawUpdateRepository.findById(raw.getId()).orElse(null);
         assertThat(reloaded).isNotNull();
         assertThat(reloaded.getProcessingStatus())
                 .as("DONE row must stay DONE under re-entry — no status mutation")
@@ -146,7 +146,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
         job.handle(raw.getId());
 
-        Bot reloaded = botRepository.findById(botId).block();
+        Bot reloaded = botRepository.findById(botId).orElse(null);
         assertThat(reloaded).isNotNull();
         assertThat(reloaded.getOwnerChatId()).isEqualTo(555L);
         // AC16 audit T14 F7 — happy-path worker success ticks telegram_worker_outcome_total{outcome=success}.
@@ -167,7 +167,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
                 privateStartPayload(200L, 200L, "/start"), 2L);
         job.handle(second.getId());
 
-        Bot reloaded = botRepository.findById(botId).block();
+        Bot reloaded = botRepository.findById(botId).orElse(null);
         assertThat(reloaded).isNotNull();
         assertThat(reloaded.getOwnerChatId())
                 .as("ownerChatId must remain pinned to the first /start chatId")
@@ -256,7 +256,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         verify(subscriberService, never())
                 .upsertFromTelegramUpdate(any(), any(), any(), any(), any(), any(), any(), any(), any());
         verify(funnelTriggerService, never()).fire(any(), any(), any(), any());
-        Bot reloaded = botRepository.findById(botId).block();
+        Bot reloaded = botRepository.findById(botId).orElse(null);
         assertThat(reloaded.getOwnerChatId()).as("group /start must NOT populate ownerChatId").isNull();
     }
 
@@ -420,7 +420,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
                 .as("rethrown exception MUST have no cause chain — cause.getMessage() would re-leak the token")
                 .isNull();
 
-        RawUpdate reloaded = rawUpdateRepository.findById(raw.getId()).block();
+        RawUpdate reloaded = rawUpdateRepository.findById(raw.getId()).orElse(null);
         assertThat(reloaded).isNotNull();
         assertThat(reloaded.getProcessingStatus()).isEqualTo(RawUpdateStatus.FAILED);
         assertThat(reloaded.getProcessingError()).isNotNull();
@@ -517,7 +517,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         // Edge case from task: bot lookup races a concurrent disconnect — worker degrades to
         // telegram_update_other with updateKind="unknown" and emits a WARN log site that must
         // be scrubber-safe.
-        botRepository.deleteAll().block();
+        botRepository.deleteAll();
         RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
                 privateStartPayload(100L, 100L, "/start"), 1L);
 
@@ -561,7 +561,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         raw.setPayload(payload);
         raw.setProcessingStatus(status);
         raw.setCreatedAt(Instant.now());
-        return rawUpdateRepository.save(raw).block();
+        return rawUpdateRepository.save(raw);
     }
 
     private Document privateStartPayload(Long chatId, Long fromId, String text) {
@@ -604,13 +604,13 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
     }
 
     private Event onlyEvent() {
-        List<Event> events = eventRepository.findAll().collectList().block();
+        List<Event> events = eventRepository.findAll();
         assertThat(events).hasSize(1);
         return events.get(0);
     }
 
     private void assertRawUpdateDone(String id) {
-        RawUpdate reloaded = rawUpdateRepository.findById(id).block();
+        RawUpdate reloaded = rawUpdateRepository.findById(id).orElse(null);
         assertThat(reloaded).isNotNull();
         assertThat(reloaded.getProcessingStatus()).isEqualTo(RawUpdateStatus.DONE);
     }

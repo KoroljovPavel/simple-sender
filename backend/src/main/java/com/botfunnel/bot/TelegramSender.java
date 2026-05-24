@@ -229,7 +229,7 @@ public class TelegramSender {
         return mapBodyToSentMessage(result, chatId, attempts);
     }
 
-    private RuntimeException map4xx(ClientHttpResponse response, String botId, AtomicInteger attempts) {
+    private RuntimeException map4xx(ClientHttpResponse response, String botId, AtomicInteger attempts) throws java.io.IOException {
         int rawStatus = response.getStatusCode().value();
         HttpStatus status = HttpStatus.resolve(rawStatus);
         TelegramSendResult<JsonNode> result = readBodyOrEmpty(response);

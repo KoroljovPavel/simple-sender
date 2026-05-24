@@ -21,7 +21,7 @@ class HardDeleteJobTest extends AbstractIntegrationTest {
 
     @BeforeEach
     void cleanState() {
-        userRepository.deleteAll().block();
+        userRepository.deleteAll();
     }
 
     private User seedDeleted(String email, Instant deletedAt) {
@@ -33,7 +33,7 @@ class HardDeleteJobTest extends AbstractIntegrationTest {
         u.setDeletedAt(deletedAt);
         u.setCreatedAt(deletedAt.minus(Duration.ofDays(60)));
         u.setUpdatedAt(deletedAt);
-        return userRepository.save(u).block();
+        return userRepository.save(u);
     }
 
     private User seedActive(String email) {
@@ -44,7 +44,7 @@ class HardDeleteJobTest extends AbstractIntegrationTest {
         u.setStatus(UserStatus.active);
         u.setCreatedAt(Instant.now().minus(Duration.ofDays(40)));
         u.setUpdatedAt(Instant.now().minus(Duration.ofDays(40)));
-        return userRepository.save(u).block();
+        return userRepository.save(u);
     }
 
     @Test
@@ -54,10 +54,10 @@ class HardDeleteJobTest extends AbstractIntegrationTest {
 
         hardDeleteJob.hardDeleteSoftDeletedUsers();
 
-        List<User> remaining = userRepository.findAll().collectList().block();
+        List<User> remaining = userRepository.findAll();
         assertThat(remaining).hasSize(1);
         assertThat(remaining.get(0).getId()).isEqualTo(recent.getId());
-        assertThat(userRepository.findById(old.getId()).block()).isNull();
+        assertThat(userRepository.findById(old.getId()).orElse(null)).isNull();
     }
 
     @Test
@@ -68,14 +68,14 @@ class HardDeleteJobTest extends AbstractIntegrationTest {
 
         hardDeleteJob.hardDeleteSoftDeletedUsers();
 
-        assertThat(userRepository.findById(active.getId()).block()).isNotNull();
+        assertThat(userRepository.findById(active.getId()).orElse(null)).isNotNull();
     }
 
     @Test
     void hardDelete_emptyResultSet_doesNotThrow() {
         // Standalone "no work to do" run — must complete without error and leave state untouched.
         hardDeleteJob.hardDeleteSoftDeletedUsers();
-        assertThat(userRepository.count().block()).isZero();
+        assertThat(userRepository.count()).isZero();
     }
 
     @Test
@@ -88,7 +88,7 @@ class HardDeleteJobTest extends AbstractIntegrationTest {
 
         hardDeleteJob.hardDeleteSoftDeletedUsers();
 
-        assertThat(userRepository.findById(exactly.getId()).block())
+        assertThat(userRepository.findById(exactly.getId()).orElse(null))
                 .as("user soft-deleted exactly 30d ago must be hard-deleted on this run")
                 .isNull();
     }

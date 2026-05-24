@@ -8,7 +8,7 @@ import org.jobrunr.jobs.annotations.Job;
 import org.jobrunr.jobs.annotations.Recurring;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.stereotype.Component;
@@ -33,11 +33,11 @@ public class ProjectHardDeleteJob {
 
     private final ProjectRepository projectRepository;
     private final EventService eventService;
-    private final ReactiveMongoTemplate template;
+    private final MongoTemplate template;
 
     public ProjectHardDeleteJob(ProjectRepository projectRepository,
                                 EventService eventService,
-                                ReactiveMongoTemplate template) {
+                                MongoTemplate template) {
         this.projectRepository = projectRepository;
         this.eventService = eventService;
         this.template = template;
@@ -52,10 +52,7 @@ public class ProjectHardDeleteJob {
         // instead of surviving another day.
         Instant cutoff = Instant.now().minus(RETENTION).plusNanos(1);
 
-        List<Project> projects = projectRepository.findByDeletedAtBefore(cutoff)
-                .collectList()
-                .blockOptional()
-                .orElseGet(List::of);
+        List<Project> projects = projectRepository.findByDeletedAtBefore(cutoff);
 
         if (projects.isEmpty()) {
             // Zero-deletion-day still emits the structured INFO line so operations see the cron
@@ -69,36 +66,31 @@ public class ProjectHardDeleteJob {
 
         // Cascade in this exact order — AC-17b depends on it:
         //  1. Sweep prior events for these projects FIRST. The fresh project_hard_deleted rows
-        //     emitted in step 2 land AFTER this sweep finishes (synchronous .block()) so they
-        //     are not collateral damage in this run.
+        //     emitted in step 2 land AFTER this sweep finishes synchronously so they are not
+        //     collateral damage in this run.
         //  2. Emit one project_hard_deleted event per deleted project, synchronously via
-        //     EventService.logEventBlocking(...).block() so the row reaches Mongo BEFORE
-        //     step 3 begins. Using the fire-and-forget logEvent(...) here would race and
-        //     violate AC-17b in production under load.
+        //     EventService.logEvent(...) so the row reaches Mongo BEFORE step 3 begins.
         //  3. Drop the project documents.
         // No cross-collection transaction (Mongo replica-set transactions are not configured
         // here). If step 3 fails after step 1 succeeds, the next daily run picks the same
         // projects back up via findByDeletedAtBefore — idempotent recovery, intentional trade-off.
         DeleteResult eventsDelete = template.remove(
-                        Query.query(Criteria.where("metadata.projectId").in(deletedIds)),
-                        EVENTS_COLLECTION)
-                .block();
+                Query.query(Criteria.where("metadata.projectId").in(deletedIds)),
+                EVENTS_COLLECTION);
         long eventsRemovedCount = eventsDelete == null ? 0L : eventsDelete.getDeletedCount();
 
         for (Project p : projects) {
-            eventService.logEventBlocking(
-                            p.getOwnerId(),
-                            EVENT_PROJECT_HARD_DELETED,
-                            null,
-                            null,
-                            Map.of("projectId", p.getId(), "name", p.getName()))
-                    .block();
+            eventService.logEvent(
+                    p.getOwnerId(),
+                    EVENT_PROJECT_HARD_DELETED,
+                    null,
+                    null,
+                    Map.of("projectId", p.getId(), "name", p.getName()));
         }
 
         template.remove(
-                        Query.query(Criteria.where("_id").in(deletedIds)),
-                        PROJECTS_COLLECTION)
-                .block();
+                Query.query(Criteria.where("_id").in(deletedIds)),
+                PROJECTS_COLLECTION);
 
         log.info("ProjectHardDeleteJob - run completed: deletedCount={} eventsRemovedCount={} runDurationMs={}",
                 projects.size(), eventsRemovedCount, System.currentTimeMillis() - startedAtMillis);

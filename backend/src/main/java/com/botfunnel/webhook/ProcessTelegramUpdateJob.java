@@ -17,7 +17,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
@@ -29,8 +29,8 @@ import java.util.Map;
 // JobRunr dispatches handle(rawUpdateId) on a worker thread (blocking-safe — same convention as
 // HardDeleteJob / ProjectHardDeleteJob). Three correctness mechanisms (Decisions 5, 9, 12):
 //   1. Re-entry guard — first action after load is "if processingStatus == DONE return".
-//   2. Cascade ordering — every event.logEventBlocking(...).block() finishes BEFORE the rawUpdate
-//      status flip to DONE; a mid-flight worker crash leaves NO DONE row without its audit event.
+//   2. Cascade ordering — every event.logEvent(...) finishes BEFORE the rawUpdate status flip
+//      to DONE; a mid-flight worker crash leaves NO DONE row without its audit event.
 //   3. Failure path — catch Throwable, atomically write FAILED + scrubbed/truncated error via
 //      findAndModify, increment failure counter, and RETHROW so JobRunr's default retry kicks in.
 @Component
@@ -48,7 +48,7 @@ public class ProcessTelegramUpdateJob {
     private final RawUpdateRepository rawUpdateRepository;
     private final BotRepository botRepository;
     private final ProjectRepository projectRepository;
-    private final ReactiveMongoTemplate reactiveMongoTemplate;
+    private final MongoTemplate mongoTemplate;
     private final EventService eventService;
     private final SubscriberService subscriberService;
     private final FunnelTriggerService funnelTriggerService;
@@ -58,7 +58,7 @@ public class ProcessTelegramUpdateJob {
     public ProcessTelegramUpdateJob(RawUpdateRepository rawUpdateRepository,
                                     BotRepository botRepository,
                                     ProjectRepository projectRepository,
-                                    ReactiveMongoTemplate reactiveMongoTemplate,
+                                    MongoTemplate mongoTemplate,
                                     EventService eventService,
                                     SubscriberService subscriberService,
                                     FunnelTriggerService funnelTriggerService,
@@ -67,7 +67,7 @@ public class ProcessTelegramUpdateJob {
         this.rawUpdateRepository = rawUpdateRepository;
         this.botRepository = botRepository;
         this.projectRepository = projectRepository;
-        this.reactiveMongoTemplate = reactiveMongoTemplate;
+        this.mongoTemplate = mongoTemplate;
         this.eventService = eventService;
         this.subscriberService = subscriberService;
         this.funnelTriggerService = funnelTriggerService;
@@ -76,11 +76,11 @@ public class ProcessTelegramUpdateJob {
     }
 
     public void handle(String rawUpdateId) {
-        RawUpdate rawUpdate = rawUpdateRepository.findById(rawUpdateId).block();
+        RawUpdate rawUpdate = rawUpdateRepository.findById(rawUpdateId).orElse(null);
         if (rawUpdate == null) {
-            // Deterministic-UUID enqueue happens AFTER the reactive save commit (Decision 11), so
-            // a missing row at worker time should not happen in production. Log and exit — better
-            // than throwing and looping forever on a row that genuinely is not coming.
+            // Deterministic-UUID enqueue happens AFTER the save commit, so a missing row at
+            // worker time should not happen in production. Log and exit — better than throwing
+            // and looping forever on a row that genuinely is not coming.
             log.warn("ProcessTelegramUpdateJob - rawUpdate not found, skipping (rawUpdateId={})",
                     TelegramApiClient.scrubTokens(rawUpdateId));
             return;
@@ -97,12 +97,12 @@ public class ProcessTelegramUpdateJob {
                 rawUpdateId, rawUpdate.getProjectId());
         try {
             TelegramUpdate update = objectMapper.convertValue(rawUpdate.getPayload(), TelegramUpdate.class);
-            Project project = projectRepository.findById(rawUpdate.getProjectId()).block();
+            Project project = projectRepository.findById(rawUpdate.getProjectId()).orElse(null);
             String userId = project == null ? null : project.getOwnerId();
             dispatch(rawUpdate.getProjectId(), userId, update);
 
             rawUpdate.setProcessingStatus(RawUpdateStatus.DONE);
-            rawUpdateRepository.save(rawUpdate).block();
+            rawUpdateRepository.save(rawUpdate);
             meterRegistry.counter(COUNTER, "outcome", "success").increment();
             log.info("ProcessTelegramUpdateJob - success (rawUpdateId={}, projectId={})",
                     rawUpdateId, rawUpdate.getProjectId());
@@ -118,13 +118,13 @@ public class ProcessTelegramUpdateJob {
         // Atomic findAndModify — NEVER findById + setter + save here; two retries could trample
         // each other in the race window between read and write. Persist enum.name() explicitly:
         // matches the partial-filter index literal `'FAILED'` byte-identical (Bot precedent
-        // line 210 uses the same pattern).
-        reactiveMongoTemplate.findAndModify(
+        // uses the same pattern).
+        mongoTemplate.findAndModify(
                 Query.query(Criteria.where("_id").is(rawUpdateId)),
                 new Update()
                         .set("processingStatus", RawUpdateStatus.FAILED.name())
                         .set("processingError", truncated),
-                RawUpdate.class).block();
+                RawUpdate.class);
         meterRegistry.counter(COUNTER, "outcome", "failure").increment();
         log.error("ProcessTelegramUpdateJob - worker failed (rawUpdateId={}): {}",
                 rawUpdateId, truncated);
@@ -180,7 +180,7 @@ public class ProcessTelegramUpdateJob {
 
         // Plain text — private-chat upserts subscriber; non-private logs event only.
         if (isPrivate && chatId != null) {
-            Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).block();
+            Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).orElse(null);
             if (bot == null) {
                 logEventOther(projectId, userId, "unknown");
                 return;
@@ -205,7 +205,7 @@ public class ProcessTelegramUpdateJob {
             return;
         }
 
-        Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).block();
+        Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).orElse(null);
         if (bot == null) {
             // Bot lookup races with a concurrent disconnect — treat as unknown per Edge cases.
             log.warn("ProcessTelegramUpdateJob - bot lookup missed in /start handler (projectId={}, chatId={})",
@@ -217,14 +217,14 @@ public class ProcessTelegramUpdateJob {
 
         if (bot.getOwnerChatId() == null) {
             // Decision 5 — atomic CAS. Predicate-fail (another worker already populated, or status
-            // changed CONNECTED→DISCONNECTED between lookup and write) returns Mono.empty(), which
-            // .block() resolves to null. Treated as no-op; the populate-or-not race is intentional.
-            Bot updated = reactiveMongoTemplate.findAndModify(
+            // changed CONNECTED→DISCONNECTED between lookup and write) returns null — treated as
+            // a benign no-op; the populate-or-not race is intentional.
+            Bot updated = mongoTemplate.findAndModify(
                     Query.query(Criteria.where("_id").is(bot.getId())
                             .and("status").is(BotStatus.CONNECTED.name())
                             .and("ownerChatId").isNull()),
                     new Update().set("ownerChatId", chatId),
-                    Bot.class).block();
+                    Bot.class);
             if (updated != null) {
                 log.info("ProcessTelegramUpdateJob - ownerChatId populated (botId={}, chatId={})",
                         bot.getId(), TelegramApiClient.scrubTokens(String.valueOf(chatId)));
@@ -245,7 +245,7 @@ public class ProcessTelegramUpdateJob {
 
     private void handleStop(String projectId, String userId, boolean isPrivate, Long chatId, String chatType) {
         if (isPrivate && chatId != null) {
-            Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).block();
+            Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).orElse(null);
             if (bot == null) {
                 logEventOther(projectId, userId, "unknown");
                 return;
@@ -264,7 +264,7 @@ public class ProcessTelegramUpdateJob {
         metadata.put("startPayload", startPayload);
         metadata.put("chatId", chatId);
         metadata.put("chatType", chatType);
-        eventService.logEventBlocking(userId, EVT_COMMAND_START, null, null, metadata).block();
+        eventService.logEvent(userId, EVT_COMMAND_START, null, null, metadata);
     }
 
     private void logEventCommandStop(String projectId, String userId, Long chatId, String chatType) {
@@ -272,21 +272,21 @@ public class ProcessTelegramUpdateJob {
         metadata.put("projectId", projectId);
         metadata.put("chatId", chatId);
         metadata.put("chatType", chatType);
-        eventService.logEventBlocking(userId, EVT_COMMAND_STOP, null, null, metadata).block();
+        eventService.logEvent(userId, EVT_COMMAND_STOP, null, null, metadata);
     }
 
     private void logEventMessageReceived(String projectId, String userId, Long chatId) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("projectId", projectId);
         metadata.put("chatId", chatId);
-        eventService.logEventBlocking(userId, EVT_MESSAGE_RECEIVED, null, null, metadata).block();
+        eventService.logEvent(userId, EVT_MESSAGE_RECEIVED, null, null, metadata);
     }
 
     private void logEventOther(String projectId, String userId, String updateKind) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("projectId", projectId);
         metadata.put("updateKind", updateKind);
-        eventService.logEventBlocking(userId, EVT_UPDATE_OTHER, null, null, metadata).block();
+        eventService.logEvent(userId, EVT_UPDATE_OTHER, null, null, metadata);
     }
 
     private static String resolveUpdateKind(TelegramUpdate update) {

@@ -53,7 +53,7 @@ public class SuperAdminSeeder implements ApplicationRunner {
         }
         String email = adminEmail.trim().toLowerCase(Locale.ROOT);
 
-        User existing = userRepository.findByEmail(email).block();
+        User existing = userRepository.findByEmail(email).orElse(null);
         if (existing == null) {
             User user = new User();
             Instant now = Instant.now();
@@ -64,7 +64,7 @@ public class SuperAdminSeeder implements ApplicationRunner {
             user.setSuperAdmin(true);
             user.setCreatedAt(now);
             user.setUpdatedAt(now);
-            userRepository.save(user).block();
+            userRepository.save(user);
             log.info("Super admin created: {}", email);
             return;
         }
@@ -74,7 +74,7 @@ public class SuperAdminSeeder implements ApplicationRunner {
         }
         existing.setSuperAdmin(true);
         existing.setUpdatedAt(Instant.now());
-        userRepository.save(existing).block();
+        userRepository.save(existing);
         log.info("Existing user promoted to super admin: {}", email);
     }
 }

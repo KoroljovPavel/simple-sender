@@ -1,11 +1,10 @@
 package com.botfunnel;
 
 import ch.martinelli.oss.testcontainers.mailpit.MailpitContainer;
-import org.junit.jupiter.api.BeforeEach;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.context.TestConfiguration;
-import org.springframework.context.ApplicationContext;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
@@ -14,7 +13,7 @@ import org.springframework.mail.javamail.JavaMailSenderImpl;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.web.reactive.server.WebTestClient;
+import org.springframework.test.web.servlet.MockMvc;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MongoDBContainer;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -24,6 +23,7 @@ import org.testcontainers.utility.DockerImageName;
 // class by default; the static containers + static start() block ensure each container is
 // launched once for the JVM and reused across all subclasses, which keeps the test suite fast.
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+@AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Testcontainers
 @Import({AbstractIntegrationTest.MailpitTestConfig.class, JobRunrInMemoryConfig.class})
@@ -69,21 +69,12 @@ public abstract class AbstractIntegrationTest {
     // The background-job-server is disabled in test profile (application-test.properties) so no
     // worker threads spawn. Recurring-job registration still runs at startup and is verified by
     // HardDeleteJobTest invoking the @Recurring method directly.
+
+    // Servlet MockMvc — autowired via @AutoConfigureMockMvc. After the servlet flip, this is the
+    // sole HTTP-level test client; the prior reactive WebTestClient autowire is gone because
+    // spring-webflux is no longer on the test classpath.
     @Autowired
-    private ApplicationContext applicationContext;
-
-    // The autowired RANDOM_PORT WebTestClient is bound-to-server, which breaks the
-    // SecurityMockServerConfigurers.csrf() mutator (it requires bindToApplicationContext).
-    // Re-bind per test to the in-memory ApplicationContext so csrf() works for IT POSTs,
-    // matching the convention used by AuthControllerSliceTest.
-    protected WebTestClient webTestClient;
-
-    @BeforeEach
-    void rebindWebTestClient() {
-        webTestClient = WebTestClient.bindToApplicationContext(applicationContext)
-                .configureClient()
-                .build();
-    }
+    protected MockMvc mockMvc;
 
     @DynamicPropertySource
     static void registerProperties(DynamicPropertyRegistry registry) {

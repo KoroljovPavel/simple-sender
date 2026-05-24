@@ -4,6 +4,7 @@ import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.bot.TelegramApiClient;
+import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -22,20 +23,20 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.BiConsumer;
 
-// Decisions 1, 2, 3, 4, 11, 16. Returns Mono<ResponseEntity<Void>> with explicit status — never
-// throws AppException, never goes through GlobalErrorHandler. Lookup order is bot-CONNECTED →
-// project (existence + soft-delete) → secret verify → persist + enqueue. Owns 4 counters + 1 Timer;
-// the FIFTH counter (oversize-body reason) lives on WebhookPayloadSizeFilter (T11) — the filter
-// short-circuits before the controller and the counter must tick where the rejection happens.
-// Grep guard: this file must NOT contain the oversize reason string (per tech-spec AC).
+// Decisions 1, 2, 3, 4, 11, 16. Synchronous controller — returns ResponseEntity<Void> with
+// explicit status, never throws AppException, never goes through GlobalErrorHandler. Lookup
+// order is bot-CONNECTED → project (existence + soft-delete) → secret verify → persist +
+// enqueue. Owns 4 counters + 1 Timer; the FIFTH counter (oversize-body reason) lives on
+// WebhookPayloadSizeFilter — the filter short-circuits before the controller and the counter
+// must tick where the rejection happens. Grep guard: this file must NOT contain the oversize
+// reason string (per tech-spec AC).
 @RestController
 @RequestMapping("/webhooks/telegram")
 public class TelegramWebhookController {
@@ -102,98 +103,112 @@ public class TelegramWebhookController {
     }
 
     @PostMapping("/{projectId}")
-    public Mono<ResponseEntity<Void>> receive(
+    public ResponseEntity<Void> receive(
             @PathVariable String projectId,
             @RequestHeader(value = "X-Telegram-Bot-Api-Secret-Token", required = false) String headerSecret,
             @RequestBody Document body) {
 
         Timer.Sample sample = Timer.start(meterRegistry);
+        try {
+            // Decision 1 ordering: bot CONNECTED first (most-frequent miss), then project existence +
+            // soft-delete, then secret verify, then persist + enqueue. IllegalArgumentException from
+            // Spring Data's ObjectId parse collapses into the same 404 path so an attacker cannot
+            // distinguish "malformed id" from "missing project" by status.
+            Optional<Bot> botOpt;
+            try {
+                botOpt = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED);
+            } catch (IllegalArgumentException ex) {
+                botOpt = Optional.empty();
+            }
+            if (botOpt.isEmpty()) {
+                rejectedProjectNotFound.increment();
+                return ResponseEntity.notFound().build();
+            }
 
-        // Decision 1 ordering: bot CONNECTED first (most-frequent miss), then project existence +
-        // soft-delete, then secret verify, then persist + enqueue. onErrorMap collapses malformed
-        // ObjectId (IllegalArgumentException from Spring Data's ObjectId parse) into the same 404
-        // path so an attacker cannot distinguish "malformed id" from "missing project" by status.
-        return botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)
-                .onErrorResume(IllegalArgumentException.class, ex -> Mono.empty())
-                .flatMap(bot -> projectRepository.findById(projectId)
-                        .filter(p -> p.getDeletedAt() == null)
-                        .map(p -> bot))
-                .flatMap(bot -> handleVerified(projectId, headerSecret, body, bot))
-                .switchIfEmpty(Mono.defer(() -> {
-                    rejectedProjectNotFound.increment();
-                    return Mono.just(ResponseEntity.notFound().<Void>build());
-                }))
-                .doFinally(signal -> sample.stop(durationTimer));
+            Optional<Project> projectOpt;
+            try {
+                projectOpt = projectRepository.findById(projectId)
+                        .filter(p -> p.getDeletedAt() == null);
+            } catch (IllegalArgumentException ex) {
+                projectOpt = Optional.empty();
+            }
+            if (projectOpt.isEmpty()) {
+                rejectedProjectNotFound.increment();
+                return ResponseEntity.notFound().build();
+            }
+
+            Bot bot = botOpt.get();
+            if (!webhookSecretVerifier.verify(headerSecret, bot.getWebhookSecretHash())) {
+                rejectedInvalidSecret.increment();
+                return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
+            }
+
+            Long updateId = extractUpdateId(body);
+            if (updateId == null) {
+                // Telegram contract guarantees update_id. Without it, the (projectId, updateId)
+                // unique index cannot enforce idempotency — refuse rather than persist a bad row.
+                log.warn("TelegramWebhookController - rejecting payload with missing update_id (projectId={})",
+                        TelegramApiClient.scrubTokens(projectId));
+                return ResponseEntity.badRequest().build();
+            }
+
+            RawUpdate row = new RawUpdate();
+            row.setProjectId(projectId);
+            row.setUpdateId(updateId);
+            row.setPayload(body);
+            row.setProcessingStatus(RawUpdateStatus.PENDING);
+            row.setCreatedAt(Instant.now());
+
+            try {
+                RawUpdate saved = rawUpdateRepository.save(row);
+                enqueueIdempotent(saved.getId());
+                meterRegistry.counter(RECEIVED_TOTAL, "projectId", projectId).increment();
+                return ResponseEntity.ok().build();
+            } catch (DuplicateKeyException ex) {
+                // Decision 4 self-heal: prior insert succeeded but enqueue may have failed.
+                // Telegram retries → DuplicateKey on the (projectId, updateId) unique index
+                // → still re-enqueue (deterministic UUID makes it idempotent at JobRunr) →
+                // return 200 so Telegram stops retrying.
+                rejectedDuplicate.increment();
+                log.warn("TelegramWebhookController - duplicate update (projectId={}, updateId={})",
+                        TelegramApiClient.scrubTokens(projectId),
+                        TelegramApiClient.scrubTokens(String.valueOf(updateId)));
+                Optional<RawUpdate> existing =
+                        rawUpdateRepository.findFirstByProjectIdAndUpdateId(projectId, updateId);
+                if (existing.isPresent()) {
+                    enqueueIdempotent(existing.get().getId());
+                }
+                return ResponseEntity.ok().build();
+            }
+        } catch (Throwable t) {
+            // Per Decision 3, the webhook MUST NOT surface through GlobalErrorHandler — every
+            // response shape stays ResponseEntity<Void> with explicit status. Catch any
+            // non-DuplicateKey error (the most common case: enqueue failed and propagated up from
+            // enqueueIdempotent) and respond with an empty 500 so Telegram retries against an
+            // explicit status rather than receiving the GlobalErrorHandler JSON body — which would
+            // also bypass the scrubber chain. The enqueue site itself has already logged the
+            // scrubbed cause.
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
+        } finally {
+            sample.stop(durationTimer);
+        }
     }
 
-    private Mono<ResponseEntity<Void>> handleVerified(String projectId, String headerSecret,
-                                                      Document body, Bot bot) {
-        if (!webhookSecretVerifier.verify(headerSecret, bot.getWebhookSecretHash())) {
-            rejectedInvalidSecret.increment();
-            return Mono.just(ResponseEntity.status(HttpStatus.UNAUTHORIZED).<Void>build());
-        }
-
-        Long updateId = extractUpdateId(body);
-        if (updateId == null) {
-            // Telegram contract guarantees update_id. Without it, the (projectId, updateId)
-            // unique index cannot enforce idempotency — refuse rather than persist a bad row.
-            log.warn("TelegramWebhookController - rejecting payload with missing update_id (projectId={})",
-                    TelegramApiClient.scrubTokens(projectId));
-            return Mono.just(ResponseEntity.badRequest().<Void>build());
-        }
-
-        RawUpdate row = new RawUpdate();
-        row.setProjectId(projectId);
-        row.setUpdateId(updateId);
-        row.setPayload(body);
-        row.setProcessingStatus(RawUpdateStatus.PENDING);
-        row.setCreatedAt(Instant.now());
-
-        return rawUpdateRepository.save(row)
-                .flatMap(saved -> enqueueIdempotent(saved.getId())
-                        .doOnSuccess(unused -> meterRegistry.counter(RECEIVED_TOTAL,
-                                "projectId", projectId).increment())
-                        .thenReturn(ResponseEntity.ok().<Void>build()))
-                .onErrorResume(DuplicateKeyException.class, ex -> {
-                    // Decision 4 self-heal: prior insert succeeded but enqueue may have failed.
-                    // Telegram retries → DuplicateKey on the (projectId, updateId) unique index
-                    // → still re-enqueue (deterministic UUID makes it idempotent at JobRunr) →
-                    // return 200 so Telegram stops retrying.
-                    rejectedDuplicate.increment();
-                    log.warn("TelegramWebhookController - duplicate update (projectId={}, updateId={})",
-                            TelegramApiClient.scrubTokens(projectId),
-                            TelegramApiClient.scrubTokens(String.valueOf(updateId)));
-                    return rawUpdateRepository.findFirstByProjectIdAndUpdateId(projectId, updateId)
-                            .flatMap(existing -> enqueueIdempotent(existing.getId())
-                                    .thenReturn(ResponseEntity.ok().<Void>build()));
-                })
-                // Per Decision 3, the webhook MUST NOT surface through GlobalErrorHandler — every
-                // response shape stays Mono<ResponseEntity<Void>>. Catch any non-DuplicateKey error
-                // (the most common case: enqueue failed and propagated up from enqueueIdempotent)
-                // and respond with an empty 500 so Telegram retries against an explicit status
-                // rather than receiving the GlobalErrorHandler JSON body — which would also bypass
-                // the scrubber chain. The enqueue site itself has already logged the scrubbed cause.
-                .onErrorResume(ex -> Mono.just(
-                        ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build()));
-    }
-
-    private Mono<Void> enqueueIdempotent(String rawUpdateId) {
+    private void enqueueIdempotent(String rawUpdateId) {
         UUID jobId = UUID.nameUUIDFromBytes(rawUpdateId.getBytes(StandardCharsets.UTF_8));
-        return Mono.fromRunnable(() -> enqueuer.accept(jobId, rawUpdateId))
-                .subscribeOn(Schedulers.boundedElastic())
-                .onErrorResume(ex -> {
-                    // Decision 11: enqueue failure propagates so Telegram retries (via the
-                    // Mono.error path); the retry hits the DuplicateKey self-heal next time.
-                    // The outer handleVerified.onErrorResume converts the error to an empty 5xx
-                    // so the GlobalErrorHandler never gets a chance to write a body. Token-scrub
-                    // both the rawUpdateId and the exception message (a Telegram-token-shaped
-                    // string could conceivably end up in a payload-derived exception).
-                    log.error("TelegramWebhookController - enqueue failed (rawUpdateId={}): {}",
-                            TelegramApiClient.scrubTokens(rawUpdateId),
-                            TelegramApiClient.scrubTokens(ex.getMessage()));
-                    return Mono.error(ex);
-                })
-                .then();
+        try {
+            enqueuer.accept(jobId, rawUpdateId);
+        } catch (RuntimeException ex) {
+            // Decision 11: enqueue failure propagates so Telegram retries; the retry hits the
+            // DuplicateKey self-heal next time. The outer try/catch on the caller converts the
+            // exception to an empty 500 so the GlobalErrorHandler never gets a chance to write a
+            // body. Token-scrub both the rawUpdateId and the exception message (a Telegram-token-
+            // shaped string could conceivably end up in a payload-derived exception).
+            log.error("TelegramWebhookController - enqueue failed (rawUpdateId={}): {}",
+                    TelegramApiClient.scrubTokens(rawUpdateId),
+                    TelegramApiClient.scrubTokens(ex.getMessage()));
+            throw ex;
+        }
     }
 
     private static Long extractUpdateId(Document body) {

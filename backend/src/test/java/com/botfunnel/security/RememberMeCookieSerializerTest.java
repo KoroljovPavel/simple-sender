@@ -9,7 +9,7 @@ import org.springframework.boot.autoconfigure.web.ServerProperties;
 import org.springframework.boot.web.server.Cookie.SameSite;
 import org.springframework.mock.web.MockHttpServletRequest;
 import org.springframework.mock.web.MockHttpServletResponse;
-import org.springframework.session.web.http.DefaultCookieSerializer.CookieValue;
+import org.springframework.session.web.http.CookieSerializer.CookieValue;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

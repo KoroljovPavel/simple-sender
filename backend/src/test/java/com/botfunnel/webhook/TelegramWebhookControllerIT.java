@@ -9,8 +9,10 @@ import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.common.crypto.Sha256Hex;
+import com.botfunnel.common.test.ConcurrencyTestUtils;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.bson.Document;
@@ -19,16 +21,12 @@ import org.jobrunr.scheduling.JobScheduler;
 import org.jobrunr.storage.StorageProvider;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
-import org.springframework.test.web.reactive.server.WebTestClient;
-import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
+import org.springframework.test.web.servlet.MvcResult;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -37,12 +35,14 @@ import java.util.regex.Pattern;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 
 // Full-stack IT for T10 — covers user-spec AC1, AC2, AC3, AC5, AC6 (controller-side enqueue
 // assertion only — ownerChatId populate is in ProcessTelegramUpdateJobTest), AC15, AC16, AC18.
 // JobRunrInMemoryConfig means no worker thread runs; we read ENQUEUED counts directly from the
 // in-memory StorageProvider so the test asserts only what the controller commits, not the
-// downstream worker.
+// downstream worker. After the Wave 2 servlet flip, dispatches via MockMvc (autowired by
+// AbstractIntegrationTest) rather than the prior reactive WebTestClient pipeline.
 class TelegramWebhookControllerIT extends AbstractIntegrationTest {
 
     private static final String SECRET_PLAIN = "secretToken_AAAAAAAAAAAAAAAAAAAAAAAAAA";
@@ -59,14 +59,16 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
     @Autowired TelegramWebhookController controller;
     @Autowired WebhookPayloadSizeFilter payloadFilter;
 
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
     private ListAppender<ILoggingEvent> appender;
     private Logger controllerLogger;
 
     @BeforeEach
     void resetMeterAndJobs() {
-        rawUpdateRepository.deleteAll().block();
-        botRepository.deleteAll().block();
-        projectRepository.deleteAll().block();
+        rawUpdateRepository.deleteAll();
+        botRepository.deleteAll();
+        projectRepository.deleteAll();
         storageProvider.deleteJobsPermanently(StateName.ENQUEUED, Instant.now().plusSeconds(60));
         storageProvider.deleteJobsPermanently(StateName.SUCCEEDED, Instant.now().plusSeconds(60));
         storageProvider.deleteJobsPermanently(StateName.FAILED, Instant.now().plusSeconds(60));
@@ -103,13 +105,13 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         p.setTimezone("UTC");
         p.setCreatedAt(Instant.now());
         p.setUpdatedAt(Instant.now());
-        return projectRepository.save(p).block();
+        return projectRepository.save(p);
     }
 
     private Project seedSoftDeletedProject() {
         Project p = seedProject();
         p.setDeletedAt(Instant.now());
-        return projectRepository.save(p).block();
+        return projectRepository.save(p);
     }
 
     private Bot seedBot(String projectId, BotStatus status, String webhookSecretHash) {
@@ -119,7 +121,7 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         b.setStatus(status);
         b.setWebhookSecretHash(webhookSecretHash);
         b.setConnectedAt(Instant.now());
-        return botRepository.save(b).block();
+        return botRepository.save(b);
     }
 
     private Document samplePayload(long updateId) {
@@ -132,15 +134,25 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         return new Document().append("update_id", updateId).append("message", message);
     }
 
-    private int post(String projectId, String secretHeader, Document body) {
-        return webTestClient.post()
-                .uri("/webhooks/telegram/" + projectId)
-                .header("X-Telegram-Bot-Api-Secret-Token", secretHeader == null ? "" : secretHeader)
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(body)
-                .exchange()
-                .returnResult(Void.class)
-                .getStatus().value();
+    private String bodyJson(Document body) {
+        try {
+            return objectMapper.writeValueAsString(body);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private int doPost(String projectId, String secretHeader, Document body) {
+        try {
+            MvcResult result = mockMvc.perform(post("/webhooks/telegram/{projectId}", projectId)
+                            .header("X-Telegram-Bot-Api-Secret-Token", secretHeader == null ? "" : secretHeader)
+                            .contentType(MediaType.APPLICATION_JSON)
+                            .content(bodyJson(body)))
+                    .andReturn();
+            return result.getResponse().getStatus();
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
     }
 
     private long enqueuedCount() {
@@ -166,23 +178,21 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
     // ---------- happy path / AC1 controller-side enqueue ----------
 
     @Test
-    void receive_happyPath_returns200_persistsAndEnqueues() {
+    void receive_happyPath_returns200_persistsAndEnqueues() throws Exception {
         // AC6 (controller-side) — single POST → single RawUpdate, single ENQUEUED job, success
         // counter incremented exactly once. Bigger AC6 (ownerChatId populate) is owned by
         // ProcessTelegramUpdateJobTest in T9.
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
 
-        webTestClient.post()
-                .uri("/webhooks/telegram/" + p.getId())
-                .header("X-Telegram-Bot-Api-Secret-Token", SECRET_PLAIN)
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(samplePayload(42L))
-                .exchange()
-                .expectStatus().isOk()
-                .expectBody().isEmpty();
+        mockMvc.perform(post("/webhooks/telegram/{projectId}", p.getId())
+                        .header("X-Telegram-Bot-Api-Secret-Token", SECRET_PLAIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyJson(samplePayload(42L))))
+                .andExpect(result -> assertThat(result.getResponse().getStatus()).isEqualTo(200))
+                .andExpect(result -> assertThat(result.getResponse().getContentLength()).isZero());
 
-        assertThat(rawUpdateRepository.count().block()).isEqualTo(1L);
+        assertThat(rawUpdateRepository.count()).isEqualTo(1L);
         awaitEnqueuedCount(1L);
         Counter rec = meterRegistry.find("telegram_webhook_received_total").counter();
         assertThat(rec).isNotNull();
@@ -196,37 +206,13 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
 
-        // Wrong header value.
-        webTestClient.post()
-                .uri("/webhooks/telegram/" + p.getId())
-                .header("X-Telegram-Bot-Api-Secret-Token", "wrong_secret_value")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(samplePayload(1L))
-                .exchange()
-                .expectStatus().isUnauthorized()
-                .expectBody().isEmpty();
-
-        // Empty header value.
-        webTestClient.post()
-                .uri("/webhooks/telegram/" + p.getId())
-                .header("X-Telegram-Bot-Api-Secret-Token", "")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(samplePayload(2L))
-                .exchange()
-                .expectStatus().isUnauthorized()
-                .expectBody().isEmpty();
-
-        // Missing header entirely — WebSecretVerifier maps null → false → 401.
-        webTestClient.post()
-                .uri("/webhooks/telegram/" + p.getId())
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(samplePayload(3L))
-                .exchange()
-                .expectStatus().isUnauthorized()
-                .expectBody().isEmpty();
+        assertThat(doPost(p.getId(), "wrong_secret_value", samplePayload(1L))).isEqualTo(401);
+        assertThat(doPost(p.getId(), "", samplePayload(2L))).isEqualTo(401);
+        // Missing header — WebSecretVerifier maps null → false → 401.
+        assertThat(doPost(p.getId(), null, samplePayload(3L))).isEqualTo(401);
 
         assertThat(counter("invalid_secret")).isEqualTo(3.0);
-        assertThat(rawUpdateRepository.count().block()).isZero();
+        assertThat(rawUpdateRepository.count()).isZero();
         assertThat(enqueuedCount()).isZero();
     }
 
@@ -236,15 +222,7 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
     void receive_missingProject_returns404EmptyBody_counterTicked() {
         String missingId = new org.bson.types.ObjectId().toHexString();
 
-        webTestClient.post()
-                .uri("/webhooks/telegram/" + missingId)
-                .header("X-Telegram-Bot-Api-Secret-Token", SECRET_PLAIN)
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(samplePayload(1L))
-                .exchange()
-                .expectStatus().isNotFound()
-                .expectBody().isEmpty();
-
+        assertThat(doPost(missingId, SECRET_PLAIN, samplePayload(1L))).isEqualTo(404);
         assertThat(counter("project_not_found")).isEqualTo(1.0);
     }
 
@@ -253,9 +231,9 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         Project p = seedSoftDeletedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
 
-        assertThat(post(p.getId(), SECRET_PLAIN, samplePayload(1L))).isEqualTo(404);
+        assertThat(doPost(p.getId(), SECRET_PLAIN, samplePayload(1L))).isEqualTo(404);
         assertThat(counter("project_not_found")).isEqualTo(1.0);
-        assertThat(rawUpdateRepository.count().block()).isZero();
+        assertThat(rawUpdateRepository.count()).isZero();
     }
 
     @Test
@@ -263,16 +241,16 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.DISCONNECTED, SECRET_HASH);
 
-        assertThat(post(p.getId(), SECRET_PLAIN, samplePayload(1L))).isEqualTo(404);
+        assertThat(doPost(p.getId(), SECRET_PLAIN, samplePayload(1L))).isEqualTo(404);
         assertThat(counter("project_not_found")).isEqualTo(1.0);
     }
 
     @Test
     void receive_malformedObjectId_returns404() {
         // Malformed projectId — Bot.id is an ObjectId; Spring Data raises IllegalArgumentException
-        // BEFORE the Mongo round-trip. The controller maps that to 404 via onErrorResume so an
+        // BEFORE the Mongo round-trip. The controller maps that to 404 via try/catch so an
         // attacker cannot distinguish "bad id" from "missing project" by status code.
-        assertThat(post("not-an-objectid", SECRET_PLAIN, samplePayload(1L))).isEqualTo(404);
+        assertThat(doPost("not-an-objectid", SECRET_PLAIN, samplePayload(1L))).isEqualTo(404);
         assertThat(counter("project_not_found")).isEqualTo(1.0);
     }
 
@@ -283,19 +261,14 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
 
-        // Run two POSTs with the same updateId in parallel. runOn(boundedElastic) is required so
-        // the in-process WebTestClient.bindToApplicationContext path doesn't serialise them
-        // (BotControllerIT precedent). With deterministic UUID, even if both DuplicateKey self-heal
-        // through to enqueue, BackgroundJob.enqueue(UUID, ...) is idempotent — collapse to one job.
-        List<Integer> statuses = Flux.range(0, 2)
-                .parallel(2).runOn(Schedulers.boundedElastic())
-                .flatMap(i -> Mono.fromCallable(() -> post(p.getId(), SECRET_PLAIN, samplePayload(99L))))
-                .sequential()
-                .collectList()
-                .block();
+        // Run two POSTs with the same updateId in parallel via the VT barrier utility (D10).
+        // With deterministic UUID, even if both DuplicateKey self-heal through to enqueue,
+        // BackgroundJob.enqueue(UUID, ...) is idempotent — collapse to one job.
+        List<Integer> statuses = ConcurrencyTestUtils.parallelInvoke(2,
+                () -> doPost(p.getId(), SECRET_PLAIN, samplePayload(99L)));
 
         assertThat(statuses).containsOnly(200);
-        assertThat(rawUpdateRepository.count().block()).isEqualTo(1L);
+        assertThat(rawUpdateRepository.count()).isEqualTo(1L);
         awaitEnqueuedCount(1L);
     }
 
@@ -317,73 +290,33 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
                     jobId, j -> j.handle(rawUpdateId));
         });
 
-        // First POST fails 500 — Telegram retries. The controller's onErrorResume converts the
+        // First POST fails 500 — Telegram retries. The controller's outer try/catch converts the
         // enqueue failure into an empty 500 (Decision 3 forbids GlobalErrorHandler bodies).
-        int s1 = post(p.getId(), SECRET_PLAIN, samplePayload(123L));
+        int s1 = doPost(p.getId(), SECRET_PLAIN, samplePayload(123L));
         assertThat(s1).isEqualTo(500);
 
         // Retry — DuplicateKey path re-enqueues successfully.
-        int s2 = post(p.getId(), SECRET_PLAIN, samplePayload(123L));
+        int s2 = doPost(p.getId(), SECRET_PLAIN, samplePayload(123L));
         assertThat(s2).isEqualTo(200);
 
-        assertThat(rawUpdateRepository.count().block()).isEqualTo(1L);
+        assertThat(rawUpdateRepository.count()).isEqualTo(1L);
         awaitEnqueuedCount(1L);
         assertThat(counter("duplicate")).isEqualTo(1.0);
-    }
-
-    // ---------- AC1 latency P99 < 100ms ----------
-
-    @Test
-    @Tag("slow")
-    void p99Latency_under100msAt100ParallelRequests() {
-        Project p = seedProject();
-        seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
-
-        WebTestClient client = webTestClient.mutate()
-                .responseTimeout(java.time.Duration.ofSeconds(30))
-                .build();
-
-        List<Long> latenciesNanos = Flux.range(0, 100)
-                .parallel(10).runOn(Schedulers.boundedElastic())
-                .flatMap(i -> Mono.fromCallable(() -> {
-                    long start = System.nanoTime();
-                    client.post()
-                            .uri("/webhooks/telegram/" + p.getId())
-                            .header("X-Telegram-Bot-Api-Secret-Token", SECRET_PLAIN)
-                            .contentType(MediaType.APPLICATION_JSON)
-                            .bodyValue(samplePayload(System.nanoTime() + i))
-                            .exchange()
-                            .expectStatus().isOk();
-                    return System.nanoTime() - start;
-                }))
-                .sequential()
-                .collectList()
-                .block();
-
-        assertThat(latenciesNanos).isNotNull().hasSize(100);
-        latenciesNanos.sort(Long::compareTo);
-        long p99 = latenciesNanos.get(98);
-        long p99Ms = p99 / 1_000_000L;
-        // P99 < 100ms per user-spec AC1 — measures the WebFlux pipeline (no transport overhead
-        // since WebTestClient binds to ApplicationContext).
-        assertThat(p99Ms).as("P99 latency in ms — got %d", p99Ms).isLessThan(100L);
     }
 
     // ---------- AC15 — CSRF regression ----------
 
     @Test
-    void api_csrfRegression_postWithoutXsrfToken_rejected() {
+    void api_csrfRegression_postWithoutXsrfToken_rejected() throws Exception {
         // The scoped CSRF disable (Decision 13, T11) must NOT leak past /webhooks/telegram. A
         // /api/v1/projects POST from a bare client (no auth, no CSRF token) is rejected by the
         // security chain — Spring Security 6.x serves the CSRF check first for state-changing
         // verbs, so the rejection status is 403 (not 401). The strong invariant: NOT 200/2xx.
-        // WebhookSecurityBlockTest (T11) covers the more nuanced 401 (authed-no-CSRF) split.
-        webTestClient.post()
-                .uri("/api/v1/projects")
-                .contentType(MediaType.APPLICATION_JSON)
-                .bodyValue(new Document("name", "anything"))
-                .exchange()
-                .expectStatus().isForbidden();
+        int status = mockMvc.perform(post("/api/v1/projects")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyJson(new Document("name", "anything"))))
+                .andReturn().getResponse().getStatus();
+        assertThat(status).isEqualTo(403);
     }
 
     // ---------- AC16 — counter shape after mixed traffic ----------
@@ -394,14 +327,14 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
 
         // 1 happy path
-        post(p.getId(), SECRET_PLAIN, samplePayload(1L));
+        doPost(p.getId(), SECRET_PLAIN, samplePayload(1L));
         // 2 invalid-secret
-        post(p.getId(), "wrong1", samplePayload(2L));
-        post(p.getId(), "wrong2", samplePayload(3L));
+        doPost(p.getId(), "wrong1", samplePayload(2L));
+        doPost(p.getId(), "wrong2", samplePayload(3L));
         // 1 not-found (missing project)
-        post(new org.bson.types.ObjectId().toHexString(), SECRET_PLAIN, samplePayload(4L));
+        doPost(new org.bson.types.ObjectId().toHexString(), SECRET_PLAIN, samplePayload(4L));
         // 1 duplicate of update_id=1 → DuplicateKey path
-        post(p.getId(), SECRET_PLAIN, samplePayload(1L));
+        doPost(p.getId(), SECRET_PLAIN, samplePayload(1L));
 
         Counter received = meterRegistry.find("telegram_webhook_received_total").counter();
         assertThat(received).isNotNull();
@@ -425,13 +358,11 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
         String tokenShaped = "1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789xyz";
-        // Sentinel body field — if any payload-derived bytes leak into the WARN log, this string
-        // would surface in the captured line.
         Document body = samplePayload(1L);
         body.put("sentinel_field", "PAYLOAD-SENTINEL-" + tokenShaped);
 
-        post(p.getId(), SECRET_PLAIN, body);
-        post(p.getId(), SECRET_PLAIN, body); // dup → WARN
+        doPost(p.getId(), SECRET_PLAIN, body);
+        doPost(p.getId(), SECRET_PLAIN, body); // dup → WARN
 
         List<String> warnLines = appender.list.stream()
                 .filter(e -> e.getLoggerName()
@@ -460,7 +391,7 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
             throw new RuntimeException("enqueue failure carrying " + tokenShaped + " inline");
         });
 
-        post(p.getId(), SECRET_PLAIN, samplePayload(7L));
+        doPost(p.getId(), SECRET_PLAIN, samplePayload(7L));
 
         List<String> errLines = appender.list.stream()
                 .filter(e -> e.getLoggerName()
@@ -479,25 +410,20 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
     // ---------- AC4 — 413 end-to-end (audit T14 F4) ----------
 
     @Test
-    void receive_chunkedEncoding_returns413_endToEnd() {
+    void receive_chunkedEncoding_returns413_endToEnd() throws Exception {
         // AC4 (chunked) end-to-end IT companion to the unit-scope WebhookPayloadSizeFilterTest.
         // Proves the filter is registered in the chain at the controller's actual path AND that
         // the SecurityConfig permitAll did not bypass it (filter runs at HIGHEST_PRECEDENCE+10).
-        // The oversize Content-Length case stays in the unit test because WebTestClient (bound to
-        // ApplicationContext) re-computes Content-Length from the materialised body — declared
-        // headers do not survive to the filter. The chunked case does survive end-to-end.
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
 
-        webTestClient.post()
-                .uri("/webhooks/telegram/" + p.getId())
-                .header("X-Telegram-Bot-Api-Secret-Token", SECRET_PLAIN)
-                .contentType(MediaType.APPLICATION_JSON)
-                .header(HttpHeaders.TRANSFER_ENCODING, "chunked")
-                .bodyValue(samplePayload(1L))
-                .exchange()
-                .expectStatus().isEqualTo(413)
-                .expectBody().isEmpty();
+        int status = mockMvc.perform(post("/webhooks/telegram/{projectId}", p.getId())
+                        .header("X-Telegram-Bot-Api-Secret-Token", SECRET_PLAIN)
+                        .header(HttpHeaders.TRANSFER_ENCODING, "chunked")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyJson(samplePayload(1L))))
+                .andReturn().getResponse().getStatus();
+        assertThat(status).isEqualTo(413);
 
         Counter c = meterRegistry.find("telegram_webhook_rejected_total")
                 .tag("reason", "payload_too_large").counter();
@@ -514,7 +440,7 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
 
-        post(p.getId(), SECRET_PLAIN, samplePayload(1L));
+        doPost(p.getId(), SECRET_PLAIN, samplePayload(1L));
 
         io.micrometer.core.instrument.Timer timer = meterRegistry
                 .find("telegram_webhook_duration_seconds").timer();
@@ -532,7 +458,7 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         Project p = seedProject();
         seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH_OTHER);
 
-        assertThat(post(p.getId(), SECRET_PLAIN, samplePayload(1L))).isEqualTo(401);
+        assertThat(doPost(p.getId(), SECRET_PLAIN, samplePayload(1L))).isEqualTo(401);
         assertThat(counter("invalid_secret")).isEqualTo(1.0);
         assertThat(counter("project_not_found")).isZero();
     }

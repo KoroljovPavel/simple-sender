@@ -1,38 +1,19 @@
 package com.botfunnel;
 
-import com.mongodb.reactivestreams.client.MongoClient;
 import org.junit.jupiter.api.Test;
-import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.data.redis.connection.ReactiveRedisConnectionFactory;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.reactive.server.WebTestClient;
 
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@ActiveProfiles("test")
-@Import(JobRunrInMemoryConfig.class)
-class SecurityBlockTest {
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-    @Autowired
-    WebTestClient webTestClient;
-
-    // Decision 6: mocked to prevent auto-config from requiring live DB connections in tests
-    @MockitoBean
-    MongoClient mongoClient;
-
-    @MockitoBean
-    RedisConnectionFactory redisConnectionFactory;
-
-    @MockitoBean
-    ReactiveRedisConnectionFactory reactiveRedisConnectionFactory;
+// Servlet-flip note: previously mocked MongoClient + RedisConnectionFactory at the slice level
+// and exercised via WebTestClient.bindToApplicationContext. After the flip both patterns are
+// gone — this test now inherits AbstractIntegrationTest's Testcontainers Mongo/Redis and uses
+// the autowired servlet MockMvc.
+class SecurityBlockTest extends AbstractIntegrationTest {
 
     @Test
-    void undefinedPathBlockedReturns401() {
-        webTestClient.get().uri("/api/nonexistent")
-                .exchange()
-                .expectStatus().isUnauthorized();
+    void undefinedPathBlockedReturns401() throws Exception {
+        mockMvc.perform(get("/api/nonexistent"))
+                .andExpect(status().isUnauthorized());
     }
 }

@@ -23,7 +23,7 @@ class SuperAdminSeederTest extends AbstractIntegrationTest {
 
     @BeforeEach
     void cleanState() {
-        userRepository.deleteAll().block();
+        userRepository.deleteAll();
     }
 
     private SuperAdminSeeder seeder() {
@@ -35,11 +35,10 @@ class SuperAdminSeederTest extends AbstractIntegrationTest {
         seeder().run(null);
         seeder().run(null);
 
-        long total = userRepository.count().block();
-        long admins = userRepository.findAll()
+        long total = userRepository.count();
+        long admins = userRepository.findAll().stream()
                 .filter(u -> u.isSuperAdmin() && EMAIL.equals(u.getEmail()))
-                .count()
-                .block();
+                .count();
         assertThat(total).isEqualTo(1);
         assertThat(admins).isEqualTo(1);
     }
@@ -55,13 +54,13 @@ class SuperAdminSeederTest extends AbstractIntegrationTest {
         existing.setSuperAdmin(false);
         existing.setCreatedAt(Instant.now());
         existing.setUpdatedAt(Instant.now());
-        String oldId = userRepository.save(existing).block().getId();
+        String oldId = userRepository.save(existing).getId();
 
         seeder().run(null);
 
-        long total = userRepository.count().block();
+        long total = userRepository.count();
         assertThat(total).as("must NOT create a duplicate user").isEqualTo(1);
-        User reread = userRepository.findById(oldId).block();
+        User reread = userRepository.findById(oldId).orElse(null);
         assertThat(reread).isNotNull();
         assertThat(reread.isSuperAdmin()).isTrue();
         // Existing data must be preserved — promotion does not rewrite name/password.
@@ -72,21 +71,21 @@ class SuperAdminSeederTest extends AbstractIntegrationTest {
     void seeder_missingEmail_doesNotThrow_doesNotCreateRecord() {
         SuperAdminSeeder s = new SuperAdminSeeder(userRepository, passwordEncoder, "", PASSWORD);
         s.run(null);
-        assertThat(userRepository.count().block()).isEqualTo(0);
+        assertThat(userRepository.count()).isEqualTo(0);
     }
 
     @Test
     void seeder_missingPassword_doesNotThrow_doesNotCreateRecord() {
         SuperAdminSeeder s = new SuperAdminSeeder(userRepository, passwordEncoder, EMAIL, "");
         s.run(null);
-        assertThat(userRepository.count().block()).isEqualTo(0);
+        assertThat(userRepository.count()).isEqualTo(0);
     }
 
     @Test
     void seeder_createsActiveSuperAdminWithBcryptHashedPassword() {
         seeder().run(null);
 
-        User u = userRepository.findByEmail(EMAIL).block();
+        User u = userRepository.findByEmail(EMAIL).orElse(null);
         assertThat(u).isNotNull();
         assertThat(u.getStatus()).isEqualTo(UserStatus.active);
         assertThat(u.isSuperAdmin()).isTrue();

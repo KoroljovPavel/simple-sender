@@ -1,18 +1,10 @@
 package com.botfunnel.security;
 
-import com.botfunnel.JobRunrInMemoryConfig;
-import com.mongodb.client.MongoClient;
+import com.botfunnel.AbstractIntegrationTest;
 import jakarta.servlet.http.Cookie;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
-import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.context.annotation.Import;
-import org.springframework.data.redis.connection.RedisConnectionFactory;
 import org.springframework.session.web.http.CookieSerializer;
-import org.springframework.test.context.ActiveProfiles;
-import org.springframework.test.context.bean.override.mockito.MockitoBean;
-import org.springframework.test.web.servlet.MockMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
@@ -20,24 +12,15 @@ import static org.springframework.test.web.servlet.request.MockMvcRequestBuilder
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.cookie;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
-@SpringBootTest
-@AutoConfigureMockMvc
-@ActiveProfiles("test")
-@Import(JobRunrInMemoryConfig.class)
-class SecurityConfigTest {
-
-    @Autowired
-    MockMvc mockMvc;
+// Servlet-flip note: the prior slice-style @MockitoBean MongoClient + RedisConnectionFactory
+// pattern stopped working post-Wave 2 (MongoTemplate constructs eagerly off MongoClient at
+// context refresh — a Mockito stub returns a null MongoDatabase). Same observation as
+// MeterRegistryConfigTest: inherit AbstractIntegrationTest's Testcontainers Mongo/Redis
+// instead. JobRunrInMemoryConfig comes in via AbstractIntegrationTest's @Import.
+class SecurityConfigTest extends AbstractIntegrationTest {
 
     @Autowired
     CookieSerializer cookieSerializer;
-
-    // Mock infrastructure to prevent auto-config from connecting to live services
-    @MockitoBean
-    MongoClient mongoClient;
-
-    @MockitoBean
-    RedisConnectionFactory redisConnectionFactory;
 
     @Test
     void cookieSerializer_isRememberMeCookieSerializer_notDefault() {

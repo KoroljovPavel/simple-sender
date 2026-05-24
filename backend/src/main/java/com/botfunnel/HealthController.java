@@ -2,7 +2,6 @@ package com.botfunnel;
 
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RestController;
-import reactor.core.publisher.Mono;
 
 import java.util.Map;
 
@@ -10,7 +9,7 @@ import java.util.Map;
 public class HealthController {
 
     @GetMapping("/health")
-    public Mono<Map<String, String>> health() {
-        return Mono.just(Map.of("status", "ok"));
+    public Map<String, String> health() {
+        return Map.of("status", "ok");
     }
 }

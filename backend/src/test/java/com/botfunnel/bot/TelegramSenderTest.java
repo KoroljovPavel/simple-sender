@@ -21,18 +21,18 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Mono;
-import reactor.test.StepVerifier;
+import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
@@ -101,7 +101,7 @@ class TelegramSenderTest {
     }
 
     private TelegramSender newSender(Duration responseTimeout, Duration overallTimeout) {
-        return new TelegramSender(WebClient.builder(), mockServer.url("/").toString(),
+        return new TelegramSender(RestClient.builder(), mockServer.url("/").toString(),
                 responseTimeout, overallTimeout, botRepository, encryptor, eventService);
     }
 
@@ -115,11 +115,11 @@ class TelegramSenderTest {
     }
 
     private void stubFindReturns(Bot bot) {
-        when(botRepository.findById(BOT_ID)).thenReturn(Mono.just(bot));
+        when(botRepository.findById(BOT_ID)).thenReturn(Optional.of(bot));
     }
 
     private void stubFindEmpty() {
-        when(botRepository.findById(BOT_ID)).thenReturn(Mono.empty());
+        when(botRepository.findById(BOT_ID)).thenReturn(Optional.empty());
     }
 
     private static MockResponse jsonResponse(int status, String body) {
@@ -175,7 +175,7 @@ class TelegramSenderTest {
         stubFindReturns(connectedBot());
         mockServer.enqueue(okSendMessage(42L, 5L));
 
-        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID).block();
+        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID);
 
         assertThat(sm).isNotNull();
         assertThat(sm.messageId()).isEqualTo(42L);
@@ -202,7 +202,7 @@ class TelegramSenderTest {
         stubFindReturns(connectedBot());
         mockServer.enqueue(okSendMessage(1L, CALLER_CHAT_ID));
 
-        sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID).block();
+        sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID);
 
         RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
         assertThat(req).isNotNull();
@@ -219,7 +219,7 @@ class TelegramSenderTest {
         stubFindReturns(connectedBot());
         mockServer.enqueue(okSendMessage(1L, CALLER_CHAT_ID));
 
-        sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, "HTML", OWNER_ID).block();
+        sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, "HTML", OWNER_ID);
 
         RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
         assertThat(req).isNotNull();
@@ -233,7 +233,7 @@ class TelegramSenderTest {
         stubFindReturns(connectedBot());
         mockServer.enqueue(okSendMessage(7L, CALLER_CHAT_ID));
 
-        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, null).block();
+        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, null);
 
         assertThat(sm).isNotNull();
         verify(eventService).logEvent(isNull(), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
@@ -248,12 +248,12 @@ class TelegramSenderTest {
         mockServer.enqueue(status5xx(503));
         mockServer.enqueue(okSendMessage(42L, 5L));
 
-        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID).block();
+        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID);
 
         assertThat(sm).isNotNull();
         assertThat(sm.messageId()).isEqualTo(42L);
         assertThat(mockServer.getRequestCount()).isEqualTo(2);
-        // Pin success-metadata shape per tech-spec Data Models line 256:
+        // Pin success-metadata shape per tech-spec Data Models:
         // sentMetadata = {botId, chatId, messageId} — NO attempts key on success.
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCap = ArgumentCaptor.forClass(Map.class);
@@ -271,15 +271,14 @@ class TelegramSenderTest {
             mockServer.enqueue(status5xx(503));
         }
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(TelegramSendException.class);
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .satisfies(err -> {
                     TelegramSendException tse = (TelegramSendException) err;
                     assertThat(tse.getErrorCode()).isNull();
                     assertThat(tse.getAttempts()).isEqualTo(4);
                     assertThat(tse.getMessage()).isEqualTo("transient_failure_exhausted");
-                })
-                .verify(Duration.ofSeconds(15));
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
 
@@ -297,8 +296,7 @@ class TelegramSenderTest {
         mockServer.enqueue(new MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START));
         mockServer.enqueue(okSendMessage(42L, 5L));
 
-        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID)
-                .block(Duration.ofSeconds(15));
+        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID);
 
         assertThat(sm).isNotNull();
         assertThat(mockServer.getRequestCount()).isEqualTo(2);
@@ -316,8 +314,7 @@ class TelegramSenderTest {
         mockServer.enqueue(okSendMessage(42L, 5L));
 
         long start = System.nanoTime();
-        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID)
-                .block(Duration.ofSeconds(10));
+        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID);
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
 
         assertThat(sm).isNotNull();
@@ -333,13 +330,9 @@ class TelegramSenderTest {
         stubFindReturns(connectedBot());
         mockServer.enqueue(status429(120));
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err)
-                            .isInstanceOf(TelegramSendException.class)
-                            .isNotInstanceOf(TelegramRateLimitException.class);
-                })
-                .verify(Duration.ofSeconds(10));
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .isNotInstanceOf(TelegramRateLimitException.class);
     }
 
     @Test
@@ -353,12 +346,9 @@ class TelegramSenderTest {
         }
 
         long start = System.nanoTime();
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(TelegramSendException.class);
-                    assertThat(err.getMessage()).isEqualTo("timeout");
-                })
-                .verify(Duration.ofSeconds(10));
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .hasMessage("timeout");
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         // Overall timeout is 3s in this test config; allow generous upper bound for CI variance.
         assertThat(elapsedMs).isGreaterThanOrEqualTo(2500).isLessThan(8000);
@@ -372,12 +362,9 @@ class TelegramSenderTest {
             mockServer.enqueue(status429(null));
         }
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(TelegramSendException.class);
-                    assertThat(err.getMessage()).isEqualTo("timeout");
-                })
-                .verify(Duration.ofSeconds(10));
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .hasMessage("timeout");
     }
 
     @Test
@@ -388,12 +375,9 @@ class TelegramSenderTest {
             mockServer.enqueue(status429(-5));
         }
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(TelegramSendException.class);
-                    assertThat(err.getMessage()).isEqualTo("timeout");
-                })
-                .verify(Duration.ofSeconds(10));
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .hasMessage("timeout");
 
         // No spin loop: under the 3s overall timeout with negative retry_after clamped to 0
         // (plus jitter 0..200ms), there's enough room for a handful of attempts but the
@@ -409,14 +393,13 @@ class TelegramSenderTest {
         mockServer.enqueue(status5xx(503));
         mockServer.enqueue(okSendMessage(42L, 5L));
 
-        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID)
-                .block(Duration.ofSeconds(15));
+        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID);
 
         assertThat(sm).isNotNull();
         // Request count == 4 pins the AtomicInteger semantic: each HTTP attempt increments the
-        // counter via doOnSubscribe, and the counter survives the 429 outer-loop resubscription
-        // (Decision 10: 429 outer wraps 5xx inner). The "no failed event" assertion guards
-        // against accidental double-emission across the retry boundary.
+        // counter at the request site, and the counter survives the 429 outer-loop re-entry into
+        // the 5xx inner loop (Decision 2: 429 outer wraps 5xx inner). The "no failed event"
+        // assertion guards against accidental double-emission across the retry boundary.
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
         // Success-shape: sent-event present without "attempts" key, no failed-event.
         @SuppressWarnings("unchecked")
@@ -436,15 +419,14 @@ class TelegramSenderTest {
         mockServer.enqueue(jsonResponse(401,
                 "{\"ok\":false,\"error_code\":401,\"description\":\"Unauthorized\"}"));
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(BotTokenInvalidException.class);
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(BotTokenInvalidException.class)
+                .satisfies(err -> {
                     BotTokenInvalidException bti = (BotTokenInvalidException) err;
                     assertThat(bti.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
                     assertThat(bti.getCode()).isEqualTo("invalid_bot_token");
                     assertThat(bti.getBotId()).isEqualTo(BOT_ID);
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
     }
@@ -455,14 +437,13 @@ class TelegramSenderTest {
         mockServer.enqueue(jsonResponse(400,
                 "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: chat not found\"}"));
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(TelegramSendException.class);
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .satisfies(err -> {
                     TelegramSendException tse = (TelegramSendException) err;
                     assertThat(tse.getErrorCode()).isEqualTo(400);
                     assertThat(tse.getMessage()).contains("chat not found");
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
     }
@@ -473,14 +454,13 @@ class TelegramSenderTest {
         mockServer.enqueue(jsonResponse(200,
                 "{\"ok\":false,\"description\":\"something bad happened\"}"));
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(TelegramSendException.class);
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .satisfies(err -> {
                     TelegramSendException tse = (TelegramSendException) err;
                     assertThat(tse.getErrorCode()).isNull();
                     assertThat(tse.getMessage()).contains("something bad happened");
-                })
-                .verify();
+                });
     }
 
     // ---------- Pre-wire guards ----------
@@ -494,19 +474,18 @@ class TelegramSenderTest {
         bot.setEncryptedTokenCiphertext(Base64.getEncoder().encodeToString(ev.ciphertext()));
         stubFindReturns(bot);
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(BotTokenInvalidException.class);
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(BotTokenInvalidException.class)
+                .satisfies(err -> {
                     BotTokenInvalidException bti = (BotTokenInvalidException) err;
                     assertThat(bti.getMessage()).isEqualTo("invalid token shape after decrypt");
                     assertThat(bti.getBotId()).isEqualTo(BOT_ID);
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isZero();
 
-        // Pre-HTTP BotTokenInvalidException is auditable per tech-spec error-mapping table
-        // (line 265): emits telegram_send_failed WITHOUT errorCode/errorDescription keys.
+        // Pre-HTTP BotTokenInvalidException is auditable per tech-spec error-mapping table:
+        // emits telegram_send_failed WITHOUT errorCode/errorDescription keys.
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Map<String, Object>> metaCap = ArgumentCaptor.forClass(Map.class);
         verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
@@ -526,14 +505,13 @@ class TelegramSenderTest {
         bot.setEncryptedTokenCiphertext("!!!!");
         stubFindReturns(bot);
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(BotTokenInvalidException.class);
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(BotTokenInvalidException.class)
+                .satisfies(err -> {
                     BotTokenInvalidException bti = (BotTokenInvalidException) err;
                     assertThat(bti.getMessage()).isEqualTo("decryption failed");
                     assertThat(bti.getBotId()).isEqualTo(BOT_ID);
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isZero();
 
@@ -552,25 +530,20 @@ class TelegramSenderTest {
     void sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid() {
         // Stub TokenEncryptor to throw IllegalStateException — covers BOTH tampered-ciphertext
         // (AEAD-tag failure wrapped) AND misconfigured-bean. The two are indistinguishable at
-        // this call site (Risk R7), so the sender must NOT translate either to 422
-        // BotTokenInvalidException; both must propagate as-is to surface as 500 via
-        // GlobalErrorHandler.handleThrowable.
+        // this call site, so the sender must NOT translate either to 422 BotTokenInvalidException;
+        // both must propagate as-is to surface as 500 via GlobalErrorHandler.handleThrowable.
         TokenEncryptor stubEncryptor = mock(TokenEncryptor.class);
         when(stubEncryptor.decrypt(any(), any()))
                 .thenThrow(new IllegalStateException("AES-GCM decryption failed"));
         TelegramSender stubSender = new TelegramSender(
-                WebClient.builder(), mockServer.url("/").toString(),
+                RestClient.builder(), mockServer.url("/").toString(),
                 TelegramApiClient.DEFAULT_RESPONSE_TIMEOUT, Duration.ofSeconds(30),
                 botRepository, stubEncryptor, eventService);
         stubFindReturns(connectedBot());
 
-        StepVerifier.create(stubSender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err)
-                            .isInstanceOf(IllegalStateException.class)
-                            .isNotInstanceOf(BotTokenInvalidException.class);
-                })
-                .verify();
+        assertThatThrownBy(() -> stubSender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(IllegalStateException.class)
+                .isNotInstanceOf(BotTokenInvalidException.class);
 
         assertThat(mockServer.getRequestCount()).isZero();
     }
@@ -579,15 +552,14 @@ class TelegramSenderTest {
     void sendText_botNotFound_throwsNotFound_noHttp() {
         stubFindEmpty();
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
                     assertThat(app.getCode()).isNull();
                     assertThat(app.getMessage()).isEqualTo("Bot not found");
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isZero();
     }
@@ -598,15 +570,14 @@ class TelegramSenderTest {
         bot.setStatus(BotStatus.DISCONNECTED);
         stubFindReturns(bot);
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.NOT_FOUND);
                     assertThat(app.getCode()).isNull();
                     assertThat(app.getMessage()).isEqualTo("Bot not found");
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isZero();
     }
@@ -622,12 +593,9 @@ class TelegramSenderTest {
                     .setBodyDelay(500, TimeUnit.MILLISECONDS));
         }
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(TelegramSendException.class);
-                    assertThat(err.getMessage()).isEqualTo("transient_failure_exhausted");
-                })
-                .verify(Duration.ofSeconds(15));
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .hasMessage("transient_failure_exhausted");
 
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
     }
@@ -640,15 +608,15 @@ class TelegramSenderTest {
                 .setBodyDelay(35, TimeUnit.SECONDS));
 
         long start = System.nanoTime();
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(TelegramSendException.class);
-                    assertThat(err.getMessage()).isEqualTo("timeout");
-                })
-                .verify(Duration.ofSeconds(10));
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .hasMessage("timeout");
         long elapsedMs = (System.nanoTime() - start) / 1_000_000;
         // SHORT_OVERALL_TIMEOUT is 3s in this test config (production: 30s wall-clock).
-        assertThat(elapsedMs).isGreaterThanOrEqualTo(2500).isLessThan(8000);
+        // Allow generous upper bound for the 35s server-side body delay path: the test sender's
+        // response timeout is the production 10s, so an attempt may stall up to that before the
+        // deadline fires post-sleep.
+        assertThat(elapsedMs).isGreaterThanOrEqualTo(2500).isLessThan(15000);
 
         verify(eventService, times(1)).logEvent(eq(OWNER_ID),
                 eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
@@ -663,9 +631,8 @@ class TelegramSenderTest {
         mockServer.enqueue(jsonResponse(400, "{\"ok\":false,\"error_code\":400,\"description\":\""
                 + "Bad request for token " + TOKEN + " on chat\"}"));
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectError(TelegramSendException.class)
-                .verify();
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
 
         assertThat(anyMessageMatches(Level.WARN, m -> m.contains("[REDACTED_TOKEN]"))).isTrue();
         assertThat(anyMessageMatches(Level.WARN, m -> m.contains(TOKEN))).isFalse();
@@ -677,12 +644,13 @@ class TelegramSenderTest {
         mockServer.enqueue(status5xxWithToken(503));
         mockServer.enqueue(okSendMessage(42L, 5L));
 
-        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID).block();
+        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID);
 
         assertThat(sm).isNotNull();
-        // Retry observer logs the failure message at WARN level. WebClientResponseException's
-        // message embeds the URI (carrying the token) + body excerpt; scrubTokens must remove
-        // any token-shaped substring before the message reaches the appender.
+        // Retry observer logs the failure message at WARN level. RestClient's
+        // HttpServerErrorException message embeds the URI (carrying the token) + body excerpt;
+        // scrubTokens must remove any token-shaped substring before the message reaches the
+        // appender.
         List<String> warnMessages = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.WARN)
                 .map(ILoggingEvent::getFormattedMessage)
@@ -698,8 +666,7 @@ class TelegramSenderTest {
         mockServer.enqueue(status429WithToken(1));
         mockServer.enqueue(okSendMessage(42L, 5L));
 
-        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID)
-                .block(Duration.ofSeconds(10));
+        SentMessage sm = sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID);
 
         assertThat(sm).isNotNull();
         List<String> warnMessages = logAppender.list.stream()
@@ -717,9 +684,8 @@ class TelegramSenderTest {
             mockServer.enqueue(status5xxWithToken(503));
         }
 
-        StepVerifier.create(sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectError(TelegramSendException.class)
-                .verify(Duration.ofSeconds(15));
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
 
         List<String> errorMessages = logAppender.list.stream()
                 .filter(e -> e.getLevel() == Level.ERROR)
@@ -736,19 +702,18 @@ class TelegramSenderTest {
 
     @Test
     void sendText_tokenInTransportErrorMessage_scrubbed() throws Exception {
-        // Close the server before issuing the call so the WebClient hits a transport error whose
-        // message embeds the request URI (with the token).
+        // Close the server before issuing the call so the RestClient hits a transport error whose
+        // message may embed the request URI (with the token).
         int port = mockServer.getPort();
         mockServer.shutdown();
         TelegramSender deadServerSender = new TelegramSender(
-                WebClient.builder(), "http://localhost:" + port + "/",
+                RestClient.builder(), "http://localhost:" + port + "/",
                 Duration.ofMillis(500), Duration.ofSeconds(15),
                 botRepository, encryptor, eventService);
         stubFindReturns(connectedBot());
 
-        StepVerifier.create(deadServerSender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
-                .expectError(TelegramSendException.class)
-                .verify(Duration.ofSeconds(20));
+        assertThatThrownBy(() -> deadServerSender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
 
         // Re-init mockServer so @AfterEach's mockServer.shutdown() is a clean no-op. Without
         // this, the field still references the already-shut-down instance and the AfterEach
@@ -762,9 +727,9 @@ class TelegramSenderTest {
                 .toList();
         assertThat(leakSites).isNotEmpty();
         assertThat(leakSites).noneMatch(m -> m.contains(TOKEN));
-        // Negative-only assertion: WebClientRequestException's message format is
-        // "Connection refused: host:port" — no URI segment, no token-shaped content. The
-        // scrubbing call is still defensive at the log site; the assertion that matters here
-        // is the negative one (raw TOKEN absent across WARN+ERROR).
+        // Negative-only assertion: ResourceAccessException's message format is
+        // "I/O error on POST request for ...: Connection refused" — defensive scrubbing is
+        // still applied at the log site; the assertion that matters here is the negative one
+        // (raw TOKEN absent across WARN+ERROR).
     }
 }

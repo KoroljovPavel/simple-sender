@@ -18,7 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.mongodb.core.ReactiveMongoTemplate;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 
@@ -27,16 +27,20 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
-import static org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 // IT scope: HTTP → BotController → BotService → real Mongo, with a class-level MockWebServer
-// standing in for api.telegram.org. Two scenarios that depend on Task 5's BotService rewrite
-// are @Disabled; they will be enabled by Task 5. The remaining two scenarios (null-branch
+// standing in for api.telegram.org. Two scenarios that depend on Task 7's BotService rewrite
+// are @Disabled; they will be enabled by Task 7. The remaining two scenarios (null-branch
 // regression + legacy-document deserialization) verify behavior that is already correct in
 // Wave 2 — the existing 422 stub and Spring Data MongoDB's nullable-wrapper read semantics.
 class TelegramSenderIT extends AbstractIntegrationTest {
@@ -71,7 +75,7 @@ class TelegramSenderIT extends AbstractIntegrationTest {
     @Autowired UserRepository userRepository;
     @Autowired ProjectRepository projectRepository;
     @Autowired EventRepository eventRepository;
-    @Autowired ReactiveMongoTemplate mongoTemplate;
+    @Autowired MongoTemplate mongoTemplate;
 
     @BeforeEach
     void cleanAndSeed() {
@@ -82,10 +86,10 @@ class TelegramSenderIT extends AbstractIntegrationTest {
         } catch (InterruptedException ie) {
             Thread.currentThread().interrupt();
         }
-        botRepository.deleteAll().block();
-        userRepository.deleteAll().block();
-        projectRepository.deleteAll().block();
-        eventRepository.deleteAll().block();
+        botRepository.deleteAll();
+        userRepository.deleteAll();
+        projectRepository.deleteAll();
+        eventRepository.deleteAll();
 
         seedUser(USER_ID, "telegram-sender-it@test.com");
     }
@@ -102,7 +106,7 @@ class TelegramSenderIT extends AbstractIntegrationTest {
         u.setSuperAdmin(false);
         u.setCreatedAt(Instant.now());
         u.setUpdatedAt(Instant.now());
-        userRepository.save(u).block();
+        userRepository.save(u);
     }
 
     private Project saveActiveProject(String ownerId) {
@@ -112,7 +116,7 @@ class TelegramSenderIT extends AbstractIntegrationTest {
         p.setTimezone("Europe/Kyiv");
         p.setCreatedAt(Instant.now());
         p.setUpdatedAt(Instant.now());
-        return projectRepository.save(p).block();
+        return projectRepository.save(p);
     }
 
     private Bot seedConnectedBot(String projectId, Long ownerChatId) {
@@ -128,7 +132,7 @@ class TelegramSenderIT extends AbstractIntegrationTest {
         b.setWebhookSecretHash("a".repeat(64));
         b.setConnectedAt(Instant.now());
         b.setOwnerChatId(ownerChatId);
-        return botRepository.save(b).block();
+        return botRepository.save(b);
     }
 
     private List<RecordedRequest> drainRequests() {
@@ -148,8 +152,7 @@ class TelegramSenderIT extends AbstractIntegrationTest {
         await().during(Duration.ofMillis(500))
                 .atMost(Duration.ofSeconds(2))
                 .untilAsserted(() -> {
-                    boolean any = Boolean.TRUE.equals(eventRepository.findAll()
-                            .filter(predicate).hasElements().block());
+                    boolean any = eventRepository.findAll().stream().anyMatch(predicate);
                     assertThat(any).isFalse();
                 });
     }
@@ -157,39 +160,37 @@ class TelegramSenderIT extends AbstractIntegrationTest {
     // ---------- Scenarios ----------
 
     @Test
-    @Disabled("enabled by Task 5 — requires BotService.sendTestMessage to call TelegramSender")
+    @Disabled("enabled by Task 7 — requires BotService.sendTestMessage to call TelegramSender")
     @WithMockAppUser(userId = USER_ID)
     void sendText_endToEndViaBotService_emitsBothEvents() {
-        // Wave 3 — Task 5 wires BotService.sendTestMessage to call TelegramSender. Until then,
+        // Wave 2 — Task 7 wires BotService.sendTestMessage to call TelegramSender. Until then,
         // the existing 422 owner_chat_id_unknown stub returns regardless of ownerChatId, so the
         // happy-path send-and-events scenario cannot be exercised through HTTP.
     }
 
     @Test
-    @Disabled("enabled by Task 5 — requires BotService.sendTestMessage to call TelegramSender")
+    @Disabled("enabled by Task 7 — requires BotService.sendTestMessage to call TelegramSender")
     @WithMockAppUser(userId = USER_ID)
     void sendText_terminalFailureViaBotService_emitsFailedEventOnly() {
-        // Wave 3 — Task 5 wires the failure-event-only branch. Until then, the stub short-circuits
+        // Wave 2 — Task 7 wires the failure-event-only branch. Until then, the stub short-circuits
         // before TelegramSender is ever invoked.
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls() {
+    void sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls() throws Exception {
         // Wave 2 behavior preserved: when ownerChatId is null, BotService short-circuits with 422
         // owner_chat_id_unknown. No Telegram traffic and no telegram_* / bot_test_message_sent
         // events written. Regression net for Epic 06 AC15 across the 04c → 04b boundary.
         Project project = saveActiveProject(USER_ID);
         seedConnectedBot(project.getId(), null);
 
-        webTestClient.mutateWith(csrf())
-                .post().uri("/api/v1/projects/" + project.getId() + "/bot/test-message")
-                .exchange()
-                .expectStatus().isEqualTo(422)
-                .expectBody()
-                .jsonPath("$.code").isEqualTo("owner_chat_id_unknown")
-                .jsonPath("$.message")
-                .isEqualTo("Send /start to your bot in Telegram first, then try again");
+        mockMvc.perform(post("/api/v1/projects/" + project.getId() + "/bot/test-message")
+                        .with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("owner_chat_id_unknown"))
+                .andExpect(jsonPath("$.message")
+                        .value("Send /start to your bot in Telegram first, then try again"));
 
         assertThat(drainRequests()).isEmpty();
         awaitNoEvent(e -> e.getEventType() != null
@@ -216,12 +217,13 @@ class TelegramSenderIT extends AbstractIntegrationTest {
                 .append("webhookSecretHash", "a".repeat(64))
                 .append("connectedAt", Instant.now());
 
-        Document inserted = mongoTemplate.insert(legacy, "bots").block();
+        Document inserted = mongoTemplate.insert(legacy, "bots");
         assertThat(inserted).isNotNull();
         String id = inserted.getObjectId("_id").toHexString();
 
-        Bot loaded = botRepository.findById(id).block();
-        assertThat(loaded).isNotNull();
+        Optional<Bot> loadedOpt = botRepository.findById(id);
+        assertThat(loadedOpt).isPresent();
+        Bot loaded = loadedOpt.get();
         assertThat(loaded.getOwnerChatId()).isNull();
         assertThat(loaded.getStatus()).isEqualTo(BotStatus.CONNECTED);
         assertThat(loaded.getTelegramBotId()).isEqualTo(TELEGRAM_BOT_ID);

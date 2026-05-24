@@ -16,14 +16,14 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.reactive.function.client.WebClient;
-import reactor.test.StepVerifier;
+import org.springframework.web.client.RestClient;
 
 import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class TelegramApiClientTest {
 
@@ -38,7 +38,7 @@ class TelegramApiClientTest {
     void setUp() throws Exception {
         mockServer = new MockWebServer();
         mockServer.start();
-        client = new TelegramApiClient(WebClient.builder(), mockServer.url("/").toString());
+        client = new TelegramApiClient(RestClient.builder(), mockServer.url("/").toString());
 
         logger = (Logger) LoggerFactory.getLogger(TelegramApiClient.class);
         logAppender = new ListAppender<>();
@@ -60,7 +60,7 @@ class TelegramApiClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"ok\":true,\"result\":{\"id\":123,\"is_bot\":true,\"first_name\":\"x\",\"username\":\"x_bot\"}}"));
 
-        TelegramUser user = client.getMe(TOKEN).block();
+        TelegramUser user = client.getMe(TOKEN);
 
         assertThat(user).isNotNull();
         assertThat(user.id()).isEqualTo(123L);
@@ -80,14 +80,13 @@ class TelegramApiClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"ok\":false,\"error_code\":401,\"description\":\"Unauthorized\"}"));
 
-        StepVerifier.create(client.getMe(TOKEN))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> client.getMe(TOKEN))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
                     assertThat(app.getCode()).isEqualTo("invalid_bot_token");
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
     }
@@ -101,14 +100,13 @@ class TelegramApiClientTest {
                     .setBody("{\"ok\":false,\"error_code\":503,\"description\":\"Service Unavailable\"}"));
         }
 
-        StepVerifier.create(client.getMe(TOKEN))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> client.getMe(TOKEN))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.BAD_GATEWAY);
                     assertThat(app.getCode()).isEqualTo("telegram_unavailable");
-                })
-                .verify(Duration.ofSeconds(10));
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
     }
@@ -120,14 +118,13 @@ class TelegramApiClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"ok\":false,\"error_code\":400,\"description\":\"HTTPS url must be provided for webhook\"}"));
 
-        StepVerifier.create(client.setWebhook(TOKEN, "http://example.com/hook", "secret-xyz"))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> client.setWebhook(TOKEN, "http://example.com/hook", "secret-xyz"))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.INTERNAL_SERVER_ERROR);
                     assertThat(app.getCode()).isEqualTo("webhook_config_error");
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
         assertThat(logAppender.list)
@@ -144,9 +141,8 @@ class TelegramApiClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"ok\":false,\"error_code\":400,\"description\":\"" + description + "\"}"));
 
-        StepVerifier.create(client.setWebhook(TOKEN, "https://example.com/hook", "secret-xyz"))
-                .expectError(AppException.class)
-                .verify();
+        assertThatThrownBy(() -> client.setWebhook(TOKEN, "https://example.com/hook", "secret-xyz"))
+                .isInstanceOf(AppException.class);
 
         assertThat(logAppender.list)
                 .filteredOn(e -> e.getLevel() == Level.WARN)
@@ -161,15 +157,14 @@ class TelegramApiClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"ok\":false,\"error_code\":403,\"description\":\"\"}"));
 
-        StepVerifier.create(client.getMe(TOKEN))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> client.getMe(TOKEN))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                     assertThat(app.getMessage()).isEqualTo("Telegram client error");
                     assertThat(app.getCode()).isNull();
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
     }
@@ -181,14 +176,13 @@ class TelegramApiClientTest {
                 .setHeader("Content-Type", "text/html")
                 .setBody("<html><body>I am a teapot</body></html>"));
 
-        StepVerifier.create(client.getMe(TOKEN))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> client.getMe(TOKEN))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.BAD_REQUEST);
                     assertThat(app.getMessage()).isEqualTo("Telegram client error");
-                })
-                .verify();
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
     }
@@ -246,14 +240,13 @@ class TelegramApiClientTest {
                     .setBody("{\"ok\":false,\"error_code\":503,\"description\":\"Service Unavailable\"}"));
         }
 
-        StepVerifier.create(client.deleteWebhook(TOKEN))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> client.deleteWebhook(TOKEN))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.BAD_GATEWAY);
                     assertThat(app.getCode()).isEqualTo("telegram_unavailable");
-                })
-                .verify(Duration.ofSeconds(10));
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
     }
@@ -265,7 +258,7 @@ class TelegramApiClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"ok\":true,\"result\":true}"));
 
-        Boolean result = client.deleteWebhook(TOKEN).block();
+        boolean result = client.deleteWebhook(TOKEN);
 
         assertThat(result).isTrue();
         RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
@@ -275,12 +268,12 @@ class TelegramApiClientTest {
     }
 
     @Test
-    void getMe_nettyReadTimeout_retriesThenReturns502TelegramUnavailable() throws Exception {
+    void getMe_readTimeout_retriesThenReturns502TelegramUnavailable() throws Exception {
         mockServer.shutdown();
         mockServer = new MockWebServer();
         mockServer.start();
         client = new TelegramApiClient(
-                WebClient.builder(),
+                RestClient.builder(),
                 mockServer.url("/").toString(),
                 Duration.ofMillis(200));
 
@@ -292,14 +285,13 @@ class TelegramApiClientTest {
                     .setBodyDelay(500, TimeUnit.MILLISECONDS));
         }
 
-        StepVerifier.create(client.getMe(TOKEN))
-                .expectErrorSatisfies(err -> {
-                    assertThat(err).isInstanceOf(AppException.class);
+        assertThatThrownBy(() -> client.getMe(TOKEN))
+                .isInstanceOf(AppException.class)
+                .satisfies(err -> {
                     AppException app = (AppException) err;
                     assertThat(app.getStatus()).isEqualTo(HttpStatus.BAD_GATEWAY);
                     assertThat(app.getCode()).isEqualTo("telegram_unavailable");
-                })
-                .verify(Duration.ofSeconds(15));
+                });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
     }
@@ -311,7 +303,7 @@ class TelegramApiClientTest {
                 .setHeader("Content-Type", "application/json")
                 .setBody("{\"ok\":true,\"result\":true}"));
 
-        Boolean ok = client.setWebhook(TOKEN, "https://example.com/hook", "secret-xyz").block();
+        boolean ok = client.setWebhook(TOKEN, "https://example.com/hook", "secret-xyz");
         assertThat(ok).isTrue();
 
         RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);

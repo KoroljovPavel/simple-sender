@@ -6,8 +6,9 @@ import com.botfunnel.bot.dto.TelegramSendResult;
 import com.botfunnel.common.AppException;
 import com.botfunnel.common.crypto.TokenEncryptor;
 import com.botfunnel.events.EventService;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
-import io.netty.channel.ChannelOption;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -15,22 +16,20 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
-import org.springframework.http.client.reactive.ReactorClientHttpConnector;
+import org.springframework.http.client.ClientHttpResponse;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
-import org.springframework.web.reactive.function.client.ClientResponse;
-import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.client.RestClient;
 import org.springframework.web.util.DefaultUriBuilderFactory;
-import reactor.core.publisher.Mono;
-import reactor.netty.http.client.HttpClient;
-import reactor.util.retry.Retry;
 
+import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -38,10 +37,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * exponential backoff (1s/2s/4s, 3 retries), 429 {@code retry_after} loop wrapping the 5xx loop,
  * overall 30s timeout, typed-exception mapping, audit-event emission, and token-scrubbed logging.
  *
- * <p>Plaintext-token lifetime: decrypted token is captured in the chain closure (Mono pipeline)
- * and reachable until subscription completes (worst case ~30s). Never stored, never logged,
- * never serialized, never pushed to background schedulers. Closure capture follows the existing
- * BotService convention (BotService.java:216-220).
+ * <p>Plaintext-token lifetime: decrypted token is captured in a local variable for the duration
+ * of one HTTP attempt and reachable until the synchronous call returns. Never stored, never
+ * logged, never serialized, never pushed to background schedulers.
  */
 @Component
 public class TelegramSender {
@@ -51,24 +49,31 @@ public class TelegramSender {
     static final String EVENT_TELEGRAM_MESSAGE_SENT = "telegram_message_sent";
     static final String EVENT_TELEGRAM_SEND_FAILED = "telegram_send_failed";
 
-    // Anti-enumeration 404 message. Kept in sync with BotService.java:57's MESSAGE_BOT_NOT_FOUND
+    // Anti-enumeration 404 message. Kept in sync with BotService.java's MESSAGE_BOT_NOT_FOUND
     // constant — both must produce identical wire shape ({status: 404, code: null,
     // message: "Bot not found"}) so a system-context caller can't distinguish "bot does not exist"
-    // from "bot exists but is not CONNECTED" (Decision 7).
+    // from "bot exists but is not CONNECTED".
     static final String MESSAGE_BOT_NOT_FOUND = "Bot not found";
 
     private static final Duration DEFAULT_OVERALL_TIMEOUT = Duration.ofSeconds(30);
     private static final int RATE_LIMIT_DELAY_CAP_SECONDS = 30;
     private static final int RATE_LIMIT_JITTER_MAX_MS = 200;
+    private static final int MAX_RETRIES = 3;
+    private static final Duration INITIAL_5XX_BACKOFF = Duration.ofSeconds(1);
+    private static final Duration MAX_5XX_BACKOFF = Duration.ofSeconds(4);
 
-    private final WebClient webClient;
+    private static final ObjectMapper STATIC_OBJECT_MAPPER = new ObjectMapper();
+    private static final TypeReference<TelegramSendResult<JsonNode>> SEND_RESULT_TYPE =
+            new TypeReference<>() {};
+
+    private final RestClient restClient;
     private final BotRepository botRepository;
     private final TokenEncryptor tokenEncryptor;
     private final EventService eventService;
     private final Duration overallTimeout;
 
     @Autowired
-    public TelegramSender(WebClient.Builder builder,
+    public TelegramSender(RestClient.Builder builder,
                           @Value("${app.telegram.base-url}") String baseUrl,
                           BotRepository botRepository,
                           TokenEncryptor tokenEncryptor,
@@ -78,25 +83,26 @@ public class TelegramSender {
     }
 
     // Package-private test constructor: lets unit tests dial down responseTimeout (for the
-    // read-timeout scenario) and overallTimeout (for the 30s-budget scenarios — overall-timeout,
-    // 429-large-retry-after, 429-missing-retry-after, 429-negative-retry-after) so the suite
-    // finishes in seconds instead of minutes. Mirrors TelegramApiClient.java:55's pattern.
-    TelegramSender(WebClient.Builder builder,
+    // read-timeout scenario) and overallTimeout (for the 30s-budget scenarios — overall timeout,
+    // 429 large retry_after, 429 missing retry_after, 429 negative retry_after) so the suite
+    // finishes in seconds instead of minutes.
+    TelegramSender(RestClient.Builder builder,
                    String baseUrl,
                    Duration responseTimeout,
                    Duration overallTimeout,
                    BotRepository botRepository,
                    TokenEncryptor tokenEncryptor,
                    EventService eventService) {
-        HttpClient httpClient = HttpClient.create()
-                .responseTimeout(responseTimeout)
-                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS,
-                        (int) TelegramApiClient.CONNECT_TIMEOUT.toMillis());
+        HttpClient httpClient = HttpClient.newBuilder()
+                .connectTimeout(TelegramApiClient.CONNECT_TIMEOUT)
+                .build();
+        JdkClientHttpRequestFactory requestFactory = new JdkClientHttpRequestFactory(httpClient);
+        requestFactory.setReadTimeout(responseTimeout);
         DefaultUriBuilderFactory uriBuilderFactory = new DefaultUriBuilderFactory(baseUrl);
         uriBuilderFactory.setEncodingMode(DefaultUriBuilderFactory.EncodingMode.NONE);
-        this.webClient = builder
+        this.restClient = builder
                 .uriBuilderFactory(uriBuilderFactory)
-                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .requestFactory(requestFactory)
                 .build();
         this.botRepository = botRepository;
         this.tokenEncryptor = tokenEncryptor;
@@ -104,37 +110,87 @@ public class TelegramSender {
         this.overallTimeout = overallTimeout;
     }
 
-    public Mono<SentMessage> sendText(String botId, Long chatId, String text,
-                                      String parseMode, String ownerId) {
-        // Outermost-closure AtomicInteger. Persists across BOTH retry loops; a counter declared
-        // inside the per-attempt request supplier would reset on every 429 resubscription.
+    public SentMessage sendText(String botId, Long chatId, String text,
+                                String parseMode, String ownerId) {
+        // Outermost AtomicInteger. Persists across BOTH retry loops: each HTTP attempt increments
+        // it once at the request site. The [5xx, 429, 5xx, 200] interleaving invariant asserts
+        // attempts==4 — the counter survives 429 outer-loop re-entry into the 5xx inner loop.
         AtomicInteger attempts = new AtomicInteger(0);
+        // Captured ONCE at the start of sendText — never re-derived inside the retry loops.
+        Instant deadline = Instant.now().plus(overallTimeout);
 
-        return botRepository.findById(botId)
-                .filter(bot -> bot.getStatus() == BotStatus.CONNECTED)
-                .switchIfEmpty(Mono.error(AppException.notFound(MESSAGE_BOT_NOT_FOUND)))
-                .flatMap(bot -> sendOnce(bot, botId, chatId, text, parseMode, attempts))
-                .timeout(overallTimeout)
-                .onErrorMap(TimeoutException.class,
-                        ex -> new TelegramSendException(null, "timeout", attempts.get()))
-                .doOnSuccess(sm -> {
-                    if (sm != null) {
-                        eventService.logEvent(ownerId, EVENT_TELEGRAM_MESSAGE_SENT,
-                                null, null, sentMetadata(botId, sm));
-                    }
-                })
-                .doOnError(ex -> {
-                    if (isTerminalAuditable(ex)) {
-                        log.error("Telegram send terminal failure attempts={}: {}",
-                                attempts.get(), TelegramApiClient.scrubTokens(ex.getMessage()));
-                        eventService.logEvent(ownerId, EVENT_TELEGRAM_SEND_FAILED,
-                                null, null, failedMetadata(botId, chatId, ex, attempts.get()));
-                    }
-                });
+        try {
+            Optional<Bot> botOpt = botRepository.findById(botId)
+                    .filter(b -> b.getStatus() == BotStatus.CONNECTED);
+            Bot bot = botOpt.orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND));
+
+            SentMessage sm = sendWithRateLimitRetry(bot, botId, chatId, text, parseMode,
+                    attempts, deadline);
+            eventService.logEvent(ownerId, EVENT_TELEGRAM_MESSAGE_SENT,
+                    null, null, sentMetadata(botId, sm));
+            return sm;
+        } catch (RuntimeException ex) {
+            if (isTerminalAuditable(ex)) {
+                log.error("Telegram send terminal failure attempts={}: {}",
+                        attempts.get(), TelegramApiClient.scrubTokens(ex.getMessage()));
+                eventService.logEvent(ownerId, EVENT_TELEGRAM_SEND_FAILED,
+                        null, null, failedMetadata(botId, chatId, ex, attempts.get()));
+            }
+            throw ex;
+        }
     }
 
-    private Mono<SentMessage> sendOnce(Bot bot, String botId, Long chatId, String text,
-                                       String parseMode, AtomicInteger attempts) {
+    // Outer 429 loop wrapping the inner 5xx loop. Per Decision 2, 429 wraps 5xx — Telegram's
+    // rate-limit window resets the per-second budget, so we retry from scratch on retry_after.
+    private SentMessage sendWithRateLimitRetry(Bot bot, String botId, Long chatId, String text,
+                                               String parseMode, AtomicInteger attempts,
+                                               Instant deadline) {
+        while (true) {
+            try {
+                return sendWith5xxRetry(bot, botId, chatId, text, parseMode, attempts, deadline);
+            } catch (TelegramRateLimitException rate) {
+                long delaySeconds = Math.max(0,
+                        Math.min(rate.getRetryAfterSeconds(), RATE_LIMIT_DELAY_CAP_SECONDS));
+                long jitterMs = ThreadLocalRandom.current().nextLong(0, RATE_LIMIT_JITTER_MAX_MS);
+                log.warn("Telegram 429 — waiting {}s + {}ms jitter", delaySeconds, jitterMs);
+                long totalSleepMs = delaySeconds * 1000L + jitterMs;
+                sleepWithDeadline(totalSleepMs, deadline, attempts);
+            }
+        }
+    }
+
+    private SentMessage sendWith5xxRetry(Bot bot, String botId, Long chatId, String text,
+                                         String parseMode, AtomicInteger attempts,
+                                         Instant deadline) {
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            checkDeadline(deadline, attempts);
+            try {
+                return sendOnce(bot, botId, chatId, text, parseMode, attempts);
+            } catch (TelegramRateLimitException re) {
+                // 429 is handled by the outer loop, NOT a transient.
+                throw re;
+            } catch (RuntimeException ex) {
+                if (!TelegramApiClient.isTransient(ex)) {
+                    throw ex;
+                }
+                if (attempt == MAX_RETRIES) {
+                    throw new TelegramSendException(null, "transient_failure_exhausted",
+                            attempts.get());
+                }
+                log.warn("Telegram transient retry #{} after error: {}",
+                        attempt + 1, TelegramApiClient.scrubTokens(ex.getMessage()));
+                long backoffMs = Math.min(
+                        INITIAL_5XX_BACKOFF.toMillis() << attempt,
+                        MAX_5XX_BACKOFF.toMillis());
+                sleepWithDeadline(backoffMs, deadline, attempts);
+            }
+        }
+        // Unreachable: the attempt==MAX_RETRIES branch always throws.
+        throw new TelegramSendException(null, "transient_failure_exhausted", attempts.get());
+    }
+
+    private SentMessage sendOnce(Bot bot, String botId, Long chatId, String text,
+                                 String parseMode, AtomicInteger attempts) {
         byte[] iv;
         byte[] ct;
         try {
@@ -142,9 +198,9 @@ public class TelegramSender {
             ct = Base64.getDecoder().decode(bot.getEncryptedTokenCiphertext());
         } catch (IllegalArgumentException e) {
             // Base64 decode failed = data corruption at storage boundary → user-fixable 422.
-            return Mono.error(new BotTokenInvalidException(botId, "decryption failed"));
+            throw new BotTokenInvalidException(botId, "decryption failed");
         }
-        // tokenEncryptor.decrypt deliberately OUTSIDE the catch (Risk R7): IllegalStateException
+        // tokenEncryptor.decrypt deliberately OUTSIDE the catch: IllegalStateException
         // (AEAD-tag failure or misconfigured bean) and IllegalArgumentException from wrong-length
         // IV must propagate as 500 — indistinguishable failure modes that ops monitoring must see.
         String token = tokenEncryptor.decrypt(iv, ct);
@@ -152,7 +208,7 @@ public class TelegramSender {
         try {
             TelegramApiClient.requireValidTokenShape(token);
         } catch (IllegalArgumentException e) {
-            return Mono.error(new BotTokenInvalidException(botId, "invalid token shape after decrypt"));
+            throw new BotTokenInvalidException(botId, "invalid token shape after decrypt");
         }
 
         Map<String, Object> body = new HashMap<>();
@@ -162,30 +218,40 @@ public class TelegramSender {
             body.put("parse_mode", parseMode);
         }
 
-        return webClient.post()
+        attempts.incrementAndGet();
+        TelegramSendResult<JsonNode> result = restClient.post()
                 .uri("/bot{token}/sendMessage", token)
-                .bodyValue(body)
+                .body(body)
                 .retrieve()
-                .onStatus(HttpStatusCode::is4xxClientError, response -> map4xx(response, botId, attempts))
-                .bodyToMono(new ParameterizedTypeReference<TelegramSendResult<JsonNode>>() {})
-                .doOnSubscribe(s -> attempts.incrementAndGet())
-                .flatMap(result -> mapBodyToSentMessage(result, chatId, attempts))
-                .retryWhen(buildTransientRetry(attempts))
-                .retryWhen(buildRateLimitRetry());
+                .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {
+                    throw map4xx(resp, botId, attempts);
+                })
+                .body(new ParameterizedTypeReference<TelegramSendResult<JsonNode>>() {});
+        return mapBodyToSentMessage(result, chatId, attempts);
     }
 
-    private Mono<? extends Throwable> map4xx(ClientResponse response, String botId, AtomicInteger attempts) {
-        HttpStatus status = HttpStatus.resolve(response.statusCode().value());
-        int rawStatus = response.statusCode().value();
-        return response.bodyToMono(new ParameterizedTypeReference<TelegramSendResult<JsonNode>>() {})
-                .onErrorResume(ex -> Mono.just(emptyResult()))
-                .defaultIfEmpty(emptyResult())
-                .map(result -> toThrowable(status, rawStatus, result, botId, attempts));
+    private RuntimeException map4xx(ClientHttpResponse response, String botId, AtomicInteger attempts) {
+        int rawStatus = response.getStatusCode().value();
+        HttpStatus status = HttpStatus.resolve(rawStatus);
+        TelegramSendResult<JsonNode> result = readBodyOrEmpty(response);
+        return toThrowable(status, rawStatus, result, botId, attempts);
     }
 
-    private Throwable toThrowable(HttpStatus status, int rawStatus,
-                                  TelegramSendResult<JsonNode> result,
-                                  String botId, AtomicInteger attempts) {
+    private TelegramSendResult<JsonNode> readBodyOrEmpty(ClientHttpResponse response) {
+        try {
+            byte[] bytes = response.getBody().readAllBytes();
+            if (bytes.length == 0) {
+                return emptyResult();
+            }
+            return STATIC_OBJECT_MAPPER.readValue(bytes, SEND_RESULT_TYPE);
+        } catch (Exception ex) {
+            return emptyResult();
+        }
+    }
+
+    private RuntimeException toThrowable(HttpStatus status, int rawStatus,
+                                         TelegramSendResult<JsonNode> result,
+                                         String botId, AtomicInteger attempts) {
         String scrubbed = TelegramApiClient.scrubTokens(result.description());
         if (status == HttpStatus.UNAUTHORIZED) {
             return new BotTokenInvalidException(botId, "Token is invalid or revoked");
@@ -203,18 +269,22 @@ public class TelegramSender {
         return new TelegramSendException(rawStatus, scrubbed, attempts.get());
     }
 
-    private Mono<SentMessage> mapBodyToSentMessage(TelegramSendResult<JsonNode> result,
-                                                   Long fallbackChatId,
-                                                   AtomicInteger attempts) {
+    private SentMessage mapBodyToSentMessage(TelegramSendResult<JsonNode> result,
+                                             Long fallbackChatId,
+                                             AtomicInteger attempts) {
+        if (result == null) {
+            log.warn("Telegram ok=false or missing message_id: {}", "null body");
+            throw new TelegramSendException(null, "null body", attempts.get());
+        }
         JsonNode resultNode = result.result();
         if (result.ok() && resultNode != null && resultNode.has("message_id")) {
             Long messageId = resultNode.get("message_id").asLong();
             Long chatId = extractChatId(resultNode, fallbackChatId);
-            return Mono.just(new SentMessage(chatId, messageId, Instant.now()));
+            return new SentMessage(chatId, messageId, Instant.now());
         }
         String scrubbed = TelegramApiClient.scrubTokens(result.description());
         log.warn("Telegram ok=false or missing message_id: {}", scrubbed);
-        return Mono.error(new TelegramSendException(null, scrubbed, attempts.get()));
+        throw new TelegramSendException(null, scrubbed, attempts.get());
     }
 
     private static Long extractChatId(JsonNode resultNode, Long fallback) {
@@ -226,27 +296,27 @@ public class TelegramSender {
         return fallback;
     }
 
-    private Retry buildTransientRetry(AtomicInteger attempts) {
-        return Retry.backoff(3, Duration.ofSeconds(1))
-                .maxBackoff(Duration.ofSeconds(4))
-                .filter(TelegramApiClient::isTransient)
-                .doBeforeRetry(rs -> log.warn("Telegram transient retry #{} after error: {}",
-                        rs.totalRetries() + 1,
-                        TelegramApiClient.scrubTokens(rs.failure().getMessage())))
-                .onRetryExhaustedThrow((spec, signal) ->
-                        new TelegramSendException(null, "transient_failure_exhausted", attempts.get()));
+    // Deadline check: throws TelegramSendException("timeout") if the wall-clock budget is gone.
+    // Checked before each sleep and before each new retry attempt (per Decision 2 ordering rule).
+    private void checkDeadline(Instant deadline, AtomicInteger attempts) {
+        if (Instant.now().isAfter(deadline)) {
+            throw new TelegramSendException(null, "timeout", attempts.get());
+        }
     }
 
-    private Retry buildRateLimitRetry() {
-        return Retry.from(companion -> companion.flatMap(rs -> {
-            if (!(rs.failure() instanceof TelegramRateLimitException tr)) {
-                return Mono.error(rs.failure());
+    // Sleep with deadline check before AND after. Pre-check avoids sleeping past the budget;
+    // post-check guards against clock drift / VT-scheduling latency during the sleep.
+    private void sleepWithDeadline(long durationMs, Instant deadline, AtomicInteger attempts) {
+        checkDeadline(deadline, attempts);
+        if (durationMs > 0) {
+            try {
+                Thread.sleep(durationMs);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                throw new TelegramSendException(null, "interrupted", attempts.get());
             }
-            long delaySeconds = Math.max(0, Math.min(tr.getRetryAfterSeconds(), RATE_LIMIT_DELAY_CAP_SECONDS));
-            long jitterMs = ThreadLocalRandom.current().nextLong(0, RATE_LIMIT_JITTER_MAX_MS);
-            log.warn("Telegram 429 — waiting {}s + {}ms jitter", delaySeconds, jitterMs);
-            return Mono.delay(Duration.ofSeconds(delaySeconds).plusMillis(jitterMs));
-        }));
+        }
+        checkDeadline(deadline, attempts);
     }
 
     private static TelegramSendResult<JsonNode> emptyResult() {
@@ -276,9 +346,9 @@ public class TelegramSender {
         meta.put("attempts", attempts);
         // For TelegramSendException we always insert both keys (errorCode/errorDescription) even
         // when null — keeps the metadata schema predictable for event consumers that may rely on
-        // .containsKey(...). The "timeout" and "transient_failure_exhausted" sentinel
-        // descriptions are deliberate internal markers (not upstream Telegram strings).
-        // BotTokenInvalidException omits both keys per tech-spec error-mapping table line 265.
+        // .containsKey(...). The "timeout" / "transient_failure_exhausted" / "interrupted"
+        // sentinel descriptions are deliberate internal markers (not upstream Telegram strings).
+        // BotTokenInvalidException omits both keys per tech-spec error-mapping table.
         if (ex instanceof TelegramSendException tse) {
             meta.put("errorCode", tse.getErrorCode());
             meta.put("errorDescription", tse.getMessage());

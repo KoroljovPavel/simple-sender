@@ -270,6 +270,13 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         assertThat(statuses).containsOnly(200);
         assertThat(rawUpdateRepository.count()).isEqualTo(1L);
         awaitEnqueuedCount(1L);
+        // Pin self-heal branch fired exactly once — proves the (projectId, updateId) unique
+        // index rejected the second insert AND the catch(DuplicateKeyException) ran. Without
+        // this, an absent index could pass (both inserts succeed → counter stays 0 → row count
+        // could still be 1 by upsert semantics if anyone introduces them later).
+        assertThat(counter("duplicate"))
+                .as("exactly one of the two parallel POSTs must hit the self-heal branch")
+                .isEqualTo(1.0);
     }
 
     @Test
@@ -461,5 +468,46 @@ class TelegramWebhookControllerIT extends AbstractIntegrationTest {
         assertThat(doPost(p.getId(), SECRET_PLAIN, samplePayload(1L))).isEqualTo(401);
         assertThat(counter("invalid_secret")).isEqualTo(1.0);
         assertThat(counter("project_not_found")).isZero();
+    }
+
+    // ---------- missing update_id → 400 (per TDD anchor) ----------
+
+    @Test
+    void receive_missingUpdateId_returns400EmptyBody() throws Exception {
+        // Telegram contract guarantees update_id. A payload without it cannot satisfy the
+        // (projectId, updateId) unique index — controller rejects with 400 + scrubbed WARN log,
+        // never persists a row, never enqueues a job.
+        Project p = seedProject();
+        seedBot(p.getId(), BotStatus.CONNECTED, SECRET_HASH);
+
+        Document noUpdateId = new Document().append("message",
+                new Document("chat", new Document("id", 100L).append("type", "private"))
+                        .append("text", "/start"));
+
+        int status = mockMvc.perform(post("/webhooks/telegram/{projectId}", p.getId())
+                        .header("X-Telegram-Bot-Api-Secret-Token", SECRET_PLAIN)
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(bodyJson(noUpdateId)))
+                .andReturn().getResponse().getStatus();
+        assertThat(status).isEqualTo(400);
+
+        assertThat(rawUpdateRepository.count()).isZero();
+        assertThat(enqueuedCount()).isZero();
+
+        // Decision 3 pins: scrubbed WARN log site exists for the missing-update_id rejection.
+        List<String> warnLines = appender.list.stream()
+                .filter(e -> e.getLoggerName()
+                        .equals("com.botfunnel.webhook.TelegramWebhookController"))
+                .filter(e -> e.getLevel() == Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+        assertThat(warnLines)
+                .as("controller must emit a scrubbed WARN line on missing update_id")
+                .anySatisfy(line -> assertThat(line).contains("missing update_id"));
+        for (String line : warnLines) {
+            assertThat(TOKEN_PATTERN.matcher(line).find())
+                    .as("WARN log must NOT contain a Telegram-token-shaped substring: <%s>", line)
+                    .isFalse();
+        }
     }
 }

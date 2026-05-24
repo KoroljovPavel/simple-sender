@@ -60,6 +60,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
     @MockitoSpyBean SubscriberService subscriberService;
     @MockitoSpyBean FunnelTriggerService funnelTriggerService;
+    @MockitoSpyBean com.botfunnel.events.EventService eventService;
 
     private String projectId;
     private String botId;
@@ -88,7 +89,7 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         rawUpdateRepository.deleteAll();
         botRepository.deleteAll();
         projectRepository.deleteAll();
-        Mockito.reset(subscriberService, funnelTriggerService);
+        Mockito.reset(subscriberService, funnelTriggerService, eventService);
 
         Project p = new Project();
         p.setOwnerId(OWNER_ID);
@@ -159,12 +160,19 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
     void ownerChatIdPopulate_secondStartDifferentChat_doesNotOverwrite() {
         // AC6 second-half: atomic predicate (ownerChatId=null) MUST fail on the second start,
         // so the first chatId stays pinned even after subsequent /start from a different chat.
+        // Also pins the "benign no-op" contract (Edge case 263): CAS predicate-fail returns null
+        // from findAndModify, which must NOT log ERROR, NOT throw, NOT tick failure counter.
         RawUpdate first = seedRawUpdate(RawUpdateStatus.PENDING,
                 privateStartPayload(100L, 100L, "/start"), 1L);
         job.handle(first.getId());
 
         RawUpdate second = seedRawUpdate(RawUpdateStatus.PENDING,
                 privateStartPayload(200L, 200L, "/start"), 2L);
+        long beforeFailure = failureCount();
+        long beforeSuccess = successCount();
+        // Clear the appender so we can scope ERROR-log assertions to the second invocation only.
+        jobAppender.list.clear();
+
         job.handle(second.getId());
 
         Bot reloaded = botRepository.findById(botId).orElse(null);
@@ -172,6 +180,52 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         assertThat(reloaded.getOwnerChatId())
                 .as("ownerChatId must remain pinned to the first /start chatId")
                 .isEqualTo(100L);
+        // Benign no-op contract: second worker must still complete DONE, not FAILED.
+        assertRawUpdateDone(second.getId());
+        // Failure counter must NOT tick — CAS predicate-fail is not a worker failure.
+        assertThat(failureCount())
+                .as("CAS predicate-fail must NOT tick failure counter — it is benign")
+                .isEqualTo(beforeFailure);
+        // Success counter ticks once for the second worker run (happy path overall).
+        assertThat(successCount() - beforeSuccess)
+                .as("CAS predicate-fail still resolves to worker success")
+                .isEqualTo(1L);
+        // No ERROR log site fired during the second invocation.
+        assertThat(jobAppender.list.stream()
+                .filter(e -> e.getLevel() == Level.ERROR)
+                .toList())
+                .as("CAS predicate-fail must NOT log ERROR")
+                .isEmpty();
+    }
+
+    @Test
+    void eventWriteBeforeStatusFlip_orderingInvariant() {
+        // AC explicit (tasks/9.md line 166): event-write completes BEFORE status flip to DONE.
+        // Sentinel side-effect approach: capture the rawUpdate's processingStatus at the moment
+        // eventService.logEvent is invoked. If event-write fires BEFORE the DONE save, the live
+        // status seen by the spy is still PENDING; if a regression moves the save earlier, the
+        // spy would see DONE. Resolved against the same Mongo doc the worker writes to (single-
+        // row test, IT-style with autowired real repos).
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "/start"), 1L);
+
+        RawUpdateStatus[] statusSeenAtEventWrite = {null};
+        Mockito.doAnswer(inv -> {
+            if (statusSeenAtEventWrite[0] == null) {
+                RawUpdate live = rawUpdateRepository.findById(raw.getId()).orElse(null);
+                statusSeenAtEventWrite[0] = live == null ? null : live.getProcessingStatus();
+            }
+            // Delegate to the real service so the DB row is actually written.
+            return inv.callRealMethod();
+        }).when(eventService).logEvent(any(), any(), any(), any(), any());
+
+        job.handle(raw.getId());
+
+        assertThat(statusSeenAtEventWrite[0])
+                .as("event-write must observe PENDING status — the DONE save must happen AFTER")
+                .isEqualTo(RawUpdateStatus.PENDING);
+        // End-state remains DONE — proves the save eventually ran.
+        assertRawUpdateDone(raw.getId());
     }
 
     // ─── AC7 — /start payload variants ─────────────────────────────────────────

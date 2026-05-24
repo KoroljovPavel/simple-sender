@@ -31,8 +31,11 @@ public final class ConcurrencyTestUtils {
             for (int i = 0; i < n; i++) {
                 futures.add(executor.submit(() -> {
                     try {
-                        // Announce we're parked at the barrier. Defensive: countDown also lives in
-                        // the finally so any exception en route here still releases the caller.
+                        // Pre-barrier countDown: signal we are parked. The duplicate countDown
+                        // in the finally is harmless (countDown is monotonic at zero) and exists
+                        // only as a paranoia hedge against Error-class throws between the call
+                        // here and start.await() — without it, the parent's ready.await() would
+                        // hang on an OOME/StackOverflowError that escaped between the two lines.
                         ready.countDown();
                         start.await();
                         return task.call();

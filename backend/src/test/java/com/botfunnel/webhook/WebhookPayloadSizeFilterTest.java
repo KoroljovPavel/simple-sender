@@ -197,6 +197,39 @@ class WebhookPayloadSizeFilterTest {
     }
 
     @Test
+    void multiValueTransferEncodingCaseFold_rejectsWith413() throws Exception {
+        // HTTP/1.1 legal: comma-separated multi-value `Transfer-Encoding`, mixed case. Filter
+        // must still reject. Pins Locale.ROOT case-fold (Turkish-locale JVM dotless-i bug) AND
+        // substring `.contains("chunked")` (so equality checks like equals("chunked") regress
+        // here).
+        MockHttpServletRequest req = post("/webhooks/telegram/abc");
+        req.addHeader(HttpHeaders.TRANSFER_ENCODING, "gzip,Chunked");
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        AtomicBoolean downstream = new AtomicBoolean(false);
+        invoke(req, resp, downstream);
+
+        assertThat(resp.getStatus()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE.value());
+        assertThat(downstream.get()).as("chain must NOT be invoked on chunked reject").isFalse();
+        assertThat(counter()).isEqualTo(1.0);
+    }
+
+    @Test
+    void allUppercaseTransferEncoding_rejectsWith413() throws Exception {
+        // All-uppercase variant — same Locale.ROOT case-fold contract.
+        MockHttpServletRequest req = post("/webhooks/telegram/abc");
+        req.addHeader(HttpHeaders.TRANSFER_ENCODING, "GZIP, CHUNKED");
+        MockHttpServletResponse resp = new MockHttpServletResponse();
+
+        AtomicBoolean downstream = new AtomicBoolean(false);
+        invoke(req, resp, downstream);
+
+        assertThat(resp.getStatus()).isEqualTo(HttpStatus.PAYLOAD_TOO_LARGE.value());
+        assertThat(downstream.get()).isFalse();
+        assertThat(counter()).isEqualTo(1.0);
+    }
+
+    @Test
     void zeroContentLength_passesThrough() throws Exception {
         // Per task edge case: CL: 0 is a valid empty body. Filter passes through; controller's
         // @RequestBody surfaces a Spring 400 default downstream.

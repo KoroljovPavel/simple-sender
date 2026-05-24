@@ -9,6 +9,7 @@ import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import jakarta.servlet.http.Cookie;
 import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -577,7 +578,12 @@ class AuthControllerIT extends AbstractIntegrationTest {
                         .content("{\"email\":\"\",\"password\":\"Strong1Pass\"}"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(nullValue()))
-                .andExpect(jsonPath("$.message").value(matchesPattern("^email: .+(, .+: .+)*$")));
+                // Joiner-shape regex: `[^,]+` instead of `.+` so the leading group does NOT
+                // greedily swallow following ", field: message" segments. Tightens the AC17
+                // contract — a regression that collapses the joiner to space-separated would
+                // be caught here (the original `.+(, .+: .+)*$` accidentally matched on any
+                // "email: <anything>" string because the `.+` swallowed commas).
+                .andExpect(jsonPath("$.message").value(matchesPattern("^email: [^,]+(, [^,]+: [^,]+)*$")));
     }
 
     // ---------- AC18: remember-me Max-Age cookie attributes + XSRF co-emission ----------
@@ -607,6 +613,13 @@ class AuthControllerIT extends AbstractIntegrationTest {
         //     same response". TC11 is covered by
         //     SecurityConfigTest.csrfCookie_writtenOnSafeVerbRequest (the cookie write path
         //     fires on a fresh anonymous GET). See decisions.md Task 12 Deviations.
+        // Security sanity: rememberMeDays config must stay within a sane upper bound. An
+        // env misconfiguration that pushes the cookie lifetime to ~1 year would silently
+        // pass the Max-Age equality check below, so we pin the configured value itself.
+        assertThat(cfgRememberMeDays)
+                .as("app.session.ttl-remember-me-days upper bound (defensive cap on remember-me lifetime)")
+                .isLessThanOrEqualTo(60L);
+
         seedUser("rmt@test.com", UserStatus.active, null);
 
         MockHttpServletResponse response = mockMvc.perform(post("/api/auth/login")
@@ -694,11 +707,17 @@ class AuthControllerIT extends AbstractIntegrationTest {
     }
 
     /**
-     * Parses the first {@code Set-Cookie} header for {@code cookieName} and returns its
-     * attributes as a case-insensitive map (keys lowercased). The cookie name/value are
-     * stored under reserved keys {@code __name} and {@code __value}. Flag-only attributes
-     * (HttpOnly, Secure) store an empty string. Returns {@code null} if no matching header
-     * is present.
+     * Parses the single {@code Set-Cookie} header whose name matches {@code cookieName} and
+     * returns its attributes as a case-insensitive map (keys lowercased). The cookie name and
+     * value are stored under reserved keys {@code __name} and {@code __value}. Flag-only
+     * attributes (HttpOnly, Secure) store an empty string. Returns {@code null} if no matching
+     * header is present.
+     *
+     * <p>Throws {@link AssertionError} if more than one {@code Set-Cookie} header matches —
+     * for SESSION this could happen if {@code AuthService.openSession} starts emitting an
+     * explicit clear-old-cookie before the new one (e.g., as part of a session-fixation
+     * hardening), in which case the test must be updated to pick the correct entry rather
+     * than silently match the first.
      *
      * <p>Reads {@code response.getHeaders("Set-Cookie")} rather than {@link MockHttpServletResponse#getCookie(String)}
      * because the latter exposes the {@link Cookie#getMaxAge() Max-Age} but not the
@@ -708,12 +727,19 @@ class AuthControllerIT extends AbstractIntegrationTest {
      */
     private static Map<String, String> parseSetCookieHeaderFor(MockHttpServletResponse response, String cookieName) {
         String prefix = cookieName + "=";
+        java.util.List<String> matches = new java.util.ArrayList<>();
         for (String header : response.getHeaders("Set-Cookie")) {
             if (header.startsWith(prefix)) {
-                return parseSetCookie(header);
+                matches.add(header);
             }
         }
-        return null;
+        if (matches.isEmpty()) {
+            return null;
+        }
+        assertThat(matches)
+                .as("expected exactly one Set-Cookie header for cookie name '%s', got %d", cookieName, matches.size())
+                .hasSize(1);
+        return parseSetCookie(matches.get(0));
     }
 
     private static Map<String, String> parseSetCookie(String header) {

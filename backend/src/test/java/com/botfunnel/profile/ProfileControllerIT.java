@@ -335,6 +335,13 @@ class ProfileControllerIT extends AbstractIntegrationTest {
 
         // (b) The current device's session survives — `_id` matched currentSessionId so the
         // `.and("_id").ne(currentSessionId)` filter excluded it from the delete.
+        //
+        // Design choice (deliberate): change-password does NOT rotate the current session id.
+        // The acting device's id stays stable so the user is not silently logged out of the
+        // device they just used to rotate their password. The session-fixation defence
+        // (changeSessionId) runs only at login (AuthService.openSession). If a future
+        // CWE-384 hardening pass adds session-id rotation on password change, this assertion
+        // will (correctly) fail and the test must be updated to capture the rotated id.
         long currentCount = mongoTemplate.count(
                 Query.query(Criteria.where("principal").is(USER_ID).and("_id").is(currentSessionId)), "sessions");
         assertThat(currentCount)

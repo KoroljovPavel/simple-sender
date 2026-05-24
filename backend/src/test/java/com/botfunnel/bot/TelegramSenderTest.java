@@ -440,6 +440,7 @@ class TelegramSenderTest {
                 isNull(), isNull(), metaCap.capture());
         assertThat(metaCap.getValue())
                 .containsEntry("botId", BOT_ID)
+                .containsEntry("chatId", CALLER_CHAT_ID)
                 .containsEntry("attempts", 1)
                 .doesNotContainKey("errorCode")
                 .doesNotContainKey("errorDescription");

@@ -44,10 +44,13 @@ public interface SubscriberService {
 
     /**
      * Manual unsubscribe (Task 8 CRM action): flips an ACTIVE subscriber to UNSUBSCRIBED and writes
-     * {@code subscriber_unsubscribed{reason:"manual"}}. Throws 404 when the subscriber is missing and
-     * 409 {@code already_unsubscribed} when it is not ACTIVE (UNSUBSCRIBED/BLOCKED/DELETED).
+     * {@code subscriber_unsubscribed{reason:"manual"}}. {@code projectId} scopes the lookup as
+     * anti-IDOR defense-in-depth — a subscriber that belongs to a different project collapses to the
+     * same uniform 404 as a missing one (the controller's {@code requireOwned} proves project
+     * ownership but not that the path {@code subscriberId} belongs to that project). Throws 409
+     * {@code already_unsubscribed} when the subscriber is not ACTIVE (UNSUBSCRIBED/BLOCKED/DELETED).
      */
-    void unsubscribeManual(String subscriberId);
+    void unsubscribeManual(String projectId, String subscriberId);
 
     /**
      * Decision 10 sole-writer entry point for {@code subscriber_custom_field_set}. Records ONE audit

@@ -9,7 +9,7 @@ import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-// AC24 / Decision 1: after NoOpSubscriberService deletion there is exactly ONE SubscriberService bean
+// AC24 / Decision 1: after the placeholder-stub deletion there is exactly ONE SubscriberService bean
 // and it is the real SubscriberServiceImpl — proving the stub was replaced, not shadowed via @Primary.
 class SubscriberStubReplacementIT extends AbstractIntegrationTest {
 

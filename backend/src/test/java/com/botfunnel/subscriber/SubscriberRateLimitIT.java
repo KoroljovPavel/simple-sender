@@ -162,6 +162,9 @@ class SubscriberRateLimitIT extends AbstractIntegrationTest {
                 .anyMatch(e -> e.getLevel() == Level.WARN
                         && e.getFormattedMessage().contains("SUBSCRIBER_START_RATE_REDIS_FAIL_OPEN"));
         assertThat(warned).as("fail-open path must emit the greppable WARN constant").isTrue();
+        assertThat(rateLimitEvents())
+                .as("fail-open must NOT emit a rate_limit_exceeded event")
+                .isZero();
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────────

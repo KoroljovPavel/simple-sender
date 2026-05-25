@@ -14,6 +14,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.UpdateDefinition;
@@ -102,7 +103,7 @@ class SubscriberStatusMachineTest {
         when(subscriberRepository.findById("sub-1"))
                 .thenReturn(Optional.of(subscriber("sub-1", SubscriberStatus.UNSUBSCRIBED)));
 
-        assertThatThrownBy(() -> service.unsubscribeManual("sub-1"))
+        assertThatThrownBy(() -> service.unsubscribeManual(PROJECT_ID, "sub-1"))
                 .isInstanceOfSatisfying(AppException.class, ex -> {
                     assertThat(ex.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                     assertThat(ex.getCode()).isEqualTo("already_unsubscribed");
@@ -118,7 +119,7 @@ class SubscriberStatusMachineTest {
                 .thenReturn(Optional.of(subscriber("deleted", SubscriberStatus.DELETED)));
 
         for (String id : List.of("blocked", "deleted")) {
-            assertThatThrownBy(() -> service.unsubscribeManual(id))
+            assertThatThrownBy(() -> service.unsubscribeManual(PROJECT_ID, id))
                     .isInstanceOfSatisfying(AppException.class, ex -> {
                         assertThat(ex.getStatus()).isEqualTo(HttpStatus.CONFLICT);
                         assertThat(ex.getCode()).isEqualTo("already_unsubscribed");
@@ -127,11 +128,23 @@ class SubscriberStatusMachineTest {
     }
 
     @Test
+    void unsubscribeManual_foreignProject_throws404() {
+        // Anti-IDOR: subscriber exists but belongs to a different project → uniform 404, no mutation.
+        when(subscriberRepository.findById("sub-1"))
+                .thenReturn(Optional.of(subscriber("sub-1", SubscriberStatus.ACTIVE)));
+
+        assertThatThrownBy(() -> service.unsubscribeManual("other-project", "sub-1"))
+                .isInstanceOfSatisfying(AppException.class, ex ->
+                        assertThat(ex.getStatus()).isEqualTo(HttpStatus.NOT_FOUND));
+        verify(subscriberEventRepository, never()).save(any());
+    }
+
+    @Test
     void unsubscribeManual_onActive_flipsAndWritesManualReason() {
         when(subscriberRepository.findById("sub-1"))
                 .thenReturn(Optional.of(subscriber("sub-1", SubscriberStatus.ACTIVE)));
 
-        service.unsubscribeManual("sub-1");
+        service.unsubscribeManual(PROJECT_ID, "sub-1");
 
         assertThat(capturedSet().get("status")).isEqualTo(SubscriberStatus.UNSUBSCRIBED);
         assertThat(capturedEvent().getMetadata()).containsEntry("reason", "manual");
@@ -163,6 +176,26 @@ class SubscriberStatusMachineTest {
         SubscriberEvent event = capturedEvent();
         assertThat(event.getEventType()).isEqualTo("subscriber_reactivated");
         assertThat(event.getMetadata()).containsEntry("previousStatus", "UNSUBSCRIBED");
+    }
+
+    @Test
+    void upsertFromTelegramUpdate_onDuplicateKeyRace_reReadsAndRefreshes() {
+        // Deterministically exercise the DuplicateKeyException catch: first lookup misses, the insert
+        // loses the unique-index race, the re-read returns the winner's ACTIVE row → refresh path.
+        Subscriber winner = subscriber("sub-1", SubscriberStatus.ACTIVE);
+        when(subscriberRepository.findByProjectIdAndTelegramUserId(PROJECT_ID, 300L))
+                .thenReturn(Optional.empty())
+                .thenReturn(Optional.of(winner));
+        when(subscriberRepository.insert(any(Subscriber.class)))
+                .thenThrow(new DuplicateKeyException("E11000 duplicate key"));
+
+        service.upsertFromTelegramUpdate(PROJECT_ID, BOT_ID, CHAT_ID, "private", 300L,
+                "Alice", "L", "alice", "en");
+
+        // Recovery applied the refresh (exactly one findAndModify), and wrote NO lifecycle event
+        // (the winner row was already ACTIVE).
+        verify(mongoTemplate).findAndModify(any(Query.class), any(UpdateDefinition.class), eq(Subscriber.class));
+        verify(subscriberEventRepository, never()).save(any());
     }
 
     @Test

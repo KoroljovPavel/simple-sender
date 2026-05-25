@@ -146,9 +146,14 @@ class SubscriberServiceImplIT extends AbstractIntegrationTest {
             return null;
         });
 
-        assertThat(subscriberRepository.findAll())
-                .filteredOn(s -> 300L == s.getTelegramUserId())
-                .hasSize(1);
+        // Exactly one surviving ACTIVE row (the recovery applied refresh, not a second insert)…
+        List<Subscriber> rows = subscriberRepository.findAll().stream()
+                .filter(s -> 300L == s.getTelegramUserId())
+                .toList();
+        assertThat(rows).hasSize(1);
+        assertThat(rows.get(0).getStatus()).isEqualTo(SubscriberStatus.ACTIVE);
+        // …and the registration event fired exactly once (no double-register from the racing worker).
+        assertThat(registeredEventsFor(rows.get(0).getId())).hasSize(1);
     }
 
     // ─── Decision 10 writers (direct invocation) ────────────────────────────

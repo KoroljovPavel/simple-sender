@@ -208,8 +208,11 @@ public class SubscriberServiceImpl implements SubscriberService {
     }
 
     @Override
-    public void unsubscribeManual(String subscriberId) {
+    public void unsubscribeManual(String projectId, String subscriberId) {
+        // projectId scope is anti-IDOR defense-in-depth — a foreign-project subscriber collapses to
+        // the same uniform 404 as a missing one (mirrors the addTag/removeTag (projectId, _id) scope).
         Subscriber s = subscriberRepository.findById(subscriberId)
+                .filter(sub -> projectId.equals(sub.getProjectId()))
                 .orElseThrow(() -> AppException.notFound(MESSAGE_SUBSCRIBER_NOT_FOUND));
         if (s.getStatus() != SubscriberStatus.ACTIVE) {
             // UNSUBSCRIBED/BLOCKED/DELETED — terminal states cannot be manually unsubscribed.

@@ -1,11 +1,35 @@
 <script setup lang="ts">
 import { useAuthStore } from '~/stores/auth'
 import { useProjectsStore } from '~/stores/projects'
+import { NON_DEFAULT_LOCALES } from '~/shared/i18n-locales'
 
 const authStore = useAuthStore()
 const projectsStore = useProjectsStore()
 const { t } = useI18n()
 const localePath = useLocalePath()
+const route = useRoute()
+
+// Project-scoped Subscribers sub-nav bases (built only when a project is selected).
+const subscribersBase = computed(() =>
+  projectsStore.currentProject ? `/projects/${projectsStore.currentProject.id}/subscribers` : '',
+)
+const tagsBase = computed(() =>
+  projectsStore.currentProject ? `/projects/${projectsStore.currentProject.id}/tags` : '',
+)
+const customFieldsBase = computed(() =>
+  projectsStore.currentProject ? `/projects/${projectsStore.currentProject.id}/custom-fields` : '',
+)
+
+// i18n strategy="prefix_except_default": strip a known non-default locale segment before matching,
+// sourced from the single locales constant (mirror SettingsSubnav). Parent + each child use
+// prefix-match so the profile sub-route (/subscribers/{id}) keeps the Subscribers entry active.
+const LOCALE_PREFIX_RE = new RegExp(`^/(${NON_DEFAULT_LOCALES.join('|')})(?=/|$)`)
+const currentPath = computed(() => (route.path ?? '').replace(/\/$/, '').replace(LOCALE_PREFIX_RE, ''))
+
+function isActive(base: string): boolean {
+  if (!base) return false
+  return currentPath.value === base || currentPath.value.startsWith(`${base}/`)
+}
 
 async function onLogout() {
   try {
@@ -48,6 +72,44 @@ async function onLogout() {
           >
             {{ t('layout.sidebar.allProjects') }}
           </NuxtLinkLocale>
+          <template v-if="projectsStore.currentProject">
+            <NuxtLinkLocale
+              :to="subscribersBase"
+              data-test="sidebar-subscribers-parent"
+              class="text-sm hover:underline"
+              :class="isActive(subscribersBase) ? 'text-blue-600 font-medium' : ''"
+              :aria-current="isActive(subscribersBase) ? 'page' : undefined"
+            >
+              {{ t('layout.sidebar.subscribers') }}
+            </NuxtLinkLocale>
+            <NuxtLinkLocale
+              :to="subscribersBase"
+              data-test="sidebar-subscribers-link"
+              class="text-sm hover:underline pl-4"
+              :class="isActive(subscribersBase) ? 'text-blue-600 font-medium' : ''"
+              :aria-current="isActive(subscribersBase) ? 'page' : undefined"
+            >
+              {{ t('subscribers.subnav.subscribers') }}
+            </NuxtLinkLocale>
+            <NuxtLinkLocale
+              :to="tagsBase"
+              data-test="sidebar-tags-link"
+              class="text-sm hover:underline pl-4"
+              :class="isActive(tagsBase) ? 'text-blue-600 font-medium' : ''"
+              :aria-current="isActive(tagsBase) ? 'page' : undefined"
+            >
+              {{ t('tags.subnav.tags') }}
+            </NuxtLinkLocale>
+            <NuxtLinkLocale
+              :to="customFieldsBase"
+              data-test="sidebar-custom-fields-link"
+              class="text-sm hover:underline pl-4"
+              :class="isActive(customFieldsBase) ? 'text-blue-600 font-medium' : ''"
+              :aria-current="isActive(customFieldsBase) ? 'page' : undefined"
+            >
+              {{ t('customFields.subnav.customFields') }}
+            </NuxtLinkLocale>
+          </template>
           <NuxtLinkLocale
             v-if="projectsStore.currentProject"
             :to="`/projects/${projectsStore.currentProject.id}/settings`"

@@ -22,7 +22,8 @@
     },
     "sidebar": {
       "settings": "Налаштування",
-      "allProjects": "Усі проекти"
+      "allProjects": "Усі проекти",
+      "subscribers": "Підписники"
     }
   },
   "timezone": {
@@ -348,6 +349,196 @@
         "403": "Дія заборонена. Зверніться до підтримки",
         "generic": "Не вдалося видалити акаунт. Спробуйте пізніше"
       }
+    }
+  },
+  "subscribers": {
+    "title": "Підписники",
+    "searchPlaceholder": "Пошук за іменем або юзернеймом…",
+    "filters": {
+      "status": "Статус",
+      "tags": {
+        "include": "З тегами",
+        "exclude": "Без тегів"
+      },
+      "dateRange": {
+        "from": "Від",
+        "to": "До"
+      }
+    },
+    "sort": {
+      "createdDesc": "Спочатку нові",
+      "lastSeenDesc": "Остання активність"
+    },
+    "loadMore": "Завантажити ще",
+    "empty": {
+      "title": "Поки що немає підписників",
+      "body": "Коли користувач напише /start вашому боту, він з'явиться тут."
+    },
+    "actions": {
+      "export": "Експорт CSV",
+      "recentExports": "Останні експорти"
+    },
+    "columns": {
+      "firstName": "Ім'я",
+      "lastName": "Прізвище",
+      "username": "Юзернейм",
+      "status": "Статус",
+      "tags": "Теги",
+      "lastSeen": "Остання активність"
+    },
+    "status": {
+      "active": "Активний",
+      "unsubscribed": "Відписався",
+      "blocked": "Заблокував",
+      "deleted": "Видалений"
+    },
+    "profile": {
+      "identityCard": {
+        "title": "Профіль підписника"
+      },
+      "tabs": {
+        "tags": "Теги",
+        "customFields": "Кастомні поля",
+        "history": "Історія"
+      },
+      "actions": {
+        "unsubscribe": "Відписати",
+        "sendMessage": "Надіслати повідомлення"
+      },
+      "sendMessage": {
+        "dialog": {
+          "title": "Надіслати повідомлення",
+          "textLabel": "Текст повідомлення",
+          "submit": "Надіслати"
+        },
+        "success": "Повідомлення надіслано"
+      },
+      "history": {
+        "empty": "Подій ще немає"
+      }
+    },
+    "subnav": {
+      "subscribers": "Підписники"
+    }
+  },
+  "tags": {
+    "title": "Теги",
+    "empty": {
+      "title": "Тегів ще немає",
+      "body": "Створіть перший тег, щоб групувати підписників."
+    },
+    "columns": {
+      "label": "Назва",
+      "slug": "Слаг",
+      "subscriberCount": "Підписників"
+    },
+    "actions": {
+      "create": "Створити тег",
+      "rename": "Перейменувати",
+      "delete": "Видалити"
+    },
+    "createDialog": {
+      "title": "Новий тег",
+      "slugLabel": "Слаг",
+      "labelLabel": "Назва",
+      "submit": "Створити"
+    },
+    "renameDialog": {
+      "title": "Перейменувати тег",
+      "labelLabel": "Назва",
+      "submit": "Зберегти"
+    },
+    "deleteDialog": {
+      "title": "Видалити тег?",
+      "confirmBody": "Тег буде знято з усіх підписників. Дію не можна скасувати.",
+      "submit": "Видалити"
+    },
+    "subnav": {
+      "tags": "Теги"
+    }
+  },
+  "customFields": {
+    "title": "Кастомні поля",
+    "empty": {
+      "title": "Кастомних полів ще немає",
+      "body": "Додайте поле, щоб зберігати додаткові дані про підписників."
+    },
+    "columns": {
+      "label": "Назва",
+      "name": "Ідентифікатор",
+      "type": "Тип",
+      "defaultValue": "Значення за замовчуванням"
+    },
+    "actions": {
+      "add": "Додати поле",
+      "edit": "Редагувати",
+      "delete": "Видалити"
+    },
+    "type": {
+      "string": "Текст",
+      "number": "Число",
+      "boolean": "Так/Ні",
+      "date": "Дата"
+    },
+    "addDialog": {
+      "title": "Нове поле",
+      "nameLabel": "Ідентифікатор",
+      "labelLabel": "Назва",
+      "typeLabel": "Тип",
+      "defaultValueLabel": "Значення за замовчуванням",
+      "submit": "Додати"
+    },
+    "editDialog": {
+      "title": "Редагувати поле",
+      "labelLabel": "Назва",
+      "defaultValueLabel": "Значення за замовчуванням",
+      "submit": "Зберегти"
+    },
+    "deleteDialog": {
+      "title": "Видалити поле?",
+      "confirmBody": "Поле та його значення буде видалено в усіх підписників. Дію не можна скасувати.",
+      "submit": "Видалити"
+    },
+    "subnav": {
+      "customFields": "Кастомні поля"
+    }
+  },
+  "exports": {
+    "dialog": {
+      "title": "Експорт підписників",
+      "body": "Буде створено CSV-файл з підписниками за поточним фільтром. Посилання надішлемо на email.",
+      "submit": "Експортувати",
+      "cancel": "Скасувати"
+    },
+    "recentDialog": {
+      "title": "Останні експорти",
+      "empty": "Експортів ще не було",
+      "columns": {
+        "createdAt": "Створено",
+        "status": "Статус",
+        "rowCount": "Рядків",
+        "actions": "Дії"
+      },
+      "actions": {
+        "download": "Завантажити",
+        "refreshUrl": "Оновити посилання"
+      },
+      "expiresIn": "Дійсне ще {duration}",
+      "expired": "Посилання прострочено"
+    },
+    "status": {
+      "pending": "В черзі",
+      "running": "Виконується",
+      "done": "Готово",
+      "failed": "Помилка",
+      "purged": "Видалено"
+    },
+    "triggered": "Експорт розпочато",
+    "ready": "Експорт готовий",
+    "failed": {
+      "generic": "Не вдалося створити експорт. Спробуйте пізніше.",
+      "tooLarge": "Фільтр надто великий. Звузьте вибірку.",
+      "inFlight": "Експорт уже виконується. Зачекайте завершення."
     }
   }
 }

@@ -22,7 +22,8 @@
     },
     "sidebar": {
       "settings": "Settings",
-      "allProjects": "All projects"
+      "allProjects": "All projects",
+      "subscribers": "Subscribers"
     }
   },
   "timezone": {
@@ -348,6 +349,196 @@
         "403": "Action denied. Contact support",
         "generic": "Failed to delete account. Try again later"
       }
+    }
+  },
+  "subscribers": {
+    "title": "Subscribers",
+    "searchPlaceholder": "Search by name or username…",
+    "filters": {
+      "status": "Status",
+      "tags": {
+        "include": "With tags",
+        "exclude": "Without tags"
+      },
+      "dateRange": {
+        "from": "From",
+        "to": "To"
+      }
+    },
+    "sort": {
+      "createdDesc": "Newest first",
+      "lastSeenDesc": "Last seen"
+    },
+    "loadMore": "Load more",
+    "empty": {
+      "title": "No subscribers yet",
+      "body": "When a user sends /start to your bot, they will show up here."
+    },
+    "actions": {
+      "export": "Export CSV",
+      "recentExports": "Recent exports"
+    },
+    "columns": {
+      "firstName": "First name",
+      "lastName": "Last name",
+      "username": "Username",
+      "status": "Status",
+      "tags": "Tags",
+      "lastSeen": "Last seen"
+    },
+    "status": {
+      "active": "Active",
+      "unsubscribed": "Unsubscribed",
+      "blocked": "Blocked",
+      "deleted": "Deleted"
+    },
+    "profile": {
+      "identityCard": {
+        "title": "Subscriber profile"
+      },
+      "tabs": {
+        "tags": "Tags",
+        "customFields": "Custom fields",
+        "history": "History"
+      },
+      "actions": {
+        "unsubscribe": "Unsubscribe",
+        "sendMessage": "Send message"
+      },
+      "sendMessage": {
+        "dialog": {
+          "title": "Send message",
+          "textLabel": "Message text",
+          "submit": "Send"
+        },
+        "success": "Message sent"
+      },
+      "history": {
+        "empty": "No events yet"
+      }
+    },
+    "subnav": {
+      "subscribers": "Subscribers"
+    }
+  },
+  "tags": {
+    "title": "Tags",
+    "empty": {
+      "title": "No tags yet",
+      "body": "Create your first tag to group subscribers."
+    },
+    "columns": {
+      "label": "Label",
+      "slug": "Slug",
+      "subscriberCount": "Subscribers"
+    },
+    "actions": {
+      "create": "Create tag",
+      "rename": "Rename",
+      "delete": "Delete"
+    },
+    "createDialog": {
+      "title": "New tag",
+      "slugLabel": "Slug",
+      "labelLabel": "Label",
+      "submit": "Create"
+    },
+    "renameDialog": {
+      "title": "Rename tag",
+      "labelLabel": "Label",
+      "submit": "Save"
+    },
+    "deleteDialog": {
+      "title": "Delete tag?",
+      "confirmBody": "The tag will be removed from all subscribers. This action cannot be undone.",
+      "submit": "Delete"
+    },
+    "subnav": {
+      "tags": "Tags"
+    }
+  },
+  "customFields": {
+    "title": "Custom fields",
+    "empty": {
+      "title": "No custom fields yet",
+      "body": "Add a field to store extra data about your subscribers."
+    },
+    "columns": {
+      "label": "Label",
+      "name": "Identifier",
+      "type": "Type",
+      "defaultValue": "Default value"
+    },
+    "actions": {
+      "add": "Add field",
+      "edit": "Edit",
+      "delete": "Delete"
+    },
+    "type": {
+      "string": "Text",
+      "number": "Number",
+      "boolean": "Yes/No",
+      "date": "Date"
+    },
+    "addDialog": {
+      "title": "New field",
+      "nameLabel": "Identifier",
+      "labelLabel": "Label",
+      "typeLabel": "Type",
+      "defaultValueLabel": "Default value",
+      "submit": "Add"
+    },
+    "editDialog": {
+      "title": "Edit field",
+      "labelLabel": "Label",
+      "defaultValueLabel": "Default value",
+      "submit": "Save"
+    },
+    "deleteDialog": {
+      "title": "Delete field?",
+      "confirmBody": "The field and its values will be removed from all subscribers. This action cannot be undone.",
+      "submit": "Delete"
+    },
+    "subnav": {
+      "customFields": "Custom fields"
+    }
+  },
+  "exports": {
+    "dialog": {
+      "title": "Export subscribers",
+      "body": "A CSV file with subscribers matching the current filter will be created. We will email you the link.",
+      "submit": "Export",
+      "cancel": "Cancel"
+    },
+    "recentDialog": {
+      "title": "Recent exports",
+      "empty": "No exports yet",
+      "columns": {
+        "createdAt": "Created",
+        "status": "Status",
+        "rowCount": "Rows",
+        "actions": "Actions"
+      },
+      "actions": {
+        "download": "Download",
+        "refreshUrl": "Refresh link"
+      },
+      "expiresIn": "Valid for {duration} more",
+      "expired": "Link expired"
+    },
+    "status": {
+      "pending": "Queued",
+      "running": "Running",
+      "done": "Done",
+      "failed": "Failed",
+      "purged": "Removed"
+    },
+    "triggered": "Export started",
+    "ready": "Export ready",
+    "failed": {
+      "generic": "Failed to create export. Try again later.",
+      "tooLarge": "The filter is too large. Narrow the selection.",
+      "inFlight": "An export is already running. Wait for it to finish."
     }
   }
 }

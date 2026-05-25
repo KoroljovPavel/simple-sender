@@ -117,7 +117,7 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
     private void seedSubscriberEvent(String projectId) {
         SubscriberEvent e = new SubscriberEvent();
         e.setProjectId(projectId);
-        e.setSubscriberId("sub-" + System.nanoTime());
+        e.setSubscriberId("sub-" + SEQ.incrementAndGet());
         e.setEventType("subscriber_registered");
         e.setCreatedAt(Instant.now());
         mongoTemplate.save(e);

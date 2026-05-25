@@ -5,6 +5,14 @@ import com.botfunnel.events.Event;
 import com.botfunnel.events.EventRepository;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
+import com.botfunnel.subscriber.Subscriber;
+import com.botfunnel.subscriber.SubscriberEvent;
+import com.botfunnel.subscriber.SubscriberStatus;
+import com.botfunnel.subscriber.export.ExportStatus;
+import com.botfunnel.subscriber.export.SubscriberExport;
+import com.botfunnel.tag.Tag;
+import com.mongodb.client.gridfs.model.GridFSFile;
+import org.bson.Document;
 import org.jobrunr.jobs.RecurringJob;
 import org.jobrunr.storage.StorageProvider;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,7 +21,13 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.system.CapturedOutput;
 import org.springframework.boot.test.system.OutputCaptureExtension;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.gridfs.GridFsOperations;
 
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
@@ -28,15 +42,23 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
     @Autowired EventRepository eventRepository;
     @Autowired ProjectHardDeleteJob job;
     @Autowired StorageProvider storageProvider;
+    @Autowired MongoTemplate mongoTemplate;
+    @Autowired GridFsOperations gridFsOperations;
 
     @BeforeEach
     void cleanState() {
-        // Wipes `projects` + `events` only. JobRunr StorageProvider state (the registered
-        // RecurringJob list) is intentionally NOT reset between tests — registrations come from
-        // @Recurring discovery at Spring context startup and are stable for the JVM lifetime.
-        // `recurringJob_registeredWithCorrectIdAndCron` reads that state read-only.
+        // Wipes `projects` + `events` + the four subscriber-domain collections + every GridFS file.
+        // JobRunr StorageProvider state (the registered RecurringJob list) is intentionally NOT
+        // reset between tests — registrations come from @Recurring discovery at Spring context
+        // startup and are stable for the JVM lifetime. `recurringJob_registeredWithCorrectIdAndCron`
+        // reads that state read-only.
         projectRepository.deleteAll();
         eventRepository.deleteAll();
+        mongoTemplate.remove(new Query(), Subscriber.class);
+        mongoTemplate.remove(new Query(), Tag.class);
+        mongoTemplate.remove(new Query(), SubscriberEvent.class);
+        mongoTemplate.remove(new Query(), SubscriberExport.class);
+        gridFsOperations.delete(new Query());
     }
 
     private Project seedSoftDeletedProject(String ownerId, String name, Instant deletedAt) {
@@ -57,6 +79,70 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         Map<String, Object> meta = Map.of("projectId", projectId);
         Event e = new Event(ownerId, type, null, null, meta, createdAt);
         return eventRepository.save(e);
+    }
+
+    // ─── Subscriber-domain + GridFS seed helpers (Epic 09 cascade) ──────────────
+    // Each seeds exactly one row keyed by projectId at the document root (Subscriber/Tag/
+    // SubscriberEvent/SubscriberExport) so the cascade's top-level `projectId` criterion picks
+    // them up. GridFS files are keyed under `metadata.projectId` (nested) like the `events` sweep.
+
+    private void seedSubscriber(String projectId) {
+        Subscriber s = new Subscriber();
+        s.setProjectId(projectId);
+        // Unique-compound (projectId, telegramUserId): nanoTime keeps repeated seeds collision-free.
+        s.setTelegramUserId(System.nanoTime());
+        s.setTelegramChatId(System.nanoTime());
+        s.setStatus(SubscriberStatus.ACTIVE);
+        s.setSubscribedAt(Instant.now());
+        s.setLastSeenAt(Instant.now());
+        mongoTemplate.save(s);
+    }
+
+    private void seedTag(String projectId) {
+        Tag t = new Tag();
+        t.setProjectId(projectId);
+        // Unique-compound (projectId, slug): nanoTime slug keeps repeated seeds collision-free.
+        t.setSlug("tag-" + System.nanoTime());
+        t.setLabel("L");
+        t.setCreatedAt(Instant.now());
+        mongoTemplate.save(t);
+    }
+
+    private void seedSubscriberEvent(String projectId) {
+        SubscriberEvent e = new SubscriberEvent();
+        e.setProjectId(projectId);
+        e.setSubscriberId("sub-" + System.nanoTime());
+        e.setEventType("subscriber_registered");
+        e.setCreatedAt(Instant.now());
+        mongoTemplate.save(e);
+    }
+
+    private void seedSubscriberExport(String projectId) {
+        SubscriberExport ex = new SubscriberExport();
+        ex.setProjectId(projectId);
+        ex.setOwnerId("owner-1");
+        // DONE avoids the (projectId) partial-unique index on in-flight (PENDING/RUNNING) exports,
+        // so multiple seeds for distinct projects never collide.
+        ex.setStatus(ExportStatus.DONE);
+        ex.setCreatedAt(Instant.now());
+        mongoTemplate.save(ex);
+    }
+
+    private void seedGridFsFile(String projectId, String exportId) {
+        Document metadata = new Document("projectId", projectId).append("exportId", exportId);
+        gridFsOperations.store(
+                new ByteArrayInputStream("col1,col2\nval1,val2\n".getBytes(StandardCharsets.UTF_8)),
+                "export-" + exportId + ".csv", metadata);
+    }
+
+    private long countByProjectId(Class<?> entityType, String projectId) {
+        return mongoTemplate.count(Query.query(Criteria.where("projectId").is(projectId)), entityType);
+    }
+
+    private boolean gridFsFileExists(String projectId) {
+        GridFSFile found = gridFsOperations.findOne(
+                Query.query(Criteria.where("metadata.projectId").is(projectId)));
+        return found != null;
     }
 
     @Test
@@ -129,9 +215,12 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
                 .as("project_hard_deleted must be created during this run, not pre-existing")
                 .isAfterOrEqualTo(preJob);
 
+        // This canonical AC-17b proof seeds only `events`, so the new subscriber-domain + GridFS
+        // counts are all 0 here — the dedicated cascade tests below seed and drain those.
         assertThat(output.getOut())
                 .containsPattern("ProjectHardDeleteJob - run completed: "
-                        + "deletedCount=1 eventsRemovedCount=2 runDurationMs=\\d+");
+                        + "deletedCount=1 eventsRemovedCount=2 gridFsFilesRemoved=0 exportsRemoved=0 "
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs=\\d+");
     }
 
     @Test
@@ -205,13 +294,16 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void cron_zeroDeletionDay_emitsStructuredInfoLog(CapturedOutput output) {
-        // Empty DB after cleanState — exercise the zero-deletion-day liveness signal.
+    void cron_zeroDeletionDay_emitsExtendedStructuredLineWithZeros(CapturedOutput output) {
+        // Empty DB after cleanState — exercise the zero-deletion-day liveness signal. The extended
+        // shape must still emit with every per-collection count at 0 (operations grep for the
+        // "run completed" prefix to confirm the cron is alive).
         job.hardDeleteSoftDeletedProjects();
 
         assertThat(output.getOut())
                 .containsPattern("ProjectHardDeleteJob - run completed: "
-                        + "deletedCount=0 eventsRemovedCount=0 runDurationMs=\\d+");
+                        + "deletedCount=0 eventsRemovedCount=0 gridFsFilesRemoved=0 exportsRemoved=0 "
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs=\\d+");
 
         assertThat(projectRepository.count()).isZero();
         assertThat(eventRepository.count()).isZero();
@@ -235,7 +327,8 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         String captured = output.getOut();
         assertThat(captured)
                 .containsPattern("ProjectHardDeleteJob - run completed: "
-                        + "deletedCount=1 eventsRemovedCount=2 runDurationMs=\\d+");
+                        + "deletedCount=1 eventsRemovedCount=2 gridFsFilesRemoved=0 exportsRemoved=0 "
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs=\\d+");
         long occurrences = countOccurrences(captured, "ProjectHardDeleteJob - run completed: ");
         assertThat(occurrences)
                 .as("structured INFO line must be emitted exactly once per run")
@@ -250,6 +343,97 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
             idx += needle.length();
         }
         return count;
+    }
+
+    @Test
+    void cron_cascadesAllSubscriberDomainCollectionsAndGridFs() {
+        // One project, one row in each of the four subscriber-domain collections + one GridFS file.
+        // Proves NO collection is forgotten by the cascade and the binary blob is swept.
+        Project oldProject = seedSoftDeletedProject("owner-1", "Old Project",
+                Instant.now().minus(8, ChronoUnit.DAYS));
+        seedSubscriber(oldProject.getId());
+        seedTag(oldProject.getId());
+        seedSubscriberEvent(oldProject.getId());
+        seedSubscriberExport(oldProject.getId());
+        seedGridFsFile(oldProject.getId(), "export-1");
+
+        job.hardDeleteSoftDeletedProjects();
+
+        assertThat(projectRepository.findById(oldProject.getId()).orElse(null)).isNull();
+        assertThat(countByProjectId(Subscriber.class, oldProject.getId())).isZero();
+        assertThat(countByProjectId(Tag.class, oldProject.getId())).isZero();
+        assertThat(countByProjectId(SubscriberEvent.class, oldProject.getId())).isZero();
+        assertThat(countByProjectId(SubscriberExport.class, oldProject.getId())).isZero();
+        assertThat(gridFsFileExists(oldProject.getId()))
+                .as("GridFS export blob must be swept (both fs.files and fs.chunks)")
+                .isFalse();
+    }
+
+    @Test
+    void cron_logsExtendedStructuredLineWithPerCollectionCounts(CapturedOutput output) {
+        Project oldProject = seedSoftDeletedProject("owner-1", "Old Project",
+                Instant.now().minus(8, ChronoUnit.DAYS));
+        seedEvent("owner-1", oldProject.getId(), "project_created", Instant.now().minus(20, ChronoUnit.DAYS));
+        seedEvent("owner-1", oldProject.getId(), "project_soft_deleted", Instant.now().minus(8, ChronoUnit.DAYS));
+        seedSubscriber(oldProject.getId());
+        seedTag(oldProject.getId());
+        seedSubscriberEvent(oldProject.getId());
+        seedSubscriberExport(oldProject.getId());
+        seedGridFsFile(oldProject.getId(), "export-1");
+
+        job.hardDeleteSoftDeletedProjects();
+
+        assertThat(output.getOut())
+                .containsPattern("ProjectHardDeleteJob - run completed: "
+                        + "deletedCount=1 eventsRemovedCount=2 gridFsFilesRemoved=1 exportsRemoved=1 "
+                        + "subscriberEventsRemoved=1 subscribersRemoved=1 tagsRemoved=1 runDurationMs=\\d+");
+    }
+
+    @Test
+    void cron_doesNotTouchSubscriberDomainRowsForYoungProjects() {
+        // Project soft-deleted 1 day ago is inside the 7d grace window — every subscriber-domain
+        // row and the GridFS blob must survive untouched.
+        Project recent = seedSoftDeletedProject("owner-1", "Recent",
+                Instant.now().minus(1, ChronoUnit.DAYS));
+        seedSubscriber(recent.getId());
+        seedTag(recent.getId());
+        seedSubscriberEvent(recent.getId());
+        seedSubscriberExport(recent.getId());
+        seedGridFsFile(recent.getId(), "export-young");
+
+        job.hardDeleteSoftDeletedProjects();
+
+        assertThat(projectRepository.findById(recent.getId()).orElse(null)).isNotNull();
+        assertThat(countByProjectId(Subscriber.class, recent.getId())).isEqualTo(1L);
+        assertThat(countByProjectId(Tag.class, recent.getId())).isEqualTo(1L);
+        assertThat(countByProjectId(SubscriberEvent.class, recent.getId())).isEqualTo(1L);
+        assertThat(countByProjectId(SubscriberExport.class, recent.getId())).isEqualTo(1L);
+        assertThat(gridFsFileExists(recent.getId()))
+                .as("young project's GridFS blob must survive the grace window")
+                .isTrue();
+    }
+
+    @Test
+    void cron_cascadeIsIdempotent_secondRunIsNoOp(CapturedOutput output) {
+        // Partial-cascade recovery contract: a re-fire on already-drained state must be a clean
+        // no-op (all counts 0, no exception). JobRunr's default retry depends on this.
+        Project oldProject = seedSoftDeletedProject("owner-1", "Old Project",
+                Instant.now().minus(8, ChronoUnit.DAYS));
+        seedSubscriber(oldProject.getId());
+        seedTag(oldProject.getId());
+        seedSubscriberEvent(oldProject.getId());
+        seedSubscriberExport(oldProject.getId());
+        seedGridFsFile(oldProject.getId(), "export-1");
+
+        job.hardDeleteSoftDeletedProjects();
+        // Second run sees an empty deletedIds list (project doc already dropped) → zero-deletion path.
+        job.hardDeleteSoftDeletedProjects();
+
+        assertThat(output.getOut())
+                .containsPattern("ProjectHardDeleteJob - run completed: "
+                        + "deletedCount=0 eventsRemovedCount=0 gridFsFilesRemoved=0 exportsRemoved=0 "
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs=\\d+");
+        assertThat(projectRepository.findById(oldProject.getId()).orElse(null)).isNull();
     }
 
     @Test

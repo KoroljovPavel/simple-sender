@@ -86,10 +86,22 @@ class SubscriberControllerIT extends AbstractIntegrationTest {
     void list_textSearch_matchesFirstNameLastNameUsername() throws Exception {
         seedNamed("Ivanna", "Petrenko", "ivanna_p");
         seedNamed("Bohdan", "Koval", "bohdan_k");
+        seedNamed("Olena", "Shevchenko", "olena_marketing");
 
-        JsonNode page = getPage("?search=ivanna");
-        assertThat(page.get("items")).hasSize(1);
-        assertThat(page.get("items").get(0).get("firstName").asText()).isEqualTo("Ivanna");
+        // firstName token
+        JsonNode byFirst = getPage("?search=ivanna");
+        assertThat(byFirst.get("items")).hasSize(1);
+        assertThat(byFirst.get("items").get(0).get("firstName").asText()).isEqualTo("Ivanna");
+
+        // lastName token (whole-word, language=none)
+        JsonNode byLast = getPage("?search=koval");
+        assertThat(byLast.get("items")).hasSize(1);
+        assertThat(byLast.get("items").get(0).get("lastName").asText()).isEqualTo("Koval");
+
+        // username token
+        JsonNode byUsername = getPage("?search=olena_marketing");
+        assertThat(byUsername.get("items")).hasSize(1);
+        assertThat(byUsername.get("items").get(0).get("username").asText()).isEqualTo("olena_marketing");
     }
 
     @Test
@@ -148,9 +160,28 @@ class SubscriberControllerIT extends AbstractIntegrationTest {
     @WithMockAppUser(userId = USER_ID)
     void list_cursorForward3Pages_noDuplicatesNoSkips() throws Exception {
         seedSubscribers(120);
-        List<String> all = fetchAllIds(50);
-        assertThat(all).hasSize(120);
-        assertThat(new HashSet<>(all)).hasSize(120); // no duplicates
+
+        List<String> orderedIds = new ArrayList<>();
+        List<String> orderedSubscribedAt = new ArrayList<>();
+        String cursor = null;
+        int guard = 0;
+        do {
+            JsonNode page = getPage("?limit=50" + (cursor == null ? "" : "&cursor=" + cursor));
+            page.get("items").forEach(n -> {
+                orderedIds.add(n.get("id").asText());
+                orderedSubscribedAt.add(n.get("subscribedAt").asText());
+            });
+            cursor = page.get("nextCursor").isNull() ? null : page.get("nextCursor").asText();
+            guard++;
+        } while (cursor != null && guard < 50);
+
+        // No skips: every seeded subscriber appears exactly once (full-set coverage, no duplicates).
+        Set<String> seededIds = new HashSet<>();
+        subscriberRepository.findAll().forEach(s -> seededIds.add(s.getId()));
+        assertThat(orderedIds).hasSize(120);
+        assertThat(new HashSet<>(orderedIds)).isEqualTo(seededIds);
+        // Ordering continuity: created_desc → subscribedAt is non-increasing across page boundaries.
+        assertThat(orderedSubscribedAt).isSortedAccordingTo(java.util.Comparator.reverseOrder());
     }
 
     @Test
@@ -197,7 +228,11 @@ class SubscriberControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void cursor_dollarPrefixedKeys_returns400() throws Exception {
-        mockMvc.perform(get(url() + "?cursor=" + encode("{\"$where\":\"1\",\"id\":\"0123456789abcdef01234567\"}")))
+        // Keys are exactly {v,id} with a VALID 24-hex id, so the unknown-key + id-regex checks pass —
+        // ONLY the recursive $-key walk (assertNoDollarKeys) can reject the nested $ne operator. This
+        // isolates the NoSQL operator-injection guard (F6) that cursor_unknownKeys does not exercise.
+        mockMvc.perform(get(url() + "?cursor="
+                        + encode("{\"v\":{\"$ne\":null},\"id\":\"0123456789abcdef01234567\"}")))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value("invalid_cursor"));
     }
@@ -255,20 +290,6 @@ class SubscriberControllerIT extends AbstractIntegrationTest {
                 .andExpect(status().isOk())
                 .andReturn();
         return objectMapper.readTree(res.getResponse().getContentAsString());
-    }
-
-    private List<String> fetchAllIds(int limit) throws Exception {
-        List<String> ids = new ArrayList<>();
-        String cursor = null;
-        int guard = 0;
-        do {
-            String q = "?limit=" + limit + (cursor == null ? "" : "&cursor=" + cursor);
-            JsonNode page = getPage(q);
-            page.get("items").forEach(n -> ids.add(n.get("id").asText()));
-            cursor = page.get("nextCursor").isNull() ? null : page.get("nextCursor").asText();
-            guard++;
-        } while (cursor != null && guard < 50);
-        return ids;
     }
 
     private static String encode(String json) {

@@ -27,6 +27,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.data.mongodb.core.query.Criteria;
 import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
@@ -94,7 +95,7 @@ public class SubscriberController {
     private final TelegramSender telegramSender;
     private final BotRepository botRepository;
     private final MongoTemplate mongoTemplate;
-    private final org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
+    private final StringRedisTemplate redisTemplate;
     private final SegmentFilterBuilder segmentFilterBuilder;
     private final ObjectMapper objectMapper;
     private final Clock clock;
@@ -108,7 +109,7 @@ public class SubscriberController {
                                 TelegramSender telegramSender,
                                 BotRepository botRepository,
                                 MongoTemplate mongoTemplate,
-                                org.springframework.data.redis.core.StringRedisTemplate redisTemplate,
+                                StringRedisTemplate redisTemplate,
                                 SegmentFilterBuilder segmentFilterBuilder,
                                 ObjectMapper objectMapper,
                                 Clock clock,
@@ -136,8 +137,10 @@ public class SubscriberController {
                                                                  @Valid @ModelAttribute SubscriberListQuery query) {
         Project project = projectService.requireOwned(currentUserId(), projectId, false);
 
-        // Explicit server-side guard: a 1-char search must be a 400, not a silent no-op (the @Size
-        // bean-validation also covers it; this keeps the rejection deterministic at the handler).
+        // Explicit server-side guard: a <2-char search must be a 400, not a silent no-op. This counts
+        // TRIMMED length, whereas the DTO's @Size(min=2) counts raw length — the two layers overlap but
+        // are not redundant (this also rejects "  a  " which @Size would accept). Bean-validation fires
+        // first during binding; this is the deterministic fallback at the handler.
         if (query.search() != null && query.search().trim().length() < SegmentFilterBuilder.MIN_SEARCH_CHARS) {
             throw AppException.badRequest("search must be at least 2 characters");
         }
@@ -176,8 +179,11 @@ public class SubscriberController {
         Project project = projectService.requireOwned(currentUserId(), projectId, false);
         requireOwnedSubscriber(project.getId(), id);
 
-        int effectiveLimit = Math.min(Math.max(limit, 1), MAX_EVENTS_LIMIT);
-        Query feed = Query.query(Criteria.where("subscriberId").is(id))
+        // limit <= 0 → documented default 50 (symmetric with the list endpoint's clampLimit); max 200.
+        int effectiveLimit = limit <= 0 ? DEFAULT_EVENTS_LIMIT : Math.min(limit, MAX_EVENTS_LIMIT);
+        // Self-scoping by projectId too (not just subscriberId): defense-in-depth so the feed query
+        // cannot leak cross-project rows even if a future caller reaches it without requireOwnedSubscriber.
+        Query feed = Query.query(Criteria.where("subscriberId").is(id).and("projectId").is(project.getId()))
                 .with(Sort.by(Sort.Direction.DESC, "createdAt"))
                 .limit(effectiveLimit);
         List<SubscriberEventResponse> body = mongoTemplate.find(feed, SubscriberEvent.class).stream()

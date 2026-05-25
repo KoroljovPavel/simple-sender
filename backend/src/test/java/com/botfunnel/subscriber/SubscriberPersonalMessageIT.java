@@ -248,12 +248,21 @@ class SubscriberPersonalMessageIT extends AbstractIntegrationTest {
     @WithMockAppUser(userId = USER_ID)
     void create_hostileBodyMassAssignment_dropped() throws Exception {
         TELEGRAM.enqueue(ok200());
+        int before = TELEGRAM.getRequestCount();
 
+        // Extra keys (evil_key, status) are not on SendMessageRequest → @JsonIgnoreProperties drops them
+        // silently. The request must still succeed using only the valid `text`, with no side effect from
+        // the hostile keys: subscriber status stays ACTIVE and exactly one normal send fires.
         mockMvc.perform(post(url() + "/" + subscriberId + "/messages").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content("{\"text\":\"hi\",\"evil_key\":\"x\",\"status\":\"hacked\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("sent"));
+
+        assertThat(TELEGRAM.getRequestCount() - before).isEqualTo(1);
+        assertThat(eventsFor("personal_message_sent")).hasSize(1);
+        assertThat(subscriberRepository.findById(subscriberId).orElseThrow().getStatus())
+                .isEqualTo(SubscriberStatus.ACTIVE);
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────────

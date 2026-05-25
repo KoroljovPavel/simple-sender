@@ -7,6 +7,7 @@ import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
+import java.util.List;
 
 // Indexes auto-created via spring.data.mongodb.auto-index-creation=true (dev).
 // Production index management is out of scope (see decisions / user-spec Constraints).
@@ -33,6 +34,11 @@ public class Project {
     private Instant updatedAt;
     private Instant deletedAt;
 
+    // Embedded custom-field schema (Epic 05). Nullable on existing documents (Mongo schemaless);
+    // getter contract is "may return null", consistent with the other nullable Project fields.
+    // Bean Validation on items lives on the request DTOs (Task 5), not here.
+    private List<CustomFieldDefinition> customFieldDefinitions;
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
@@ -56,4 +62,7 @@ public class Project {
 
     public Instant getDeletedAt() { return deletedAt; }
     public void setDeletedAt(Instant deletedAt) { this.deletedAt = deletedAt; }
+
+    public List<CustomFieldDefinition> getCustomFieldDefinitions() { return customFieldDefinitions; }
+    public void setCustomFieldDefinitions(List<CustomFieldDefinition> customFieldDefinitions) { this.customFieldDefinitions = customFieldDefinitions; }
 }

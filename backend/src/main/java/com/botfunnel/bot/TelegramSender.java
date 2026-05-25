@@ -6,6 +6,7 @@ import com.botfunnel.bot.dto.TelegramSendResult;
 import com.botfunnel.common.AppException;
 import com.botfunnel.common.crypto.TokenEncryptor;
 import com.botfunnel.events.EventService;
+import com.botfunnel.subscriber.SubscriberService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -27,6 +28,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -47,6 +49,16 @@ public class TelegramSender {
 
     static final String EVENT_TELEGRAM_MESSAGE_SENT = "telegram_message_sent";
     static final String EVENT_TELEGRAM_SEND_FAILED = "telegram_send_failed";
+
+    // Greppable WARN constant for the Decision 4 subscriber-hook fail path: a downstream
+    // mark-*ByChatId failure (Mongo down, etc.) must NOT swallow or alter the original send
+    // exception (mirrors the SUBSCRIBER_START_RATE_REDIS_FAIL_OPEN convention in SubscriberServiceImpl).
+    static final String TELEGRAM_SENDER_SUBSCRIBER_HOOK_FAILED =
+            "TELEGRAM_SENDER_SUBSCRIBER_HOOK_FAILED: subscriber CRM flip failed, original send error preserved: {}";
+
+    // Telegram 400 description marker for a removed chat / deleted account (case-insensitive match
+    // on the post-scrub description). Observed as both "chat not found" and "Bad Request: chat not found".
+    private static final String CHAT_NOT_FOUND_MARKER = "chat not found";
 
     // Anti-enumeration 404 message. Kept in sync with BotService.java's MESSAGE_BOT_NOT_FOUND
     // constant — both must produce identical wire shape ({status: 404, code: null,
@@ -69,6 +81,7 @@ public class TelegramSender {
     private final BotRepository botRepository;
     private final TokenEncryptor tokenEncryptor;
     private final EventService eventService;
+    private final SubscriberService subscriberService;
     private final Duration overallTimeout;
 
     @Autowired
@@ -76,9 +89,10 @@ public class TelegramSender {
                           @Value("${app.telegram.base-url}") String baseUrl,
                           BotRepository botRepository,
                           TokenEncryptor tokenEncryptor,
-                          EventService eventService) {
+                          EventService eventService,
+                          SubscriberService subscriberService) {
         this(builder, baseUrl, TelegramApiClient.DEFAULT_RESPONSE_TIMEOUT, DEFAULT_OVERALL_TIMEOUT,
-                botRepository, tokenEncryptor, eventService);
+                botRepository, tokenEncryptor, eventService, subscriberService);
     }
 
     // Package-private test constructor: lets unit tests dial down responseTimeout (for the
@@ -91,7 +105,8 @@ public class TelegramSender {
                    Duration overallTimeout,
                    BotRepository botRepository,
                    TokenEncryptor tokenEncryptor,
-                   EventService eventService) {
+                   EventService eventService,
+                   SubscriberService subscriberService) {
         HttpClient httpClient = HttpClient.newBuilder()
                 .connectTimeout(TelegramApiClient.CONNECT_TIMEOUT)
                 .build();
@@ -106,6 +121,7 @@ public class TelegramSender {
         this.botRepository = botRepository;
         this.tokenEncryptor = tokenEncryptor;
         this.eventService = eventService;
+        this.subscriberService = subscriberService;
         this.overallTimeout = overallTimeout;
     }
 
@@ -118,8 +134,13 @@ public class TelegramSender {
         // Captured ONCE at the start of sendText — never re-derived inside the retry loops.
         Instant deadline = Instant.now().plus(overallTimeout);
 
+        // Promoted to method scope so the catch block can resolve projectId from the same Bot
+        // instance (no extra findById round-trip). null only if findById threw before assignment —
+        // in which case the exception is AppException(404), not TelegramSendException, so the hook
+        // dispatch is naturally skipped.
+        Bot bot = null;
         try {
-            Bot bot = botRepository.findById(botId)
+            bot = botRepository.findById(botId)
                     .filter(b -> b.getStatus() == BotStatus.CONNECTED)
                     .orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND));
 
@@ -135,7 +156,35 @@ public class TelegramSender {
                 eventService.logEvent(ownerId, EVENT_TELEGRAM_SEND_FAILED,
                         null, null, failedMetadata(botId, chatId, ex, attempts.get()));
             }
+            // Decision 4: AFTER the audit (the durable record), flip the subscriber on a terminal
+            // 403/400-chat-not-found. The mark-* call is the secondary side-effect and must never
+            // alter or swallow the original send exception.
+            dispatchSubscriberHook(ex, bot, chatId);
             throw ex;
+        }
+    }
+
+    // Decision 4 subscriber hook. Routes on the typed TerminalReason carried by the exception (no
+    // substring sniffing here). A failure inside mark-* is caught locally, WARN-logged with a
+    // greppable constant, and never propagates — the original send exception is what the caller sees.
+    private void dispatchSubscriberHook(RuntimeException ex, Bot bot, Long chatId) {
+        if (bot == null || !(ex instanceof TelegramSendException tse)) {
+            return;
+        }
+        TelegramSendException.TerminalReason reason = tse.getTerminalReason();
+        if (reason != TelegramSendException.TerminalReason.BLOCKED_BY_USER
+                && reason != TelegramSendException.TerminalReason.CHAT_NOT_FOUND) {
+            return;
+        }
+        try {
+            if (reason == TelegramSendException.TerminalReason.BLOCKED_BY_USER) {
+                subscriberService.markBlockedByChatId(bot.getProjectId(), bot.getTelegramBotId(), chatId);
+            } else {
+                subscriberService.markDeletedByChatId(bot.getProjectId(), bot.getTelegramBotId(), chatId);
+            }
+        } catch (RuntimeException hookEx) {
+            log.warn(TELEGRAM_SENDER_SUBSCRIBER_HOOK_FAILED,
+                    TelegramApiClient.scrubTokens(hookEx.getMessage()));
         }
     }
 
@@ -265,7 +314,23 @@ public class TelegramSender {
             return new TelegramRateLimitException(retryAfter);
         }
         log.warn("Telegram 4xx ({}): {}", rawStatus, scrubbed);
-        return new TelegramSendException(rawStatus, scrubbed, attempts.get());
+        return new TelegramSendException(rawStatus, scrubbed, attempts.get(),
+                terminalReasonFor(rawStatus, scrubbed));
+    }
+
+    // Decision 4 mapping (colocated with the rest of toThrowable): 403 → BLOCKED_BY_USER;
+    // 400 whose post-scrub description contains "chat not found" (case-insensitive) → CHAT_NOT_FOUND;
+    // everything else (incl. 400 with empty/null/other description) → OTHER. 401 (token invalid) and
+    // 429 (rate limit) never reach here — they are mapped to dedicated exception types above.
+    private static TelegramSendException.TerminalReason terminalReasonFor(int rawStatus, String description) {
+        if (rawStatus == 403) {
+            return TelegramSendException.TerminalReason.BLOCKED_BY_USER;
+        }
+        if (rawStatus == 400 && description != null
+                && description.toLowerCase(Locale.ROOT).contains(CHAT_NOT_FOUND_MARKER)) {
+            return TelegramSendException.TerminalReason.CHAT_NOT_FOUND;
+        }
+        return TelegramSendException.TerminalReason.OTHER;
     }
 
     private SentMessage mapBodyToSentMessage(TelegramSendResult<JsonNode> result,

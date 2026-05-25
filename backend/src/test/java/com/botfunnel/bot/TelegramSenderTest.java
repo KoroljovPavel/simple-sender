@@ -9,6 +9,7 @@ import com.botfunnel.common.AppException;
 import com.botfunnel.common.crypto.EncryptedValue;
 import com.botfunnel.common.crypto.TokenEncryptor;
 import com.botfunnel.events.EventService;
+import com.botfunnel.subscriber.SubscriberService;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import okhttp3.mockwebserver.MockResponse;
@@ -62,6 +63,7 @@ class TelegramSenderTest {
     private TokenEncryptor encryptor;
     private BotRepository botRepository;
     private EventService eventService;
+    private SubscriberService subscriberService;
     private TelegramSender sender;
     private ListAppender<ILoggingEvent> logAppender;
     private Logger logger;
@@ -80,6 +82,7 @@ class TelegramSenderTest {
 
         botRepository = mock(BotRepository.class);
         eventService = mock(EventService.class);
+        subscriberService = mock(SubscriberService.class);
 
         sender = newSender(TelegramApiClient.DEFAULT_RESPONSE_TIMEOUT, Duration.ofSeconds(30));
 
@@ -104,7 +107,8 @@ class TelegramSenderTest {
 
     private TelegramSender newSender(Duration responseTimeout, Duration overallTimeout) {
         return new TelegramSender(RestClient.builder(), mockServer.url("/").toString(),
-                responseTimeout, overallTimeout, botRepository, encryptor, eventService);
+                responseTimeout, overallTimeout, botRepository, encryptor, eventService,
+                subscriberService);
     }
 
     private Bot connectedBot() {
@@ -587,7 +591,7 @@ class TelegramSenderTest {
         TelegramSender stubSender = new TelegramSender(
                 RestClient.builder(), mockServer.url("/").toString(),
                 TelegramApiClient.DEFAULT_RESPONSE_TIMEOUT, Duration.ofSeconds(30),
-                botRepository, stubEncryptor, eventService);
+                botRepository, stubEncryptor, eventService, subscriberService);
         stubFindReturns(connectedBot());
 
         assertThatThrownBy(() -> stubSender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
@@ -763,7 +767,7 @@ class TelegramSenderTest {
         TelegramSender deadServerSender = new TelegramSender(
                 RestClient.builder(), "http://localhost:" + port + "/",
                 Duration.ofMillis(500), Duration.ofSeconds(15),
-                botRepository, encryptor, eventService);
+                botRepository, encryptor, eventService, subscriberService);
         stubFindReturns(connectedBot());
 
         assertThatThrownBy(() -> deadServerSender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))

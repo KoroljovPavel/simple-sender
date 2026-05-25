@@ -7,6 +7,7 @@ import com.botfunnel.project.CustomFieldType;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectService;
 import com.botfunnel.subscriber.dto.SetCustomFieldsRequest;
+import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -58,7 +59,7 @@ public class SubscriberCustomFieldsController {
     @PatchMapping
     public ResponseEntity<Map<String, Object>> setCustomFields(@PathVariable String projectId,
                                                                @PathVariable String subscriberId,
-                                                               @RequestBody SetCustomFieldsRequest request) {
+                                                               @Valid @RequestBody SetCustomFieldsRequest request) {
         Project project = projectService.requireOwned(currentUserId(), projectId, false);
         // projectId-scoped lookup is the cross-project isolation guard: a subscriber that belongs to
         // a different project collapses to the same uniform 404 as a missing one (mirrors

@@ -2,6 +2,8 @@ package com.botfunnel.project;
 
 import com.botfunnel.AbstractIntegrationTest;
 import com.botfunnel.auth.AppUserDetails;
+import com.botfunnel.events.Event;
+import com.botfunnel.events.EventRepository;
 import com.botfunnel.profile.WithMockAppUser;
 import com.botfunnel.subscriber.Subscriber;
 import com.botfunnel.subscriber.SubscriberRepository;
@@ -43,6 +45,7 @@ class CustomFieldDefinitionIT extends AbstractIntegrationTest {
     @Autowired UserRepository userRepository;
     @Autowired ProjectRepository projectRepository;
     @Autowired SubscriberRepository subscriberRepository;
+    @Autowired EventRepository eventRepository;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
 
@@ -53,6 +56,7 @@ class CustomFieldDefinitionIT extends AbstractIntegrationTest {
         userRepository.deleteAll();
         projectRepository.deleteAll();
         subscriberRepository.deleteAll();
+        eventRepository.deleteAll();
 
         User u = new User();
         u.setId(USER_ID);
@@ -210,6 +214,21 @@ class CustomFieldDefinitionIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void update_validDefaultValue_returns200_andPersistsNormalized() throws Exception {
+        seedDefinition(new CustomFieldDefinition("age", "Age", CustomFieldType.NUMBER, null, Instant.now()));
+
+        // "42" is normalized to the Double 42.0 by the validator and persisted as such.
+        mockMvc.perform(patch(url(ownedProjectId) + "/age").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(mapWith("defaultValue", "42"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.defaultValue").value(42.0));
+
+        assertThat(findDef(ownedProjectId, "age").defaultValue()).isEqualTo(42.0d);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void update_defaultValueWithTypeMismatch_returns422_customFieldTypeMismatch() throws Exception {
         seedDefinition(new CustomFieldDefinition("age", "Age", CustomFieldType.NUMBER, null, Instant.now()));
 
@@ -238,6 +257,29 @@ class CustomFieldDefinitionIT extends AbstractIntegrationTest {
         assertThat(subscriberRepository.findAll())
                 .hasSize(12)
                 .allSatisfy(s -> assertThat(s.getCustomFields()).doesNotContainKey("city"));
+
+        List<Event> deleted = eventRepository.findAll().stream()
+                .filter(e -> "custom_field_definition_deleted".equals(e.getEventType()))
+                .toList();
+        assertThat(deleted).hasSize(1);
+        assertThat(deleted.get(0).getMetadata())
+                .containsEntry("name", "city")
+                .containsEntry("projectId", ownedProjectId)
+                .containsEntry("removedValueCount", 12L);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void delete_definitionWithNoSeededValues_returns204_removedValueCountZero() throws Exception {
+        seedDefinition(new CustomFieldDefinition("city", "City", CustomFieldType.STRING, null, Instant.now()));
+
+        mockMvc.perform(delete(url(ownedProjectId) + "/city").with(csrf()))
+                .andExpect(status().isNoContent());
+
+        Event evt = eventRepository.findAll().stream()
+                .filter(e -> "custom_field_definition_deleted".equals(e.getEventType()))
+                .findFirst().orElseThrow();
+        assertThat(evt.getMetadata()).containsEntry("removedValueCount", 0L);
     }
 
     @Test

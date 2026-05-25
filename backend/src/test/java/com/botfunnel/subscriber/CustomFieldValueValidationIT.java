@@ -76,10 +76,36 @@ class CustomFieldValueValidationIT extends AbstractIntegrationTest {
 
         List<SubscriberEvent> events = customFieldSetEvents(subscriberId);
         assertThat(events).hasSize(1);
+        Map<String, Object> meta = events.get(0).getMetadata();
         assertThat(events.get(0).getProjectId()).isEqualTo(projectId);
         @SuppressWarnings("unchecked")
-        List<String> changedKeys = (List<String>) events.get(0).getMetadata().get("changedKeys");
+        List<String> changedKeys = (List<String>) meta.get("changedKeys");
         assertThat(changedKeys).containsExactlyInAnyOrder("city", "age");
+        // The audit row carries the full old→new transition (both keys started absent → null).
+        @SuppressWarnings("unchecked")
+        Map<String, Object> newValues = (Map<String, Object>) meta.get("newValues");
+        assertThat(newValues).containsEntry("city", "Kyiv").containsEntry("age", 42.0d);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> oldValues = (Map<String, Object>) meta.get("oldValues");
+        assertThat(oldValues).containsKeys("city", "age");
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patch_valueEqualToCurrent_returns200_emitsNoEvent() throws Exception {
+        String projectId = saveProject(USER_ID, null, def("city", CustomFieldType.STRING)).getId();
+        Map<String, Object> seeded = new HashMap<>();
+        seeded.put("city", "Kyiv");
+        String subscriberId = saveSubscriber(projectId, 110L, seeded);
+
+        // Re-setting the same value → no actual change → recordCustomFieldsSet writes no event.
+        mockMvc.perform(patch(url(projectId, subscriberId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(map("city", "Kyiv"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.city").value("Kyiv"));
+
+        assertThat(customFieldSetEvents(subscriberId)).isEmpty();
     }
 
     @Test
@@ -146,6 +172,13 @@ class CustomFieldValueValidationIT extends AbstractIntegrationTest {
 
         assertThat(subscriberRepository.findById(subscriberId).orElseThrow()
                 .getCustomFields()).doesNotContainKey("city");
+
+        // Clearing a populated value is a real change → one audit event with city in changedKeys.
+        List<SubscriberEvent> events = customFieldSetEvents(subscriberId);
+        assertThat(events).hasSize(1);
+        @SuppressWarnings("unchecked")
+        List<String> changedKeys = (List<String>) events.get(0).getMetadata().get("changedKeys");
+        assertThat(changedKeys).containsExactly("city");
     }
 
     @Test

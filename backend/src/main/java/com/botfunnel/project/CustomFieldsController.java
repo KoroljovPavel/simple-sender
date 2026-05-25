@@ -30,6 +30,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 // CustomFieldDefinition schema CRUD on Project.customFieldDefinitions[] (Epic 05). Every handler
 // calls projectService.requireOwned(...) FIRST for anti-IDOR / anti-enumeration (uniform 404 on
@@ -40,6 +41,12 @@ import java.util.Map;
 public class CustomFieldsController {
 
     private static final int MAX_DEFINITIONS = 20;
+
+    // Slug shape for the {name} path variable (mirrors CreateCustomFieldRequest's @Pattern). A
+    // non-slug name can never match a stored definition, so we reject it as 404 BEFORE any
+    // "customFields." + name field-path concat in the delete cascade — defense-in-depth so a future
+    // reorder of the pull-then-cascade steps cannot expose dotted/$-prefixed path traversal.
+    private static final Pattern NAME_SLUG = Pattern.compile("^[a-z0-9_-]{1,32}$");
 
     // Decision 3 atomic conditional push guard. The array is "full" once the slot at index
     // (MAX_DEFINITIONS - 1) exists — i.e. there are already MAX_DEFINITIONS elements (indices
@@ -128,6 +135,7 @@ public class CustomFieldsController {
                                                       @Valid @RequestBody UpdateCustomFieldRequest request) {
         String userId = currentUserId();
         Project project = projectService.requireOwned(userId, projectId, false);
+        requireValidName(name);
         CustomFieldDefinition existing = findDefinition(project, name);
 
         // PATCH semantics: null field = no change. name + type are immutable (Decision 11); the DTO
@@ -166,6 +174,7 @@ public class CustomFieldsController {
     public ResponseEntity<Void> delete(@PathVariable String projectId, @PathVariable String name) {
         String userId = currentUserId();
         projectService.requireOwned(userId, projectId, false);
+        requireValidName(name);
 
         UpdateResult pull = mongoTemplate.update(Project.class)
                 .matching(Query.query(Criteria.where("_id").is(projectId)))
@@ -188,6 +197,12 @@ public class CustomFieldsController {
                 Map.of("projectId", projectId, "name", name,
                         "removedValueCount", cascade.getModifiedCount()));
         return ResponseEntity.noContent().build();
+    }
+
+    private static void requireValidName(String name) {
+        if (name == null || !NAME_SLUG.matcher(name).matches()) {
+            throw AppException.notFound(MESSAGE_NOT_FOUND);
+        }
     }
 
     private static List<CustomFieldDefinition> definitions(Project project) {

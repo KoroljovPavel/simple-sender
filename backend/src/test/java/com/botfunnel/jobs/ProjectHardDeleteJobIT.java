@@ -32,6 +32,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -44,6 +45,11 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
     @Autowired StorageProvider storageProvider;
     @Autowired MongoTemplate mongoTemplate;
     @Autowired GridFsOperations gridFsOperations;
+
+    // Deterministic uniqueness for the unique-compound seeds (subscribers (projectId,telegramUserId),
+    // tags (projectId,slug)) — replaces System.nanoTime(), which is not guaranteed distinct across
+    // rapid consecutive calls on every platform.
+    private static final AtomicLong SEQ = new AtomicLong();
 
     @BeforeEach
     void cleanState() {
@@ -89,9 +95,9 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
     private void seedSubscriber(String projectId) {
         Subscriber s = new Subscriber();
         s.setProjectId(projectId);
-        // Unique-compound (projectId, telegramUserId): nanoTime keeps repeated seeds collision-free.
-        s.setTelegramUserId(System.nanoTime());
-        s.setTelegramChatId(System.nanoTime());
+        // Unique-compound (projectId, telegramUserId): SEQ keeps repeated seeds collision-free.
+        s.setTelegramUserId(SEQ.incrementAndGet());
+        s.setTelegramChatId(SEQ.incrementAndGet());
         s.setStatus(SubscriberStatus.ACTIVE);
         s.setSubscribedAt(Instant.now());
         s.setLastSeenAt(Instant.now());
@@ -101,8 +107,8 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
     private void seedTag(String projectId) {
         Tag t = new Tag();
         t.setProjectId(projectId);
-        // Unique-compound (projectId, slug): nanoTime slug keeps repeated seeds collision-free.
-        t.setSlug("tag-" + System.nanoTime());
+        // Unique-compound (projectId, slug): SEQ slug keeps repeated seeds collision-free.
+        t.setSlug("tag-" + SEQ.incrementAndGet());
         t.setLabel("L");
         t.setCreatedAt(Instant.now());
         mongoTemplate.save(t);
@@ -121,8 +127,9 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         SubscriberExport ex = new SubscriberExport();
         ex.setProjectId(projectId);
         ex.setOwnerId("owner-1");
-        // DONE avoids the (projectId) partial-unique index on in-flight (PENDING/RUNNING) exports,
-        // so multiple seeds for distinct projects never collide.
+        // Status MUST be DONE (load-bearing): the (projectId) partial-unique index only covers
+        // in-flight (PENDING/RUNNING) exports, so DONE lets multiple seeds across projects coexist
+        // without DuplicateKeyException.
         ex.setStatus(ExportStatus.DONE);
         ex.setCreatedAt(Instant.now());
         mongoTemplate.save(ex);
@@ -414,26 +421,64 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void cron_cascadeIsIdempotent_secondRunIsNoOp(CapturedOutput output) {
-        // Partial-cascade recovery contract: a re-fire on already-drained state must be a clean
-        // no-op (all counts 0, no exception). JobRunr's default retry depends on this.
+    void cron_cascadeRecoversPartialDrainThenSecondRunIsNoOp(CapturedOutput output) {
+        // Partial-cascade recovery contract (the JobRunr daily-retry guarantee). Simulate a crashed
+        // prior run: the project is still soft-deleted (step 8 "drop projects" never reached) and a
+        // subset of its rows survived — `subscribers` was already swept before the crash, while
+        // tags / subscriber_events / subscriber_exports / GridFS remain. The recovery run must drain
+        // the survivors AND treat the already-empty `subscribers` collection as a no-op (count 0, no
+        // exception). A bug that skipped any survivor sweep would fail the per-collection assertions
+        // below — so this exercises the real cascade `remove` steps, not the zero-deletion path.
         Project oldProject = seedSoftDeletedProject("owner-1", "Old Project",
                 Instant.now().minus(8, ChronoUnit.DAYS));
-        seedSubscriber(oldProject.getId());
+        // subscribers intentionally NOT seeded → models a collection already drained by the crash.
         seedTag(oldProject.getId());
         seedSubscriberEvent(oldProject.getId());
         seedSubscriberExport(oldProject.getId());
-        seedGridFsFile(oldProject.getId(), "export-1");
+        seedGridFsFile(oldProject.getId(), "export-survivor");
 
         job.hardDeleteSoftDeletedProjects();
-        // Second run sees an empty deletedIds list (project doc already dropped) → zero-deletion path.
-        job.hardDeleteSoftDeletedProjects();
 
-        assertThat(output.getOut())
-                .containsPattern("ProjectHardDeleteJob - run completed: "
-                        + "deletedCount=0 eventsRemovedCount=0 gridFsFilesRemoved=0 exportsRemoved=0 "
-                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs=\\d+");
         assertThat(projectRepository.findById(oldProject.getId()).orElse(null)).isNull();
+        assertThat(countByProjectId(Subscriber.class, oldProject.getId())).isZero();
+        assertThat(countByProjectId(Tag.class, oldProject.getId())).isZero();
+        assertThat(countByProjectId(SubscriberEvent.class, oldProject.getId())).isZero();
+        assertThat(countByProjectId(SubscriberExport.class, oldProject.getId())).isZero();
+        assertThat(gridFsFileExists(oldProject.getId())).isFalse();
+        assertThat(output.getOut())
+                .as("recovery run drains survivors (gridFs/exports/events/tags=1) and no-ops the "
+                        + "already-empty subscribers collection (subscribersRemoved=0)")
+                .containsPattern("ProjectHardDeleteJob - run completed: "
+                        + "deletedCount=1 eventsRemovedCount=0 gridFsFilesRemoved=1 exportsRemoved=1 "
+                        + "subscriberEventsRemoved=1 subscribersRemoved=0 tagsRemoved=1 runDurationMs=\\d+");
+
+        // Second fire on the now fully-drained state is a clean no-op (nothing eligible).
+        job.hardDeleteSoftDeletedProjects();
+        long noOpRuns = countOccurrences(output.getOut(),
+                "deletedCount=0 eventsRemovedCount=0 gridFsFilesRemoved=0 exportsRemoved=0 "
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0");
+        assertThat(noOpRuns)
+                .as("the no-eligible-projects re-fire emits exactly one all-zero line")
+                .isEqualTo(1L);
+    }
+
+    @Test
+    void cron_gridFsFileWithoutExportPointer_isStillSwept() {
+        // Locks in the GridFS-before-exports rationale (Decision 8, task edge case): the GridFS sweep
+        // is keyed by metadata.projectId — NOT by the subscriber_exports pointer row. A blob whose
+        // pointer was already removed must still be swept. A reimplementation that swept GridFS by
+        // joining through subscriber_exports (wrong order / wrong key) would leak this orphan blob.
+        Project oldProject = seedSoftDeletedProject("owner-1", "Old Project",
+                Instant.now().minus(8, ChronoUnit.DAYS));
+        seedGridFsFile(oldProject.getId(), "orphan-export");
+        // Deliberately NO seedSubscriberExport(...) — the pointer row is already gone.
+
+        job.hardDeleteSoftDeletedProjects();
+
+        assertThat(projectRepository.findById(oldProject.getId()).orElse(null)).isNull();
+        assertThat(gridFsFileExists(oldProject.getId()))
+                .as("orphan GridFS blob (no pointer row) must still be swept by metadata.projectId")
+                .isFalse();
     }
 
     @Test

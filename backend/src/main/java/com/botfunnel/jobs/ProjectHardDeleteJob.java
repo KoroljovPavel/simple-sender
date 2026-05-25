@@ -36,8 +36,9 @@ public class ProjectHardDeleteJob {
     private static final String SUBSCRIBER_EVENTS_COLLECTION = "subscriber_events";
     private static final String SUBSCRIBERS_COLLECTION = "subscribers";
     private static final String TAGS_COLLECTION = "tags";
-    // GridFS file-metadata collection (default `fs.files`); counted before the GridFS delete since
-    // GridFsOperations.delete(query) returns no count.
+    // GridFS file-metadata collection (default bucket `fs.files`); counted before the GridFS delete
+    // since GridFsOperations.delete(query) returns no count. Must stay in sync with the GridFS
+    // bucket the delete targets — no custom bucket is configured, so the default holds.
     private static final String GRIDFS_FILES_COLLECTION = "fs.files";
 
     private final ProjectRepository projectRepository;
@@ -101,9 +102,14 @@ public class ProjectHardDeleteJob {
         //    pointer row was already removed is still swept correctly.
         //  - Each step is idempotent: remove on an empty match is a no-op. A partial-cascade
         //    failure leaves the project doc in place (step 8 below not reached), so the next daily
-        //    run re-selects it via findByDeletedAtBefore and re-processes the survivors.
+        //    run re-selects it via findByDeletedAtBefore and re-processes the survivors. This is the
+        //    same accepted non-transactional trade-off as the events sweep above. (Residual: a crash
+        //    mid-GridFS-delete can leave chunks whose fs.files entry is already gone — unreachable by
+        //    the metadata.projectId re-run; a narrow, accepted window, no orphan-chunk reaper here.)
         // GridFS files: GridFsOperations.delete(query) removes both fs.files and fs.chunks but
-        // returns no count, so count fs.files first (daily cron, not a hot path).
+        // returns no count, so count fs.files first (daily cron, not a hot path). The count is an
+        // advisory pre-delete snapshot for the log line, not a transactional erasure receipt — the
+        // delete re-runs the query independently, so erasure is correct even if the count drifts.
         Query gridFsByProject = Query.query(Criteria.where("metadata.projectId").in(deletedIds));
         long gridFsFilesRemoved = template.count(gridFsByProject, GRIDFS_FILES_COLLECTION);
         gridFsOperations.delete(gridFsByProject);

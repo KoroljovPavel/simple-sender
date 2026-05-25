@@ -99,7 +99,7 @@ class ProjectSoftDeleteCascadeIT extends AbstractIntegrationTest {
 
     @Test
     void softDeletedProject_subscribersListEndpoint_returns404() {
-        // TODO Task 8 — replace with a full controller IT (GET /subscribers) once the subscriber
+        // TODO Task 8/4/5 — replace with a full controller IT (GET /subscribers) once the subscriber
         // list endpoint lands. The subscriber list controller is not wired at this task's execution
         // time, so assert the actual requireOwned contract directly: soft-deleted project → 404.
         assertThatThrownBy(() -> projectService.requireOwned(USER_ID, softDeletedProjectId, false))

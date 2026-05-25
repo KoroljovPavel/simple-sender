@@ -37,8 +37,10 @@ class TelegramSendExceptionTerminalReasonTest {
 
     @Test
     void enumShapeIsStable() {
-        // Catches silent renames/reorders that would mis-route the TelegramSender hook.
-        assertThat(TerminalReason.values()).hasSize(3);
+        // Catches silent renames/reorders that would mis-route the TelegramSender hook. containsExactly
+        // pins both identity and ordinal order; the explicit name() checks guard against renames.
+        assertThat(TerminalReason.values())
+                .containsExactly(TerminalReason.BLOCKED_BY_USER, TerminalReason.CHAT_NOT_FOUND, TerminalReason.OTHER);
         assertThat(TerminalReason.BLOCKED_BY_USER.name()).isEqualTo("BLOCKED_BY_USER");
         assertThat(TerminalReason.CHAT_NOT_FOUND.name()).isEqualTo("CHAT_NOT_FOUND");
         assertThat(TerminalReason.OTHER.name()).isEqualTo("OTHER");

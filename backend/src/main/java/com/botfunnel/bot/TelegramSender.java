@@ -177,6 +177,8 @@ public class TelegramSender {
             return;
         }
         try {
+            // bot.getTelegramBotId() (Long) — NOT the Mongo String botId. Subscribers are keyed by
+            // (projectId, telegramBotId, telegramChatId); passing the String id would never match.
             if (reason == TelegramSendException.TerminalReason.BLOCKED_BY_USER) {
                 subscriberService.markBlockedByChatId(bot.getProjectId(), bot.getTelegramBotId(), chatId);
             } else {

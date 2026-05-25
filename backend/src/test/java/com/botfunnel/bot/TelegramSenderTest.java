@@ -43,6 +43,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 class TelegramSenderTest {
@@ -487,18 +488,22 @@ class TelegramSenderTest {
     @Test
     void sendText_otherClientError_throwsTelegramSendException_noRetry() {
         stubFindReturns(connectedBot());
+        // Deliberately NOT a "chat not found" description: post-Task-6 that phrase routes to
+        // TerminalReason.CHAT_NOT_FOUND and would fire the subscriber hook. This test covers the
+        // plain "other 4xx" path, so the mocked SubscriberService must stay untouched.
         mockServer.enqueue(jsonResponse(400,
-                "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: chat not found\"}"));
+                "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: message is too long\"}"));
 
         assertThatThrownBy(() -> sender.sendText(BOT_ID, CALLER_CHAT_ID, TEXT, null, OWNER_ID))
                 .isInstanceOf(TelegramSendException.class)
                 .satisfies(err -> {
                     TelegramSendException tse = (TelegramSendException) err;
                     assertThat(tse.getErrorCode()).isEqualTo(400);
-                    assertThat(tse.getMessage()).contains("chat not found");
+                    assertThat(tse.getMessage()).contains("message is too long");
                 });
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
+        verifyNoInteractions(subscriberService);
     }
 
     @Test

@@ -131,6 +131,34 @@ class TelegramSenderSubscriberHookIT {
     }
 
     @Test
+    void http400ChatNotFoundCaseInsensitiveMarksDeleted() {
+        // Mixed-case description proves the .toLowerCase(Locale.ROOT) match — Telegram casing varies.
+        mockServer.enqueue(jsonResponse(400,
+                "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: CHAT Not Found\"}"));
+
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
+
+        verify(subscriberService).markDeletedByChatId(PROJECT_ID, TELEGRAM_BOT_ID, CHAT_ID);
+        verify(subscriberService, never()).markBlockedByChatId(any(), any(), any());
+    }
+
+    @Test
+    void http400NullDescriptionDoesNotMark_noNpe() {
+        // No description field → result.description() is null → terminalReasonFor must null-guard
+        // and fall through to OTHER (no NPE, no CRM flip).
+        mockServer.enqueue(jsonResponse(400, "{\"ok\":false,\"error_code\":400}"));
+
+        assertThatThrownBy(() -> sender.sendText(BOT_ID, CHAT_ID, TEXT, null, OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
+
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), any());
+        verify(subscriberService, never()).markBlockedByChatId(any(), any(), any());
+        verify(subscriberService, never()).markDeletedByChatId(any(), any(), any());
+    }
+
+    @Test
     void http400OtherDescriptionDoesNotMark() {
         mockServer.enqueue(jsonResponse(400,
                 "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: message text is too long\"}"));

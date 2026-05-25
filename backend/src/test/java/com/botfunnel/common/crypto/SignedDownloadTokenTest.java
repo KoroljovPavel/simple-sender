@@ -19,6 +19,9 @@ class SignedDownloadTokenTest {
     private static final String TEST_KEY_HEX =
             "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
 
+    private static final String OTHER_KEY_HEX =
+            "112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00";
+
     private final SignedDownloadToken token = new SignedDownloadToken(TEST_KEY_HEX);
 
     @Test
@@ -68,6 +71,26 @@ class SignedDownloadTokenTest {
         String forged = forgedPayload + "." + parts[1];
 
         assertThat(reasonOf(token.verify(forged))).isEqualTo(FailureReason.BAD_SIGNATURE);
+    }
+
+    @Test
+    void verify_tamperedAndExpired_returnsBadSignatureNotExpired() {
+        // Signature is verified before expiry — a tampered+expired token must report the tamper,
+        // never EXPIRED (the documented ordering property; guards against future reordering).
+        String[] parts = token.mint("projA", "exp123", Instant.now().minus(1, ChronoUnit.HOURS))
+                .split("\\.");
+        String tampered = flipFirstBase64Char(parts[0]) + "." + parts[1];
+
+        assertThat(reasonOf(token.verify(tampered))).isEqualTo(FailureReason.BAD_SIGNATURE);
+    }
+
+    @Test
+    void verify_wrongKey_returnsBadSignature() {
+        // A token minted under one key must not verify under another (mirror TokenEncryptor).
+        SignedDownloadToken other = new SignedDownloadToken(OTHER_KEY_HEX);
+        String minted = token.mint("projA", "exp123", future());
+
+        assertThat(reasonOf(other.verify(minted))).isEqualTo(FailureReason.BAD_SIGNATURE);
     }
 
     @Test

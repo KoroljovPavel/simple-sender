@@ -14,7 +14,6 @@ import java.util.Base64;
 import java.util.HexFormat;
 
 import static java.nio.charset.StandardCharsets.US_ASCII;
-import static java.nio.charset.StandardCharsets.UTF_8;
 
 /**
  * Mints and verifies HMAC-SHA256 signed download tokens for subscriber exports (Decision 15).

@@ -5,6 +5,7 @@ import com.botfunnel.common.test.ConcurrencyTestUtils;
 import com.botfunnel.events.Event;
 import com.botfunnel.events.EventRepository;
 import com.botfunnel.subscriber.Subscriber;
+import com.botfunnel.subscriber.SubscriberEventRepository;
 import com.botfunnel.subscriber.SubscriberRepository;
 import com.botfunnel.subscriber.SubscriberStatus;
 import org.bson.Document;
@@ -31,6 +32,7 @@ class TagServiceTest extends AbstractIntegrationTest {
     @Autowired TagService tagService;
     @Autowired TagRepository tagRepository;
     @Autowired SubscriberRepository subscriberRepository;
+    @Autowired SubscriberEventRepository subscriberEventRepository;
     @Autowired EventRepository eventRepository;
     @Autowired MongoTemplate mongoTemplate;
 
@@ -38,6 +40,7 @@ class TagServiceTest extends AbstractIntegrationTest {
     void clean() {
         tagRepository.deleteAll();
         subscriberRepository.deleteAll();
+        subscriberEventRepository.deleteAll();
         eventRepository.deleteAll();
     }
 
@@ -60,6 +63,9 @@ class TagServiceTest extends AbstractIntegrationTest {
         assertThat(result.getId()).isNotNull();
         assertThat(result.getSlug()).isEqualTo("vip");
         assertThat(result.getSubscriberCount()).isZero();
+        assertThat(result.getLabel())
+                .as("auto-created tag has null label until set via PATCH — Task 8 relies on this")
+                .isNull();
         assertThat(tagRepository.findByProjectIdAndSlug(PROJECT_ID, "vip")).isPresent();
     }
 
@@ -104,6 +110,20 @@ class TagServiceTest extends AbstractIntegrationTest {
         assertThat(reread("vip").getSubscriberCount()).isEqualTo(5L);
     }
 
+    @Test
+    void incrementCounter_concurrentIncrements_areAtomic() {
+        // Litmus for the findAndModify $inc: 50 concurrent +1 must land exactly 50, with no lost
+        // updates. A non-atomic load-modify-save impl would undercount under contention here.
+        seedTag("vip", 0L);
+
+        ConcurrencyTestUtils.parallelInvoke(50, () -> {
+            tagService.incrementCounter(PROJECT_ID, "vip", 1);
+            return null;
+        });
+
+        assertThat(reread("vip").getSubscriberCount()).isEqualTo(50L);
+    }
+
     // ─── deleteWithCascade ───────────────────────────────────────────────────
 
     @Test
@@ -129,6 +149,11 @@ class TagServiceTest extends AbstractIntegrationTest {
                 .containsEntry("tagSlug", "vip")
                 .containsEntry("projectId", PROJECT_ID)
                 .containsEntry("subscriberCountAtDelete", 3L);
+        // Decision 10 boundary: tag_deleted is a platform `events` row only — the cascade must NOT
+        // write anything into subscriber_events.
+        assertThat(subscriberEventRepository.count())
+                .as("tag delete cascade must not touch subscriber_events")
+                .isZero();
     }
 
     // ─── updateLabel ───────────────────────────────────────────────────────

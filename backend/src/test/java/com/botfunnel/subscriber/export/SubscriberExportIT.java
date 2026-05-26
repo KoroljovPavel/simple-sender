@@ -70,6 +70,8 @@ class SubscriberExportIT extends AbstractIntegrationTest {
         eventRepository.deleteAll();
         mongoTemplate.remove(new Query(), SubscriberExport.class);
         gridFsOperations.delete(new Query());
+        // Mailpit is a JVM-wide singleton — clear it so email assertions can't pass on leftovers.
+        MAILPIT.getClient().deleteAllMessages();
         telegramUserSeq = 5000L;
 
         seedUser();
@@ -101,9 +103,10 @@ class SubscriberExportIT extends AbstractIntegrationTest {
         assertThat(metadata.getString("projectId")).isEqualTo(projectId);
         assertThat(((Number) metadata.get("rowCount")).longValue()).isEqualTo(3L);
 
-        // Email captured by Mailpit with the signed URL + expiry in the body.
+        // Email captured by Mailpit with the signed URL + expiry in the body. Exact count (==1) so
+        // the await blocks until the export-ready message actually lands, not on a stale leftover.
         await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(200))
-                .until(() -> MAILPIT.getClient().getMessageCount() >= 1);
+                .until(() -> MAILPIT.getClient().getMessageCount() == 1);
         String html = MAILPIT.getClient().getMessageHtml(MAILPIT.getClient().getAllMessages().get(0).id());
         assertThat(html).contains("download?token=").contains(exportId);
 
@@ -131,9 +134,20 @@ class SubscriberExportIT extends AbstractIntegrationTest {
                 .doesNotContain("AAHabcdefghijklmnopqrstuvwxyz");
         assertThat(export.getErrorMessage().length()).isLessThanOrEqualTo(1024);
 
+        // The failed-export email must actually be the one sent: exact count + body marker, and it
+        // must NOT carry a download link.
         await().atMost(Duration.ofSeconds(30)).pollInterval(Duration.ofMillis(200))
-                .until(() -> MAILPIT.getClient().getMessageCount() >= 1);
+                .until(() -> MAILPIT.getClient().getMessageCount() == 1);
+        String html = MAILPIT.getClient().getMessageHtml(MAILPIT.getClient().getAllMessages().get(0).id());
+        assertThat(html).contains("Спробуйте ще раз").doesNotContain("download?token=");
         assertThat(eventByType("subscribers_export_failed")).isNotNull();
+
+        // Orphan-blob cleanup: the partial/0-byte GridFS file store() created before the throw must
+        // be deleted on the FAILED branch (ExportCleanupJob only sweeps DONE rows).
+        assertThat(gridFsOperations.findOne(
+                Query.query(Criteria.where("metadata.exportId").is(exportId))))
+                .as("partial GridFS blob must be deleted on the FAILED branch")
+                .isNull();
     }
 
     @Test

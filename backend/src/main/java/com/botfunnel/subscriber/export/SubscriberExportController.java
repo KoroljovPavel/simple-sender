@@ -337,7 +337,9 @@ public class SubscriberExportController {
                     throw AppException.conflict(CODE_EXPORT_IN_FLIGHT, "Export still in progress");
             case PURGED -> throw AppException.gone(CODE_EXPORT_PURGED, "Export file purged");
             case FAILED -> throw AppException.gone(CODE_EXPORT_FAILED, "Export failed");
-            default -> throw AppException.gone(CODE_EXPORT_FAILED, "Export failed");
+            // Exhaustive over the 5-value enum; an added constant surfaces here instead of silently
+            // masquerading as export_failed.
+            default -> throw new IllegalStateException("Unhandled export status: " + export.getStatus());
         }
     }
 

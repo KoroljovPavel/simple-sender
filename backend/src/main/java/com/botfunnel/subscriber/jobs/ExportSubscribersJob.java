@@ -30,7 +30,6 @@ import org.springframework.stereotype.Component;
 
 import java.io.PipedInputStream;
 import java.io.PipedOutputStream;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Map;
@@ -124,30 +123,34 @@ public class ExportSubscribersJob {
             return;
         }
 
-        ObjectId gridFsFileId = null;
+        // Holder so the GridFS file id is visible to the FAILED branch even when streamToGridFs
+        // throws AFTER store() persisted a partial/0-byte blob — otherwise that blob orphans
+        // permanently (ExportCleanupJob only sweeps DONE rows).
+        AtomicReference<ObjectId> createdFileId = new AtomicReference<>();
         try {
-            gridFsFileId = streamToGridFs(exportId, export);
-            finishSuccess(exportId, export, gridFsFileId);
+            streamToGridFs(exportId, export, createdFileId);
+            finishSuccess(exportId, export, createdFileId.get());
         } catch (Throwable t) {
-            handleFailure(exportId, export, gridFsFileId, t);
+            handleFailure(exportId, export, createdFileId.get(), t);
         }
     }
 
     // Writes the CSV to GridFS on a writer thread, blocking the calling worker on store() until the
-    // pipe closes. Returns the GridFS file id (always set once store() returns — even on writer
-    // failure, since the writer closes the pipe and store() then sees EOF, storing a partial file
-    // the FAILED branch deletes). Rethrows the writer's root failure so the caller's catch records it.
-    private ObjectId streamToGridFs(String exportId, SubscriberExport export) {
+    // pipe closes. Publishes the GridFS file id into {@code createdFileId} the instant store()
+    // returns — even on writer failure, where the writer closes the pipe and store() then sees EOF,
+    // storing a partial file the FAILED branch deletes. Rethrows the writer's root failure so the
+    // caller's catch records it.
+    private void streamToGridFs(String exportId, SubscriberExport export,
+                                AtomicReference<ObjectId> createdFileId) {
         SegmentFilter filter = deserializeFilter(export.getFilter());
         Query query = exportQuery(export.getProjectId(), filter);
         String fileName = "subscribers-export-" + exportId + ".csv";
         Document metadata = new Document("exportId", exportId).append("projectId", export.getProjectId());
 
-        ObjectId gridFsFileId;
         AtomicReference<Throwable> writerError = new AtomicReference<>();
         AtomicLong rowCount = new AtomicLong();
-        try {
-            PipedInputStream in = new PipedInputStream(PIPE_BUFFER);
+        // try-with-resources closes the read end symmetrically with the writer's closeQuietly(pipeOut).
+        try (PipedInputStream in = new PipedInputStream(PIPE_BUFFER)) {
             PipedOutputStream pipeOut = new PipedOutputStream(in);
             Thread writer = Thread.ofVirtual().name("export-csv-writer-" + exportId).unstarted(() -> {
                 // MongoTemplate.stream returns a Stream backed by a live cursor (AutoCloseable);
@@ -162,7 +165,9 @@ public class ExportSubscribersJob {
             });
             writer.start();
             try {
-                gridFsFileId = gridFsOperations.store(in, fileName, CONTENT_TYPE, metadata);
+                // Publish the id BEFORE the writer-error rethrow below, so handleFailure can delete
+                // any partial blob store() persisted.
+                createdFileId.set(gridFsOperations.store(in, fileName, CONTENT_TYPE, metadata));
             } finally {
                 // If store() threw before draining the pipe, interrupt so the writer cannot block
                 // forever on a full pipe; then always join so the writer's outcome is observed.
@@ -189,11 +194,10 @@ public class ExportSubscribersJob {
         // subscriber_exports.rowCount == fs.files.metadata.rowCount. Unknown at store() time because
         // the writer counts as it emits and store() blocks on the pipe until the writer closes it.
         mongoTemplate.updateFirst(
-                Query.query(Criteria.where("_id").is(gridFsFileId)),
+                Query.query(Criteria.where("_id").is(createdFileId.get())),
                 new Update().set("metadata.rowCount", rowCount.get()),
                 GRIDFS_FILES_COLLECTION);
         export.setRowCount(rowCount.get());
-        return gridFsFileId;
     }
 
     private void finishSuccess(String exportId, SubscriberExport export, ObjectId gridFsFileId) {

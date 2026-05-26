@@ -205,6 +205,21 @@ class SubscriberExportSignedUrlIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void unauthenticatedDownload_rejectedBySecurity_returns403() throws Exception {
+        // Locks the chosen access model: the download endpoint is session-guarded (under /api/** →
+        // authenticated) AND token-bound — defense-in-depth matching the task's step-3
+        // requireOwned(currentUserId()) contract. An anonymous request is rejected by the security
+        // filter chain (403, same as SecurityBlockTest) before the controller / HMAC verify runs.
+        // This is a documented deviation from tech-spec §146's "HMAC-only" phrasing (see decisions.md).
+        Instant expiresAt = Instant.now().plus(Duration.ofHours(24));
+        SubscriberExport export = seedExport(projectId, ExportStatus.DONE, expiresAt, true);
+        String token = signedDownloadToken.mint(projectId, export.getId(), expiresAt);
+
+        mockMvc.perform(get(downloadUrl(export.getId())).param("token", token))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
     void downloadRateLimit_parallel31Requests_one429() throws Exception {
         // Race the controller method directly (real Redis INCR via the delegating spy) — 31 parallel
         // downloads, the 31st trips the 30/min bucket. MockMvc is avoided here for thread-safety.

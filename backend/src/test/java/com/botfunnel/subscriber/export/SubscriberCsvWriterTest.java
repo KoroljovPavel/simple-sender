@@ -107,20 +107,24 @@ class SubscriberCsvWriterTest {
     }
 
     @Test
-    void formulaInjection_customFieldsCell_prefixed() throws IOException {
-        // Whole-cell neutralization: when the serialized JSON's first char is a trigger, the whole
-        // cell is prefixed. Force it by making the map serialize to a string starting with '+'.
-        // A normal JSON object starts with '{' (not a trigger) — so we assert the value-bearing
-        // case via a custom field whose serialization is driven to a trigger char is not possible
-        // for an object; instead assert the object case is emitted verbatim (first char '{').
+    void formulaInjection_customFieldsObjectCell_notPrefixed() throws IOException {
+        // Whole-cell neutralization (Decision 7, anchor's permitted interpretation): the customFields
+        // cell is the Jackson-serialized JSON, neutralized as ONE cell. A JSON object always
+        // serializes starting with '{' (not a trigger), so the cell is emitted WITHOUT an apostrophe
+        // — the embedded "+1+1" is inert because Excel does not evaluate a formula that is not the
+        // cell's first char. This proves the whole-cell path runs and correctly leaves '{' unprefixed.
         Map<String, Object> cf = new LinkedHashMap<>();
         cf.put("city", "+1+1");
         byte[] bytes = write(sub(s -> s.setCustomFields(cf)));
-        String cell = parse(bytes).get(1).get(10);
-        // Object JSON starts with '{' (safe) → emitted without an apostrophe; the +1+1 value stays
-        // inside the JSON string, harmless because Excel does not parse formulas inside a quoted cell
-        // that does not START with a trigger.
-        assertThat(cell).isEqualTo("{\"city\":\"+1+1\"}");
+        assertThat(parse(bytes).get(1).get(10)).isEqualTo("{\"city\":\"+1+1\"}");
+    }
+
+    @Test
+    void formulaInjection_wholeCellHelper_prefixesTriggerFirstChar() {
+        // Direct contract check of the whole-cell neutralization that the customFields path relies on:
+        // a value whose first char is a trigger IS prefixed; a '{'-leading JSON object is not.
+        assertThat(SubscriberCsvWriter.neutralizeFormula("=DANGER()")).isEqualTo("'=DANGER()");
+        assertThat(SubscriberCsvWriter.neutralizeFormula("{\"k\":\"v\"}")).isEqualTo("{\"k\":\"v\"}");
     }
 
     @Test

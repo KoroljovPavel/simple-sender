@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 
 @Service
 public class EmailService {
@@ -47,6 +48,18 @@ public class EmailService {
         sendAsync(to, "Ваш акаунт заблоковано", body);
     }
 
+    public void sendExportReadyEmail(String to, String name, String downloadUrl, Instant expiresAt) {
+        String body = buildExportReadyBody(name, downloadUrl, expiresAt);
+        if (body.isEmpty()) return;
+        sendAsync(to, "Експорт підписників готовий", body);
+    }
+
+    public void sendExportFailedEmail(String to, String name) {
+        String body = buildExportFailedBody(name);
+        if (body.isEmpty()) return;
+        sendAsync(to, "Експорт підписників не вдався", body);
+    }
+
     String buildVerificationBody(String name, String token) {
         String template = loadTemplate("/templates/email/verify-email.html");
         if (template.isEmpty()) return "";
@@ -73,6 +86,24 @@ public class EmailService {
         return template
                 .replace("{NAME}", htmlEscape(name))
                 .replace("{SUPPORT_EMAIL}", htmlEscape(supportEmail));
+    }
+
+    String buildExportReadyBody(String name, String downloadUrl, Instant expiresAt) {
+        String template = loadTemplate("/templates/email/subscribers-export-ready.html");
+        if (template.isEmpty()) return "";
+        return template
+                .replace("{NAME}", htmlEscape(name))
+                .replace("{URL}", htmlEscape(downloadUrl))
+                .replace("{EXPIRES_AT}", htmlEscape(expiresAt == null ? "" : expiresAt.toString()))
+                .replace("{APP_URL}", htmlEscape(appUrl));
+    }
+
+    String buildExportFailedBody(String name) {
+        String template = loadTemplate("/templates/email/subscribers-export-failed.html");
+        if (template.isEmpty()) return "";
+        return template
+                .replace("{NAME}", htmlEscape(name))
+                .replace("{APP_URL}", htmlEscape(appUrl));
     }
 
     // Silent-failure contract: SMTP / MIME build failures must NOT propagate to the caller. The

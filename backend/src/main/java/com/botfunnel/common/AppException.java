@@ -45,6 +45,13 @@ public class AppException extends RuntimeException {
         return new AppException(HttpStatus.TOO_MANY_REQUESTS, null, message);
     }
 
+    // 410 GONE — the four export-pipeline terminal-state codes (export_purged, export_expired,
+    // export_failed, export_project_unavailable) need a typed factory matching the
+    // unprocessableEntity / tooManyRequests shape; the existing factories do not cover 410.
+    public static AppException gone(String code, String message) {
+        return new AppException(HttpStatus.GONE, code, message);
+    }
+
     public HttpStatus getStatus() { return status; }
     public String getCode() { return code; }
 }

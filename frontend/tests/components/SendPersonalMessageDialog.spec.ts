@@ -90,6 +90,17 @@ describe('SendPersonalMessageDialog', () => {
     expect(toast.error).toHaveBeenCalled()
   })
 
+  it('503Response_telegramRateLimitedToast', async () => {
+    apiMock.mockRejectedValueOnce({ statusCode: 503, data: { code: 'telegram_rate_limited' } })
+    await mountOpen()
+    await settle()
+    await $('[data-test="send-personal-message-text"]').setValue('hello')
+    await settle()
+    await $('[data-test="send-personal-message-form"]').trigger('submit')
+    await settle()
+    expect(toast.error).toHaveBeenCalled()
+  })
+
   it('massAssignment_onlyTextSent', async () => {
     apiMock.mockResolvedValueOnce({ status: 'sent', message: 'Message sent' })
     await mountOpen()

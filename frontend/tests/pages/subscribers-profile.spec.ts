@@ -67,11 +67,36 @@ describe('subscribers profile page', () => {
     expect(navigateToMock).not.toHaveBeenCalled()
   })
 
-  it('activeSubscriber_unsubscribeEnabled_blockedDisabled', async () => {
+  it('activeSubscriber_unsubscribeEnabled', async () => {
     routeApi(sub('active'))
     const wrapper = await mountSuspended(SubscriberProfile)
     await settle()
     const btn = wrapper.find('[data-test="subscriber-manual-unsubscribe"]').element as HTMLButtonElement
     expect(btn.disabled).toBe(false)
+  })
+
+  it('blockedSubscriber_unsubscribeDisabled', async () => {
+    routeApi(sub('blocked'))
+    const wrapper = await mountSuspended(SubscriberProfile)
+    await settle()
+    const btn = wrapper.find('[data-test="subscriber-manual-unsubscribe"]').element as HTMLButtonElement
+    expect(btn.disabled).toBe(true)
+  })
+
+  it('unsubscribeClick_postsUnsubscribe', async () => {
+    // GET resolves active; the unsubscribe POST resolves an updated (unsubscribed) row.
+    apiMock.mockImplementation((url: string, opts?: { method?: string }) => {
+      if (url === '/api/v1/projects/p1/subscribers/s1/unsubscribe' && opts?.method === 'POST') {
+        return Promise.resolve(sub('unsubscribed'))
+      }
+      if (url === '/api/v1/projects/p1/subscribers/s1') return Promise.resolve(sub('active'))
+      return Promise.resolve([])
+    })
+    const wrapper = await mountSuspended(SubscriberProfile)
+    await settle()
+    await wrapper.find('[data-test="subscriber-manual-unsubscribe"]').trigger('click')
+    await settle()
+    expect(apiMock).toHaveBeenCalledWith('/api/v1/projects/p1/subscribers/s1/unsubscribe', { method: 'POST' })
+    expect(wrapper.find('[data-test="subscriber-status-badge"]').attributes('data-status')).toBe('unsubscribed')
   })
 })

@@ -36,6 +36,15 @@ onMounted(async () => {
   }
 })
 
+// Re-sync the edit buffer to server truth whenever the parent re-fetches the subscriber (e.g. after a
+// save emits refresh) so a stale local value never lingers.
+watch(
+  () => props.customFields,
+  () => {
+    for (const def of definitions.value) editValues[def.name] = initialValue(def)
+  },
+)
+
 function typedValue(def: CustomFieldDefinition, raw: unknown): unknown {
   switch (def.type) {
     case 'NUMBER':
@@ -55,7 +64,9 @@ async function save(def: CustomFieldDefinition) {
       `/api/v1/projects/${props.projectId}/subscribers/${props.subscriberId}/custom-fields`,
       { method: 'PATCH', body: { values: { [def.name]: typedValue(def, editValues[def.name]) } } },
     )
-    toast.success(t('subscribers.profile.sendMessage.success'))
+    // No customFields-specific success key was seeded by Task 2; common.save is the closest seeded,
+    // non-misleading confirmation (flagged for a Task 2 i18n follow-up). Do NOT add keys here.
+    toast.success(t('common.save'))
     emit('refresh')
   } catch (err) {
     toast.error(resolveError(err, 'subscribers.customFields') || t('errors.generic'))

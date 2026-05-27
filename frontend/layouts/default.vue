@@ -2,6 +2,7 @@
 import { useAuthStore } from '~/stores/auth'
 import { useProjectsStore } from '~/stores/projects'
 import { NON_DEFAULT_LOCALES } from '~/shared/i18n-locales'
+import { Toaster } from '~/components/ui/sonner'
 
 const authStore = useAuthStore()
 const projectsStore = useProjectsStore()
@@ -125,5 +126,9 @@ async function onLogout() {
         <slot />
       </main>
     </div>
+
+    <!-- Toast surface (vue-sonner). Mounted once here so every page's toast.*() calls render;
+         Task 10 is the first consumer of the sonner block Task 2 scaffolded. -->
+    <Toaster />
   </div>
 </template>

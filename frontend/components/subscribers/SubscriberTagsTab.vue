@@ -52,7 +52,7 @@ async function removeTag(slug: string) {
   busy.value = true
   try {
     await useApi()(
-      `/api/v1/projects/${props.projectId}/subscribers/${props.subscriberId}/tags/${slug}`,
+      `/api/v1/projects/${props.projectId}/subscribers/${props.subscriberId}/tags/${encodeURIComponent(slug)}`,
       { method: 'DELETE' },
     )
     emit('refresh')

@@ -79,6 +79,18 @@ describe('SendPersonalMessageDialog', () => {
     expect(wrapper.emitted('refresh')).toBeTruthy()
   })
 
+  it('deletedResponse_warningToast_andRefreshEmitted', async () => {
+    apiMock.mockResolvedValueOnce({ status: 'deleted', message: 'Telegram chat no longer exists' })
+    const wrapper = await mountOpen()
+    await settle()
+    await $('[data-test="send-personal-message-text"]').setValue('hello')
+    await settle()
+    await $('[data-test="send-personal-message-form"]').trigger('submit')
+    await settle()
+    expect(toast.warning).toHaveBeenCalled()
+    expect(wrapper.emitted('refresh')).toBeTruthy()
+  })
+
   it('429Response_rateLimitedToast', async () => {
     apiMock.mockRejectedValueOnce({ statusCode: 429, data: { code: 'personal_message_rate_limited' } })
     await mountOpen()

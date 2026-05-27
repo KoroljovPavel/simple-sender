@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../helpers/settle'
+import { toast } from 'vue-sonner'
 import type { Subscriber, SubscriberStatus } from '../../types/subscriber'
 
 vi.mock('vue-sonner', () => ({ toast: { success: vi.fn(), warning: vi.fn(), error: vi.fn() } }))
@@ -98,5 +99,23 @@ describe('subscribers profile page', () => {
     await settle()
     expect(apiMock).toHaveBeenCalledWith('/api/v1/projects/p1/subscribers/s1/unsubscribe', { method: 'POST' })
     expect(wrapper.find('[data-test="subscriber-status-badge"]').attributes('data-status')).toBe('unsubscribed')
+  })
+
+  it('unsubscribeClick_apiError_showsErrorToast', async () => {
+    vi.mocked(toast.error).mockReset()
+    apiMock.mockImplementation((url: string, opts?: { method?: string }) => {
+      if (url === '/api/v1/projects/p1/subscribers/s1/unsubscribe' && opts?.method === 'POST') {
+        return Promise.reject({ statusCode: 409, data: { code: 'already_unsubscribed' } })
+      }
+      if (url === '/api/v1/projects/p1/subscribers/s1') return Promise.resolve(sub('active'))
+      return Promise.resolve([])
+    })
+    const wrapper = await mountSuspended(SubscriberProfile)
+    await settle()
+    await wrapper.find('[data-test="subscriber-manual-unsubscribe"]').trigger('click')
+    await settle()
+    expect(toast.error).toHaveBeenCalled()
+    // Stayed on the profile (no redirect) and badge unchanged.
+    expect(navigateToMock).not.toHaveBeenCalled()
   })
 })

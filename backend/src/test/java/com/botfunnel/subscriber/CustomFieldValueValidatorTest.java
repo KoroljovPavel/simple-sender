@@ -108,8 +108,9 @@ class CustomFieldValueValidatorTest {
     @ParameterizedTest
     @ValueSource(strings = {"2024-01-15T10:30:00Z", "2024-12-31T23:59:59+02:00"})
     void date_acceptsIso8601(String raw) {
+        // Normalized to the UTC Instant (OffsetDateTime has no MongoDB codec; Instant does).
         assertThat(validator.validate(CustomFieldType.DATE, raw))
-                .isEqualTo(OffsetDateTime.parse(raw));
+                .isEqualTo(OffsetDateTime.parse(raw).toInstant());
     }
 
     @ParameterizedTest

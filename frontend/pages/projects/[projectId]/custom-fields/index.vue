@@ -60,9 +60,11 @@ function openDelete(field: CustomFieldDefinition) {
   selected.value = field
   deleteOpen.value = true
 }
-// NOTE: the task lists a "Created" column for /custom-fields, but Task 2 seeded no
-// `customFields.columns.created` i18n key and this task must not edit locales — column omitted
-// (see decisions.md i18n gap).
+function formatDate(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
+}
 function formatDefault(field: CustomFieldDefinition): string {
   const dv = field.defaultValue
   if (dv === null || dv === undefined || dv === '') return '—'
@@ -101,6 +103,7 @@ function formatDefault(field: CustomFieldDefinition): string {
           <TableHead>{{ t('customFields.columns.name') }}</TableHead>
           <TableHead>{{ t('customFields.columns.type') }}</TableHead>
           <TableHead>{{ t('customFields.columns.defaultValue') }}</TableHead>
+          <TableHead>{{ t('customFields.columns.created') }}</TableHead>
           <TableHead class="text-right">{{ t('customFields.actions.edit') }}</TableHead>
         </TableRow>
       </TableHeader>
@@ -110,6 +113,7 @@ function formatDefault(field: CustomFieldDefinition): string {
           <TableCell><code class="rounded bg-gray-100 px-1.5 py-0.5 text-xs">{{ field.name }}</code></TableCell>
           <TableCell>{{ t(`customFields.type.${field.type.toLowerCase()}`) }}</TableCell>
           <TableCell>{{ formatDefault(field) }}</TableCell>
+          <TableCell class="text-sm text-gray-600">{{ formatDate(field.createdAt) }}</TableCell>
           <TableCell class="space-x-2 text-right">
             <button
               type="button"

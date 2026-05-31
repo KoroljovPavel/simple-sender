@@ -45,7 +45,16 @@
     "projectNameMax": "Maximum 50 characters",
     "projectDescriptionMax": "Maximum 200 characters",
     "timezoneRequired": "Timezone is required",
-    "timezoneInvalid": "Unknown timezone"
+    "timezoneInvalid": "Unknown timezone",
+    "tagSlugPattern": "Lowercase letters, digits, _ and -, up to 32 characters",
+    "tagLabelRequired": "Name is required",
+    "tagLabelMax": "Maximum 64 characters",
+    "customFieldNamePattern": "Lowercase letters, digits, _ and -, up to 32 characters",
+    "customFieldLabelRequired": "Name is required",
+    "customFieldLabelMax": "Maximum 64 characters",
+    "customFieldNumberDefault": "Default value must be a number",
+    "messageRequired": "Message text is required",
+    "messageMax": "Maximum {max} characters"
   },
   "auth": {
     "login": {
@@ -251,6 +260,56 @@
   },
   "errors": {
     "generic": "Something went wrong. Try again later",
+    "tags": {
+      "create": {
+        "409": "A tag with this slug already exists",
+        "generic": "Could not create the tag"
+      },
+      "update": {
+        "generic": "Could not update the tag"
+      },
+      "delete": {
+        "generic": "Could not delete the tag"
+      }
+    },
+    "customFields": {
+      "create": {
+        "409": "A field with this identifier already exists",
+        "422": "Invalid field data or limit reached",
+        "generic": "Could not create the field"
+      },
+      "update": {
+        "generic": "Could not update the field"
+      },
+      "delete": {
+        "generic": "Could not delete the field"
+      }
+    },
+    "subscribers": {
+      "tags": {
+        "generic": "Could not update subscriber tags"
+      },
+      "customFields": {
+        "422": "Value does not match the field type",
+        "generic": "Could not save the value"
+      },
+      "sendMessage": {
+        "429": "Too many messages. Try again in a minute",
+        "503": "Messaging service is temporarily unavailable",
+        "generic": "Could not send the message"
+      },
+      "exports": {
+        "list": {
+          "generic": "Could not load the exports list"
+        },
+        "refresh": {
+          "409": "Export is still running",
+          "410": "Export is no longer available",
+          "429": "Too many requests. Try again in a minute",
+          "generic": "Could not refresh the link"
+        }
+      }
+    },
     "bot": {
       "generic": "Action failed. Try again later",
       "connect": {
@@ -384,6 +443,7 @@
       "username": "Username",
       "status": "Status",
       "tags": "Tags",
+      "subscribedAt": "Subscribed",
       "lastSeen": "Last seen"
     },
     "status": {
@@ -395,6 +455,13 @@
     "profile": {
       "identityCard": {
         "title": "Subscriber profile"
+      },
+      "lifecycle": {
+        "subscribedAt": "Subscribed",
+        "unsubscribedAt": "Unsubscribed",
+        "blockedAt": "Blocked",
+        "deletedAt": "Deleted",
+        "lastSeenAt": "Last seen"
       },
       "tabs": {
         "tags": "Tags",
@@ -413,6 +480,10 @@
         },
         "success": "Message sent"
       },
+      "customFields": {
+        "saved": "Value saved",
+        "unsaved": "Unsaved"
+      },
       "history": {
         "empty": "No events yet"
       }
@@ -430,7 +501,8 @@
     "columns": {
       "label": "Label",
       "slug": "Slug",
-      "subscriberCount": "Subscribers"
+      "subscriberCount": "Subscribers",
+      "created": "Created"
     },
     "actions": {
       "create": "Create tag",
@@ -441,12 +513,14 @@
       "title": "New tag",
       "slugLabel": "Slug",
       "labelLabel": "Label",
-      "submit": "Create"
+      "submit": "Create",
+      "success": "Tag created"
     },
     "renameDialog": {
       "title": "Rename tag",
       "labelLabel": "Label",
-      "submit": "Save"
+      "submit": "Save",
+      "success": "Tag updated"
     },
     "deleteDialog": {
       "title": "Delete tag?",
@@ -467,8 +541,10 @@
       "label": "Label",
       "name": "Identifier",
       "type": "Type",
-      "defaultValue": "Default value"
+      "defaultValue": "Default value",
+      "created": "Created"
     },
+    "editImmutableWarning": "Identifier and type cannot be changed after creation",
     "actions": {
       "add": "Add field",
       "edit": "Edit",
@@ -486,13 +562,15 @@
       "labelLabel": "Label",
       "typeLabel": "Type",
       "defaultValueLabel": "Default value",
-      "submit": "Add"
+      "submit": "Add",
+      "success": "Field created"
     },
     "editDialog": {
       "title": "Edit field",
       "labelLabel": "Label",
       "defaultValueLabel": "Default value",
-      "submit": "Save"
+      "submit": "Save",
+      "success": "Field updated"
     },
     "deleteDialog": {
       "title": "Delete field?",

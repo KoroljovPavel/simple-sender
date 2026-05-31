@@ -73,7 +73,10 @@ describe('AddCustomFieldDialog', () => {
       await setName(name)
       await setLabel('X')
       await submit()
-      expect(maybe('[data-test="custom-field-name-error"]')).not.toBeNull()
+      const nameErr = maybe('[data-test="custom-field-name-error"]')
+      expect(nameErr).not.toBeNull()
+      // Localized via validation.customFieldNamePattern — not zod's raw English default.
+      expect(nameErr!.textContent).not.toContain('Invalid')
       expect(apiMock).not.toHaveBeenCalled()
       wrapper.unmount()
       document.body.innerHTML = ''
@@ -128,9 +131,25 @@ describe('AddCustomFieldDialog', () => {
     expect(toast.success).toHaveBeenCalled()
   })
 
+  it('AddCustomFieldDialog_dateDefault_sentAsIsoDateTime', async () => {
+    apiMock.mockResolvedValueOnce({ name: 'bday', label: 'Birthday', type: 'DATE' })
+    await mountOpen()
+    await setName('bday')
+    await setLabel('Birthday')
+    await setType('DATE')
+    await $('[data-test="custom-field-default-input"]').setValue('2026-05-31')
+    await submit()
+
+    expect(apiMock).toHaveBeenCalledTimes(1)
+    const body = apiMock.mock.calls[0][1].body as Record<string, unknown>
+    expect(body.type).toBe('DATE')
+    // Date input yields 'YYYY-MM-DD'; backend OffsetDateTime.parse needs a full ISO-8601 date-time.
+    expect(body.defaultValue).toBe('2026-05-31T00:00:00Z')
+  })
+
   it('AddCustomFieldDialog_duplicateName_rendersSubmitError', async () => {
-    // 409 custom_field_name_taken; Task 2 did not seed errors.customFields.create.codes.*, so
-    // useApiError walks to errors.generic — a real, non-key string in the submit-error slot.
+    // 409 custom_field_name_taken → useApiError resolves errors.customFields.create.409 (status-specific
+    // localized message), not the generic fallback nor a raw key.
     apiMock.mockRejectedValueOnce({ statusCode: 409, data: { code: 'custom_field_name_taken' } })
     const wrapper = await mountOpen()
     await setName('city')
@@ -140,6 +159,7 @@ describe('AddCustomFieldDialog', () => {
     const err = maybe('[data-test="submit-error"]')
     expect(err).not.toBeNull()
     expect(err!.textContent?.trim().length).toBeGreaterThan(0)
+    expect(err!.textContent).not.toContain('errors.') // not a raw i18n key
     expect(wrapper.emitted('created')).toBeFalsy()
   })
 })

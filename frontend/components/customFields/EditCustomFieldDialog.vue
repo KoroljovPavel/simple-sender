@@ -23,12 +23,15 @@ const resolveError = useApiError()
 // form-driven type field (Task 11 edge case + Decision 11: name/type are immutable).
 function defaultValueSchema(type: CustomFieldType): z.ZodTypeAny {
   if (type === 'NUMBER') {
-    return z.any().refine((v) => {
-      if (v === '' || v === null || v === undefined) return true
-      if (typeof v === 'number') return Number.isFinite(v)
-      if (typeof v === 'string') return v.trim() !== '' && !Number.isNaN(Number(v))
-      return false
-    })
+    return z.any().refine(
+      (v) => {
+        if (v === '' || v === null || v === undefined) return true
+        if (typeof v === 'number') return Number.isFinite(v)
+        if (typeof v === 'string') return v.trim() !== '' && !Number.isNaN(Number(v))
+        return false
+      },
+      { message: t('validation.customFieldNumberDefault') },
+    )
   }
   return z.any()
 }
@@ -37,13 +40,15 @@ function defaultValueSchema(type: CustomFieldType): z.ZodTypeAny {
 function toModel(field: CustomFieldDefinition): string {
   const dv = field.defaultValue
   if (dv === null || dv === undefined) return ''
+  // DATE is stored as ISO-8601 date-time but the date input needs 'YYYY-MM-DD'.
+  if (field.type === 'DATE') return isoToDateInput(dv)
   return String(dv)
 }
 
 const schema = computed(() =>
   toTypedSchema(
     z.object({
-      label: z.string().trim().min(1).max(64),
+      label: z.string().trim().min(1, t('validation.customFieldLabelRequired')).max(64, t('validation.customFieldLabelMax')),
       defaultValue: defaultValueSchema(props.field.type),
     }),
   ),
@@ -72,6 +77,8 @@ function typedDefault(): unknown {
       return Number(raw)
     case 'BOOLEAN':
       return raw === 'true' || raw === true
+    case 'DATE':
+      return dateInputToIso(raw) // 'YYYY-MM-DD' -> ISO-8601 date-time the backend accepts
     default:
       return raw
   }
@@ -87,7 +94,7 @@ const onSubmit = handleSubmit(async (values) => {
       `/api/v1/projects/${props.projectId}/custom-fields/${encodeURIComponent(props.field.name)}`,
       { method: 'PATCH', body: { label: values.label, defaultValue: typedDefault() } },
     )
-    toast.success(t('common.save'))
+    toast.success(t('customFields.editDialog.success'))
     emit('updated', field)
     emit('update:open', false)
   } catch (err) {
@@ -107,9 +114,10 @@ const onSubmit = handleSubmit(async (values) => {
       </DialogHeader>
 
       <form data-test="custom-field-edit-form" class="space-y-3" novalidate @submit.prevent="onSubmit">
-        <!-- name + type are immutable (Decision 11). Rendered as disabled fields so the immutability is
-             visible. Task 2 did not seed a dedicated customFields.editImmutableWarning copy — the
-             disabled controls communicate it (see decisions.md i18n gap note). -->
+        <!-- name + type are immutable (Decision 11). Rendered as disabled fields + an explicit note. -->
+        <p data-test="custom-field-edit-immutable-warning" class="text-xs text-gray-500">
+          {{ t('customFields.editImmutableWarning') }}
+        </p>
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs font-medium text-gray-500 mb-1">{{ t('customFields.columns.name') }}</label>
@@ -173,7 +181,7 @@ const onSubmit = handleSubmit(async (values) => {
             v-bind="defaultValueAttrs"
             data-test="custom-field-edit-default-input"
             type="date"
-            class="rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <!-- BOOLEAN tri-state select; no v-bind="defaultValueAttrs" — vee-validate only needs v-model
                on a native select and BOOLEAN has no per-type refine (mirrors AddCustomFieldDialog). -->

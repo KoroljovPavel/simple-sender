@@ -15,6 +15,12 @@ const REQUIRED_KEYS = [
   'errors.projects.unavailable',
   'errors.projects.restore.renamedDueToConflict',
   'projects.create.limitReachedTooltip',
+  'subscribers.profile.lifecycle.subscribedAt',
+  'subscribers.profile.lifecycle.unsubscribedAt',
+  'subscribers.profile.lifecycle.blockedAt',
+  'subscribers.profile.lifecycle.deletedAt',
+  'subscribers.profile.lifecycle.lastSeenAt',
+  'subscribers.profile.customFields.saved',
 ] as const
 
 describe('i18n AC-25 required keys', () => {

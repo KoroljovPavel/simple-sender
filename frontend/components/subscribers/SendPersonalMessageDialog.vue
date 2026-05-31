@@ -22,10 +22,18 @@ const resolveError = useApiError()
 const MAX = 4096
 
 // Schema wrapped in computed() so a live locale switch re-runs validation in the new language
-// (patterns.md:145). Messages are intentionally omitted: Task 2 did not seed validation.required /
-// validation.maxLength keys, so passing t('…') would surface a raw key string. Submit is gated by
-// form validity + a character counter instead (see decisions.md deviation note).
-const schema = computed(() => toTypedSchema(z.object({ text: z.string().trim().min(1).max(MAX) })))
+// (patterns.md:145). Submit is also gated by form validity + a character counter.
+const schema = computed(() =>
+  toTypedSchema(
+    z.object({
+      text: z
+        .string()
+        .trim()
+        .min(1, t('validation.messageRequired'))
+        .max(MAX, t('validation.messageMax', { max: MAX })),
+    }),
+  ),
+)
 
 const { handleSubmit, defineField, resetForm, meta } = useForm({
   validationSchema: schema,

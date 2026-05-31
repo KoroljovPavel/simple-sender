@@ -4,6 +4,7 @@ import com.botfunnel.common.AppException;
 import com.botfunnel.project.CustomFieldType;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.format.DateTimeParseException;
 import java.util.Locale;
@@ -17,8 +18,10 @@ import java.util.Locale;
  * <p>Null is accepted for every type (a definition may carry a null {@code defaultValue}; a
  * subscriber value may be cleared by passing {@code null}) and returned unchanged. Any rule
  * violation throws 422 {@code custom_field_type_mismatch}. The returned value is the normalized /
- * coerced form: trimmed {@link String}, parsed {@link Double}, {@link Boolean}, or parsed
- * {@link OffsetDateTime}.
+ * coerced form: trimmed {@link String}, parsed {@link Double}, {@link Boolean}, or a parsed
+ * {@link Instant} (the ISO-8601 input is parsed as an {@link OffsetDateTime} then reduced to its
+ * UTC instant — the MongoDB driver has no codec for {@code OffsetDateTime}, but does for
+ * {@code Instant}, which is how every other date in the schema is stored).
  */
 @Component
 public class CustomFieldValueValidator {
@@ -86,12 +89,14 @@ public class CustomFieldValueValidator {
         throw mismatch("expected one of true|false|yes|no");
     }
 
-    private static OffsetDateTime validateDate(Object raw) {
+    private static Instant validateDate(Object raw) {
         if (!(raw instanceof String s)) {
             throw mismatch("expected an ISO-8601 date-time string");
         }
         try {
-            return OffsetDateTime.parse(s.trim());
+            // Parse as OffsetDateTime (accepts any offset, e.g. +02:00) then reduce to the UTC instant
+            // — OffsetDateTime has no MongoDB codec; Instant does.
+            return OffsetDateTime.parse(s.trim()).toInstant();
         } catch (DateTimeParseException e) {
             throw mismatch("expected an ISO-8601 date-time string");
         }

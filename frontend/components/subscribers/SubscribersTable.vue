@@ -41,7 +41,7 @@ function formatDate(iso: string | null): string {
           <TableHead>{{ t('subscribers.columns.firstName') }}</TableHead>
           <TableHead>{{ t('subscribers.columns.status') }}</TableHead>
           <TableHead>{{ t('subscribers.columns.tags') }}</TableHead>
-          <TableHead>{{ t('subscribers.filters.dateRange.from') }}</TableHead>
+          <TableHead>{{ t('subscribers.columns.subscribedAt') }}</TableHead>
           <TableHead>{{ t('subscribers.columns.lastSeen') }}</TableHead>
         </TableRow>
       </TableHeader>

@@ -32,12 +32,15 @@ const selectedType = ref<CustomFieldType>('STRING')
 // (patterns.md:145 + Task 11 edge case). NUMBER refine rejects non-numeric; null/empty always allowed.
 function defaultValueSchema(type: CustomFieldType): z.ZodTypeAny {
   if (type === 'NUMBER') {
-    return z.any().refine((v) => {
-      if (v === '' || v === null || v === undefined) return true
-      if (typeof v === 'number') return Number.isFinite(v)
-      if (typeof v === 'string') return v.trim() !== '' && !Number.isNaN(Number(v))
-      return false
-    })
+    return z.any().refine(
+      (v) => {
+        if (v === '' || v === null || v === undefined) return true
+        if (typeof v === 'number') return Number.isFinite(v)
+        if (typeof v === 'string') return v.trim() !== '' && !Number.isNaN(Number(v))
+        return false
+      },
+      { message: t('validation.customFieldNumberDefault') },
+    )
   }
   // STRING / DATE / BOOLEAN: any value accepted; null/unset is a valid persisted default.
   return z.any()
@@ -46,8 +49,8 @@ function defaultValueSchema(type: CustomFieldType): z.ZodTypeAny {
 const schema = computed(() =>
   toTypedSchema(
     z.object({
-      name: z.string().trim().regex(SLUG_RE),
-      label: z.string().trim().min(1).max(64),
+      name: z.string().trim().regex(SLUG_RE, t('validation.customFieldNamePattern')),
+      label: z.string().trim().min(1, t('validation.customFieldLabelRequired')).max(64, t('validation.customFieldLabelMax')),
       defaultValue: defaultValueSchema(selectedType.value),
     }),
   ),
@@ -73,8 +76,10 @@ function typedDefault(): unknown {
       return Number(raw)
     case 'BOOLEAN':
       return raw === 'true' || raw === true
+    case 'DATE':
+      return dateInputToIso(raw) // 'YYYY-MM-DD' -> ISO-8601 date-time the backend accepts
     default:
-      return raw // STRING, DATE
+      return raw // STRING
   }
 }
 
@@ -94,7 +99,7 @@ const onSubmit = handleSubmit(async (values) => {
         body: { name: values.name, label: values.label, type: selectedType.value, defaultValue: typedDefault() },
       },
     )
-    toast.success(t('common.save'))
+    toast.success(t('customFields.addDialog.success'))
     emit('created', field)
     reset()
     emit('update:open', false)
@@ -186,7 +191,7 @@ const onSubmit = handleSubmit(async (values) => {
             v-bind="defaultValueAttrs"
             data-test="custom-field-default-input"
             type="date"
-            class="rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
           <!-- BOOLEAN: tri-state (unset / true / false). defaultValue=null is a valid persisted state
                (Task 11 edge case), so a plain checkbox cannot represent it — a 3-option select can.

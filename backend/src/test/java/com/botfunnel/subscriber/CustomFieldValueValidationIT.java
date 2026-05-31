@@ -156,6 +156,30 @@ class CustomFieldValueValidationIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void patch_dateValue_persistsAndRoundTrips() throws Exception {
+        // Regression guard: validateDate must return a Mongo-encodable type. It previously returned
+        // OffsetDateTime, which the driver cannot encode (CodecConfigurationException → 500 on write).
+        String projectId = saveProject(USER_ID, null, def("bday", CustomFieldType.DATE)).getId();
+        String subscriberId = saveSubscriber(projectId, 120L, new HashMap<>());
+
+        // Frontend sends a full ISO-8601 date-time (the date input value normalized to YYYY-MM-DDT00:00:00Z).
+        mockMvc.perform(patch(url(projectId, subscriberId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(body(map("bday", "2026-05-31T00:00:00Z"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.bday").exists());
+
+        Object stored = subscriberRepository.findById(subscriberId).orElseThrow()
+                .getCustomFields().get("bday");
+        assertThat(stored).isNotNull();
+        Instant storedInstant = stored instanceof Instant i ? i
+                : stored instanceof java.util.Date d ? d.toInstant()
+                : Instant.parse(stored.toString());
+        assertThat(storedInstant).isEqualTo(Instant.parse("2026-05-31T00:00:00Z"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void patch_clearsValue_whenValueIsNull() throws Exception {
         String projectId = saveProject(USER_ID, null, def("city", CustomFieldType.STRING)).getId();
         Map<String, Object> seeded = new HashMap<>();

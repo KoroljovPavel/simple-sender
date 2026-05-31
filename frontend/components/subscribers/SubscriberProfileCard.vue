@@ -55,7 +55,7 @@ const lifecycle = computed(() => [
     <CardContent class="space-y-4">
       <dl class="grid grid-cols-2 gap-x-6 gap-y-1 text-sm">
         <template v-for="row in lifecycle" :key="row.key">
-          <dt class="text-gray-500">{{ row.key }}</dt>
+          <dt class="text-gray-500">{{ t(`subscribers.profile.lifecycle.${row.key}`) }}</dt>
           <dd>{{ formatDate(row.value) }}</dd>
         </template>
       </dl>

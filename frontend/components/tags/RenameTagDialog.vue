@@ -21,7 +21,13 @@ const resolveError = useApiError()
 
 // Label-only edit (Decision 11: slug is immutable; the PATCH body excludes slug — the backend
 // UpdateTagRequest schema has no slug field).
-const schema = computed(() => toTypedSchema(z.object({ label: z.string().trim().min(1).max(64) })))
+const schema = computed(() =>
+  toTypedSchema(
+    z.object({
+      label: z.string().trim().min(1, t('validation.tagLabelRequired')).max(64, t('validation.tagLabelMax')),
+    }),
+  ),
+)
 
 const { defineField, handleSubmit, errors, resetForm } = useForm({
   validationSchema: schema,
@@ -46,7 +52,7 @@ const onSubmit = handleSubmit(async (values) => {
       `/api/v1/projects/${props.projectId}/tags/${encodeURIComponent(props.tag.slug)}`,
       { method: 'PATCH', body: { label: values.label } },
     )
-    toast.success(t('common.save'))
+    toast.success(t('tags.renameDialog.success'))
     emit('updated', updated)
     emit('update:open', false)
   } catch (err) {

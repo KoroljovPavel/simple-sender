@@ -25,13 +25,13 @@ const SLUG_RE = /^[a-z0-9_-]{1,32}$/
 
 // Schema wrapped in computed() (patterns.md:145) so a live locale switch re-runs validation. label is
 // required on the frontend for a usable display name even though the backend treats it as optional —
-// stricter-than-backend is safe (backend never rejects a provided label). Messages are omitted: Task 2
-// did not seed validation.slug.* keys, so zod's defaults render (see decisions.md i18n gap note).
+// stricter-than-backend is safe (backend never rejects a provided label). Messages localized via the
+// validation.* namespace (mirrors the auth/projects forms).
 const schema = computed(() =>
   toTypedSchema(
     z.object({
-      slug: z.string().trim().regex(SLUG_RE),
-      label: z.string().trim().min(1).max(64),
+      slug: z.string().trim().regex(SLUG_RE, t('validation.tagSlugPattern')),
+      label: z.string().trim().min(1, t('validation.tagLabelRequired')).max(64, t('validation.tagLabelMax')),
     }),
   ),
 )
@@ -54,9 +54,7 @@ const onSubmit = handleSubmit(async (values) => {
       method: 'POST',
       body: { slug: values.slug, label: values.label },
     })
-    // No tags.* create-success key was seeded by Task 2; common.save is the closest non-misleading
-    // confirmation (flagged for a Task 2 i18n follow-up). Do NOT add keys here.
-    toast.success(t('common.save'))
+    toast.success(t('tags.createDialog.success'))
     emit('created', tag)
     resetForm()
     emit('update:open', false)

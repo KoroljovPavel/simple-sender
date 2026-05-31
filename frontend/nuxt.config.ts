@@ -1,3 +1,4 @@
+import { fileURLToPath } from 'node:url'
 import { NON_DEFAULT_LOCALES } from './shared/i18n-locales'
 
 const AUTH_HEADERS = {
@@ -21,6 +22,25 @@ export default defineNuxtConfig({
   // form submissions, etc.). DevTools is dev-only ergonomics, not feature-
   // critical, so we turn it off rather than fight the bundling.
   devtools: { enabled: false },
+  // Restrict component auto-import scanning to `.vue` files only. The shadcn-vue
+  // primitives under `components/ui/<x>/` ship both a `Component.vue` and an
+  // `index.ts` barrel; Nuxt derives the same name from each (`ui/badge/Badge.vue`
+  // and `ui/badge/index.ts` both → `UiBadge`), which logs a "Two component files
+  // resolving to the same name" WARN for every primitive on dev-server start.
+  // These primitives are consumed via explicit barrel imports (`import { Card }
+  // from '~/components/ui/card'`), never via auto-import, so dropping `.ts` from
+  // the scan is side-effect-free. (See shadcn-vue issue #1593.)
+  components: [{ path: '~/components', extensions: ['.vue'] }],
+  vite: {
+    resolve: {
+      alias: {
+        // Silence a dev-only unhandled rejection: vee-validate/Pinia call setupDevtoolsPlugin() from
+        // @vue/devtools-api, but the bare specifier resolves to v7/v8 here (no such export) → throws.
+        // Devtools are disabled project-wide; point the package at a no-op stub. See the stub file.
+        '@vue/devtools-api': fileURLToPath(new URL('./stubs/vue-devtools-api.mjs', import.meta.url)),
+      },
+    },
+  },
   modules: [
     '@pinia/nuxt',
     '@nuxtjs/tailwindcss',

@@ -49,6 +49,27 @@ describe('SubscriberCustomFieldsTab', () => {
     expect(Object.keys(body.values)).toEqual(['city'])
   })
 
+  it('save_disabledUntilDirty_andMarkerToggles', async () => {
+    const wrapper = await mountTab()
+    const disabled = () =>
+      (wrapper.find('[data-test="subscriber-custom-field-city-save"]').element as HTMLButtonElement).disabled
+    const marker = () => wrapper.find('[data-test="subscriber-custom-field-city-dirty"]').exists()
+
+    // Pristine (value === server truth): button disabled, no "unsaved" marker.
+    expect(disabled()).toBe(true)
+    expect(marker()).toBe(false)
+
+    // Edited: button enabled, marker shown.
+    await wrapper.find('[data-test="subscriber-custom-field-city-input"]').setValue('Lviv')
+    expect(disabled()).toBe(false)
+    expect(marker()).toBe(true)
+
+    // Reverted to the original value: clean again.
+    await wrapper.find('[data-test="subscriber-custom-field-city-input"]').setValue('Kyiv')
+    expect(disabled()).toBe(true)
+    expect(marker()).toBe(false)
+  })
+
   it('typeMismatch422_showsErrorToast', async () => {
     const wrapper = await mountTab()
     apiMock.mockRejectedValueOnce({ statusCode: 422, data: { code: 'custom_field_type_mismatch' } })

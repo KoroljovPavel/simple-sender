@@ -60,8 +60,11 @@ function openDelete(tag: Tag) {
   selected.value = tag
   deleteOpen.value = true
 }
-// NOTE: the task lists a "Created" column for /tags, but Task 2 seeded no `tags.columns.created`
-// i18n key and this task must not edit locales — column omitted (see decisions.md i18n gap).
+function formatDate(iso: string | null): string {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleString()
+}
 </script>
 
 <template>
@@ -93,6 +96,7 @@ function openDelete(tag: Tag) {
           <TableHead>{{ t('tags.columns.label') }}</TableHead>
           <TableHead>{{ t('tags.columns.slug') }}</TableHead>
           <TableHead>{{ t('tags.columns.subscriberCount') }}</TableHead>
+          <TableHead>{{ t('tags.columns.created') }}</TableHead>
           <TableHead class="text-right">{{ t('tags.actions.rename') }}</TableHead>
         </TableRow>
       </TableHeader>
@@ -101,6 +105,7 @@ function openDelete(tag: Tag) {
           <TableCell class="font-medium">{{ tag.label }}</TableCell>
           <TableCell><code class="rounded bg-gray-100 px-1.5 py-0.5 text-xs">{{ tag.slug }}</code></TableCell>
           <TableCell>{{ tag.subscriberCount }}</TableCell>
+          <TableCell class="text-sm text-gray-600">{{ formatDate(tag.createdAt) }}</TableCell>
           <TableCell class="space-x-2 text-right">
             <button
               type="button"

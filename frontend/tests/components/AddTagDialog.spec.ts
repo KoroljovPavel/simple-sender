@@ -65,6 +65,9 @@ describe('CreateTagDialog (AddTag dialog)', () => {
     const err = maybe('[data-test="tag-slug-error"]')
     expect(err).not.toBeNull()
     expect(err!.textContent?.trim().length).toBeGreaterThan(0)
+    // Localized via validation.tagSlugPattern — not zod's raw English defaults.
+    expect(err!.textContent).not.toContain('Invalid')
+    expect(err!.textContent).not.toContain('String must contain')
     expect(apiMock).not.toHaveBeenCalled()
   })
 

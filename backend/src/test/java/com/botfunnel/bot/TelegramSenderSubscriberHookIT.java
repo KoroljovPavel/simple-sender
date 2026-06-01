@@ -235,6 +235,7 @@ class TelegramSenderSubscriberHookIT {
                 isNull(), isNull(), any());
         ordered.verify(subscriberService).markDeletedByChatId(PROJECT_ID, TELEGRAM_BOT_ID, CHAT_ID);
 
+        verify(subscriberService, times(1)).markDeletedByChatId(PROJECT_ID, TELEGRAM_BOT_ID, CHAT_ID);
         verify(subscriberService, never()).markBlockedByChatId(any(), any(), any());
     }
 

@@ -845,7 +845,7 @@ class TelegramSenderTest {
     }
 
     @Test
-    void sendPhoto_rateLimited_retriesThenSucceeds() {
+    void sendPhoto_rateLimited_retriesThenSucceeds() throws Exception {
         stubFindReturns(connectedBot());
         mockServer.enqueue(status429(1));
         mockServer.enqueue(okSendMessage(42L, 5L));
@@ -855,6 +855,14 @@ class TelegramSenderTest {
         assertThat(sm).isNotNull();
         assertThat(sm.messageId()).isEqualTo(42L);
         assertThat(mockServer.getRequestCount()).isEqualTo(2);
+
+        // Both attempts (initial 429 + retry) must hit /sendPhoto, not just the first call.
+        RecordedRequest first = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        RecordedRequest second = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(first).isNotNull();
+        assertThat(second).isNotNull();
+        assertThat(first.getPath()).isEqualTo("/bot" + TOKEN + "/sendPhoto");
+        assertThat(second.getPath()).isEqualTo("/bot" + TOKEN + "/sendPhoto");
     }
 
     @Test
@@ -873,6 +881,8 @@ class TelegramSenderTest {
 
         verify(subscriberService).markBlockedByChatId("proj-photo-1", 7007L, CALLER_CHAT_ID);
         verify(subscriberService, never()).markDeletedByChatId(any(), any(), any());
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), any());
     }
 
     @Test
@@ -891,6 +901,8 @@ class TelegramSenderTest {
 
         verify(subscriberService).markDeletedByChatId("proj-photo-2", 8008L, CALLER_CHAT_ID);
         verify(subscriberService, never()).markBlockedByChatId(any(), any(), any());
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), any());
     }
 
     @Test
@@ -910,6 +922,8 @@ class TelegramSenderTest {
 
         assertThat(mockServer.getRequestCount()).isEqualTo(1);
         verifyNoInteractions(subscriberService);
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), any());
     }
 
     @Test
@@ -924,6 +938,8 @@ class TelegramSenderTest {
                 .hasMessage("transient_failure_exhausted");
 
         assertThat(mockServer.getRequestCount()).isEqualTo(4);
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), any());
     }
 
     @Test

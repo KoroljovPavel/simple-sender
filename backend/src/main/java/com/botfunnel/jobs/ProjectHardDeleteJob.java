@@ -36,6 +36,10 @@ public class ProjectHardDeleteJob {
     private static final String SUBSCRIBER_EVENTS_COLLECTION = "subscriber_events";
     private static final String SUBSCRIBERS_COLLECTION = "subscribers";
     private static final String TAGS_COLLECTION = "tags";
+    // Epic 10 funnel-domain collections swept by the cascade (Task 8). Both store projectId at the
+    // document root, so removeByProjectId handles them like the subscriber-domain collections.
+    private static final String FUNNELS_COLLECTION = "funnels";
+    private static final String FUNNEL_EXECUTIONS_COLLECTION = "funnel_executions";
     // GridFS file-metadata collection (default bucket `fs.files`); counted before the GridFS delete
     // since GridFsOperations.delete(query) returns no count. Must stay in sync with the GridFS
     // bucket the delete targets — no custom bucket is configured, so the default holds.
@@ -73,7 +77,8 @@ public class ProjectHardDeleteJob {
             // deletion path (all per-collection counts at 0) so the grep target is stable.
             log.info("ProjectHardDeleteJob - run completed: deletedCount=0 eventsRemovedCount=0 "
                             + "gridFsFilesRemoved=0 exportsRemoved=0 subscriberEventsRemoved=0 "
-                            + "subscribersRemoved=0 tagsRemoved=0 runDurationMs={}",
+                            + "subscribersRemoved=0 tagsRemoved=0 funnelsRemoved=0 "
+                            + "funnelExecutionsRemoved=0 runDurationMs={}",
                     System.currentTimeMillis() - startedAtMillis);
             return;
         }
@@ -119,6 +124,12 @@ public class ProjectHardDeleteJob {
         long subscribersRemoved = removeByProjectId(deletedIds, SUBSCRIBERS_COLLECTION);
         long tagsRemoved = removeByProjectId(deletedIds, TAGS_COLLECTION);
 
+        // Epic 10 funnel-domain cascade (Task 8). Swept here, before the project docs are dropped, by
+        // top-level projectId — drop projects does not cascade into these collections. Idempotent like
+        // the steps above: a re-run after a partial crash re-selects the project and no-ops empty sweeps.
+        long funnelsRemoved = removeByProjectId(deletedIds, FUNNELS_COLLECTION);
+        long funnelExecutionsRemoved = removeByProjectId(deletedIds, FUNNEL_EXECUTIONS_COLLECTION);
+
         for (Project p : projects) {
             eventService.logEvent(
                     p.getOwnerId(),
@@ -134,9 +145,11 @@ public class ProjectHardDeleteJob {
 
         log.info("ProjectHardDeleteJob - run completed: deletedCount={} eventsRemovedCount={} "
                         + "gridFsFilesRemoved={} exportsRemoved={} subscriberEventsRemoved={} "
-                        + "subscribersRemoved={} tagsRemoved={} runDurationMs={}",
+                        + "subscribersRemoved={} tagsRemoved={} funnelsRemoved={} "
+                        + "funnelExecutionsRemoved={} runDurationMs={}",
                 projects.size(), eventsRemovedCount, gridFsFilesRemoved, exportsRemoved,
-                subscriberEventsRemoved, subscribersRemoved, tagsRemoved,
+                subscriberEventsRemoved, subscribersRemoved, tagsRemoved, funnelsRemoved,
+                funnelExecutionsRemoved,
                 System.currentTimeMillis() - startedAtMillis);
     }
 

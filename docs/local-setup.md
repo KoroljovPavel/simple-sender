@@ -55,6 +55,17 @@ MONGODB_URI=mongodb://localhost:27017/botfunnel
 REDIS_URL=redis://localhost:6379
 ```
 
+#### Funnel engine variables (optional)
+
+The funnel execution engine (Epic 10) reads three optional variables. The defaults are sane for local
+development — leave them unset unless you are tuning behaviour:
+
+| Variable | Default | Meaning | When to change |
+|----------|---------|---------|----------------|
+| `FUNNEL_SCHEDULER_INTERVAL` | `PT30S` | Sweep cadence of the funnel engine, as an ISO-8601 Duration (`PT30S`, `PT1M`, …). | Lower it to make funnel steps fire sooner while testing locally. Must stay **≥ 15s** (the JobRunr poll interval) — a shorter value silently degrades step timing. |
+| `FUNNEL_MAX_STEPS` | `50` | Hard cap on the number of steps a single funnel may contain (enforced by the API). | Lower to test the limit-reached error path; raising it is rarely needed. |
+| `FUNNEL_SWEEP_BATCH_SIZE` | `200` | Max executions claimed per sweep tick (batch cap protecting against sweep overload). | Lower to exercise batching with little data; raise only under heavy load. |
+
 ### Step 3 — Start MongoDB and Redis
 
 ```bash

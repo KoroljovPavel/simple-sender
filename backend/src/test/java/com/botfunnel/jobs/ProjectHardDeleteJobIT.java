@@ -64,7 +64,41 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         mongoTemplate.remove(new Query(), Tag.class);
         mongoTemplate.remove(new Query(), SubscriberEvent.class);
         mongoTemplate.remove(new Query(), SubscriberExport.class);
+        mongoTemplate.remove(new Query(), FUNNELS_COLLECTION);
+        mongoTemplate.remove(new Query(), FUNNEL_EXECUTIONS_COLLECTION);
         gridFsOperations.delete(new Query());
+    }
+
+    private static final String FUNNELS_COLLECTION = "funnels";
+    private static final String FUNNEL_EXECUTIONS_COLLECTION = "funnel_executions";
+
+    // Funnel-domain seed helpers (Task 8 cascade): both collections store projectId at the document
+    // root, so the cascade's removeByProjectId(...).in(deletedIds) sweep picks them up. Seed minimal
+    // raw documents — the cascade keys on projectId only, not on any other field.
+    private void seedFunnel(String projectId) {
+        mongoTemplate.insert(
+                new Document("projectId", projectId).append("name", "funnel-" + SEQ.incrementAndGet()),
+                FUNNELS_COLLECTION);
+    }
+
+    private void seedFunnelExecution(String projectId) {
+        mongoTemplate.insert(
+                new Document("projectId", projectId).append("subscriberId", "sub-" + SEQ.incrementAndGet()),
+                FUNNEL_EXECUTIONS_COLLECTION);
+    }
+
+    private long countInCollection(String collection, String projectId) {
+        return mongoTemplate.count(Query.query(Criteria.where("projectId").is(projectId)), collection);
+    }
+
+    private Project seedActiveProject(String ownerId, String name) {
+        Project p = new Project();
+        p.setOwnerId(ownerId);
+        p.setName(name);
+        p.setTimezone("Europe/Kyiv");
+        p.setCreatedAt(Instant.now());
+        p.setUpdatedAt(Instant.now());
+        return projectRepository.save(p);
     }
 
     private Project seedSoftDeletedProject(String ownerId, String name, Instant deletedAt) {
@@ -227,7 +261,8 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         assertThat(output.getOut())
                 .containsPattern("ProjectHardDeleteJob - run completed: "
                         + "deletedCount=1 eventsRemovedCount=2 gridFsFilesRemoved=0 exportsRemoved=0 "
-                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs=\\d+");
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 "
+                        + "funnelsRemoved=0 funnelExecutionsRemoved=0 runDurationMs=\\d+");
     }
 
     @Test
@@ -310,7 +345,8 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         assertThat(output.getOut())
                 .containsPattern("ProjectHardDeleteJob - run completed: "
                         + "deletedCount=0 eventsRemovedCount=0 gridFsFilesRemoved=0 exportsRemoved=0 "
-                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs=\\d+");
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 "
+                        + "funnelsRemoved=0 funnelExecutionsRemoved=0 runDurationMs=\\d+");
 
         assertThat(projectRepository.count()).isZero();
         assertThat(eventRepository.count()).isZero();
@@ -335,7 +371,8 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         assertThat(captured)
                 .containsPattern("ProjectHardDeleteJob - run completed: "
                         + "deletedCount=1 eventsRemovedCount=2 gridFsFilesRemoved=0 exportsRemoved=0 "
-                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs=\\d+");
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 "
+                        + "funnelsRemoved=0 funnelExecutionsRemoved=0 runDurationMs=\\d+");
         long occurrences = countOccurrences(captured, "ProjectHardDeleteJob - run completed: ");
         assertThat(occurrences)
                 .as("structured INFO line must be emitted exactly once per run")
@@ -393,7 +430,8 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         assertThat(output.getOut())
                 .containsPattern("ProjectHardDeleteJob - run completed: "
                         + "deletedCount=1 eventsRemovedCount=2 gridFsFilesRemoved=1 exportsRemoved=1 "
-                        + "subscriberEventsRemoved=1 subscribersRemoved=1 tagsRemoved=1 runDurationMs=\\d+");
+                        + "subscriberEventsRemoved=1 subscribersRemoved=1 tagsRemoved=1 "
+                        + "funnelsRemoved=0 funnelExecutionsRemoved=0 runDurationMs=\\d+");
     }
 
     @Test
@@ -450,13 +488,15 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
                         + "already-empty subscribers collection (subscribersRemoved=0)")
                 .containsPattern("ProjectHardDeleteJob - run completed: "
                         + "deletedCount=1 eventsRemovedCount=0 gridFsFilesRemoved=1 exportsRemoved=1 "
-                        + "subscriberEventsRemoved=1 subscribersRemoved=0 tagsRemoved=1 runDurationMs=\\d+");
+                        + "subscriberEventsRemoved=1 subscribersRemoved=0 tagsRemoved=1 "
+                        + "funnelsRemoved=0 funnelExecutionsRemoved=0 runDurationMs=\\d+");
 
         // Second fire on the now fully-drained state is a clean no-op (nothing eligible).
         job.hardDeleteSoftDeletedProjects();
         long noOpRuns = countOccurrences(output.getOut(),
                 "deletedCount=0 eventsRemovedCount=0 gridFsFilesRemoved=0 exportsRemoved=0 "
-                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0");
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 "
+                        + "funnelsRemoved=0 funnelExecutionsRemoved=0");
         assertThat(noOpRuns)
                 .as("the no-eligible-projects re-fire emits exactly one all-zero line")
                 .isEqualTo(1L);
@@ -479,6 +519,51 @@ class ProjectHardDeleteJobIT extends AbstractIntegrationTest {
         assertThat(gridFsFileExists(oldProject.getId()))
                 .as("orphan GridFS blob (no pointer row) must still be swept by metadata.projectId")
                 .isFalse();
+    }
+
+    @Test
+    void cron_cascadeRemovesFunnelsAndExecutions(CapturedOutput output) {
+        // Task 8 cascade: a hard-deleted project's funnels + funnel_executions (keyed by top-level
+        // projectId) must be swept before the project doc is dropped, with per-collection log counters.
+        Project oldProject = seedSoftDeletedProject("owner-1", "Old Project",
+                Instant.now().minus(8, ChronoUnit.DAYS));
+        seedFunnel(oldProject.getId());
+        seedFunnel(oldProject.getId());
+        seedFunnelExecution(oldProject.getId());
+
+        job.hardDeleteSoftDeletedProjects();
+
+        assertThat(projectRepository.findById(oldProject.getId()).orElse(null)).isNull();
+        assertThat(countInCollection(FUNNELS_COLLECTION, oldProject.getId())).isZero();
+        assertThat(countInCollection(FUNNEL_EXECUTIONS_COLLECTION, oldProject.getId())).isZero();
+        assertThat(output.getOut())
+                .containsPattern("ProjectHardDeleteJob - run completed: "
+                        + "deletedCount=1 eventsRemovedCount=0 gridFsFilesRemoved=0 exportsRemoved=0 "
+                        + "subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 "
+                        + "funnelsRemoved=2 funnelExecutionsRemoved=1 runDurationMs=\\d+");
+    }
+
+    @Test
+    void cron_cascadeDoesNotTouchFunnelsOfOtherProjects() {
+        // Cross-project isolation: only the deleted project's funnels/executions are swept; an active
+        // (never-deleted) control project's funnel-domain rows must survive untouched.
+        Project oldProject = seedSoftDeletedProject("owner-1", "Old Project",
+                Instant.now().minus(8, ChronoUnit.DAYS));
+        Project control = seedActiveProject("owner-2", "Active Project");
+        seedFunnel(oldProject.getId());
+        seedFunnelExecution(oldProject.getId());
+        seedFunnel(control.getId());
+        seedFunnelExecution(control.getId());
+
+        job.hardDeleteSoftDeletedProjects();
+
+        assertThat(projectRepository.findById(oldProject.getId()).orElse(null)).isNull();
+        assertThat(countInCollection(FUNNELS_COLLECTION, oldProject.getId())).isZero();
+        assertThat(countInCollection(FUNNEL_EXECUTIONS_COLLECTION, oldProject.getId())).isZero();
+
+        assertThat(projectRepository.findById(control.getId()).orElse(null)).isNotNull();
+        assertThat(countInCollection(FUNNELS_COLLECTION, control.getId())).isEqualTo(1L);
+        assertThat(countInCollection(FUNNEL_EXECUTIONS_COLLECTION, control.getId())).isEqualTo(1L);
     }
 
     @Test

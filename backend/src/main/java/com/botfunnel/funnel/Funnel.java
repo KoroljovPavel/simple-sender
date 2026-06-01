@@ -3,7 +3,6 @@ package com.botfunnel.funnel;
 import org.springframework.data.annotation.Id;
 import org.springframework.data.mongodb.core.index.CompoundIndex;
 import org.springframework.data.mongodb.core.index.CompoundIndexes;
-import org.springframework.data.mongodb.core.index.Indexed;
 import org.springframework.data.mongodb.core.mapping.Document;
 
 import java.time.Instant;
@@ -39,7 +38,9 @@ public class Funnel {
     @Id
     private String id;
 
-    @Indexed
+    // No standalone @Indexed: the non-partial compound (projectId, status) already covers
+    // projectId-prefix queries. (Contrast FunnelExecution, whose other compound is partial, so its
+    // projectId cascade lookup needs its own @Indexed.)
     private String projectId;
 
     private String name;
@@ -79,6 +80,9 @@ public class Funnel {
     public boolean isAllowReEnter() { return allowReEnter; }
     public void setAllowReEnter(boolean allowReEnter) { this.allowReEnter = allowReEnter; }
 
+    // Decision 3 (snapshot isolation): the returned list is the live backing reference, NOT a copy.
+    // Callers must not mutate it in place. The execution snapshot is produced separately via
+    // FunnelStep.copyOf at fire() time, so reads here never feed engine state.
     public List<FunnelStep> getSteps() { return steps; }
     public void setSteps(List<FunnelStep> steps) { this.steps = steps; }
 

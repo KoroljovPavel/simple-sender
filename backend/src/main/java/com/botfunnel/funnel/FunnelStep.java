@@ -30,6 +30,14 @@ public class FunnelStep {
 
     // SET_CUSTOM_FIELD
     private String customFieldKey;
+    /**
+     * Typed {@code Object} to mirror the subscriber {@code customFields} map: values are validated
+     * scalars — {@code Double} / {@code Boolean} / {@code Instant} / {@code String} (all immutable),
+     * enforced by CustomFieldValueValidator (Task 4/5). Because the value is always an immutable
+     * scalar, {@link #copyOf(FunnelStep)} can copy it by reference and still satisfy the deep-copy
+     * contract. Storing a mutable collection here would violate Decision 3 (snapshot isolation) and
+     * is disallowed.
+     */
     private Object customFieldValue;
 
     public FunnelStep() {
@@ -38,6 +46,13 @@ public class FunnelStep {
     /**
      * Deep copy for the execution snapshot (Decision 3). Returns {@code null} for a {@code null} input
      * so callers can map a list element-wise without null-guarding each entry.
+     *
+     * <p>Deep-copy contract: every field is an immutable value type — {@code String} / boxed primitive
+     * / enum — and {@link #customFieldValue} is a validated immutable scalar (Double / Boolean /
+     * Instant / String, enforced by CustomFieldValueValidator in Task 4/5). A field-wise reference
+     * copy is therefore a sufficient deep copy. No collection-defensive-copy logic is needed (and is
+     * intentionally absent): storing a mutable collection in {@link #customFieldValue} would violate
+     * Decision 3 and is disallowed by the validator.
      */
     public static FunnelStep copyOf(FunnelStep source) {
         if (source == null) {

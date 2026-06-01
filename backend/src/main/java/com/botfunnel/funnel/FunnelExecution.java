@@ -88,6 +88,9 @@ public class FunnelExecution {
     public Instant getNextRunAt() { return nextRunAt; }
     public void setNextRunAt(Instant nextRunAt) { this.nextRunAt = nextRunAt; }
 
+    // Decision 3 (snapshot isolation): the returned list is the live backing reference, NOT a copy.
+    // Callers must not mutate it in place. The snapshot itself is built at fire() time from
+    // independent FunnelStep.copyOf deep copies, decoupling it from later edits to the source funnel.
     public List<FunnelStep> getStepsSnapshot() { return stepsSnapshot; }
     public void setStepsSnapshot(List<FunnelStep> stepsSnapshot) { this.stepsSnapshot = stepsSnapshot; }
 

@@ -50,10 +50,47 @@ public class SubscriberCustomFieldsService {
      * @param type  the resolved field type; MUST be non-null (caller pre-filters unknown keys)
      * @param value the raw incoming value
      * @return the normalized value to {@code $set}, or {@code null} to {@code $unset} the field
+     * @throws IllegalArgumentException if {@code type} is null (precondition; both callers pre-filter
+     *                                  null types, so this is a fail-fast on a programming error)
      * @throws com.botfunnel.common.AppException 422 if the value does not match {@code type}
      */
     public Object validateAndNormalize(CustomFieldType type, Object value) {
+        if (type == null) {
+            throw new IllegalArgumentException("type must not be null");
+        }
         return validator.validate(type, value); // 422 on type mismatch
+    }
+
+    /**
+     * Single-field set for the FUTURE funnel engine path (Task 6, one field per {@code SET_CUSTOM_FIELD}
+     * step) — a thin wrapper over {@link #validateAndNormalize} + {@link #applyAll} that performs
+     * validate+apply ONLY.
+     *
+     * <p>This method does NOT write the audit event. The caller (engine) is responsible for the
+     * sole-writer audit via {@link SubscriberService#recordCustomFieldsSet} — exactly as the controller
+     * does for its aggregated multi-key path. The controller deliberately does NOT route through this
+     * method; it uses the two-pass {@link #validateAndNormalize} + {@link #applyAll} directly so a
+     * multi-key PATCH stays all-or-nothing with a single aggregated audit event.
+     *
+     * <p>Behavior:
+     * <ul>
+     *   <li>{@code type == null} → return immediately (deleted/unknown field → silent no-op skip,
+     *       mirroring the controller's mass-assignment pre-filter; no validation, no DB write).</li>
+     *   <li>otherwise → {@link #validateAndNormalize}({@code type}, {@code value}) (422 on mismatch)
+     *       then {@link #applyAll} of the single {@code key→normalized} entry (non-null {@code $set}s,
+     *       {@code null} {@code $unset}s the field).</li>
+     * </ul>
+     *
+     * @param type  the resolved field type, or {@code null} to skip (deleted/unknown field)
+     * @param value the raw incoming value
+     * @throws com.botfunnel.common.AppException 422 if the value does not match {@code type}
+     */
+    public void setOne(String projectId, String subscriberId, CustomFieldType type, String key, Object value) {
+        if (type == null) {
+            return; // deleted/unknown field → no-op skip (no validate, no DB write, no audit)
+        }
+        Object normalized = validateAndNormalize(type, value); // 422 on type mismatch
+        applyAll(projectId, subscriberId, java.util.Collections.singletonMap(key, normalized));
     }
 
     /**
@@ -62,6 +99,12 @@ public class SubscriberCustomFieldsService {
      * {@code $unset}s it). Atomic for the whole map; emits NO audit (caller records once).
      *
      * <p>No-op (no DB call) when {@code normalizedByKey} is empty.
+     *
+     * <p><strong>Precondition (caller-enforced; this method performs NO validation):</strong> every key
+     * MUST originate from a validated project field definition — i.e. a slug matching
+     * {@code ^[a-z0-9_-]{1,32}$} (no dots / Mongo-operator chars, so no dotted-path or operator
+     * injection into {@code customFields.<key>}) — and every value MUST be an output of
+     * {@link #validateAndNormalize}. Passing raw/unvalidated keys or values is a programming error.
      *
      * @param normalizedByKey values already passed through {@link #validateAndNormalize} (insertion
      *                        order preserved); {@code null} value → {@code $unset}, else {@code $set}

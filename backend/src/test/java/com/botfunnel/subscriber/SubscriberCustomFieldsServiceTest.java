@@ -61,6 +61,15 @@ class SubscriberCustomFieldsServiceTest {
     }
 
     @Test
+    void validateAndNormalize_nullType_throwsIllegalArgument() {
+        assertThatThrownBy(() -> newService().validateAndNormalize(null, "x"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("type must not be null");
+
+        verify(mongoTemplate, never()).update(any(Class.class));
+    }
+
+    @Test
     void validateAndNormalize_invalidValue_throws422_noWrite() {
         when(validator.validate(CustomFieldType.NUMBER, "abc"))
                 .thenThrow(AppException.unprocessableEntity("custom_field_type_mismatch", "bad"));
@@ -108,9 +117,84 @@ class SubscriberCustomFieldsServiceTest {
     }
 
     @Test
+    void applyAll_mixedNonNullAndNull_setsAndUnsetsInOneUpdate() {
+        Map<String, Object> normalized = new LinkedHashMap<>();
+        normalized.put("city", "Kyiv"); // non-null → $set
+        normalized.put("age", null);    // null → $unset
+
+        newService().applyAll(PROJECT_ID, SUBSCRIBER_ID, normalized);
+
+        ArgumentCaptor<UpdateDefinition> captor = ArgumentCaptor.forClass(UpdateDefinition.class);
+        verify(mongoTemplate.update(Subscriber.class).matching(any(Query.class))).apply(captor.capture());
+        Document update = captor.getValue().getUpdateObject();
+        Document set = update.get("$set", Document.class);
+        Document unset = update.get("$unset", Document.class);
+        assertThat(set).isNotNull();
+        assertThat(set.get("customFields.city")).isEqualTo("Kyiv");
+        assertThat(unset).isNotNull();
+        assertThat(unset).containsKey("customFields.age");
+        verify(terminalUpdate()).first();
+    }
+
+    @Test
     void applyAll_emptyMap_isNoOp_noDbCall() {
         newService().applyAll(PROJECT_ID, SUBSCRIBER_ID, Map.of());
 
         verify(mongoTemplate, never()).update(any(Class.class));
+    }
+
+    @Test
+    void setOne_validValue_validatesAndApplies() {
+        when(validator.validate(CustomFieldType.STRING, "  Kyiv  ")).thenReturn("Kyiv");
+
+        newService().setOne(PROJECT_ID, SUBSCRIBER_ID, CustomFieldType.STRING, "city", "  Kyiv  ");
+
+        // validate path was exercised
+        verify(validator).validate(CustomFieldType.STRING, "  Kyiv  ");
+        // applyAll committed a single-key $set update
+        ArgumentCaptor<UpdateDefinition> captor = ArgumentCaptor.forClass(UpdateDefinition.class);
+        verify(mongoTemplate.update(Subscriber.class).matching(any(Query.class))).apply(captor.capture());
+        Document set = captor.getValue().getUpdateObject().get("$set", Document.class);
+        assertThat(set).isNotNull();
+        assertThat(set.get("customFields.city")).isEqualTo("Kyiv");
+        assertThat(captor.getValue().getUpdateObject().get("$unset", Document.class)).isNull();
+        verify(terminalUpdate()).first();
+    }
+
+    @Test
+    void setOne_deletedFieldTypeNull_skips() {
+        newService().setOne(PROJECT_ID, SUBSCRIBER_ID, null, "gone", "anything");
+
+        // null type → no validate, no DB write, no applyAll
+        verify(validator, never()).validate(any(), any());
+        verify(mongoTemplate, never()).update(any(Class.class));
+    }
+
+    @Test
+    void setOne_invalidValue_throws422() {
+        when(validator.validate(CustomFieldType.NUMBER, "abc"))
+                .thenThrow(AppException.unprocessableEntity("custom_field_type_mismatch", "bad"));
+
+        assertThatThrownBy(() -> newService().setOne(PROJECT_ID, SUBSCRIBER_ID, CustomFieldType.NUMBER, "age", "abc"))
+                .isInstanceOf(AppException.class)
+                .satisfies(e -> assertThat(((AppException) e).getStatus()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY));
+
+        // 422 before any write
+        verify(mongoTemplate, never()).update(any(Class.class));
+    }
+
+    @Test
+    void setOne_nullValue_unsetsField() {
+        when(validator.validate(CustomFieldType.STRING, null)).thenReturn(null);
+
+        newService().setOne(PROJECT_ID, SUBSCRIBER_ID, CustomFieldType.STRING, "city", null);
+
+        ArgumentCaptor<UpdateDefinition> captor = ArgumentCaptor.forClass(UpdateDefinition.class);
+        verify(mongoTemplate.update(Subscriber.class).matching(any(Query.class))).apply(captor.capture());
+        Document unset = captor.getValue().getUpdateObject().get("$unset", Document.class);
+        assertThat(unset).isNotNull();
+        assertThat(unset).containsKey("customFields.city");
+        assertThat(captor.getValue().getUpdateObject().get("$set", Document.class)).isNull();
+        verify(terminalUpdate()).first();
     }
 }

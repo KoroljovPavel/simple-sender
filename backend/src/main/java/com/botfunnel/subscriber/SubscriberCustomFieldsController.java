@@ -67,6 +67,10 @@ public class SubscriberCustomFieldsController {
         Map<String, Object> requested = request.values() == null
                 ? Map.of() : request.values();
 
+        // Two-pass, all-or-nothing PATCH semantics: validate EVERY key first (no DB writes), so an
+        // invalid key throws 422 before anything is persisted; only then apply ONE aggregated update.
+        // Pass 1 — validate + normalize ALL allowed keys; collect old/new maps. NO DB writes here, so
+        // a 422 on a later key leaves the subscriber untouched (no partial write).
         Map<String, Object> oldValues = new LinkedHashMap<>();
         Map<String, Object> newValues = new LinkedHashMap<>();
         for (Map.Entry<String, Object> entry : requested.entrySet()) {
@@ -77,14 +81,16 @@ public class SubscriberCustomFieldsController {
                 log.debug("custom-fields PATCH dropped unknown key '{}' for subscriber {}", key, subscriberId);
                 continue;
             }
-            // Delegate validate + atomic per-key update to the shared service (Decision 11). Audit
-            // stays aggregated below — recordCustomFieldsSet is NOT called per key.
-            Object normalized = customFieldsService.setOne(projectId, subscriberId, type, key, entry.getValue());
+            // 422 here propagates with nothing written yet (Decision 11 shared validate path).
+            Object normalized = customFieldsService.validateAndNormalize(type, entry.getValue());
             oldValues.put(key, current.get(key));
             newValues.put(key, normalized);
         }
 
         if (!newValues.isEmpty()) {
+            // Pass 2 — apply ALL writes in ONE aggregated update (set for non-null, unset for null),
+            // byte-identical to the original single mongoTemplate.update(...).
+            customFieldsService.applyAll(projectId, subscriberId, newValues);
             // Decision 10/11 sole-writer path for subscriber_custom_field_set — called EXACTLY ONCE per
             // PATCH with the full aggregated old/new maps (idempotent: an empty old→new diff writes no
             // event). Per-key recording would fragment one PATCH into multiple events (audit regression).

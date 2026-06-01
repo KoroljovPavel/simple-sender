@@ -50,26 +50,37 @@ class SubscriberCustomFieldsControllerTest extends AbstractIntegrationTest {
         subscriberRepository.deleteAll();
         subscriberEventRepository.deleteAll();
 
+        userRepository.save(user(USER_ID, "scf@test.com", "SCF Owner"));
+        // Foreign owner seeded for patchCustomFields_foreignOwner_returns404 robustness (the owner of
+        // the foreign project actually exists, so the 404 is the IDOR guard, not a missing-user fluke).
+        userRepository.save(user(OTHER_USER_ID, "scf-other@test.com", "SCF Other"));
+    }
+
+    private User user(String id, String email, String name) {
         User u = new User();
-        u.setId(USER_ID);
-        u.setEmail("scf@test.com");
-        u.setName("SCF Owner");
+        u.setId(id);
+        u.setEmail(email);
+        u.setName(name);
         u.setPasswordHash("not-used");
         u.setStatus(UserStatus.active);
         u.setSuperAdmin(false);
         u.setCreatedAt(Instant.now());
         u.setUpdatedAt(Instant.now());
-        userRepository.save(u);
+        return u;
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void patchCustomFields_behaviourUnchanged() throws Exception {
-        // Two known fields + one unknown key in a single PATCH. Expected: 200, both known values
-        // applied & echoed, unknown key dropped, and ONE aggregated audit event covering both keys.
+        // Two known fields (with PRIOR values) + one unknown key in a single PATCH. Expected: 200,
+        // both known values overwritten & echoed, unknown key dropped, and ONE aggregated audit event
+        // whose oldValues capture the prior state and newValues the normalized new state.
         String projectId = saveProject(USER_ID,
                 def("city", CustomFieldType.STRING), def("age", CustomFieldType.NUMBER)).getId();
-        String subscriberId = saveSubscriber(projectId, 200L, new HashMap<>());
+        Map<String, Object> prior = new HashMap<>();
+        prior.put("city", "OldCity");
+        prior.put("age", 25.0d);
+        String subscriberId = saveSubscriber(projectId, 200L, prior);
 
         mockMvc.perform(patch(url(projectId, subscriberId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -83,12 +94,63 @@ class SubscriberCustomFieldsControllerTest extends AbstractIntegrationTest {
         assertThat(reread.getCustomFields()).containsEntry("city", "Kyiv").containsEntry("age", 42.0d)
                 .doesNotContainKey("unknown_evil");
 
-        // Aggregated audit invariant: ONE event for the whole PATCH, both changed keys in it.
+        // Aggregated audit invariant: ONE event for the whole PATCH, both changed keys in it, and the
+        // old/new value capture is pinned — oldValues = prior state, newValues = normalized new state.
         List<SubscriberEvent> events = customFieldSetEvents(subscriberId);
         assertThat(events).hasSize(1);
+        Map<String, Object> meta = events.get(0).getMetadata();
         @SuppressWarnings("unchecked")
-        List<String> changedKeys = (List<String>) events.get(0).getMetadata().get("changedKeys");
+        List<String> changedKeys = (List<String>) meta.get("changedKeys");
         assertThat(changedKeys).containsExactlyInAnyOrder("city", "age");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> oldValues = (Map<String, Object>) meta.get("oldValues");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> newValues = (Map<String, Object>) meta.get("newValues");
+        assertThat(oldValues).containsEntry("city", "OldCity").containsEntry("age", 25.0d);
+        assertThat(newValues).containsEntry("city", "Kyiv").containsEntry("age", 42.0d);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patchCustomFields_partialKeyOrder_422_writesNothing() throws Exception {
+        // Multi-key PATCH where the FIRST key is valid and the SECOND is invalid. All-or-nothing
+        // semantics: the 422 must leave the subscriber untouched — the first (valid) key must NOT be
+        // persisted, and NO audit event may be emitted (validate-all-then-apply-once).
+        String projectId = saveProject(USER_ID,
+                def("city", CustomFieldType.STRING), def("age", CustomFieldType.NUMBER)).getId();
+        String subscriberId = saveSubscriber(projectId, 204L, new HashMap<>());
+
+        mockMvc.perform(patch(url(projectId, subscriberId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"values\":{\"city\":\"Kyiv\",\"age\":\"not-a-number\"}}"))
+                .andExpect(status().is(422))
+                .andExpect(jsonPath("$.code").value("custom_field_type_mismatch"));
+
+        // Nothing written: the earlier valid key did NOT leak into the document.
+        Subscriber reread = subscriberRepository.findById(subscriberId).orElseThrow();
+        assertThat(reread.getCustomFields()).doesNotContainKey("city").doesNotContainKey("age");
+        // And no audit event for the rejected PATCH.
+        assertThat(customFieldSetEvents(subscriberId)).isEmpty();
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patchCustomFields_onlyUnknownKeys_200_noWriteNoAudit() throws Exception {
+        // PATCH containing ONLY unknown keys → 200, keys silently ignored, no DB write, and
+        // recordCustomFieldsSet NOT called (newValues empty).
+        String projectId = saveProject(USER_ID, def("city", CustomFieldType.STRING)).getId();
+        String subscriberId = saveSubscriber(projectId, 205L, new HashMap<>());
+
+        mockMvc.perform(patch(url(projectId, subscriberId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"values\":{\"ghost\":\"x\",\"other_unknown\":\"y\"}}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.ghost").doesNotExist())
+                .andExpect(jsonPath("$.other_unknown").doesNotExist());
+
+        Subscriber reread = subscriberRepository.findById(subscriberId).orElseThrow();
+        assertThat(reread.getCustomFields()).isEmpty();
+        assertThat(customFieldSetEvents(subscriberId)).isEmpty();
     }
 
     @Test

@@ -207,6 +207,22 @@ class SubscriberServiceImplIT extends AbstractIntegrationTest {
         assertThat(events.get(0).getMetadata()).containsEntry("slug", "vip");
     }
 
+    // ─── lookup-by-chat (Task 4) ─────────────────────────────────────────────
+
+    @Test
+    void lookupByChat_delegatesToRepository() {
+        Subscriber s = seedActiveSubscriber(400L);
+
+        // Hit: returns the row the repository resolves for (projectId, telegramBotId, chatId).
+        java.util.Optional<Subscriber> found =
+                subscriberService.findByChat(projectId, TELEGRAM_BOT_ID, 400L);
+        assertThat(found).isPresent();
+        assertThat(found.orElseThrow().getId()).isEqualTo(s.getId());
+
+        // Miss: an unknown chatId mirrors the repository's Optional.empty().
+        assertThat(subscriberService.findByChat(projectId, TELEGRAM_BOT_ID, 999999L)).isEmpty();
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────────────
 
     private void handle(String rawUpdateId) {

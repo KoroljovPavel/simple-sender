@@ -179,7 +179,7 @@ public class SubscriberServiceImpl implements SubscriberService {
 
     @Override
     public void markUnsubscribed(String projectId, Long telegramBotId, Long chatId) {
-        Subscriber s = findByChat(projectId, telegramBotId, chatId);
+        Subscriber s = findByChat(projectId, telegramBotId, chatId).orElse(null);
         if (s == null || s.getStatus() == SubscriberStatus.UNSUBSCRIBED) {
             return; // never-registered chat, or already unsubscribed → idempotent no-op
         }
@@ -189,7 +189,7 @@ public class SubscriberServiceImpl implements SubscriberService {
 
     @Override
     public void markBlockedByChatId(String projectId, Long telegramBotId, Long chatId) {
-        Subscriber s = findByChat(projectId, telegramBotId, chatId);
+        Subscriber s = findByChat(projectId, telegramBotId, chatId).orElse(null);
         if (s == null || s.getStatus() == SubscriberStatus.BLOCKED) {
             return;
         }
@@ -199,7 +199,7 @@ public class SubscriberServiceImpl implements SubscriberService {
 
     @Override
     public void markDeletedByChatId(String projectId, Long telegramBotId, Long chatId) {
-        Subscriber s = findByChat(projectId, telegramBotId, chatId);
+        Subscriber s = findByChat(projectId, telegramBotId, chatId).orElse(null);
         if (s == null || s.getStatus() == SubscriberStatus.DELETED) {
             return;
         }
@@ -283,10 +283,12 @@ public class SubscriberServiceImpl implements SubscriberService {
         }
     }
 
-    private Subscriber findByChat(String projectId, Long telegramBotId, Long chatId) {
+    @Override
+    public Optional<Subscriber> findByChat(String projectId, Long telegramBotId, Long chatId) {
+        // Pure exposure of the existing repository lookup — no new query logic. Reused internally by
+        // the status-machine writers below (markUnsubscribed / markBlocked / markDeleted).
         return subscriberRepository
-                .findByProjectIdAndTelegramBotIdAndTelegramChatId(projectId, telegramBotId, chatId)
-                .orElse(null);
+                .findByProjectIdAndTelegramBotIdAndTelegramChatId(projectId, telegramBotId, chatId);
     }
 
     private void flip(String subscriberId, SubscriberStatus target, String timestampField) {

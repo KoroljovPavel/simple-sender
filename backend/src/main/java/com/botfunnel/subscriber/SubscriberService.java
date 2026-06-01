@@ -1,6 +1,7 @@
 package com.botfunnel.subscriber;
 
 import java.util.Map;
+import java.util.Optional;
 
 /**
  * Subscriber CRM lifecycle contract (Epic 05). The single implementation is
@@ -75,4 +76,14 @@ public interface SubscriberService {
      * Idempotent on an already-absent tag.
      */
     void removeTag(String projectId, String subscriberId, String slug);
+
+    /**
+     * Non-HTTP subscriber lookup by {@code (projectId, telegramBotId, chatId)} for consumers outside a
+     * request scope — the funnel engine's {@code SET_CUSTOM_FIELD} trigger/step (Task 6), which has no
+     * {@code SecurityContextHolder} or path variables. Delegates to the existing
+     * {@code SubscriberRepository.findByProjectIdAndTelegramBotIdAndTelegramChatId}; returns
+     * {@link Optional#empty()} when no subscriber matches (engine: log + skip). Does NO anti-IDOR —
+     * the caller already operates in a trusted project scope.
+     */
+    Optional<Subscriber> findByChat(String projectId, Long telegramBotId, Long chatId);
 }

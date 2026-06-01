@@ -10,10 +10,6 @@ import com.botfunnel.subscriber.dto.SetCustomFieldsRequest;
 import jakarta.validation.Valid;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.data.mongodb.core.MongoTemplate;
-import org.springframework.data.mongodb.core.query.Criteria;
-import org.springframework.data.mongodb.core.query.Query;
-import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -40,20 +36,17 @@ public class SubscriberCustomFieldsController {
 
     private final ProjectService projectService;
     private final SubscriberRepository subscriberRepository;
-    private final CustomFieldValueValidator validator;
     private final SubscriberService subscriberService;
-    private final MongoTemplate mongoTemplate;
+    private final SubscriberCustomFieldsService customFieldsService;
 
     public SubscriberCustomFieldsController(ProjectService projectService,
                                             SubscriberRepository subscriberRepository,
-                                            CustomFieldValueValidator validator,
                                             SubscriberService subscriberService,
-                                            MongoTemplate mongoTemplate) {
+                                            SubscriberCustomFieldsService customFieldsService) {
         this.projectService = projectService;
         this.subscriberRepository = subscriberRepository;
-        this.validator = validator;
         this.subscriberService = subscriberService;
-        this.mongoTemplate = mongoTemplate;
+        this.customFieldsService = customFieldsService;
     }
 
     @PatchMapping
@@ -76,7 +69,6 @@ public class SubscriberCustomFieldsController {
 
         Map<String, Object> oldValues = new LinkedHashMap<>();
         Map<String, Object> newValues = new LinkedHashMap<>();
-        Update update = new Update();
         for (Map.Entry<String, Object> entry : requested.entrySet()) {
             String key = entry.getKey();
             CustomFieldType type = allowed.get(key);
@@ -85,23 +77,17 @@ public class SubscriberCustomFieldsController {
                 log.debug("custom-fields PATCH dropped unknown key '{}' for subscriber {}", key, subscriberId);
                 continue;
             }
-            Object normalized = validator.validate(type, entry.getValue()); // 422 on type mismatch
+            // Delegate validate + atomic per-key update to the shared service (Decision 11). Audit
+            // stays aggregated below — recordCustomFieldsSet is NOT called per key.
+            Object normalized = customFieldsService.setOne(projectId, subscriberId, type, key, entry.getValue());
             oldValues.put(key, current.get(key));
             newValues.put(key, normalized);
-            if (normalized == null) {
-                update.unset("customFields." + key); // null clears the field
-            } else {
-                update.set("customFields." + key, normalized);
-            }
         }
 
         if (!newValues.isEmpty()) {
-            mongoTemplate.update(Subscriber.class)
-                    .matching(Query.query(Criteria.where("_id").is(subscriberId)))
-                    .apply(update)
-                    .first();
-            // Decision 10 sole-writer path for subscriber_custom_field_set (idempotent: an empty
-            // old→new diff writes no event).
+            // Decision 10/11 sole-writer path for subscriber_custom_field_set — called EXACTLY ONCE per
+            // PATCH with the full aggregated old/new maps (idempotent: an empty old→new diff writes no
+            // event). Per-key recording would fragment one PATCH into multiple events (audit regression).
             subscriberService.recordCustomFieldsSet(projectId, subscriberId, oldValues, newValues);
         }
 

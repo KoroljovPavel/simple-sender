@@ -1,0 +1,526 @@
+package com.botfunnel.funnel;
+
+import com.botfunnel.AbstractIntegrationTest;
+import com.botfunnel.bot.Bot;
+import com.botfunnel.bot.BotRepository;
+import com.botfunnel.bot.BotStatus;
+import com.botfunnel.common.AppException;
+import com.botfunnel.common.test.ConcurrencyTestUtils;
+import com.botfunnel.profile.WithMockAppUser;
+import com.botfunnel.project.Project;
+import com.botfunnel.project.ProjectRepository;
+import com.botfunnel.user.User;
+import com.botfunnel.user.UserRepository;
+import com.botfunnel.user.UserStatus;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+
+class FunnelControllerIT extends AbstractIntegrationTest {
+
+    private static final String USER_ID = "funnel-it-user";
+    private static final String OTHER_USER_ID = "funnel-it-other";
+
+    @Autowired UserRepository userRepository;
+    @Autowired ProjectRepository projectRepository;
+    @Autowired FunnelRepository funnelRepository;
+    @Autowired BotRepository botRepository;
+    @Autowired FunnelService funnelService;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private String projectId;
+
+    @BeforeEach
+    void cleanAndSeed() {
+        userRepository.deleteAll();
+        projectRepository.deleteAll();
+        funnelRepository.deleteAll();
+        botRepository.deleteAll();
+
+        seedUser(USER_ID, "owner@test.com");
+        projectId = saveProject(USER_ID, null).getId();
+    }
+
+    // ─── create ──────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void createReturns201Draft() throws Exception {
+        mockMvc.perform(post(url()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "t"))))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value("t"))
+                .andExpect(jsonPath("$.status").value("draft"))
+                .andExpect(jsonPath("$.steps.length()").value(0))
+                .andExpect(jsonPath("$.deepLink").value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    // ─── list ────────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void listFiltersByStatus() throws Exception {
+        seedFunnel("Draft one", FunnelStatus.draft, "", List.of());
+        seedFunnel("Active one", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+
+        mockMvc.perform(get(url() + "?status=active"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.length()").value(1))
+                .andExpect(jsonPath("$[0].name").value("Active one"))
+                .andExpect(jsonPath("$[0].status").value("active"))
+                // FunnelSummaryResponse carries NO steps array (lightweight list view).
+                .andExpect(jsonPath("$[0].steps").doesNotExist())
+                .andExpect(jsonPath("$[0].stepCount").value(1));
+    }
+
+    // ─── get ─────────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void getReturnsFullFunnelWithSteps() throws Exception {
+        seedConnectedBot("my_bot");
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo",
+                List.of(sendMessage("hello"), delayStep(5, "MIN")));
+
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps.length()").value(2))
+                .andExpect(jsonPath("$.steps[0].stepType").value("SEND_MESSAGE"))
+                .andExpect(jsonPath("$.steps[1].stepType").value("DELAY"))
+                // deepLink present for an active funnel (survives page reload, not only activate resp).
+                .andExpect(jsonPath("$.deepLink").value("t.me/my_bot?start=promo"));
+    }
+
+    // ─── update ──────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateRewritesStepOrderByIndex() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggerValue", "",
+                "steps", List.of(
+                        stepMap("SEND_MESSAGE", Map.of("text", "first")),
+                        stepMap("DELAY", Map.of("delayValue", 2, "delayUnit", "HOUR")),
+                        stepMap("ADD_TAG", Map.of("tagSlug", "vip"))));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps.length()").value(3));
+
+        // Server rewrites FunnelStep.order from the array index, ignoring any client-supplied order.
+        Funnel reloaded = funnelRepository.findById(f.getId()).orElseThrow();
+        List<FunnelStep> steps = reloaded.getSteps();
+        assertThat(steps).hasSize(3);
+        assertThat(steps.get(0).getOrder()).isZero();
+        assertThat(steps.get(1).getOrder()).isEqualTo(1);
+        assertThat(steps.get(2).getOrder()).isEqualTo(2);
+        assertThat(steps.get(0).getStepType()).isEqualTo(StepType.SEND_MESSAGE);
+        assertThat(steps.get(2).getStepType()).isEqualTo(StepType.ADD_TAG);
+    }
+
+    // ─── delete ──────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void deleteReturns204AndCancelsActiveExecutions() throws Exception {
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        String runningId = seedExecution(f.getId(), ExecutionStatus.running);
+        String waitingId = seedExecution(f.getId(), ExecutionStatus.waiting);
+        String completedId = seedExecution(f.getId(), ExecutionStatus.completed);
+
+        mockMvc.perform(delete(url() + "/" + f.getId()).with(csrf()))
+                .andExpect(status().isNoContent());
+
+        assertThat(funnelRepository.findById(f.getId())).isEmpty();
+        assertThat(execStatus(runningId)).isEqualTo(ExecutionStatus.cancelled);
+        assertThat(execStatus(waitingId)).isEqualTo(ExecutionStatus.cancelled);
+        // A terminal execution is untouched by the cancel sweep.
+        assertThat(execStatus(completedId)).isEqualTo(ExecutionStatus.completed);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void deleteDraftWithoutExecutionsReturns204() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        mockMvc.perform(delete(url() + "/" + f.getId()).with(csrf()))
+                .andExpect(status().isNoContent());
+        assertThat(funnelRepository.findById(f.getId())).isEmpty();
+    }
+
+    // ─── activate ──────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateValidatesAtLeastOneStep() throws Exception {
+        Funnel f = seedFunnel("Empty", FunnelStatus.draft, "promo", List.of());
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_no_steps"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateValidatesRequiredFields() throws Exception {
+        // Seed (directly) a draft whose SEND_MESSAGE step is missing its required text — activate must
+        // re-validate per-type fields and reject with 422 (defense-in-depth beyond the update path).
+        FunnelStep broken = new FunnelStep();
+        broken.setStepType(StepType.SEND_MESSAGE);
+        broken.setOrder(0);
+        Funnel f = seedFunnel("Broken", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(broken)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateSucceedsAndReturnsDeepLink() throws Exception {
+        seedConnectedBot("promo_bot");
+        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("active"))
+                .andExpect(jsonPath("$.deepLink").value("t.me/promo_bot?start=go"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void pauseTransitionsActiveToPaused() throws Exception {
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        mockMvc.perform(post(url() + "/" + f.getId() + "/pause").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("paused"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateTriggerConflictReturns422() throws Exception {
+        // An already-active funnel owns (on_start, "promo"); activating a second draft with the same
+        // trigger trips the SERVICE pre-check → 422 funnel_trigger_conflict (first line of Decision 8).
+        seedFunnel("First", FunnelStatus.active, "promo", List.of(sendMessage("a")));
+        Funnel second = seedFunnel("Second", FunnelStatus.draft, "promo", List.of(sendMessage("b")));
+
+        mockMvc.perform(post(url() + "/" + second.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_trigger_conflict"));
+    }
+
+    @Test
+    void activateTriggerConflictRaceMapsIndexDuplicateKeyTo422() {
+        // Both funnels start in draft, so two simultaneous activate() calls BOTH pass the service
+        // pre-check (no active funnel exists yet) and race to save status=active. The partial-unique
+        // index lets exactly one win; the loser's DuplicateKeyException MUST be mapped to 422
+        // funnel_trigger_conflict (NOT surface as a 500). Driven at the service layer (no HTTP/session
+        // needed — activate takes ownerId directly) to isolate the index branch deterministically.
+        Funnel a = seedFunnel("A", FunnelStatus.draft, "race", List.of(sendMessage("a")));
+        Funnel b = seedFunnel("B", FunnelStatus.draft, "race", List.of(sendMessage("b")));
+
+        // parallelInvoke runs the SAME callable n times; an atomic counter routes invocation 0 → a,
+        // invocation 1 → b so the two parked VTs activate distinct funnels on simultaneous release.
+        java.util.concurrent.atomic.AtomicInteger idx = new java.util.concurrent.atomic.AtomicInteger();
+        List<Object> outcomes = ConcurrencyTestUtils.parallelInvoke(2, () ->
+                activateCatching(idx.getAndIncrement() == 0 ? a.getId() : b.getId()));
+
+        long activated = outcomes.stream().filter(o -> "active".equals(o)).count();
+        long conflicts = outcomes.stream()
+                .filter(o -> FunnelService.CODE_TRIGGER_CONFLICT.equals(o)).count();
+        assertThat(activated).as("exactly one funnel becomes active").isEqualTo(1L);
+        assertThat(conflicts).as("the loser is mapped to 422 funnel_trigger_conflict, not 500")
+                .isEqualTo(1L);
+        // And the index left exactly one active row for this trigger.
+        assertThat(funnelRepository.findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
+                projectId, FunnelService.TRIGGER_ON_START, "race", FunnelStatus.active)).isPresent();
+    }
+
+    // ─── access guards (uniform 404) ───────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void crossProjectFunnelReturnsUniform404() throws Exception {
+        // A funnel that belongs to ANOTHER project must collapse to 404 on every verb, even though the
+        // caller owns the project in the path — never 403, never 500, never a leak of existence.
+        seedUser(OTHER_USER_ID, "other@test.com");
+        String foreignProject = saveProject(OTHER_USER_ID, null).getId();
+        Funnel foreign = new Funnel();
+        foreign.setProjectId(foreignProject);
+        foreign.setName("Foreign");
+        foreign.setStatus(FunnelStatus.draft);
+        foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
+        foreign.setTriggerValue("");
+        foreign.setSteps(new ArrayList<>());
+        foreign.setCreatedAt(Instant.now());
+        foreign.setUpdatedAt(Instant.now());
+        String foreignId = funnelRepository.save(foreign).getId();
+
+        // GET, PUT, DELETE, activate of the foreign funnel under MY project path → uniform 404.
+        mockMvc.perform(get(url() + "/" + foreignId)).andExpect(status().isNotFound());
+        mockMvc.perform(put(url() + "/" + foreignId).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "x", "steps", List.of()))))
+                .andExpect(status().isNotFound());
+        mockMvc.perform(delete(url() + "/" + foreignId).with(csrf())).andExpect(status().isNotFound());
+        mockMvc.perform(post(url() + "/" + foreignId + "/activate").with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void foreignProjectReturns404() throws Exception {
+        seedUser(OTHER_USER_ID, "other@test.com");
+        String foreign = saveProject(OTHER_USER_ID, null).getId();
+        mockMvc.perform(get("/api/v1/projects/" + foreign + "/funnels"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void malformedProjectIdReturns404() throws Exception {
+        mockMvc.perform(get("/api/v1/projects/not-a-valid-objectid/funnels"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void missingFunnelIdReturns404() throws Exception {
+        mockMvc.perform(get(url() + "/0123456789abcdef01234567"))
+                .andExpect(status().isNotFound());
+    }
+
+    // ─── bean-validation / per-type validation ─────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void beanValidationMissingNameReturns400() throws Exception {
+        mockMvc.perform(post(url()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("description", "no name"))))
+                .andExpect(status().isBadRequest());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void emptyTextInSendMessageReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> body = Map.of(
+                "name", "Draft", "triggerValue", "",
+                "steps", List.of(stepMap("SEND_MESSAGE", Map.of("text", "  "))));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void invalidTriggerValueWithSpaceReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> body = Map.of(
+                "name", "Draft", "triggerValue", "has space",
+                "steps", List.of(stepMap("SEND_MESSAGE", Map.of("text", "ok"))));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_invalid_trigger_value"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void exceedingMaxStepsReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        List<Map<String, Object>> steps = new ArrayList<>();
+        for (int i = 0; i < 51; i++) { // default max-steps = 50
+            steps.add(stepMap("SEND_MESSAGE", Map.of("text", "s" + i)));
+        }
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "", "steps", steps))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_limit_reached"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void invalidImageUrlReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+                "steps", List.of(stepMap("SEND_IMAGE", Map.of("imageUrl", "ftp://evil/x.png"))));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void invalidTagSlugReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+                "steps", List.of(stepMap("ADD_TAG", Map.of("tagSlug", "Has Space!"))));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    // ─── helpers ────────────────────────────────────────────────────────────────
+
+    private Object activateCatching(String funnelId) {
+        try {
+            funnelService.activate(USER_ID, projectId, funnelId);
+            return "active";
+        } catch (AppException ex) {
+            return ex.getCode();
+        }
+    }
+
+    private String url() {
+        return "/api/v1/projects/" + projectId + "/funnels";
+    }
+
+    private String json(Object body) throws Exception {
+        return objectMapper.writeValueAsString(body);
+    }
+
+    private static Map<String, Object> sendMessage(String text) {
+        return stepMap("SEND_MESSAGE", Map.of("text", text));
+    }
+
+    private static Map<String, Object> delayStep(int value, String unit) {
+        return stepMap("DELAY", Map.of("delayValue", value, "delayUnit", unit));
+    }
+
+    private static Map<String, Object> stepMap(String stepType, Map<String, Object> fields) {
+        Map<String, Object> step = new java.util.HashMap<>();
+        step.put("stepType", stepType);
+        step.putAll(fields);
+        return step;
+    }
+
+    private FunnelStep buildStep(Map<String, Object> dto) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.valueOf((String) dto.get("stepType")));
+        s.setText((String) dto.get("text"));
+        s.setImageUrl((String) dto.get("imageUrl"));
+        s.setCaption((String) dto.get("caption"));
+        s.setDelayValue((Integer) dto.get("delayValue"));
+        s.setDelayUnit((String) dto.get("delayUnit"));
+        s.setTagSlug((String) dto.get("tagSlug"));
+        s.setCustomFieldKey((String) dto.get("customFieldKey"));
+        return s;
+    }
+
+    private Funnel seedFunnel(String name, FunnelStatus status, String triggerValue,
+                              List<?> stepSpecs) {
+        Funnel f = new Funnel();
+        f.setProjectId(projectId);
+        f.setName(name);
+        f.setStatus(status);
+        f.setTriggerType(FunnelService.TRIGGER_ON_START);
+        f.setTriggerValue(triggerValue);
+        f.setAllowReEnter(false);
+        List<FunnelStep> steps = new ArrayList<>();
+        int i = 0;
+        for (Object spec : stepSpecs) {
+            FunnelStep step = spec instanceof FunnelStep fs ? fs : buildStep(castMap(spec));
+            step.setOrder(i++);
+            steps.add(step);
+        }
+        f.setSteps(steps);
+        f.setCreatedAt(Instant.now());
+        f.setUpdatedAt(Instant.now());
+        return funnelRepository.save(f);
+    }
+
+    @SuppressWarnings("unchecked")
+    private static Map<String, Object> castMap(Object o) {
+        return (Map<String, Object>) o;
+    }
+
+    private final java.util.concurrent.atomic.AtomicLong subscriberSeq =
+            new java.util.concurrent.atomic.AtomicLong(1);
+
+    @Autowired org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
+
+    private String seedExecution(String funnelId, ExecutionStatus status) {
+        FunnelExecution e = new FunnelExecution();
+        e.setProjectId(projectId);
+        e.setFunnelId(funnelId);
+        e.setSubscriberId("sub-" + subscriberSeq.incrementAndGet());
+        e.setTelegramBotId(9000L);
+        e.setStatus(status);
+        e.setCurrentStepIndex(0);
+        e.setStepRunStatus(StepRunStatus.pending);
+        e.setNextRunAt(Instant.now());
+        e.setStepsSnapshot(new ArrayList<>());
+        e.setCreatedAt(Instant.now());
+        e.setUpdatedAt(Instant.now());
+        return mongoTemplate.save(e).getId();
+    }
+
+    private ExecutionStatus execStatus(String id) {
+        return mongoTemplate.findById(id, FunnelExecution.class).getStatus();
+    }
+
+    private void seedConnectedBot(String username) {
+        Bot bot = new Bot();
+        bot.setProjectId(projectId);
+        bot.setTelegramBotId(9000L);
+        bot.setTelegramUsername(username);
+        bot.setStatus(BotStatus.CONNECTED);
+        bot.setConnectedAt(Instant.now());
+        botRepository.save(bot);
+    }
+
+    private void seedUser(String id, String email) {
+        User u = new User();
+        u.setId(id);
+        u.setEmail(email);
+        u.setName("Owner");
+        u.setPasswordHash("x");
+        u.setStatus(UserStatus.active);
+        u.setSuperAdmin(false);
+        u.setCreatedAt(Instant.now());
+        u.setUpdatedAt(Instant.now());
+        userRepository.save(u);
+    }
+
+    private Project saveProject(String ownerId, Instant deletedAt) {
+        Project p = new Project();
+        p.setOwnerId(ownerId);
+        p.setName("Proj-" + System.nanoTime());
+        p.setTimezone("UTC");
+        p.setCreatedAt(Instant.now());
+        p.setUpdatedAt(Instant.now());
+        p.setDeletedAt(deletedAt);
+        return projectRepository.save(p);
+    }
+}

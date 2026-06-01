@@ -127,7 +127,14 @@ public class FunnelService {
         validateSteps(steps);
         funnel.setSteps(steps);
         funnel.setUpdatedAt(Instant.now(clock));
-        return toResponse(funnelRepository.save(funnel));
+        // Editing an ACTIVE funnel's trigger can collide with another active funnel (Decision 3 allows
+        // editing while active). Only an active row participates in the partial-unique index, so the
+        // conflict guard runs only for active funnels — same defense-in-depth as activate (pre-check +
+        // DuplicateKeyException → 422), so a colliding edit never surfaces as a 500.
+        if (funnel.getStatus() == FunnelStatus.active) {
+            checkTriggerConflict(funnel);
+        }
+        return toResponse(saveHandlingTriggerConflict(funnel));
     }
 
     public void delete(String ownerId, String projectId, String funnelId) {
@@ -158,21 +165,32 @@ public class FunnelService {
 
         // Service pre-check (first line of the Decision 8 defense): another ACTIVE funnel already owns
         // this trigger → 422. The partial-unique index is the second line for the parallel-activate race.
+        checkTriggerConflict(funnel);
+
+        funnel.setStatus(FunnelStatus.active);
+        funnel.setUpdatedAt(Instant.now(clock));
+        return toResponse(saveHandlingTriggerConflict(funnel));
+    }
+
+    // Service-side pre-check: reject if a DIFFERENT active funnel already owns this funnel's
+    // (triggerType, triggerValue). Excludes self so re-activating / editing the same funnel is fine.
+    private void checkTriggerConflict(Funnel funnel) {
         Optional<Funnel> conflict = funnelRepository.findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
-                projectId, funnel.getTriggerType(), funnel.getTriggerValue(), FunnelStatus.active);
+                funnel.getProjectId(), funnel.getTriggerType(), funnel.getTriggerValue(), FunnelStatus.active);
         if (conflict.isPresent() && !conflict.get().getId().equals(funnel.getId())) {
             throw AppException.unprocessableEntity(CODE_TRIGGER_CONFLICT,
                     "Another active funnel already uses this trigger");
         }
+    }
 
-        funnel.setStatus(FunnelStatus.active);
-        funnel.setUpdatedAt(Instant.now(clock));
+    // Second line of the Decision 8 defense: the partial-unique (projectId, triggerType, triggerValue)
+    // filtered active index closes the race the pre-check can lose. The ONLY unique index on `funnels`
+    // is the trigger one, so a DuplicateKeyException here can only mean a trigger collision → map to the
+    // SAME 422 as the pre-check, never a 500.
+    private Funnel saveHandlingTriggerConflict(Funnel funnel) {
         try {
-            Funnel saved = funnelRepository.save(funnel);
-            return toResponse(saved);
+            return funnelRepository.save(funnel);
         } catch (DuplicateKeyException ex) {
-            // Race lost on the partial-unique (projectId, triggerType, triggerValue) filtered active
-            // index. Map to the SAME 422 as the pre-check — must NOT surface as a 500.
             throw AppException.unprocessableEntity(CODE_TRIGGER_CONFLICT,
                     "Another active funnel already uses this trigger");
         }
@@ -193,7 +211,15 @@ public class FunnelService {
     // funnelId collapses to the same uniform 404 (anti-IDOR, no existence leak).
     private Funnel requireFunnel(String ownerId, String projectId, String funnelId) {
         projectService.requireOwned(ownerId, projectId, false);
-        return funnelRepository.findById(funnelId)
+        Optional<Funnel> found;
+        try {
+            found = funnelRepository.findById(funnelId);
+        } catch (IllegalArgumentException e) {
+            // Malformed ObjectId hex collapses into the same anti-enumeration 404 (mirrors
+            // ProjectService.requireOwned) — a probe learns nothing about funnel existence.
+            throw AppException.notFound(MESSAGE_NOT_FOUND);
+        }
+        return found
                 .filter(f -> projectId.equals(f.getProjectId()))
                 .orElseThrow(() -> AppException.notFound(MESSAGE_NOT_FOUND));
     }

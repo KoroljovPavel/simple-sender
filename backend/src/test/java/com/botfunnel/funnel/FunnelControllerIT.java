@@ -261,6 +261,41 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void pauseNonActiveReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of(sendMessage("hi")));
+        mockMvc.perform(post(url() + "/" + f.getId() + "/pause").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_invalid_state"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateActiveFunnelToCollidingTriggerReturns422() throws Exception {
+        // Editing an active funnel's trigger to collide with ANOTHER active funnel must be 422
+        // (defense-in-depth on the update path), never a 500 from the partial-unique index.
+        seedFunnel("First", FunnelStatus.active, "taken", List.of(sendMessage("a")));
+        Funnel second = seedFunnel("Second", FunnelStatus.active, "free", List.of(sendMessage("b")));
+
+        Map<String, Object> body = Map.of("name", "Second", "triggerValue", "taken",
+                "steps", List.of(stepMap("SEND_MESSAGE", Map.of("text", "b"))));
+        mockMvc.perform(put(url() + "/" + second.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_trigger_conflict"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void malformedFunnelIdReturns404() throws Exception {
+        // Non-hex funnelId must collapse to the uniform anti-enumeration 404, not a 500 from the
+        // ObjectId conversion inside findById.
+        mockMvc.perform(get(url() + "/not-a-valid-objectid"))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void crossProjectFunnelReturnsUniform404() throws Exception {
         // A funnel that belongs to ANOTHER project must collapse to 404 on every verb, even though the
         // caller owns the project in the path — never 403, never 500, never a leak of existence.

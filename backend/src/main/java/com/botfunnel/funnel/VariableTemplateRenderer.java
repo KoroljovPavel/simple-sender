@@ -62,6 +62,8 @@ public final class VariableTemplateRenderer {
      * per {@code parseMode} ({@code null} = None | {@code "HTML"} | {@code "MarkdownV2"}).
      */
     public static String render(String template, String parseMode, Subscriber subscriber) {
+        // The engine always passes a resolved subscriber; make the precondition explicit.
+        java.util.Objects.requireNonNull(subscriber, "subscriber");
         if (template == null || template.isEmpty()) {
             return "";
         }
@@ -86,6 +88,10 @@ public final class VariableTemplateRenderer {
             }
 
             if (c == '{') {
+                // Single-pass scan: bind to the FIRST '}' after the '{'. A trailing "}}" right after a
+                // placeholder closes at its first '}'; the remaining '}' is then handled by the loop
+                // (here a leftover lone '}' is emitted verbatim). The substituted value is never
+                // re-scanned, so braces inside a value cannot start a new placeholder.
                 int close = template.indexOf('}', i + 1);
                 if (close == -1) {
                     // Unclosed brace — emit the rest verbatim, never throw.
@@ -146,6 +152,8 @@ public final class VariableTemplateRenderer {
         }
         if (value instanceof Double d) {
             if (d == Math.floor(d) && !d.isInfinite()) {
+                // longValue() assumes domain-scalar magnitudes — custom-field numbers come pre-validated
+                // by CustomFieldValueValidator, so no overflow guard / BigDecimal is needed here (YAGNI).
                 return Long.toString(d.longValue());
             }
             return d.toString();
@@ -176,6 +184,10 @@ public final class VariableTemplateRenderer {
                 case '&' -> sb.append("&amp;");
                 case '<' -> sb.append("&lt;");
                 case '>' -> sb.append("&gt;");
+                // A value placed inside an HTML attribute (e.g. <a href="{custom.url}">) could break
+                // out of the quoted attribute via a raw ". Telegram HTML mode decodes standard named
+                // entities (incl. &quot;), so legitimate quotes still display correctly.
+                case '"' -> sb.append("&quot;");
                 default -> sb.append(c);
             }
         }
@@ -186,7 +198,11 @@ public final class VariableTemplateRenderer {
         StringBuilder sb = new StringBuilder(value.length() + 8);
         for (int i = 0; i < value.length(); i++) {
             char c = value.charAt(i);
-            if (MARKDOWN_V2_SPECIALS.indexOf(c) >= 0) {
+            // Escape the backslash itself AND every char in the special set. Iterating the ORIGINAL
+            // value char-by-char (single pass) avoids double-processing a backslash we just emitted:
+            // e.g. a value of "\*" -> "\\\\\\*" so Telegram renders a literal backslash + literal '*'
+            // instead of a literal backslash followed by an ACTIVE '*' (markup injection).
+            if (c == '\\' || MARKDOWN_V2_SPECIALS.indexOf(c) >= 0) {
                 sb.append('\\');
             }
             sb.append(c);

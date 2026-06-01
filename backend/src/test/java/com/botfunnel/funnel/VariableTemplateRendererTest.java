@@ -57,13 +57,15 @@ class VariableTemplateRendererTest {
         Map<String, Object> cf = new HashMap<>();
         cf.put("empty", "");
         cf.put("nil", null);
-        // first_name present but null, username present but empty
+        // first_name + last_name present but null, username present but empty
         Subscriber s = subscriber(null, null, "", cf);
 
+        // {user.last_name} pins the null user-field resolution branch.
         String result = VariableTemplateRenderer.render(
-                "[{user.first_name}][{user.username}][{custom.empty}][{custom.nil}]", null, s);
+                "[{user.first_name}][{user.last_name}][{user.username}][{custom.empty}][{custom.nil}]",
+                null, s);
 
-        assertThat(result).isEqualTo("[][][][]");
+        assertThat(result).isEqualTo("[][][][][]");
     }
 
     @Test
@@ -99,6 +101,7 @@ class VariableTemplateRendererTest {
         String result = VariableTemplateRenderer.render(
                 "{custom.optedIn}/{custom.optedOut}", null, s);
 
+        // Canonical lowercase true/false is intentional — this is a pure util with no i18n.
         assertThat(result).isEqualTo("true/false");
     }
 
@@ -130,18 +133,49 @@ class VariableTemplateRendererTest {
     }
 
     @Test
+    void htmlModeEscapesDoubleQuoteInAttribute() {
+        Map<String, Object> cf = new HashMap<>();
+        // Value injected into an HTML attribute tries to break out of the quoted attribute via ".
+        cf.put("url", "x\" onmouseover=\"evil()");
+        Subscriber s = subscriber(null, null, null, cf);
+
+        // Author attribute markup (href="...") survives; only the substituted value's " is escaped
+        // to &quot; (regression for the missing double-quote escaping).
+        String result = VariableTemplateRenderer.render(
+                "<a href=\"{custom.url}\">link</a>", "HTML", s);
+
+        assertThat(result).isEqualTo(
+                "<a href=\"x&quot; onmouseover=&quot;evil()\">link</a>");
+    }
+
+    @Test
     void markdownV2ModeEscapesFullCharset() {
         Map<String, Object> cf = new HashMap<>();
-        // Every official MarkdownV2 special char in one value.
-        cf.put("payload", "_*[]()~`>#+-=|{}.!");
+        // Every official MarkdownV2 special char in one value, plus a leading backslash.
+        cf.put("payload", "\\_*[]()~`>#+-=|{}.!");
         Subscriber s = subscriber(null, null, null, cf);
 
         // Author markup (*bold*) in the template stays intact; only the value is escaped.
         String result = VariableTemplateRenderer.render(
                 "*bold* {custom.payload}", "MarkdownV2", s);
 
+        // The leading '\' is escaped to '\\' (regression for the backslash-injection fix).
         assertThat(result).isEqualTo(
-                "*bold* \\_\\*\\[\\]\\(\\)\\~\\`\\>\\#\\+\\-\\=\\|\\{\\}\\.\\!");
+                "*bold* \\\\\\_\\*\\[\\]\\(\\)\\~\\`\\>\\#\\+\\-\\=\\|\\{\\}\\.\\!");
+    }
+
+    @Test
+    void markdownV2EscapesBackslashToPreventInjection() {
+        Map<String, Object> cf = new HashMap<>();
+        // A naive escaper that only escapes the '*' would turn "\*" into "\\*": Telegram then
+        // renders a literal '\' followed by an ACTIVE '*' (markup injection). The backslash itself
+        // must be escaped so the result is "\\\\\\*" -> literal '\' + literal '*'.
+        cf.put("payload", "\\*");
+        Subscriber s = subscriber(null, null, null, cf);
+
+        String result = VariableTemplateRenderer.render("{custom.payload}", "MarkdownV2", s);
+
+        assertThat(result).isEqualTo("\\\\\\*");
     }
 
     @Test
@@ -215,6 +249,24 @@ class VariableTemplateRendererTest {
         Subscriber s = subscriber("Ada", null, null, null);
 
         assertThat(VariableTemplateRenderer.render("[{}]", null, s)).isEqualTo("[]");
+    }
+
+    @Test
+    void loneClosingBraceWithoutOpenerIsLiteral() {
+        Subscriber s = subscriber("Ada", null, null, null);
+
+        // A '}' not preceded by '{' and not part of '}}' is emitted verbatim.
+        assertThat(VariableTemplateRenderer.render("foo } bar", null, s)).isEqualTo("foo } bar");
+    }
+
+    @Test
+    void closingBracesAfterPlaceholderLeaveLoneBrace() {
+        Subscriber s = subscriber("Ada", null, null, null);
+
+        // Single-pass scan: "{user.first_name}}" binds the '{' to the FIRST '}' (placeholder close),
+        // substitutes the value, then the leftover lone '}' is emitted verbatim.
+        assertThat(VariableTemplateRenderer.render("{user.first_name}}", null, s))
+                .isEqualTo("Ada}");
     }
 
     @Test

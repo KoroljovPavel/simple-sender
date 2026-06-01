@@ -110,6 +110,50 @@ describe('funnels store', () => {
     })
   })
 
+  it('fetchOne gets the single funnel detail', async () => {
+    apiMock.mockResolvedValueOnce(full('a'))
+    const store = useFunnelsStore()
+    const res = await store.fetchOne('a')
+
+    expect(res.id).toBe('a')
+    expect(apiMock).toHaveBeenCalledWith(`${URL}/a`)
+  })
+
+  it('activate posts and syncs the matching list row', async () => {
+    apiMock.mockResolvedValueOnce([summary('a', 'draft')])
+    const store = useFunnelsStore()
+    await store.fetch()
+
+    apiMock.mockResolvedValueOnce({ ...full('a'), status: 'active', steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] })
+    const res = await store.activate('a')
+
+    expect(res.status).toBe('active')
+    expect(apiMock).toHaveBeenLastCalledWith(`${URL}/a/activate`, { method: 'POST' })
+    // List row reflects the new status + stepCount.
+    expect(store.funnels[0].status).toBe('active')
+    expect(store.funnels[0].stepCount).toBe(1)
+  })
+
+  it('pause posts and syncs the matching list row', async () => {
+    apiMock.mockResolvedValueOnce([summary('a', 'active')])
+    const store = useFunnelsStore()
+    await store.fetch()
+
+    apiMock.mockResolvedValueOnce({ ...full('a'), status: 'paused' })
+    await store.pause('a')
+
+    expect(apiMock).toHaveBeenLastCalledWith(`${URL}/a/pause`, { method: 'POST' })
+    expect(store.funnels[0].status).toBe('paused')
+  })
+
+  it('activate re-throws and flags error on 422', async () => {
+    apiMock.mockRejectedValueOnce({ statusCode: 422, data: { code: 'funnel_no_steps' } })
+    const store = useFunnelsStore()
+
+    await expect(store.activate('a')).rejects.toMatchObject({ statusCode: 422 })
+    expect(store.error).toBe(true)
+  })
+
   it('delete removes from list', async () => {
     apiMock.mockResolvedValueOnce([summary('a'), summary('b')])
     const store = useFunnelsStore()

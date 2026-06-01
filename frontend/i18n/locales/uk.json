@@ -427,7 +427,19 @@
       },
       "delete": {
         "generic": "Не вдалося видалити воронку"
-      }
+      },
+      "activate": {
+        "generic": "Не вдалося активувати воронку"
+      },
+      "pause": {
+        "generic": "Не вдалося призупинити воронку"
+      },
+      "funnel_no_steps": "Додайте принаймні один крок перед активацією.",
+      "funnel_step_invalid": "Один із кроків заповнено некоректно — перевірте поля кроку.",
+      "funnel_step_limit_reached": "Перевищено максимальну кількість кроків у воронці.",
+      "funnel_trigger_conflict": "Інша активна воронка вже використовує цей тригер.",
+      "funnel_invalid_trigger_value": "Значення тригера містить недопустимі символи.",
+      "funnel_invalid_state": "Дію недоступно для поточного статусу воронки."
     }
   },
   "subscribers": {
@@ -672,6 +684,84 @@
       "message": "Воронку буде остаточно видалено, активні виконання — скасовано. Цю дію не можна скасувати.",
       "confirm": "Видалити",
       "cancel": "Скасувати"
+    },
+    "editor": {
+      "stepsTitle": "Кроки",
+      "saving": "Збереження…",
+      "activate": "Активувати",
+      "pause": "Призупинити"
+    },
+    "steps": {
+      "add": "+ Додати крок",
+      "edit": "Редагувати",
+      "delete": "Видалити",
+      "confirmDelete": "Видалити крок?",
+      "moveUp": "Перемістити вгору",
+      "moveDown": "Перемістити вниз",
+      "empty": {
+        "title": "Кроків ще немає",
+        "body": "Додайте перший крок, щоб побудувати послідовність воронки."
+      },
+      "type": {
+        "SEND_MESSAGE": "Надіслати повідомлення",
+        "SEND_IMAGE": "Надіслати зображення",
+        "DELAY": "Затримка",
+        "ADD_TAG": "Додати тег",
+        "REMOVE_TAG": "Зняти тег",
+        "SET_CUSTOM_FIELD": "Задати кастомне поле"
+      },
+      "unit": {
+        "MIN": "хв",
+        "HOUR": "год",
+        "DAY": "дн"
+      },
+      "summary": {
+        "delay": "Затримка {value} {unit}",
+        "addTag": "Додати тег: {tag}",
+        "removeTag": "Зняти тег: {tag}",
+        "setCustomField": "Поле: {key}"
+      },
+      "dialog": {
+        "addTitle": "Додати крок",
+        "editTitle": "Редагувати крок"
+      },
+      "form": {
+        "typeLabel": "Тип кроку",
+        "text": "Текст",
+        "parseMode": "Форматування",
+        "parseModeNone": "Без форматування",
+        "imageUrl": "URL зображення",
+        "caption": "Підпис",
+        "delayValue": "Тривалість",
+        "delayUnit": "Одиниця",
+        "tagSlug": "Тег",
+        "customFieldKey": "Ключ поля",
+        "customFieldValue": "Значення",
+        "submitAdd": "Додати",
+        "submitSave": "Зберегти"
+      },
+      "validation": {
+        "textRequired": "Текст не може бути порожнім",
+        "textMax": "Текст перевищує 4096 символів",
+        "imageUrlRequired": "Вкажіть URL зображення",
+        "imageUrlScheme": "URL має починатися з http:// або https://",
+        "delayMin": "Затримка має бути не менше 1",
+        "tagPattern": "Лише малі латинські літери, цифри, _ та -, до 32 символів",
+        "customFieldKeyRequired": "Вкажіть ключ поля"
+      }
+    },
+    "trigger": {
+      "title": "Тригер",
+      "typeLabel": "Тип тригера",
+      "onStart": "/start",
+      "valueLabel": "Значення тригера",
+      "valuePlaceholder": "напр. ref_promo",
+      "valueHint": "Опційний параметр для deep-link. Порожнє → звичайний /start.",
+      "valuePattern": "Дозволені лише латиниця, цифри, _ та - (до 64 символів)",
+      "deepLinkLabel": "Deep-link",
+      "copy": "Копіювати",
+      "copied": "Скопійовано",
+      "noBot": "Підключіть бота до проєкту, щоб побачити deep-link."
     }
   }
 }

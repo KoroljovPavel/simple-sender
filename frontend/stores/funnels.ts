@@ -88,6 +88,70 @@ export const useFunnelsStore = defineStore('funnels', () => {
     }
   }
 
+  // Single-funnel GET for the editor (Task 10): returns the full FunnelResponse (steps + deepLink).
+  // Not cached in `funnels` (that list holds summaries without steps); the editor owns the detail.
+  async function fetchOne(funnelId: string): Promise<FunnelResponse> {
+    error.value = false
+    try {
+      return await useApi()<FunnelResponse>(`${listUrl()}/${funnelId}`)
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
+  // Re-sync the matching list row from a fresh detail response (after update/activate/pause), so the
+  // list page reflects status/stepCount changes without a separate refetch.
+  function syncRow(updated: FunnelResponse): void {
+    funnels.value = funnels.value.map((f) =>
+      f.id === updated.id
+        ? {
+            ...f,
+            name: updated.name,
+            description: updated.description,
+            status: updated.status,
+            triggerType: updated.triggerType,
+            triggerValue: updated.triggerValue,
+            allowReEnter: updated.allowReEnter,
+            stepCount: updated.steps.length,
+            updatedAt: updated.updatedAt,
+          }
+        : f,
+    )
+  }
+
+  // POST .../activate → 200 active FunnelResponse, or 422 (no steps / invalid step / trigger conflict).
+  // Mirrors the store contract: catch only to flip the error flag and RE-THROW (the editor page maps the
+  // 422 code to a localized inline message via useApiError in its own setup).
+  async function activate(funnelId: string): Promise<FunnelResponse> {
+    error.value = false
+    try {
+      const updated = await useApi()<FunnelResponse>(`${listUrl()}/${funnelId}/activate`, {
+        method: 'POST',
+      })
+      syncRow(updated)
+      return updated
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
+  // POST .../pause → 200 paused FunnelResponse, or 422 (funnel_invalid_state when not active).
+  async function pause(funnelId: string): Promise<FunnelResponse> {
+    error.value = false
+    try {
+      const updated = await useApi()<FunnelResponse>(`${listUrl()}/${funnelId}/pause`, {
+        method: 'POST',
+      })
+      syncRow(updated)
+      return updated
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
   // Server cascades cancellation of active executions (Task 5); the front-end only DELETEs + confirms.
   async function delete_(funnelId: string): Promise<void> {
     error.value = false
@@ -105,8 +169,11 @@ export const useFunnelsStore = defineStore('funnels', () => {
     loading,
     error,
     fetch,
+    fetchOne,
     create,
     update,
+    activate,
+    pause,
     // `delete` is a reserved word for a method name in object shorthand; expose under the spec'd name.
     delete: delete_,
   }

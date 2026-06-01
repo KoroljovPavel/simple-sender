@@ -427,7 +427,19 @@
       },
       "delete": {
         "generic": "Could not delete the funnel"
-      }
+      },
+      "activate": {
+        "generic": "Could not activate the funnel"
+      },
+      "pause": {
+        "generic": "Could not pause the funnel"
+      },
+      "funnel_no_steps": "Add at least one step before activating.",
+      "funnel_step_invalid": "One of the steps is filled in incorrectly — check the step fields.",
+      "funnel_step_limit_reached": "The funnel exceeds the maximum number of steps.",
+      "funnel_trigger_conflict": "Another active funnel already uses this trigger.",
+      "funnel_invalid_trigger_value": "The trigger value contains invalid characters.",
+      "funnel_invalid_state": "This action is not available for the funnel's current status."
     }
   },
   "subscribers": {
@@ -672,6 +684,84 @@
       "message": "This permanently deletes the funnel and cancels any active executions. This cannot be undone.",
       "confirm": "Delete",
       "cancel": "Cancel"
+    },
+    "editor": {
+      "stepsTitle": "Steps",
+      "saving": "Saving…",
+      "activate": "Activate",
+      "pause": "Pause"
+    },
+    "steps": {
+      "add": "+ Add step",
+      "edit": "Edit",
+      "delete": "Delete",
+      "confirmDelete": "Delete step?",
+      "moveUp": "Move up",
+      "moveDown": "Move down",
+      "empty": {
+        "title": "No steps yet",
+        "body": "Add the first step to build the funnel sequence."
+      },
+      "type": {
+        "SEND_MESSAGE": "Send message",
+        "SEND_IMAGE": "Send image",
+        "DELAY": "Delay",
+        "ADD_TAG": "Add tag",
+        "REMOVE_TAG": "Remove tag",
+        "SET_CUSTOM_FIELD": "Set custom field"
+      },
+      "unit": {
+        "MIN": "min",
+        "HOUR": "h",
+        "DAY": "d"
+      },
+      "summary": {
+        "delay": "Delay {value} {unit}",
+        "addTag": "Add tag: {tag}",
+        "removeTag": "Remove tag: {tag}",
+        "setCustomField": "Field: {key}"
+      },
+      "dialog": {
+        "addTitle": "Add step",
+        "editTitle": "Edit step"
+      },
+      "form": {
+        "typeLabel": "Step type",
+        "text": "Text",
+        "parseMode": "Formatting",
+        "parseModeNone": "No formatting",
+        "imageUrl": "Image URL",
+        "caption": "Caption",
+        "delayValue": "Duration",
+        "delayUnit": "Unit",
+        "tagSlug": "Tag",
+        "customFieldKey": "Field key",
+        "customFieldValue": "Value",
+        "submitAdd": "Add",
+        "submitSave": "Save"
+      },
+      "validation": {
+        "textRequired": "Text cannot be empty",
+        "textMax": "Text exceeds 4096 characters",
+        "imageUrlRequired": "Enter an image URL",
+        "imageUrlScheme": "URL must start with http:// or https://",
+        "delayMin": "Delay must be at least 1",
+        "tagPattern": "Only lowercase letters, digits, _ and -, up to 32 characters",
+        "customFieldKeyRequired": "Enter a field key"
+      }
+    },
+    "trigger": {
+      "title": "Trigger",
+      "typeLabel": "Trigger type",
+      "onStart": "/start",
+      "valueLabel": "Trigger value",
+      "valuePlaceholder": "e.g. ref_promo",
+      "valueHint": "Optional deep-link parameter. Empty → plain /start.",
+      "valuePattern": "Only Latin letters, digits, _ and - are allowed (up to 64 characters)",
+      "deepLinkLabel": "Deep link",
+      "copy": "Copy",
+      "copied": "Copied",
+      "noBot": "Connect a bot to the project to see the deep link."
     }
   }
 }

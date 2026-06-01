@@ -19,6 +19,8 @@ const valueError = computed(() =>
 // server deepLink (active funnel, no bot username at hand). Empty trigger_value → bare t.me/<bot> link
 // WITHOUT ?start= (mirrors backend: a blank value yields plain /start).
 const link = computed<string | null>(() => {
+  // Never offer a copyable link for a value that fails the pattern — it would yield a broken deep-link.
+  if (valueError.value) return null
   if (props.botUsername) {
     const base = `t.me/${props.botUsername}`
     return triggerValue.value ? `${base}?start=${triggerValue.value}` : base

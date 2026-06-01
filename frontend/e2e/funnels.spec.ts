@@ -106,11 +106,18 @@ test('funnels_goldenPath_buildAndActivate', async ({ page }) => {
   await addSendMessage(page, 'Still here?')
   await expect(page.locator('[data-test^="funnel-step-row-"]')).toHaveCount(3)
 
-  // Reorder: move the last step up, then back down (exercises ↑/↓).
-  await page.locator('[data-test="funnel-step-move-up-2"]').click()
-  await expect.poll(() => page.locator('[data-test^="funnel-step-row-"]').count()).toBe(3)
-  await page.locator('[data-test="funnel-step-move-down-1"]').click()
-  await expect.poll(() => page.locator('[data-test^="funnel-step-row-"]').count()).toBe(3)
+  // Reorder: move the last step (the 2nd "Still here?" message) up one → it lands at index 1.
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes('/funnels/') && r.request().method() === 'PATCH'),
+    page.locator('[data-test="funnel-step-move-up-2"]').click(),
+  ])
+  await expect(page.locator('[data-test="funnel-step-row-1"]')).toContainText('Still here?')
+  // Move it back down → returns to index 2, restoring the original order.
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes('/funnels/') && r.request().method() === 'PATCH'),
+    page.locator('[data-test="funnel-step-move-down-1"]').click(),
+  ])
+  await expect(page.locator('[data-test="funnel-step-row-2"]')).toContainText('Still here?')
 
   // Trigger value → deep-link preview + Copy button.
   await page.locator('[data-test="funnel-trigger-value-input"]').fill('ref_e2e')

@@ -82,6 +82,31 @@ describe('AddStepDialog', () => {
     expect(emitted![0][0]).toMatchObject({ stepType: 'SEND_MESSAGE', text: 'Welcome!' })
   })
 
+  it('blocks emit on empty custom-field key, emits when filled', async () => {
+    const wrapper = await mountOpen()
+    await setType('SET_CUSTOM_FIELD')
+    await submit()
+    expect(maybe('[data-test="step-cf-key-error"]')).not.toBeNull()
+    expect(wrapper.emitted('add')).toBeFalsy()
+
+    await $('[data-test="step-cf-key-input"]').setValue('city')
+    await $('[data-test="step-cf-value-input"]').setValue('Kyiv')
+    await submit()
+    const emitted = wrapper.emitted('add')
+    expect(emitted).toBeTruthy()
+    expect(emitted![0][0]).toMatchObject({ stepType: 'SET_CUSTOM_FIELD', customFieldKey: 'city', customFieldValue: 'Kyiv' })
+  })
+
+  it('emits a valid remove-tag step', async () => {
+    const wrapper = await mountOpen()
+    await setType('REMOVE_TAG')
+    await $('[data-test="step-tag-input"]').setValue('vip')
+    await submit()
+    const emitted = wrapper.emitted('add')
+    expect(emitted).toBeTruthy()
+    expect(emitted![0][0]).toMatchObject({ stepType: 'REMOVE_TAG', tagSlug: 'vip' })
+  })
+
   it('rejects non-http image url', async () => {
     const wrapper = await mountOpen()
     await setType('SEND_IMAGE')

@@ -23,6 +23,7 @@ const funnel = ref<FunnelResponse | null>(null)
 const steps = ref<FunnelStep[]>([])
 const triggerValue = ref('')
 const loaded = ref(false)
+const loadError = ref<string | null>(null)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const activateError = ref<string | null>(null)
@@ -46,10 +47,15 @@ function statusOf(err: unknown): number | null {
   return e?.statusCode ?? e?.status ?? e?.response?.status ?? null
 }
 
-// 422 carries a business code in the body (err.data.code) — map it to a localized inline message; fall
-// back to the status/generic message via useApiError when the code is absent or unmapped.
+// 422 carries a business code in the body — map it to a localized inline message; fall back to the
+// status/generic message via useApiError when the code is absent or unmapped. ofetch exposes the parsed
+// body as `data`; the 404 interceptor's re-thrown shape nests it under `response._data` — read both.
+function errorCode(err: unknown): string | undefined {
+  const e = err as { data?: { code?: string }; response?: { _data?: { code?: string } } }
+  return e?.data?.code ?? e?.response?._data?.code
+}
 function resolveFunnelError(err: unknown, contextKey: string): string {
-  const code = (err as { data?: { code?: string } })?.data?.code
+  const code = errorCode(err)
   if (code && te(`errors.funnels.${code}`)) return t(`errors.funnels.${code}`)
   return resolveError(err, contextKey)
 }
@@ -60,6 +66,7 @@ function applyResponse(res: FunnelResponse) {
 }
 
 async function load() {
+  loadError.value = null
   try {
     const res = await funnelsStore.fetchOne(funnelId.value)
     applyResponse(res)
@@ -71,7 +78,8 @@ async function load() {
       await navigateTo(localePath(`/projects/${projectId.value}/funnels`))
       return
     }
-    saveError.value = resolveError(err, 'funnels.list')
+    // Any other load failure (5xx/network) → visible error + retry, NOT a blank page.
+    loadError.value = resolveError(err, 'funnels.list')
   }
 }
 
@@ -153,11 +161,8 @@ async function activate() {
     clearTimeout(triggerTimer)
     triggerTimer = null
   }
-  const saved = await persist()
-  if (!saved) {
-    activateError.value = saveError.value
-    return
-  }
+  // persist() surfaces its own failure via saveError — don't duplicate it into activateError.
+  if (!(await persist())) return
   try {
     applyResponse(await funnelsStore.activate(funnelId.value))
   } catch (err) {
@@ -176,7 +181,27 @@ async function pause() {
 </script>
 
 <template>
-  <div v-if="funnel" class="space-y-6">
+  <p
+    v-if="loadError"
+    data-test="funnel-load-error"
+    class="flex items-center justify-between rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700"
+  >
+    <span>{{ loadError }}</span>
+    <button
+      type="button"
+      data-test="funnel-load-retry"
+      class="rounded-md border border-red-300 px-2.5 py-1 text-sm hover:bg-red-100"
+      @click="load"
+    >
+      {{ t('common.retry') }}
+    </button>
+  </p>
+
+  <p v-else-if="!funnel" data-test="funnel-editor-loading" class="px-4 py-10 text-center text-sm text-gray-500">
+    {{ t('common.loading') }}
+  </p>
+
+  <div v-else class="space-y-6">
     <div class="flex items-center justify-between gap-4">
       <div class="flex min-w-0 items-center gap-3">
         <NuxtLink

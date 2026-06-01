@@ -21,6 +21,25 @@ const REQUIRED_KEYS = [
   'subscribers.profile.lifecycle.deletedAt',
   'subscribers.profile.lifecycle.lastSeenAt',
   'subscribers.profile.customFields.saved',
+  // Task 9 — funnels list + create/delete (10-funnels). Section is extensible (Task 10 adds editor keys).
+  'funnels.title',
+  'funnels.createButton',
+  'funnels.status.draft',
+  'funnels.status.active',
+  'funnels.status.paused',
+  'funnels.filter.all',
+  'funnels.emptyState.title',
+  'funnels.emptyState.cta',
+  'funnels.deleteConfirm.title',
+  'funnels.deleteConfirm.message',
+  'funnels.deleteConfirm.confirm',
+  'funnels.deleteConfirm.cancel',
+  'funnels.form.name',
+  'funnels.form.description',
+  'errors.funnels.create.422',
+  'errors.funnels.create.generic',
+  'errors.funnels.list.generic',
+  'errors.funnels.delete.generic',
 ] as const
 
 describe('i18n AC-25 required keys', () => {

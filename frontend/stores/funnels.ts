@@ -1,0 +1,113 @@
+import { defineStore } from 'pinia'
+import type {
+  CreateFunnelRequest,
+  FunnelResponse,
+  FunnelStatusFilter,
+  FunnelSummaryResponse,
+  UpdateFunnelRequest,
+} from '~/types/funnel'
+
+// Simple project-scoped CRUD store over useApi (structural template: stores/projects.ts / stores/bot.ts).
+// Deliberately NOT cursor-paginated (unlike stores/subscribers.ts) — the funnels list is a small,
+// fully-loaded metadata list. The ONE idiom borrowed from subscribers.ts is reading projectId from the
+// route in a listUrl() helper, so the page does not thread projectId through every action.
+//
+// CRITICAL (task spec): this store NEVER calls useApiError. useApiError → useI18n() requires a Vue
+// component setup context and crashes at runtime inside a Pinia action. Actions catch ONLY to flip the
+// loading/error flags and then RE-THROW, so the component (CreateFunnelDialog.vue / funnels/index.vue)
+// maps the error to a localized message via useApiError in its own setup.
+export const useFunnelsStore = defineStore('funnels', () => {
+  const funnels = ref<FunnelSummaryResponse[]>([])
+  const loading = ref(false)
+  const error = ref(false)
+
+  function listUrl(): string {
+    // Route param is authoritative for project scope (it can differ from projectsStore.currentProjectId
+    // when the user deep-links a project they are not "currently" on). Idiom from stores/subscribers.ts.
+    const projectId = useRoute().params.projectId
+    return `/api/v1/projects/${projectId}/funnels`
+  }
+
+  // 'all' (default) → omit the ?status= param entirely; a concrete status is passed through.
+  async function fetch(status: FunnelStatusFilter = 'all'): Promise<void> {
+    loading.value = true
+    error.value = false
+    try {
+      funnels.value = await useApi()<FunnelSummaryResponse[]>(listUrl(), {
+        query: status === 'all' ? undefined : { status },
+      })
+    } catch (err) {
+      error.value = true
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  // Creates a draft funnel and returns it (caller navigates into the editor via the returned id).
+  async function create(payload: CreateFunnelRequest): Promise<FunnelResponse> {
+    error.value = false
+    try {
+      return await useApi()<FunnelResponse>(listUrl(), {
+        method: 'POST',
+        body: { name: payload.name, description: payload.description },
+      })
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
+  // Full-replace update (Task 10 reuses this — no UI in Task 9). Refreshes the matching list row.
+  async function update(funnelId: string, payload: UpdateFunnelRequest): Promise<FunnelResponse> {
+    error.value = false
+    try {
+      const updated = await useApi()<FunnelResponse>(`${listUrl()}/${funnelId}`, {
+        method: 'PATCH',
+        body: payload,
+      })
+      funnels.value = funnels.value.map((f) =>
+        f.id === funnelId
+          ? {
+              ...f,
+              name: updated.name,
+              description: updated.description,
+              status: updated.status,
+              triggerType: updated.triggerType,
+              triggerValue: updated.triggerValue,
+              allowReEnter: updated.allowReEnter,
+              stepCount: updated.steps.length,
+              updatedAt: updated.updatedAt,
+            }
+          : f,
+      )
+      return updated
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
+  // Server cascades cancellation of active executions (Task 5); the front-end only DELETEs + confirms.
+  async function delete_(funnelId: string): Promise<void> {
+    error.value = false
+    try {
+      await useApi()<void>(`${listUrl()}/${funnelId}`, { method: 'DELETE' })
+      funnels.value = funnels.value.filter((f) => f.id !== funnelId)
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
+  return {
+    funnels,
+    loading,
+    error,
+    fetch,
+    create,
+    update,
+    // `delete` is a reserved word for a method name in object shorthand; expose under the spec'd name.
+    delete: delete_,
+  }
+})

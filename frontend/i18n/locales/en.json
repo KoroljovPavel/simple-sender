@@ -8,7 +8,9 @@
     "edit": "Edit",
     "email": "Email",
     "password": "Password",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "loading": "Loading…",
+    "retry": "Retry"
   },
   "layout": {
     "logout": "Logout",
@@ -54,7 +56,10 @@
     "customFieldLabelMax": "Maximum 64 characters",
     "customFieldNumberDefault": "Default value must be a number",
     "messageRequired": "Message text is required",
-    "messageMax": "Maximum {max} characters"
+    "messageMax": "Maximum {max} characters",
+    "funnelNameRequired": "Funnel name is required",
+    "funnelNameMax": "Funnel name must be at most 128 characters",
+    "funnelDescriptionMax": "Description must be at most 1024 characters"
   },
   "auth": {
     "login": {
@@ -408,6 +413,21 @@
         "403": "Action denied. Contact support",
         "generic": "Failed to delete account. Try again later"
       }
+    },
+    "funnels": {
+      "create": {
+        "422": "Invalid funnel data — check the name and try again",
+        "generic": "Could not create the funnel"
+      },
+      "list": {
+        "generic": "Could not load funnels"
+      },
+      "update": {
+        "generic": "Could not update the funnel"
+      },
+      "delete": {
+        "generic": "Could not delete the funnel"
+      }
     }
   },
   "subscribers": {
@@ -617,6 +637,41 @@
       "generic": "Failed to create export. Try again later.",
       "tooLarge": "The filter is too large. Narrow the selection.",
       "inFlight": "An export is already running. Wait for it to finish."
+    }
+  },
+  "funnels": {
+    "title": "Funnels",
+    "createButton": "Create funnel",
+    "filter": {
+      "label": "Status",
+      "all": "All",
+      "draft": "Draft",
+      "active": "Active",
+      "paused": "Paused"
+    },
+    "status": {
+      "draft": "Draft",
+      "active": "Active",
+      "paused": "Paused"
+    },
+    "emptyState": {
+      "title": "No funnels yet",
+      "body": "Create your first funnel to start onboarding subscribers automatically.",
+      "cta": "Create funnel"
+    },
+    "form": {
+      "name": "Name",
+      "description": "Description"
+    },
+    "createDialog": {
+      "title": "Create funnel",
+      "submit": "Create"
+    },
+    "deleteConfirm": {
+      "title": "Delete funnel?",
+      "message": "This permanently deletes the funnel and cancels any active executions. This cannot be undone.",
+      "confirm": "Delete",
+      "cancel": "Cancel"
     }
   }
 }

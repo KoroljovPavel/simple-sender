@@ -83,7 +83,9 @@ class FunnelTriggerServiceIT extends AbstractIntegrationTest {
         String subId = seedActiveSubscriber();
         seedActiveFunnel("ref_x", false, sendMessage("hello"), delay(5, "MIN"), sendMessage("world"));
 
+        Instant before = Instant.now();
         funnelTriggerService.fire(projectId, CHAT_ID, "on_start", "ref_x");
+        Instant after = Instant.now();
 
         List<FunnelExecution> executions = allExecutions();
         assertThat(executions).hasSize(1);
@@ -93,7 +95,9 @@ class FunnelTriggerServiceIT extends AbstractIntegrationTest {
         assertThat(exec.getCurrentStepIndex()).isZero();
         assertThat(exec.getSubscriberId()).isEqualTo(subId);
         assertThat(exec.getTelegramBotId()).isEqualTo(TELEGRAM_BOT_ID);
-        assertThat(exec.getNextRunAt()).isNotNull();
+        // nextRunAt = fire-time "now" so the nearest sweep picks it up — pin it to the [before, after]
+        // window (kills a mutant that leaves it null/epoch/far-future), not merely non-null.
+        assertThat(exec.getNextRunAt()).isNotNull().isBetween(before, after);
         assertThat(exec.getStepsSnapshot()).hasSize(3);
         assertThat(exec.getStepsSnapshot().get(0).getText()).isEqualTo("hello");
         assertThat(exec.getStepsSnapshot().get(1).getStepType()).isEqualTo(StepType.DELAY);
@@ -112,6 +116,10 @@ class FunnelTriggerServiceIT extends AbstractIntegrationTest {
 
         FunnelExecution exec = allExecutions().get(0);
         assertThat(exec.getStepsSnapshot().get(0).getText()).isEqualTo("original");
+        // Identity guard: the snapshot must NOT alias the source funnel's step instances — a shallow
+        // copy (e.g. new ArrayList<>(steps)) would share them. Per-field deep-copy independence is
+        // additionally pinned by FunnelStepTest.deepCopyProducesIndependentStep.
+        assertThat(exec.getStepsSnapshot().get(0)).isNotSameAs(funnel.getSteps().get(0));
     }
 
     // ─── exact match incl empty payload ─────────────────────────────────────────

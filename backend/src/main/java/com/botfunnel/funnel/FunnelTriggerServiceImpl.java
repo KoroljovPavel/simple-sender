@@ -55,6 +55,7 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
     static final String LOG_FIRE_REENTER_IGNORED = "FUNNEL_FIRE_REENTER_IGNORED";
     static final String LOG_FIRE_REENTER_RESTARTED = "FUNNEL_FIRE_REENTER_RESTARTED";
     static final String LOG_FIRE_ERROR = "FUNNEL_FIRE_ERROR";
+    static final String LOG_CANCEL_NO_BOT = "FUNNEL_CANCEL_SKIP_NO_CONNECTED_BOT";
     static final String LOG_CANCEL_NO_SUBSCRIBER = "FUNNEL_CANCEL_SKIP_NO_SUBSCRIBER";
     static final String LOG_CANCEL_DONE = "FUNNEL_CANCEL_ACTIVE";
     static final String LOG_CANCEL_ERROR = "FUNNEL_CANCEL_ERROR";
@@ -111,7 +112,7 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
 
             // Step 4: re-enter guard (Decision 8).
             if (funnel.isAllowReEnter()) {
-                cancelExistingForPair(funnel.getId(), subscriber.getId());
+                cancelExistingForPair(projectId, funnel.getId(), subscriber.getId());
                 insertExecution(projectId, funnel, subscriber.getId(), telegramBotId);
                 log.info("{} funnelId={} subscriberId={}", LOG_FIRE_REENTER_RESTARTED,
                         funnel.getId(), subscriber.getId());
@@ -136,7 +137,7 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
         try {
             Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).orElse(null);
             if (bot == null) {
-                log.info("{} projectId={}", LOG_CANCEL_NO_SUBSCRIBER, projectId);
+                log.info("{} projectId={}", LOG_CANCEL_NO_BOT, projectId);
                 return;
             }
             Subscriber subscriber = subscriberService
@@ -145,11 +146,13 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
                 log.info("{} projectId={}", LOG_CANCEL_NO_SUBSCRIBER, projectId);
                 return;
             }
-            // Transition every running|waiting execution of this subscriber to cancelled. Statuses as
-            // lowercase .name() literals (Decision 14).
+            // Transition every running|waiting execution of this subscriber to cancelled. Scoped by
+            // projectId too (fail-closed tenant hardening), statuses as lowercase .name() literals
+            // (Decision 14).
             Instant now = Instant.now(clock);
             mongoTemplate.updateMulti(
-                    Query.query(Criteria.where("subscriberId").is(subscriber.getId())
+                    Query.query(Criteria.where("projectId").is(projectId)
+                            .and("subscriberId").is(subscriber.getId())
                             .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name())),
                     new Update()
                             .set("status", ExecutionStatus.cancelled.name())
@@ -165,10 +168,11 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
     // Atomically cancel the existing running|waiting execution for the (funnelId, subscriberId) pair so
     // the partial-unique index frees up before the fresh insert (allowReEnter=true). updateMulti is
     // defensive — the unique index guarantees at most one such row.
-    private void cancelExistingForPair(String funnelId, String subscriberId) {
+    private void cancelExistingForPair(String projectId, String funnelId, String subscriberId) {
         Instant now = Instant.now(clock);
         mongoTemplate.updateMulti(
-                Query.query(Criteria.where("funnelId").is(funnelId)
+                Query.query(Criteria.where("projectId").is(projectId)
+                        .and("funnelId").is(funnelId)
                         .and("subscriberId").is(subscriberId)
                         .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name())),
                 new Update()

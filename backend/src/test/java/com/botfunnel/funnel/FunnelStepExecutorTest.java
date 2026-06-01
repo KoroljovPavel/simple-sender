@@ -186,6 +186,26 @@ class FunnelStepExecutorTest {
         verify(subscriberService).addTag(PROJECT_ID, SUBSCRIBER_ID, "vip");
     }
 
+    @Test
+    void removeTagDelegatesToSubscriberService() {
+        StepExecutor.StepResult result = executor.execute(
+                tagStep(StepType.REMOVE_TAG, "vip"), execution(0), activeSubscriber(), connectedBot());
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        verify(subscriberService).removeTag(PROJECT_ID, SUBSCRIBER_ID, "vip");
+    }
+
+    @Test
+    void sendMessageInvalidBotTokenFails() {
+        when(sender.sendText(anyString(), any(), anyString(), any(), any()))
+                .thenThrow(new com.botfunnel.bot.BotTokenInvalidException(BOT_ID, "Token is invalid or revoked"));
+
+        StepExecutor.StepResult result = executor.execute(
+                sendMessageStep("hi", null), execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(result.reasonCode()).isEqualTo("invalid_bot_token");
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────────────
 
     private List<String> warnMessages() {

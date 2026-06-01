@@ -72,6 +72,9 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     @DynamicPropertySource
     static void telegramProps(DynamicPropertyRegistry registry) {
         registry.add("app.telegram.base-url", () -> TELEGRAM.url("/").toString());
+        // Tiny batch cap so the saturation/sort test can prove the WARN + oldest-first ordering with a
+        // handful of rows instead of 200. A single-execution test still sees size 1 < 2 → no false WARN.
+        registry.add("app.funnel.sweep-batch-size", () -> "2");
     }
 
     @Autowired FunnelExecutionEngine engine;
@@ -289,13 +292,16 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     @Test
     void stateTransitionsEmitNamedLogConstantsWithoutPayload() {
         Logger engineLogger = (Logger) LoggerFactory.getLogger(FunnelExecutionEngine.class);
+        Logger executorLogger = (Logger) LoggerFactory.getLogger(StepExecutor.class);
         ListAppender<ILoggingEvent> appender = new ListAppender<>();
         appender.start();
         engineLogger.addAppender(appender);
+        executorLogger.addAppender(appender);
         try {
             String subId = seedActiveSubscriber();
             String pii = "PII_SECRET_PAYLOAD_42";
-            String execId = seedExecution(subId, BASE, sendMessage(pii));
+            // Over-4096 so StepExecutor's trim-WARN site also fires — proving even that path omits payload.
+            String execId = seedExecution(subId, BASE, sendMessage(pii + "x".repeat(5000)));
             enqueueOk(1);
 
             engine.sweep();
@@ -303,9 +309,45 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
             List<String> messages = appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
             assertThat(messages).anyMatch(m -> m.contains(FunnelExecutionEngine.LOG_CLAIM_WON));
             assertThat(messages).anyMatch(m -> m.contains(FunnelExecutionEngine.LOG_EXECUTION_COMPLETED));
-            assertThat(messages).as("no rendered payload (PII) in engine logs")
+            assertThat(messages).anyMatch(m -> m.contains(StepExecutor.LOG_TEXT_TRIMMED));
+            assertThat(messages).as("no rendered payload (PII) in engine OR executor logs")
                     .noneMatch(m -> m.contains(pii));
             assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        } finally {
+            engineLogger.detachAppender(appender);
+            executorLogger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
+    void sweepRespectsBatchCapOldestFirstAndWarnsOnSaturation() {
+        // batchSize=2 (set via @DynamicPropertySource). Three due executions with distinct nextRunAt →
+        // one tick claims the 2 OLDEST (sort nextRunAt asc), logs the saturation WARN, and leaves the
+        // newest for the next tick.
+        Logger engineLogger = (Logger) LoggerFactory.getLogger(FunnelExecutionEngine.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        engineLogger.addAppender(appender);
+        try {
+            String s1 = seedActiveSubscriber();
+            String s2 = seedActiveSubscriber();
+            String s3 = seedActiveSubscriber();
+            String oldest = seedExecution(s1, BASE.minusSeconds(20), sendMessage("a"));
+            String middle = seedExecution(s2, BASE.minusSeconds(10), sendMessage("b"));
+            String newest = seedExecution(s3, BASE.minusSeconds(1), sendMessage("c"));
+            enqueueOk(2);
+
+            engine.sweep();
+
+            assertThat(reload(oldest).getStatus()).isEqualTo(ExecutionStatus.completed);
+            assertThat(reload(middle).getStatus()).isEqualTo(ExecutionStatus.completed);
+            // The newest exceeded the per-tick cap → untouched (still running, pending).
+            assertThat(reload(newest).getStatus()).isEqualTo(ExecutionStatus.running);
+            assertThat(reload(newest).getStepRunStatus()).isEqualTo(StepRunStatus.pending);
+            assertThat(sentCount()).isEqualTo(2);
+            assertThat(appender.list).anyMatch(e ->
+                    e.getFormattedMessage().contains(FunnelExecutionEngine.LOG_SWEEP_SATURATED));
         } finally {
             engineLogger.detachAppender(appender);
             appender.stop();

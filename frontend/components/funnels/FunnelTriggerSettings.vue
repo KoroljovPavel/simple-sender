@@ -28,6 +28,10 @@ const link = computed<string | null>(() => {
   return props.deepLink ?? null
 })
 
+// A bot is reachable for previewing when we have either its username or a server-built deepLink. Used to
+// distinguish "no bot connected" from "bot connected but the current value is invalid" (link suppressed).
+const hasBot = computed(() => !!(props.botUsername || props.deepLink))
+
 const copied = ref(false)
 let copyTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -86,6 +90,8 @@ onBeforeUnmount(() => {
         </button>
       </div>
     </div>
-    <p v-else data-test="funnel-trigger-no-bot" class="text-sm text-gray-500">{{ t('funnels.trigger.noBot') }}</p>
+    <!-- Only when genuinely no bot is connected — NOT when a bot is connected but the value is invalid
+         (the link is suppressed then, and the value-pattern error above already explains why). -->
+    <p v-else-if="!hasBot" data-test="funnel-trigger-no-bot" class="text-sm text-gray-500">{{ t('funnels.trigger.noBot') }}</p>
   </section>
 </template>

@@ -75,6 +75,28 @@ describe('funnels/[funnelId] editor page', () => {
     expect(wrapper.find('[data-test="funnel-status-draft"]').exists()).toBe(true)
   })
 
+  it('uses the code-specific message, not the generic fallback', async () => {
+    // Litmus for the errors.funnels.<code> branch: a MAPPED code must render a different message than an
+    // UNMAPPED code (which falls through to useApiError's generic). If the mapping branch were deleted,
+    // both would resolve to the same generic string and this assertion would fail.
+    async function activateErrorText(rejectValue: unknown): Promise<string> {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      storeMock.update.mockResolvedValue(draft())
+      storeMock.activate.mockReset().mockRejectedValue(rejectValue)
+      const wrapper = await mountSuspended(FunnelEditorPage)
+      await settle()
+      await wrapper.get('[data-test="funnel-activate"]').trigger('click')
+      await settle()
+      return wrapper.get('[data-test="funnel-activate-error"]').text().trim()
+    }
+
+    const mapped = await activateErrorText({ statusCode: 422, data: { code: 'funnel_no_steps' } })
+    const generic = await activateErrorText({ statusCode: 422, data: { code: 'totally_unknown_code' } })
+    expect(mapped.length).toBeGreaterThan(0)
+    expect(generic.length).toBeGreaterThan(0)
+    expect(mapped).not.toBe(generic)
+  })
+
   it('redirects to the list on a 404 (missing / cross-owner funnel)', async () => {
     storeMock.fetchOne.mockRejectedValue({ statusCode: 404 })
 

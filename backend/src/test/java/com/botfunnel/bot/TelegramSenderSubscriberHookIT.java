@@ -48,6 +48,8 @@ class TelegramSenderSubscriberHookIT {
     private static final Long TELEGRAM_BOT_ID = 555000111L;
     private static final Long CHAT_ID = 424242L;
     private static final String TEXT = "Hook IT message";
+    private static final String IMAGE_URL = "https://example.com/hook.png";
+    private static final String CAPTION = "Hook IT caption";
     private static final String HEX_KEY_64 = "0".repeat(64);
 
     private MockWebServer mockServer;
@@ -201,6 +203,39 @@ class TelegramSenderSubscriberHookIT {
                 .filter(e -> e.getLevel() == Level.WARN)
                 .anyMatch(e -> e.getFormattedMessage().contains("TELEGRAM_SENDER_SUBSCRIBER_HOOK_FAILED"));
         assertThat(warnLogged).isTrue();
+    }
+
+    @Test
+    void sendPhoto_403_marksBlockedByChat() {
+        mockServer.enqueue(jsonResponse(403,
+                "{\"ok\":false,\"error_code\":403,\"description\":\"Forbidden: bot was blocked by the user\"}"));
+
+        assertThatThrownBy(() -> sender.sendPhoto(BOT_ID, CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
+
+        InOrder ordered = inOrder(eventService, subscriberService);
+        ordered.verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), any());
+        ordered.verify(subscriberService).markBlockedByChatId(PROJECT_ID, TELEGRAM_BOT_ID, CHAT_ID);
+
+        verify(subscriberService, times(1)).markBlockedByChatId(PROJECT_ID, TELEGRAM_BOT_ID, CHAT_ID);
+        verify(subscriberService, never()).markDeletedByChatId(any(), any(), any());
+    }
+
+    @Test
+    void sendPhoto_chatNotFound_marksDeletedByChat() {
+        mockServer.enqueue(jsonResponse(400,
+                "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: chat not found\"}"));
+
+        assertThatThrownBy(() -> sender.sendPhoto(BOT_ID, CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
+
+        InOrder ordered = inOrder(eventService, subscriberService);
+        ordered.verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), any());
+        ordered.verify(subscriberService).markDeletedByChatId(PROJECT_ID, TELEGRAM_BOT_ID, CHAT_ID);
+
+        verify(subscriberService, never()).markBlockedByChatId(any(), any(), any());
     }
 
     private Bot connectedBot() {

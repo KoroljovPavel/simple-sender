@@ -142,6 +142,9 @@ class TelegramSenderTest {
                 messageId, chatId));
     }
 
+    private static final String IMAGE_URL = "https://example.com/cat.png";
+    private static final String CAPTION = "A cat";
+
     private static MockResponse status5xx(int code) {
         return jsonResponse(code, String.format(
                 "{\"ok\":false,\"error_code\":%d,\"description\":\"Service Unavailable\"}", code));
@@ -794,5 +797,153 @@ class TelegramSenderTest {
         // "I/O error on POST request for ...: Connection refused" — defensive scrubbing is
         // still applied at the log site; the assertion that matters here is the negative one
         // (raw TOKEN absent across WARN+ERROR).
+    }
+
+    // ---------- sendPhoto (mirrors sendText failure-matrix) ----------
+
+    @Test
+    void sendPhoto_success_returnsSentMessage() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(okSendMessage(77L, 5L));
+
+        SentMessage sm = sender.sendPhoto(BOT_ID, CALLER_CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID);
+
+        assertThat(sm).isNotNull();
+        assertThat(sm.messageId()).isEqualTo(77L);
+        assertThat(sm.chatId()).isEqualTo(5L);
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
+
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        assertThat(req.getPath()).isEqualTo("/bot" + TOKEN + "/sendPhoto");
+        assertThat(req.getMethod()).isEqualTo("POST");
+        Map<String, Object> body = new ObjectMapper().readValue(
+                req.getBody().readUtf8(), new TypeReference<>() {});
+        assertThat(body).containsEntry("photo", IMAGE_URL);
+        assertThat(body).containsEntry("caption", CAPTION);
+        assertThat(body).containsEntry("parse_mode", "HTML");
+        assertThat(((Number) body.get("chat_id")).longValue()).isEqualTo(CALLER_CHAT_ID);
+
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
+                isNull(), isNull(), any());
+    }
+
+    @Test
+    void sendPhoto_captionAndParseModeNull_omitsFieldsFromBody() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(okSendMessage(1L, CALLER_CHAT_ID));
+
+        sender.sendPhoto(BOT_ID, CALLER_CHAT_ID, IMAGE_URL, null, null, OWNER_ID);
+
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        Map<String, Object> body = new ObjectMapper().readValue(
+                req.getBody().readUtf8(), new TypeReference<>() {});
+        assertThat(body).containsEntry("photo", IMAGE_URL);
+        assertThat(body).doesNotContainKey("caption");
+        assertThat(body).doesNotContainKey("parse_mode");
+    }
+
+    @Test
+    void sendPhoto_rateLimited_retriesThenSucceeds() {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(status429(1));
+        mockServer.enqueue(okSendMessage(42L, 5L));
+
+        SentMessage sm = sender.sendPhoto(BOT_ID, CALLER_CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID);
+
+        assertThat(sm).isNotNull();
+        assertThat(sm.messageId()).isEqualTo(42L);
+        assertThat(mockServer.getRequestCount()).isEqualTo(2);
+    }
+
+    @Test
+    void sendPhoto_403_flipsBlockedAndThrows() {
+        Bot bot = connectedBot();
+        bot.setProjectId("proj-photo-1");
+        bot.setTelegramBotId(7007L);
+        stubFindReturns(bot);
+        mockServer.enqueue(jsonResponse(403,
+                "{\"ok\":false,\"error_code\":403,\"description\":\"Forbidden: bot was blocked by the user\"}"));
+
+        assertThatThrownBy(() -> sender.sendPhoto(BOT_ID, CALLER_CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .satisfies(err -> assertThat(((TelegramSendException) err).getTerminalReason())
+                        .isEqualTo(TelegramSendException.TerminalReason.BLOCKED_BY_USER));
+
+        verify(subscriberService).markBlockedByChatId("proj-photo-1", 7007L, CALLER_CHAT_ID);
+        verify(subscriberService, never()).markDeletedByChatId(any(), any(), any());
+    }
+
+    @Test
+    void sendPhoto_400ChatNotFound_flipsDeletedAndThrows() {
+        Bot bot = connectedBot();
+        bot.setProjectId("proj-photo-2");
+        bot.setTelegramBotId(8008L);
+        stubFindReturns(bot);
+        mockServer.enqueue(jsonResponse(400,
+                "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: chat not found\"}"));
+
+        assertThatThrownBy(() -> sender.sendPhoto(BOT_ID, CALLER_CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .satisfies(err -> assertThat(((TelegramSendException) err).getTerminalReason())
+                        .isEqualTo(TelegramSendException.TerminalReason.CHAT_NOT_FOUND));
+
+        verify(subscriberService).markDeletedByChatId("proj-photo-2", 8008L, CALLER_CHAT_ID);
+        verify(subscriberService, never()).markBlockedByChatId(any(), any(), any());
+    }
+
+    @Test
+    void sendPhoto_400OtherDescription_terminalOther() {
+        stubFindReturns(connectedBot());
+        // e.g. Telegram fails to fetch the image URL → 400 without "chat not found".
+        mockServer.enqueue(jsonResponse(400,
+                "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: wrong file identifier/HTTP URL specified\"}"));
+
+        assertThatThrownBy(() -> sender.sendPhoto(BOT_ID, CALLER_CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .satisfies(err -> {
+                    TelegramSendException tse = (TelegramSendException) err;
+                    assertThat(tse.getErrorCode()).isEqualTo(400);
+                    assertThat(tse.getTerminalReason()).isEqualTo(TelegramSendException.TerminalReason.OTHER);
+                });
+
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
+        verifyNoInteractions(subscriberService);
+    }
+
+    @Test
+    void sendPhoto_5xxExhausted_throwsTransientExhausted() {
+        stubFindReturns(connectedBot());
+        for (int i = 0; i < 4; i++) {
+            mockServer.enqueue(status5xx(503));
+        }
+
+        assertThatThrownBy(() -> sender.sendPhoto(BOT_ID, CALLER_CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .hasMessage("transient_failure_exhausted");
+
+        assertThat(mockServer.getRequestCount()).isEqualTo(4);
+    }
+
+    @Test
+    void sendPhoto_failure_doesNotLeakDecryptedToken() {
+        stubFindReturns(connectedBot());
+        // 400 whose description embeds the token; scrubTokens must remove it from every log line.
+        mockServer.enqueue(jsonResponse(400, "{\"ok\":false,\"error_code\":400,\"description\":\""
+                + "Bad request for token " + TOKEN + " on chat\"}"));
+
+        assertThatThrownBy(() -> sender.sendPhoto(BOT_ID, CALLER_CHAT_ID, IMAGE_URL, CAPTION, "HTML", OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
+
+        List<String> logSites = logAppender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN || e.getLevel() == Level.ERROR)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+        assertThat(logSites).isNotEmpty();
+        // The decrypted token (which is also the path segment in /bot{token}/sendPhoto) must never
+        // appear in any log line.
+        assertThat(logSites).noneMatch(m -> m.contains(TOKEN));
+        assertThat(logSites).anyMatch(m -> m.contains("[REDACTED_TOKEN]"));
     }
 }

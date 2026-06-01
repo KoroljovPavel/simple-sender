@@ -34,7 +34,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Outbound sender for Telegram {@code sendMessage}. Owns: per-call AES-GCM token decrypt, 5xx
+ * Outbound sender for Telegram {@code sendMessage} / {@code sendPhoto}. Owns: per-call AES-GCM token decrypt, 5xx
  * exponential backoff (1s/2s/4s, 3 retries), 429 {@code retry_after} loop wrapping the 5xx loop,
  * overall 30s timeout, typed-exception mapping, audit-event emission, and token-scrubbed logging.
  *
@@ -127,11 +127,41 @@ public class TelegramSender {
 
     public SentMessage sendText(String botId, Long chatId, String text,
                                 String parseMode, String ownerId) {
+        // Body for /sendMessage. parse_mode added only when non-null (mirrored by /sendPhoto).
+        Map<String, Object> contentFields = new HashMap<>();
+        contentFields.put("text", text);
+        if (parseMode != null) {
+            contentFields.put("parse_mode", parseMode);
+        }
+        return send(botId, chatId, "/bot{token}/sendMessage", contentFields, ownerId);
+    }
+
+    public SentMessage sendPhoto(String botId, Long chatId, String imageUrl, String caption,
+                                 String parseMode, String ownerId) {
+        // Body for /sendPhoto. photo is the URL — Telegram fetches it; the backend never
+        // dereferences it (no SSRF). caption/parse_mode added only when non-null.
+        Map<String, Object> contentFields = new HashMap<>();
+        contentFields.put("photo", imageUrl);
+        if (caption != null) {
+            contentFields.put("caption", caption);
+        }
+        if (parseMode != null) {
+            contentFields.put("parse_mode", parseMode);
+        }
+        return send(botId, chatId, "/bot{token}/sendPhoto", contentFields, ownerId);
+    }
+
+    // Shared orchestration for every outbound send (sendText / sendPhoto). The only per-method
+    // difference is the endpoint path and the content fields of the request body — everything else
+    // (CONNECTED filter, retry/backoff/429 loop, audit, Decision-4 subscriber hook, typed mapping)
+    // is identical and lives here so the failure-matrix is byte-identical across endpoints.
+    private SentMessage send(String botId, Long chatId, String endpoint,
+                             Map<String, Object> contentFields, String ownerId) {
         // Outermost AtomicInteger. Persists across BOTH retry loops: each HTTP attempt increments
         // it once at the request site. The [5xx, 429, 5xx, 200] interleaving invariant asserts
         // attempts==4 — the counter survives 429 outer-loop re-entry into the 5xx inner loop.
         AtomicInteger attempts = new AtomicInteger(0);
-        // Captured ONCE at the start of sendText — never re-derived inside the retry loops.
+        // Captured ONCE at the start of the send — never re-derived inside the retry loops.
         Instant deadline = Instant.now().plus(overallTimeout);
 
         // Promoted to method scope so the catch block can resolve projectId from the same Bot
@@ -144,7 +174,7 @@ public class TelegramSender {
                     .filter(b -> b.getStatus() == BotStatus.CONNECTED)
                     .orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND));
 
-            SentMessage sm = sendWithRateLimitRetry(bot, botId, chatId, text, parseMode,
+            SentMessage sm = sendWithRateLimitRetry(bot, botId, chatId, endpoint, contentFields,
                     attempts, deadline);
             eventService.logEvent(ownerId, EVENT_TELEGRAM_MESSAGE_SENT,
                     null, null, sentMetadata(botId, sm));
@@ -192,12 +222,12 @@ public class TelegramSender {
 
     // Outer 429 loop wrapping the inner 5xx loop. Per Decision 2, 429 wraps 5xx — Telegram's
     // rate-limit window resets the per-second budget, so we retry from scratch on retry_after.
-    private SentMessage sendWithRateLimitRetry(Bot bot, String botId, Long chatId, String text,
-                                               String parseMode, AtomicInteger attempts,
-                                               Instant deadline) {
+    private SentMessage sendWithRateLimitRetry(Bot bot, String botId, Long chatId, String endpoint,
+                                               Map<String, Object> contentFields,
+                                               AtomicInteger attempts, Instant deadline) {
         while (true) {
             try {
-                return sendWith5xxRetry(bot, botId, chatId, text, parseMode, attempts, deadline);
+                return sendWith5xxRetry(bot, botId, chatId, endpoint, contentFields, attempts, deadline);
             } catch (TelegramRateLimitException rate) {
                 long delaySeconds = Math.max(0,
                         Math.min(rate.getRetryAfterSeconds(), RATE_LIMIT_DELAY_CAP_SECONDS));
@@ -209,13 +239,13 @@ public class TelegramSender {
         }
     }
 
-    private SentMessage sendWith5xxRetry(Bot bot, String botId, Long chatId, String text,
-                                         String parseMode, AtomicInteger attempts,
+    private SentMessage sendWith5xxRetry(Bot bot, String botId, Long chatId, String endpoint,
+                                         Map<String, Object> contentFields, AtomicInteger attempts,
                                          Instant deadline) {
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             checkDeadline(deadline, attempts);
             try {
-                return sendOnce(bot, botId, chatId, text, parseMode, attempts);
+                return sendOnce(bot, botId, chatId, endpoint, contentFields, attempts);
             } catch (TelegramRateLimitException re) {
                 // 429 is handled by the outer loop, NOT a transient.
                 throw re;
@@ -239,8 +269,8 @@ public class TelegramSender {
         throw new TelegramSendException(null, "transient_failure_exhausted", attempts.get());
     }
 
-    private SentMessage sendOnce(Bot bot, String botId, Long chatId, String text,
-                                 String parseMode, AtomicInteger attempts) {
+    private SentMessage sendOnce(Bot bot, String botId, Long chatId, String endpoint,
+                                 Map<String, Object> contentFields, AtomicInteger attempts) {
         byte[] iv;
         byte[] ct;
         try {
@@ -261,16 +291,15 @@ public class TelegramSender {
             throw new BotTokenInvalidException(botId, "invalid token shape after decrypt");
         }
 
-        Map<String, Object> body = new HashMap<>();
+        // chat_id is common to every endpoint; the caller-supplied contentFields carry the
+        // endpoint-specific keys (text / photo+caption + parse_mode). Copy into a fresh map so the
+        // shared contentFields instance is never mutated across retry attempts.
+        Map<String, Object> body = new HashMap<>(contentFields);
         body.put("chat_id", chatId);
-        body.put("text", text);
-        if (parseMode != null) {
-            body.put("parse_mode", parseMode);
-        }
 
         attempts.incrementAndGet();
         TelegramSendResult<JsonNode> result = restClient.post()
-                .uri("/bot{token}/sendMessage", token)
+                .uri(endpoint, token)
                 .body(body)
                 .retrieve()
                 .onStatus(HttpStatusCode::is4xxClientError, (req, resp) -> {

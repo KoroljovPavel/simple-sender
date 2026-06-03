@@ -162,8 +162,14 @@ public class FunnelExecutionEngine {
                     exec.setCurrentStepIndex(exec.getCurrentStepIndex() + 1);
                     // Commit progress while STILL holding the in_progress claim — a crash after the
                     // side effect but before this write leaves the step un-advanced + in_progress
-                    // (stuck, never re-sent), not re-executed.
-                    persistProgress(exec, now);
+                    // (stuck, never re-sent), not re-executed. The write is conditional on the claim
+                    // still being ours: if a concurrent terminal cancel (FunnelService.delete /
+                    // FunnelTriggerService.cancelActiveFor/cancelExistingForPair) flipped the row, the
+                    // CAS no-ops and we stop advancing — the cancel wins, no resurrection.
+                    if (!persistProgress(exec, now)) {
+                        log.debug("{} executionId={}", LOG_CLAIM_LOST, exec.getId());
+                        return;
+                    }
                     log.info("{} executionId={} stepType={} newStepIndex={}", LOG_STEP_ADVANCED,
                             exec.getId(), step.getStepType(), exec.getCurrentStepIndex());
                 }
@@ -202,40 +208,83 @@ public class FunnelExecutionEngine {
                 new FindAndModifyOptions().returnNew(true), FunnelExecution.class);
     }
 
+    // Every in-tick write is a CAS predicated on the claim still being ours (stepRunStatus=in_progress)
+    // rather than a blind full-document save. The terminal cancellers set stepRunStatus=done, so once a
+    // concurrent cancel lands this predicate no longer matches and the engine's write is a no-op it
+    // detects (returnNew == null) — the cancel deterministically wins and a cancelled/deleted execution
+    // can never be resurrected by the engine. Statuses written as lowercase .name() literals (Decision 14).
+    private static Query stillClaimed(String executionId) {
+        return Query.query(Criteria.where("_id").is(executionId)
+                .and("stepRunStatus").is(StepRunStatus.in_progress.name()));
+    }
+
     // Advance within the tick: keep stepRunStatus=in_progress so no other replica can claim mid-run.
-    private void persistProgress(FunnelExecution exec, Instant now) {
-        exec.setStepRunStatus(StepRunStatus.in_progress);
+    // Persists status too (a resumed-from-waiting execution flips waiting→running in memory and must
+    // commit that). Returns false if the claim was lost to a concurrent cancel — caller stops the tick.
+    private boolean persistProgress(FunnelExecution exec, Instant now) {
+        Update update = new Update()
+                .set("status", exec.getStatus().name())
+                .set("currentStepIndex", exec.getCurrentStepIndex())
+                .set("stepRunStatus", StepRunStatus.in_progress.name())
+                .set("updatedAt", now);
+        FunnelExecution updated = mongoTemplate.findAndModify(stillClaimed(exec.getId()), update,
+                new FindAndModifyOptions().returnNew(true), FunnelExecution.class);
+        if (updated == null) {
+            return false;
+        }
         exec.setUpdatedAt(now);
-        mongoTemplate.save(exec);
+        return true;
     }
 
     // Yield on a Delay: park until nextRunAt, status=waiting, stepRunStatus=pending so the next tick can
-    // re-claim. currentStepIndex is left on the Delay step (advanced on resume).
+    // re-claim. currentStepIndex is left on the Delay step (advanced on resume). No-op if the claim was
+    // lost to a concurrent cancel.
     private void scheduleDelay(FunnelExecution exec, Instant nextRunAt) {
-        exec.setStatus(ExecutionStatus.waiting);
-        exec.setStepRunStatus(StepRunStatus.pending);
-        exec.setNextRunAt(nextRunAt);
-        exec.setUpdatedAt(Instant.now(clock));
-        mongoTemplate.save(exec);
+        Update update = new Update()
+                .set("status", ExecutionStatus.waiting.name())
+                .set("stepRunStatus", StepRunStatus.pending.name())
+                .set("currentStepIndex", exec.getCurrentStepIndex())
+                .set("nextRunAt", nextRunAt)
+                .set("updatedAt", Instant.now(clock));
+        FunnelExecution updated = mongoTemplate.findAndModify(stillClaimed(exec.getId()), update,
+                new FindAndModifyOptions().returnNew(true), FunnelExecution.class);
+        if (updated == null) {
+            log.debug("{} executionId={}", LOG_CLAIM_LOST, exec.getId());
+            return;
+        }
         log.info("{} executionId={} stepIndex={}", LOG_DELAY_SCHEDULED,
                 exec.getId(), exec.getCurrentStepIndex());
     }
 
     private void complete(FunnelExecution exec, Instant now) {
-        exec.setStatus(ExecutionStatus.completed);
-        exec.setStepRunStatus(StepRunStatus.done);
-        exec.setCompletedAt(now);
-        exec.setUpdatedAt(now);
-        mongoTemplate.save(exec);
+        Update update = new Update()
+                .set("status", ExecutionStatus.completed.name())
+                .set("stepRunStatus", StepRunStatus.done.name())
+                .set("currentStepIndex", exec.getCurrentStepIndex())
+                .set("completedAt", now)
+                .set("updatedAt", now);
+        FunnelExecution updated = mongoTemplate.findAndModify(stillClaimed(exec.getId()), update,
+                new FindAndModifyOptions().returnNew(true), FunnelExecution.class);
+        if (updated == null) {
+            log.debug("{} executionId={}", LOG_CLAIM_LOST, exec.getId());
+            return;
+        }
         log.info("{} executionId={} funnelId={}", LOG_EXECUTION_COMPLETED, exec.getId(), exec.getFunnelId());
     }
 
     private void terminate(FunnelExecution exec, ExecutionStatus status, Instant now,
                            String logConstant, String reasonCode) {
-        exec.setStatus(status);
-        exec.setStepRunStatus(StepRunStatus.done);
-        exec.setUpdatedAt(now);
-        mongoTemplate.save(exec);
+        Update update = new Update()
+                .set("status", status.name())
+                .set("stepRunStatus", StepRunStatus.done.name())
+                .set("currentStepIndex", exec.getCurrentStepIndex())
+                .set("updatedAt", now);
+        FunnelExecution updated = mongoTemplate.findAndModify(stillClaimed(exec.getId()), update,
+                new FindAndModifyOptions().returnNew(true), FunnelExecution.class);
+        if (updated == null) {
+            log.debug("{} executionId={}", LOG_CLAIM_LOST, exec.getId());
+            return;
+        }
         log.info("{} executionId={} funnelId={} stepIndex={} reason={}", logConstant,
                 exec.getId(), exec.getFunnelId(), exec.getCurrentStepIndex(), reasonCode);
     }

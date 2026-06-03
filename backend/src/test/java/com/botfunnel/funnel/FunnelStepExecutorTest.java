@@ -26,10 +26,13 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
@@ -131,13 +134,16 @@ class FunnelStepExecutorTest {
     void setCustomFieldInvalidValueFailsExecution() {
         when(projectRepository.findById(PROJECT_ID)).thenReturn(Optional.of(projectWithField("age", CustomFieldType.NUMBER)));
         doThrow(AppException.unprocessableEntity("custom_field_type_mismatch", "expected a finite number"))
-                .when(customFieldsService).setOne(eq(PROJECT_ID), eq(SUBSCRIBER_ID), eq(CustomFieldType.NUMBER), eq("age"), any());
+                .when(customFieldsService).validateAndNormalize(eq(CustomFieldType.NUMBER), any());
         FunnelStep step = setCustomFieldStep("age", "not-a-number");
 
         StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
 
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
         assertThat(result.reasonCode()).isEqualTo("custom_field_type_mismatch");
+        // Validation failed before any write/audit — neither must happen.
+        verify(customFieldsService, never()).applyAll(any(), any(), any());
+        verify(subscriberService, never()).recordCustomFieldsSet(any(), any(), any(), any());
     }
 
     @Test
@@ -149,8 +155,39 @@ class FunnelStepExecutorTest {
         StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
 
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
-        verify(customFieldsService, never()).setOne(any(), any(), any(), any(), any());
+        verify(customFieldsService, never()).applyAll(any(), any(), any());
+        verify(subscriberService, never()).recordCustomFieldsSet(any(), any(), any(), any());
         assertThat(logAppender.list).anyMatch(e -> e.getFormattedMessage().contains(StepExecutor.LOG_CUSTOM_FIELD_SKIPPED));
+    }
+
+    @Test
+    void setCustomFieldAppliesAndRecordsAuditEvent() {
+        // F1: a funnel SET_CUSTOM_FIELD must (a) apply the NORMALIZED value and (b) record the
+        // subscriber_custom_field_set audit via the sole writer (SubscriberService) — symmetric to
+        // ADD_TAG/REMOVE_TAG and to the controller's PATCH path.
+        when(projectRepository.findById(PROJECT_ID))
+                .thenReturn(Optional.of(projectWithField("age", CustomFieldType.NUMBER)));
+        when(customFieldsService.validateAndNormalize(eq(CustomFieldType.NUMBER), eq("30")))
+                .thenReturn(30.0); // validator normalizes "30" → 30.0
+        Subscriber sub = activeSubscriber();
+        Map<String, Object> existing = new HashMap<>();
+        existing.put("age", 10.0); // prior value → recorded as oldValues
+        sub.setCustomFields(existing);
+
+        StepExecutor.StepResult result = executor.execute(setCustomFieldStep("age", "30"), execution(0), sub, connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+
+        ArgumentCaptor<Map<String, Object>> applied = mapCaptor();
+        verify(customFieldsService).applyAll(eq(PROJECT_ID), eq(SUBSCRIBER_ID), applied.capture());
+        assertThat(applied.getValue()).containsExactly(entry("age", 30.0)); // normalized, not "30"
+
+        ArgumentCaptor<Map<String, Object>> oldCap = mapCaptor();
+        ArgumentCaptor<Map<String, Object>> newCap = mapCaptor();
+        verify(subscriberService).recordCustomFieldsSet(eq(PROJECT_ID), eq(SUBSCRIBER_ID),
+                oldCap.capture(), newCap.capture());
+        assertThat(oldCap.getValue()).containsExactly(entry("age", 10.0));
+        assertThat(newCap.getValue()).containsExactly(entry("age", 30.0));
     }
 
     @Test
@@ -207,6 +244,11 @@ class FunnelStepExecutorTest {
     }
 
     // ─── helpers ─────────────────────────────────────────────────────────────
+
+    @SuppressWarnings("unchecked")
+    private static ArgumentCaptor<Map<String, Object>> mapCaptor() {
+        return ArgumentCaptor.forClass(Map.class);
+    }
 
     private List<String> warnMessages() {
         return logAppender.list.stream()

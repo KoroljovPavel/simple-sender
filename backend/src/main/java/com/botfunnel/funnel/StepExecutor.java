@@ -17,7 +17,9 @@ import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Per-{@link StepType} executor for the funnel engine (Decision 12: flat dispatch, no polymorphic
@@ -79,7 +81,7 @@ public class StepExecutor {
                 subscriberService.removeTag(execution.getProjectId(), execution.getSubscriberId(), step.getTagSlug());
                 yield StepResult.cont();
             }
-            case SET_CUSTOM_FIELD -> setCustomField(step, execution);
+            case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
         };
     }
 
@@ -128,7 +130,7 @@ public class StepExecutor {
         }
     }
 
-    private StepResult setCustomField(FunnelStep step, FunnelExecution execution) {
+    private StepResult setCustomField(FunnelStep step, FunnelExecution execution, Subscriber subscriber) {
         CustomFieldType type = resolveFieldType(execution.getProjectId(), step.getCustomFieldKey());
         if (type == null) {
             // Definition was deleted from the project → silently skip this step, execution continues.
@@ -137,13 +139,31 @@ public class StepExecutor {
             return StepResult.cont();
         }
         try {
-            customFieldsService.setOne(execution.getProjectId(), execution.getSubscriberId(),
-                    type, step.getCustomFieldKey(), step.getCustomFieldValue());
+            // Mirror SubscriberCustomFieldsController's sole-writer cycle (Decision 11): validate→apply
+            // through SubscriberCustomFieldsService, then record the audit event via the sole writer.
+            // setOne deliberately skips the audit, so the engine — like the controller — owns the
+            // recordCustomFieldsSet call. We validate here (not via setOne) because the event must carry
+            // the NORMALIZED value (e.g. 30.0, not "30") for recordCustomFieldsSet's old/new diff.
+            String key = step.getCustomFieldKey();
+            Object normalized = customFieldsService.validateAndNormalize(type, step.getCustomFieldValue());
+            Map<String, Object> oldValues = Collections.singletonMap(key, currentValue(subscriber, key));
+            Map<String, Object> newValues = Collections.singletonMap(key, normalized);
+            customFieldsService.applyAll(execution.getProjectId(), execution.getSubscriberId(), newValues);
+            // oldValues is read from the tick-start subscriber snapshot — accurate for the common single
+            // SET_CUSTOM_FIELD-per-key case (the controller likewise reads old once). recordCustomFieldsSet
+            // is a no-op when nothing actually changed (empty changedKeys).
+            subscriberService.recordCustomFieldsSet(execution.getProjectId(), execution.getSubscriberId(),
+                    oldValues, newValues);
             return StepResult.cont();
         } catch (AppException ex) {
             // 422 type mismatch (custom_field_type_mismatch) → execution failed.
             return StepResult.fail(codeOrStatus(ex));
         }
+    }
+
+    private static Object currentValue(Subscriber subscriber, String key) {
+        Map<String, Object> fields = subscriber.getCustomFields();
+        return fields == null ? null : fields.get(key);
     }
 
     private CustomFieldType resolveFieldType(String projectId, String key) {

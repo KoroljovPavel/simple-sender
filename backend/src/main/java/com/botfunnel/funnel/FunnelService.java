@@ -139,15 +139,21 @@ public class FunnelService {
 
     public void delete(String ownerId, String projectId, String funnelId) {
         Funnel funnel = requireFunnel(ownerId, projectId, funnelId);
-        // Cancel the funnel's in-flight executions BEFORE dropping it. One atomic bulk-update; the
-        // engine (Task 6) is the only other writer and it claims per-execution, so a running|waiting
-        // row flipped to cancelled here will fail the engine's claim predicate — no double-processing.
-        // Enum statuses written as lowercase name() literals (Decision 14) to byte-match the index.
+        // Cancel the funnel's in-flight executions BEFORE dropping it. One atomic bulk-update. The
+        // engine (Task 6) is the only other writer: a not-yet-claimed row flipped to cancelled here
+        // fails the engine's claim predicate; a row the engine is mid-tick on is protected too, because
+        // every in-tick engine write is a CAS on stepRunStatus=in_progress — this update flips
+        // stepRunStatus to done, so the engine's next write no-ops and the cancel wins (no resurrection,
+        // no double-processing). Enum statuses written as lowercase name() literals (Decision 14).
         mongoTemplate.updateMulti(
                 Query.query(Criteria.where("funnelId").is(funnelId)
                         .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name())),
                 new Update()
                         .set("status", ExecutionStatus.cancelled.name())
+                        // Also flip stepRunStatus→done so the engine's claim-conditional in-tick writes
+                        // (CAS on stepRunStatus=in_progress) no-op for a row it is mid-processing — keeps
+                        // this canceller consistent with FunnelTriggerService's cancel paths.
+                        .set("stepRunStatus", StepRunStatus.done.name())
                         .set("updatedAt", Instant.now(clock)),
                 FunnelExecution.class);
         funnelRepository.delete(funnel);

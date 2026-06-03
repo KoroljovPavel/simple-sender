@@ -13,9 +13,14 @@ import com.botfunnel.common.test.ConcurrencyTestUtils;
 import com.botfunnel.subscriber.Subscriber;
 import com.botfunnel.subscriber.SubscriberRepository;
 import com.botfunnel.subscriber.SubscriberStatus;
+import okhttp3.mockwebserver.Dispatcher;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.QueueDispatcher;
+import okhttp3.mockwebserver.RecordedRequest;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
+import org.springframework.data.mongodb.core.query.Update;
 import org.jobrunr.jobs.RecurringJob;
 import org.jobrunr.storage.StorageProvider;
 import org.junit.jupiter.api.AfterEach;
@@ -214,6 +219,43 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
 
         assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
         assertThat(sentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void concurrentCancelMidTickWinsOverEngineWrite() {
+        // F2: a terminal cancel that lands AFTER the engine claimed the row but BEFORE its in-tick write
+        // must win — the engine's claim-conditional CAS (stepRunStatus=in_progress) no-ops, so the
+        // cancelled execution is never resurrected and the remaining step never fires. We trigger the
+        // cancel from inside step-1's Telegram send (engine is then mid-tick, holding the claim),
+        // mirroring FunnelService.delete / FunnelTriggerService.cancelActiveFor racing the sweep.
+        String subId = seedActiveSubscriber();
+        String execId = seedExecution(subId, BASE, sendMessage("step-1"), sendMessage("step-2"));
+
+        TELEGRAM.setDispatcher(new Dispatcher() {
+            private boolean cancelled = false;
+
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                if (!cancelled) {
+                    cancelled = true;
+                    mongoTemplate.updateFirst(
+                            Query.query(Criteria.where("_id").is(execId)),
+                            new Update()
+                                    .set("status", ExecutionStatus.cancelled.name())
+                                    .set("stepRunStatus", StepRunStatus.done.name()),
+                            FunnelExecution.class);
+                }
+                return json(200, "{\"ok\":true,\"result\":{\"message_id\":1,\"chat\":{\"id\":99}}}");
+            }
+        });
+
+        engine.sweep();
+
+        FunnelExecution after = reload(execId);
+        assertThat(after.getStatus()).isEqualTo(ExecutionStatus.cancelled); // not resurrected to running/completed
+        assertThat(after.getStepRunStatus()).isEqualTo(StepRunStatus.done);
+        assertThat(after.getCurrentStepIndex()).isZero();                   // never advanced past step-1
+        assertThat(sentCount()).isEqualTo(1);                               // step-2 never sent
     }
 
     // ─── send-fail matrix ──────────────────────────────────────────────────────

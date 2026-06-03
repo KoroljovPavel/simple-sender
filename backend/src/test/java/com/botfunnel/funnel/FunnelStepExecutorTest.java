@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -188,6 +189,25 @@ class FunnelStepExecutorTest {
                 oldCap.capture(), newCap.capture());
         assertThat(oldCap.getValue()).containsExactly(entry("age", 10.0));
         assertThat(newCap.getValue()).containsExactly(entry("age", 30.0));
+    }
+
+    @Test
+    void setCustomFieldFirstTimeRecordsNullOldValue() {
+        // Edge case from the task: subscriber has no customFields map yet (null) → oldValues carries a
+        // null entry (singletonMap allows it; recordCustomFieldsSet is null-safe), newValues the normalized.
+        when(projectRepository.findById(PROJECT_ID))
+                .thenReturn(Optional.of(projectWithField("age", CustomFieldType.NUMBER)));
+        when(customFieldsService.validateAndNormalize(eq(CustomFieldType.NUMBER), eq("30")))
+                .thenReturn(30.0);
+        Subscriber sub = activeSubscriber(); // customFields == null
+
+        StepExecutor.StepResult result = executor.execute(setCustomFieldStep("age", "30"), execution(0), sub, connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        ArgumentCaptor<Map<String, Object>> oldCap = mapCaptor();
+        verify(subscriberService).recordCustomFieldsSet(eq(PROJECT_ID), eq(SUBSCRIBER_ID),
+                oldCap.capture(), eq(Collections.singletonMap("age", (Object) 30.0)));
+        assertThat(oldCap.getValue()).containsExactly(entry("age", null));
     }
 
     @Test

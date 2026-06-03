@@ -258,6 +258,43 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         assertThat(sentCount()).isEqualTo(1);                               // step-2 never sent
     }
 
+    @Test
+    void concurrentCancelMidTickWinsOverTerminalWrite() {
+        // F2, terminal-write path: a send that fails terminally drives the engine into terminate(failed).
+        // If a cancel races in during that same send, terminate()'s claim-conditional CAS must no-op so
+        // the row stays the cancel's terminal state, NOT the engine's. We make the engine WANT 'failed'
+        // (400-other → TerminalReason.OTHER) while the dispatcher concurrently sets 'cancelled' — a blind
+        // save would clobber to 'failed', the CAS keeps 'cancelled'. This races terminate() specifically;
+        // complete()/scheduleDelay() are unreachable under a synchronous race (no I/O precedes them — they
+        // only run with the claim already held), so they are defense-in-depth verified by code structure.
+        String subId = seedActiveSubscriber();
+        String execId = seedExecution(subId, BASE, sendMessage("doomed"));
+
+        TELEGRAM.setDispatcher(new Dispatcher() {
+            private boolean cancelled = false;
+
+            @Override
+            public MockResponse dispatch(RecordedRequest request) {
+                if (!cancelled) {
+                    cancelled = true;
+                    mongoTemplate.updateFirst(
+                            Query.query(Criteria.where("_id").is(execId)),
+                            new Update()
+                                    .set("status", ExecutionStatus.cancelled.name())
+                                    .set("stepRunStatus", StepRunStatus.done.name()),
+                            FunnelExecution.class);
+                }
+                // 400 WITHOUT "chat not found" → TerminalReason.OTHER → engine wants terminate(failed).
+                return json(400, "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: bad something\"}");
+            }
+        });
+
+        engine.sweep();
+
+        // CAS held: the cancel wins. A blind save would have flipped this to failed.
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.cancelled);
+    }
+
     // ─── send-fail matrix ──────────────────────────────────────────────────────
 
     @Test

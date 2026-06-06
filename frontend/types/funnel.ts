@@ -18,6 +18,11 @@ export type StepType =
 // Delay unit — mirrors backend requireDelay (MIN | HOUR | DAY).
 export type DelayUnit = 'MIN' | 'HOUR' | 'DAY'
 
+// Dynamic-value sentinel for a SET_CUSTOM_FIELD step on a DATE field: stored as the customFieldValue
+// instead of a fixed date, the engine resolves it to the execution-time instant. MUST match backend
+// StepExecutor.CURRENT_DATE_TOKEN byte-for-byte.
+export const CURRENT_DATE_TOKEN = '@now'
+
 // One ordered step. Flat shape mirroring backend FunnelStepDto (Decision 12 — no _class discriminator).
 // Position in the steps array IS the order; the server rewrites FunnelStep.order from the index, so the
 // editor never sends `order` explicitly. Per-type fields are optional and only the type's required ones

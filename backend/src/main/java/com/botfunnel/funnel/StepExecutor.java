@@ -16,7 +16,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
@@ -49,19 +51,28 @@ public class StepExecutor {
     static final String LOG_CAPTION_TRIMMED = "FUNNEL_STEP_CAPTION_TRIMMED";
     static final String LOG_CUSTOM_FIELD_SKIPPED = "FUNNEL_STEP_CUSTOM_FIELD_SKIPPED_DELETED_DEFINITION";
 
+    // Dynamic-value sentinel for a SET_CUSTOM_FIELD step on a DATE field: instead of a fixed ISO date the
+    // author can store this token, and the engine substitutes the execution-time instant. Resolved ONLY
+    // for DATE fields (the editor offers "current date" only there); any other type treats it literally.
+    // The frontend mirrors this literal as CURRENT_DATE_TOKEN in types/funnel.ts.
+    public static final String CURRENT_DATE_TOKEN = "@now";
+
     private final TelegramSender sender;
     private final SubscriberService subscriberService;
     private final SubscriberCustomFieldsService customFieldsService;
     private final ProjectRepository projectRepository;
+    private final Clock clock;
 
     public StepExecutor(TelegramSender sender,
                         SubscriberService subscriberService,
                         SubscriberCustomFieldsService customFieldsService,
-                        ProjectRepository projectRepository) {
+                        ProjectRepository projectRepository,
+                        Clock clock) {
         this.sender = sender;
         this.subscriberService = subscriberService;
         this.customFieldsService = customFieldsService;
         this.projectRepository = projectRepository;
+        this.clock = clock;
     }
 
     /**
@@ -145,7 +156,11 @@ public class StepExecutor {
             // recordCustomFieldsSet call. We validate here (not via setOne) because the event must carry
             // the NORMALIZED value (e.g. 30.0, not "30") for recordCustomFieldsSet's old/new diff.
             String key = step.getCustomFieldKey();
-            Object normalized = customFieldsService.validateAndNormalize(type, step.getCustomFieldValue());
+            // DATE + "@now" → resolve to the execution-time instant (clock-driven for testability); every
+            // other case goes through the per-type validator exactly as before.
+            Object normalized = type == CustomFieldType.DATE && CURRENT_DATE_TOKEN.equals(step.getCustomFieldValue())
+                    ? Instant.now(clock)
+                    : customFieldsService.validateAndNormalize(type, step.getCustomFieldValue());
             Map<String, Object> oldValues = Collections.singletonMap(key, currentValue(subscriber, key));
             Map<String, Object> newValues = Collections.singletonMap(key, normalized);
             customFieldsService.applyAll(execution.getProjectId(), execution.getSubscriberId(), newValues);

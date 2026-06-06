@@ -134,6 +134,7 @@ describe('layouts/default — deep-link project hydration', () => {
     expect(wrapper.find('[data-test="sidebar-subscribers-link"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="sidebar-tags-link"]').exists()).toBe(true)
     expect(wrapper.find('[data-test="sidebar-custom-fields-link"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="sidebar-funnels-link"]').exists()).toBe(true)
   })
 
   it('hides the Subscribers nav group when no project is current (pre-hydration state)', async () => {

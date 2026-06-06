@@ -24,8 +24,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.slf4j.LoggerFactory;
 
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -53,6 +55,9 @@ class FunnelStepExecutorTest {
     private static final String PROJECT_ID = "proj-1";
     private static final String SUBSCRIBER_ID = "sub-1";
 
+    // Fixed clock so the "@now" DATE-resolution test asserts an exact instant.
+    private static final Instant FIXED_NOW = Instant.parse("2026-06-06T10:15:30Z");
+
     private TelegramSender sender;
     private SubscriberService subscriberService;
     private SubscriberCustomFieldsService customFieldsService;
@@ -68,7 +73,8 @@ class FunnelStepExecutorTest {
         subscriberService = mock(SubscriberService.class);
         customFieldsService = mock(SubscriberCustomFieldsService.class);
         projectRepository = mock(ProjectRepository.class);
-        executor = new StepExecutor(sender, subscriberService, customFieldsService, projectRepository);
+        executor = new StepExecutor(sender, subscriberService, customFieldsService, projectRepository,
+                Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         logger = (Logger) LoggerFactory.getLogger(StepExecutor.class);
         logAppender = new ListAppender<>();
@@ -189,6 +195,27 @@ class FunnelStepExecutorTest {
                 oldCap.capture(), newCap.capture());
         assertThat(oldCap.getValue()).containsExactly(entry("age", 10.0));
         assertThat(newCap.getValue()).containsExactly(entry("age", 30.0));
+    }
+
+    @Test
+    void setCustomFieldDateNowTokenResolvesToClockInstant() {
+        // "@now" on a DATE field must bypass the per-type validator and apply the execution-time instant
+        // (from the fixed clock), so the author can stamp "the moment this block runs".
+        when(projectRepository.findById(PROJECT_ID))
+                .thenReturn(Optional.of(projectWithField("signed_at", CustomFieldType.DATE)));
+        Subscriber sub = activeSubscriber();
+        sub.setCustomFields(new HashMap<>());
+
+        StepExecutor.StepResult result = executor.execute(
+                setCustomFieldStep("signed_at", StepExecutor.CURRENT_DATE_TOKEN), execution(0), sub, connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        // The token is resolved by the engine — the validator is never asked to parse "@now".
+        verify(customFieldsService, never()).validateAndNormalize(eq(CustomFieldType.DATE), eq(StepExecutor.CURRENT_DATE_TOKEN));
+
+        ArgumentCaptor<Map<String, Object>> applied = mapCaptor();
+        verify(customFieldsService).applyAll(eq(PROJECT_ID), eq(SUBSCRIBER_ID), applied.capture());
+        assertThat(applied.getValue()).containsExactly(entry("signed_at", FIXED_NOW));
     }
 
     @Test

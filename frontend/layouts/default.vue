@@ -26,6 +26,9 @@ const tagsBase = computed(() =>
 const customFieldsBase = computed(() =>
   projectsStore.currentProject ? `/projects/${projectsStore.currentProject.id}/custom-fields` : '',
 )
+const funnelsBase = computed(() =>
+  projectsStore.currentProject ? `/projects/${projectsStore.currentProject.id}/funnels` : '',
+)
 
 // i18n strategy="prefix_except_default": strip a known non-default locale segment before matching,
 // sourced from the single locales constant (mirror SettingsSubnav). Parent + each child use
@@ -148,6 +151,16 @@ watch(() => route.params.projectId, syncProjectFromRoute)
               {{ t('customFields.subnav.customFields') }}
             </NuxtLinkLocale>
           </template>
+          <NuxtLinkLocale
+            v-if="projectsStore.currentProject"
+            :to="funnelsBase"
+            data-test="sidebar-funnels-link"
+            class="text-sm hover:underline"
+            :class="isActive(funnelsBase) ? 'text-blue-600 font-medium' : ''"
+            :aria-current="isActive(funnelsBase) ? 'page' : undefined"
+          >
+            {{ t('layout.sidebar.funnels') }}
+          </NuxtLinkLocale>
           <NuxtLinkLocale
             v-if="projectsStore.currentProject"
             :to="`/projects/${projectsStore.currentProject.id}/settings`"

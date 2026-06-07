@@ -132,6 +132,47 @@ test('funnels_goldenPath_buildAndActivate', async ({ page }) => {
   await expect(page.locator('[data-test="funnel-status-active"]')).toBeVisible()
 })
 
+test('funnels_menuGoldenPath_buildAndActivate', async ({ page }) => {
+  test.skip(!backendUp, SKIP_BACKEND_MSG)
+  test.skip(!seedReady, SKIP_SEED_MSG)
+
+  await login(page)
+  await openDraftEditor(page)
+
+  // First add a plain SEND_MESSAGE so the MENU has a real step to target (besides "End").
+  await addSendMessage(page, 'Welcome!')
+
+  // Add a MENU with two callback buttons: one → the SEND_MESSAGE step, one → End.
+  await page.locator('[data-test="funnel-add-step"]').click()
+  await page.locator('[data-test="step-type-select"]').selectOption('MENU')
+  await page.locator('[data-test="step-menu-text-input"]').fill('Pick one:')
+
+  // Button 0 (callback → the first step). The target picker is the SearchableSelect — pick the first
+  // step option (label is "1. ...") rather than End.
+  await page.locator('[data-test="step-menu-button-label-0"]').fill('Continue')
+  await page.locator('[data-test="step-menu-target-0-input"]').click()
+  await page.locator('[data-test^="step-menu-target-0-option-"]').first().click()
+
+  // Button 1 (callback → End sentinel).
+  await page.locator('[data-test="step-menu-add-button"]').click()
+  await page.locator('[data-test="step-menu-button-label-1"]').fill('Finish')
+  await page.locator('[data-test="step-menu-target-1-input"]').click()
+  await page.locator('[data-test="step-menu-target-1-option-__END__"]').click()
+
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes('/funnels/') && r.request().method() === 'PATCH'),
+    page.locator('[data-test="step-form-submit"]').click(),
+  ])
+  await expect(page.locator('[data-test^="funnel-step-row-"]')).toHaveCount(2)
+
+  // Activate → status flips to active (graph validates: ≥1 callback, all targets resolve).
+  await Promise.all([
+    page.waitForResponse((r) => r.url().includes('/activate') && r.request().method() === 'POST'),
+    page.locator('[data-test="funnel-activate"]').click(),
+  ])
+  await expect(page.locator('[data-test="funnel-status-active"]')).toBeVisible()
+})
+
 test('funnels_activation422_showsInlineError', async ({ page }) => {
   test.skip(!backendUp, SKIP_BACKEND_MSG)
   test.skip(!seedReady, SKIP_SEED_MSG)

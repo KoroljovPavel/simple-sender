@@ -55,7 +55,9 @@ export interface FunnelStep {
   next?: string | null
   buttons?: Button[] | null
   timeoutValue?: number | null
-  timeoutUnit?: string | null
+  // Canonical timeout units mirror DelayUnit / backend DelayUnit (MIN | HOUR | DAY) — NOT the stale
+  // minutes/hours/days from the tech-spec Data Models text. The engine only parses MIN/HOUR/DAY.
+  timeoutUnit?: DelayUnit | null
   timeoutTargetStepId?: string | null
 }
 

@@ -272,7 +272,13 @@ async function pause() {
       :deep-link="funnel.deepLink"
     />
 
-    <AddStepDialog v-model:open="addOpen" @add="onAddStep" />
-    <EditStepDialog v-model:open="editOpen" :step="editStep" :index="editIndex" @save="onSaveStep" />
+    <AddStepDialog v-model:open="addOpen" :sibling-steps="steps" @add="onAddStep" />
+    <EditStepDialog
+      v-model:open="editOpen"
+      :step="editStep"
+      :index="editIndex"
+      :sibling-steps="steps"
+      @save="onSaveStep"
+    />
   </div>
 </template>

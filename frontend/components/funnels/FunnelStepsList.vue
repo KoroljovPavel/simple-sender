@@ -33,6 +33,8 @@ function summary(step: FunnelStep): string {
       return t('funnels.steps.summary.removeTag', { tag: step.tagSlug ?? '' })
     case 'SET_CUSTOM_FIELD':
       return t('funnels.steps.summary.setCustomField', { key: step.customFieldKey ?? '' })
+    case 'MENU':
+      return t('funnels.steps.summary.menu', { count: step.buttons?.length ?? 0 })
   }
 }
 

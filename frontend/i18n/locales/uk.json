@@ -440,7 +440,8 @@
       "funnel_step_limit_reached": "Перевищено максимальну кількість кроків у воронці.",
       "funnel_trigger_conflict": "Інша активна воронка вже використовує цей тригер.",
       "funnel_invalid_trigger_value": "Значення тригера містить недопустимі символи.",
-      "funnel_invalid_state": "Дію недоступно для поточного статусу воронки."
+      "funnel_invalid_state": "Дію недоступно для поточного статусу воронки.",
+      "funnel_broken_edge": "Кнопка веде на видалений крок. Виправте ціль перед активацією."
     }
   },
   "subscribers": {
@@ -709,7 +710,8 @@
         "DELAY": "Затримка",
         "ADD_TAG": "Додати тег",
         "REMOVE_TAG": "Зняти тег",
-        "SET_CUSTOM_FIELD": "Задати кастомне поле"
+        "SET_CUSTOM_FIELD": "Задати кастомне поле",
+        "MENU": "Меню (кнопки)"
       },
       "unit": {
         "MIN": "хв",
@@ -720,7 +722,8 @@
         "delay": "Затримка {value} {unit}",
         "addTag": "Додати тег: {tag}",
         "removeTag": "Зняти тег: {tag}",
-        "setCustomField": "Поле: {key}"
+        "setCustomField": "Поле: {key}",
+        "menu": "Меню · {count} кнопок"
       },
       "dialog": {
         "addTitle": "Додати крок",
@@ -748,6 +751,20 @@
         "customFieldValue": "Значення",
         "customFieldValueBool": "Увімкнено",
         "customFieldCurrentDate": "Поточна дата (на момент виконання кроку)",
+        "menuText": "Текст повідомлення",
+        "menuButtons": "Кнопки",
+        "menuAddButton": "+ Додати кнопку",
+        "menuRemoveButton": "Видалити кнопку",
+        "menuButtonType": "Тип кнопки",
+        "menuButtonTypeCallback": "Крок / Кінець",
+        "menuButtonTypeUrl": "Посилання",
+        "menuButtonLabel": "Підпис кнопки",
+        "menuButtonUrl": "https://…",
+        "menuTargetEnd": "Кінець (завершити воронку)",
+        "menuTargetPlaceholder": "Оберіть крок-ціль або Кінець…",
+        "menuTargetLoading": "Завантаження…",
+        "menuTargetEmpty": "Поки немає інших кроків",
+        "menuTargetNoMatches": "Нічого не знайдено",
         "submitAdd": "Додати",
         "submitSave": "Зберегти"
       },
@@ -761,7 +778,12 @@
         "customFieldKeyRequired": "Вкажіть ключ поля",
         "customFieldValueNumber": "Значення має бути числом",
         "customFieldValueDate": "Невірний формат дати",
-        "customFieldValueStringMax": "Значення перевищує 1024 символи"
+        "customFieldValueStringMax": "Значення перевищує 1024 символи",
+        "menuButtonLabelRequired": "Підпис кнопки не може бути порожнім",
+        "menuButtonLabelMax": "Підпис кнопки перевищує 64 символи",
+        "menuButtonUrlRequired": "Вкажіть URL посилання",
+        "menuButtonUrlScheme": "URL має починатися з http:// або https://",
+        "menuNeedsCallback": "Меню має містити хоча б одну кнопку, що веде на крок або Кінець"
       }
     },
     "trigger": {

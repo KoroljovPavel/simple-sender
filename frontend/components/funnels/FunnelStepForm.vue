@@ -3,7 +3,7 @@ import { toTypedSchema } from '@vee-validate/zod'
 import { useForm } from 'vee-validate'
 import { z } from 'zod'
 import { CURRENT_DATE_TOKEN } from '~/types/funnel'
-import type { DelayUnit, FunnelStep, StepType } from '~/types/funnel'
+import type { Button, DelayUnit, FunnelStep, StepType } from '~/types/funnel'
 import type { CustomFieldDefinition, CustomFieldType, Tag } from '~/types/subscriber'
 import SearchableSelect from '~/components/funnels/SearchableSelect.vue'
 
@@ -14,7 +14,13 @@ import SearchableSelect from '~/components/funnels/SearchableSelect.vue'
 // empty text, http(s) imageUrl, delayValue >= 1, tagSlug ^[a-z0-9_-]{1,32}$, customFieldKey non-empty.
 // For SET_CUSTOM_FIELD the value widget + validation additionally mirror the field's TYPE (the same
 // per-type inputs the subscriber custom-fields tab uses), resolved from the project's definitions.
-const props = defineProps<{ initial?: FunnelStep | null; submitLabel: string }>()
+// siblingSteps = the OTHER steps of the funnel (threaded down from the page via Add/EditStepDialog) so a
+// MENU callback button can target another step by its stable id. Empty/absent for non-MENU usage.
+const props = defineProps<{
+  initial?: FunnelStep | null
+  submitLabel: string
+  siblingSteps?: FunnelStep[]
+}>()
 const emit = defineEmits<{ submit: [step: FunnelStep]; cancel: [] }>()
 
 const { t } = useI18n()
@@ -28,6 +34,7 @@ const STEP_TYPES: StepType[] = [
   'ADD_TAG',
   'REMOVE_TAG',
   'SET_CUSTOM_FIELD',
+  'MENU',
 ]
 const PARSE_MODES = ['', 'HTML', 'MarkdownV2'] as const
 const DELAY_UNITS: DelayUnit[] = ['MIN', 'HOUR', 'DAY']
@@ -39,7 +46,87 @@ const IMAGE_URL_RE = /^https?:\/\//i
 // Native <input type="date"> emits 'YYYY-MM-DD'; mirror the prefix the backend DATE validator accepts.
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}/
 
+// ── MENU constants (mirror backend validateSteps / Decision 10) ──────────────────────────────────────
+// Up to 8 buttons, one per row; each label ≤64 chars (UX proxy for the server callback_data byte limit);
+// every MENU needs ≥1 callback button; URL buttons must be http(s).
+const MENU_MAX_BUTTONS = 8
+const MENU_LABEL_MAX = 64
+// Sentinel for the "End the funnel" target inside the picker ONLY. It is mapped to targetStepId=null on
+// emit — an empty string "" would be a non-null id matching no step → server 422 funnel_broken_edge.
+const MENU_END_TARGET = '__END__'
+
 const selectedType = ref<StepType>(props.initial?.stepType ?? 'SEND_MESSAGE')
+
+// MENU button sub-editor: a local reactive array (not a single vee-validate field), validated by hand on
+// submit. Each row keeps an internal targetStepId where the MENU_END_TARGET sentinel stands in for End.
+type ButtonRow = { type: 'callback' | 'url'; label: string; targetStepId: string; url: string }
+function blankButtonRow(): ButtonRow {
+  return { type: 'callback', label: '', targetStepId: MENU_END_TARGET, url: '' }
+}
+// Pre-fill from an edited MENU step (End/null target → the sentinel), else seed one empty callback row so
+// the author always has a starting point.
+function initialButtonRows(): ButtonRow[] {
+  const existing = props.initial?.stepType === 'MENU' ? props.initial?.buttons : null
+  if (existing && existing.length > 0) {
+    return existing.map((b) => ({
+      type: b.type === 'url' ? 'url' : 'callback',
+      label: b.label ?? '',
+      targetStepId: b.type === 'callback' ? (b.targetStepId ?? MENU_END_TARGET) : MENU_END_TARGET,
+      url: b.url ?? '',
+    }))
+  }
+  return [blankButtonRow()]
+}
+const menuButtons = ref<ButtonRow[]>(initialButtonRows())
+// Per-row touched flag so an error only shows after the author tried to submit (or edited the row).
+const menuTouched = ref(false)
+
+// Target options for a callback button: every OTHER step (by stable id) + the End sentinel. Steps without
+// an id (not yet persisted) are skipped — they cannot be a stable target until the first save mints one.
+const menuTargetOptions = computed(() => {
+  const steps = props.siblingSteps ?? []
+  const stepOptions = steps
+    .filter((s) => !!s.id && s.id !== props.initial?.id)
+    .map((s, i) => ({
+      value: s.id as string,
+      label: `${i + 1}. ${t(`funnels.steps.type.${s.stepType}`)}`,
+    }))
+  return [{ value: MENU_END_TARGET, label: t('funnels.steps.form.menuTargetEnd') }, ...stepOptions]
+})
+
+function addMenuButton() {
+  if (menuButtons.value.length >= MENU_MAX_BUTTONS) return
+  menuButtons.value.push(blankButtonRow())
+}
+function removeMenuButton(index: number) {
+  menuButtons.value.splice(index, 1)
+}
+
+// Per-row validation (UX mirror of backend). Returns a localized message or null. label non-empty + ≤64;
+// url buttons need an http(s) link.
+function menuButtonLabelError(row: ButtonRow): string | null {
+  const label = row.label.trim()
+  if (!label) return t('funnels.steps.validation.menuButtonLabelRequired')
+  if (label.length > MENU_LABEL_MAX) return t('funnels.steps.validation.menuButtonLabelMax')
+  return null
+}
+function menuButtonUrlError(row: ButtonRow): string | null {
+  if (row.type !== 'url') return null
+  const url = row.url.trim()
+  if (!url) return t('funnels.steps.validation.menuButtonUrlRequired')
+  if (!IMAGE_URL_RE.test(url)) return t('funnels.steps.validation.menuButtonUrlScheme')
+  return null
+}
+// Menu-level rule: ≥1 callback button (Decision 10) so the funnel can never get stuck.
+const menuNeedsCallback = computed(
+  () => selectedType.value === 'MENU' && !menuButtons.value.some((b) => b.type === 'callback'),
+)
+const menuButtonsValid = computed(
+  () =>
+    menuButtons.value.length > 0 &&
+    !menuNeedsCallback.value &&
+    menuButtons.value.every((b) => !menuButtonLabelError(b) && !menuButtonUrlError(b)),
+)
 
 // Project custom-field definitions feed the key select AND the value widget/validation. Lazy-loaded the
 // first time SET_CUSTOM_FIELD is the active type (no fetch for funnels that never set a field).
@@ -133,10 +220,14 @@ function cfValueSchema(type: CustomFieldType | null): z.ZodTypeAny {
 // One schema computed over selectedType: only the active type's fields are validated; the rest fall back
 // to z.any() so a stale value from another branch never blocks submit.
 function schemaFor(type: StepType): z.ZodTypeAny {
+  // MENU text is the message body; the backend does NOT require it (validateMenu only checks buttons), so
+  // mirror that — only cap the length. SEND_MESSAGE requires non-empty text.
   const text =
     type === 'SEND_MESSAGE'
       ? z.string().trim().min(1, t('funnels.steps.validation.textRequired')).max(4096, t('funnels.steps.validation.textMax'))
-      : z.any()
+      : type === 'MENU'
+        ? z.string().trim().max(4096, t('funnels.steps.validation.textMax'))
+        : z.any()
   const imageUrl =
     type === 'SEND_IMAGE'
       ? z
@@ -307,6 +398,31 @@ const onSubmit = handleSubmit((values) => {
         customFieldValue: customFieldValueForSubmit(values.customFieldValue),
       }
       break
+    case 'MENU': {
+      // Button validation is manual (the rows are a local array, not vee-validate fields). Mark touched
+      // so inline errors render, then block the emit if anything is invalid (mirrors backend validateMenu).
+      menuTouched.value = true
+      if (!menuButtonsValid.value) return
+      const buttons: Button[] = menuButtons.value.map((b) => ({
+        type: b.type,
+        label: b.label.trim(),
+        // End → targetStepId null (NOT "" — an empty string is a non-null id matching no step → server
+        // 422 funnel_broken_edge). URL buttons carry no target.
+        targetStepId:
+          b.type === 'callback' ? (b.targetStepId === MENU_END_TARGET ? null : b.targetStepId) : null,
+        url: b.type === 'url' ? b.url.trim() : null,
+      }))
+      step = {
+        stepType: type,
+        text: blankToNull(values.text),
+        parseMode: blankToNull(values.parseMode),
+        buttons,
+        // Preserve the server-minted graph fields so a re-save / reorder keeps stable ids + edges.
+        id: props.initial?.id ?? undefined,
+        next: props.initial?.next ?? undefined,
+      }
+      break
+    }
   }
   emit('submit', step)
 })
@@ -435,8 +551,136 @@ const onSubmit = handleSubmit((values) => {
       </div>
     </template>
 
+    <!-- MENU -->
+    <template v-else-if="selectedType === 'MENU'">
+      <div>
+        <label for="step-menu-text" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuText') }}</label>
+        <textarea
+          id="step-menu-text"
+          v-model="text"
+          v-bind="textAttrs"
+          data-test="step-menu-text-input"
+          rows="3"
+          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <p v-if="errors.text" data-test="step-menu-text-error" class="mt-1 text-sm text-red-600">{{ errors.text }}</p>
+      </div>
+      <div>
+        <label for="step-menu-parsemode" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.parseMode') }}</label>
+        <select
+          id="step-menu-parsemode"
+          v-model="parseMode"
+          v-bind="parseModeAttrs"
+          data-test="step-menu-parsemode-select"
+          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option v-for="pm in PARSE_MODES" :key="pm" :value="pm">
+            {{ pm === '' ? t('funnels.steps.form.parseModeNone') : pm }}
+          </option>
+        </select>
+      </div>
+
+      <!-- Button sub-editor: one row per inline-keyboard button. Labels render via {{ }} interpolation
+           (never v-html) — they are author-entered plain text and must not be parsed as markup (XSS). -->
+      <div data-test="step-menu-buttons">
+        <div class="mb-1 flex items-center justify-between">
+          <label class="block text-sm font-medium">{{ t('funnels.steps.form.menuButtons') }}</label>
+          <button
+            type="button"
+            data-test="step-menu-add-button"
+            :disabled="menuButtons.length >= MENU_MAX_BUTTONS"
+            class="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-40"
+            @click="addMenuButton"
+          >
+            {{ t('funnels.steps.form.menuAddButton') }}
+          </button>
+        </div>
+
+        <div
+          v-for="(row, index) in menuButtons"
+          :key="index"
+          :data-test="`step-menu-button-row-${index}`"
+          class="mb-2 space-y-2 rounded-md border p-2"
+        >
+          <div class="flex gap-2">
+            <select
+              v-model="row.type"
+              :data-test="`step-menu-button-type-${index}`"
+              :aria-label="t('funnels.steps.form.menuButtonType')"
+              class="rounded-md border px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="callback">{{ t('funnels.steps.form.menuButtonTypeCallback') }}</option>
+              <option value="url">{{ t('funnels.steps.form.menuButtonTypeUrl') }}</option>
+            </select>
+            <input
+              v-model="row.label"
+              :data-test="`step-menu-button-label-${index}`"
+              type="text"
+              :placeholder="t('funnels.steps.form.menuButtonLabel')"
+              :aria-label="t('funnels.steps.form.menuButtonLabel')"
+              class="flex-1 rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              type="button"
+              :data-test="`step-menu-button-remove-${index}`"
+              :aria-label="t('funnels.steps.form.menuRemoveButton')"
+              class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50"
+              @click="removeMenuButton(index)"
+            >
+              ×
+            </button>
+          </div>
+
+          <p
+            v-if="menuTouched && menuButtonLabelError(row)"
+            :data-test="`step-menu-button-label-error-${index}`"
+            class="text-sm text-red-600"
+          >
+            {{ menuButtonLabelError(row) }}
+          </p>
+
+          <!-- Callback: target = another step or End, via the shared SearchableSelect. -->
+          <template v-if="row.type === 'callback'">
+            <SearchableSelect
+              v-model="row.targetStepId"
+              :options="menuTargetOptions"
+              :test-prefix="`step-menu-target-${index}`"
+              :placeholder="t('funnels.steps.form.menuTargetPlaceholder')"
+              :loading-text="t('funnels.steps.form.menuTargetLoading')"
+              :empty-text="t('funnels.steps.form.menuTargetEmpty')"
+              :no-matches-text="t('funnels.steps.form.menuTargetNoMatches')"
+            />
+          </template>
+
+          <!-- URL: an http(s) link (the funnel does not advance on click). -->
+          <template v-else>
+            <input
+              v-model="row.url"
+              :data-test="`step-menu-button-url-${index}`"
+              type="text"
+              autocomplete="off"
+              :placeholder="t('funnels.steps.form.menuButtonUrl')"
+              :aria-label="t('funnels.steps.form.menuButtonUrl')"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <p
+              v-if="menuTouched && menuButtonUrlError(row)"
+              :data-test="`step-menu-button-url-error-${index}`"
+              class="text-sm text-red-600"
+            >
+              {{ menuButtonUrlError(row) }}
+            </p>
+          </template>
+        </div>
+
+        <p v-if="menuTouched && menuNeedsCallback" data-test="step-menu-error" class="mt-1 text-sm text-red-600">
+          {{ t('funnels.steps.validation.menuNeedsCallback') }}
+        </p>
+      </div>
+    </template>
+
     <!-- SET_CUSTOM_FIELD -->
-    <template v-else>
+    <template v-else-if="selectedType === 'SET_CUSTOM_FIELD'">
       <div>
         <label for="step-cf-key" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.customFieldKey') }}</label>
         <SearchableSelect

@@ -11,7 +11,9 @@ import type { FunnelStep } from '~/types/funnel'
 
 // Edit dialog: same per-type form (shared FunnelStepForm), PRE-FILLED from the step being edited; emits
 // the updated step back to the parent which replaces it in place (order unchanged).
-const props = defineProps<{ open: boolean; step: FunnelStep | null; index: number }>()
+// siblingSteps = the funnel's other steps, threaded into the form so a MENU callback button can target one
+// (the form filters out the step being edited by its own id).
+const props = defineProps<{ open: boolean; step: FunnelStep | null; index: number; siblingSteps?: FunnelStep[] }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; save: [index: number, step: FunnelStep] }>()
 
 const { t } = useI18n()
@@ -41,6 +43,7 @@ function onSubmit(step: FunnelStep) {
         v-if="props.step"
         :key="formKey"
         :initial="props.step"
+        :sibling-steps="props.siblingSteps"
         :submit-label="t('funnels.steps.form.submitSave')"
         @submit="onSubmit"
         @cancel="emit('update:open', false)"

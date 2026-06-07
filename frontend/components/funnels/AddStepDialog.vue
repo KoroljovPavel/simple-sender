@@ -11,7 +11,8 @@ import type { FunnelStep } from '~/types/funnel'
 
 // Add dialog: picks a StepType + fills the per-type form (shared FunnelStepForm), then emits the new
 // step. The parent appends it to the END of the steps array (position = order). No initial → SEND_MESSAGE.
-const props = defineProps<{ open: boolean }>()
+// siblingSteps = the funnel's other steps, threaded into the form so a MENU callback button can target one.
+const props = defineProps<{ open: boolean; siblingSteps?: FunnelStep[] }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; add: [step: FunnelStep] }>()
 
 const { t } = useI18n()
@@ -39,6 +40,7 @@ function onSubmit(step: FunnelStep) {
       </DialogHeader>
       <FunnelStepForm
         :key="formKey"
+        :sibling-steps="props.siblingSteps"
         :submit-label="t('funnels.steps.form.submitAdd')"
         @submit="onSubmit"
         @cancel="emit('update:open', false)"

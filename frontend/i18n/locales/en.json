@@ -440,7 +440,8 @@
       "funnel_step_limit_reached": "The funnel exceeds the maximum number of steps.",
       "funnel_trigger_conflict": "Another active funnel already uses this trigger.",
       "funnel_invalid_trigger_value": "The trigger value contains invalid characters.",
-      "funnel_invalid_state": "This action is not available for the funnel's current status."
+      "funnel_invalid_state": "This action is not available for the funnel's current status.",
+      "funnel_broken_edge": "A button points at a deleted step. Fix the target before activating."
     }
   },
   "subscribers": {
@@ -709,7 +710,8 @@
         "DELAY": "Delay",
         "ADD_TAG": "Add tag",
         "REMOVE_TAG": "Remove tag",
-        "SET_CUSTOM_FIELD": "Set custom field"
+        "SET_CUSTOM_FIELD": "Set custom field",
+        "MENU": "Menu (buttons)"
       },
       "unit": {
         "MIN": "min",
@@ -720,7 +722,8 @@
         "delay": "Delay {value} {unit}",
         "addTag": "Add tag: {tag}",
         "removeTag": "Remove tag: {tag}",
-        "setCustomField": "Field: {key}"
+        "setCustomField": "Field: {key}",
+        "menu": "Menu · {count} button(s)"
       },
       "dialog": {
         "addTitle": "Add step",
@@ -748,6 +751,20 @@
         "customFieldValue": "Value",
         "customFieldValueBool": "Enabled",
         "customFieldCurrentDate": "Current date (at step execution time)",
+        "menuText": "Message text",
+        "menuButtons": "Buttons",
+        "menuAddButton": "+ Add button",
+        "menuRemoveButton": "Remove button",
+        "menuButtonType": "Button type",
+        "menuButtonTypeCallback": "Step / End",
+        "menuButtonTypeUrl": "Link",
+        "menuButtonLabel": "Button label",
+        "menuButtonUrl": "https://…",
+        "menuTargetEnd": "End (finish funnel)",
+        "menuTargetPlaceholder": "Choose a target step or End…",
+        "menuTargetLoading": "Loading…",
+        "menuTargetEmpty": "No other steps yet",
+        "menuTargetNoMatches": "No matches",
         "submitAdd": "Add",
         "submitSave": "Save"
       },
@@ -761,7 +778,12 @@
         "customFieldKeyRequired": "Enter a field key",
         "customFieldValueNumber": "Value must be a number",
         "customFieldValueDate": "Invalid date",
-        "customFieldValueStringMax": "Value exceeds 1024 characters"
+        "customFieldValueStringMax": "Value exceeds 1024 characters",
+        "menuButtonLabelRequired": "Button label cannot be empty",
+        "menuButtonLabelMax": "Button label exceeds 64 characters",
+        "menuButtonUrlRequired": "Enter a link URL",
+        "menuButtonUrlScheme": "URL must start with http:// or https://",
+        "menuNeedsCallback": "A menu needs at least one button that leads to a step or End"
       }
     },
     "trigger": {

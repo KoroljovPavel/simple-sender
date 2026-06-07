@@ -58,17 +58,38 @@ public interface SubscriberService {
      * event with metadata {@code {oldValues, newValues, changedKeys}} (changedKeys = symmetric diff of
      * the two maps). Does NOT mutate the subscriber document (Task 5's PATCH owns that); idempotent —
      * an empty diff writes no event.
+     *
+     * <p><strong>Trigger side effect (Phase 3 / Task 5, Decision 5/6).</strong> After the audit write,
+     * when the diff is non-empty, fires a {@code custom_field_set} funnel trigger via
+     * {@code FunnelEventService} once per changed key. An empty diff (no-op) fires nothing.
+     *
+     * @param originDepth enroll-depth origin of the write: {@code 0} for a human/external root (manual
+     *                    PATCH controller, public API); {@code execution.enrollDepth + 1} for a
+     *                    funnel-step-originated write ({@code SET_CUSTOM_FIELD} step). Threaded into the
+     *                    per-key trigger dispatch so an auto child is counted toward the volume
+     *                    rate-limit and the depth cap (Decision 6: auto = depth &gt; 0).
      */
     void recordCustomFieldsSet(String projectId, String subscriberId,
-                               Map<String, Object> oldValues, Map<String, Object> newValues);
+                               Map<String, Object> oldValues, Map<String, Object> newValues,
+                               int originDepth);
 
     /**
      * Decision 10 sole writer for {@code subscriber_tag_added}. Atomic {@code $addToSet} on the
      * subscriber's tags; only when membership actually changed does it bump {@code Tag.subscriberCount}
      * (delegated to {@code TagService.incrementCounter}, +1) and write the event. Idempotent on an
      * already-present tag.
+     *
+     * <p><strong>Trigger side effect (Phase 3 / Task 5, Decision 5/6).</strong> After the audit write,
+     * when membership actually changed, fires a {@code tag_added} funnel trigger ({@code matchKey = slug})
+     * via {@code FunnelEventService}. An idempotent re-add (no membership change) fires nothing.
+     *
+     * @param originDepth enroll-depth origin of the write: {@code 0} for a human/external root (manual
+     *                    tag-assign controller); {@code execution.enrollDepth + 1} for a
+     *                    funnel-step-originated write ({@code ADD_TAG} step). Threaded into the trigger
+     *                    dispatch so an auto child is counted toward the volume rate-limit and the depth
+     *                    cap (Decision 6: auto = depth &gt; 0).
      */
-    void addTag(String projectId, String subscriberId, String slug);
+    void addTag(String projectId, String subscriberId, String slug, int originDepth);
 
     /**
      * Decision 10 sole writer for {@code subscriber_tag_removed}. Atomic mirror of {@link #addTag}:

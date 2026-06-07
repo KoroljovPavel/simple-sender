@@ -68,17 +68,20 @@ public class StepExecutor {
     private final SubscriberService subscriberService;
     private final SubscriberCustomFieldsService customFieldsService;
     private final ProjectRepository projectRepository;
+    private final FunnelEventService funnelEventService;
     private final Clock clock;
 
     public StepExecutor(TelegramSender sender,
                         SubscriberService subscriberService,
                         SubscriberCustomFieldsService customFieldsService,
                         ProjectRepository projectRepository,
+                        FunnelEventService funnelEventService,
                         Clock clock) {
         this.sender = sender;
         this.subscriberService = subscriberService;
         this.customFieldsService = customFieldsService;
         this.projectRepository = projectRepository;
+        this.funnelEventService = funnelEventService;
         this.clock = clock;
     }
 
@@ -92,23 +95,33 @@ public class StepExecutor {
             case SEND_IMAGE -> sendImage(step, execution, subscriber, bot);
             case DELAY -> StepResult.delay(delayDuration(step));
             case ADD_TAG -> {
-                subscriberService.addTag(execution.getProjectId(), execution.getSubscriberId(), step.getTagSlug());
+                // Funnel-step-originated write → child enroll depth (parent + 1) so a tag_added trigger
+                // it fires is counted as auto (depth > 0) toward the volume rate-limit + depth cap.
+                subscriberService.addTag(execution.getProjectId(), execution.getSubscriberId(),
+                        step.getTagSlug(), execution.getEnrollDepth() + 1);
                 yield StepResult.cont();
             }
             case REMOVE_TAG -> {
+                // REMOVE_TAG is not a trigger (only tag_added fires) — signature unchanged, no depth.
                 subscriberService.removeTag(execution.getProjectId(), execution.getSubscriberId(), step.getTagSlug());
                 yield StepResult.cont();
             }
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
             case MENU -> menu(step, execution, subscriber, bot);
-            // EMIT_EVENT (Phase 3 / Decision 4): the real dispatch (call FunnelEventService for the
-            // current subscriber with enrollDepth+1, return CONTINUE) is wired in Task 5. This case
-            // exists now only to keep the exhaustive switch compiling once StepType.EMIT_EVENT is added
-            // (Task 1). No funnel can reach it before Task 5 wires the dispatcher, so a guard throw is
-            // safe and clearly fails loud if the ordering is ever violated.
-            case EMIT_EVENT -> throw new UnsupportedOperationException(
-                    "EMIT_EVENT step execution is wired in Task 5 (feature 12-funnels-triggers)");
+            case EMIT_EVENT -> emitEvent(step, execution);
         };
+    }
+
+    // EMIT_EVENT (Phase 3 / Decision 4): synchronously dispatch the step's event (the shared `event`
+    // namespace, keyed by eventName) for the current subscriber at child enroll depth (parent + 1), then
+    // CONTINUE so the parent funnel advances. The dispatcher is error-isolated and owns the three loop
+    // backstops (Task 4) — no second try/catch here (it would swallow a genuine engine fault
+    // differently); a stray blank eventName degrades to a no-op fan-out, never a thrown step. Logs stay
+    // id/code-only (Decision 16) — the eventName is the matchKey, never logged here.
+    private StepResult emitEvent(FunnelStep step, FunnelExecution execution) {
+        funnelEventService.dispatchForSubscriber(execution.getProjectId(), execution.getSubscriberId(),
+                FunnelEventService.TRIGGER_EVENT, step.getEventName(), execution.getEnrollDepth() + 1);
+        return StepResult.cont();
     }
 
     // MENU (Phase 2, park-on-reply): render the menu text (same renderer/trim rules as SEND_MESSAGE) and
@@ -247,8 +260,10 @@ public class StepExecutor {
             // oldValues is read from the tick-start subscriber snapshot — accurate for the common single
             // SET_CUSTOM_FIELD-per-key case (the controller likewise reads old once). recordCustomFieldsSet
             // is a no-op when nothing actually changed (empty changedKeys).
+            // Funnel-step-originated write → child enroll depth (parent + 1) so a custom_field_set
+            // trigger it fires is counted as auto (depth > 0) toward the volume rate-limit + depth cap.
             subscriberService.recordCustomFieldsSet(execution.getProjectId(), execution.getSubscriberId(),
-                    oldValues, newValues);
+                    oldValues, newValues, execution.getEnrollDepth() + 1);
             return StepResult.cont();
         } catch (AppException ex) {
             // 422 type mismatch (custom_field_type_mismatch) → execution failed.

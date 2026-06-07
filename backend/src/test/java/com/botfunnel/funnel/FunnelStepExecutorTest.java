@@ -37,6 +37,7 @@ import java.util.Optional;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.entry;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
@@ -62,6 +63,7 @@ class FunnelStepExecutorTest {
     private SubscriberService subscriberService;
     private SubscriberCustomFieldsService customFieldsService;
     private ProjectRepository projectRepository;
+    private FunnelEventService funnelEventService;
     private StepExecutor executor;
 
     private ListAppender<ILoggingEvent> logAppender;
@@ -73,8 +75,9 @@ class FunnelStepExecutorTest {
         subscriberService = mock(SubscriberService.class);
         customFieldsService = mock(SubscriberCustomFieldsService.class);
         projectRepository = mock(ProjectRepository.class);
+        funnelEventService = mock(FunnelEventService.class);
         executor = new StepExecutor(sender, subscriberService, customFieldsService, projectRepository,
-                Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
+                funnelEventService, Clock.fixed(FIXED_NOW, ZoneOffset.UTC));
 
         logger = (Logger) LoggerFactory.getLogger(StepExecutor.class);
         logAppender = new ListAppender<>();
@@ -150,7 +153,7 @@ class FunnelStepExecutorTest {
         assertThat(result.reasonCode()).isEqualTo("custom_field_type_mismatch");
         // Validation failed before any write/audit — neither must happen.
         verify(customFieldsService, never()).applyAll(any(), any(), any());
-        verify(subscriberService, never()).recordCustomFieldsSet(any(), any(), any(), any());
+        verify(subscriberService, never()).recordCustomFieldsSet(any(), any(), any(), any(), anyInt());
     }
 
     @Test
@@ -163,7 +166,7 @@ class FunnelStepExecutorTest {
 
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
         verify(customFieldsService, never()).applyAll(any(), any(), any());
-        verify(subscriberService, never()).recordCustomFieldsSet(any(), any(), any(), any());
+        verify(subscriberService, never()).recordCustomFieldsSet(any(), any(), any(), any(), anyInt());
         assertThat(logAppender.list).anyMatch(e -> e.getFormattedMessage().contains(StepExecutor.LOG_CUSTOM_FIELD_SKIPPED));
     }
 
@@ -191,8 +194,9 @@ class FunnelStepExecutorTest {
 
         ArgumentCaptor<Map<String, Object>> oldCap = mapCaptor();
         ArgumentCaptor<Map<String, Object>> newCap = mapCaptor();
+        // Funnel-step write → child enroll depth (execution(0).enrollDepth 0 + 1 = 1).
         verify(subscriberService).recordCustomFieldsSet(eq(PROJECT_ID), eq(SUBSCRIBER_ID),
-                oldCap.capture(), newCap.capture());
+                oldCap.capture(), newCap.capture(), eq(1));
         assertThat(oldCap.getValue()).containsExactly(entry("age", 10.0));
         assertThat(newCap.getValue()).containsExactly(entry("age", 30.0));
     }
@@ -233,7 +237,7 @@ class FunnelStepExecutorTest {
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
         ArgumentCaptor<Map<String, Object>> oldCap = mapCaptor();
         verify(subscriberService).recordCustomFieldsSet(eq(PROJECT_ID), eq(SUBSCRIBER_ID),
-                oldCap.capture(), eq(Collections.singletonMap("age", (Object) 30.0)));
+                oldCap.capture(), eq(Collections.singletonMap("age", (Object) 30.0)), eq(1));
         assertThat(oldCap.getValue()).containsExactly(entry("age", null));
     }
 
@@ -342,7 +346,42 @@ class FunnelStepExecutorTest {
         StepExecutor.StepResult result = executor.execute(
                 tagStep(StepType.ADD_TAG, "vip"), execution(0), activeSubscriber(), connectedBot());
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
-        verify(subscriberService).addTag(PROJECT_ID, SUBSCRIBER_ID, "vip");
+        // Funnel-step ADD_TAG → child enroll depth (execution(0).enrollDepth 0 + 1 = 1).
+        verify(subscriberService).addTag(PROJECT_ID, SUBSCRIBER_ID, "vip", 1);
+    }
+
+    @Test
+    void addTagStep_passesParentDepthPlusOne() {
+        // The ADD_TAG step forwards execution.enrollDepth + 1 to addTag — here parent depth 2 → 3.
+        StepExecutor.StepResult result = executor.execute(
+                tagStep(StepType.ADD_TAG, "vip"), execution(0, 2), activeSubscriber(), connectedBot());
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        verify(subscriberService).addTag(PROJECT_ID, SUBSCRIBER_ID, "vip", 3);
+    }
+
+    // ─── EMIT_EVENT (Phase 3 / Decision 4) ───────────────────────────────────
+
+    @Test
+    void emitEvent_returnsContinue_dispatchesEventWithChildDepth() {
+        // EMIT_EVENT dispatches event=step.eventName for the current subscriber at child depth
+        // (parent enrollDepth 0 + 1 = 1) and returns CONTINUE so the parent funnel advances.
+        StepExecutor.StepResult result = executor.execute(
+                emitEventStep("welcome_done"), execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        verify(funnelEventService).dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID,
+                FunnelEventService.TRIGGER_EVENT, "welcome_done", 1);
+    }
+
+    @Test
+    void emitEvent_carriesParentDepthPlusOne() {
+        // A nested EMIT_EVENT inside a depth-2 execution dispatches at depth 3.
+        StepExecutor.StepResult result = executor.execute(
+                emitEventStep("ping"), execution(0, 2), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        verify(funnelEventService).dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID,
+                FunnelEventService.TRIGGER_EVENT, "ping", 3);
     }
 
     @Test
@@ -429,7 +468,18 @@ class FunnelStepExecutorTest {
         return s;
     }
 
+    private static FunnelStep emitEventStep(String eventName) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.EMIT_EVENT);
+        s.setEventName(eventName);
+        return s;
+    }
+
     private static FunnelExecution execution(int stepIndex) {
+        return execution(stepIndex, 0);
+    }
+
+    private static FunnelExecution execution(int stepIndex, int enrollDepth) {
         FunnelExecution e = new FunnelExecution();
         e.setId("exec-1");
         e.setProjectId(PROJECT_ID);
@@ -439,6 +489,7 @@ class FunnelStepExecutorTest {
         e.setStatus(ExecutionStatus.running);
         e.setCurrentStepIndex(stepIndex);
         e.setStepRunStatus(StepRunStatus.in_progress);
+        e.setEnrollDepth(enrollDepth);
         return e;
     }
 

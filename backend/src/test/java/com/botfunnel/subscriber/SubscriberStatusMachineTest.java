@@ -2,6 +2,7 @@ package com.botfunnel.subscriber;
 
 import com.botfunnel.common.AppException;
 import com.botfunnel.events.EventService;
+import com.botfunnel.funnel.FunnelEventService;
 import com.botfunnel.tag.TagService;
 import com.mongodb.client.result.UpdateResult;
 import org.bson.Document;
@@ -57,6 +58,7 @@ class SubscriberStatusMachineTest {
     @Mock(answer = Answers.RETURNS_DEEP_STUBS) MongoTemplate mongoTemplate;
     @Mock(answer = Answers.RETURNS_DEEP_STUBS) org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
     @Mock EventService eventService;
+    @Mock FunnelEventService funnelEventService;
 
     SubscriberServiceImpl service;
 
@@ -64,7 +66,7 @@ class SubscriberStatusMachineTest {
     void initService() {
         Clock fixed = Clock.fixed(NOW, ZoneOffset.UTC);
         service = new SubscriberServiceImpl(subscriberRepository, subscriberEventRepository, tagService,
-                mongoTemplate, redisTemplate, eventService, fixed, 100);
+                mongoTemplate, redisTemplate, eventService, funnelEventService, fixed, 100);
     }
 
     // ─── /stop and manual unsubscribe ──────────────────────────────────────
@@ -256,9 +258,12 @@ class SubscriberStatusMachineTest {
     void recordCustomFieldsSet_onEmptyDiff_writesNoEvent() {
         Map<String, Object> same = Map.of("a", 1, "b", 2);
 
-        service.recordCustomFieldsSet(PROJECT_ID, "sub-1", new LinkedHashMap<>(same), new LinkedHashMap<>(same));
+        service.recordCustomFieldsSet(PROJECT_ID, "sub-1", new LinkedHashMap<>(same), new LinkedHashMap<>(same), 0);
 
         verify(subscriberEventRepository, never()).save(any());
+        // No-op diff must NOT fire a custom_field_set trigger (Decision 5: fire only after a real change).
+        verify(funnelEventService, never())
+                .dispatchForSubscriber(anyString(), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt());
     }
 
     @Test
@@ -271,7 +276,7 @@ class SubscriberStatusMachineTest {
         fresh.put("b", 3);
         fresh.put("c", 4);
 
-        service.recordCustomFieldsSet(PROJECT_ID, "sub-1", old, fresh);
+        service.recordCustomFieldsSet(PROJECT_ID, "sub-1", old, fresh, 0);
 
         SubscriberEvent event = capturedEvent();
         assertThat(event.getEventType()).isEqualTo("subscriber_custom_field_set");
@@ -280,28 +285,78 @@ class SubscriberStatusMachineTest {
         assertThat(event.getMetadata().get("changedKeys")).isEqualTo(List.of("b", "c"));
     }
 
+    @Test
+    void recordCustomFieldsSet_firesCustomFieldSetTriggerPerChangedKey_withExplicitDepth() {
+        // N changed keys → N custom_field_set dispatches, one per key, each carrying the explicit
+        // originDepth verbatim (here 3 = a funnel-step child's enrollDepth + 1). Pins the 5-arg writer.
+        Map<String, Object> old = new LinkedHashMap<>();
+        old.put("a", 1);
+        old.put("b", 2);
+        Map<String, Object> fresh = new LinkedHashMap<>();
+        fresh.put("a", 1);
+        fresh.put("b", 3);
+        fresh.put("c", 4);
+
+        service.recordCustomFieldsSet(PROJECT_ID, "sub-1", old, fresh, 3);
+
+        verify(funnelEventService).dispatchForSubscriber(PROJECT_ID, "sub-1",
+                FunnelEventService.TRIGGER_CUSTOM_FIELD_SET, "b", 3);
+        verify(funnelEventService).dispatchForSubscriber(PROJECT_ID, "sub-1",
+                FunnelEventService.TRIGGER_CUSTOM_FIELD_SET, "c", 3);
+        verify(funnelEventService, org.mockito.Mockito.times(2)).dispatchForSubscriber(
+                anyString(), anyString(), eq(FunnelEventService.TRIGGER_CUSTOM_FIELD_SET),
+                anyString(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
     // ─── addTag / removeTag (Decision 10) ───────────────────────────────────
 
     @Test
     void addTag_onAlreadyPresent_isNoop() {
         stubSubscriberUpdate(0L);
 
-        service.addTag(PROJECT_ID, "sub-1", "vip");
+        service.addTag(PROJECT_ID, "sub-1", "vip", 0);
 
         verify(tagService, never()).incrementCounter(anyString(), anyString(), anyLong());
         verify(subscriberEventRepository, never()).save(any());
+        // Idempotent re-add (membership unchanged) must NOT fire a tag_added trigger (Decision 5).
+        verify(funnelEventService, never())
+                .dispatchForSubscriber(anyString(), anyString(), anyString(), anyString(), org.mockito.ArgumentMatchers.anyInt());
     }
 
     @Test
     void addTag_onFirstAdd_writesEventAndIncrementsCounter() {
         stubSubscriberUpdate(1L);
 
-        service.addTag(PROJECT_ID, "sub-1", "vip");
+        service.addTag(PROJECT_ID, "sub-1", "vip", 0);
 
         verify(tagService).incrementCounter(PROJECT_ID, "vip", 1);
         SubscriberEvent event = capturedEvent();
         assertThat(event.getEventType()).isEqualTo("subscriber_tag_added");
         assertThat(event.getMetadata()).containsEntry("slug", "vip");
+    }
+
+    @Test
+    void addTag_onFirstAdd_firesTagAddedTrigger_withManualDepthZero() {
+        // A real membership change from the manual path fires tag_added(slug) at originDepth 0
+        // (human root, exempt from the auto-enroll volume limit). Pins the 4-arg addTag writer.
+        stubSubscriberUpdate(1L);
+
+        service.addTag(PROJECT_ID, "sub-1", "vip", 0);
+
+        verify(funnelEventService).dispatchForSubscriber(PROJECT_ID, "sub-1",
+                FunnelEventService.TRIGGER_TAG_ADDED, "vip", 0);
+    }
+
+    @Test
+    void addTag_fromFunnelStep_firesTagAddedTrigger_withChildDepth() {
+        // A funnel-step ADD_TAG passes execution.enrollDepth + 1 (here parent 1 → child 2); the writer
+        // forwards that explicit depth so the auto child counts toward the volume + depth backstops.
+        stubSubscriberUpdate(1L);
+
+        service.addTag(PROJECT_ID, "sub-1", "vip", 2);
+
+        verify(funnelEventService).dispatchForSubscriber(PROJECT_ID, "sub-1",
+                FunnelEventService.TRIGGER_TAG_ADDED, "vip", 2);
     }
 
     @Test

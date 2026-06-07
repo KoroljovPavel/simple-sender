@@ -213,7 +213,9 @@ public class SubscriberController {
         requireOwnedSubscriber(project.getId(), id);
         // find-or-create the project tag, then atomic $addToSet + conditional counter $inc (service).
         tagService.findOrCreate(project.getId(), request.slug());
-        subscriberService.addTag(project.getId(), id, request.slug());
+        // Manual UI tag-assign = human root → originDepth 0 (exempt from the auto-enroll volume limit;
+        // a tag_added trigger it fires starts a depth-0 root execution). Decision 6.
+        subscriberService.addTag(project.getId(), id, request.slug(), 0);
         return ResponseEntity.ok(toResponse(requireOwnedSubscriber(project.getId(), id)));
     }
 

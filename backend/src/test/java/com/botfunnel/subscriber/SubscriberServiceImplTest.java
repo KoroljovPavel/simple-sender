@@ -1,6 +1,7 @@
 package com.botfunnel.subscriber;
 
 import com.botfunnel.events.EventService;
+import com.botfunnel.funnel.FunnelEventService;
 import com.botfunnel.tag.TagService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -36,6 +37,7 @@ class SubscriberServiceImplTest {
     @Mock MongoTemplate mongoTemplate;
     @Mock StringRedisTemplate redisTemplate;
     @Mock EventService eventService;
+    @Mock FunnelEventService funnelEventService;
 
     private SubscriberServiceImpl service;
 
@@ -43,7 +45,7 @@ class SubscriberServiceImplTest {
     void setUp() {
         Clock clock = Clock.fixed(Instant.parse("2026-06-07T00:00:00Z"), ZoneOffset.UTC);
         service = new SubscriberServiceImpl(subscriberRepository, subscriberEventRepository, tagService,
-                mongoTemplate, redisTemplate, eventService, clock, 100);
+                mongoTemplate, redisTemplate, eventService, funnelEventService, clock, 100);
     }
 
     @Test

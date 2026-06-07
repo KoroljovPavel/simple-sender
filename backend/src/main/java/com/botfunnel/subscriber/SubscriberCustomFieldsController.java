@@ -94,7 +94,9 @@ public class SubscriberCustomFieldsController {
             // Decision 10/11 sole-writer path for subscriber_custom_field_set — called EXACTLY ONCE per
             // PATCH with the full aggregated old/new maps (idempotent: an empty old→new diff writes no
             // event). Per-key recording would fragment one PATCH into multiple events (audit regression).
-            subscriberService.recordCustomFieldsSet(projectId, subscriberId, oldValues, newValues);
+            // Manual PATCH = human root → originDepth 0 (exempt from the auto-enroll volume limit; a
+            // custom_field_set trigger it fires starts a depth-0 root execution). Decision 6.
+            subscriberService.recordCustomFieldsSet(projectId, subscriberId, oldValues, newValues, 0);
         }
 
         Subscriber reloaded = subscriberRepository.findById(subscriberId)

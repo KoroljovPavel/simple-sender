@@ -2,11 +2,13 @@ package com.botfunnel.subscriber;
 
 import com.botfunnel.common.AppException;
 import com.botfunnel.events.EventService;
+import com.botfunnel.funnel.FunnelEventService;
 import com.botfunnel.tag.TagService;
 import com.mongodb.client.result.UpdateResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.FindAndModifyOptions;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -74,6 +76,7 @@ public class SubscriberServiceImpl implements SubscriberService {
     private final MongoTemplate mongoTemplate;
     private final StringRedisTemplate redisTemplate;
     private final EventService eventService;
+    private final FunnelEventService funnelEventService;
     private final Clock clock;
     private final int startRateLimitPerMin;
 
@@ -83,6 +86,14 @@ public class SubscriberServiceImpl implements SubscriberService {
                                  MongoTemplate mongoTemplate,
                                  StringRedisTemplate redisTemplate,
                                  EventService eventService,
+                                 // @Lazy breaks the SubscriberServiceImpl ↔ FunnelEventService
+                                 // constructor cycle (FunnelEventService injects SubscriberService for
+                                 // its project-scoped findById). The dispatcher is only invoked at
+                                 // request/step time, never during bean construction, so a lazy proxy
+                                 // is safe. This is the idiomatic break for THIS 2-node edge; it is NOT
+                                 // the StepExecutor→FunnelEventService edge (that one is structurally
+                                 // broken via FunnelExecutionFactory in Task 4).
+                                 @Lazy FunnelEventService funnelEventService,
                                  Clock clock,
                                  @Value("${app.subscriber.rate-limit.start-per-min}") int startRateLimitPerMin) {
         this.subscriberRepository = subscriberRepository;
@@ -91,6 +102,7 @@ public class SubscriberServiceImpl implements SubscriberService {
         this.mongoTemplate = mongoTemplate;
         this.redisTemplate = redisTemplate;
         this.eventService = eventService;
+        this.funnelEventService = funnelEventService;
         this.clock = clock;
         this.startRateLimitPerMin = startRateLimitPerMin;
     }
@@ -227,29 +239,42 @@ public class SubscriberServiceImpl implements SubscriberService {
 
     @Override
     public void recordCustomFieldsSet(String projectId, String subscriberId,
-                                      Map<String, Object> oldValues, Map<String, Object> newValues) {
+                                      Map<String, Object> oldValues, Map<String, Object> newValues,
+                                      int originDepth) {
         List<String> changedKeys = changedKeys(oldValues, newValues);
         if (changedKeys.isEmpty()) {
-            return; // no-op — nothing actually changed
+            return; // no-op — nothing actually changed (no audit, no trigger)
         }
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("oldValues", nullSafe(oldValues));
         metadata.put("newValues", nullSafe(newValues));
         metadata.put("changedKeys", changedKeys);
+        // Audit FIRST (Decision 10 sole writer), trigger SECOND (Decision 5) — two distinct side
+        // effects of the same write, ordered so a dispatch fault never precedes the audit record.
         writeSubscriberEvent(subscriberId, projectId, EVT_CUSTOM_FIELD_SET, metadata);
+        // One custom_field_set firing per changed key (matchKey = field key) so each per-key listener
+        // funnel fires on its own key. The dispatcher is error-isolated + owns the loop backstops.
+        for (String key : changedKeys) {
+            funnelEventService.dispatchForSubscriber(projectId, subscriberId,
+                    FunnelEventService.TRIGGER_CUSTOM_FIELD_SET, key, originDepth);
+        }
     }
 
     @Override
-    public void addTag(String projectId, String subscriberId, String slug) {
+    public void addTag(String projectId, String subscriberId, String slug, int originDepth) {
         UpdateResult result = mongoTemplate.update(Subscriber.class)
                 .matching(Query.query(Criteria.where("_id").is(subscriberId).and("projectId").is(projectId)))
                 .apply(new Update().addToSet("tags", slug))
                 .first();
         if (result.getModifiedCount() == 0L) {
-            return; // tag already present (or no matching subscriber) → idempotent no-op
+            return; // tag already present (or no matching subscriber) → idempotent no-op (no audit, no trigger)
         }
         tagService.incrementCounter(projectId, slug, 1);
+        // Audit FIRST (Decision 10 sole writer), trigger SECOND (Decision 5). Only a real membership
+        // change reaches here, so an idempotent re-add never fires the trigger.
         writeSubscriberEvent(subscriberId, projectId, EVT_TAG_ADDED, Map.of("slug", slug));
+        funnelEventService.dispatchForSubscriber(projectId, subscriberId,
+                FunnelEventService.TRIGGER_TAG_ADDED, slug, originDepth);
     }
 
     @Override

@@ -149,7 +149,7 @@ class SubscriberTagAssignmentIT extends AbstractIntegrationTest {
         seedTag("vip", 0L);
 
         ConcurrencyTestUtils.parallelInvoke(10, () -> {
-            subscriberService.addTag(projectId, subscriberId, "vip");
+            subscriberService.addTag(projectId, subscriberId, "vip", 0);
             return null;
         });
 

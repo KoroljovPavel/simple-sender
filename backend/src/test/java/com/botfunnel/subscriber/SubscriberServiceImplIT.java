@@ -5,6 +5,7 @@ import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.common.test.ConcurrencyTestUtils;
+import com.botfunnel.funnel.FunnelEventService;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
 import com.botfunnel.tag.Tag;
@@ -17,6 +18,7 @@ import org.bson.Document;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 
 import java.time.Instant;
 import java.util.List;
@@ -24,6 +26,12 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 // Real Spring-wired path. Webhook scenarios go through processTelegramUpdateJob.handle(rawUpdateId)
 // (synchronous on the calling thread, mirroring ProcessTelegramUpdateJobTest). The Decision 10 writer
@@ -41,6 +49,12 @@ class SubscriberServiceImplIT extends AbstractIntegrationTest {
     @Autowired TagRepository tagRepository;
     @Autowired ProcessTelegramUpdateJob job;
     @Autowired SubscriberService subscriberService;
+
+    // Mock the dispatcher so the tag/field trigger side effects can be asserted as a unit-of-dispatch
+    // (call args + depth) without standing up matching funnels — the real fan-out is covered separately
+    // in the engine IT. A @MockitoBean also keeps the wired SubscriberServiceImpl ↔ FunnelEventService
+    // edge in play (the context still boots with the bean injected → the bean-cycle close is proven).
+    @MockitoBean FunnelEventService funnelEventService;
 
     private String projectId;
 
@@ -163,7 +177,7 @@ class SubscriberServiceImplIT extends AbstractIntegrationTest {
         Subscriber s = seedActiveSubscriber(400L);
 
         subscriberService.recordCustomFieldsSet(projectId, s.getId(),
-                Map.of("a", 1), Map.of("a", 2, "b", 3));
+                Map.of("a", 1), Map.of("a", 2, "b", 3), 0);
 
         List<SubscriberEvent> events = subscriberEventRepository.findAll().stream()
                 .filter(e -> "subscriber_custom_field_set".equals(e.getEventType()))
@@ -180,7 +194,7 @@ class SubscriberServiceImplIT extends AbstractIntegrationTest {
         Subscriber s = seedActiveSubscriber(400L);
         seedTag("vip", 0L);
 
-        subscriberService.addTag(projectId, s.getId(), "vip");
+        subscriberService.addTag(projectId, s.getId(), "vip", 0);
 
         assertThat(subscriberRepository.findById(s.getId()).orElseThrow().getTags()).contains("vip");
         assertThat(tagRepository.findByProjectIdAndSlug(projectId, "vip").orElseThrow().getSubscriberCount())
@@ -188,6 +202,90 @@ class SubscriberServiceImplIT extends AbstractIntegrationTest {
         List<SubscriberEvent> events = tagEventsFor(s.getId(), "subscriber_tag_added");
         assertThat(events).hasSize(1);
         assertThat(events.get(0).getMetadata()).containsEntry("slug", "vip");
+    }
+
+    // ─── Phase 3 trigger side effects (Task 5, Decision 5/6) ─────────────────
+
+    @Test
+    void addTag_newTag_firesTagAddedTrigger() {
+        // A real tag add (membership changed) fires tag_added(slug) via the dispatcher, after the audit
+        // write, with the explicit originDepth (0 here = manual/root). Pins the 4-arg addTag writer.
+        Subscriber s = seedActiveSubscriber(400L);
+        seedTag("vip", 0L);
+
+        subscriberService.addTag(projectId, s.getId(), "vip", 0);
+
+        verify(funnelEventService).dispatchForSubscriber(projectId, s.getId(),
+                FunnelEventService.TRIGGER_TAG_ADDED, "vip", 0);
+    }
+
+    @Test
+    void addTag_alreadyPresent_doesNotFire() {
+        // Idempotent no-op (tag already on the subscriber) → no dispatch, no audit (existing behavior).
+        Subscriber s = seedActiveSubscriber(400L);
+        s.setTags(new java.util.ArrayList<>(List.of("vip")));
+        subscriberRepository.save(s);
+        seedTag("vip", 1L);
+
+        subscriberService.addTag(projectId, s.getId(), "vip", 0);
+
+        assertThat(tagEventsFor(s.getId(), "subscriber_tag_added")).isEmpty();
+        verify(funnelEventService, never())
+                .dispatchForSubscriber(anyString(), anyString(), anyString(), anyString(), anyInt());
+    }
+
+    @Test
+    void addTag_funnelStep_depthIsParentPlusOne() {
+        // The ADD_TAG funnel step passes execution.getEnrollDepth() + 1; the writer forwards that
+        // explicit depth verbatim (here a parent-1 child → depth 2).
+        Subscriber s = seedActiveSubscriber(400L);
+        seedTag("vip", 0L);
+
+        subscriberService.addTag(projectId, s.getId(), "vip", 2);
+
+        verify(funnelEventService).dispatchForSubscriber(projectId, s.getId(),
+                FunnelEventService.TRIGGER_TAG_ADDED, "vip", 2);
+    }
+
+    @Test
+    void recordCustomFieldsSet_changedKeys_firesPerKey() {
+        // N changed keys → N custom_field_set dispatches, one per key, each at the explicit originDepth.
+        Subscriber s = seedActiveSubscriber(400L);
+
+        subscriberService.recordCustomFieldsSet(projectId, s.getId(),
+                Map.of("a", 1), Map.of("a", 2, "b", 3), 0);
+
+        verify(funnelEventService).dispatchForSubscriber(projectId, s.getId(),
+                FunnelEventService.TRIGGER_CUSTOM_FIELD_SET, "a", 0);
+        verify(funnelEventService).dispatchForSubscriber(projectId, s.getId(),
+                FunnelEventService.TRIGGER_CUSTOM_FIELD_SET, "b", 0);
+        verify(funnelEventService, times(2)).dispatchForSubscriber(anyString(), anyString(),
+                eq(FunnelEventService.TRIGGER_CUSTOM_FIELD_SET), anyString(), anyInt());
+    }
+
+    @Test
+    void recordCustomFieldsSet_emptyDiff_doesNotFire() {
+        // Empty changedKeys → no dispatch (and no audit, existing behavior).
+        Subscriber s = seedActiveSubscriber(400L);
+
+        subscriberService.recordCustomFieldsSet(projectId, s.getId(),
+                Map.of("a", 1), Map.of("a", 1), 0);
+
+        verify(funnelEventService, never())
+                .dispatchForSubscriber(anyString(), anyString(), anyString(), anyString(), anyInt());
+    }
+
+    @Test
+    void recordCustomFieldsSet_passesExplicitOriginDepth() {
+        // The writer forwards the explicit originDepth (here a funnel-step child = enrollDepth + 1 = 4)
+        // to each per-key custom_field_set dispatch.
+        Subscriber s = seedActiveSubscriber(400L);
+
+        subscriberService.recordCustomFieldsSet(projectId, s.getId(),
+                Map.of("a", 1), Map.of("a", 2), 4);
+
+        verify(funnelEventService).dispatchForSubscriber(projectId, s.getId(),
+                FunnelEventService.TRIGGER_CUSTOM_FIELD_SET, "a", 4);
     }
 
     @Test

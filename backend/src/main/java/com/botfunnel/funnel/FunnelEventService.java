@@ -59,6 +59,14 @@ public class FunnelEventService {
 
     private static final Logger log = LoggerFactory.getLogger(FunnelEventService.class);
 
+    // Public trigger-type constants — the cross-package dispatch contract. Cross-package callers
+    // (SubscriberServiceImpl tag/field hooks, StepExecutor EMIT_EVENT, EventsController) pass these to
+    // dispatchForSubscriber's triggerType param instead of re-typing the literals. Mirror the
+    // package-private FunnelService.TRIGGER_* values (same module, single source of truth).
+    public static final String TRIGGER_TAG_ADDED = FunnelService.TRIGGER_TAG_ADDED;
+    public static final String TRIGGER_CUSTOM_FIELD_SET = FunnelService.TRIGGER_CUSTOM_FIELD_SET;
+    public static final String TRIGGER_EVENT = FunnelService.TRIGGER_EVENT;
+
     // Greppable markers — identifiers/codes only (Decision 16), mirroring FunnelTriggerServiceImpl's
     // LOG_* convention. One per no-op path and one per backstop drop.
     static final String LOG_DISPATCH_NO_BOT = "FUNNEL_DISPATCH_SKIP_NO_CONNECTED_BOT";

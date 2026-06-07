@@ -172,6 +172,224 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         assertThat(funnelRepository.findById(f.getId())).isEmpty();
     }
 
+    // ─── duplicate ───────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void duplicateReturns201DraftWithResetTrigger() throws Exception {
+        // An ACTIVE funnel with a non-default trigger (on_start, "promo"); the copy must be born draft
+        // with the trigger reset to (on_start, "") regardless of the original's trigger.
+        Funnel f = seedFunnel("Promo", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("draft"))
+                .andExpect(jsonPath("$.triggerType").value("on_start"))
+                .andExpect(jsonPath("$.triggerValue").value(""))
+                .andExpect(jsonPath("$.name").value("Promo (копія)"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void duplicateCopiesGraphVerbatim() throws Exception {
+        // Build a two-step graph with explicit ids + edges: a MENU (with a callback targetStepId + a
+        // timeout edge) and its SEND_MESSAGE target. The copy must preserve step ids and every edge
+        // verbatim, copy keywords/allowReEnter/description, and leave the original untouched.
+        FunnelStep target = new FunnelStep();
+        target.setStepType(StepType.SEND_MESSAGE);
+        target.setText("branch");
+        target.setId("target-1");
+
+        FunnelStep menu = menuStep("menu-1", callbackButton("Go", "target-1"));
+        menu.setNext("target-1");
+        menu.setTimeoutValue(2);
+        menu.setTimeoutUnit("HOUR");
+        menu.setTimeoutTargetStepId("target-1");
+
+        Funnel f = seedFunnel("Graph", FunnelStatus.draft, "",
+                new ArrayList<>(List.of(menu, target)));
+        f.setDescription("the original description");
+        f.setAllowReEnter(true);
+        f.setKeywords(List.of("alpha", "beta"));
+        funnelRepository.save(f);
+
+        String body = mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String copyId = objectMapper.readTree(body).get("id").asText();
+
+        // The copy is a distinct document.
+        assertThat(copyId).isNotEqualTo(f.getId());
+
+        Funnel copy = funnelRepository.findById(copyId).orElseThrow();
+        assertThat(copy.getDescription()).isEqualTo("the original description");
+        assertThat(copy.isAllowReEnter()).isTrue();
+        assertThat(copy.getKeywords()).containsExactly("alpha", "beta");
+
+        List<FunnelStep> steps = copy.getSteps();
+        assertThat(steps).hasSize(2);
+        FunnelStep copiedMenu = steps.get(0);
+        FunnelStep copiedTarget = steps.get(1);
+        assertThat(copiedMenu.getId()).isEqualTo("menu-1");
+        assertThat(copiedMenu.getNext()).isEqualTo("target-1");
+        assertThat(copiedMenu.getTimeoutTargetStepId()).isEqualTo("target-1");
+        assertThat(copiedMenu.getButtons()).hasSize(1);
+        assertThat(copiedMenu.getButtons().get(0).targetStepId()).isEqualTo("target-1");
+        assertThat(copiedTarget.getId()).isEqualTo("target-1");
+
+        // Original is unchanged: still draft was its seed status here, still its own id, steps intact.
+        Funnel original = funnelRepository.findById(f.getId()).orElseThrow();
+        assertThat(original.getName()).isEqualTo("Graph");
+        assertThat(original.getSteps()).hasSize(2);
+        assertThat(original.getSteps().get(0).getId()).isEqualTo("menu-1");
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void duplicateNameAt128NotTruncated() throws Exception {
+        // Suffix " (копія)" is 8 UTF-16 chars; choose a base so "<base> (копія)" == exactly 128 → no
+        // truncation, full name persists.
+        String base = "x".repeat(128 - " (копія)".length());
+        Funnel f = seedFunnel(base, FunnelStatus.draft, "", List.of());
+        String expected = base + " (копія)";
+        assertThat(expected.length()).isEqualTo(128);
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.name").value(expected));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void duplicateNameAt129TruncatedStill201() throws Exception {
+        // "<base> (копія)" == 129 → must truncate to 128 (still 201, not 400 from @Size).
+        String base = "x".repeat(129 - " (копія)".length());
+        Funnel f = seedFunnel(base, FunnelStatus.draft, "", List.of());
+
+        String body = mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        String name = objectMapper.readTree(body).get("name").asText();
+        assertThat(name.length()).isEqualTo(128);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void duplicateOfDraftOrEmptyFunnelResetsTrigger() throws Exception {
+        // Empty (no steps) draft funnel with a non-default trigger value → copy stays draft with the
+        // trigger reset; copyOf over an empty list must not NPE.
+        Funnel f = seedFunnel("Empty", FunnelStatus.draft, "leftover", List.of());
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
+                .andExpect(status().isCreated())
+                .andExpect(jsonPath("$.status").value("draft"))
+                .andExpect(jsonPath("$.triggerType").value("on_start"))
+                .andExpect(jsonPath("$.triggerValue").value(""))
+                .andExpect(jsonPath("$.steps.length()").value(0));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void duplicateForeignFunnelReturns404() throws Exception {
+        seedUser(OTHER_USER_ID, "other@test.com");
+        String foreignProject = saveProject(OTHER_USER_ID, null).getId();
+        Funnel foreign = new Funnel();
+        foreign.setProjectId(foreignProject);
+        foreign.setName("Foreign");
+        foreign.setStatus(FunnelStatus.draft);
+        foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
+        foreign.setTriggerValue("");
+        foreign.setSteps(new ArrayList<>());
+        foreign.setCreatedAt(Instant.now());
+        foreign.setUpdatedAt(Instant.now());
+        String foreignId = funnelRepository.save(foreign).getId();
+
+        mockMvc.perform(post(url() + "/" + foreignId + "/duplicate").with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    // ─── stop-all ─────────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void stopAllCancelsActiveAndSetsStepRunDone() throws Exception {
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        String runningId = seedExecution(f.getId(), ExecutionStatus.running);
+        String waitingId = seedExecution(f.getId(), ExecutionStatus.waiting);
+        String waitingForReplyId = seedExecution(f.getId(), ExecutionStatus.waiting_for_reply);
+        String completedId = seedExecution(f.getId(), ExecutionStatus.completed);
+        String failedId = seedExecution(f.getId(), ExecutionStatus.failed);
+        String cancelledId = seedExecution(f.getId(), ExecutionStatus.cancelled);
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/executions/stop").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancelled").value(3));
+
+        // All three in-flight rows → cancelled AND stepRunStatus=done (claim-CAS contract, Decision 7).
+        for (String id : List.of(runningId, waitingId, waitingForReplyId)) {
+            assertThat(execStatus(id)).isEqualTo(ExecutionStatus.cancelled);
+            assertThat(stepRunStatus(id)).isEqualTo(StepRunStatus.done);
+        }
+        // Terminal rows untouched.
+        assertThat(execStatus(completedId)).isEqualTo(ExecutionStatus.completed);
+        assertThat(execStatus(failedId)).isEqualTo(ExecutionStatus.failed);
+        assertThat(execStatus(cancelledId)).isEqualTo(ExecutionStatus.cancelled);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void stopAllWithNoActiveReturnsZero() throws Exception {
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        seedExecution(f.getId(), ExecutionStatus.completed);
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/executions/stop").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancelled").value(0));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void stopAllScopedByProjectAndFunnel() throws Exception {
+        Funnel f = seedFunnel("Target", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        String mineRunning = seedExecution(f.getId(), ExecutionStatus.running);
+
+        // Sibling execution under ANOTHER funnel in the SAME project — must NOT be cancelled.
+        Funnel sibling = seedFunnel("Sibling", FunnelStatus.active, "other", List.of(sendMessage("x")));
+        String siblingRunning = seedExecution(sibling.getId(), ExecutionStatus.running);
+
+        // Execution under ANOTHER project but the SAME funnelId — must NOT be cancelled (tenant scope).
+        String foreignProject = "ffffffffffffffffffffffff";
+        String foreignSameFunnel = seedExecutionFor(foreignProject, f.getId(), ExecutionStatus.running);
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/executions/stop").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.cancelled").value(1));
+
+        assertThat(execStatus(mineRunning)).isEqualTo(ExecutionStatus.cancelled);
+        assertThat(execStatus(siblingRunning)).isEqualTo(ExecutionStatus.running);
+        assertThat(execStatus(foreignSameFunnel)).isEqualTo(ExecutionStatus.running);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void stopAllForeignFunnelReturns404() throws Exception {
+        seedUser(OTHER_USER_ID, "other@test.com");
+        String foreignProject = saveProject(OTHER_USER_ID, null).getId();
+        Funnel foreign = new Funnel();
+        foreign.setProjectId(foreignProject);
+        foreign.setName("Foreign");
+        foreign.setStatus(FunnelStatus.draft);
+        foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
+        foreign.setTriggerValue("");
+        foreign.setSteps(new ArrayList<>());
+        foreign.setCreatedAt(Instant.now());
+        foreign.setUpdatedAt(Instant.now());
+        String foreignId = funnelRepository.save(foreign).getId();
+
+        mockMvc.perform(post(url() + "/" + foreignId + "/executions/stop").with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
     // ─── activate ──────────────────────────────────────────────────────────────
 
     @Test
@@ -834,6 +1052,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Autowired org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
 
     private String seedExecution(String funnelId, ExecutionStatus status) {
+        return seedExecutionFor(projectId, funnelId, status);
+    }
+
+    private String seedExecutionFor(String projectId, String funnelId, ExecutionStatus status) {
         FunnelExecution e = new FunnelExecution();
         e.setProjectId(projectId);
         e.setFunnelId(funnelId);
@@ -851,6 +1073,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     private ExecutionStatus execStatus(String id) {
         return mongoTemplate.findById(id, FunnelExecution.class).getStatus();
+    }
+
+    private StepRunStatus stepRunStatus(String id) {
+        return mongoTemplate.findById(id, FunnelExecution.class).getStepRunStatus();
     }
 
     private void seedConnectedBot(String username) {

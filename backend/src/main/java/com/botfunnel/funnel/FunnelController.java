@@ -5,6 +5,7 @@ import com.botfunnel.common.AppException;
 import com.botfunnel.funnel.dto.CreateFunnelRequest;
 import com.botfunnel.funnel.dto.FunnelResponse;
 import com.botfunnel.funnel.dto.FunnelSummaryResponse;
+import com.botfunnel.funnel.dto.StopAllResponse;
 import com.botfunnel.funnel.dto.UpdateFunnelRequest;
 import jakarta.validation.Valid;
 import org.springframework.http.HttpStatus;
@@ -83,6 +84,20 @@ public class FunnelController {
     public ResponseEntity<FunnelResponse> activate(@PathVariable String projectId,
                                                    @PathVariable String funnelId) {
         return ResponseEntity.ok(funnelService.activate(currentUserId(), projectId, funnelId));
+    }
+
+    @PostMapping("/{funnelId}/duplicate")
+    public ResponseEntity<FunnelResponse> duplicate(@PathVariable String projectId,
+                                                    @PathVariable String funnelId) {
+        FunnelResponse body = funnelService.duplicate(currentUserId(), projectId, funnelId);
+        return ResponseEntity.status(HttpStatus.CREATED).body(body);
+    }
+
+    @PostMapping("/{funnelId}/executions/stop")
+    public ResponseEntity<StopAllResponse> stopAllExecutions(@PathVariable String projectId,
+                                                             @PathVariable String funnelId) {
+        long cancelled = funnelService.stopAllExecutions(currentUserId(), projectId, funnelId);
+        return ResponseEntity.ok(new StopAllResponse(cancelled));
     }
 
     @PostMapping("/{funnelId}/pause")

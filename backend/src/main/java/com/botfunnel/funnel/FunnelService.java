@@ -30,6 +30,7 @@ import java.util.Locale;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 /**
  * CRUD + lifecycle for linear funnels (Phase 1). HTTP facade over the Task 1 domain model. Every
@@ -171,25 +172,86 @@ public class FunnelService {
 
     public void delete(String ownerId, String projectId, String funnelId) {
         Funnel funnel = requireFunnel(ownerId, projectId, funnelId);
-        // Cancel the funnel's in-flight executions BEFORE dropping it. One atomic bulk-update. The
-        // engine (Task 6) is the only other writer: a not-yet-claimed row flipped to cancelled here
-        // fails the engine's claim predicate; a row the engine is mid-tick on is protected too, because
-        // every in-tick engine write is a CAS on stepRunStatus=in_progress — this update flips
-        // stepRunStatus to done, so the engine's next write no-ops and the cancel wins (no resurrection,
-        // no double-processing). Enum statuses written as lowercase name() literals (Decision 14).
-        mongoTemplate.updateMulti(
-                Query.query(Criteria.where("funnelId").is(funnelId)
+        // Cancel the funnel's in-flight executions BEFORE dropping it, then remove the funnel.
+        cancelInFlightExecutions(projectId, funnelId);
+        funnelRepository.delete(funnel);
+    }
+
+    // Bulk-cancel every in-flight execution of (projectId, funnelId). One atomic updateMulti, shared by
+    // delete() and stopAllExecutions() so there is a single bulk-cancel implementation. The engine
+    // (Task 6) is the only other writer: a not-yet-claimed row flipped to cancelled here fails the
+    // engine's claim predicate; a row the engine is mid-tick on is protected too, because every in-tick
+    // engine write is a CAS on stepRunStatus=in_progress — this update flips stepRunStatus→done, so the
+    // engine's next write no-ops and the cancel wins (no resurrection, no double-processing). Scoped by
+    // BOTH projectId AND funnelId — fail-closed tenant hardening (same shape as
+    // FunnelExecutionFactory.cancelExistingForPair); a funnelId-only scope would risk cancelling another
+    // project's executions that happen to share a funnelId. Enum statuses are written as lowercase
+    // name() literals (Decision 14). Returns the best-effort modifiedCount (Decision 8).
+    private long cancelInFlightExecutions(String projectId, String funnelId) {
+        return mongoTemplate.updateMulti(
+                Query.query(Criteria.where("projectId").is(projectId)
+                        .and("funnelId").is(funnelId)
                         .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
                                 ExecutionStatus.waiting_for_reply.name())),
                 new Update()
                         .set("status", ExecutionStatus.cancelled.name())
-                        // Also flip stepRunStatus→done so the engine's claim-conditional in-tick writes
-                        // (CAS on stepRunStatus=in_progress) no-op for a row it is mid-processing — keeps
-                        // this canceller consistent with FunnelTriggerService's cancel paths.
                         .set("stepRunStatus", StepRunStatus.done.name())
                         .set("updatedAt", Instant.now(clock)),
-                FunnelExecution.class);
-        funnelRepository.delete(funnel);
+                FunnelExecution.class).getModifiedCount();
+    }
+
+    // Force-stop all in-flight executions of a funnel without deleting the funnel itself (the "stop all"
+    // author tool). requireFunnel runs FIRST (anti-IDOR uniform 404 before any side effect). Reuses the
+    // shared bulk-cancel helper; returns the best-effort number cancelled (Decision 8 — modifiedCount).
+    public long stopAllExecutions(String ownerId, String projectId, String funnelId) {
+        requireFunnel(ownerId, projectId, funnelId);
+        return cancelInFlightExecutions(projectId, funnelId);
+    }
+
+    // Independent copy of a funnel (the "duplicate" author tool, Decision 6). The step graph is copied
+    // verbatim via FunnelStep.copyOf — ids and every edge (next / timeoutTargetStepId / Button
+    // targetStepId) are preserved (step ids carry no unique index, so reuse across funnels is fine and
+    // no re-mint is needed). keywords / allowReEnter / description are copied. The copy is always born
+    // draft with the trigger reset to (on_start, "") regardless of the original's status/trigger — this
+    // removes the "two funnels claim the same trigger on activate" surprise, and draft never enters the
+    // partial-unique trigger index, so a plain save (not saveHandlingTriggerConflict) cannot collide.
+    // The name is "<name> (копія)" truncated to 128 chars so the suffix can never breach @Size(max=128).
+    public FunnelResponse duplicate(String ownerId, String projectId, String funnelId) {
+        Funnel original = requireFunnel(ownerId, projectId, funnelId);
+        Instant now = Instant.now(clock);
+
+        Funnel copy = new Funnel();
+        copy.setProjectId(projectId);
+        copy.setName(duplicateName(original.getName()));
+        copy.setDescription(original.getDescription());
+        copy.setStatus(FunnelStatus.draft);
+        copy.setTriggerType(TRIGGER_ON_START);
+        copy.setTriggerValue("");
+        copy.setAllowReEnter(original.isAllowReEnter());
+        copy.setKeywords(original.getKeywords());
+        List<FunnelStep> steps = original.getSteps() == null
+                ? new ArrayList<>()
+                : original.getSteps().stream().map(FunnelStep::copyOf).collect(Collectors.toCollection(ArrayList::new));
+        copy.setSteps(steps);
+        copy.setCreatedAt(now);
+        copy.setUpdatedAt(now);
+        return toResponse(funnelRepository.save(copy));
+    }
+
+    private static final String DUPLICATE_SUFFIX = " (копія)";
+    private static final int MAX_NAME_LENGTH = 128;
+
+    // "<name> (копія)" truncated to 128 UTF-16 chars (matching @Size, which counts String.length()). The
+    // suffix is preserved when possible; if the base is so long that base+suffix would exceed 128, the
+    // base is trimmed so the suffix still fits, then the whole thing is capped at 128.
+    private static String duplicateName(String original) {
+        String base = original == null ? "" : original;
+        String candidate = base + DUPLICATE_SUFFIX;
+        if (candidate.length() <= MAX_NAME_LENGTH) {
+            return candidate;
+        }
+        int keep = Math.max(0, MAX_NAME_LENGTH - DUPLICATE_SUFFIX.length());
+        return (base.substring(0, keep) + DUPLICATE_SUFFIX);
     }
 
     public FunnelResponse activate(String ownerId, String projectId, String funnelId) {

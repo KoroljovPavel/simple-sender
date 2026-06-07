@@ -17,6 +17,7 @@ import java.util.List;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
@@ -71,9 +72,16 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
                 new Document("projectId", 1).append("triggerType", 1).append("triggerValue", 1));
         assertThat(triggerUnique.getBoolean("unique", false)).isTrue();
 
+        // Phase 3 (Decision 1 + Task 2): the partial filter now carries BOTH status='active' AND
+        // triggerType='on_start' — the old broad {status:'active'}-only filter is gone (the Task-2
+        // reconciliation runner dropped it at context startup, and auto-index-creation recreated the
+        // on_start-only shape from the Funnel annotation).
         Document pfe = triggerUnique.get("partialFilterExpression", Document.class);
         assertThat(pfe).as("triggerUnique partialFilterExpression").isNotNull();
         assertThat(pfe.getString("status")).isEqualTo("active");
+        assertThat(pfe.getString("triggerType"))
+                .as("Phase 3: uniqueness is scoped to on_start only")
+                .isEqualTo("on_start");
     }
 
     @Test
@@ -138,12 +146,59 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
         }
     }
 
+    /**
+     * Phase 3 fan-out (Decision 1): two active {@code event} funnels in the same project sharing the SAME
+     * triggerValue must coexist — the relaxed partial filter ({@code triggerType:'on_start'}) no longer
+     * applies uniqueness to {@code event}. Proves the index migration unblocked fan-out.
+     */
+    @Test
+    void twoActiveEventFunnelsWithSameTriggerValueCoexist() {
+        String projectId = "proj-" + UUID.randomUUID();
+        try {
+            mongoTemplate.insert(activeFunnel(projectId, "event", "purchase"));
+
+            assertThatCode(() -> mongoTemplate.insert(activeFunnel(projectId, "event", "purchase")))
+                    .as("two active event funnels with the same triggerValue must coexist (fan-out)")
+                    .doesNotThrowAnyException();
+
+            long active = mongoTemplate.count(
+                    new Query(Criteria.where("projectId").is(projectId)
+                            .and("triggerType").is("event").and("status").is(FunnelStatus.active)),
+                    Funnel.class);
+            assertThat(active).as("both event funnels persisted").isEqualTo(2);
+        } finally {
+            mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
+        }
+    }
+
+    /**
+     * Phase 3 (Decision 1): the {@code on_start} uniqueness guard survives the relax — two active
+     * {@code on_start} funnels in the same project with the same triggerValue still collide.
+     */
+    @Test
+    void twoActiveOnStartFunnelsWithSamePayloadStillCollide() {
+        String projectId = "proj-" + UUID.randomUUID();
+        try {
+            mongoTemplate.insert(activeFunnel(projectId, "on_start", "promo"));
+
+            assertThatThrownBy(() -> mongoTemplate.insert(activeFunnel(projectId, "on_start", "promo")))
+                    .as("two active on_start funnels with the same triggerValue must still collide")
+                    .isInstanceOfAny(DuplicateKeyException.class, DataIntegrityViolationException.class);
+        } finally {
+            mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
+        }
+    }
+
     private Funnel activeFunnel(String projectId, String triggerValue) {
+        return activeFunnel(projectId, "on_start", triggerValue);
+    }
+
+    private Funnel activeFunnel(String projectId, String triggerType, String triggerValue) {
         Funnel f = new Funnel();
         f.setProjectId(projectId);
         f.setName("funnel-" + UUID.randomUUID());
         f.setStatus(FunnelStatus.active);
-        f.setTriggerType("on_start");
+        f.setTriggerType(triggerType);
         f.setTriggerValue(triggerValue);
         f.setCreatedAt(Instant.now());
         f.setUpdatedAt(Instant.now());

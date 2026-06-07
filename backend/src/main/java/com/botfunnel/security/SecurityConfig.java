@@ -1,9 +1,15 @@
 package com.botfunnel.security;
 
+import com.botfunnel.api.ApiKeyAuthFilter;
+import com.botfunnel.api.ApiKeyRepository;
+import com.botfunnel.api.ApiKeyService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.web.ServerProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
+import org.springframework.security.config.http.SessionCreationPolicy;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -60,7 +66,40 @@ public class SecurityConfig {
         return new RememberMeCookieSerializer(serverProperties, rememberMeDays);
     }
 
+    /**
+     * Decision 7: higher-priority STATELESS chain for the public, key-authenticated API. Its
+     * {@code securityMatcher("/api/integrations/**")} carves the public namespace out from the session
+     * chain's broad {@code /api/**} matcher — it MUST be {@code @Order(1)} so it is evaluated first; the
+     * session chain is {@code @Order(2)}. CSRF is disabled (cookieless header-key auth, nothing to
+     * forge), httpBasic/formLogin are off, and the {@link ApiKeyAuthFilter} runs before the username/
+     * password filter slot to pre-authenticate from the {@code X-API-Key} header. CORS is shared with the
+     * session chain so the {@code X-API-Key} preflight allowance applies here too.
+     */
     @Bean
+    @Order(1)
+    public SecurityFilterChain integrationsSecurityFilterChain(HttpSecurity http,
+                                                               ApiKeyService apiKeyService,
+                                                               ApiKeyRepository apiKeyRepository)
+            throws Exception {
+        // Constructed here (NOT a @Component) so the filter runs ONLY inside this chain — a
+        // @Component OncePerRequestFilter would be auto-registered globally and 401 every request.
+        ApiKeyAuthFilter apiKeyAuthFilter = new ApiKeyAuthFilter(apiKeyService, apiKeyRepository);
+        return http
+                .securityMatcher("/api/integrations/**")
+                .csrf(AbstractHttpConfigurer::disable)
+                .cors(cors -> cors.configurationSource(corsConfigurationSource()))
+                .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .httpBasic(AbstractHttpConfigurer::disable)
+                .formLogin(AbstractHttpConfigurer::disable)
+                .authorizeHttpRequests(authz -> authz.anyRequest().authenticated())
+                // The api-key filter pins an ApiKeyAuthentication before the auth slot; a request that
+                // reaches the slot unauthenticated falls through to the entry point → uniform 401.
+                .addFilterBefore(apiKeyAuthFilter, UsernamePasswordAuthenticationFilter.class)
+                .build();
+    }
+
+    @Bean
+    @Order(2)
     public SecurityFilterChain appSecurityFilterChain(HttpSecurity http) throws Exception {
         return http
                 .csrf(csrf -> csrf
@@ -138,8 +177,11 @@ public class SecurityConfig {
         CorsConfiguration config = new CorsConfiguration();
         config.setAllowedOrigins(List.of(appUrl));
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
-        // X-XSRF-TOKEN is required for CookieCsrfTokenRepository — client must send it
-        config.setAllowedHeaders(List.of("Content-Type", "X-Requested-With", "X-XSRF-TOKEN"));
+        // X-XSRF-TOKEN is required for CookieCsrfTokenRepository — client must send it.
+        // X-API-Key (Task 7): without it a cross-origin integrations caller is blocked at the OPTIONS
+        // preflight before the key filter ever runs. The CORS source is registered on /** so this one
+        // entry covers /api/integrations/** too.
+        config.setAllowedHeaders(List.of("Content-Type", "X-Requested-With", "X-XSRF-TOKEN", "X-API-Key"));
         config.setAllowCredentials(true);
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

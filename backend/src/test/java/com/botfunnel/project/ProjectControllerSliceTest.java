@@ -32,6 +32,12 @@ class ProjectControllerSliceTest {
     @Autowired MockMvc mockMvc;
     @MockitoBean ProjectService projectService;
 
+    // SecurityConfig's @Order(1) integrations chain (Task 7) constructs an ApiKeyAuthFilter from these
+    // beans; @WebMvcTest does not load the api package, so they are mocked to let the imported
+    // SecurityConfig wire. Unused by this slice's session-chain tests.
+    @MockitoBean com.botfunnel.api.ApiKeyService apiKeyService;
+    @MockitoBean com.botfunnel.api.ApiKeyRepository apiKeyRepository;
+
     @Test
     @WithMockAppUser
     void getProject_happyPath_responseShapeMatches() throws Exception {

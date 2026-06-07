@@ -328,6 +328,18 @@ public class SubscriberServiceImpl implements SubscriberService {
                 .filter(sub -> projectId.equals(sub.getProjectId()));
     }
 
+    @Override
+    public Optional<Subscriber> findByTelegramUserId(String projectId, Long telegramUserId) {
+        // Project-scoped boundary lookup for the public /events API (Task 7). The repository query is
+        // already keyed by (projectId, telegramUserId), so a foreign-project subscriber is never
+        // returned — no extra filter needed. The api package routes through this boundary instead of the
+        // repository (module boundary).
+        if (telegramUserId == null) {
+            return Optional.empty();
+        }
+        return subscriberRepository.findByProjectIdAndTelegramUserId(projectId, telegramUserId);
+    }
+
     private void flip(String subscriberId, SubscriberStatus target, String timestampField) {
         // Atomic findAndModify — never findById + setter + save (two retries could trample).
         mongoTemplate.findAndModify(byId(subscriberId),

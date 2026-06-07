@@ -37,6 +37,15 @@ class AuthControllerSliceTest {
     @MockitoBean
     AuthService authService;
 
+    // SecurityConfig's @Order(1) integrations chain constructs an ApiKeyAuthFilter from these beans;
+    // @WebMvcTest does not load the api package's @Service/@Repository, so they are mocked here to let
+    // the imported SecurityConfig wire (Task 7). Unused by this slice's session-chain tests.
+    @MockitoBean
+    com.botfunnel.api.ApiKeyService apiKeyService;
+
+    @MockitoBean
+    com.botfunnel.api.ApiKeyRepository apiKeyRepository;
+
     @Test
     void login_success_returns200WithBody() throws Exception {
         AuthResponse response = new AuthResponse("u1", "user@test.com", "Alice", "active", null);

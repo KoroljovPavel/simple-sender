@@ -124,4 +124,17 @@ public interface SubscriberService {
      * <p>Task 4 is the SOLE OWNER/CREATOR of this canonical signature; Task 7 reuses it as-is.
      */
     Optional<Subscriber> findById(String projectId, String subscriberId);
+
+    /**
+     * Project-scoped subscriber lookup by Telegram user id for the public {@code /events} API (Task 7).
+     * The external caller supplies a {@code telegram_user_id} (not a chatId) and is authenticated only by
+     * the per-project API key; the {@code api} package must NOT reach into {@code SubscriberRepository}
+     * directly (module boundary), so this boundary method wraps the existing repository lookup
+     * {@code findByProjectIdAndTelegramUserId}.
+     *
+     * <p><strong>Anti-IDOR.</strong> The lookup is keyed by {@code (projectId, telegramUserId)} and the
+     * {@code projectId} is the one pinned by the key filter, so a subscriber in another tenant's project
+     * is never resolvable — it collapses to {@link Optional#empty()} (a uniform 404 at the controller).
+     */
+    Optional<Subscriber> findByTelegramUserId(String projectId, Long telegramUserId);
 }

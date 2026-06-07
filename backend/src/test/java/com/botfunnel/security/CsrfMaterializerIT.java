@@ -4,6 +4,7 @@ import com.botfunnel.AbstractIntegrationTest;
 import jakarta.servlet.Filter;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.csrf.CsrfFilter;
 
@@ -28,7 +29,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 // emission happen, and the live curl is recorded as Task 17 QA evidence.
 class CsrfMaterializerIT extends AbstractIntegrationTest {
 
+    // Task 7 added a second SecurityFilterChain (integrationsSecurityFilterChain) — qualify by bean
+    // name so this test still targets the session chain that carries the CsrfCookieMaterializer.
     @Autowired
+    @Qualifier("appSecurityFilterChain")
     SecurityFilterChain securityFilterChain;
 
     @Test

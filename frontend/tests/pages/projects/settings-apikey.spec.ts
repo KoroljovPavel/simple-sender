@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
+import { flushPromises } from '@vue/test-utils'
+import { nextTick } from 'vue'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../../helpers/settle'
 import type { Project } from '../../../types/project'
@@ -191,4 +193,42 @@ describe('projects/[projectId]/settings — API-key card', () => {
     expect(wrapper.find('[data-test="api-key-error"]').text().length).toBeGreaterThan(0)
     expect(wrapper.find('[data-test="api-key-modal"]').exists()).toBe(false)
   })
+
+  it('disables the action button while the request is in flight', async () => {
+    let releasePost: ((v: ApiKeyGenerated) => void) | undefined
+    apiMock.mockImplementation((url: unknown, opts?: { method?: string }) => {
+      const path = String(url)
+      const method = String(opts?.method ?? 'GET').toUpperCase()
+      if (path === API_KEY_PATH) {
+        if (method === 'POST') {
+          // Hold the POST open so the in-flight (busy) state stays observable.
+          return new Promise<ApiKeyGenerated>((resolve) => {
+            releasePost = resolve
+          })
+        }
+        return Promise.resolve({ present: false, mask: null })
+      }
+      return Promise.resolve(makeProject())
+    })
+
+    const wrapper = await mountSuspended(SettingsPage)
+    await settle()
+
+    const btn = () => wrapper.find('[data-test="api-key-generate"]').element as HTMLButtonElement
+    expect(btn().disabled).toBe(false)
+
+    await wrapper.find('[data-test="api-key-generate"]').trigger('click')
+    await flushPromises()
+    await nextTick()
+    expect(btn().disabled).toBe(true)
+
+    releasePost?.({ apiKey: 'sk_live_PLAINTEXT_SECRET_123', mask: 'sk_live•••' })
+    await settle()
+
+    // After the request settles, the modal opens (busy cleared).
+    expect(wrapper.find('[data-test="api-key-modal"]').exists()).toBe(true)
+  })
 })
+
+// Local type mirror for the deferred-promise typing in the in-flight test.
+type ApiKeyGenerated = { apiKey: string; mask: string }

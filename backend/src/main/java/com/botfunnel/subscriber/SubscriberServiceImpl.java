@@ -291,6 +291,18 @@ public class SubscriberServiceImpl implements SubscriberService {
                 .findByProjectIdAndTelegramBotIdAndTelegramChatId(projectId, telegramBotId, chatId);
     }
 
+    @Override
+    public Optional<Subscriber> findById(String projectId, String subscriberId) {
+        // Project-scoped boundary lookup (Task 4). Anti-IDOR: filter the repo result by projectId so a
+        // subscriberId belonging to a different project collapses to empty — never leaks/enrolls another
+        // tenant's subscriber (mirrors unsubscribeManual's (projectId, _id) scope).
+        if (subscriberId == null) {
+            return Optional.empty();
+        }
+        return subscriberRepository.findById(subscriberId)
+                .filter(sub -> projectId.equals(sub.getProjectId()));
+    }
+
     private void flip(String subscriberId, SubscriberStatus target, String timestampField) {
         // Atomic findAndModify — never findById + setter + save (two retries could trample).
         mongoTemplate.findAndModify(byId(subscriberId),

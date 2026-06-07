@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 
 import java.time.Clock;
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -55,7 +54,6 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
     static final String LOG_FIRE_NO_BOT = "FUNNEL_FIRE_SKIP_NO_CONNECTED_BOT";
     static final String LOG_FIRE_NO_SUBSCRIBER = "FUNNEL_FIRE_SKIP_NO_SUBSCRIBER";
     static final String LOG_FIRE_NO_MATCH = "FUNNEL_FIRE_NO_MATCHING_FUNNEL";
-    static final String LOG_FIRE_STARTED = "FUNNEL_FIRE_EXECUTION_STARTED";
     static final String LOG_FIRE_REENTER_IGNORED = "FUNNEL_FIRE_REENTER_IGNORED";
     static final String LOG_FIRE_REENTER_RESTARTED = "FUNNEL_FIRE_REENTER_RESTARTED";
     static final String LOG_FIRE_ERROR = "FUNNEL_FIRE_ERROR";
@@ -97,6 +95,7 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
     private final TelegramSender telegramSender;
     private final EventService eventService;
     private final FunnelExecutionEngine executionEngine;
+    private final FunnelExecutionFactory executionFactory;
 
     public FunnelTriggerServiceImpl(BotRepository botRepository,
                                     SubscriberService subscriberService,
@@ -105,7 +104,8 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
                                     Clock clock,
                                     TelegramSender telegramSender,
                                     EventService eventService,
-                                    FunnelExecutionEngine executionEngine) {
+                                    FunnelExecutionEngine executionEngine,
+                                    FunnelExecutionFactory executionFactory) {
         this.botRepository = botRepository;
         this.subscriberService = subscriberService;
         this.funnelRepository = funnelRepository;
@@ -114,6 +114,7 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
         this.telegramSender = telegramSender;
         this.eventService = eventService;
         this.executionEngine = executionEngine;
+        this.executionFactory = executionFactory;
     }
 
     @Override
@@ -148,16 +149,18 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
                 return;
             }
 
-            // Step 4: re-enter guard (Decision 8).
+            // Step 4: re-enter guard (Decision 8). on_start roots are depth 0 (Phase 3 / Decision 6) —
+            // the depth-aware insert lives behind FunnelExecutionFactory (Task 4: no forked writer, no
+            // FunnelEventService → FunnelTriggerServiceImpl bean edge).
             if (funnel.isAllowReEnter()) {
-                cancelExistingForPair(projectId, funnel.getId(), subscriber.getId());
-                insertExecution(projectId, funnel, subscriber.getId(), telegramBotId);
+                executionFactory.cancelExistingForPair(projectId, funnel.getId(), subscriber.getId());
+                executionFactory.insertExecution(projectId, funnel, subscriber.getId(), telegramBotId, 0);
                 log.info("{} funnelId={} subscriberId={}", LOG_FIRE_REENTER_RESTARTED,
                         funnel.getId(), subscriber.getId());
                 return;
             }
             try {
-                insertExecution(projectId, funnel, subscriber.getId(), telegramBotId);
+                executionFactory.insertExecution(projectId, funnel, subscriber.getId(), telegramBotId, 0);
             } catch (DuplicateKeyException dup) {
                 // Re-enter disabled: the unique partial index already has a running|waiting execution for
                 // this (funnelId, subscriberId). Repeated /start is an atomic no-op — swallow.
@@ -402,60 +405,4 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
                 FunnelExecution.class);
     }
 
-    // Atomically cancel the existing running|waiting execution for the (funnelId, subscriberId) pair so
-    // the partial-unique index frees up before the fresh insert (allowReEnter=true). updateMulti is
-    // defensive — the unique index guarantees at most one such row.
-    private void cancelExistingForPair(String projectId, String funnelId, String subscriberId) {
-        Instant now = Instant.now(clock);
-        mongoTemplate.updateMulti(
-                Query.query(Criteria.where("projectId").is(projectId)
-                        .and("funnelId").is(funnelId)
-                        .and("subscriberId").is(subscriberId)
-                        .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
-                                ExecutionStatus.waiting_for_reply.name())),
-                new Update()
-                        .set("status", ExecutionStatus.cancelled.name())
-                        .set("stepRunStatus", StepRunStatus.done.name())
-                        .set("updatedAt", now),
-                FunnelExecution.class);
-    }
-
-    // Build and insert a fresh execution from step 0 with a deep-copy steps snapshot (Decision 3) and the
-    // pinned telegramBotId (Decision 7). Uses MongoTemplate.insert so a unique-index collision surfaces as
-    // DuplicateKeyException (the re-enter guard for allowReEnter=false).
-    private void insertExecution(String projectId, Funnel funnel, String subscriberId, Long telegramBotId) {
-        Instant now = Instant.now(clock);
-        FunnelExecution execution = new FunnelExecution();
-        execution.setProjectId(projectId);
-        execution.setFunnelId(funnel.getId());
-        execution.setSubscriberId(subscriberId);
-        execution.setTelegramBotId(telegramBotId);
-        execution.setStatus(ExecutionStatus.running);
-        execution.setCurrentStepIndex(0);
-        execution.setStepRunStatus(StepRunStatus.pending);
-        execution.setNextRunAt(now);
-        List<FunnelStep> snapshot = deepCopySteps(funnel.getSteps());
-        execution.setStepsSnapshot(snapshot);
-        // Seed the graph cursor (Decision 2/7) to the first step's id so the engine navigates by
-        // currentStepId from the start. null-safe for an empty snapshot. currentStepIndex stays 0 for
-        // drain compatibility.
-        execution.setCurrentStepId(snapshot.isEmpty() ? null : snapshot.get(0).getId());
-        execution.setCreatedAt(now);
-        execution.setUpdatedAt(now);
-        mongoTemplate.insert(execution);
-        log.info("{} funnelId={} subscriberId={} executionId={}", LOG_FIRE_STARTED,
-                funnel.getId(), subscriberId, execution.getId());
-    }
-
-    // Deep copy of the funnel's steps via FunnelStep.copyOf (Decision 3 — snapshot isolation from later
-    // funnel edits). null steps → empty snapshot.
-    private static List<FunnelStep> deepCopySteps(List<FunnelStep> steps) {
-        List<FunnelStep> snapshot = new ArrayList<>();
-        if (steps != null) {
-            for (FunnelStep step : steps) {
-                snapshot.add(FunnelStep.copyOf(step));
-            }
-        }
-        return snapshot;
-    }
 }

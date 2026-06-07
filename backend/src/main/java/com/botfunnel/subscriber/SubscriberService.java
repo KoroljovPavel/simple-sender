@@ -86,4 +86,21 @@ public interface SubscriberService {
      * the caller already operates in a trusted project scope.
      */
     Optional<Subscriber> findByChat(String projectId, Long telegramBotId, Long chatId);
+
+    /**
+     * Project-scoped subscriber lookup by id for non-HTTP, in-process callers — the funnel dispatcher
+     * ({@code FunnelEventService}, Phase 3 / Task 4) which receives a {@code subscriberId} (not a chatId)
+     * from a tag/field/event trigger or {@code EMIT_EVENT} step, and the public {@code /events} API
+     * (Task 7) which reuses this exact method. The {@code funnel}/{@code api} packages must NOT reach into
+     * {@code SubscriberRepository} directly (module boundary).
+     *
+     * <p><strong>Anti-IDOR.</strong> Filters the repository result by {@code projectId} and returns
+     * {@link Optional#empty()} on mismatch. Even though the in-process caller is trusted, the
+     * {@code subscriberId} arriving via the public {@code event} API / {@code EMIT_EVENT} is
+     * attacker-influencable — scoping to the key-pinned project prevents reading or enrolling another
+     * tenant's subscriber.
+     *
+     * <p>Task 4 is the SOLE OWNER/CREATOR of this canonical signature; Task 7 reuses it as-is.
+     */
+    Optional<Subscriber> findById(String projectId, String subscriberId);
 }

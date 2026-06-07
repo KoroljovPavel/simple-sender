@@ -65,6 +65,19 @@ describe('SearchableSelect', () => {
     expect((wrapper.find('[data-test="sel-input"]').element as HTMLInputElement).value).toBe('removed')
   })
 
+  it('shows the value as a grey suffix by default (tag/field pickers need the key visible)', async () => {
+    const wrapper = await mountOpen()
+    // Default showValue=true → label differs from value → suffix "· city" is rendered.
+    expect(wrapper.find('[data-test="sel-option-city"]').text()).toContain('· city')
+  })
+
+  it('hides the value suffix when showValue is false (MENU target picker)', async () => {
+    const wrapper = await mountOpen('', OPTIONS, { showValue: false })
+    const opt = wrapper.find('[data-test="sel-option-city"]')
+    expect(opt.text()).toContain('City') // label still shown
+    expect(opt.text()).not.toContain('· city') // internal value suffix suppressed
+  })
+
   it('renders an empty-state when there are no options', async () => {
     const wrapper = await mountOpen('', [])
     expect(wrapper.find('[data-test="sel-empty"]').exists()).toBe(true)

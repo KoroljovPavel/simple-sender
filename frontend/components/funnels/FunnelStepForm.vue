@@ -694,6 +694,7 @@ const onSubmit = handleSubmit((values) => {
             <SearchableSelect
               v-model="row.targetStepId"
               :options="menuTargetOptions"
+              :show-value="false"
               :test-prefix="`step-menu-target-${index}`"
               :placeholder="t('funnels.steps.form.menuTargetPlaceholder')"
               :loading-text="t('funnels.steps.form.menuTargetLoading')"
@@ -762,6 +763,7 @@ const onSubmit = handleSubmit((values) => {
           <SearchableSelect
             v-model="menuTimeoutTarget"
             :options="menuTargetOptions"
+            :show-value="false"
             test-prefix="step-menu-timeout-target"
             :placeholder="t('funnels.steps.form.menuTargetPlaceholder')"
             :loading-text="t('funnels.steps.form.menuTargetLoading')"

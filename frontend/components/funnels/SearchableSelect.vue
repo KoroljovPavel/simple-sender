@@ -5,18 +5,29 @@
 // input shows its `label`. Built from scratch (same UX as TimezonePicker) for full keyboard/ARIA control.
 export type SearchableOption = { value: string; label: string; hint?: string }
 
-const props = defineProps<{
-  modelValue: string
-  options: SearchableOption[]
-  testPrefix: string
-  placeholder: string
-  loadingText: string
-  emptyText: string
-  noMatchesText: string
-  loading?: boolean
-  id?: string
-  invalid?: boolean
-}>()
+// showValue defaults to true via withDefaults: Vue coerces an absent declared Boolean prop to `false`, so a
+// plain optional `showValue?: boolean` would silently flip the default. withDefaults restores the true default,
+// preserving the tag/custom-field pickers (which need the value suffix) while letting the MENU target picker
+// opt out with :show-value="false".
+const props = withDefaults(
+  defineProps<{
+    modelValue: string
+    options: SearchableOption[]
+    testPrefix: string
+    placeholder: string
+    loadingText: string
+    emptyText: string
+    noMatchesText: string
+    loading?: boolean
+    id?: string
+    invalid?: boolean
+    // Whether to render the option `value` as a grey suffix next to the label. True for the tag/custom-field
+    // pickers where the value (slug / field name) is a meaningful key the author needs to see. Set false for
+    // the MENU target picker where the value is an internal Mongo step id / sentinel that is just noise.
+    showValue?: boolean
+  }>(),
+  { showValue: true },
+)
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
@@ -168,7 +179,7 @@ onBeforeUnmount(() => {
         >
           <span class="truncate">
             {{ opt.label }}
-            <span v-if="opt.label !== opt.value" class="text-gray-400">· {{ opt.value }}</span>
+            <span v-if="showValue && opt.label !== opt.value" class="text-gray-400">· {{ opt.value }}</span>
           </span>
           <span v-if="opt.hint" class="whitespace-nowrap text-xs text-gray-500">{{ opt.hint }}</span>
         </li>

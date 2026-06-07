@@ -243,6 +243,35 @@ describe('FunnelStepForm — MENU', () => {
     expect(maybe('[data-test="step-menu-target-0-option-__END__"]')).not.toBeNull()
   })
 
+  it('hides the internal step id / sentinel in the target picker options', async () => {
+    // UX-fix: the target picker passes :show-value="false", so options show only the step number+name
+    // (and "End"), never the raw Mongo step id or the __END__ sentinel as a grey suffix.
+    await mountMenuForm()
+    await $('[data-test="step-menu-target-0-input"]').trigger('focus')
+    await settle()
+
+    const step = $('[data-test="step-menu-target-0-option-s1"]')
+    expect(step.text()).toContain('1.') // step number + name still shown
+    expect(step.text()).not.toContain('s1') // raw id suffix gone
+
+    const end = $('[data-test="step-menu-target-0-option-__END__"]')
+    expect(end.text().length).toBeGreaterThan(0)
+    expect(end.text()).not.toContain('__END__') // sentinel suffix gone
+  })
+
+  it('keeps the timeout-target picker free of the raw step id', async () => {
+    const wrapper = await mountMenuForm()
+    await $('[data-test="step-menu-timeout-value"]').setValue('3')
+    await $('[data-test="step-menu-timeout-unit"]').setValue('HOUR')
+    await settle()
+    await $('[data-test="step-menu-timeout-target-input"]').trigger('focus')
+    await settle()
+
+    const step = $('[data-test="step-menu-timeout-target-option-s2"]')
+    expect(step.text()).not.toContain('s2')
+    expect(wrapper).toBeTruthy()
+  })
+
   it('blocks submit on an empty button label', async () => {
     const wrapper = await mountMenuForm()
     await $('[data-test="step-menu-text-input"]').setValue('Pick one')

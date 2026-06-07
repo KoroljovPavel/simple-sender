@@ -74,6 +74,15 @@ public class ApiKeyService {
     }
 
     /**
+     * The project's current key prefix for the UI mask ({@code prefix•••}), or empty when no key exists.
+     * Returns only the non-sensitive {@code keyPrefix} — never the hash, never the plaintext (which is
+     * not stored). Backs the settings GET endpoint (Task 8).
+     */
+    public Optional<String> currentKeyPrefix(String projectId) {
+        return apiKeyRepository.findByProjectId(projectId).map(ApiKey::getKeyPrefix);
+    }
+
+    /**
      * Resolve a presented plaintext key to its {@link ApiKey} by hash. Null/blank input returns empty
      * (never an NPE — {@link Sha256Hex#hex(String)} throws on null, so the boundary guards it). No
      * plaintext comparison occurs.

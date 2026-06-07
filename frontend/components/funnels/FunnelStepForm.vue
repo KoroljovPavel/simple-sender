@@ -86,10 +86,13 @@ const menuTouched = ref(false)
 const menuTargetOptions = computed(() => {
   const steps = props.siblingSteps ?? []
   const stepOptions = steps
-    .filter((s) => !!s.id && s.id !== props.initial?.id)
-    .map((s, i) => ({
+    // Keep the real funnel position (index in the full array) so the label number matches the steps list,
+    // THEN drop targetless steps (no id yet, or the MENU being edited itself).
+    .map((s, position) => ({ s, position }))
+    .filter(({ s }) => !!s.id && s.id !== props.initial?.id)
+    .map(({ s, position }) => ({
       value: s.id as string,
-      label: `${i + 1}. ${t(`funnels.steps.type.${s.stepType}`)}`,
+      label: `${position + 1}. ${t(`funnels.steps.type.${s.stepType}`)}`,
     }))
   return [{ value: MENU_END_TARGET, label: t('funnels.steps.form.menuTargetEnd') }, ...stepOptions]
 })

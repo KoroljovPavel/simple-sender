@@ -1,5 +1,14 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import { Badge } from '~/components/ui/badge'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '~/components/ui/dialog'
 import FunnelStepsList from '~/components/funnels/FunnelStepsList.vue'
 import AddStepDialog from '~/components/funnels/AddStepDialog.vue'
 import EditStepDialog from '~/components/funnels/EditStepDialog.vue'
@@ -29,6 +38,13 @@ const loadError = ref<string | null>(null)
 const saving = ref(false)
 const saveError = ref<string | null>(null)
 const activateError = ref<string | null>(null)
+
+// Task 5 author-tooling. Test for me writes its error to its OWN ref so the inline hint sits beside the
+// Test-for-me button (not the activate banner). Stop-all reuses the list's Dialog-confirm pattern.
+const testError = ref<string | null>(null)
+const testing = ref(false)
+const stopOpen = ref(false)
+const stopping = ref(false)
 
 const addOpen = ref(false)
 const editOpen = ref(false)
@@ -213,6 +229,54 @@ async function pause() {
     activateError.value = resolveFunnelError(err, 'funnels.pause')
   }
 }
+
+// ─── Task 5: author tooling (Duplicate / Stop-all / Test for me) ──────────────
+// Duplicate: success → toast; any failure → toast (no inline — there's no business code to surface here).
+async function duplicate() {
+  try {
+    await funnelsStore.duplicate(funnelId.value)
+    toast.success(t('funnels.editor.duplicateResult'))
+  } catch (err) {
+    toast.error(resolveError(err, 'funnels.duplicate'))
+  }
+}
+
+// Test for me: a 422 with a MAPPED business code (funnel_owner_not_linked / validation) → inline hint
+// beside the button; any other failure (network/5xx/unmapped) → toast. Mirrors the resolveFunnelError
+// branch, but inspect the code first to pick the surface.
+async function testRun() {
+  testError.value = null
+  testing.value = true
+  try {
+    await funnelsStore.testRun(funnelId.value)
+    toast.success(t('funnels.editor.testForMeResult'))
+  } catch (err) {
+    const code = errorCode(err)
+    if (code && te(`errors.funnels.${code}`)) {
+      testError.value = t(`errors.funnels.${code}`)
+    } else {
+      toast.error(resolveError(err, 'funnels.testRun'))
+    }
+  } finally {
+    testing.value = false
+  }
+}
+
+// Stop-all: destructive → confirm via the shared Dialog. Confirm cancels all active runs and reports the
+// count (0 is not an error). Cancel just closes the dialog.
+async function confirmStopAll() {
+  stopping.value = true
+  try {
+    const { cancelled } = await funnelsStore.stopAllExecutions(funnelId.value)
+    stopOpen.value = false
+    toast.success(t('funnels.editor.stopAll.result', { count: cancelled }))
+  } catch (err) {
+    stopOpen.value = false
+    toast.error(resolveError(err, 'funnels.stopAll'))
+  } finally {
+    stopping.value = false
+  }
+}
 </script>
 
 <template>
@@ -254,6 +318,30 @@ async function pause() {
       <div class="flex items-center gap-2">
         <span v-if="saving" data-test="funnel-saving" class="text-sm text-gray-500">{{ t('funnels.editor.saving') }}</span>
         <button
+          type="button"
+          data-test="funnel-test-run"
+          class="rounded-md border px-4 py-2 text-sm font-medium hover:bg-gray-50"
+          @click="testRun"
+        >
+          {{ t('funnels.editor.testForMe') }}
+        </button>
+        <button
+          type="button"
+          data-test="funnel-editor-duplicate"
+          class="rounded-md border px-4 py-2 text-sm font-medium hover:bg-gray-50"
+          @click="duplicate"
+        >
+          {{ t('funnels.editor.duplicate') }}
+        </button>
+        <button
+          type="button"
+          data-test="funnel-editor-stop-all"
+          class="rounded-md border border-red-300 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-50"
+          @click="stopOpen = true"
+        >
+          {{ t('funnels.editor.stopAll.button') }}
+        </button>
+        <button
           v-if="status === 'active'"
           type="button"
           data-test="funnel-pause"
@@ -273,6 +361,14 @@ async function pause() {
         </button>
       </div>
     </div>
+
+    <p
+      v-if="testError"
+      data-test="funnel-test-run-error"
+      class="rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+    >
+      {{ testError }}
+    </p>
 
     <p v-if="activateError" data-test="funnel-activate-error" class="rounded-md border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
       {{ activateError }}
@@ -317,5 +413,33 @@ async function pause() {
       :sibling-steps="steps"
       @save="onSaveStep"
     />
+
+    <Dialog :open="stopOpen" @update:open="(v: boolean) => { if (!v) stopOpen = false }">
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{{ t('funnels.editor.stopAll.title') }}</DialogTitle>
+          <DialogDescription>{{ t('funnels.editor.stopAll.message') }}</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <button
+            type="button"
+            data-test="funnel-stop-all-cancel"
+            class="rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
+            @click="stopOpen = false"
+          >
+            {{ t('funnels.editor.stopAll.cancel') }}
+          </button>
+          <button
+            type="button"
+            data-test="funnel-stop-all-confirm"
+            :disabled="stopping"
+            class="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+            @click="confirmStopAll"
+          >
+            {{ t('funnels.editor.stopAll.confirm') }}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   </div>
 </template>

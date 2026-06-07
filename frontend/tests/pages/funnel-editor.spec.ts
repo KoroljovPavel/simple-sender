@@ -10,15 +10,20 @@ import type { FunnelResponse, FunnelStep } from '../../types/funnel'
 // The editor page owns the headline Task-10 behaviour: 422-code → inline errors.funnels.* (NOT a global
 // toast) and the anti-IDOR 404 → graceful list redirect. The E2E covers it only against a live backend
 // (test.skip without one), so these mount specs are the always-on guard for that logic.
-const { storeMock, botStoreMock, navMock } = vi.hoisted(() => ({
+const { storeMock, botStoreMock, navMock, toastMock } = vi.hoisted(() => ({
   storeMock: {
     fetchOne: vi.fn(),
     update: vi.fn(),
     activate: vi.fn(),
     pause: vi.fn(),
+    // Task 5: author-tooling actions wired into the header.
+    duplicate: vi.fn(),
+    stopAllExecutions: vi.fn(),
+    testRun: vi.fn(),
   },
   botStoreMock: { current: null as { telegramUsername: string } | null, fetch: vi.fn() },
   navMock: vi.fn(),
+  toastMock: { success: vi.fn(), error: vi.fn() },
 }))
 
 mockNuxtImport('useFunnelsStore', () => () => storeMock)
@@ -26,9 +31,21 @@ mockNuxtImport('useBotStore', () => () => botStoreMock)
 mockNuxtImport('navigateTo', () => navMock)
 mockNuxtImport('useLocalePath', () => () => (p: string) => p)
 mockNuxtImport('useRoute', () => () => ({ params: { projectId: 'p1', funnelId: 'f1' } }))
+
+// vue-sonner's `toast` is imported directly (not auto-imported) — mock the module so success/error
+// fan-out is observable. Task 5: success → toast, network/unexpected error → toast, 422 code → inline.
+vi.mock('vue-sonner', () => ({ toast: toastMock }))
 // MENU has no remote fetch, but the shared FunnelStepForm auto-imports useApi for the tag/cf pickers —
 // stub it so a direct mount never hits a real fetch.
 mockNuxtImport('useApi', () => () => () => Promise.resolve([]))
+
+// Render Teleport content inline for EVERY editor-page mount so (a) wrapper.find() sees the DialogPortal'd
+// confirm dialog, and (b) the page's always-mounted Add/Edit/Stop dialogs unmount with the wrapper instead
+// of leaving body-teleported fragments that race with the MENU section's body-wipe (nextSibling-of-null on
+// a later unmount). Same per-mount stub used by settings/bot.spec.ts.
+const editorMountOptions = {
+  global: { stubs: { teleport: { template: '<div data-test-teleport><slot /></div>' } } },
+}
 
 function draft(over: Partial<FunnelResponse> = {}): FunnelResponse {
   return {
@@ -54,9 +71,14 @@ describe('funnels/[funnelId] editor page', () => {
     storeMock.update.mockReset()
     storeMock.activate.mockReset()
     storeMock.pause.mockReset()
+    storeMock.duplicate.mockReset()
+    storeMock.stopAllExecutions.mockReset()
+    storeMock.testRun.mockReset()
     botStoreMock.fetch.mockReset().mockResolvedValue(null)
     botStoreMock.current = null
     navMock.mockReset()
+    toastMock.success.mockReset()
+    toastMock.error.mockReset()
   })
 
   it('maps a 422 activation code to an inline error and keeps status draft', async () => {
@@ -64,7 +86,7 @@ describe('funnels/[funnelId] editor page', () => {
     storeMock.update.mockResolvedValue(draft()) // activate flushes edits first
     storeMock.activate.mockRejectedValue({ statusCode: 422, data: { code: 'funnel_no_steps' } })
 
-    const wrapper = await mountSuspended(FunnelEditorPage)
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
     await settle()
 
     await wrapper.get('[data-test="funnel-activate"]').trigger('click')
@@ -88,7 +110,7 @@ describe('funnels/[funnelId] editor page', () => {
       storeMock.fetchOne.mockResolvedValue(draft())
       storeMock.update.mockResolvedValue(draft())
       storeMock.activate.mockReset().mockRejectedValue(rejectValue)
-      const wrapper = await mountSuspended(FunnelEditorPage)
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
       await settle()
       await wrapper.get('[data-test="funnel-activate"]').trigger('click')
       await settle()
@@ -105,7 +127,7 @@ describe('funnels/[funnelId] editor page', () => {
   it('redirects to the list on a 404 (missing / cross-owner funnel)', async () => {
     storeMock.fetchOne.mockRejectedValue({ statusCode: 404 })
 
-    await mountSuspended(FunnelEditorPage)
+    await mountSuspended(FunnelEditorPage, editorMountOptions)
     await settle()
 
     expect(navMock).toHaveBeenCalledWith('/projects/p1/funnels')
@@ -114,7 +136,7 @@ describe('funnels/[funnelId] editor page', () => {
   it('shows a retry banner (not a blank page) on a non-404 load failure', async () => {
     storeMock.fetchOne.mockRejectedValue({ statusCode: 500 })
 
-    const wrapper = await mountSuspended(FunnelEditorPage)
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
     await settle()
 
     expect(navMock).not.toHaveBeenCalled()
@@ -128,7 +150,7 @@ describe('funnels/[funnelId] editor page', () => {
     )
     storeMock.pause.mockResolvedValue(draft({ status: 'paused', steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] }))
 
-    const wrapper = await mountSuspended(FunnelEditorPage)
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
     await settle()
     // Active funnel shows the Pause button (not Activate) and the one step row.
     expect(wrapper.find('[data-test="funnel-pause"]').exists()).toBe(true)
@@ -165,7 +187,7 @@ describe('funnels/[funnelId] editor page', () => {
       storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
         Promise.resolve(draft({ ...over, ...body })),
       )
-      const wrapper = await mountSuspended(FunnelEditorPage)
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
       // load() runs on a microtask; advance enough to settle the initial mount with fake timers.
       await tick(700)
       storeMock.update.mockClear()
@@ -242,7 +264,7 @@ describe('funnels/[funnelId] editor page', () => {
     storeMock.update.mockResolvedValue(draft({ steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] }))
     storeMock.activate.mockRejectedValue({ statusCode: 422, data: { code: 'funnel_broken_edge' } })
 
-    const wrapper = await mountSuspended(FunnelEditorPage)
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
     await settle()
 
     await wrapper.get('[data-test="funnel-activate"]').trigger('click')
@@ -257,6 +279,126 @@ describe('funnels/[funnelId] editor page', () => {
     // Activation rejected → status stays draft.
     expect(wrapper.find('[data-test="funnel-status-active"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="funnel-status-draft"]').exists()).toBe(true)
+  })
+
+  // ─── Task 5: header action buttons (Duplicate / Stop-all / Test for me) ───────
+  describe('header action buttons', () => {
+    it('renders Duplicate / Stop-all / Test for me in the header (no Preview toggle)', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      expect(wrapper.find('[data-test="funnel-editor-duplicate"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-editor-stop-all"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-test-run"]').exists()).toBe(true)
+      // Preview is Task 6 — must NOT be here yet.
+      expect(wrapper.find('[data-test="funnel-preview-toggle"]').exists()).toBe(false)
+    })
+
+    it('Duplicate calls the store with the funnelId and success-toasts', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      storeMock.duplicate.mockResolvedValue(draft({ id: 'f1-copy', name: 'My funnel (copy)' }))
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      await wrapper.get('[data-test="funnel-editor-duplicate"]').trigger('click')
+      await settle()
+
+      expect(storeMock.duplicate).toHaveBeenCalledWith('f1')
+      expect(toastMock.success).toHaveBeenCalled()
+      expect(toastMock.error).not.toHaveBeenCalled()
+    })
+
+    it('Test for me on an unlinked bot shows an inline hint (not a toast)', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      storeMock.testRun.mockRejectedValue({ statusCode: 422, data: { code: 'funnel_owner_not_linked' } })
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      await wrapper.get('[data-test="funnel-test-run"]').trigger('click')
+      await settle()
+
+      const err = wrapper.find('[data-test="funnel-test-run-error"]')
+      expect(err.exists()).toBe(true)
+      // Localized via errors.funnels.funnel_owner_not_linked — not a raw key.
+      expect(err.text().trim().length).toBeGreaterThan(0)
+      expect(err.text()).not.toContain('errors.funnels')
+      expect(err.text()).not.toContain('funnel_owner_not_linked')
+      // Business 422 → inline, never a toast.
+      expect(toastMock.error).not.toHaveBeenCalled()
+    })
+
+    it('Test for me network error (no code) toasts, no inline message', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      storeMock.testRun.mockRejectedValue({ statusCode: 500 })
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      await wrapper.get('[data-test="funnel-test-run"]').trigger('click')
+      await settle()
+
+      expect(toastMock.error).toHaveBeenCalled()
+      expect(wrapper.find('[data-test="funnel-test-run-error"]').exists()).toBe(false)
+    })
+
+    it('Test for me success-toasts when the enroll registers', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      storeMock.testRun.mockResolvedValue(undefined)
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      await wrapper.get('[data-test="funnel-test-run"]').trigger('click')
+      await settle()
+
+      expect(storeMock.testRun).toHaveBeenCalledWith('f1')
+      expect(toastMock.success).toHaveBeenCalled()
+      expect(wrapper.find('[data-test="funnel-test-run-error"]').exists()).toBe(false)
+    })
+
+    it('Test for me is present and enabled on a draft funnel', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft({ status: 'draft' }))
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      const btn = wrapper.get('[data-test="funnel-test-run"]')
+      expect(btn.exists()).toBe(true)
+      expect((btn.element as HTMLButtonElement).disabled).toBe(false)
+    })
+
+    it('Stop-all opens a confirm dialog, then reports the cancelled count', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      storeMock.stopAllExecutions.mockResolvedValue({ cancelled: 4 })
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      // Not called until confirmed.
+      await wrapper.get('[data-test="funnel-editor-stop-all"]').trigger('click')
+      await settle()
+      expect(storeMock.stopAllExecutions).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-test="funnel-stop-all-confirm"]').exists()).toBe(true)
+
+      await wrapper.get('[data-test="funnel-stop-all-confirm"]').trigger('click')
+      await settle()
+
+      expect(storeMock.stopAllExecutions).toHaveBeenCalledWith('f1')
+      // Count surfaced via the stopAll.result toast ({count} interpolation).
+      const msg = toastMock.success.mock.calls.at(-1)?.[0] as string
+      expect(msg).toContain('4')
+    })
+
+    it('Stop-all cancel is a no-op and closes the dialog', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      await wrapper.get('[data-test="funnel-editor-stop-all"]').trigger('click')
+      await settle()
+      await wrapper.get('[data-test="funnel-stop-all-cancel"]').trigger('click')
+      await settle()
+
+      expect(storeMock.stopAllExecutions).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-test="funnel-stop-all-confirm"]').exists()).toBe(false)
+    })
   })
 })
 

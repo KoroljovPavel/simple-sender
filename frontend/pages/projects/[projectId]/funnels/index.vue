@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { toast } from 'vue-sonner'
 import {
   Dialog,
   DialogContent,
@@ -29,6 +30,11 @@ const deleteTarget = ref<FunnelSummaryResponse | null>(null)
 const deleting = ref(false)
 const loadError = ref<string | null>(null)
 const deleteError = ref<string | null>(null)
+
+// Task 5 author tooling — Stop-all confirm uses its OWN refs (separate from the delete dialog).
+const stopTarget = ref<FunnelSummaryResponse | null>(null)
+const stopping = ref(false)
+const stopError = ref<string | null>(null)
 
 const STATUS_VARIANT: Record<FunnelStatus, 'secondary' | 'default' | 'outline'> = {
   draft: 'secondary',
@@ -74,6 +80,40 @@ async function confirmDelete() {
     deleteError.value = resolveError(err, 'funnels.delete')
   } finally {
     deleting.value = false
+  }
+}
+
+// Duplicate: store action syncs the new draft row into the list; success/failure → toast (no business
+// code to surface inline here).
+async function duplicateFunnel(funnel: FunnelSummaryResponse) {
+  try {
+    await funnelsStore.duplicate(funnel.id)
+    toast.success(t('funnels.editor.duplicateResult'))
+  } catch (err) {
+    toast.error(resolveError(err, 'funnels.duplicate'))
+  }
+}
+
+function askStopAll(funnel: FunnelSummaryResponse) {
+  stopError.value = null
+  stopTarget.value = funnel
+}
+
+// Stop-all: cancel all active runs of the funnel; the count (0 included) is reported via toast. A failure
+// shows inline in the dialog body (like deleteError), the dialog stays open.
+async function confirmStopAll() {
+  const target = stopTarget.value
+  if (!target) return
+  stopping.value = true
+  stopError.value = null
+  try {
+    const { cancelled } = await funnelsStore.stopAllExecutions(target.id)
+    stopTarget.value = null
+    toast.success(t('funnels.editor.stopAll.result', { count: cancelled }))
+  } catch (err) {
+    stopError.value = resolveError(err, 'funnels.stopAll')
+  } finally {
+    stopping.value = false
   }
 }
 
@@ -167,6 +207,22 @@ function formatDate(iso: string): string {
         </button>
         <button
           type="button"
+          :data-test="`funnel-duplicate-${funnel.id}`"
+          class="rounded-md border px-2.5 py-1 text-sm hover:bg-gray-50"
+          @click="duplicateFunnel(funnel)"
+        >
+          {{ t('funnels.editor.duplicate') }}
+        </button>
+        <button
+          type="button"
+          :data-test="`funnel-stop-all-${funnel.id}`"
+          class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50"
+          @click="askStopAll(funnel)"
+        >
+          {{ t('funnels.editor.stopAll.button') }}
+        </button>
+        <button
+          type="button"
           :data-test="`funnel-delete-${funnel.id}`"
           class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50"
           @click="askDelete(funnel)"
@@ -207,6 +263,40 @@ function formatDate(iso: string): string {
             @click="confirmDelete"
           >
             {{ t('funnels.deleteConfirm.confirm') }}
+          </button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
+    <Dialog
+      :open="stopTarget !== null"
+      @update:open="(v: boolean) => { if (!v) stopTarget = null }"
+    >
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>{{ t('funnels.editor.stopAll.title') }}</DialogTitle>
+          <DialogDescription>{{ t('funnels.editor.stopAll.message') }}</DialogDescription>
+        </DialogHeader>
+
+        <p v-if="stopError" data-test="funnel-stop-all-error" class="text-sm text-red-600">{{ stopError }}</p>
+
+        <DialogFooter>
+          <button
+            type="button"
+            data-test="funnel-stop-all-cancel"
+            class="rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
+            @click="stopTarget = null"
+          >
+            {{ t('funnels.editor.stopAll.cancel') }}
+          </button>
+          <button
+            type="button"
+            data-test="funnel-stop-all-confirm"
+            :disabled="stopping"
+            class="rounded-md bg-red-600 px-3 py-1.5 text-sm text-white hover:bg-red-700 disabled:opacity-50"
+            @click="confirmStopAll"
+          >
+            {{ t('funnels.editor.stopAll.confirm') }}
           </button>
         </DialogFooter>
       </DialogContent>

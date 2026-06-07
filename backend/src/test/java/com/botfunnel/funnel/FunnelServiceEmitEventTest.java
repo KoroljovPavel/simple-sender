@@ -81,7 +81,12 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
         String id = createDraft();
         assertThatThrownBy(() -> funnelService.update(USER_ID, projectId, id, reqWithStep(step)))
                 .isInstanceOf(AppException.class)
-                .satisfies(ex -> assertThat(((AppException) ex).getStatus().value()).isEqualTo(422));
+                .satisfies(ex -> {
+                    AppException ae = (AppException) ex;
+                    assertThat(ae.getStatus().value()).isEqualTo(422);
+                    // A bad eventName is a per-type step validation failure → funnel_step_invalid.
+                    assertThat(ae.getCode()).isEqualTo(FunnelService.CODE_INVALID_STEP);
+                });
     }
 
     @Test

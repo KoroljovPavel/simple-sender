@@ -83,34 +83,33 @@ class FunnelServiceKeywordTest extends AbstractIntegrationTest {
                 .containsExactly("bonus", "sale");
     }
 
+    private void assertInvalidKeywords(String id, UpdateFunnelRequest req) {
+        assertThatThrownBy(() -> funnelService.update(USER_ID, projectId, id, req))
+                .isInstanceOf(AppException.class)
+                .satisfies(ex -> {
+                    AppException ae = (AppException) ex;
+                    assertThat(ae.getStatus().value()).isEqualTo(422);
+                    assertThat(ae.getCode()).isEqualTo(FunnelService.CODE_INVALID_KEYWORDS);
+                });
+    }
+
     @Test
     void keyword_requiresNonEmptyKeywords() {
         String id = createDraft();
 
-        // Absent keywords → 422.
-        assertThatThrownBy(() -> funnelService.update(USER_ID, projectId, id, keywordReq(null, List.of())))
-                .isInstanceOf(AppException.class)
-                .satisfies(ex -> assertThat(((AppException) ex).getStatus().value()).isEqualTo(422));
-
+        // Absent keywords → 422 funnel_invalid_keywords.
+        assertInvalidKeywords(id, keywordReq(null, List.of()));
         // Empty list → 422.
-        assertThatThrownBy(() -> funnelService.update(USER_ID, projectId, id, keywordReq(List.of(), List.of())))
-                .isInstanceOf(AppException.class)
-                .satisfies(ex -> assertThat(((AppException) ex).getStatus().value()).isEqualTo(422));
-
+        assertInvalidKeywords(id, keywordReq(List.of(), List.of()));
         // List of only blanks normalizes to empty → 422.
-        assertThatThrownBy(() -> funnelService.update(USER_ID, projectId, id, keywordReq(List.of("  ", ""), List.of())))
-                .isInstanceOf(AppException.class)
-                .satisfies(ex -> assertThat(((AppException) ex).getStatus().value()).isEqualTo(422));
+        assertInvalidKeywords(id, keywordReq(List.of("  ", ""), List.of()));
     }
 
     @Test
     void keywords_rejectedForNonKeywordTrigger() {
         String id = createDraft();
         // Sending keywords on an on_start trigger → 422 (tight contract; Decision 3 reject-vs-ignore).
-        UpdateFunnelRequest req = new UpdateFunnelRequest("f", null, "on_start", "", false,
-                List.of("bonus"), List.of());
-        assertThatThrownBy(() -> funnelService.update(USER_ID, projectId, id, req))
-                .isInstanceOf(AppException.class)
-                .satisfies(ex -> assertThat(((AppException) ex).getStatus().value()).isEqualTo(422));
+        assertInvalidKeywords(id, new UpdateFunnelRequest("f", null, "on_start", "", false,
+                List.of("bonus"), List.of()));
     }
 }

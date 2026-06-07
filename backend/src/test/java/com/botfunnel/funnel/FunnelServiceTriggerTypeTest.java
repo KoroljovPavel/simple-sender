@@ -74,16 +74,20 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
         funnelService.update(USER_ID, projectId, id, req(triggerType, triggerValue));
     }
 
-    private void assert422(String id, String triggerType, String triggerValue) {
+    private void assert422(String id, String triggerType, String triggerValue, String expectedCode) {
         assertThatThrownBy(() -> update(id, triggerType, triggerValue))
                 .isInstanceOf(AppException.class)
-                .satisfies(ex -> assertThat(((AppException) ex).getStatus().value()).isEqualTo(422));
+                .satisfies(ex -> {
+                    AppException ae = (AppException) ex;
+                    assertThat(ae.getStatus().value()).isEqualTo(422);
+                    assertThat(ae.getCode()).isEqualTo(expectedCode);
+                });
     }
 
     @Test
     void triggerType_unknownRejected() {
         String id = createDraft();
-        assert422(id, "totally_bogus", "x");
+        assert422(id, "totally_bogus", "x", FunnelService.CODE_INVALID_TRIGGER_TYPE);
     }
 
     @Test
@@ -92,16 +96,17 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
 
         // tag_added: triggerValue is a tag slug ^[a-z0-9_-]{1,32}$.
         assertThatCode(() -> update(id, "tag_added", "paid")).doesNotThrowAnyException();
-        assert422(id, "tag_added", "Paid Tag!");   // uppercase + space + special
+        // uppercase + space + special → invalid trigger value.
+        assert422(id, "tag_added", "Paid Tag!", FunnelService.CODE_INVALID_TRIGGER_VALUE);
 
         // custom_field_set: triggerValue is a non-blank field key.
         assertThatCode(() -> update(id, "custom_field_set", "plan")).doesNotThrowAnyException();
-        assert422(id, "custom_field_set", "   ");   // blank key
+        assert422(id, "custom_field_set", "   ", FunnelService.CODE_INVALID_TRIGGER_VALUE); // blank key
 
         // event: triggerValue is an event slug ^[A-Za-z0-9_-]{1,64}$.
         assertThatCode(() -> update(id, "event", "Purchase_Done-1")).doesNotThrowAnyException();
-        assert422(id, "event", "bad slug!");        // space + special
-        assert422(id, "event", "");                 // empty (slug requires 1..64)
+        assert422(id, "event", "bad slug!", FunnelService.CODE_INVALID_TRIGGER_VALUE); // space + special
+        assert422(id, "event", "", FunnelService.CODE_INVALID_TRIGGER_VALUE);          // empty (1..64)
     }
 
     @Test

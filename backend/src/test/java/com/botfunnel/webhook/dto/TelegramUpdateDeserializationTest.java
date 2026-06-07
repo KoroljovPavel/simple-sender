@@ -1,7 +1,6 @@
 package com.botfunnel.webhook.dto;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.exc.MismatchedInputException;
 import org.junit.jupiter.api.Test;
@@ -171,20 +170,29 @@ class TelegramUpdateDeserializationTest {
     }
 
     @Test
-    void deserialize_callbackQuerySlot_populatedAsJsonNode() throws Exception {
+    void deserialize_callbackQuerySlot_populatedAsTypedRecord() throws Exception {
+        // callback_query is now a typed CallbackQuery record (Phase 2, Task 7) — including the nested
+        // message.chat the worker reads for chatId, plus the no-PII `from`.
         String json = """
                 {
                   "update_id": 9,
-                  "callback_query": {"id": "cb-1", "data": "vote_yes"}
+                  "callback_query": {
+                    "id": "cb-1",
+                    "data": "vote_yes",
+                    "from": {"id": 777, "is_bot": false, "first_name": "Alice"},
+                    "message": {"message_id": 5, "chat": {"id": 100, "type": "private"}}
+                  }
                 }
                 """;
 
         TelegramUpdate update = mapper.readValue(json, TelegramUpdate.class);
 
         assertThat(update.callback_query()).isNotNull();
-        JsonNode cb = update.callback_query();
-        assertThat(cb.get("id").asText()).isEqualTo("cb-1");
-        assertThat(cb.get("data").asText()).isEqualTo("vote_yes");
+        CallbackQuery cb = update.callback_query();
+        assertThat(cb.id()).isEqualTo("cb-1");
+        assertThat(cb.data()).isEqualTo("vote_yes");
+        assertThat(cb.from().id()).isEqualTo(777L);
+        assertThat(cb.message().chat().id()).isEqualTo(100L);
     }
 
     @Test

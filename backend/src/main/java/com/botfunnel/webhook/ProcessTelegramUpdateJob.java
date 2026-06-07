@@ -9,6 +9,7 @@ import com.botfunnel.funnel.FunnelTriggerService;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
 import com.botfunnel.subscriber.SubscriberService;
+import com.botfunnel.webhook.dto.CallbackQuery;
 import com.botfunnel.webhook.dto.Chat;
 import com.botfunnel.webhook.dto.Message;
 import com.botfunnel.webhook.dto.TelegramUpdate;
@@ -42,6 +43,7 @@ public class ProcessTelegramUpdateJob {
     private static final String EVT_COMMAND_STOP = "telegram_command_stop";
     private static final String EVT_MESSAGE_RECEIVED = "telegram_message_received";
     private static final String EVT_UPDATE_OTHER = "telegram_update_other";
+    private static final String EVT_CALLBACK_QUERY = "telegram_callback_query";
     private static final String COUNTER = "telegram_worker_outcome_total";
     private static final int ERROR_MAX_LEN = 1024;
 
@@ -144,6 +146,14 @@ public class ProcessTelegramUpdateJob {
     }
 
     private void dispatch(String projectId, String userId, TelegramUpdate update) {
+        // callback_query branch — Phase 2. Must run BEFORE the message-fallback: a callback_query
+        // update has message == null at the top level, so without this it would fall through to
+        // logEventOther("callback_query"/"unknown") and never reach the funnel engine.
+        if (update.callback_query() != null) {
+            handleCallbackQuery(projectId, userId, update.callback_query());
+            return;
+        }
+
         Message message = update.message();
         if (message == null) {
             // Modeled non-message slot OR truly unknown — resolveUpdateKind picks the first
@@ -256,6 +266,33 @@ public class ProcessTelegramUpdateJob {
         logEventCommandStop(projectId, userId, chatId, chatType);
     }
 
+    private void handleCallbackQuery(String projectId, String userId, CallbackQuery cq) {
+        Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).orElse(null);
+        if (bot == null) {
+            // Bot lookup races a concurrent disconnect — degrade to telegram_update_other, do NOT
+            // advance (mirrors the bot-missing pattern in handleStart). updateKind reuses the slot
+            // name "callback_query" so the analytics taxonomy stays consistent.
+            log.warn("ProcessTelegramUpdateJob - bot lookup missed in callback_query handler (projectId={})",
+                    projectId);
+            logEventOther(projectId, userId, "callback_query");
+            return;
+        }
+
+        Message cqMessage = cq.message();
+        Chat chat = cqMessage == null ? null : cqMessage.chat();
+        Long chatId = chat == null ? null : chat.id();
+        String data = cq.data();
+        String callbackQueryId = cq.id();
+
+        // advanceOnCallback is best-effort swallow-all (Task 5) — a failed advance must NOT poison
+        // the worker. It stays inside the worker's try/catch(Throwable) so a genuine worker fault
+        // still surfaces; we add NO extra local swallow that would hide a real failure.
+        funnelTriggerService.advanceOnCallback(projectId, chatId, data, callbackQueryId);
+        // Event AFTER the advance but BEFORE the status flip in handle() (event-before-flip). Carries
+        // ids/codes only — no PII (no from.first_name / username), Decision 9.
+        logEventCallbackQuery(projectId, userId, chatId, data);
+    }
+
     private void logEventCommandStart(String projectId, String userId, Long chatId, String chatType, String startPayload) {
         // LinkedHashMap allows null values; Map.of does not — chatId can be null in malformed
         // payloads even though our dispatch usually filters those upstream.
@@ -282,6 +319,18 @@ public class ProcessTelegramUpdateJob {
         eventService.logEvent(userId, EVT_MESSAGE_RECEIVED, null, null, metadata);
     }
 
+    private void logEventCallbackQuery(String projectId, String userId, Long chatId, String dataMarker) {
+        // LinkedHashMap allows null values (chatId/dataMarker can be null on inline-mode callbacks
+        // or absent data). ids/codes ONLY — never from.first_name / last_name / username (Decision 9).
+        // dataMarker is the raw callback_data ("{executionId}:{buttonIndex}") — an internal code,
+        // not PII; strict parse/validation is advanceOnCallback's job (Task 5), not the worker's.
+        Map<String, Object> metadata = new LinkedHashMap<>();
+        metadata.put("projectId", projectId);
+        metadata.put("chatId", chatId);
+        metadata.put("data", dataMarker);
+        eventService.logEvent(userId, EVT_CALLBACK_QUERY, null, null, metadata);
+    }
+
     private void logEventOther(String projectId, String userId, String updateKind) {
         Map<String, Object> metadata = new LinkedHashMap<>();
         metadata.put("projectId", projectId);
@@ -293,8 +342,10 @@ public class ProcessTelegramUpdateJob {
         if (update.edited_message() != null) return "edited_message";
         if (update.channel_post() != null) return "channel_post";
         if (update.edited_channel_post() != null) return "edited_channel_post";
+        // callback_query is now a typed dispatch branch (handleCallbackQuery), not an opaque slot —
+        // but a bot-missing degrade still routes here, so keep it classified for that path.
+        if (update.callback_query() != null) return "callback_query";
         JsonNode n;
-        if ((n = update.callback_query()) != null && !n.isNull()) return "callback_query";
         if ((n = update.my_chat_member()) != null && !n.isNull()) return "my_chat_member";
         if ((n = update.chat_member()) != null && !n.isNull()) return "chat_member";
         if ((n = update.inline_query()) != null && !n.isNull()) return "inline_query";

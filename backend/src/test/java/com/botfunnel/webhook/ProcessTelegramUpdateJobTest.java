@@ -346,8 +346,11 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
 
     // ─── AC11 — non-message update kinds ───────────────────────────────────────
 
+    // callback_query is intentionally absent — it is now a typed dispatch branch
+    // (handleCallbackQuery), not a "telegram_update_other" opaque slot. Its coverage lives in the
+    // callback-query test block below.
     static Stream<String> jsonNodeSlots() {
-        return Stream.of("callback_query", "my_chat_member", "chat_member",
+        return Stream.of("my_chat_member", "chat_member",
                 "inline_query", "shipping_query", "pre_checkout_query", "poll_answer");
     }
 
@@ -606,6 +609,132 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         verify(funnelTriggerService, never()).fire(any(), any(), any(), any());
     }
 
+    // ─── Task 7 — callback_query ingest ────────────────────────────────────────
+
+    @Test
+    void callbackQuery_callsAdvanceOnCallback_writesEvent() {
+        // Ingest a valid callback_query (private chat) → advanceOnCallback invoked exactly once with
+        // (projectId, chatId, data, callbackQueryId); exactly one telegram_callback_query event with
+        // chatId+projectId; rawUpdate flips to DONE.
+        String data = "507f1f77bcf86cd799439011:2";
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                callbackQueryPayload(100L, 999L, data, "cbq-1"), 1L);
+
+        job.handle(raw.getId());
+
+        verify(funnelTriggerService, times(1))
+                .advanceOnCallback(eq(projectId), eq(100L), eq(data), eq("cbq-1"));
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_callback_query");
+        assertThat(event.getUserId()).isEqualTo(OWNER_ID);
+        assertThat(event.getMetadata()).containsEntry("projectId", projectId);
+        assertThat(event.getMetadata()).containsEntry("chatId", 100L);
+        assertThat(event.getMetadata()).containsEntry("data", data);
+        verify(funnelTriggerService, never()).fire(any(), any(), any(), any());
+        assertRawUpdateDone(raw.getId());
+    }
+
+    @Test
+    void callbackQuery_eventBeforeStatusFlip_orderingInvariant() {
+        // event-before-flip: at the moment eventService.logEvent fires, the live rawUpdate status is
+        // still PENDING — the DONE save happens AFTER the event-write (sentinel side-effect approach,
+        // mirroring eventWriteBeforeStatusFlip_orderingInvariant).
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                callbackQueryPayload(100L, 999L, "507f1f77bcf86cd799439011:0", "cbq-1"), 1L);
+
+        RawUpdateStatus[] statusSeenAtEventWrite = {null};
+        Mockito.doAnswer(inv -> {
+            if (statusSeenAtEventWrite[0] == null) {
+                RawUpdate live = rawUpdateRepository.findById(raw.getId()).orElse(null);
+                statusSeenAtEventWrite[0] = live == null ? null : live.getProcessingStatus();
+            }
+            return inv.callRealMethod();
+        }).when(eventService).logEvent(any(), any(), any(), any(), any());
+
+        job.handle(raw.getId());
+
+        assertThat(statusSeenAtEventWrite[0])
+                .as("callback_query event-write must observe PENDING — DONE save happens AFTER")
+                .isEqualTo(RawUpdateStatus.PENDING);
+        assertRawUpdateDone(raw.getId());
+    }
+
+    @Test
+    void callbackQuery_reentryGuardDone_noOp() {
+        // DONE row + valid callback_query → advanceOnCallback NOT invoked, 0 events, status stays DONE.
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.DONE,
+                callbackQueryPayload(100L, 999L, "507f1f77bcf86cd799439011:1", "cbq-1"), 1L);
+
+        job.handle(raw.getId());
+
+        verify(funnelTriggerService, never())
+                .advanceOnCallback(any(), any(), any(), any());
+        assertThat(eventRepository.count()).isZero();
+        RawUpdate reloaded = rawUpdateRepository.findById(raw.getId()).orElse(null);
+        assertThat(reloaded).isNotNull();
+        assertThat(reloaded.getProcessingStatus()).isEqualTo(RawUpdateStatus.DONE);
+    }
+
+    @Test
+    void callbackQuery_botMissing_degradesNoAdvance() {
+        // No CONNECTED bot (race with disconnect) → advanceOnCallback NOT invoked; degrade to
+        // telegram_update_other with updateKind="callback_query".
+        botRepository.deleteAll();
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                callbackQueryPayload(100L, 999L, "507f1f77bcf86cd799439011:0", "cbq-1"), 1L);
+
+        job.handle(raw.getId());
+
+        verify(funnelTriggerService, never())
+                .advanceOnCallback(any(), any(), any(), any());
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_update_other");
+        assertThat(event.getMetadata()).containsEntry("updateKind", "callback_query");
+        assertRawUpdateDone(raw.getId());
+    }
+
+    @Test
+    void callbackQuery_eventCarriesNoPii() {
+        // The telegram_callback_query event must carry ids/codes only — never from.first_name /
+        // last_name / username (Decision 9). The callbackQueryPayload seeds those PII fields on
+        // `from`; assert none of them leaked into the event metadata.
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                callbackQueryPayload(100L, 999L, "507f1f77bcf86cd799439011:0", "cbq-1"), 1L);
+
+        job.handle(raw.getId());
+
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_callback_query");
+        Map<String, Object> md = event.getMetadata();
+        assertThat(md).doesNotContainKeys("from", "first_name", "last_name", "username");
+        assertThat(md.values())
+                .as("no PII value (first/last name, username) may leak into event metadata")
+                .doesNotContain("Test", "User", "testuser");
+    }
+
+    @Test
+    void callbackQuery_nullMessage_advancesWithNullChatId() {
+        // Edge case: callback on an inline-mode message has no `message` → chatId null. advanceOnCallback
+        // still invoked (it no-ops on null chatId, Task 5 swallow-all); event still written.
+        Document cq = new Document()
+                .append("id", "cbq-1")
+                .append("data", "507f1f77bcf86cd799439011:0")
+                .append("from", new Document()
+                        .append("id", 999L)
+                        .append("is_bot", false)
+                        .append("first_name", "Test"));
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                new Document().append("update_id", 1L).append("callback_query", cq), 1L);
+
+        job.handle(raw.getId());
+
+        verify(funnelTriggerService, times(1))
+                .advanceOnCallback(eq(projectId), eq(null), eq("507f1f77bcf86cd799439011:0"), eq("cbq-1"));
+        Event event = onlyEvent();
+        assertThat(event.getEventType()).isEqualTo("telegram_callback_query");
+        assertThat(event.getMetadata()).containsEntry("chatId", null);
+    }
+
     // ─── helpers ───────────────────────────────────────────────────────────────
 
     private RawUpdate seedRawUpdate(RawUpdateStatus status, Document payload, long updateId) {
@@ -639,6 +768,30 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
                     .append("language_code", "en"));
         }
         return new Document().append("update_id", 1L).append("message", message);
+    }
+
+    private Document callbackQueryPayload(Long chatId, Long fromId, String data, String callbackQueryId) {
+        // Mirrors Telegram's callback_query shape: callback_query.{id, from, message:{chat:{id,type}}, data}.
+        // `from` carries PII fields (first_name/last_name/username) on purpose — the no-PII test asserts
+        // none of them leak into the event metadata.
+        Document chat = new Document().append("id", chatId).append("type", "private");
+        Document message = new Document()
+                .append("message_id", 555L)
+                .append("chat", chat)
+                .append("date", 1700000000L);
+        Document from = new Document()
+                .append("id", fromId)
+                .append("is_bot", false)
+                .append("first_name", "Test")
+                .append("last_name", "User")
+                .append("username", "testuser")
+                .append("language_code", "en");
+        Document cq = new Document()
+                .append("id", callbackQueryId)
+                .append("from", from)
+                .append("message", message)
+                .append("data", data);
+        return new Document().append("update_id", 1L).append("callback_query", cq);
     }
 
     private Document slotPayload(String slotName) {

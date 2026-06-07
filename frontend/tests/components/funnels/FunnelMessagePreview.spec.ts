@@ -1,0 +1,121 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
+import { settle } from '../../helpers/settle'
+import FunnelMessagePreview from '../../../components/funnels/FunnelMessagePreview.vue'
+import type { FunnelStep } from '../../../types/funnel'
+
+// Read the component's own source for the static no-v-html guard (the compiled SFC object does not
+// expose its template string). vitest runs with cwd = frontend/.
+const componentSource = readFileSync(
+  resolve(process.cwd(), 'components/funnels/FunnelMessagePreview.vue'),
+  'utf8',
+)
+
+const { previewMock } = vi.hoisted(() => ({ previewMock: vi.fn() }))
+
+// The panel talks to the store, not useApi directly — mock the store's preview action.
+mockNuxtImport('useFunnelsStore', () => () => ({ preview: previewMock }))
+// useRoute supplies funnelId; the panel needs it to call preview(funnelId, stepId, payload).
+mockNuxtImport('useRoute', () => () => ({ params: { projectId: 'p1', funnelId: 'f1' } }))
+
+function messageStep(over: Partial<FunnelStep> = {}): FunnelStep {
+  return { stepType: 'SEND_MESSAGE', id: 's1', text: 'Hi {user.first_name}!', parseMode: null, ...over }
+}
+
+async function mountWith(step: FunnelStep | null) {
+  const wrapper = await mountSuspended(FunnelMessagePreview, { props: { step } })
+  await settle()
+  return wrapper
+}
+
+describe('FunnelMessagePreview', () => {
+  beforeEach(() => {
+    previewMock.mockReset()
+  })
+
+  it('renders backend result for a message step', async () => {
+    previewMock.mockResolvedValueOnce({ rendered: 'Hi Olena!', sampleData: false, kind: 'message' })
+    const wrapper = await mountWith(messageStep())
+
+    expect(previewMock).toHaveBeenCalledTimes(1)
+    expect(previewMock).toHaveBeenCalledWith('f1', 's1', {
+      stepType: 'SEND_MESSAGE',
+      text: 'Hi {user.first_name}!',
+      parseMode: null,
+    })
+    const panel = wrapper.find('[data-test="funnel-preview-panel"]')
+    expect(panel.text()).toContain('Hi Olena!')
+  })
+
+  it('shows placeholder for a non-message step', async () => {
+    const wrapper = await mountWith({ stepType: 'DELAY', id: 's2', delayValue: 1, delayUnit: 'MIN' })
+
+    // Non-message steps never call the backend.
+    expect(previewMock).not.toHaveBeenCalled()
+    const placeholder = wrapper.find('[data-test="funnel-preview-placeholder"]')
+    expect(placeholder.exists()).toBe(true)
+    expect(placeholder.text().trim().length).toBeGreaterThan(0)
+    // The rendered output area is not shown for non-message steps.
+    expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(false)
+  })
+
+  it('shows sample-data indicator when flagged', async () => {
+    previewMock.mockResolvedValueOnce({ rendered: 'Hi Sample!', sampleData: true, kind: 'message' })
+    const wrapper = await mountWith(messageStep())
+
+    const indicator = wrapper.find('[data-test="funnel-preview-sample-data"]')
+    expect(indicator.exists()).toBe(true)
+    expect(indicator.text().trim().length).toBeGreaterThan(0)
+  })
+
+  it('does NOT show sample-data indicator when not flagged', async () => {
+    previewMock.mockResolvedValueOnce({ rendered: 'Hi Olena!', sampleData: false, kind: 'message' })
+    const wrapper = await mountWith(messageStep())
+
+    expect(wrapper.find('[data-test="funnel-preview-sample-data"]').exists()).toBe(false)
+  })
+
+  it('renders rendered output as TEXT, never via v-html', async () => {
+    // Telegram escaping is NOT browser-safe. A markup payload in `rendered` MUST surface as literal text,
+    // never as a created DOM element (stored-XSS guard, OWASP A03).
+    const payload = '<img src=x onerror=alert(1)><b>x</b>'
+    previewMock.mockResolvedValueOnce({ rendered: payload, sampleData: false, kind: 'message' })
+    const wrapper = await mountWith(messageStep())
+
+    const rendered = wrapper.find('[data-test="funnel-preview-rendered"]')
+    // The payload appears as LITERAL text…
+    expect(rendered.text()).toContain(payload)
+    // …and produced NO real elements (no v-html / innerHTML).
+    expect(rendered.find('img').exists()).toBe(false)
+    expect(rendered.find('b').exists()).toBe(false)
+    expect(rendered.element.querySelector('img')).toBeNull()
+    // Hard guard: the component source must not USE v-html / innerHTML (a v-html="" directive binding or
+    // an .innerHTML assignment). Comments that merely mention the words are stripped first.
+    const sourceNoComments = componentSource
+      .replace(/<!--[\s\S]*?-->/g, '') // HTML comments
+      .replace(/\/\/[^\n]*/g, '') // line comments
+      .replace(/\/\*[\s\S]*?\*\//g, '') // block comments
+    expect(sourceNoComments).not.toMatch(/v-html\s*=/)
+    expect(sourceNoComments).not.toMatch(/\.innerHTML\s*=/)
+  })
+
+  it('renders neutral message on preview error', async () => {
+    previewMock.mockRejectedValueOnce({ statusCode: 404 })
+    const wrapper = await mountWith(messageStep())
+
+    const error = wrapper.find('[data-test="funnel-preview-error"]')
+    expect(error.exists()).toBe(true)
+    expect(error.text().trim().length).toBeGreaterThan(0)
+    // The panel did not blow up / stay blank — the rendered output is not shown on error.
+    expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(false)
+  })
+
+  it('shows a neutral empty state when no step is selected', async () => {
+    const wrapper = await mountWith(null)
+
+    expect(previewMock).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="funnel-preview-empty"]').exists()).toBe(true)
+  })
+})

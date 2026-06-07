@@ -13,7 +13,8 @@ import FunnelStepsList from '~/components/funnels/FunnelStepsList.vue'
 import AddStepDialog from '~/components/funnels/AddStepDialog.vue'
 import EditStepDialog from '~/components/funnels/EditStepDialog.vue'
 import FunnelTriggerSettings from '~/components/funnels/FunnelTriggerSettings.vue'
-import type { FunnelResponse, FunnelStatus, FunnelStep, FunnelTriggerType } from '~/types/funnel'
+import FunnelMessagePreview from '~/components/funnels/FunnelMessagePreview.vue'
+import type { FunnelResponse, FunnelStatus, FunnelStep, FunnelTriggerType, StepType } from '~/types/funnel'
 
 definePageMeta({ layout: 'default' })
 
@@ -50,6 +51,17 @@ const addOpen = ref(false)
 const editOpen = ref(false)
 const editIndex = ref(-1)
 const editStep = computed<FunnelStep | null>(() => steps.value[editIndex.value] ?? null)
+
+// ─── Task 6: message-preview panel ────────────────────────────────────────────
+// Header toggle mounts <FunnelMessagePreview> to the right (desktop-first ≥1024px). The panel previews
+// the step in focus: the one being edited (edit dialog open) wins; otherwise the first message step, so
+// turning Preview on without an open dialog still shows something. No message step → neutral empty state.
+const previewOpen = ref(false)
+const MESSAGE_STEP_TYPES: StepType[] = ['SEND_MESSAGE', 'SEND_IMAGE', 'MENU']
+const previewStep = computed<FunnelStep | null>(() => {
+  if (editStep.value) return editStep.value
+  return steps.value.find((s) => MESSAGE_STEP_TYPES.includes(s.stepType)) ?? null
+})
 
 const botUsername = computed(() => botStore.current?.telegramUsername ?? null)
 const status = computed<FunnelStatus | null>(() => funnel.value?.status ?? null)
@@ -319,6 +331,16 @@ async function confirmStopAll() {
         <span v-if="saving" data-test="funnel-saving" class="text-sm text-gray-500">{{ t('funnels.editor.saving') }}</span>
         <button
           type="button"
+          data-test="funnel-preview-toggle"
+          :aria-pressed="previewOpen"
+          class="rounded-md border px-4 py-2 text-sm font-medium hover:bg-gray-50"
+          :class="previewOpen ? 'border-blue-500 bg-blue-50 text-blue-700' : ''"
+          @click="previewOpen = !previewOpen"
+        >
+          {{ t('funnels.editor.preview') }}
+        </button>
+        <button
+          type="button"
           data-test="funnel-test-run"
           class="rounded-md border px-4 py-2 text-sm font-medium hover:bg-gray-50"
           @click="testRun"
@@ -377,33 +399,41 @@ async function confirmStopAll() {
       {{ saveError }}
     </p>
 
-    <div class="flex items-center justify-between gap-4">
-      <h2 class="text-lg font-semibold">{{ t('funnels.editor.stepsTitle') }}</h2>
-      <button
-        type="button"
-        data-test="funnel-add-step"
-        class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-        @click="addOpen = true"
-      >
-        {{ t('funnels.steps.add') }}
-      </button>
+    <!-- Two-column on ≥1024px when Preview is on: editor left, message-preview panel right (desktop-first
+         per ux-guidelines). Below lg the panel stacks under the editor — no complex narrow layout. -->
+    <div :class="previewOpen ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-6' : ''">
+      <div class="min-w-0 space-y-6">
+        <div class="flex items-center justify-between gap-4">
+          <h2 class="text-lg font-semibold">{{ t('funnels.editor.stepsTitle') }}</h2>
+          <button
+            type="button"
+            data-test="funnel-add-step"
+            class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
+            @click="addOpen = true"
+          >
+            {{ t('funnels.steps.add') }}
+          </button>
+        </div>
+
+        <FunnelStepsList
+          :steps="steps"
+          @move="onMove"
+          @edit="openEdit"
+          @delete="onDeleteStep"
+          @add="addOpen = true"
+        />
+
+        <FunnelTriggerSettings
+          v-model:trigger-type="triggerType"
+          v-model:trigger-value="triggerValue"
+          v-model:keywords="keywords"
+          :bot-username="botUsername"
+          :deep-link="funnel.deepLink"
+        />
+      </div>
+
+      <FunnelMessagePreview v-if="previewOpen" :step="previewStep" class="mt-6 lg:mt-0" />
     </div>
-
-    <FunnelStepsList
-      :steps="steps"
-      @move="onMove"
-      @edit="openEdit"
-      @delete="onDeleteStep"
-      @add="addOpen = true"
-    />
-
-    <FunnelTriggerSettings
-      v-model:trigger-type="triggerType"
-      v-model:trigger-value="triggerValue"
-      v-model:keywords="keywords"
-      :bot-username="botUsername"
-      :deep-link="funnel.deepLink"
-    />
 
     <AddStepDialog v-model:open="addOpen" :sibling-steps="steps" @add="onAddStep" />
     <EditStepDialog

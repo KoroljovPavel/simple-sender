@@ -20,6 +20,8 @@ const { storeMock, botStoreMock, navMock, toastMock } = vi.hoisted(() => ({
     duplicate: vi.fn(),
     stopAllExecutions: vi.fn(),
     testRun: vi.fn(),
+    // Task 6: message-preview panel action (only called when a message step is in focus).
+    preview: vi.fn(),
   },
   botStoreMock: { current: null as { telegramUsername: string } | null, fetch: vi.fn() },
   navMock: vi.fn(),
@@ -283,7 +285,7 @@ describe('funnels/[funnelId] editor page', () => {
 
   // ─── Task 5: header action buttons (Duplicate / Stop-all / Test for me) ───────
   describe('header action buttons', () => {
-    it('renders Duplicate / Stop-all / Test for me in the header (no Preview toggle)', async () => {
+    it('renders Duplicate / Stop-all / Test for me + Preview toggle in the header', async () => {
       storeMock.fetchOne.mockResolvedValue(draft())
       const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
       await settle()
@@ -291,8 +293,20 @@ describe('funnels/[funnelId] editor page', () => {
       expect(wrapper.find('[data-test="funnel-editor-duplicate"]').exists()).toBe(true)
       expect(wrapper.find('[data-test="funnel-editor-stop-all"]').exists()).toBe(true)
       expect(wrapper.find('[data-test="funnel-test-run"]').exists()).toBe(true)
-      // Preview is Task 6 — must NOT be here yet.
-      expect(wrapper.find('[data-test="funnel-preview-toggle"]').exists()).toBe(false)
+      // Task 6: Preview toggle is present and starts OFF (panel not mounted until toggled).
+      expect(wrapper.find('[data-test="funnel-preview-toggle"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-preview-panel"]').exists()).toBe(false)
+    })
+
+    it('Preview toggle mounts the message-preview panel', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      await wrapper.get('[data-test="funnel-preview-toggle"]').trigger('click')
+      await settle()
+
+      expect(wrapper.find('[data-test="funnel-preview-panel"]').exists()).toBe(true)
     })
 
     it('Duplicate calls the store with the funnelId and success-toasts', async () => {

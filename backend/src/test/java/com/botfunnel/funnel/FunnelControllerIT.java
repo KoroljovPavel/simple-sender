@@ -9,6 +9,9 @@ import com.botfunnel.common.test.ConcurrencyTestUtils;
 import com.botfunnel.profile.WithMockAppUser;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
+import com.botfunnel.subscriber.Subscriber;
+import com.botfunnel.subscriber.SubscriberRepository;
+import com.botfunnel.subscriber.SubscriberStatus;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
@@ -41,6 +44,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Autowired ProjectRepository projectRepository;
     @Autowired FunnelRepository funnelRepository;
     @Autowired BotRepository botRepository;
+    @Autowired SubscriberRepository subscriberRepository;
     @Autowired FunnelService funnelService;
 
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -52,6 +56,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         projectRepository.deleteAll();
         funnelRepository.deleteAll();
         botRepository.deleteAll();
+        subscriberRepository.deleteAll();
 
         seedUser(USER_ID, "owner@test.com");
         projectId = saveProject(USER_ID, null).getId();
@@ -476,6 +481,343 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         // And the index left exactly one active row for this trigger.
         assertThat(funnelRepository.findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
                 projectId, FunnelService.TRIGGER_ON_START, "race", FunnelStatus.active)).isPresent();
+    }
+
+    // ─── test-run ──────────────────────────────────────────────────────────────
+
+    private static final Long OWNER_CHAT_ID = 555_000L;
+    private static final Long BOT_TG_ID = 9000L;
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void testRunOwnerChatIdNullReturns422() throws Exception {
+        // Bot connected but ownerChatId not captured → 422 funnel_owner_not_linked, NOT 500 (HTTP-shape).
+        seedConnectedBot("my_bot"); // no ownerChatId
+        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_owner_not_linked"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void testRunSubscriberMissingReturns422() throws Exception {
+        // ownerChatId set but no subscriber doc for it → 422 funnel_owner_not_linked.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_owner_not_linked"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void testRunSubscriberNotActiveReturns422() throws Exception {
+        // Subscriber exists for ownerChatId but is BLOCKED (not ACTIVE) → 422 funnel_owner_not_linked.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.BLOCKED);
+        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_owner_not_linked"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void testRunEmptyFunnelReturns422() throws Exception {
+        // Linked owner but empty funnel → same 422 funnel_no_steps as activate (HTTP-shape, Decision 4).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        Funnel f = seedFunnel("Empty", FunnelStatus.draft, "go", List.of());
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_no_steps"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void testRunInvalidStepsReturns422() throws Exception {
+        // Linked owner but a SEND_MESSAGE step missing required text → same 422 funnel_step_invalid.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        FunnelStep broken = new FunnelStep();
+        broken.setStepType(StepType.SEND_MESSAGE);
+        broken.setOrder(0);
+        Funnel f = seedFunnel("Broken", FunnelStatus.draft, "go", new ArrayList<>(List.of(broken)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void testRunDraftFunnelReturns2xx() throws Exception {
+        // A DRAFT (valid, non-empty) funnel is test-runnable — the status-gate does not block (Decision 2).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
+                .andExpect(status().is2xxSuccessful());
+
+        // An execution was created from step 0 with depth 0, pinned to the bot's telegramBotId.
+        List<FunnelExecution> execs = inFlightExecutions(f.getId(), owner.getId());
+        assertThat(execs).hasSize(1);
+        FunnelExecution e = execs.get(0);
+        assertThat(e.getStatus()).isEqualTo(ExecutionStatus.running);
+        assertThat(e.getEnrollDepth()).isZero();
+        assertThat(e.getCurrentStepIndex()).isZero();
+        assertThat(e.getTelegramBotId()).isEqualTo(BOT_TG_ID);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void testRunRestartCancelsPrevious() throws Exception {
+        // A repeat test-run cancels the previous in-flight execution of the (funnel, subscriber) pair
+        // (cancelExistingForPair BEFORE insertExecution) and starts fresh — the previous row → cancelled,
+        // a new running row exists. This also proves the cancel-before-insert ORDER: were insert first,
+        // the re-enter partial-unique index would trip a DuplicateKeyException (→ 500), not a clean 2xx.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
+                .andExpect(status().is2xxSuccessful());
+        String firstExecId = inFlightExecutions(f.getId(), owner.getId()).get(0).getId();
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
+                .andExpect(status().is2xxSuccessful());
+
+        // Previous run was cancelled; exactly one in-flight row remains (the fresh one, a new id).
+        assertThat(execStatus(firstExecId)).isEqualTo(ExecutionStatus.cancelled);
+        List<FunnelExecution> inFlight = inFlightExecutions(f.getId(), owner.getId());
+        assertThat(inFlight).hasSize(1);
+        assertThat(inFlight.get(0).getId()).isNotEqualTo(firstExecId);
+        assertThat(inFlight.get(0).getStatus()).isEqualTo(ExecutionStatus.running);
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void testRunForeignFunnelReturns404() throws Exception {
+        // Anti-IDOR: a foreign funnel under MY project path → uniform 404 (requireFunnel FIRST).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String foreignId = seedForeignFunnel();
+
+        mockMvc.perform(post(url() + "/" + foreignId + "/test-run").with(csrf()))
+                .andExpect(status().isNotFound());
+    }
+
+    // ─── preview ─────────────────────────────────────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewParseModeNullNoEscape() throws Exception {
+        // parseMode=null → substituted value with special chars is NOT escaped (plain text, safest mode).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("a & b < c > d");
+        subscriberRepository.save(owner);
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE",
+                                "text", "Hi {user.first_name}!"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value("Hi a & b < c > d!"))
+                .andExpect(jsonPath("$.sampleData").value(false))
+                .andExpect(jsonPath("$.kind").value("message"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewHtmlEscapes() throws Exception {
+        // parseMode=HTML → substituted value escapes & < > " ; author markup <b> stays untouched.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("& < > \"");
+        subscriberRepository.save(owner);
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE",
+                                "text", "<b>{user.first_name}</b>", "parseMode", "HTML"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value("<b>&amp; &lt; &gt; &quot;</b>"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewMarkdownV2EscapesFullSet() throws Exception {
+        // parseMode=MarkdownV2 → every special char AND the backslash itself gets a preceding backslash.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String specials = "_*[]()~`>#+-=|{}.!\\";
+        owner.setFirstName(specials);
+        subscriberRepository.save(owner);
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+
+        StringBuilder expected = new StringBuilder();
+        for (char c : specials.toCharArray()) {
+            expected.append('\\').append(c);
+        }
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE",
+                                "text", "{user.first_name}", "parseMode", "MarkdownV2"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value(expected.toString()));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewLiteralBraces() throws Exception {
+        // {{ / }} render as literal { / } ; an unclosed { is left verbatim — renderer never throws.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE",
+                                "text", "{{literal}} and {unclosed"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value("{literal} and {unclosed"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewDoubleDropsTrailingZero() throws Exception {
+        // An integral Double custom value 30.0 renders as 30 (no trailing .0), like the runtime.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setCustomFields(Map.of("age", 30.0d));
+        subscriberRepository.save(owner);
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE",
+                                "text", "Age: {custom.age}"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value("Age: 30"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewUnlinkedBotUsesStubSubscriber() throws Exception {
+        // No linked owner → render on sample stub (Іван/Петренко/ivan), sampleData=true, no NPE/500.
+        // No bot seeded at all.
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE",
+                                "text", "{user.first_name} {user.last_name} @{user.username}"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value("Іван Петренко @ivan"))
+                .andExpect(jsonPath("$.sampleData").value(true))
+                .andExpect(jsonPath("$.kind").value("message"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewNonMessageStepReturnsPlaceholder() throws Exception {
+        // A non-message step (DELAY) → kind=non_message, rendered="" — placeholder, not 500.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String stepId = "d1";
+        FunnelStep delay = new FunnelStep();
+        delay.setStepType(StepType.DELAY);
+        delay.setId(stepId);
+        delay.setDelayValue(5);
+        delay.setDelayUnit("MIN");
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go", new ArrayList<>(List.of(delay)));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "DELAY", "text", "ignored"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("non_message"))
+                .andExpect(jsonPath("$.rendered").value(""));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewUnknownStepIdReturns404() throws Exception {
+        // Unknown stepId in an OWNED, valid funnel → 404 (AppException.notFound).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(sendMessageStep("s1", "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, "no-such-step")).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE", "text", "hi"))))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewOnTheFlyContentNotSavedStep() throws Exception {
+        // The request text differs from the saved step text → the REQUEST text renders (proves on-the-fly).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(sendMessageStep(stepId, "SAVED-TEXT"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE", "text", "LIVE-TEXT"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value("LIVE-TEXT"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewForeignFunnelReturns404() throws Exception {
+        // Anti-IDOR: a foreign funnel → uniform 404 (requireFunnel FIRST).
+        String foreignId = seedForeignFunnel();
+
+        mockMvc.perform(post(url() + "/" + foreignId + "/steps/s1/preview").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE", "text", "hi"))))
+                .andExpect(status().isNotFound());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewIdorPrecedenceOver422AndStepId404() throws Exception {
+        // A foreign funnel + an unknown stepId: the requireFunnel-404 PRECEDES the stepId-404, so the
+        // 404-vs-404 result never becomes an existence oracle (Decision 9). (Both collapse to 404; the
+        // point is that the foreign-funnel check runs FIRST — a 200/422 here would leak step existence.)
+        String foreignId = seedForeignFunnel();
+
+        mockMvc.perform(post(url() + "/" + foreignId + "/steps/does-not-exist/preview").with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_MESSAGE", "text", "hi"))))
+                .andExpect(status().isNotFound());
     }
 
     // ─── access guards (uniform 404) ───────────────────────────────────────────
@@ -1080,13 +1422,73 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     }
 
     private void seedConnectedBot(String username) {
+        seedConnectedBotWithOwner(username, null);
+    }
+
+    // seedConnectedBot did not set ownerChatId; this overload does so the linked-bot test-run path can be
+    // exercised (a Bot with ownerChatId + a matching ACTIVE Subscriber doc).
+    private void seedConnectedBotWithOwner(String username, Long ownerChatId) {
         Bot bot = new Bot();
         bot.setProjectId(projectId);
-        bot.setTelegramBotId(9000L);
+        bot.setTelegramBotId(BOT_TG_ID);
         bot.setTelegramUsername(username);
         bot.setStatus(BotStatus.CONNECTED);
+        bot.setOwnerChatId(ownerChatId);
         bot.setConnectedAt(Instant.now());
         botRepository.save(bot);
+    }
+
+    // An owner subscriber keyed by (projectId, BOT_TG_ID, chatId) so resolveOwnerSubscriber.findByChat
+    // resolves it. Distinct firstName lets the "real subscriber" preview assertions differ from the stub.
+    private Subscriber seedOwnerSubscriber(Long chatId, SubscriberStatus status) {
+        Subscriber s = new Subscriber();
+        s.setProjectId(projectId);
+        s.setTelegramUserId(chatId); // unique per (project, telegramUserId)
+        s.setTelegramChatId(chatId);
+        s.setTelegramBotId(BOT_TG_ID);
+        s.setFirstName("Owner");
+        s.setStatus(status);
+        s.setSubscribedAt(Instant.now());
+        s.setLastSeenAt(Instant.now());
+        return subscriberRepository.save(s);
+    }
+
+    private String seedForeignFunnel() {
+        seedUser(OTHER_USER_ID, "other-" + System.nanoTime() + "@test.com");
+        String foreignProject = saveProject(OTHER_USER_ID, null).getId();
+        Funnel foreign = new Funnel();
+        foreign.setProjectId(foreignProject);
+        foreign.setName("Foreign");
+        foreign.setStatus(FunnelStatus.draft);
+        foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
+        foreign.setTriggerValue("");
+        foreign.setSteps(new ArrayList<>());
+        foreign.setCreatedAt(Instant.now());
+        foreign.setUpdatedAt(Instant.now());
+        return funnelRepository.save(foreign).getId();
+    }
+
+    private static FunnelStep sendMessageStep(String id, String text) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.SEND_MESSAGE);
+        s.setId(id);
+        s.setText(text);
+        return s;
+    }
+
+    private String previewUrl(Funnel f, String stepId) {
+        return url() + "/" + f.getId() + "/steps/" + stepId + "/preview";
+    }
+
+    private List<FunnelExecution> inFlightExecutions(String funnelId, String subscriberId) {
+        return mongoTemplate.find(
+                org.springframework.data.mongodb.core.query.Query.query(
+                        org.springframework.data.mongodb.core.query.Criteria.where("funnelId").is(funnelId)
+                                .and("subscriberId").is(subscriberId)
+                                .and("status").in(ExecutionStatus.running.name(),
+                                        ExecutionStatus.waiting.name(),
+                                        ExecutionStatus.waiting_for_reply.name())),
+                FunnelExecution.class);
     }
 
     private void seedUser(String id, String email) {

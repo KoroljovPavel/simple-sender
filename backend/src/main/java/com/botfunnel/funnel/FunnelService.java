@@ -9,8 +9,13 @@ import com.botfunnel.funnel.dto.CreateFunnelRequest;
 import com.botfunnel.funnel.dto.FunnelResponse;
 import com.botfunnel.funnel.dto.FunnelStepDto;
 import com.botfunnel.funnel.dto.FunnelSummaryResponse;
+import com.botfunnel.funnel.dto.PreviewStepRequest;
+import com.botfunnel.funnel.dto.PreviewStepResponse;
 import com.botfunnel.funnel.dto.UpdateFunnelRequest;
 import com.botfunnel.project.ProjectService;
+import com.botfunnel.subscriber.Subscriber;
+import com.botfunnel.subscriber.SubscriberService;
+import com.botfunnel.subscriber.SubscriberStatus;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -83,6 +88,11 @@ public class FunnelService {
     // Phase 2 (Decision 2 / Decision 10): a graph edge (next / button targetStepId / timeoutTargetStepId)
     // points at a step id that does not exist in the funnel — e.g. the target step was deleted.
     static final String CODE_BROKEN_EDGE = "funnel_broken_edge";
+    // Phase 4 / Decision 5: the test-run owner could not be resolved to an ACTIVE subscriber — the author
+    // has not (or no longer) linked their own Telegram to the project's bot. All three branches (no bot /
+    // ownerChatId null / no-or-inactive subscriber) collapse to this one code; the remediation is the
+    // same for the author ("send /start to the bot"). Always 422, never 500 (it is a predictable state).
+    static final String CODE_OWNER_NOT_LINKED = "funnel_owner_not_linked";
 
     // MENU button limits (Phase 2). Telegram allows long keyboards, but the editor caps at 8 (1/row) and
     // labels at 64 chars (also Telegram's practical button-text ceiling).
@@ -95,6 +105,8 @@ public class FunnelService {
     private final MongoTemplate mongoTemplate;
     private final ProjectService projectService;
     private final BotRepository botRepository;
+    private final FunnelExecutionFactory funnelExecutionFactory;
+    private final SubscriberService subscriberService;
     private final Clock clock;
     private final int maxSteps;
 
@@ -102,12 +114,16 @@ public class FunnelService {
                          MongoTemplate mongoTemplate,
                          ProjectService projectService,
                          BotRepository botRepository,
+                         FunnelExecutionFactory funnelExecutionFactory,
+                         SubscriberService subscriberService,
                          Clock clock,
                          @Value("${app.funnel.max-steps:50}") int maxSteps) {
         this.funnelRepository = funnelRepository;
         this.mongoTemplate = mongoTemplate;
         this.projectService = projectService;
         this.botRepository = botRepository;
+        this.funnelExecutionFactory = funnelExecutionFactory;
+        this.subscriberService = subscriberService;
         this.clock = clock;
         this.maxSteps = maxSteps;
     }
@@ -306,6 +322,106 @@ public class FunnelService {
         funnel.setStatus(FunnelStatus.paused);
         funnel.setUpdatedAt(Instant.now(clock));
         return toResponse(funnelRepository.save(funnel));
+    }
+
+    // "Test for me" (Decision 2): enroll the AUTHOR's own subscriber directly into the funnel, bypassing
+    // trigger matching, via insertExecution(depth=0). Order of guards is load-bearing:
+    //   1. requireFunnel FIRST (anti-IDOR uniform 404 before any side effect / existence leak).
+    //   2. Resolve the owner's ACTIVE subscriber; an unresolved owner → 422 funnel_owner_not_linked
+    //      (Decision 5) — never 500, since it is a predictable "account not linked" business state.
+    //   3. Pre-validate the funnel (Decision 4): an empty/invalid funnel → the SAME 422 codes as activate,
+    //      so the author gets actionable feedback instead of a silent instant-complete.
+    //   4. cancelExistingForPair BEFORE insertExecution (Decision 3 restart policy): a repeat test cancels
+    //      the previous in-flight run of THIS (funnel, subscriber) pair and starts fresh, so the re-enter
+    //      partial-unique index never trips a DuplicateKeyException.
+    // A draft (valid, non-empty) funnel is test-runnable — insertExecution does not gate on funnel.status.
+    // 2xx means the execution was created (enroll registered); the actual send is async (engine sweep), so
+    // a later Telegram-send failure flips the execution to failed without changing this HTTP result.
+    public void testRun(String ownerId, String projectId, String funnelId) {
+        Funnel funnel = requireFunnel(ownerId, projectId, funnelId);
+
+        Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).orElse(null);
+        Subscriber owner = resolveOwnerSubscriber(projectId, bot).orElseThrow(FunnelService::ownerNotLinked);
+
+        List<FunnelStep> steps = funnel.getSteps();
+        if (steps == null || steps.isEmpty()) {
+            throw AppException.unprocessableEntity(CODE_NO_STEPS,
+                    "Funnel must have at least one step to test-run");
+        }
+        validateSteps(steps);
+
+        funnelExecutionFactory.cancelExistingForPair(projectId, funnelId, owner.getId());
+        funnelExecutionFactory.insertExecution(projectId, funnel, owner.getId(), bot.getTelegramBotId(), 0);
+    }
+
+    // Step preview (Decision 9): render a message step's CURRENT (possibly unsaved) content from the
+    // request body — NOT the saved step — so the editor preview is reactive to what the author types now,
+    // with escaping computed on the backend byte-for-byte as the runtime (anti markup/XSS drift, A03).
+    // requireFunnel runs FIRST (anti-IDOR): a foreign/missing funnel collapses to 404 and that 404
+    // PRECEDES the stepId-404 and any other state, so a 404-vs-422 difference never becomes an
+    // existence oracle. An unknown stepId in an OWNED funnel → 404. Never 500 on predictable states.
+    public PreviewStepResponse previewStep(String ownerId, String projectId, String funnelId,
+                                           String stepId, PreviewStepRequest request) {
+        Funnel funnel = requireFunnel(ownerId, projectId, funnelId);
+        FunnelStep step = findStep(funnel, stepId)
+                .orElseThrow(() -> AppException.notFound("Funnel step not found"));
+
+        // Resolve the owner's ACTIVE subscriber for a faithful render; fall back to a sample stub when the
+        // bot/owner is not linked so the preview still works (sampleData=true). render() requires a
+        // non-null Subscriber, so the stub also prevents an NPE/500.
+        Bot bot = botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED).orElse(null);
+        Optional<Subscriber> resolved = resolveOwnerSubscriber(projectId, bot);
+        boolean sampleData = resolved.isEmpty();
+        Subscriber subscriber = resolved.orElseGet(FunnelService::stubSubscriber);
+
+        if (isMessageStep(step.getStepType())) {
+            // On-the-fly content (Decision 9): render the request text+parseMode, NOT the saved step.
+            String rendered = VariableTemplateRenderer.render(request.text(), request.parseMode(), subscriber);
+            return new PreviewStepResponse(rendered, sampleData, "message");
+        }
+        // Non-message step (DELAY/ADD_TAG/REMOVE_TAG/SET_CUSTOM_FIELD/EMIT_EVENT): neutral placeholder.
+        return new PreviewStepResponse("", sampleData, "non_message");
+    }
+
+    private static boolean isMessageStep(StepType type) {
+        return type == StepType.SEND_MESSAGE || type == StepType.SEND_IMAGE || type == StepType.MENU;
+    }
+
+    private static Optional<FunnelStep> findStep(Funnel funnel, String stepId) {
+        if (stepId == null || funnel.getSteps() == null) {
+            return Optional.empty();
+        }
+        return funnel.getSteps().stream().filter(s -> stepId.equals(s.getId())).findFirst();
+    }
+
+    // Shared owner-resolution shim (Decision 11 — test-run + preview share one path): the project's single
+    // CONNECTED bot → its ownerChatId → findByChat → keep ONLY an ACTIVE subscriber. Returns empty when
+    // any link is missing (no bot / ownerChatId null / no subscriber / not ACTIVE). test-run maps empty to
+    // 422; preview falls back to a stub. A non-message step's own preview never reaches the send path, so
+    // a missing link is non-fatal there. The audit (Task 7) checks this seam against duplication.
+    private Optional<Subscriber> resolveOwnerSubscriber(String projectId, Bot bot) {
+        if (bot == null || bot.getOwnerChatId() == null) {
+            return Optional.empty();
+        }
+        return subscriberService.findByChat(projectId, bot.getTelegramBotId(), bot.getOwnerChatId())
+                .filter(s -> s.getStatus() == SubscriberStatus.ACTIVE);
+    }
+
+    // Sample stub for preview when the owner is not linked (Decision 9). Sample identity values + empty
+    // custom fields; NEVER persisted. Matches the runtime user.* placeholders so the author still sees a
+    // representative render.
+    private static Subscriber stubSubscriber() {
+        Subscriber s = new Subscriber();
+        s.setFirstName("Іван");
+        s.setLastName("Петренко");
+        s.setUsername("ivan");
+        s.setCustomFields(java.util.Map.of());
+        return s;
+    }
+
+    private static AppException ownerNotLinked() {
+        return AppException.unprocessableEntity(CODE_OWNER_NOT_LINKED,
+                "Open your bot in Telegram and send /start, then try the test again");
     }
 
     // requireOwned FIRST, then prove the funnel belongs to THIS project: a cross-project / missing
@@ -509,9 +625,12 @@ public class FunnelService {
         return buttons;
     }
 
-    // Per-type + limit validation shared by update (reject invalid edits) and activate (defense-in-depth
-    // re-validation of a possibly directly-seeded funnel). All failures are 422 with a business code.
-    private void validateSteps(List<FunnelStep> steps) {
+    // Per-type + limit validation shared by update (reject invalid edits), activate (defense-in-depth
+    // re-validation of a possibly directly-seeded funnel) and test-run (Decision 4: pre-validate before
+    // enroll so an empty/invalid funnel fails fast with the SAME 422 codes as activate, instead of
+    // silently completing). Package-private (raised from private — Decision 4) so testRun can reuse it
+    // with NO logic/code change. All failures are 422 with a business code.
+    void validateSteps(List<FunnelStep> steps) {
         if (steps.size() > maxSteps) {
             throw AppException.unprocessableEntity(CODE_STEP_LIMIT,
                     "Funnel exceeds the maximum of " + maxSteps + " steps");

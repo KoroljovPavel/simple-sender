@@ -5,6 +5,8 @@ import com.botfunnel.common.AppException;
 import com.botfunnel.funnel.dto.CreateFunnelRequest;
 import com.botfunnel.funnel.dto.FunnelResponse;
 import com.botfunnel.funnel.dto.FunnelSummaryResponse;
+import com.botfunnel.funnel.dto.PreviewStepRequest;
+import com.botfunnel.funnel.dto.PreviewStepResponse;
 import com.botfunnel.funnel.dto.StopAllResponse;
 import com.botfunnel.funnel.dto.UpdateFunnelRequest;
 import jakarta.validation.Valid;
@@ -104,6 +106,26 @@ public class FunnelController {
     public ResponseEntity<FunnelResponse> pause(@PathVariable String projectId,
                                                 @PathVariable String funnelId) {
         return ResponseEntity.ok(funnelService.pause(currentUserId(), projectId, funnelId));
+    }
+
+    // "Test for me" (Task 2): enroll the author's own subscriber directly into the funnel. 200 OK on a
+    // successful enroll (the send is async); 422 funnel_owner_not_linked when the author is not linked.
+    @PostMapping("/{funnelId}/test-run")
+    public ResponseEntity<Void> testRun(@PathVariable String projectId,
+                                        @PathVariable String funnelId) {
+        funnelService.testRun(currentUserId(), projectId, funnelId);
+        return ResponseEntity.ok().build();
+    }
+
+    // Step preview (Task 2): render the message step's CURRENT (possibly unsaved) content from the body
+    // with runtime-faithful escaping. 200 + PreviewStepResponse; 404 for an unknown/foreign step/funnel.
+    @PostMapping("/{funnelId}/steps/{stepId}/preview")
+    public ResponseEntity<PreviewStepResponse> previewStep(@PathVariable String projectId,
+                                                           @PathVariable String funnelId,
+                                                           @PathVariable String stepId,
+                                                           @RequestBody PreviewStepRequest request) {
+        return ResponseEntity.ok(
+                funnelService.previewStep(currentUserId(), projectId, funnelId, stepId, request));
     }
 
     private static String currentUserId() {

@@ -4,6 +4,7 @@ import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.common.AppException;
+import com.botfunnel.funnel.dto.ButtonDto;
 import com.botfunnel.funnel.dto.CreateFunnelRequest;
 import com.botfunnel.funnel.dto.FunnelResponse;
 import com.botfunnel.funnel.dto.FunnelStepDto;
@@ -18,12 +19,15 @@ import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.mongodb.core.query.Update;
 import org.springframework.stereotype.Service;
 
+import java.net.URI;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -56,6 +60,16 @@ public class FunnelService {
     static final String CODE_INVALID_TRIGGER_VALUE = "funnel_invalid_trigger_value";
     static final String CODE_NO_STEPS = "funnel_no_steps";
     static final String CODE_INVALID_STATE = "funnel_invalid_state";
+    // Phase 2 (Decision 2 / Decision 10): a graph edge (next / button targetStepId / timeoutTargetStepId)
+    // points at a step id that does not exist in the funnel — e.g. the target step was deleted.
+    static final String CODE_BROKEN_EDGE = "funnel_broken_edge";
+
+    // MENU button limits (Phase 2). Telegram allows long keyboards, but the editor caps at 8 (1/row) and
+    // labels at 64 chars (also Telegram's practical button-text ceiling).
+    private static final int MAX_BUTTONS = 8;
+    private static final int MAX_BUTTON_LABEL = 64;
+    static final String BUTTON_TYPE_CALLBACK = "callback";
+    static final String BUTTON_TYPE_URL = "url";
 
     private final FunnelRepository funnelRepository;
     private final MongoTemplate mongoTemplate;
@@ -250,11 +264,28 @@ public class FunnelService {
         if (dtos == null) {
             return steps;
         }
+        // Graph model (Decision 2): preserve any client-supplied stable id, mint one for new steps,
+        // and reject duplicate ids within the funnel (a client sending two steps with the same id
+        // would corrupt the graph — targets resolve ambiguously). Minted ids use ObjectId hex, matching
+        // the Task 1 backfill convention.
+        Set<String> seenIds = new HashSet<>();
         for (int i = 0; i < dtos.size(); i++) {
             FunnelStepDto dto = dtos.get(i);
             FunnelStep step = new FunnelStep();
             step.setStepType(dto.stepType());
             step.setOrder(i); // position in the array IS the order (server-authoritative)
+
+            String incomingId = blankToNull(dto.id());
+            if (incomingId != null && !seenIds.add(incomingId)) {
+                throw invalidStep("Duplicate step id within funnel: " + incomingId);
+            }
+            step.setId(incomingId != null ? incomingId : new org.bson.types.ObjectId().toHexString());
+            step.setNext(blankToNull(dto.next()));
+            step.setButtons(toButtons(dto.buttons()));
+            step.setTimeoutValue(dto.timeoutValue());
+            step.setTimeoutUnit(blankToNull(dto.timeoutUnit()));
+            step.setTimeoutTargetStepId(blankToNull(dto.timeoutTargetStepId()));
+
             step.setText(dto.text());
             step.setParseMode(blankToNull(dto.parseMode()));
             step.setImageUrl(dto.imageUrl());
@@ -269,12 +300,32 @@ public class FunnelService {
         return steps;
     }
 
+    private static List<Button> toButtons(List<ButtonDto> dtos) {
+        if (dtos == null) {
+            return null;
+        }
+        List<Button> buttons = new ArrayList<>(dtos.size());
+        for (ButtonDto b : dtos) {
+            buttons.add(new Button(b.type(), b.label(), blankToNull(b.targetStepId()), blankToNull(b.url())));
+        }
+        return buttons;
+    }
+
     // Per-type + limit validation shared by update (reject invalid edits) and activate (defense-in-depth
     // re-validation of a possibly directly-seeded funnel). All failures are 422 with a business code.
     private void validateSteps(List<FunnelStep> steps) {
         if (steps.size() > maxSteps) {
             throw AppException.unprocessableEntity(CODE_STEP_LIMIT,
                     "Funnel exceeds the maximum of " + maxSteps + " steps");
+        }
+        // Build the set of existing step ids ONCE, before the edge pass (Decision 2: targets are stable
+        // ids). A null id can occur only for a directly-seeded legacy step that bypassed toSteps; the
+        // backfill (Task 1) stamps ids, and toSteps mints them, so on the normal path every step has one.
+        Set<String> stepIds = new HashSet<>();
+        for (FunnelStep step : steps) {
+            if (step.getId() != null) {
+                stepIds.add(step.getId());
+            }
         }
         for (FunnelStep step : steps) {
             switch (step.getStepType()) {
@@ -289,7 +340,84 @@ public class FunnelService {
                 case DELAY -> requireDelay(step.getDelayValue(), step.getDelayUnit());
                 case ADD_TAG, REMOVE_TAG -> requireTagSlug(step.getTagSlug());
                 case SET_CUSTOM_FIELD -> requireCustomFieldKey(step.getCustomFieldKey());
+                case MENU -> validateMenu(step, stepIds);
             }
+            // Graph-edge pass (every step type): the default outgoing edge and the optional timeout edge
+            // must point at an existing step id, or be null (null next = next-in-list; null timeout
+            // target = completed). A non-null target that is not in stepIds is a broken edge → 422.
+            requireExistingTarget(step.getNext(), stepIds);
+            requireExistingTarget(step.getTimeoutTargetStepId(), stepIds);
+        }
+    }
+
+    // MENU validation (Decision 10): >=1 callback button so the subscriber can never get stuck; per
+    // button — non-empty label <= 64 chars; callback target null (End) or an existing id; url strictly
+    // http(s) with a non-empty host; at most 8 buttons.
+    private static void validateMenu(FunnelStep step, Set<String> stepIds) {
+        List<Button> buttons = step.getButtons();
+        if (buttons == null || buttons.isEmpty()) {
+            throw invalidStep("MENU step requires at least one button");
+        }
+        if (buttons.size() > MAX_BUTTONS) {
+            throw invalidStep("MENU step exceeds the maximum of " + MAX_BUTTONS + " buttons");
+        }
+        int callbackCount = 0;
+        for (Button button : buttons) {
+            if (button.label() == null || button.label().isBlank()) {
+                throw invalidStep("MENU button requires a non-empty label");
+            }
+            if (button.label().length() > MAX_BUTTON_LABEL) {
+                throw invalidStep("MENU button label exceeds " + MAX_BUTTON_LABEL + " characters");
+            }
+            if (BUTTON_TYPE_CALLBACK.equals(button.type())) {
+                callbackCount++;
+                // null targetStepId = End (valid). A non-null target must resolve to an existing step.
+                requireExistingTarget(button.targetStepId(), stepIds);
+            } else if (BUTTON_TYPE_URL.equals(button.type())) {
+                requireHttpUrl(button.url());
+            } else {
+                throw invalidStep("MENU button type must be 'callback' or 'url'");
+            }
+        }
+        if (callbackCount == 0) {
+            throw invalidStep("MENU step requires at least one callback button");
+        }
+    }
+
+    // A non-null edge target must point at an existing step id. null = default (next-in-list / End /
+    // completed) and is always valid.
+    private static void requireExistingTarget(String targetStepId, Set<String> stepIds) {
+        if (targetStepId != null && !stepIds.contains(targetStepId)) {
+            throw AppException.unprocessableEntity(CODE_BROKEN_EDGE,
+                    "Step target points at a non-existent step id: " + targetStepId);
+        }
+    }
+
+    // Strict URL-button scheme check (Decision 10, SSRF / scheme-injection defense): parse via URI and
+    // require the scheme to be EXACTLY http or https (not startsWith) with a non-empty host. This rejects
+    // javascript:/data:/tg://, leading-whitespace-obfuscated values, and empty-host URLs. A malformed URI
+    // (URISyntaxException → IllegalArgumentException from URI(String) path) is mapped to 422, never 500.
+    private static void requireHttpUrl(String url) {
+        if (url == null || url.isBlank()) {
+            throw invalidStep("MENU url button requires a url");
+        }
+        // Leading/trailing whitespace is never valid in a URL; reject before parsing so " http://x"
+        // cannot slip a leading-space-obfuscated value past the scheme check.
+        if (!url.equals(url.strip())) {
+            throw invalidStep("MENU url button must use the http or https scheme");
+        }
+        final URI uri;
+        try {
+            uri = new URI(url);
+        } catch (Exception e) {
+            throw invalidStep("MENU url button is not a valid URL");
+        }
+        String scheme = uri.getScheme();
+        if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
+            throw invalidStep("MENU url button must use the http or https scheme");
+        }
+        if (uri.getHost() == null || uri.getHost().isBlank()) {
+            throw invalidStep("MENU url button must have a non-empty host");
         }
     }
 
@@ -382,6 +510,12 @@ public class FunnelService {
     private static FunnelStepDto toStepDto(FunnelStep step) {
         return new FunnelStepDto(
                 step.getStepType(),
+                step.getId(),
+                step.getNext(),
+                toButtonDtos(step.getButtons()),
+                step.getTimeoutValue(),
+                step.getTimeoutUnit(),
+                step.getTimeoutTargetStepId(),
                 step.getText(),
                 step.getParseMode(),
                 step.getImageUrl(),
@@ -391,6 +525,15 @@ public class FunnelService {
                 step.getTagSlug(),
                 step.getCustomFieldKey(),
                 step.getCustomFieldValue());
+    }
+
+    private static List<ButtonDto> toButtonDtos(List<Button> buttons) {
+        if (buttons == null) {
+            return null;
+        }
+        return buttons.stream()
+                .map(b -> new ButtonDto(b.type(), b.label(), b.targetStepId(), b.url()))
+                .toList();
     }
 
     // deepLink is shown for an active funnel so the editor can display + copy it after a page reload

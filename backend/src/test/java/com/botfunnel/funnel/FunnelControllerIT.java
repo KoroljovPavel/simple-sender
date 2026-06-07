@@ -426,7 +426,253 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
     }
 
+    // ─── Phase 2: graph validation (MENU + edges) ──────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateBrokenEdgeReturns422() throws Exception {
+        // A MENU whose callback button points at a step id that is NOT in the funnel (e.g. the target
+        // was deleted) → 422 funnel_broken_edge on activate.
+        FunnelStep menu = menuStep("step-menu",
+                callbackButton("Go", "deleted-step-id"),
+                callbackButton("Stay", null));
+        Funnel f = seedFunnel("Broken", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_broken_edge"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateBrokenNextEdgeReturns422() throws Exception {
+        // A non-MENU step whose `next` points at a non-existent id → 422 funnel_broken_edge.
+        FunnelStep send = new FunnelStep();
+        send.setStepType(StepType.SEND_MESSAGE);
+        send.setText("hi");
+        send.setId("step-send");
+        send.setNext("ghost-step");
+        Funnel f = seedFunnel("BrokenNext", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(send)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_broken_edge"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuWithoutCallbackReturns422() throws Exception {
+        // A MENU with only a URL button (0 callback) would strand the subscriber → 422.
+        FunnelStep menu = menuStep("step-menu", urlButton("Site", "https://example.com"));
+        Funnel f = seedFunnel("NoCallback", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuUrlButtonRejectsNonHttpScheme() throws Exception {
+        // javascript: scheme on a URL button → 422 (Decision 10 strict scheme check).
+        FunnelStep menu = menuStep("step-menu",
+                callbackButton("Ok", null),
+                urlButton("Evil", "javascript:alert(1)"));
+        Funnel f = seedFunnel("BadScheme", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuUrlButtonRejectsLeadingWhitespace() throws Exception {
+        // Leading-whitespace-obfuscated " http://..." must NOT slip past the scheme check → 422.
+        FunnelStep menu = menuStep("step-menu",
+                callbackButton("Ok", null),
+                urlButton("Sneaky", " http://example.com"));
+        Funnel f = seedFunnel("Whitespace", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuUrlButtonRejectsEmptyHost() throws Exception {
+        // http:/// has scheme http but an empty host → 422.
+        FunnelStep menu = menuStep("step-menu",
+                callbackButton("Ok", null),
+                urlButton("NoHost", "http:///path"));
+        Funnel f = seedFunnel("EmptyHost", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuRejectsTooManyButtons() throws Exception {
+        FunnelStep menu = new FunnelStep();
+        menu.setStepType(StepType.MENU);
+        menu.setId("step-menu");
+        menu.setText("pick");
+        List<Button> buttons = new ArrayList<>();
+        buttons.add(new Button("callback", "first", null, null));
+        for (int i = 0; i < 8; i++) { // 1 callback + 8 url = 9 > MAX_BUTTONS(8)
+            buttons.add(new Button("url", "u" + i, null, "https://example.com/" + i));
+        }
+        menu.setButtons(buttons);
+        Funnel f = seedFunnel("TooMany", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void menuButtonsRoundTripThroughPatchAndGet() throws Exception {
+        // PATCH a funnel: a SEND_MESSAGE target step + a MENU with 2 callback buttons (one → the send
+        // step, one → End). GET must return the same buttons/targets, and every step must have a
+        // server-minted id.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> sendStep = stepMap("SEND_MESSAGE", Map.of("text", "branch"));
+        sendStep.put("id", "target-1"); // client-supplied stable id, preserved by toSteps
+        Map<String, Object> menuStep = stepMap("MENU", Map.of(
+                "text", "choose",
+                "buttons", List.of(
+                        Map.of("type", "callback", "label", "Go", "targetStepId", "target-1"),
+                        Map.of("type", "callback", "label", "Quit")))); // no target = End
+
+        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+                "steps", List.of(menuStep, sendStep));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps.length()").value(2));
+
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].stepType").value("MENU"))
+                .andExpect(jsonPath("$.steps[0].id").isNotEmpty())
+                .andExpect(jsonPath("$.steps[0].buttons.length()").value(2))
+                .andExpect(jsonPath("$.steps[0].buttons[0].label").value("Go"))
+                .andExpect(jsonPath("$.steps[0].buttons[0].targetStepId").value("target-1"))
+                .andExpect(jsonPath("$.steps[0].buttons[1].label").value("Quit"))
+                .andExpect(jsonPath("$.steps[0].buttons[1].targetStepId").value(org.hamcrest.Matchers.nullValue()))
+                // The preserved client id round-trips; the MENU got a server-minted id (non-empty).
+                .andExpect(jsonPath("$.steps[1].id").value("target-1"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void duplicateStepIdReturns422() throws Exception {
+        // Client sends two steps with the same id → corrupt graph → 422.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> a = stepMap("SEND_MESSAGE", Map.of("text", "a"));
+        a.put("id", "dup");
+        Map<String, Object> b = stepMap("SEND_MESSAGE", Map.of("text", "b"));
+        b.put("id", "dup");
+        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+                "steps", List.of(a, b));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void reorderPreservesButtonTargetsById() throws Exception {
+        // Reorder the array (MENU first vs target first). Because targets are stable ids (not indices),
+        // the edge stays valid and activate succeeds regardless of array position.
+        seedConnectedBot("promo_bot");
+        FunnelStep target = new FunnelStep();
+        target.setStepType(StepType.SEND_MESSAGE);
+        target.setText("hi");
+        target.setId("target-x");
+        FunnelStep menu = menuStep("menu-x", callbackButton("Go", "target-x"));
+        // Array order: MENU before its target — forward edge is irrelevant, id resolves either way.
+        Funnel f = seedFunnel("Reorder", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(menu, target)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("active"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void menuFanInAndLoopTargetsValidate() throws Exception {
+        // fan-in: two callback buttons → the same step; loop: a button → back to the MENU itself.
+        // Both are valid graph edges → activate passes.
+        seedConnectedBot("promo_bot");
+        FunnelStep shared = new FunnelStep();
+        shared.setStepType(StepType.SEND_MESSAGE);
+        shared.setText("shared");
+        shared.setId("shared-step");
+        FunnelStep menu = menuStep("menu-loop",
+                callbackButton("A", "shared-step"),
+                callbackButton("B", "shared-step"),   // fan-in
+                callbackButton("Back", "menu-loop"));  // loop to self
+        Funnel f = seedFunnel("FanIn", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(menu, shared)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("active"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuLabelTooLongReturns422() throws Exception {
+        // 65-char label is over the 64 limit → 422; 64 is the boundary (accepted elsewhere).
+        String label65 = "x".repeat(65);
+        FunnelStep menu = menuStep("step-menu", callbackButton(label65, null));
+        Funnel f = seedFunnel("LongLabel", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
     // ─── helpers ────────────────────────────────────────────────────────────────
+
+    private static FunnelStep menuStep(String id, Button... buttons) {
+        FunnelStep step = new FunnelStep();
+        step.setStepType(StepType.MENU);
+        step.setId(id);
+        step.setText("menu");
+        step.setButtons(new ArrayList<>(List.of(buttons)));
+        return step;
+    }
+
+    private static Button callbackButton(String label, String targetStepId) {
+        return new Button("callback", label, targetStepId, null);
+    }
+
+    private static Button urlButton(String label, String url) {
+        return new Button("url", label, null, url);
+    }
+
 
     private Object activateCatching(String funnelId) {
         try {

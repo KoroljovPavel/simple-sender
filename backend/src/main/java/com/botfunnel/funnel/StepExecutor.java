@@ -19,7 +19,9 @@ import org.springframework.stereotype.Component;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -50,6 +52,11 @@ public class StepExecutor {
     static final String LOG_TEXT_TRIMMED = "FUNNEL_STEP_TEXT_TRIMMED";
     static final String LOG_CAPTION_TRIMMED = "FUNNEL_STEP_CAPTION_TRIMMED";
     static final String LOG_CUSTOM_FIELD_SKIPPED = "FUNNEL_STEP_CUSTOM_FIELD_SKIPPED_DELETED_DEFINITION";
+
+    // callback_data wire contract with Task 5 (Decision 6): EXACTLY "{executionId}:{buttonIndex}" — the
+    // ObjectId-hex execution id + a single ':' separator + the 0-based button index. Task 5's parser is
+    // strict (one ':', ObjectId-hex shape, bounded index); any deviation here silently drops real taps.
+    static final String CALLBACK_DATA_SEPARATOR = ":";
 
     // Dynamic-value sentinel for a SET_CUSTOM_FIELD step on a DATE field: instead of a fixed ISO date the
     // author can store this token, and the engine substitutes the execution-time instant. Resolved ONLY
@@ -93,11 +100,73 @@ public class StepExecutor {
                 yield StepResult.cont();
             }
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
-            // MENU is wired in Task 3 (park-on-reply). Until then no MENU step can exist (the type is
-            // not yet offered by the editor/validator), so reaching this arm is a programming error.
-            case MENU -> throw new UnsupportedOperationException(
-                    "MENU step execution is not implemented until Task 3 (Phase 2 engine)");
+            case MENU -> menu(step, execution, subscriber, bot);
         };
+    }
+
+    // MENU (Phase 2, park-on-reply): render the menu text (same renderer/trim rules as SEND_MESSAGE) and
+    // an inline keyboard from step.getButtons(), send via the 6-arg sendText overload (reply_markup), then
+    // return WAIT_FOR_REPLY carrying the timeout deadline (now + timeoutValue/timeoutUnit) or null (wait
+    // indefinitely). The runner applies the park (status=waiting_for_reply, currentStepId stays, nextRunAt).
+    private StepResult menu(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
+        String rendered = VariableTemplateRenderer.render(step.getText(), step.getParseMode(), subscriber);
+        if (rendered.length() > MAX_MESSAGE_LENGTH) {
+            log.warn("{} executionId={} stepIndex={} originalLength={} trimmedTo={}", LOG_TEXT_TRIMMED,
+                    execution.getId(), execution.getCurrentStepIndex(), rendered.length(), MAX_MESSAGE_LENGTH);
+            rendered = rendered.substring(0, MAX_MESSAGE_LENGTH);
+        }
+        Object replyMarkup = buildReplyMarkup(step, execution);
+        Instant deadline = menuDeadline(step);
+        try {
+            sender.sendText(bot.getId(), subscriber.getTelegramChatId(), rendered, step.getParseMode(),
+                    null, replyMarkup);
+            return StepResult.waitForReply(deadline);
+        } catch (TelegramSendException ex) {
+            return fromTerminalReason(ex);
+        } catch (BotTokenInvalidException ex) {
+            return StepResult.fail("invalid_bot_token");
+        } catch (AppException ex) {
+            return StepResult.fail(codeOrStatus(ex));
+        }
+    }
+
+    // Build a Telegram inline_keyboard ({"inline_keyboard":[[{text, callback_data|url}]]}) — one button
+    // per row, mirroring the editor's vertical layout. callback_data is the Task 5 wire contract
+    // "{executionId}:{buttonIndex}" (Decision 6); URL buttons carry a "url" field and NO callback_data.
+    // A null/empty button list yields no reply_markup (null) so the send carries no keyboard.
+    private static Object buildReplyMarkup(FunnelStep step, FunnelExecution execution) {
+        List<Button> buttons = step.getButtons();
+        if (buttons == null || buttons.isEmpty()) {
+            return null;
+        }
+        List<Object> rows = new ArrayList<>(buttons.size());
+        for (int i = 0; i < buttons.size(); i++) {
+            Button button = buttons.get(i);
+            Map<String, Object> tgButton = new LinkedHashMap<>();
+            tgButton.put("text", button.label());
+            if ("url".equals(button.type())) {
+                tgButton.put("url", button.url());
+            } else {
+                // callback (or any non-url type) → callback_data per Decision 6 wire contract.
+                tgButton.put("callback_data", execution.getId() + CALLBACK_DATA_SEPARATOR + i);
+            }
+            rows.add(List.of(tgButton));
+        }
+        Map<String, Object> markup = new LinkedHashMap<>();
+        markup.put("inline_keyboard", rows);
+        return markup;
+    }
+
+    // Timeout deadline for a MENU park: now + timeoutValue/timeoutUnit, or null when no timeout is set
+    // (wait indefinitely). timeoutUnit reuses the existing delayUnit convention {"MIN","HOUR","DAY"}
+    // (Decision: timeoutUnit format) for a shared switch with delayDuration.
+    private Instant menuDeadline(FunnelStep step) {
+        Integer value = step.getTimeoutValue();
+        String unit = step.getTimeoutUnit();
+        if (value == null || unit == null) {
+            return null;
+        }
+        return Instant.now(clock).plus(durationOf(value, unit));
     }
 
     private StepResult sendMessage(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
@@ -220,38 +289,51 @@ public class StepExecutor {
     }
 
     private static Duration delayDuration(FunnelStep step) {
-        int value = step.getDelayValue();
-        return switch (step.getDelayUnit()) {
+        return durationOf(step.getDelayValue(), step.getDelayUnit());
+    }
+
+    // Shared unit→Duration mapping for both delayUnit and timeoutUnit (Decision: timeoutUnit reuses the
+    // delayUnit convention {"MIN","HOUR","DAY"} for consistency).
+    private static Duration durationOf(int value, String unit) {
+        return switch (unit) {
             case "MIN" -> Duration.ofMinutes(value);
             case "HOUR" -> Duration.ofHours(value);
             case "DAY" -> Duration.ofDays(value);
-            default -> throw new IllegalStateException("Unknown delayUnit: " + step.getDelayUnit());
+            default -> throw new IllegalStateException("Unknown time unit: " + unit);
         };
     }
 
     /** Outcome of one step, telling the runner how to advance the execution. */
-    public enum Outcome { CONTINUE, DELAY, CANCEL, FAIL }
+    public enum Outcome { CONTINUE, DELAY, CANCEL, FAIL, WAIT_FOR_REPLY }
 
     /**
      * Result of executing one step. {@code delay} is non-null only for {@link Outcome#DELAY};
-     * {@code reasonCode} is a non-PII code for terminal outcomes (terminal reason / error code),
-     * used only for structured logging.
+     * {@code nextRunAt} is the timeout deadline for {@link Outcome#WAIT_FOR_REPLY} (or {@code null} =
+     * wait indefinitely); {@code reasonCode} is a non-PII code for terminal outcomes (terminal reason /
+     * error code), used only for structured logging. The canonical constructor is private — callers use
+     * the static factories so the field defaults stay in one place.
      */
-    public record StepResult(Outcome outcome, Duration delay, String reasonCode) {
+    public record StepResult(Outcome outcome, Duration delay, String reasonCode, Instant nextRunAt) {
         public static StepResult cont() {
-            return new StepResult(Outcome.CONTINUE, null, null);
+            return new StepResult(Outcome.CONTINUE, null, null, null);
         }
 
         public static StepResult delay(Duration delay) {
-            return new StepResult(Outcome.DELAY, delay, null);
+            return new StepResult(Outcome.DELAY, delay, null, null);
         }
 
         public static StepResult cancel(String reasonCode) {
-            return new StepResult(Outcome.CANCEL, null, reasonCode);
+            return new StepResult(Outcome.CANCEL, null, reasonCode, null);
         }
 
         public static StepResult fail(String reasonCode) {
-            return new StepResult(Outcome.FAIL, null, reasonCode);
+            return new StepResult(Outcome.FAIL, null, reasonCode, null);
+        }
+
+        // Park-on-reply (MENU): the runner sets status=waiting_for_reply, leaves currentStepId on the
+        // MENU step, and parks with nextRunAt = the timeout deadline, or null to wait indefinitely.
+        public static StepResult waitForReply(Instant nextRunAt) {
+            return new StepResult(Outcome.WAIT_FOR_REPLY, null, null, nextRunAt);
         }
     }
 }

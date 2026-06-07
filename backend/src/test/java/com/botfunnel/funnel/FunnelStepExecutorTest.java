@@ -237,6 +237,81 @@ class FunnelStepExecutorTest {
         assertThat(oldCap.getValue()).containsExactly(entry("age", null));
     }
 
+    // ─── MENU (Phase 2) ────────────────────────────────────────────────────────
+
+    @Test
+    void menu_sends_text_with_reply_markup() {
+        // MENU step → 6-arg sendText with a non-null reply_markup, outcome WAIT_FOR_REPLY.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep step = menuStep("Pick one", List.of(
+                new Button("callback", "Yes", "step-yes", null)), null, null);
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.WAIT_FOR_REPLY);
+        ArgumentCaptor<Object> markupCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("Pick one"), any(), eq(null),
+                markupCaptor.capture());
+        assertThat(markupCaptor.getValue()).isNotNull();
+    }
+
+    @Test
+    void menu_with_timeout_returns_deadline() {
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep withTimeout = menuStep("Hurry", List.of(
+                new Button("callback", "Go", "step-go", null)), 5, "MIN");
+
+        StepExecutor.StepResult timed = executor.execute(withTimeout, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(timed.outcome()).isEqualTo(StepExecutor.Outcome.WAIT_FOR_REPLY);
+        assertThat(timed.nextRunAt()).isEqualTo(FIXED_NOW.plus(Duration.ofMinutes(5)));
+
+        FunnelStep noTimeout = menuStep("Relax", List.of(
+                new Button("callback", "Go", "step-go", null)), null, null);
+
+        StepExecutor.StepResult untimed = executor.execute(noTimeout, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(untimed.outcome()).isEqualTo(StepExecutor.Outcome.WAIT_FOR_REPLY);
+        assertThat(untimed.nextRunAt()).isNull();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void menu_callbackButtons_encodeCorrectCallbackData() {
+        // Build-side of the Task 5 round-trip contract (Decision 6): each callback button carries
+        // callback_data = "{executionId}:{index}" (0-based); URL button carries url, NO callback_data.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep step = menuStep("Menu", List.of(
+                new Button("callback", "First", "s1", null),
+                new Button("callback", "Second", "s2", null),
+                new Button("url", "Site", null, "https://example.com")), null, null);
+        FunnelExecution exec = execution(0); // id == "exec-1"
+
+        executor.execute(step, exec, activeSubscriber(), connectedBot());
+
+        ArgumentCaptor<Object> markupCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("Menu"), any(), eq(null), markupCaptor.capture());
+        Map<String, Object> markup = (Map<String, Object>) markupCaptor.getValue();
+        List<List<Map<String, Object>>> rows = (List<List<Map<String, Object>>>) markup.get("inline_keyboard");
+        assertThat(rows).hasSize(3);
+
+        Map<String, Object> b0 = rows.get(0).get(0);
+        assertThat(b0.get("text")).isEqualTo("First");
+        assertThat(b0.get("callback_data")).isEqualTo("exec-1:0");
+        assertThat(b0).doesNotContainKey("url");
+
+        Map<String, Object> b1 = rows.get(1).get(0);
+        assertThat(b1.get("callback_data")).isEqualTo("exec-1:1");
+
+        Map<String, Object> b2 = rows.get(2).get(0);
+        assertThat(b2.get("text")).isEqualTo("Site");
+        assertThat(b2.get("url")).isEqualTo("https://example.com");
+        assertThat(b2).doesNotContainKey("callback_data");
+    }
+
     @Test
     void sendMessageBlockedByUserCancels() {
         when(sender.sendText(anyString(), any(), anyString(), any(), any()))
@@ -333,6 +408,16 @@ class FunnelStepExecutorTest {
         FunnelStep s = new FunnelStep();
         s.setStepType(type);
         s.setTagSlug(slug);
+        return s;
+    }
+
+    private static FunnelStep menuStep(String text, List<Button> buttons, Integer timeoutValue, String timeoutUnit) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.MENU);
+        s.setText(text);
+        s.setButtons(buttons);
+        s.setTimeoutValue(timeoutValue);
+        s.setTimeoutUnit(timeoutUnit);
         return s;
     }
 

@@ -198,7 +198,12 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
         execution.setCurrentStepIndex(0);
         execution.setStepRunStatus(StepRunStatus.pending);
         execution.setNextRunAt(now);
-        execution.setStepsSnapshot(deepCopySteps(funnel.getSteps()));
+        List<FunnelStep> snapshot = deepCopySteps(funnel.getSteps());
+        execution.setStepsSnapshot(snapshot);
+        // Seed the graph cursor (Decision 2/7) to the first step's id so the engine navigates by
+        // currentStepId from the start. null-safe for an empty snapshot. currentStepIndex stays 0 for
+        // drain compatibility.
+        execution.setCurrentStepId(snapshot.isEmpty() ? null : snapshot.get(0).getId());
         execution.setCreatedAt(now);
         execution.setUpdatedAt(now);
         mongoTemplate.insert(execution);

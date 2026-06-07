@@ -433,6 +433,249 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         }
     }
 
+    // ─── Phase 2: MENU park / resume / timeout / graph navigation ───────────────
+
+    @Test
+    void menu_parks_on_reply() {
+        String subId = seedActiveSubscriber();
+        FunnelStep menu = menu("m1", "Pick", null, null, null,
+                callbackButton("Yes", "end-yes"));
+        String execId = seedGraphExecution(subId, BASE, menu);
+        enqueueOk(1);
+
+        engine.sweep();
+
+        FunnelExecution parked = reload(execId);
+        assertThat(parked.getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(parked.getCurrentStepId()).isEqualTo("m1");
+        assertThat(parked.getNextRunAt()).isNull();
+        assertThat(sentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void sweep_does_not_resume_menu_without_timeout() {
+        String subId = seedActiveSubscriber();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "end"));
+        String execId = seedGraphExecution(subId, BASE, menu);
+        enqueueOk(1);
+
+        engine.sweep(); // parks, nextRunAt=null
+        CLOCK.advance(Duration.ofHours(48));
+        engine.sweep(); // still must not resume (no deadline)
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(sentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void resumeOnCallback_advances_into_button_branch() {
+        String subId = seedActiveSubscriber();
+        // m1 (menu) --Yes--> s2 (send) --next--> End
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch!", null);
+        String execId = seedGraphExecution(subId, BASE, menu, s2);
+        enqueueOk(2);
+
+        engine.sweep(); // parks on menu
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+
+        boolean moved = engine.resumeOnCallback(execId, subId, "s2");
+
+        assertThat(moved).isTrue();
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(2); // menu + branch send
+    }
+
+    @Test
+    void resumeOnCallback_rejects_foreign_subscriber() {
+        String ownerSub = seedActiveSubscriber();
+        String foreignSub = seedActiveSubscriber();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedGraphExecution(ownerSub, BASE, menu, s2);
+        enqueueOk(2);
+
+        engine.sweep(); // parks
+
+        boolean moved = engine.resumeOnCallback(execId, foreignSub, "s2");
+
+        assertThat(moved).isFalse();
+        // IDOR: the owner's execution did not move.
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(reload(execId).getCurrentStepId()).isEqualTo("m1");
+        assertThat(sentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void resumeOnCallback_double_click_advances_once() {
+        String subId = seedActiveSubscriber();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedGraphExecution(subId, BASE, menu, s2);
+        enqueueOk(2);
+
+        engine.sweep(); // parks
+
+        boolean first = engine.resumeOnCallback(execId, subId, "s2");
+        boolean second = engine.resumeOnCallback(execId, subId, "s2");
+
+        assertThat(first).isTrue();
+        assertThat(second).isFalse(); // second tap is a no-op (already resumed/terminal)
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(2);
+    }
+
+    @Test
+    void loop_without_wait_trips_step_budget() {
+        Logger engineLogger = (Logger) LoggerFactory.getLogger(FunnelExecutionEngine.class);
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        engineLogger.addAppender(appender);
+        try {
+            String subId = seedActiveSubscriber();
+            // a --next--> b --next--> a : an infinite ADD_TAG loop with no park/delay.
+            FunnelStep a = tagStep("a", "ADD_TAG", "x", "b");
+            FunnelStep b = tagStep("b", "ADD_TAG", "y", "a");
+            String execId = seedGraphExecution(subId, BASE, a, b);
+
+            engine.sweep();
+
+            assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.failed);
+            assertThat(appender.list).anyMatch(e ->
+                    e.getFormattedMessage().contains(FunnelExecutionEngine.LOG_STEP_BUDGET_EXCEEDED));
+        } finally {
+            engineLogger.detachAppender(appender);
+            appender.stop();
+        }
+    }
+
+    @Test
+    void fan_in_multiple_buttons_one_target() {
+        String subId = seedActiveSubscriber();
+        // Two buttons both point to s2 (fan-in). Resuming via either reaches s2.
+        FunnelStep menu = menu("m1", "Pick", null, null, null,
+                callbackButton("A", "s2"), callbackButton("B", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "converged", null);
+        String execId = seedGraphExecution(subId, BASE, menu, s2);
+        enqueueOk(2);
+
+        engine.sweep();
+        boolean moved = engine.resumeOnCallback(execId, subId, "s2");
+
+        assertThat(moved).isTrue();
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+    }
+
+    @Test
+    void timeout_resume_follows_target() {
+        String subId = seedActiveSubscriber();
+        // m1 has a 10-MIN timeout → s3 (explicit jump past s2). s3 -> End. The button branch (s2) is
+        // NOT taken; the timeout jumps directly to s3, proving the engine follows timeoutTargetStepId
+        // rather than the menu's list-order default-next.
+        FunnelStep menu = menu("m1", "Pick", 10, "MIN", "s3", callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "clicked", "s3");
+        FunnelStep s3 = sendMessageStep("s3", "timed-out", null);
+        String execId = seedGraphExecution(subId, BASE, menu, s2, s3);
+        enqueueOk(2);
+
+        engine.sweep(); // parks with deadline BASE+10min
+        assertThat(reload(execId).getNextRunAt()).isEqualTo(BASE.plus(Duration.ofMinutes(10)));
+
+        CLOCK.advance(Duration.ofMinutes(10));
+        engine.sweep(); // timeout fires → jump to s3 (skipping s2) → completes
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(reload(execId).getCurrentStepId()).isNull(); // s3 had no next → End
+        assertThat(sentCount()).isEqualTo(2); // menu + s3 only (s2 skipped)
+    }
+
+    @Test
+    void timeout_null_target_completes() {
+        String subId = seedActiveSubscriber();
+        FunnelStep menu = menu("m1", "Pick", 5, "MIN", null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedGraphExecution(subId, BASE, menu, s2);
+        enqueueOk(1);
+
+        engine.sweep(); // parks with deadline
+        CLOCK.advance(Duration.ofMinutes(5));
+        engine.sweep(); // timeout, null target → completed (no branch send)
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void loop_resend_menu_works() {
+        String subId = seedActiveSubscriber();
+        // Button loops back to the same menu; resume re-sends the menu and re-parks.
+        FunnelStep menu = menu("m1", "Again?", null, null, null, callbackButton("Loop", "m1"));
+        String execId = seedGraphExecution(subId, BASE, menu);
+        enqueueOk(3);
+
+        engine.sweep(); // send menu #1, park
+        assertThat(sentCount()).isEqualTo(1);
+
+        boolean moved = engine.resumeOnCallback(execId, subId, "m1"); // back to menu
+        assertThat(moved).isTrue();
+        // Re-sent the menu and re-parked.
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(reload(execId).getCurrentStepId()).isEqualTo("m1");
+        assertThat(sentCount()).isEqualTo(2);
+
+        // A subsequent callback still works (not stuck).
+        boolean moved2 = engine.resumeOnCallback(execId, subId, "m1");
+        assertThat(moved2).isTrue();
+        assertThat(sentCount()).isEqualTo(3);
+    }
+
+    @Test
+    void paused_funnel_in_flight_resumes_to_completed() {
+        // Decision 11: no paused-gate in resume — an in-flight waiting_for_reply drains even on a paused
+        // funnel. The engine reads no funnel status; this verifies resume just advances the in-flight run.
+        String subId = seedActiveSubscriber();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "drained", null);
+        String execId = seedGraphExecution(subId, BASE, menu, s2);
+        enqueueOk(2);
+
+        engine.sweep();
+        boolean moved = engine.resumeOnCallback(execId, subId, "s2");
+
+        assertThat(moved).isTrue();
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+    }
+
+    @Test
+    void legacy_linear_run_drains_via_index_fallback() {
+        // A legacy Phase-1 run: snapshot steps carry NO ids, currentStepId == null → drain by index.
+        String subId = seedActiveSubscriber();
+        String execId = seedExecution(subId, BASE, sendMessage("legacy-1"), sendMessage("legacy-2"));
+        // seedExecution leaves currentStepId null (legacy shape).
+        enqueueOk(2);
+
+        engine.sweep();
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(2);
+    }
+
+    @Test
+    void blocked_bot_during_wait_cancels_on_resume() {
+        String subId = seedActiveSubscriber();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "first-in-branch", null);
+        String execId = seedGraphExecution(subId, BASE, menu, s2);
+        TELEGRAM.enqueue(json(200, "{\"ok\":true,\"result\":{\"message_id\":1,\"chat\":{\"id\":99}}}")); // menu
+        TELEGRAM.enqueue(json(403, "{\"ok\":false,\"error_code\":403,\"description\":\"Forbidden: bot was blocked by the user\"}")); // branch send
+
+        engine.sweep(); // park on menu
+        boolean moved = engine.resumeOnCallback(execId, subId, "s2"); // branch send → 403 → cancelled
+
+        assertThat(moved).isTrue();
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.cancelled);
+    }
+
     @Test
     void subMinuteRecurringJobIsRegistered() {
         RecurringJob sweepJob = storageProvider.getRecurringJobs().stream()
@@ -479,6 +722,64 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         s.setDelayValue(value);
         s.setDelayUnit(unit);
         return s;
+    }
+
+    // Graph-shaped step builders (Phase 2): steps carry stable ids so the engine navigates by
+    // currentStepId. seedGraphExecution seeds currentStepId to the first step's id.
+    private FunnelStep sendMessageStep(String id, String text, String next) {
+        FunnelStep s = new FunnelStep();
+        s.setId(id);
+        s.setNext(next);
+        s.setStepType(StepType.SEND_MESSAGE);
+        s.setText(text);
+        return s;
+    }
+
+    private FunnelStep tagStep(String id, String type, String slug, String next) {
+        FunnelStep s = new FunnelStep();
+        s.setId(id);
+        s.setNext(next);
+        s.setStepType(StepType.valueOf(type));
+        s.setTagSlug(slug);
+        return s;
+    }
+
+    private FunnelStep menu(String id, String text, Integer timeoutValue, String timeoutUnit,
+                            String timeoutTargetStepId, Button... buttons) {
+        FunnelStep s = new FunnelStep();
+        s.setId(id);
+        s.setStepType(StepType.MENU);
+        s.setText(text);
+        s.setButtons(List.of(buttons));
+        s.setTimeoutValue(timeoutValue);
+        s.setTimeoutUnit(timeoutUnit);
+        s.setTimeoutTargetStepId(timeoutTargetStepId);
+        return s;
+    }
+
+    private static Button callbackButton(String label, String targetStepId) {
+        return new Button("callback", label, targetStepId, null);
+    }
+
+    private String seedGraphExecution(String subscriberId, Instant nextRunAt, FunnelStep... steps) {
+        FunnelExecution e = new FunnelExecution();
+        e.setProjectId(projectId);
+        e.setFunnelId("funnel-" + seq.incrementAndGet());
+        e.setSubscriberId(subscriberId);
+        e.setTelegramBotId(TELEGRAM_BOT_ID);
+        e.setStatus(ExecutionStatus.running);
+        e.setCurrentStepIndex(0);
+        List<FunnelStep> snapshot = new ArrayList<>();
+        for (FunnelStep s : steps) {
+            snapshot.add(s);
+        }
+        e.setCurrentStepId(snapshot.isEmpty() ? null : snapshot.get(0).getId());
+        e.setStepRunStatus(StepRunStatus.pending);
+        e.setNextRunAt(nextRunAt);
+        e.setStepsSnapshot(snapshot);
+        e.setCreatedAt(BASE);
+        e.setUpdatedAt(BASE);
+        return mongoTemplate.save(e).getId();
     }
 
     private String seedExecution(String subscriberId, Instant nextRunAt, FunnelStep... steps) {

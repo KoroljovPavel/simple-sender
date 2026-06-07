@@ -42,7 +42,30 @@ const STATUS_VARIANT: Record<FunnelStatus, 'secondary' | 'default' | 'outline'> 
   active: 'default',
   paused: 'outline',
 }
+// CANONICAL — mirror FunnelService.TRIGGER_VALUE_PATTERN (on_start; empty = bare /start) and the
+// event_name slug EVENT_NAME_PATTERN. These gate the auto-save only; the server is still the validator.
 const TRIGGER_VALUE_RE = /^[A-Za-z0-9_-]{0,64}$/
+const EVENT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
+
+// Is the CURRENT trigger draft complete enough to PATCH? The backend rejects an incomplete trigger with a
+// 422 (keyword needs ≥1 keyword; tag_added/custom_field_set/event need a non-empty triggerValue), so
+// switching the type alone — before the required value is filled — must NOT auto-save. activate() reuses
+// this so a genuine activate of an incomplete funnel still round-trips and surfaces the inline 422.
+function triggerReady(): boolean {
+  switch (triggerType.value) {
+    case 'on_start':
+      return TRIGGER_VALUE_RE.test(triggerValue.value ?? '')
+    case 'keyword':
+      return (keywords.value ?? []).length >= 1
+    case 'tag_added':
+    case 'custom_field_set':
+      return (triggerValue.value ?? '').trim().length > 0
+    case 'event':
+      return EVENT_NAME_RE.test(triggerValue.value ?? '')
+    default:
+      return false
+  }
+}
 
 function statusOf(err: unknown): number | null {
   const e = err as { statusCode?: number; status?: number; response?: { status?: number } }
@@ -150,13 +173,14 @@ function openEdit(index: number) {
   editOpen.value = true
 }
 
-// Persist trigger edits (debounced) so the activated funnel uses the value the user sees. For on_start only
-// persist a syntactically valid trigger_value (avoid a 422 round-trip on every keystroke); other types own
-// a picker/list/slug whose value is already constrained, so they persist on every change.
+// Persist trigger edits (debounced) so the activated funnel uses the value the user sees. Only schedule a
+// PATCH once the active type's required value is present (triggerReady) — switching the type alone, or
+// editing toward a still-empty value, must NOT auto-save (the backend 422s an incomplete trigger). A
+// genuine activate of an incomplete funnel still surfaces that 422 via activate()→persist().
 let triggerTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleTriggerPersist() {
   if (!loaded.value) return
-  if (triggerType.value === 'on_start' && !TRIGGER_VALUE_RE.test(triggerValue.value ?? '')) return
+  if (!triggerReady()) return
   if (triggerTimer) clearTimeout(triggerTimer)
   triggerTimer = setTimeout(() => void persist(), 600)
 }

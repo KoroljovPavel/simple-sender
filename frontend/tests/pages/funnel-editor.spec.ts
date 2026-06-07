@@ -140,6 +140,103 @@ describe('funnels/[funnelId] editor page', () => {
     expect(wrapper.find('[data-test="funnel-status-paused"]').exists()).toBe(true)
   })
 
+  // ─── Trigger auto-save readiness (Task 15 finding) ────────────────────────────
+  // Switching the trigger type must NOT fire a PATCH while the new type's required value is still empty
+  // (backend returns 422). The debounced auto-save only schedules once the active type is "ready".
+  describe('trigger auto-save readiness', () => {
+    beforeEach(() => {
+      vi.useFakeTimers()
+    })
+    afterEach(() => {
+      vi.runOnlyPendingTimers()
+      vi.useRealTimers()
+    })
+
+    // Drive the watch+debounce deterministically: flush microtasks (watch callbacks run on a microtask),
+    // advance past the 600ms debounce, then flush the resulting persist() promise.
+    async function tick(ms: number): Promise<void> {
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(ms)
+      await Promise.resolve()
+    }
+
+    async function mountLoaded(over: Partial<FunnelResponse> = {}) {
+      storeMock.fetchOne.mockResolvedValue(draft(over))
+      storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+        Promise.resolve(draft({ ...over, ...body })),
+      )
+      const wrapper = await mountSuspended(FunnelEditorPage)
+      // load() runs on a microtask; advance enough to settle the initial mount with fake timers.
+      await tick(700)
+      storeMock.update.mockClear()
+      return wrapper
+    }
+
+    it('does NOT PATCH when the type switches to keyword with no keywords yet', async () => {
+      const wrapper = await mountLoaded()
+      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('keyword')
+      await tick(700)
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+
+    it('does NOT PATCH when the type switches to tag_added / custom_field_set / event with an empty value', async () => {
+      for (const ty of ['tag_added', 'custom_field_set', 'event']) {
+        const wrapper = await mountLoaded()
+        await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue(ty)
+        await tick(700)
+        expect(storeMock.update, `type ${ty} must not auto-save while empty`).not.toHaveBeenCalled()
+      }
+    })
+
+    it('PATCHes keyword with keywords set and triggerValue null once a keyword is added', async () => {
+      const wrapper = await mountLoaded()
+      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('keyword')
+      await tick(700)
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      await wrapper.get('[data-test="funnel-trigger-keyword-input"]').setValue('hello')
+      await wrapper.get('[data-test="funnel-trigger-keyword-add"]').trigger('click')
+      await tick(700)
+
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1]
+      expect(body.triggerType).toBe('keyword')
+      expect(body.keywords).toEqual(['hello'])
+      expect(body.triggerValue).toBeNull()
+    })
+
+    it('PATCHes event with triggerValue set and keywords [] once a valid slug is typed', async () => {
+      const wrapper = await mountLoaded()
+      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('event')
+      await tick(700)
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      await wrapper.get('[data-test="funnel-trigger-event-input"]').setValue('order_paid')
+      await tick(700)
+
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1]
+      expect(body.triggerType).toBe('event')
+      expect(body.triggerValue).toBe('order_paid')
+      expect(body.keywords).toEqual([])
+    })
+
+    it('on_start still persists an empty value but not an invalid one', async () => {
+      const wrapper = await mountLoaded({ triggerType: 'on_start', triggerValue: 'promo' })
+      // Empty is valid for on_start (bare /start) → persists.
+      await wrapper.get('[data-test="funnel-trigger-value-input"]').setValue('')
+      await tick(700)
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      expect(storeMock.update.mock.calls[0][1].triggerValue).toBe('')
+
+      storeMock.update.mockClear()
+      // A value with spaces/specials fails TRIGGER_VALUE_RE → no PATCH.
+      await wrapper.get('[data-test="funnel-trigger-value-input"]').setValue('bad value!')
+      await tick(700)
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+  })
+
   it('maps a funnel_broken_edge 422 to an inline error and keeps status draft', async () => {
     storeMock.fetchOne.mockResolvedValue(draft({ steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] }))
     storeMock.update.mockResolvedValue(draft({ steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] }))

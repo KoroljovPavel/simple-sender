@@ -8,9 +8,10 @@ import java.util.List;
  * discriminator). {@code stepType} + {@code order} are always set; the remaining fields are
  * type-specific and nullable. No bean-validation here — validation lives in the DTO/service layer
  * (Task 5). {@link #copyOf(FunnelStep)} produces a deep copy for the execution snapshot (Decision 3);
- * all scalar fields are immutable value types (String / boxed primitives / enum) and copy field-wise,
- * but the {@code buttons} list (Phase 2 / Decision 5) is a mutable container and must be copied
- * defensively (see {@link #copyOf(FunnelStep)}).
+ * all scalar fields are immutable value types (String / boxed primitives / enum) and copy field-wise
+ * — including {@code eventName} (Phase 3 / Decision 4, the EMIT_EVENT target) — but the {@code buttons}
+ * list (Phase 2 / Decision 5) is a mutable container and must be copied defensively (see
+ * {@link #copyOf(FunnelStep)}).
  */
 public class FunnelStep {
 
@@ -56,6 +57,10 @@ public class FunnelStep {
      */
     private Object customFieldValue;
 
+    // EMIT_EVENT (Phase 3 / Decision 4): the named event this step emits for the current subscriber.
+    // Immutable String slug (^[A-Za-z0-9_-]{1,64}$); shares the `event` namespace with the API event.
+    private String eventName;
+
     public FunnelStep() {
     }
 
@@ -71,7 +76,8 @@ public class FunnelStep {
      * ({@code new ArrayList<>(buttons)}). A shallow list copy suffices because the elements
      * ({@link Button}) are immutable records. A {@code null} list copies to {@code null} (not an empty
      * list). Storing a mutable collection in {@link #customFieldValue} would violate Decision 3 and is
-     * disallowed by the validator.
+     * disallowed by the validator. {@link #eventName} (Phase 3 / Decision 4) is an immutable String, so
+     * it copies by reference; a {@code null} eventName stays null.
      */
     public static FunnelStep copyOf(FunnelStep source) {
         if (source == null) {
@@ -89,6 +95,8 @@ public class FunnelStep {
         copy.tagSlug = source.tagSlug;
         copy.customFieldKey = source.customFieldKey;
         copy.customFieldValue = source.customFieldValue;
+        // EMIT_EVENT target (Phase 3 / Decision 4): immutable String — reference copy, null stays null.
+        copy.eventName = source.eventName;
         // Graph scalars (immutable Strings/boxed) — reference copy.
         copy.id = source.id;
         copy.next = source.next;
@@ -132,6 +140,9 @@ public class FunnelStep {
 
     public Object getCustomFieldValue() { return customFieldValue; }
     public void setCustomFieldValue(Object customFieldValue) { this.customFieldValue = customFieldValue; }
+
+    public String getEventName() { return eventName; }
+    public void setEventName(String eventName) { this.eventName = eventName; }
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }

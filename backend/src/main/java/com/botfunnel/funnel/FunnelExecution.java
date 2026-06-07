@@ -66,6 +66,12 @@ public class FunnelExecution {
 
     private List<FunnelStep> stepsSnapshot;  // deep copy at fire() (Decision 3)
 
+    // Phase 3 (Decision 6): Redis-independent enroll-chain depth backstop. A human/external/on_start
+    // root is depth 0 (the primitive default); each auto-enrolled child carries parent.enrollDepth + 1.
+    // Set by the Task-4 dispatcher, not by the on_start fire() path (a fresh execution defaults to 0).
+    // Plain persisted scalar — no index/partial-filter dependency.
+    private int enrollDepth;
+
     private Instant createdAt;
     private Instant updatedAt;
     private Instant completedAt;
@@ -108,6 +114,9 @@ public class FunnelExecution {
     // independent FunnelStep.copyOf deep copies, decoupling it from later edits to the source funnel.
     public List<FunnelStep> getStepsSnapshot() { return stepsSnapshot; }
     public void setStepsSnapshot(List<FunnelStep> stepsSnapshot) { this.stepsSnapshot = stepsSnapshot; }
+
+    public int getEnrollDepth() { return enrollDepth; }
+    public void setEnrollDepth(int enrollDepth) { this.enrollDepth = enrollDepth; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

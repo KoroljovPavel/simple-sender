@@ -35,5 +35,8 @@ public record FunnelStepDto(
         String delayUnit,
         String tagSlug,
         String customFieldKey,
-        Object customFieldValue
+        Object customFieldValue,
+        // EMIT_EVENT (Phase 3 / Decision 4): the named event this step emits (slug ^[A-Za-z0-9_-]{1,64}$).
+        // Required for EMIT_EVENT, null for every other step type. Validated in FunnelService (→ 422).
+        String eventName
 ) {}

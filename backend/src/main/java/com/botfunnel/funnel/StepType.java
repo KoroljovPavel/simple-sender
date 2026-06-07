@@ -13,5 +13,8 @@ public enum StepType {
     REMOVE_TAG,
     SET_CUSTOM_FIELD,
     // Phase 2 (Decision 1): composite step — message + inline keyboard + park-on-reply + branch.
-    MENU
+    MENU,
+    // Phase 3 (Decision 4): emit a named event for the current subscriber from inside a running funnel.
+    // Shares the `event` trigger namespace with the external POST /events; the target is `eventName`.
+    EMIT_EVENT
 }

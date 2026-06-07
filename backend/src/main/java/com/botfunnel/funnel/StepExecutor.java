@@ -101,6 +101,13 @@ public class StepExecutor {
             }
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
             case MENU -> menu(step, execution, subscriber, bot);
+            // EMIT_EVENT (Phase 3 / Decision 4): the real dispatch (call FunnelEventService for the
+            // current subscriber with enrollDepth+1, return CONTINUE) is wired in Task 5. This case
+            // exists now only to keep the exhaustive switch compiling once StepType.EMIT_EVENT is added
+            // (Task 1). No funnel can reach it before Task 5 wires the dispatcher, so a guard throw is
+            // safe and clearly fails loud if the ordering is ever violated.
+            case EMIT_EVENT -> throw new UnsupportedOperationException(
+                    "EMIT_EVENT step execution is wired in Task 5 (feature 12-funnels-triggers)");
         };
     }
 

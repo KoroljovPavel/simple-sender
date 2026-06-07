@@ -128,6 +128,28 @@ class FunnelStepTest {
     }
 
     /**
+     * Decision 4: the {@code eventName} scalar (for EMIT_EVENT) is an immutable String, so {@code copyOf}
+     * carries it onto the execution snapshot by reference — otherwise an EMIT_EVENT step would lose its
+     * target event when the funnel fires. A null {@code eventName} stays null in the copy.
+     */
+    @Test
+    void copyOf_preservesEventName() {
+        FunnelStep original = new FunnelStep();
+        original.setStepType(StepType.EMIT_EVENT);
+        original.setEventName("purchase_done");
+
+        FunnelStep copy = FunnelStep.copyOf(original);
+
+        assertThat(copy.getEventName()).isEqualTo("purchase_done");
+
+        // A null eventName must stay null (not become "" or NPE).
+        FunnelStep noEvent = new FunnelStep();
+        noEvent.setStepType(StepType.SEND_MESSAGE);
+        assertThat(noEvent.getEventName()).isNull();
+        assertThat(FunnelStep.copyOf(noEvent).getEventName()).isNull();
+    }
+
+    /**
      * Decision 5: {@code buttons} is a mutable list, so {@code copyOf} must defensively copy it —
      * mutating the source list (or the copy) after copyOf must not leak into the other, otherwise
      * editing a funnel's buttons would corrupt an in-flight execution snapshot.

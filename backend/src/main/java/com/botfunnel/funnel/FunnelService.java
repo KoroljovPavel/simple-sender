@@ -24,6 +24,7 @@ import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -44,13 +45,28 @@ import java.util.regex.Pattern;
 @Service
 public class FunnelService {
 
-    // Phase 1 supports exactly one trigger kind. A null/blank request triggerType normalises to this.
+    // Phase 1 supports on_start; Phase 3 (Decision 1) adds four more. A null/blank request triggerType
+    // normalises to on_start; any value outside the five-member set is rejected (→ 422).
     static final String TRIGGER_ON_START = "on_start";
+    static final String TRIGGER_KEYWORD = "keyword";
+    static final String TRIGGER_TAG_ADDED = "tag_added";
+    static final String TRIGGER_CUSTOM_FIELD_SET = "custom_field_set";
+    static final String TRIGGER_EVENT = "event";
+    private static final Set<String> VALID_TRIGGER_TYPES = Set.of(
+            TRIGGER_ON_START, TRIGGER_KEYWORD, TRIGGER_TAG_ADDED, TRIGGER_CUSTOM_FIELD_SET, TRIGGER_EVENT);
 
     // Empty trigger value = bare /start (allowed). Non-empty must match this slug shape — spaces /
     // specials would break the t.me deep-link, so they are rejected as 422 (not silently passed).
     private static final Pattern TRIGGER_VALUE_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{0,64}$");
     private static final Pattern TAG_SLUG_PATTERN = Pattern.compile("^[a-z0-9_-]{1,32}$");
+    // event_name slug (Decision 4): shared by the EMIT_EVENT step and the `event` trigger value. 1..64,
+    // case-preserving (the external API event_name is case-sensitive in the same way).
+    private static final Pattern EVENT_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
+
+    // keyword list caps (Decision 3): bound the per-funnel keyword scan + each entry's length so a
+    // hostile/huge list cannot bloat the document or the runtime contains-match.
+    private static final int MAX_KEYWORDS = 50;
+    private static final int MAX_KEYWORD_LENGTH = 64;
 
     private static final String MESSAGE_NOT_FOUND = "Funnel not found";
 
@@ -58,6 +74,9 @@ public class FunnelService {
     static final String CODE_STEP_LIMIT = "funnel_step_limit_reached";
     static final String CODE_INVALID_STEP = "funnel_step_invalid";
     static final String CODE_INVALID_TRIGGER_VALUE = "funnel_invalid_trigger_value";
+    // Phase 3 (Decision 1 / 3): unknown triggerType (outside the five-value set) and bad keyword list.
+    static final String CODE_INVALID_TRIGGER_TYPE = "funnel_invalid_trigger_type";
+    static final String CODE_INVALID_KEYWORDS = "funnel_invalid_keywords";
     static final String CODE_NO_STEPS = "funnel_no_steps";
     static final String CODE_INVALID_STATE = "funnel_invalid_state";
     // Phase 2 (Decision 2 / Decision 10): a graph edge (next / button targetStepId / timeoutTargetStepId)
@@ -131,8 +150,7 @@ public class FunnelService {
         if (request.description() != null) {
             funnel.setDescription(blankToNull(request.description()));
         }
-        funnel.setTriggerType(normalizeTriggerType(request.triggerType()));
-        funnel.setTriggerValue(normalizeTriggerValue(request.triggerValue()));
+        applyTrigger(funnel, request.triggerType(), request.triggerValue(), request.keywords());
         if (request.allowReEnter() != null) {
             funnel.setAllowReEnter(request.allowReEnter());
         }
@@ -245,18 +263,135 @@ public class FunnelService {
                 .orElseThrow(() -> AppException.notFound(MESSAGE_NOT_FOUND));
     }
 
-    private String normalizeTriggerType(String triggerType) {
-        // Phase 1 supports only on_start; a null/blank request value normalises to it.
-        return (triggerType == null || triggerType.isBlank()) ? TRIGGER_ON_START : triggerType;
+    // Applies + validates the trigger triplet (type, value, keywords) together — they are coupled
+    // (Decision 1/3): the value rules and the keywords requirement both depend on the type, so they must
+    // be validated as one unit. Sets all three fields on the funnel; throws 422 on any violation.
+    private void applyTrigger(Funnel funnel, String rawType, String rawValue, List<String> rawKeywords) {
+        String type = normalizeTriggerType(rawType);
+        funnel.setTriggerType(type);
+
+        switch (type) {
+            case TRIGGER_ON_START -> {
+                // on_start keeps the existing slug rule ("" = bare /start); keywords are not allowed.
+                funnel.setTriggerValue(normalizeOnStartValue(rawValue));
+                funnel.setKeywords(requireNoKeywords(rawKeywords));
+            }
+            case TRIGGER_KEYWORD -> {
+                // keyword ignores triggerValue (the words live in `keywords`); store "" for consistency.
+                funnel.setTriggerValue("");
+                funnel.setKeywords(requireKeywords(rawKeywords));
+            }
+            case TRIGGER_TAG_ADDED -> {
+                funnel.setTriggerValue(requireTagSlugValue(rawValue));
+                funnel.setKeywords(requireNoKeywords(rawKeywords));
+            }
+            case TRIGGER_CUSTOM_FIELD_SET -> {
+                funnel.setTriggerValue(requireFieldKeyValue(rawValue));
+                funnel.setKeywords(requireNoKeywords(rawKeywords));
+            }
+            case TRIGGER_EVENT -> {
+                funnel.setTriggerValue(requireEventSlugValue(rawValue));
+                funnel.setKeywords(requireNoKeywords(rawKeywords));
+            }
+            default -> throw invalidTriggerType(type);
+        }
     }
 
-    private String normalizeTriggerValue(String triggerValue) {
+    private static String normalizeTriggerType(String triggerType) {
+        // A null/blank request value normalises to on_start; anything outside the five-value set is 422.
+        if (triggerType == null || triggerType.isBlank()) {
+            return TRIGGER_ON_START;
+        }
+        if (!VALID_TRIGGER_TYPES.contains(triggerType)) {
+            throw invalidTriggerType(triggerType);
+        }
+        return triggerType;
+    }
+
+    private static String normalizeOnStartValue(String triggerValue) {
         String value = triggerValue == null ? "" : triggerValue;
         if (!TRIGGER_VALUE_PATTERN.matcher(value).matches()) {
             throw AppException.unprocessableEntity(CODE_INVALID_TRIGGER_VALUE,
                     "Trigger value must match ^[A-Za-z0-9_-]{0,64}$");
         }
         return value;
+    }
+
+    private static String requireTagSlugValue(String triggerValue) {
+        if (triggerValue == null || !TAG_SLUG_PATTERN.matcher(triggerValue).matches()) {
+            throw AppException.unprocessableEntity(CODE_INVALID_TRIGGER_VALUE,
+                    "tag_added trigger value must be a tag slug ^[a-z0-9_-]{1,32}$");
+        }
+        return triggerValue;
+    }
+
+    private static String requireFieldKeyValue(String triggerValue) {
+        if (triggerValue == null || triggerValue.isBlank()) {
+            throw AppException.unprocessableEntity(CODE_INVALID_TRIGGER_VALUE,
+                    "custom_field_set trigger value must be a non-blank field key");
+        }
+        return triggerValue;
+    }
+
+    private static String requireEventSlugValue(String triggerValue) {
+        if (triggerValue == null || !EVENT_NAME_PATTERN.matcher(triggerValue).matches()) {
+            throw AppException.unprocessableEntity(CODE_INVALID_TRIGGER_VALUE,
+                    "event trigger value must be an event slug ^[A-Za-z0-9_-]{1,64}$");
+        }
+        return triggerValue;
+    }
+
+    // Normalize + validate the keyword list for a keyword funnel (Decision 3): lowercase (Locale.ROOT),
+    // trim, drop blanks, de-dupe preserving order (LinkedHashSet). Required non-empty after normalization,
+    // capped in size and per-entry length. Returns the normalized list.
+    private static List<String> requireKeywords(List<String> rawKeywords) {
+        List<String> normalized = normalizeKeywords(rawKeywords);
+        if (normalized.isEmpty()) {
+            throw AppException.unprocessableEntity(CODE_INVALID_KEYWORDS,
+                    "keyword trigger requires at least one non-blank keyword");
+        }
+        if (normalized.size() > MAX_KEYWORDS) {
+            throw AppException.unprocessableEntity(CODE_INVALID_KEYWORDS,
+                    "keyword trigger exceeds the maximum of " + MAX_KEYWORDS + " keywords");
+        }
+        return normalized;
+    }
+
+    // Non-keyword trigger types must NOT carry keywords (tight contract — Decision 3 reject-vs-ignore:
+    // reject). A null/empty list is fine (the normal case); any actual keyword content is 422.
+    private static List<String> requireNoKeywords(List<String> rawKeywords) {
+        if (rawKeywords != null && !normalizeKeywords(rawKeywords).isEmpty()) {
+            throw AppException.unprocessableEntity(CODE_INVALID_KEYWORDS,
+                    "keywords are only allowed for the keyword trigger type");
+        }
+        return null;
+    }
+
+    private static List<String> normalizeKeywords(List<String> rawKeywords) {
+        if (rawKeywords == null) {
+            return new ArrayList<>();
+        }
+        Set<String> seen = new LinkedHashSet<>();
+        for (String raw : rawKeywords) {
+            if (raw == null) {
+                continue;
+            }
+            String value = raw.trim().toLowerCase(Locale.ROOT);
+            if (value.isEmpty()) {
+                continue;
+            }
+            if (value.length() > MAX_KEYWORD_LENGTH) {
+                throw AppException.unprocessableEntity(CODE_INVALID_KEYWORDS,
+                        "keyword exceeds the maximum of " + MAX_KEYWORD_LENGTH + " characters");
+            }
+            seen.add(value);
+        }
+        return new ArrayList<>(seen);
+    }
+
+    private static AppException invalidTriggerType(String triggerType) {
+        return AppException.unprocessableEntity(CODE_INVALID_TRIGGER_TYPE,
+                "Unknown trigger type: " + triggerType);
     }
 
     private List<FunnelStep> toSteps(List<FunnelStepDto> dtos) {
@@ -295,6 +430,7 @@ public class FunnelService {
             step.setTagSlug(dto.tagSlug());
             step.setCustomFieldKey(dto.customFieldKey());
             step.setCustomFieldValue(dto.customFieldValue());
+            step.setEventName(blankToNull(dto.eventName()));
             steps.add(step);
         }
         return steps;
@@ -341,6 +477,7 @@ public class FunnelService {
                 case ADD_TAG, REMOVE_TAG -> requireTagSlug(step.getTagSlug());
                 case SET_CUSTOM_FIELD -> requireCustomFieldKey(step.getCustomFieldKey());
                 case MENU -> validateMenu(step, stepIds);
+                case EMIT_EVENT -> requireEventName(step.getEventName());
             }
             // Graph-edge pass (every step type): the default outgoing edge and the optional timeout edge
             // must point at an existing step id, or be null (null next = next-in-list; null timeout
@@ -490,6 +627,14 @@ public class FunnelService {
         }
     }
 
+    // EMIT_EVENT (Decision 4): eventName is required and must be an event slug ^[A-Za-z0-9_-]{1,64}$ —
+    // the same shape as the `event` trigger value, so an emit and its listener share one namespace.
+    private static void requireEventName(String eventName) {
+        if (eventName == null || !EVENT_NAME_PATTERN.matcher(eventName).matches()) {
+            throw invalidStep("EMIT_EVENT step requires an eventName matching ^[A-Za-z0-9_-]{1,64}$");
+        }
+    }
+
     private static AppException invalidStep(String message) {
         return AppException.unprocessableEntity(CODE_INVALID_STEP, message);
     }
@@ -507,6 +652,7 @@ public class FunnelService {
                 funnel.getTriggerType(),
                 funnel.getTriggerValue(),
                 funnel.isAllowReEnter(),
+                funnel.getKeywords(),
                 steps,
                 resolveDeepLink(funnel),
                 funnel.getCreatedAt(),
@@ -524,6 +670,7 @@ public class FunnelService {
                 funnel.getTriggerType(),
                 funnel.getTriggerValue(),
                 funnel.isAllowReEnter(),
+                funnel.getKeywords(),
                 stepCount,
                 funnel.getCreatedAt(),
                 funnel.getUpdatedAt());
@@ -546,7 +693,8 @@ public class FunnelService {
                 step.getDelayUnit(),
                 step.getTagSlug(),
                 step.getCustomFieldKey(),
-                step.getCustomFieldValue());
+                step.getCustomFieldValue(),
+                step.getEventName());
     }
 
     private static List<ButtonDto> toButtonDtos(List<Button> buttons) {

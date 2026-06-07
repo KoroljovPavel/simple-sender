@@ -18,6 +18,8 @@ public record FunnelResponse(
         String triggerType,
         String triggerValue,
         boolean allowReEnter,
+        // Phase 3 (Decision 3): normalized keyword list (lowercase). Null/empty for non-keyword triggers.
+        List<String> keywords,
         List<FunnelStepDto> steps,
         String deepLink,
         Instant createdAt,

@@ -20,5 +20,9 @@ public record UpdateFunnelRequest(
         String triggerType,
         String triggerValue,
         Boolean allowReEnter,
+        // Phase 3 (Decision 3): keyword list — required (non-empty after normalization) iff
+        // triggerType=keyword, rejected for any other trigger type (FunnelService → 422). Normalized
+        // server-side (lowercase, trim, de-dupe).
+        List<String> keywords,
         @Valid List<FunnelStepDto> steps
 ) {}

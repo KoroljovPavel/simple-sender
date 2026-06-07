@@ -65,6 +65,8 @@ public class ApiKeyService {
         apiKey.setKeyHash(keyHash);
         apiKey.setKeyPrefix(keyPrefix);
         apiKey.setCreatedAt(Instant.now());
+        // A (re)generated key starts unused: clear lastUsedAt so a regenerated key never inherits the
+        // previous key's usage timestamp. Task 7's filter stamps it again on each authenticated call.
         apiKey.setLastUsedAt(null);
         apiKeyRepository.save(apiKey);
 

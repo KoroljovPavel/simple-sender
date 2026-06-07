@@ -13,6 +13,7 @@ import java.util.Optional;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.within;
 
 /**
  * Integration test for {@link ApiKeyRepository} against real embedded Mongo: verifies the unique
@@ -76,5 +77,19 @@ class ApiKeyRepositoryIT extends AbstractIntegrationTest {
 
         assertThat(apiKeyRepository.findByKeyHash("nope")).isEmpty();
         assertThat(apiKeyRepository.findByProjectId("nope")).isEmpty();
+    }
+
+    @Test
+    void fields_roundTripThroughMongo() {
+        ApiKey k = newKey("proj-1", "hash-aaa");
+        Instant lastUsed = Instant.now();
+        k.setLastUsedAt(lastUsed);
+        apiKeyRepository.save(k);
+
+        ApiKey reloaded = apiKeyRepository.findByProjectId("proj-1").orElseThrow();
+        assertThat(reloaded.getCreatedAt()).isNotNull();
+        assertThat(reloaded.getKeyPrefix()).isEqualTo("hash-aaa".substring(0, 8));
+        // lastUsedAt persists and reads back (Mongo truncates to millis).
+        assertThat(reloaded.getLastUsedAt()).isCloseTo(lastUsed, within(1, java.time.temporal.ChronoUnit.SECONDS));
     }
 }

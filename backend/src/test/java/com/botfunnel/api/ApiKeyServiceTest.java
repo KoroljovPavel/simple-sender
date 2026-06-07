@@ -87,6 +87,30 @@ class ApiKeyServiceTest {
     }
 
     @Test
+    void generate_leavesLastUsedAtUnset() {
+        service.generate("proj-1");
+
+        // A freshly (re)generated key is unused — Task 7's filter stamps lastUsedAt later.
+        ApiKey stored = repository.findByProjectId("proj-1").orElseThrow();
+        assertThat(stored.getLastUsedAt()).isNull();
+    }
+
+    @Test
+    void regenerate_resetsLastUsedAt() {
+        service.generate("proj-1");
+        // Simulate the Task-7 filter stamping a usage timestamp on the live key.
+        ApiKey live = repository.findByProjectId("proj-1").orElseThrow();
+        live.setLastUsedAt(java.time.Instant.now());
+        repository.save(live);
+
+        service.generate("proj-1");
+
+        // Regenerate must not carry over the prior key's usage timestamp.
+        ApiKey regenerated = repository.findByProjectId("proj-1").orElseThrow();
+        assertThat(regenerated.getLastUsedAt()).isNull();
+    }
+
+    @Test
     void regenerate_overwritesAndInvalidatesOld() {
         ApiKeyService.GeneratedKey first = service.generate("proj-1");
         ApiKeyService.GeneratedKey second = service.generate("proj-1");

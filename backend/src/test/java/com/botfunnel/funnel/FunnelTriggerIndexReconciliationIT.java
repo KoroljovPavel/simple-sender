@@ -155,15 +155,19 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
     @Test
     void reconciliationNeverThrowsOnMongoFault() {
         // A factory whose driver points at a dead address: getCollection/listIndexes throws, and the
-        // body's try/catch must swallow it so the app still boots.
-        MongoDatabaseFactory broken = new org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory(
-                com.mongodb.client.MongoClients.create("mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=200"),
-                "botfunnel-broken");
-        FunnelTriggerIndexReconciliation faulting = new FunnelTriggerIndexReconciliation();
+        // body's try/catch must swallow it so the app still boots. try-with-resources closes the client.
+        try (com.mongodb.client.MongoClient client =
+                     com.mongodb.client.MongoClients.create(
+                             "mongodb://127.0.0.1:1/?serverSelectionTimeoutMS=200")) {
+            MongoDatabaseFactory broken =
+                    new org.springframework.data.mongodb.core.SimpleMongoClientDatabaseFactory(
+                            client, "botfunnel-broken");
+            FunnelTriggerIndexReconciliation faulting = new FunnelTriggerIndexReconciliation();
 
-        assertThatCode(() -> faulting.postProcessAfterInitialization(broken, "mongoDatabaseFactory"))
-                .as("a transient Mongo fault must be swallowed — the app must boot")
-                .doesNotThrowAnyException();
+            assertThatCode(() -> faulting.postProcessAfterInitialization(broken, "mongoDatabaseFactory"))
+                    .as("a transient Mongo fault must be swallowed — the app must boot")
+                    .doesNotThrowAnyException();
+        }
     }
 
     /**

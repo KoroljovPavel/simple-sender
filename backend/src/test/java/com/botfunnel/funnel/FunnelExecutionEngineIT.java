@@ -10,6 +10,7 @@ import com.botfunnel.bot.BotStatus;
 import com.botfunnel.common.crypto.EncryptedValue;
 import com.botfunnel.common.crypto.TokenEncryptor;
 import com.botfunnel.common.test.ConcurrencyTestUtils;
+import com.botfunnel.events.Event;
 import com.botfunnel.subscriber.Subscriber;
 import com.botfunnel.subscriber.SubscriberRepository;
 import com.botfunnel.subscriber.SubscriberStatus;
@@ -83,6 +84,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     }
 
     @Autowired FunnelExecutionEngine engine;
+    @Autowired FunnelTriggerService triggerService;
     @Autowired MongoTemplate mongoTemplate;
     @Autowired BotRepository botRepository;
     @Autowired SubscriberRepository subscriberRepository;
@@ -101,6 +103,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         CLOCK.set(BASE);
         TELEGRAM.setDispatcher(new QueueDispatcher()); // drop any leftover enqueued responses
         mongoTemplate.remove(new org.springframework.data.mongodb.core.query.Query(), FunnelExecution.class);
+        mongoTemplate.remove(new org.springframework.data.mongodb.core.query.Query(), Event.class);
         subscriberRepository.deleteAll();
         botRepository.deleteAll();
 
@@ -676,6 +679,197 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.cancelled);
     }
 
+    // ─── Task 5: FunnelTriggerService.advanceOnCallback (full callback path) ────────
+    // These ITs drive the PUBLIC advanceOnCallback (trigger → engine → Mongo/Telegram) end-to-end,
+    // resolving bot+subscriber from the project/chatId exactly as the webhook worker (Task 7) will.
+    // Deliberately co-located in the engine IT to reuse the full-context harness (per task spec).
+
+    @Test
+    void advanceOnCallback_validClick_advancesBranch_writesEvent() {
+        Subscriber sub = seedActiveSubscriberDoc();
+        // m1 (menu, button 0 "Yes" → s2) ; s2 (send) → End
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch!", null);
+        String execId = seedParkedExecution(sub.getId(), "m1", menu, s2);
+        enqueueOk(2); // branch send (s2) + answerCallbackQuery ack
+
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":0", "cbq-1");
+
+        FunnelExecution done = reload(execId);
+        assertThat(done.getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(done.getLastButtonClicked()).isEqualTo("m1:0");
+
+        List<Event> clicks = funnelButtonClickedEvents();
+        assertThat(clicks).hasSize(1);
+        Event ev = clicks.get(0);
+        assertThat(ev.getUserId()).isEqualTo(sub.getId());
+        assertThat(ev.getMetadata()).containsEntry("funnelId", done.getFunnelId())
+                .containsEntry("executionId", execId)
+                .containsEntry("currentStepId", "m1")
+                .containsEntry("buttonIndex", 0);
+        // No-PII (Decision 9): the event carries ids/codes only — never the subscriber's display name.
+        assertThat(ev.getMetadata().values()).doesNotContain(sub.getFirstName());
+        // answerCallbackQuery was issued (branch send + ack = 2 requests).
+        assertThat(sentCount()).isEqualTo(2);
+    }
+
+    @Test
+    void advanceOnCallback_foreignExecution_idorRejected_noAdvance() {
+        // Subscriber A owns execution; subscriber B (a legitimate project subscriber) forges the click.
+        Subscriber owner = seedActiveSubscriberDoc();
+        Subscriber attacker = seedActiveSubscriberDoc();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedParkedExecution(owner.getId(), "m1", menu, s2);
+        enqueueOk(1); // only the ack — no branch send must fire
+
+        triggerService.advanceOnCallback(projectId, attacker.getTelegramChatId(), execId + ":0", "cbq-idor");
+
+        // IDOR: the owner's execution is untouched.
+        FunnelExecution after = reload(execId);
+        assertThat(after.getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(after.getCurrentStepId()).isEqualTo("m1");
+        assertThat(after.getLastButtonClicked()).isNull();
+        assertThat(funnelButtonClickedEvents()).isEmpty();
+        // answerCallbackQuery still issued for the attacker's chat (spinner clears even on the no-op).
+        assertThat(sentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void advanceOnCallback_doubleClick_advancesOnce() {
+        Subscriber sub = seedActiveSubscriberDoc();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedParkedExecution(sub.getId(), "m1", menu, s2);
+        enqueueOk(3); // 1 branch send + 2 acks (one per click)
+
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":0", "cbq-a");
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":0", "cbq-b");
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        // Exactly ONE advance → exactly ONE event (claim-CAS; the second click loses).
+        assertThat(funnelButtonClickedEvents()).hasSize(1);
+    }
+
+    @Test
+    void advanceOnCallback_staleOnCompleted_noOp() {
+        Subscriber sub = seedActiveSubscriberDoc();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedParkedExecution(sub.getId(), "m1", menu, s2);
+        // Force-terminal: the click arrives after the execution already completed.
+        mongoTemplate.updateFirst(Query.query(Criteria.where("_id").is(execId)),
+                new Update().set("status", ExecutionStatus.completed.name())
+                        .set("stepRunStatus", StepRunStatus.done.name()),
+                FunnelExecution.class);
+        enqueueOk(1); // ack only
+
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":0", "cbq-stale");
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(funnelButtonClickedEvents()).isEmpty();
+        assertThat(sentCount()).isEqualTo(1); // answerCallbackQuery still called
+    }
+
+    @Test
+    void advanceOnCallback_malformedOrOversizedData_noOp() {
+        Subscriber sub = seedActiveSubscriberDoc();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedParkedExecution(sub.getId(), "m1", menu, s2);
+
+        String[] bad = {
+                execId,                       // no ':' separator
+                execId + ":0:1",              // extra segment
+                "not-an-objectid:0",          // non-hex / wrong-length left segment
+                execId + ":-1",               // negative index
+                execId + ":x",                // non-numeric index
+                "z".repeat(64) + ":0",        // 64-hex left part → 66-byte data (oversized, also wrong shape)
+        };
+        enqueueOk(bad.length); // one ack per malformed click
+
+        for (int i = 0; i < bad.length; i++) {
+            triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), bad[i], "cbq-bad-" + i);
+        }
+
+        // Nothing parsed/advanced; execution stays parked; no events.
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(funnelButtonClickedEvents()).isEmpty();
+        // answerCallbackQuery fired for every malformed click (spinner clears).
+        assertThat(sentCount()).isEqualTo(bad.length);
+    }
+
+    @Test
+    void advanceOnCallback_urlButtonOrOutOfRange_noOp() {
+        Subscriber sub = seedActiveSubscriberDoc();
+        // button 0 = URL (must not advance), button 1 = callback. Index 2 is out of range.
+        Button urlBtn = new Button("url", "Open", null, "https://example.com");
+        FunnelStep menu = menu("m1", "Pick", null, null, null, urlBtn, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedParkedExecution(sub.getId(), "m1", menu, s2);
+        enqueueOk(2); // ack for the URL click + ack for the out-of-range click
+
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":0", "cbq-url");
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":2", "cbq-oob");
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(funnelButtonClickedEvents()).isEmpty();
+        assertThat(sentCount()).isEqualTo(2); // both acks issued
+    }
+
+    @Test
+    void advanceOnCallback_currentStepIdMismatch_noOp() {
+        // The execution is waiting_for_reply but its cursor sits on a NON-menu step (it already passed
+        // the menu) — the click must be a no-op.
+        Subscriber sub = seedActiveSubscriberDoc();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "non-menu", null);
+        // Parked, but cursor is on s2 (not the menu) — a contrived mismatch shape.
+        String execId = seedParkedExecution(sub.getId(), "s2", menu, s2);
+        enqueueOk(1);
+
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":0", "cbq-mismatch");
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(reload(execId).getCurrentStepId()).isEqualTo("s2");
+        assertThat(funnelButtonClickedEvents()).isEmpty();
+        assertThat(sentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void advanceOnCallback_answerCallbackQuery5xx_advanceNotBlocked() {
+        Subscriber sub = seedActiveSubscriberDoc();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        String execId = seedParkedExecution(sub.getId(), "m1", menu, s2);
+        // Branch send (s2) succeeds; the answerCallbackQuery ack exhausts on 5xx (best-effort, 4 attempts).
+        TELEGRAM.enqueue(json(200, "{\"ok\":true,\"result\":{\"message_id\":1,\"chat\":{\"id\":99}}}")); // s2 send
+        for (int i = 0; i < 4; i++) {
+            TELEGRAM.enqueue(json(500, "{\"ok\":false,\"error_code\":500,\"description\":\"Internal Server Error\"}"));
+        }
+
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":0", "cbq-5xx");
+
+        // The 5xx ack did NOT block the branch advance.
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(funnelButtonClickedEvents()).hasSize(1);
+    }
+
+    @Test
+    void advanceOnCallback_pausedFunnel_drainsToCompleted() {
+        // Decision 11: no paused-gate in the resume path. advanceOnCallback reads no funnel status, so an
+        // in-flight waiting_for_reply drains to completed regardless of the (absent here) funnel's status.
+        Subscriber sub = seedActiveSubscriberDoc();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "drained", null);
+        String execId = seedParkedExecution(sub.getId(), "m1", menu, s2);
+        enqueueOk(2);
+
+        triggerService.advanceOnCallback(projectId, sub.getTelegramChatId(), execId + ":0", "cbq-paused");
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+    }
+
     @Test
     void subMinuteRecurringJobIsRegistered() {
         RecurringJob sweepJob = storageProvider.getRecurringJobs().stream()
@@ -804,6 +998,46 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
 
     private String seedActiveSubscriber() {
         return seedSubscriber(SubscriberStatus.ACTIVE);
+    }
+
+    // Returns the saved ACTIVE Subscriber doc (with a distinctive firstName so no-PII assertions are
+    // meaningful) — advanceOnCallback ITs need the telegramChatId + id to drive the public method.
+    private Subscriber seedActiveSubscriberDoc() {
+        Subscriber s = new Subscriber();
+        s.setProjectId(projectId);
+        s.setTelegramUserId(seq.incrementAndGet());
+        s.setTelegramChatId(seq.incrementAndGet());
+        s.setTelegramBotId(TELEGRAM_BOT_ID);
+        s.setFirstName("PII_FIRST_NAME_" + seq.incrementAndGet());
+        s.setStatus(SubscriberStatus.ACTIVE);
+        s.setSubscribedAt(BASE);
+        s.setLastSeenAt(BASE);
+        return subscriberRepository.save(s);
+    }
+
+    // Seed an execution parked on a MENU (status=waiting_for_reply, stepRunStatus=pending), cursor on
+    // currentStepId, nextRunAt=null (untimed menu) — the post-park shape a callback resumes from.
+    private String seedParkedExecution(String subscriberId, String currentStepId, FunnelStep... steps) {
+        FunnelExecution e = new FunnelExecution();
+        e.setProjectId(projectId);
+        e.setFunnelId("funnel-" + seq.incrementAndGet());
+        e.setSubscriberId(subscriberId);
+        e.setTelegramBotId(TELEGRAM_BOT_ID);
+        e.setStatus(ExecutionStatus.waiting_for_reply);
+        e.setStepRunStatus(StepRunStatus.pending);
+        e.setNextRunAt(null);
+        List<FunnelStep> snapshot = new ArrayList<>(List.of(steps));
+        e.setCurrentStepId(currentStepId);
+        e.setCurrentStepIndex(0);
+        e.setStepsSnapshot(snapshot);
+        e.setCreatedAt(BASE);
+        e.setUpdatedAt(BASE);
+        return mongoTemplate.save(e).getId();
+    }
+
+    private List<Event> funnelButtonClickedEvents() {
+        return mongoTemplate.find(
+                Query.query(Criteria.where("eventType").is("funnel_button_clicked")), Event.class);
     }
 
     private String seedSubscriber(SubscriberStatus status) {

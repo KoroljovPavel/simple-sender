@@ -155,6 +155,85 @@ const onSubmit = handleSubmit(async (values) => {
   }
 })
 
+// ── API-key card (Decision 8) ─────────────────────────────────────────────
+// GET /api-key → { present, mask } where mask is "prefix•••" or null.
+// POST /api-key → { apiKey, mask } — the plaintext is surfaced exactly ONCE.
+// SECURITY: the plaintext lives only in `apiKeyPlaintext` for the lifetime of
+// the show-once modal; it is cleared on close and is never persisted/logged.
+type ApiKeyMask = { present: boolean; mask: string | null }
+type ApiKeyGenerated = { apiKey: string; mask: string }
+
+const apiKeyMask = ref<string | null>(null)
+const apiKeyPlaintext = ref<string | null>(null)
+const isApiKeyModalOpen = ref(false)
+const isApiKeyBusy = ref(false)
+const apiKeyError = ref<string | null>(null)
+const apiKeyCopied = ref(false)
+let apiKeyCopyTimer: ReturnType<typeof setTimeout> | null = null
+
+async function loadApiKeyMask() {
+  const current = project.value
+  if (!current) return
+  try {
+    const res = await useApi()<ApiKeyMask>(`/api/v1/projects/${current.id}/api-key`)
+    apiKeyMask.value = res?.present ? res.mask : null
+  } catch (e) {
+    // Degrade gracefully — a failed mask fetch must not break the settings
+    // page; fall back to the Generate affordance.
+    console.warn('[projects/settings] api-key mask GET failed', e)
+    apiKeyMask.value = null
+  }
+}
+
+async function generateApiKey() {
+  const current = project.value
+  if (!current || isApiKeyBusy.value) return
+  isApiKeyBusy.value = true
+  apiKeyError.value = null
+  try {
+    const res = await useApi()<ApiKeyGenerated>(`/api/v1/projects/${current.id}/api-key`, {
+      method: 'POST',
+    })
+    apiKeyPlaintext.value = res.apiKey
+    apiKeyMask.value = res.mask
+    isApiKeyModalOpen.value = true
+  } catch (e: unknown) {
+    apiKeyError.value = apiError(e, 'projects.apiKey')
+  } finally {
+    isApiKeyBusy.value = false
+  }
+}
+
+function closeApiKeyModal() {
+  isApiKeyModalOpen.value = false
+  // Show-once contract: drop the plaintext so it cannot be re-read from state.
+  apiKeyPlaintext.value = null
+  apiKeyCopied.value = false
+  if (apiKeyCopyTimer) {
+    clearTimeout(apiKeyCopyTimer)
+    apiKeyCopyTimer = null
+  }
+}
+
+async function copyApiKey() {
+  if (!apiKeyPlaintext.value) return
+  await navigator.clipboard.writeText(apiKeyPlaintext.value)
+  apiKeyCopied.value = true
+  if (apiKeyCopyTimer) clearTimeout(apiKeyCopyTimer)
+  apiKeyCopyTimer = setTimeout(() => {
+    apiKeyCopied.value = false
+  }, 1500)
+}
+
+// Load the mask once the project resolves (on mount or via lazy hydration).
+onMounted(() => {
+  if (!import.meta.client) return
+  if (project.value) void loadApiKeyMask()
+})
+watch(project, (next, prev) => {
+  if (next && !prev) void loadApiKeyMask()
+})
+
 const isDeleteModalOpen = ref(false)
 const isDeleting = ref(false)
 const deleteError = ref<string | null>(null)
@@ -289,6 +368,44 @@ async function confirmDelete() {
         </form>
       </section>
 
+      <!-- API-key card (Decision 8) -->
+      <section data-test="api-key-card" class="rounded-md border p-4 space-y-3">
+        <h2 class="text-lg font-medium">{{ t('projects.settings.apiKey.title') }}</h2>
+        <p class="text-sm text-gray-600">{{ t('projects.settings.apiKey.description') }}</p>
+
+        <div v-if="apiKeyMask" class="flex items-center gap-3">
+          <code
+            data-test="api-key-mask"
+            class="rounded bg-gray-100 px-2 py-1 text-sm font-mono"
+          >{{ apiKeyMask }}</code>
+          <button
+            type="button"
+            data-test="api-key-regenerate"
+            :disabled="isApiKeyBusy"
+            class="px-3 py-1 text-sm border rounded hover:bg-gray-50 disabled:opacity-50"
+            @click="generateApiKey"
+          >
+            {{ isApiKeyBusy ? t('projects.settings.apiKey.generating') : t('projects.settings.apiKey.regenerate') }}
+          </button>
+        </div>
+
+        <div v-else>
+          <button
+            type="button"
+            data-test="api-key-generate"
+            :disabled="isApiKeyBusy"
+            class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+            @click="generateApiKey"
+          >
+            {{ isApiKeyBusy ? t('projects.settings.apiKey.generating') : t('projects.settings.apiKey.generate') }}
+          </button>
+        </div>
+
+        <p v-if="apiKeyError" data-test="api-key-error" class="text-sm text-red-600">
+          {{ apiKeyError }}
+        </p>
+      </section>
+
       <!-- Danger zone -->
       <section
         data-test="settings-danger-zone"
@@ -366,6 +483,48 @@ async function confirmDelete() {
               @click="confirmDelete"
             >
               {{ isDeleting ? t('projects.settings.delete.deleting') : t('projects.settings.delete.confirm') }}
+            </button>
+          </div>
+        </div>
+      </div>
+      <!-- API-key show-once modal -->
+      <div
+        v-if="isApiKeyModalOpen"
+        data-test="api-key-modal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="api-key-modal-title"
+      >
+        <div class="w-full max-w-md rounded-md bg-white p-5 shadow-lg space-y-4">
+          <h3 id="api-key-modal-title" class="text-lg font-semibold">
+            {{ t('projects.settings.apiKey.modalTitle') }}
+          </h3>
+          <p class="text-sm text-red-700">
+            {{ t('projects.settings.apiKey.modalWarning') }}
+          </p>
+          <div class="flex items-center gap-2">
+            <code
+              data-test="api-key-plaintext"
+              class="flex-1 break-all rounded bg-gray-100 px-2 py-2 text-sm font-mono"
+            >{{ apiKeyPlaintext }}</code>
+            <button
+              type="button"
+              data-test="api-key-copy"
+              class="px-3 py-1 text-sm border rounded hover:bg-gray-50"
+              @click="copyApiKey"
+            >
+              {{ apiKeyCopied ? t('projects.settings.apiKey.copied') : t('projects.settings.apiKey.copy') }}
+            </button>
+          </div>
+          <div class="flex justify-end pt-2">
+            <button
+              type="button"
+              data-test="api-key-modal-close"
+              class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
+              @click="closeApiKeyModal"
+            >
+              {{ t('projects.settings.apiKey.close') }}
             </button>
           </div>
         </div>

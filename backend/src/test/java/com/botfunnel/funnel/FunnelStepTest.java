@@ -148,6 +148,9 @@ class FunnelStepTest {
                 .containsExactlyElementsOf(original.getButtons());
         // ...but the list reference is distinct.
         assertThat(copy.getButtons()).isNotSameAs(original.getButtons());
+        // Elements are shared by reference — Button is immutable, so a shallow element copy is the
+        // intended Decision 5 behaviour (no needless per-record deep copy).
+        assertThat(copy.getButtons().get(0)).isSameAs(original.getButtons().get(0));
 
         // Mutating the source list does not touch the copy.
         original.getButtons().add(new Button("callback", "Extra", "step-x", null));

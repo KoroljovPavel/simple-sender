@@ -131,6 +131,38 @@ class FunnelStepIdBackfillTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void backfillLeavesAlreadySeededExecutionUntouched() throws Exception {
+        String marker = "bf-seeded-" + UUID.randomUUID();
+        // Snapshot steps already have ids; currentStepId already set to a value that DIFFERS from the
+        // index-derived one (currentStepIndex=0 would point at "id-a", but currentStepId is "id-b").
+        Document exec = new Document("funnelId", marker)
+                .append("status", "waiting_for_reply")
+                .append("currentStepIndex", 0)
+                .append("currentStepId", "id-b")
+                .append("stepsSnapshot", List.of(
+                        new Document("stepType", "SEND_MESSAGE").append("order", 0).append("id", "id-a"),
+                        new Document("stepType", "DELAY").append("order", 1).append("id", "id-b")));
+        mongoTemplate.getCollection("funnel_executions").insertOne(exec);
+
+        try {
+            backfill.run(null);
+
+            Document reloaded = mongoTemplate.getCollection("funnel_executions")
+                    .find(new Document("funnelId", marker)).first();
+            assertThat(reloaded).isNotNull();
+            @SuppressWarnings("unchecked")
+            List<Document> snap = (List<Document>) reloaded.get("stepsSnapshot");
+            // Existing ids untouched.
+            assertThat(snap.get(0).getString("id")).isEqualTo("id-a");
+            assertThat(snap.get(1).getString("id")).isEqualTo("id-b");
+            // currentStepId NOT overwritten from currentStepIndex (Decision 7: only seed when null).
+            assertThat(reloaded.getString("currentStepId")).isEqualTo("id-b");
+        } finally {
+            mongoTemplate.getCollection("funnel_executions").deleteMany(new Document("funnelId", marker));
+        }
+    }
+
+    @Test
     void backfillToleratesEmptyAndMissingStepArrays() throws Exception {
         String marker = "bf-edge-" + UUID.randomUUID();
         Document zeroSteps = new Document("name", marker).append("status", "draft").append("steps", List.of());

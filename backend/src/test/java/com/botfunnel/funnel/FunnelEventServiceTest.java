@@ -14,9 +14,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ValueOperations;
 
@@ -31,6 +33,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -190,6 +193,40 @@ class FunnelEventServiceTest {
         service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "keyword", "nothing here", 0);
 
         verifyNoInteractions(executionFactory);
+    }
+
+    // ─── re-enter guard interplay (per-funnel) ──────────────────────────────
+
+    @Test
+    void reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches() {
+        stubBotAndSubscriber();
+        Funnel dup = funnel("dup");
+        Funnel ok = funnel("ok");
+        stubEventFunnels(dup, ok);
+        // The first funnel's insert collides with the re-enter guard; the second must still insert.
+        doThrow(new DuplicateKeyException("re-enter")).when(executionFactory)
+                .insertExecution(eq(PROJECT_ID), eq(dup), any(), any(), anyInt());
+
+        service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "event", "x", 0);
+
+        verify(executionFactory, times(1))
+                .insertExecution(eq(PROJECT_ID), eq(ok), eq(SUBSCRIBER_ID), eq(TELEGRAM_BOT_ID), eq(0));
+        assertThat(warnOrInfo(FunnelEventService.LOG_DISPATCH_REENTER_IGNORED)).isTrue();
+    }
+
+    @Test
+    void reEnter_allowReEnterFunnel_cancelsExistingThenInserts() {
+        stubBotAndSubscriber();
+        Funnel restart = funnel("restart");
+        restart.setAllowReEnter(true);
+        stubEventFunnels(restart);
+
+        service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "event", "x", 0);
+
+        InOrder inOrder = inOrder(executionFactory);
+        inOrder.verify(executionFactory).cancelExistingForPair(PROJECT_ID, "restart", SUBSCRIBER_ID);
+        inOrder.verify(executionFactory)
+                .insertExecution(eq(PROJECT_ID), eq(restart), eq(SUBSCRIBER_ID), eq(TELEGRAM_BOT_ID), eq(0));
     }
 
     // ─── backstop (a) volume ────────────────────────────────────────────────

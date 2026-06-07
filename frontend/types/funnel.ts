@@ -15,6 +15,14 @@ export type StepType =
   | 'REMOVE_TAG'
   | 'SET_CUSTOM_FIELD'
   | 'MENU'
+  | 'EMIT_EVENT'
+
+// Funnel entry trigger — mirrors backend triggerType values byte-for-byte (Phase 3). The backend value
+// for the API-event path is `event`; the UI labels it "api-event" (Decision 4 — external POST /events and
+// the in-funnel EMIT_EVENT step share one `event` namespace keyed by event_name). keyword does NOT use
+// triggerValue — it scans the funnel's `keywords` list; tag_added/custom_field_set/event reuse triggerValue
+// as the match key (tag slug / field key / event name).
+export type FunnelTriggerType = 'on_start' | 'keyword' | 'tag_added' | 'custom_field_set' | 'event'
 
 // Inline-keyboard button on a MENU step — mirrors backend Button record (com.botfunnel.funnel.Button).
 // type is 'callback' (advances the funnel to targetStepId, or End when null) or 'url' (opens an
@@ -49,6 +57,8 @@ export interface FunnelStep {
   tagSlug?: string | null
   customFieldKey?: string | null
   customFieldValue?: unknown
+  // EMIT_EVENT only — the event_name this step dispatches into the shared `event` namespace (Decision 4).
+  eventName?: string | null
   // Graph model (Phase 2) — mirrors backend FunnelStep graph fields. id is server-minted; next is the
   // default outgoing edge (null = next step in list). buttons/timeout* apply to MENU steps only.
   id?: string | null
@@ -70,6 +80,8 @@ export interface FunnelSummaryResponse {
   status: FunnelStatus
   triggerType: string | null
   triggerValue: string | null
+  // Only populated for triggerType=keyword; null/empty for every other trigger type (Decision 3).
+  keywords?: string[] | null
   allowReEnter: boolean
   stepCount: number
   createdAt: string
@@ -86,6 +98,8 @@ export interface FunnelResponse {
   status: FunnelStatus
   triggerType: string | null
   triggerValue: string | null
+  // Only populated for triggerType=keyword; null/empty for every other trigger type (Decision 3).
+  keywords?: string[] | null
   allowReEnter: boolean
   steps: FunnelStep[]
   deepLink: string | null
@@ -106,6 +120,8 @@ export interface UpdateFunnelRequest {
   description?: string | null
   triggerType?: string | null
   triggerValue?: string | null
+  // Only sent for triggerType=keyword (the active type owns its value — Edge cases); omit otherwise.
+  keywords?: string[] | null
   allowReEnter?: boolean
   steps?: FunnelStep[]
 }

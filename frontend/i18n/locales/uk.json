@@ -711,7 +711,8 @@
         "ADD_TAG": "Додати тег",
         "REMOVE_TAG": "Зняти тег",
         "SET_CUSTOM_FIELD": "Задати кастомне поле",
-        "MENU": "Меню (кнопки)"
+        "MENU": "Меню (кнопки)",
+        "EMIT_EVENT": "Надіслати подію"
       },
       "unit": {
         "MIN": "хв",
@@ -771,6 +772,9 @@
         "menuTimeoutUnit": "Одиниця",
         "menuTimeoutUnitNone": "—",
         "menuTimeoutTarget": "Крок-ціль після таймауту",
+        "eventName": "Назва події",
+        "eventNamePlaceholder": "напр. order_paid",
+        "eventNameHint": "Надсилає цю подію, щоб спрацювали інші воронки, які її очікують.",
         "submitAdd": "Додати",
         "submitSave": "Зберегти"
       },
@@ -791,13 +795,21 @@
         "menuButtonUrlScheme": "URL має починатися з http:// або https://",
         "menuNeedsCallback": "Меню має містити хоча б одну кнопку, що веде на крок або Кінець",
         "menuTimeoutValueMin": "Таймаут має бути цілим числом не менше 1",
-        "menuTimeoutUnitRequired": "Оберіть одиницю таймауту"
+        "menuTimeoutUnitRequired": "Оберіть одиницю таймауту",
+        "eventNamePattern": "Дозволені лише латиниця, цифри, _ та - (від 1 до 64 символів)"
       }
     },
     "trigger": {
       "title": "Тригер",
       "typeLabel": "Тип тригера",
       "onStart": "/start",
+      "type": {
+        "on_start": "Команда /start",
+        "keyword": "Ключове слово",
+        "tag_added": "Додано тег",
+        "custom_field_set": "Задано кастомне поле",
+        "event": "API-подія"
+      },
       "valueLabel": "Значення тригера",
       "valuePlaceholder": "напр. ref_promo",
       "valueHint": "Опційний параметр для deep-link. Порожнє → звичайний /start.",
@@ -805,7 +817,22 @@
       "deepLinkLabel": "Deep-link",
       "copy": "Копіювати",
       "copied": "Скопійовано",
-      "noBot": "Підключіть бота до проєкту, щоб побачити deep-link."
+      "noBot": "Підключіть бота до проєкту, щоб побачити deep-link.",
+      "keywordLabel": "Ключові слова",
+      "keywordPlaceholder": "напр. бонус",
+      "keywordAdd": "Додати",
+      "keywordRemove": "Видалити ключове слово",
+      "keywordHint": "Воронка запускається, коли повідомлення містить будь-яке з цих слів (без урахування регістру).",
+      "tagLabel": "Тег",
+      "tagPlaceholder": "Почніть вводити для пошуку…",
+      "tagHint": "Воронка запускається, коли підписнику додають цей тег.",
+      "fieldLabel": "Кастомне поле",
+      "fieldPlaceholder": "Почніть вводити для пошуку…",
+      "fieldHint": "Воронка запускається, коли підписнику задають це кастомне поле.",
+      "eventNameLabel": "Назва події",
+      "eventNamePlaceholder": "напр. order_paid",
+      "eventNameHint": "Воронка запускається, коли надходить ця подія (через API або крок «Надіслати подію»).",
+      "eventNamePattern": "Дозволені лише латиниця, цифри, _ та - (від 1 до 64 символів)"
     }
   }
 }

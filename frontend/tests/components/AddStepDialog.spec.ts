@@ -196,4 +196,25 @@ describe('AddStepDialog', () => {
     expect(maybe('[data-test="step-imageurl-error"]')).not.toBeNull()
     expect(wrapper.emitted('add')).toBeFalsy()
   })
+
+  it('EMIT_EVENT appears in the step picker and shows the event-name field', async () => {
+    await mountOpen()
+    await setType('EMIT_EVENT')
+    expect(maybe('[data-test="step-event-name-input"]')).not.toBeNull()
+    // Non-EMIT_EVENT fields are gone.
+    expect(maybe('[data-test="step-text-input"]')).toBeNull()
+  })
+
+  it('EMIT_EVENT emits a step with eventName', async () => {
+    const wrapper = await mountOpen()
+    await setType('EMIT_EVENT')
+    // Invalid/empty name blocks submit with an inline error.
+    await submit()
+    expect(maybe('[data-test="step-event-name-error"]')).not.toBeNull()
+    expect(wrapper.emitted('add')).toBeFalsy()
+
+    await $('[data-test="step-event-name-input"]').setValue('order_paid')
+    await submit()
+    expect(wrapper.emitted('add')![0][0]).toMatchObject({ stepType: 'EMIT_EVENT', eventName: 'order_paid' })
+  })
 })

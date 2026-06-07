@@ -711,7 +711,8 @@
         "ADD_TAG": "Add tag",
         "REMOVE_TAG": "Remove tag",
         "SET_CUSTOM_FIELD": "Set custom field",
-        "MENU": "Menu (buttons)"
+        "MENU": "Menu (buttons)",
+        "EMIT_EVENT": "Emit event"
       },
       "unit": {
         "MIN": "min",
@@ -771,6 +772,9 @@
         "menuTimeoutUnit": "Unit",
         "menuTimeoutUnitNone": "—",
         "menuTimeoutTarget": "Target step after timeout",
+        "eventName": "Event name",
+        "eventNamePlaceholder": "e.g. order_paid",
+        "eventNameHint": "Dispatches this event so other funnels listening for it can fire.",
         "submitAdd": "Add",
         "submitSave": "Save"
       },
@@ -791,13 +795,21 @@
         "menuButtonUrlScheme": "URL must start with http:// or https://",
         "menuNeedsCallback": "A menu needs at least one button that leads to a step or End",
         "menuTimeoutValueMin": "Timeout must be a whole number of at least 1",
-        "menuTimeoutUnitRequired": "Choose a timeout unit"
+        "menuTimeoutUnitRequired": "Choose a timeout unit",
+        "eventNamePattern": "Only Latin letters, digits, _ and - are allowed (1 to 64 characters)"
       }
     },
     "trigger": {
       "title": "Trigger",
       "typeLabel": "Trigger type",
       "onStart": "/start",
+      "type": {
+        "on_start": "/start command",
+        "keyword": "Keyword",
+        "tag_added": "Tag added",
+        "custom_field_set": "Custom field set",
+        "event": "API event"
+      },
       "valueLabel": "Trigger value",
       "valuePlaceholder": "e.g. ref_promo",
       "valueHint": "Optional deep-link parameter. Empty → plain /start.",
@@ -805,7 +817,22 @@
       "deepLinkLabel": "Deep link",
       "copy": "Copy",
       "copied": "Copied",
-      "noBot": "Connect a bot to the project to see the deep link."
+      "noBot": "Connect a bot to the project to see the deep link.",
+      "keywordLabel": "Keywords",
+      "keywordPlaceholder": "e.g. bonus",
+      "keywordAdd": "Add",
+      "keywordRemove": "Remove keyword",
+      "keywordHint": "The funnel starts when a message contains any of these words (case-insensitive).",
+      "tagLabel": "Tag",
+      "tagPlaceholder": "Type to search…",
+      "tagHint": "The funnel starts when this tag is added to a subscriber.",
+      "fieldLabel": "Custom field",
+      "fieldPlaceholder": "Type to search…",
+      "fieldHint": "The funnel starts when this custom field is set on a subscriber.",
+      "eventNameLabel": "Event name",
+      "eventNamePlaceholder": "e.g. order_paid",
+      "eventNameHint": "The funnel starts when this event is received (via the API or an Emit event step).",
+      "eventNamePattern": "Only Latin letters, digits, _ and - are allowed (1 to 64 characters)"
     }
   }
 }

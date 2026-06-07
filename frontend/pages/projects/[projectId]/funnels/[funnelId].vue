@@ -4,7 +4,7 @@ import FunnelStepsList from '~/components/funnels/FunnelStepsList.vue'
 import AddStepDialog from '~/components/funnels/AddStepDialog.vue'
 import EditStepDialog from '~/components/funnels/EditStepDialog.vue'
 import FunnelTriggerSettings from '~/components/funnels/FunnelTriggerSettings.vue'
-import type { FunnelResponse, FunnelStatus, FunnelStep } from '~/types/funnel'
+import type { FunnelResponse, FunnelStatus, FunnelStep, FunnelTriggerType } from '~/types/funnel'
 
 definePageMeta({ layout: 'default' })
 
@@ -21,7 +21,9 @@ const funnelId = computed(() => String(route.params.funnelId))
 
 const funnel = ref<FunnelResponse | null>(null)
 const steps = ref<FunnelStep[]>([])
+const triggerType = ref<FunnelTriggerType>('on_start')
 const triggerValue = ref('')
+const keywords = ref<string[]>([])
 const loaded = ref(false)
 const loadError = ref<string | null>(null)
 const saving = ref(false)
@@ -70,7 +72,9 @@ async function load() {
   try {
     const res = await funnelsStore.fetchOne(funnelId.value)
     applyResponse(res)
+    triggerType.value = (res.triggerType as FunnelTriggerType) ?? 'on_start'
     triggerValue.value = res.triggerValue ?? ''
+    keywords.value = res.keywords ?? []
     loaded.value = true
   } catch (err) {
     // Anti-IDOR uniform 404 for missing/cross-owner funnel → graceful redirect to the list.
@@ -98,11 +102,16 @@ async function persist(): Promise<boolean> {
   saving.value = true
   saveError.value = null
   try {
+    // Send only the value the active type owns — never leak a stale value from a previously-selected type
+    // (Edge cases). keyword owns `keywords` and clears triggerValue; on_start/tag_added/custom_field_set/
+    // event own `triggerValue` and clear `keywords`.
+    const isKeyword = triggerType.value === 'keyword'
     const res = await funnelsStore.update(funnelId.value, {
       name: funnel.value.name,
       description: funnel.value.description,
-      triggerType: 'on_start',
-      triggerValue: triggerValue.value,
+      triggerType: triggerType.value,
+      triggerValue: isKeyword ? null : triggerValue.value,
+      keywords: isKeyword ? keywords.value : [],
       allowReEnter: funnel.value.allowReEnter,
       steps: steps.value,
     })
@@ -141,15 +150,17 @@ function openEdit(index: number) {
   editOpen.value = true
 }
 
-// Persist trigger_value edits (debounced) so the activated funnel uses the value the user sees in the
-// deep-link preview. Only persist a syntactically valid value (avoid a 422 round-trip on every keystroke).
+// Persist trigger edits (debounced) so the activated funnel uses the value the user sees. For on_start only
+// persist a syntactically valid trigger_value (avoid a 422 round-trip on every keystroke); other types own
+// a picker/list/slug whose value is already constrained, so they persist on every change.
 let triggerTimer: ReturnType<typeof setTimeout> | null = null
-watch(triggerValue, (v) => {
+function scheduleTriggerPersist() {
   if (!loaded.value) return
-  if (!TRIGGER_VALUE_RE.test(v ?? '')) return
+  if (triggerType.value === 'on_start' && !TRIGGER_VALUE_RE.test(triggerValue.value ?? '')) return
   if (triggerTimer) clearTimeout(triggerTimer)
   triggerTimer = setTimeout(() => void persist(), 600)
-})
+}
+watch([triggerType, triggerValue, keywords], scheduleTriggerPersist, { deep: true })
 onBeforeUnmount(() => {
   if (triggerTimer) clearTimeout(triggerTimer)
 })
@@ -267,7 +278,9 @@ async function pause() {
     />
 
     <FunnelTriggerSettings
+      v-model:trigger-type="triggerType"
       v-model:trigger-value="triggerValue"
+      v-model:keywords="keywords"
       :bot-username="botUsername"
       :deep-link="funnel.deepLink"
     />

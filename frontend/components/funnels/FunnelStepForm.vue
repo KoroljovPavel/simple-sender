@@ -35,12 +35,15 @@ const STEP_TYPES: StepType[] = [
   'REMOVE_TAG',
   'SET_CUSTOM_FIELD',
   'MENU',
+  'EMIT_EVENT',
 ]
 const PARSE_MODES = ['', 'HTML', 'MarkdownV2'] as const
 const DELAY_UNITS: DelayUnit[] = ['MIN', 'HOUR', 'DAY']
 
 // CANONICAL — MUST match backend requireTagSlug @Pattern byte-for-byte (FunnelService).
 const TAG_SLUG_RE = /^[a-z0-9_-]{1,32}$/
+// CANONICAL event-name slug — MUST mirror the backend event_name @Pattern ^[A-Za-z0-9_-]{1,64}$ (Decision 4).
+const EVENT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
 // requireImageUrl: lower-cased URL must start with http:// or https://.
 const IMAGE_URL_RE = /^https?:\/\//i
 // Native <input type="date"> emits 'YYYY-MM-DD'; mirror the prefix the backend DATE validator accepts.
@@ -295,6 +298,10 @@ function schemaFor(type: StepType): z.ZodTypeAny {
       : z.any()
   const customFieldValue =
     type === 'SET_CUSTOM_FIELD' ? cfValueSchema(selectedFieldType.value) : z.any()
+  const eventName =
+    type === 'EMIT_EVENT'
+      ? z.string().trim().regex(EVENT_NAME_RE, t('funnels.steps.validation.eventNamePattern'))
+      : z.any()
   return z.object({
     text,
     parseMode: z.any(),
@@ -305,6 +312,7 @@ function schemaFor(type: StepType): z.ZodTypeAny {
     tagSlug,
     customFieldKey,
     customFieldValue,
+    eventName,
   })
 }
 
@@ -322,6 +330,7 @@ const { defineField, handleSubmit, errors } = useForm({
     tagSlug: props.initial?.tagSlug ?? '',
     customFieldKey: props.initial?.customFieldKey ?? '',
     customFieldValue: props.initial?.customFieldValue ?? '',
+    eventName: props.initial?.eventName ?? '',
   },
 })
 const [text, textAttrs] = defineField('text')
@@ -338,6 +347,7 @@ const [tagSlug] = defineField('tagSlug')
 // model update like every other field.
 const [customFieldKey] = defineField('customFieldKey')
 const [customFieldValue] = defineField('customFieldValue')
+const [eventName, eventNameAttrs] = defineField('eventName')
 
 // Resolve the selected field's type from the loaded definitions — drives the value widget + validation.
 watch(
@@ -432,6 +442,9 @@ const onSubmit = handleSubmit((values) => {
     case 'ADD_TAG':
     case 'REMOVE_TAG':
       step = { stepType: type, tagSlug: (values.tagSlug as string).trim() }
+      break
+    case 'EMIT_EVENT':
+      step = { stepType: type, eventName: (values.eventName as string).trim() }
       break
     case 'SET_CUSTOM_FIELD':
       step = {
@@ -858,6 +871,25 @@ const onSubmit = handleSubmit((values) => {
         />
 
         <p v-if="errors.customFieldValue" data-test="step-cf-value-error" class="mt-1 text-sm text-red-600">{{ errors.customFieldValue }}</p>
+      </div>
+    </template>
+
+    <!-- EMIT_EVENT: dispatch an event into the shared `event` namespace (Decision 4). Slug-validated. -->
+    <template v-else-if="selectedType === 'EMIT_EVENT'">
+      <div>
+        <label for="step-event-name" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.eventName') }}</label>
+        <input
+          id="step-event-name"
+          v-model="eventName"
+          v-bind="eventNameAttrs"
+          data-test="step-event-name-input"
+          type="text"
+          autocomplete="off"
+          :placeholder="t('funnels.steps.form.eventNamePlaceholder')"
+          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <p class="mt-1 text-xs text-gray-500">{{ t('funnels.steps.form.eventNameHint') }}</p>
+        <p v-if="errors.eventName" data-test="step-event-name-error" class="mt-1 text-sm text-red-600">{{ errors.eventName }}</p>
       </div>
     </template>
 

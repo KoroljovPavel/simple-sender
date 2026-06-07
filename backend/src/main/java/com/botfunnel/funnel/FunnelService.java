@@ -352,12 +352,15 @@ public class FunnelService {
 
     // MENU validation (Decision 10): >=1 callback button so the subscriber can never get stuck; per
     // button — non-empty label <= 64 chars; callback target null (End) or an existing id; url strictly
-    // http(s) with a non-empty host; at most 8 buttons.
+    // http(s) with a non-empty host; at most 8 buttons. The optional timeout pair is validated too
+    // (audit-fix F1): an unvalidated/legacy timeoutUnit would make StepExecutor.menuDeadline ->
+    // durationOf throw BEFORE the menu is sent, stranding the execution in stepRunStatus=in_progress.
     private static void validateMenu(FunnelStep step, Set<String> stepIds) {
         List<Button> buttons = step.getButtons();
         if (buttons == null || buttons.isEmpty()) {
             throw invalidStep("MENU step requires at least one button");
         }
+        requireTimeout(step.getTimeoutValue(), step.getTimeoutUnit());
         if (buttons.size() > MAX_BUTTONS) {
             throw invalidStep("MENU step exceeds the maximum of " + MAX_BUTTONS + " buttons");
         }
@@ -454,6 +457,25 @@ public class FunnelService {
             throw invalidStep("delayUnit must be MIN, HOUR or DAY");
         }
         // MIN/HOUR/DAY with delayValue >= 1 is always >= 1 minute, satisfying Decision 9's floor.
+    }
+
+    // Optional MENU timeout pair (audit-fix F1). null/null = unlimited wait (valid). Otherwise BOTH must
+    // be present, timeoutUnit in {MIN,HOUR,DAY} (same convention as delayUnit; StepExecutor.durationOf
+    // only understands these) and timeoutValue >= 1. An invalid pair is a 422 funnel_step_invalid — NOT a
+    // 500, and never reaches the engine where an unknown unit would strand the execution.
+    private static void requireTimeout(Integer timeoutValue, String timeoutUnit) {
+        if (timeoutValue == null && timeoutUnit == null) {
+            return; // no timeout configured → unlimited wait
+        }
+        if (timeoutValue == null || timeoutUnit == null) {
+            throw invalidStep("MENU timeout requires both timeoutValue and timeoutUnit");
+        }
+        if (timeoutValue < 1) {
+            throw invalidStep("MENU timeoutValue must be >= 1");
+        }
+        if (!"MIN".equals(timeoutUnit) && !"HOUR".equals(timeoutUnit) && !"DAY".equals(timeoutUnit)) {
+            throw invalidStep("timeoutUnit must be MIN, HOUR or DAY");
+        }
     }
 
     private static void requireTagSlug(String tagSlug) {

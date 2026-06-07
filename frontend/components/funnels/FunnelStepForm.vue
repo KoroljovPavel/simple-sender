@@ -81,6 +81,44 @@ const menuButtons = ref<ButtonRow[]>(initialButtonRows())
 // Per-row touched flag so an error only shows after the author tried to submit (or edited the row).
 const menuTouched = ref(false)
 
+// ── MENU optional timeout (Phase 2 / tech-spec Task 6 «опц. таймаут») ─────────────────────────────────
+// All three fields are emitted ONLY when the author fills the timeout (value + unit). Left blank → unset
+// → the menu waits indefinitely. The target picker reuses the same step/End options as a callback button;
+// End is encoded as timeoutTargetStepId=null (same sentinel idiom). Client validation mirrors backend
+// requireTimeout: when a unit is chosen the value must be a positive integer.
+// Bound to a number <input>: vee-validate is not involved, so v-model writes either '' (empty) or a
+// coerced number. Kept loosely typed and normalized via String() at the read sites.
+const menuTimeoutValue = ref<string | number>(
+  props.initial?.stepType === 'MENU' && props.initial?.timeoutValue != null
+    ? props.initial.timeoutValue
+    : '',
+)
+const menuTimeoutUnit = ref<DelayUnit | ''>(
+  props.initial?.stepType === 'MENU' && props.initial?.timeoutUnit ? props.initial.timeoutUnit : '',
+)
+const menuTimeoutTarget = ref<string>(
+  props.initial?.stepType === 'MENU' && props.initial?.timeoutTargetStepId
+    ? props.initial.timeoutTargetStepId
+    : MENU_END_TARGET,
+)
+// The timeout is "on" once the author has entered a value OR picked a unit. While off, nothing is emitted.
+const menuTimeoutValueRaw = computed(() => String(menuTimeoutValue.value ?? '').trim())
+const menuTimeoutEnabled = computed(
+  () => menuTimeoutValueRaw.value !== '' || menuTimeoutUnit.value !== '',
+)
+// Returns a localized error or null. When the timeout is engaged BOTH value (>=1 integer) and unit are
+// required (mirrors backend requireTimeout's both-or-neither + value>=1 rule).
+const menuTimeoutError = computed<string | null>(() => {
+  if (!menuTimeoutEnabled.value) return null
+  if (menuTimeoutUnit.value === '') return t('funnels.steps.validation.menuTimeoutUnitRequired')
+  const raw = menuTimeoutValueRaw.value
+  const n = Number(raw)
+  if (raw === '' || !Number.isInteger(n) || n < 1) {
+    return t('funnels.steps.validation.menuTimeoutValueMin')
+  }
+  return null
+})
+
 // Target options for a callback button: every OTHER step (by stable id) + the End sentinel. Steps without
 // an id (not yet persisted) are skipped — they cannot be a stable target until the first save mints one.
 const menuTargetOptions = computed(() => {
@@ -128,6 +166,7 @@ const menuButtonsValid = computed(
   () =>
     menuButtons.value.length > 0 &&
     !menuNeedsCallback.value &&
+    !menuTimeoutError.value &&
     menuButtons.value.every((b) => !menuButtonLabelError(b) && !menuButtonUrlError(b)),
 )
 
@@ -424,6 +463,14 @@ const onSubmit = handleSubmit((values) => {
         id: props.initial?.id ?? undefined,
         next: props.initial?.next ?? undefined,
       }
+      // Optional timeout: emit the three fields ONLY when engaged (validated above). Otherwise leave them
+      // unset → the engine waits indefinitely. End is encoded as timeoutTargetStepId=null.
+      if (menuTimeoutEnabled.value) {
+        step.timeoutValue = Number(menuTimeoutValueRaw.value)
+        step.timeoutUnit = menuTimeoutUnit.value as DelayUnit
+        step.timeoutTargetStepId =
+          menuTimeoutTarget.value === MENU_END_TARGET ? null : menuTimeoutTarget.value
+      }
       break
     }
   }
@@ -678,6 +725,56 @@ const onSubmit = handleSubmit((values) => {
 
         <p v-if="menuTouched && menuNeedsCallback" data-test="step-menu-error" class="mt-1 text-sm text-red-600">
           {{ t('funnels.steps.validation.menuNeedsCallback') }}
+        </p>
+      </div>
+
+      <!-- Optional timeout: leave blank to wait indefinitely. Filling value + unit emits the timeout edge;
+           the target picker reuses the callback step/End options (End → timeoutTargetStepId null). -->
+      <div data-test="step-menu-timeout">
+        <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuTimeout') }}</label>
+        <p class="mb-2 text-xs text-gray-500">{{ t('funnels.steps.form.menuTimeoutHint') }}</p>
+        <div class="flex gap-2">
+          <div class="flex-1">
+            <input
+              v-model="menuTimeoutValue"
+              data-test="step-menu-timeout-value"
+              type="number"
+              min="1"
+              :placeholder="t('funnels.steps.form.menuTimeoutValue')"
+              :aria-label="t('funnels.steps.form.menuTimeoutValue')"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div class="flex-1">
+            <select
+              v-model="menuTimeoutUnit"
+              data-test="step-menu-timeout-unit"
+              :aria-label="t('funnels.steps.form.menuTimeoutUnit')"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">{{ t('funnels.steps.form.menuTimeoutUnitNone') }}</option>
+              <option v-for="u in DELAY_UNITS" :key="u" :value="u">{{ t(`funnels.steps.unit.${u}`) }}</option>
+            </select>
+          </div>
+        </div>
+        <div v-if="menuTimeoutEnabled" class="mt-2">
+          <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuTimeoutTarget') }}</label>
+          <SearchableSelect
+            v-model="menuTimeoutTarget"
+            :options="menuTargetOptions"
+            test-prefix="step-menu-timeout-target"
+            :placeholder="t('funnels.steps.form.menuTargetPlaceholder')"
+            :loading-text="t('funnels.steps.form.menuTargetLoading')"
+            :empty-text="t('funnels.steps.form.menuTargetEmpty')"
+            :no-matches-text="t('funnels.steps.form.menuTargetNoMatches')"
+          />
+        </div>
+        <p
+          v-if="menuTouched && menuTimeoutError"
+          data-test="step-menu-timeout-error"
+          class="mt-1 text-sm text-red-600"
+        >
+          {{ menuTimeoutError }}
         </p>
       </div>
     </template>

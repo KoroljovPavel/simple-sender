@@ -570,6 +570,46 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void editingFunnelDuringWait_doesNotChangeInFlightExecution() {
+        // Snapshot isolation at RUNTIME (tech-spec Testing Strategy): a MENU execution parks
+        // waiting_for_reply carrying its own stepsSnapshot. We then MUTATE the source funnel definition in
+        // the funnels collection (delete the branch target s2, repoint the button). On resume the engine
+        // must follow the SNAPSHOT (advance into s2 → completed), proving the live edit is ignored.
+        String subId = seedActiveSubscriber();
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch!", null);
+        String execId = seedGraphExecution(subId, BASE, menu, s2);
+        String funnelId = reload(execId).getFunnelId();
+        enqueueOk(2);
+
+        engine.sweep(); // parks on the menu (snapshot frozen)
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+
+        // Author edits the LIVE funnel while the subscriber waits: the menu now points its button at a
+        // non-existent step and s2 is gone entirely. The in-flight snapshot must not be affected.
+        FunnelStep liveMenu = menu("m1", "EDITED", null, null, null, callbackButton("Yes", "ghost"));
+        Funnel live = new Funnel();
+        live.setId(funnelId);
+        live.setProjectId(projectId);
+        live.setName("edited-mid-wait");
+        live.setStatus(FunnelStatus.active);
+        live.setTriggerType(FunnelService.TRIGGER_ON_START);
+        live.setTriggerValue("");
+        live.setSteps(new ArrayList<>(List.of(liveMenu)));
+        live.setCreatedAt(BASE);
+        live.setUpdatedAt(BASE);
+        mongoTemplate.save(live);
+
+        // Resume along the SNAPSHOT's button target (s2), which no longer exists in the live funnel.
+        boolean moved = engine.resumeOnCallback(execId, subId, "s2");
+
+        assertThat(moved).isTrue();
+        // Followed the snapshot (s2 still reachable there) → branch sent + completed, despite the live edit.
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(2); // menu + snapshot branch send
+    }
+
+    @Test
     void timeout_resume_follows_target() {
         String subId = seedActiveSubscriber();
         // m1 has a 10-MIN timeout → s3 (explicit jump past s2). s3 -> End. The button branch (s2) is

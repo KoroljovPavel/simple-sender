@@ -148,6 +148,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
         String runningId = seedExecution(f.getId(), ExecutionStatus.running);
         String waitingId = seedExecution(f.getId(), ExecutionStatus.waiting);
+        // A parked MENU execution (waiting_for_reply) must be cancelled by delete too (audit-fix F5).
+        String waitingForReplyId = seedExecution(f.getId(), ExecutionStatus.waiting_for_reply);
         String completedId = seedExecution(f.getId(), ExecutionStatus.completed);
 
         mockMvc.perform(delete(url() + "/" + f.getId()).with(csrf()))
@@ -156,6 +158,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         assertThat(funnelRepository.findById(f.getId())).isEmpty();
         assertThat(execStatus(runningId)).isEqualTo(ExecutionStatus.cancelled);
         assertThat(execStatus(waitingId)).isEqualTo(ExecutionStatus.cancelled);
+        assertThat(execStatus(waitingForReplyId)).isEqualTo(ExecutionStatus.cancelled);
         // A terminal execution is untouched by the cancel sweep.
         assertThat(execStatus(completedId)).isEqualTo(ExecutionStatus.completed);
     }
@@ -533,6 +536,69 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         }
         menu.setButtons(buttons);
         Funnel f = seedFunnel("TooMany", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuWithValidTimeoutSucceeds() throws Exception {
+        // A MENU with a valid timeout pair (value >= 1, unit in {MIN,HOUR,DAY}) and null target (= End)
+        // activates cleanly (audit-fix F1 — the pair is validated but legitimate values pass).
+        FunnelStep menu = menuStep("step-menu", callbackButton("Go", null));
+        menu.setTimeoutValue(2);
+        menu.setTimeoutUnit("HOUR");
+        Funnel f = seedFunnel("WithTimeout", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+        seedConnectedBot("validtimeout_bot");
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("active"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuRejectsUnknownTimeoutUnit() throws Exception {
+        // An invalid/legacy timeoutUnit (e.g. the old "hours") must be rejected at activate with a 422 —
+        // NOT pass through to the engine where StepExecutor.durationOf would throw and strand the run
+        // (audit-fix F1).
+        FunnelStep menu = menuStep("step-menu", callbackButton("Go", null));
+        menu.setTimeoutValue(2);
+        menu.setTimeoutUnit("hours");
+        Funnel f = seedFunnel("BadUnit", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuRejectsTimeoutValueBelowOne() throws Exception {
+        FunnelStep menu = menuStep("step-menu", callbackButton("Go", null));
+        menu.setTimeoutValue(0);
+        menu.setTimeoutUnit("MIN");
+        Funnel f = seedFunnel("ZeroTimeout", FunnelStatus.draft, "promo",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuRejectsHalfTimeoutPair() throws Exception {
+        // Only timeoutValue present (unit missing) → 422: a half-configured pair is ambiguous.
+        FunnelStep menu = menuStep("step-menu", callbackButton("Go", null));
+        menu.setTimeoutValue(5);
+        menu.setTimeoutUnit(null);
+        Funnel f = seedFunnel("HalfPair", FunnelStatus.draft, "promo",
                 new ArrayList<>(List.of(menu)));
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))

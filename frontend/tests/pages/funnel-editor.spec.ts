@@ -328,6 +328,92 @@ describe('FunnelStepForm — MENU', () => {
     ])
   })
 
+  it('omits timeout fields when the author leaves the timeout blank', async () => {
+    const wrapper = await mountMenuForm()
+    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    // A single valid callback button; the timeout inputs are left untouched.
+    await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
+    await $('[data-test="step-menu-target-0-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-menu-target-0-option-s1"]').trigger('mousedown')
+    await settle()
+    await submitForm()
+
+    const emitted = wrapper.emitted('submit')
+    expect(emitted).toBeTruthy()
+    const step = emitted![0][0] as FunnelStep
+    // Timeout omitted → all three fields unset (engine waits indefinitely).
+    expect(step.timeoutValue).toBeUndefined()
+    expect(step.timeoutUnit).toBeUndefined()
+    expect(step.timeoutTargetStepId).toBeUndefined()
+  })
+
+  it('emits the timeout fields with the chosen unit and a step target', async () => {
+    const wrapper = await mountMenuForm()
+    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
+    await $('[data-test="step-menu-target-0-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-menu-target-0-option-s1"]').trigger('mousedown')
+    await settle()
+    // Engage the timeout: 3 HOUR → target step s2.
+    await $('[data-test="step-menu-timeout-value"]').setValue('3')
+    await $('[data-test="step-menu-timeout-unit"]').setValue('HOUR')
+    await settle()
+    await $('[data-test="step-menu-timeout-target-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-menu-timeout-target-option-s2"]').trigger('mousedown')
+    await settle()
+    await submitForm()
+
+    const emitted = wrapper.emitted('submit')
+    expect(emitted).toBeTruthy()
+    const step = emitted![0][0] as FunnelStep
+    expect(step.timeoutValue).toBe(3)
+    expect(step.timeoutUnit).toBe('HOUR')
+    expect(step.timeoutTargetStepId).toBe('s2')
+  })
+
+  it('encodes a timeout target of End as timeoutTargetStepId null', async () => {
+    const wrapper = await mountMenuForm()
+    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
+    await $('[data-test="step-menu-target-0-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-menu-target-0-option-s1"]').trigger('mousedown')
+    await settle()
+    // Timeout with the default End target (sentinel) → null.
+    await $('[data-test="step-menu-timeout-value"]').setValue('30')
+    await $('[data-test="step-menu-timeout-unit"]').setValue('MIN')
+    await settle()
+    await submitForm()
+
+    const emitted = wrapper.emitted('submit')
+    expect(emitted).toBeTruthy()
+    const step = emitted![0][0] as FunnelStep
+    expect(step.timeoutValue).toBe(30)
+    expect(step.timeoutUnit).toBe('MIN')
+    // End sentinel → null (not the sentinel string, not "").
+    expect(step.timeoutTargetStepId).toBeNull()
+  })
+
+  it('blocks submit when a timeout unit is set without a value', async () => {
+    const wrapper = await mountMenuForm()
+    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
+    await $('[data-test="step-menu-target-0-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-menu-target-0-option-s1"]').trigger('mousedown')
+    await settle()
+    // Unit chosen but value left blank → invalid (mirrors backend requireTimeout both-or-neither).
+    await $('[data-test="step-menu-timeout-unit"]').setValue('HOUR')
+    await settle()
+    await submitForm()
+
+    expect(maybe('[data-test="step-menu-timeout-error"]')).not.toBeNull()
+    expect(wrapper.emitted('submit')).toBeFalsy()
+  })
+
   it('pre-fills the buttons of an edited MENU step', async () => {
     await mountMenuForm({
       stepType: 'MENU',

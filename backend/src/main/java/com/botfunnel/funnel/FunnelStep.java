@@ -26,7 +26,7 @@ public class FunnelStep {
     // list of immutable Button records — deep-copied in copyOf (Decision 5).
     private List<Button> buttons;
     private Integer timeoutValue;
-    private String timeoutUnit;          // "minutes" | "hours" | "days"
+    private String timeoutUnit;          // "MIN" | "HOUR" | "DAY" (reuses delayUnit convention, Task 3 deviation)
     private String timeoutTargetStepId;  // null = completed
 
     // SEND_MESSAGE

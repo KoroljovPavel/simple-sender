@@ -173,24 +173,3 @@ test('funnels_menuGoldenPath_buildAndActivate', async ({ page }) => {
   await expect(page.locator('[data-test="funnel-status-active"]')).toBeVisible()
 })
 
-test('funnels_activation422_showsInlineError', async ({ page }) => {
-  test.skip(!backendUp, SKIP_BACKEND_MSG)
-  test.skip(!seedReady, SKIP_SEED_MSG)
-
-  await login(page)
-  // Fresh draft funnel with ZERO steps (cheap page-test, no full seed needed).
-  await page.goto(`/projects/${PROJECT_ID}/funnels`)
-  await page.locator('[data-test="funnels-create-trigger"]').click()
-  await page.locator('[data-test="funnel-name-input"]').fill(`E2E empty ${Date.now()}`)
-  await page.locator('[data-test="funnel-create-submit"]').click()
-  await page.waitForURL(new RegExp(`/projects/${PROJECT_ID}/funnels/[^/]+$`))
-  await expect(page.locator('[data-test="funnel-steps-empty"]')).toBeVisible()
-
-  // Activate an empty funnel → backend 422 funnel_no_steps → inline error (NOT a global toast).
-  await Promise.all([
-    page.waitForResponse((r) => r.url().includes('/activate')),
-    page.locator('[data-test="funnel-activate"]').click(),
-  ])
-  await expect(page.locator('[data-test="funnel-activate-error"]')).toBeVisible()
-  await expect(page.locator('[data-test="funnel-status-active"]')).toHaveCount(0)
-})

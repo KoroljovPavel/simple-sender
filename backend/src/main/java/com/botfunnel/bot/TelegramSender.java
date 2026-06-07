@@ -127,13 +127,68 @@ public class TelegramSender {
 
     public SentMessage sendText(String botId, Long chatId, String text,
                                 String parseMode, String ownerId) {
-        // Body for /sendMessage. parse_mode added only when non-null (mirrored by /sendPhoto).
+        // Backward-compatible 5-arg path (3 production call-sites + many tests). Delegates to the
+        // 6-arg overload with replyMarkup=null so the only-if-non-null body logic lives in one place.
+        return sendText(botId, chatId, text, parseMode, ownerId, null);
+    }
+
+    /**
+     * 6-arg overload adding an optional inline keyboard. {@code replyMarkup} is a serializable
+     * object (typically a {@code Map}) shaped as {@code {"inline_keyboard":[[{text, callback_data|url}]]}};
+     * it is placed into the {@code /sendMessage} body under the {@code reply_markup} key
+     * <strong>only when non-null</strong> — the same only-if-non-null idiom as {@code parse_mode}.
+     * This is a body field, not a method-tail parameter: {@code ownerId} stays last so existing
+     * call-sites and the audit/retry/subscriber-hook pipeline are untouched.
+     */
+    public SentMessage sendText(String botId, Long chatId, String text,
+                                String parseMode, String ownerId, Object replyMarkup) {
+        // Body for /sendMessage. parse_mode + reply_markup added only when non-null (mirrored by /sendPhoto).
         Map<String, Object> contentFields = new HashMap<>();
         contentFields.put("text", text);
         if (parseMode != null) {
             contentFields.put("parse_mode", parseMode);
         }
+        if (replyMarkup != null) {
+            contentFields.put("reply_markup", replyMarkup);
+        }
         return send(botId, chatId, "/bot{token}/sendMessage", contentFields, ownerId);
+    }
+
+    // Greppable WARN constant for the Decision 8 best-effort answerCallbackQuery path. A failed ack
+    // (Telegram 5xx exhausted, timeout, bot-not-found/disconnected, token issue) must NOT propagate
+    // — it would otherwise block funnel advance on a callback. Mirrors the
+    // TELEGRAM_SENDER_SUBSCRIBER_HOOK_FAILED swallow-and-warn convention above.
+    static final String TELEGRAM_ANSWER_CALLBACK_FAILED =
+            "TELEGRAM_ANSWER_CALLBACK_FAILED: best-effort spinner ack failed (funnel advance not blocked): {}";
+
+    /**
+     * Best-effort {@code answerCallbackQuery} (Decision 8): clears the spinner on a tapped inline
+     * button. Reuses the class's per-call AES-GCM decrypt, CONNECTED filter, 5xx/429 retry-backoff
+     * loop, 30s deadline, and token-scrubbed logging. Unlike content sends, this is a non-content
+     * ack: no audit event and no subscriber hook. Any failure is scrubbed, WARN-logged, and
+     * swallowed so the funnel keeps advancing.
+     *
+     * @param text optional toast text; the {@code text} body key is omitted when null.
+     */
+    public void answerCallbackQuery(String botId, String callbackQueryId, String text) {
+        Map<String, Object> contentFields = new HashMap<>();
+        contentFields.put("callback_query_id", callbackQueryId);
+        if (text != null) {
+            contentFields.put("text", text);
+        }
+        try {
+            AtomicInteger attempts = new AtomicInteger(0);
+            Instant deadline = Instant.now().plus(overallTimeout);
+            Bot bot = botRepository.findById(botId)
+                    .filter(b -> b.getStatus() == BotStatus.CONNECTED)
+                    .orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND));
+            // Reuses the same retry/deadline seam as content sends; the ack response
+            // ({"ok":true,"result":true}) carries no message_id, so we discard the raw result.
+            sendWithRateLimitRetry(bot, botId, null, "/bot{token}/answerCallbackQuery",
+                    contentFields, attempts, deadline);
+        } catch (RuntimeException ex) {
+            log.warn(TELEGRAM_ANSWER_CALLBACK_FAILED, TelegramApiClient.scrubTokens(ex.getMessage()));
+        }
     }
 
     public SentMessage sendPhoto(String botId, Long chatId, String imageUrl, String caption,
@@ -174,8 +229,9 @@ public class TelegramSender {
                     .filter(b -> b.getStatus() == BotStatus.CONNECTED)
                     .orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND));
 
-            SentMessage sm = sendWithRateLimitRetry(bot, botId, chatId, endpoint, contentFields,
-                    attempts, deadline);
+            TelegramSendResult<JsonNode> result = sendWithRateLimitRetry(bot, botId, chatId, endpoint,
+                    contentFields, attempts, deadline);
+            SentMessage sm = mapBodyToSentMessage(result, chatId, attempts);
             eventService.logEvent(ownerId, EVENT_TELEGRAM_MESSAGE_SENT,
                     null, null, sentMetadata(botId, sm));
             return sm;
@@ -222,8 +278,8 @@ public class TelegramSender {
 
     // Outer 429 loop wrapping the inner 5xx loop. Per Decision 2, 429 wraps 5xx — Telegram's
     // rate-limit window resets the per-second budget, so we retry from scratch on retry_after.
-    private SentMessage sendWithRateLimitRetry(Bot bot, String botId, Long chatId, String endpoint,
-                                               Map<String, Object> contentFields,
+    private TelegramSendResult<JsonNode> sendWithRateLimitRetry(Bot bot, String botId, Long chatId,
+                                               String endpoint, Map<String, Object> contentFields,
                                                AtomicInteger attempts, Instant deadline) {
         while (true) {
             try {
@@ -239,9 +295,9 @@ public class TelegramSender {
         }
     }
 
-    private SentMessage sendWith5xxRetry(Bot bot, String botId, Long chatId, String endpoint,
-                                         Map<String, Object> contentFields, AtomicInteger attempts,
-                                         Instant deadline) {
+    private TelegramSendResult<JsonNode> sendWith5xxRetry(Bot bot, String botId, Long chatId,
+                                         String endpoint, Map<String, Object> contentFields,
+                                         AtomicInteger attempts, Instant deadline) {
         for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
             checkDeadline(deadline, attempts);
             try {
@@ -269,7 +325,7 @@ public class TelegramSender {
         throw new TelegramSendException(null, "transient_failure_exhausted", attempts.get());
     }
 
-    private SentMessage sendOnce(Bot bot, String botId, Long chatId, String endpoint,
+    private TelegramSendResult<JsonNode> sendOnce(Bot bot, String botId, Long chatId, String endpoint,
                                  Map<String, Object> contentFields, AtomicInteger attempts) {
         byte[] iv;
         byte[] ct;
@@ -291,14 +347,17 @@ public class TelegramSender {
             throw new BotTokenInvalidException(botId, "invalid token shape after decrypt");
         }
 
-        // chat_id is common to every endpoint; the caller-supplied contentFields carry the
-        // endpoint-specific keys (text / photo+caption + parse_mode). Copy into a fresh map so the
-        // shared contentFields instance is never mutated across retry attempts.
+        // chat_id is common to content endpoints; the caller-supplied contentFields carry the
+        // endpoint-specific keys (text / photo+caption + parse_mode + reply_markup). Copy into a
+        // fresh map so the shared contentFields instance is never mutated across retry attempts.
+        // chatId is null for non-content acks (answerCallbackQuery) — omit the key in that case.
         Map<String, Object> body = new HashMap<>(contentFields);
-        body.put("chat_id", chatId);
+        if (chatId != null) {
+            body.put("chat_id", chatId);
+        }
 
         attempts.incrementAndGet();
-        TelegramSendResult<JsonNode> result = restClient.post()
+        return restClient.post()
                 .uri(endpoint, token)
                 .body(body)
                 .retrieve()
@@ -306,7 +365,6 @@ public class TelegramSender {
                     throw map4xx(resp, botId, attempts);
                 })
                 .body(new ParameterizedTypeReference<TelegramSendResult<JsonNode>>() {});
-        return mapBodyToSentMessage(result, chatId, attempts);
     }
 
     private RuntimeException map4xx(ClientHttpResponse response, String botId, AtomicInteger attempts) throws java.io.IOException {

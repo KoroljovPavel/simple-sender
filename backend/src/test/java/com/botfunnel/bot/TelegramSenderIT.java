@@ -1,6 +1,8 @@
 package com.botfunnel.bot;
 
 import com.botfunnel.AbstractIntegrationTest;
+import com.botfunnel.common.crypto.EncryptedValue;
+import com.botfunnel.common.crypto.TokenEncryptor;
 import com.botfunnel.events.Event;
 import com.botfunnel.events.EventRepository;
 import com.botfunnel.profile.WithMockAppUser;
@@ -9,6 +11,9 @@ import com.botfunnel.project.ProjectRepository;
 import com.botfunnel.user.User;
 import com.botfunnel.user.UserRepository;
 import com.botfunnel.user.UserStatus;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.QueueDispatcher;
 import okhttp3.mockwebserver.RecordedRequest;
@@ -26,12 +31,15 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Predicate;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.awaitility.Awaitility.await;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -71,11 +79,19 @@ class TelegramSenderIT extends AbstractIntegrationTest {
         mockTelegram.shutdown();
     }
 
+    // Valid bot-token shape (matches TelegramApiClient.TOKEN_SHAPE). Encrypted per-test with the
+    // test-profile AES-GCM key so the direct-TelegramSender scenarios pass decrypt + shape check
+    // and reach the MockWebServer with /bot{token}/... on the path.
+    private static final String VALID_TOKEN = "1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789";
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
+
     @Autowired BotRepository botRepository;
     @Autowired UserRepository userRepository;
     @Autowired ProjectRepository projectRepository;
     @Autowired EventRepository eventRepository;
     @Autowired MongoTemplate mongoTemplate;
+    @Autowired TelegramSender telegramSender;
+    @Autowired TokenEncryptor tokenEncryptor;
 
     @BeforeEach
     void cleanAndSeed() {
@@ -133,6 +149,42 @@ class TelegramSenderIT extends AbstractIntegrationTest {
         b.setConnectedAt(Instant.now());
         b.setOwnerChatId(ownerChatId);
         return botRepository.save(b);
+    }
+
+    // Seeds a CONNECTED bot whose stored token decrypts to VALID_TOKEN under the test-profile key,
+    // so a direct TelegramSender call passes AES-GCM decrypt + requireValidTokenShape and actually
+    // hits MockWebServer (unlike seedConnectedBot, whose "Zm9v"/"YmFy" stubs fail decrypt).
+    private Bot seedConnectedBotWithRealToken(String projectId) {
+        EncryptedValue ev = tokenEncryptor.encrypt(VALID_TOKEN);
+        Bot b = new Bot();
+        b.setProjectId(projectId);
+        b.setTelegramBotId(TELEGRAM_BOT_ID);
+        b.setTelegramUsername(TELEGRAM_USERNAME);
+        b.setTelegramFirstName(TELEGRAM_FIRST_NAME);
+        b.setStatus(BotStatus.CONNECTED);
+        b.setEncryptedTokenCiphertext(Base64.getEncoder().encodeToString(ev.ciphertext()));
+        b.setEncryptedTokenIv(Base64.getEncoder().encodeToString(ev.iv()));
+        b.setTokenSuffix("xyz");
+        b.setWebhookSecretHash("a".repeat(64));
+        b.setConnectedAt(Instant.now());
+        return botRepository.save(b);
+    }
+
+    private static MockResponse jsonResponse(int status, String body) {
+        return new MockResponse()
+                .setResponseCode(status)
+                .setHeader("Content-Type", "application/json")
+                .setBody(body);
+    }
+
+    private static MockResponse okSendMessage(long messageId, long chatId) {
+        return jsonResponse(200, String.format(
+                "{\"ok\":true,\"result\":{\"message_id\":%d,\"chat\":{\"id\":%d}}}",
+                messageId, chatId));
+    }
+
+    private static MockResponse okAnswerCallbackQuery() {
+        return jsonResponse(200, "{\"ok\":true,\"result\":true}");
     }
 
     private List<RecordedRequest> drainRequests() {
@@ -227,5 +279,118 @@ class TelegramSenderIT extends AbstractIntegrationTest {
         assertThat(loaded.getOwnerChatId()).isNull();
         assertThat(loaded.getStatus()).isEqualTo(BotStatus.CONNECTED);
         assertThat(loaded.getTelegramBotId()).isEqualTo(TELEGRAM_BOT_ID);
+    }
+
+    // ---------- Task 2: reply_markup + answerCallbackQuery (direct TelegramSender) ----------
+
+    @Test
+    void sendText_withReplyMarkup_includesInlineKeyboardInBody() throws Exception {
+        Project project = saveActiveProject(USER_ID);
+        Bot bot = seedConnectedBotWithRealToken(project.getId());
+        mockTelegram.enqueue(okSendMessage(42L, 555L));
+
+        // {"inline_keyboard":[[{text,callback_data}],[{text,url}]]}
+        Map<String, Object> replyMarkup = Map.of(
+                "inline_keyboard", List.of(
+                        List.of(Map.of("text", "Buy", "callback_data", "exec-1:0")),
+                        List.of(Map.of("text", "Site", "url", "https://example.com"))));
+
+        telegramSender.sendText(bot.getId(), 555L, "Choose:", null, USER_ID, replyMarkup);
+
+        List<RecordedRequest> requests = drainRequests();
+        assertThat(requests).hasSize(1);
+        RecordedRequest req = requests.get(0);
+        assertThat(req.getMethod()).isEqualTo("POST");
+        assertThat(req.getPath()).isEqualTo("/bot" + VALID_TOKEN + "/sendMessage");
+
+        JsonNode body = OBJECT_MAPPER.readTree(req.getBody().readUtf8());
+        JsonNode keyboard = body.path("reply_markup").path("inline_keyboard");
+        assertThat(keyboard.isArray()).isTrue();
+        assertThat(keyboard).hasSize(2);
+        assertThat(keyboard.get(0).get(0).get("text").asText()).isEqualTo("Buy");
+        assertThat(keyboard.get(0).get(0).get("callback_data").asText()).isEqualTo("exec-1:0");
+        assertThat(keyboard.get(1).get(0).get("text").asText()).isEqualTo("Site");
+        assertThat(keyboard.get(1).get(0).get("url").asText()).isEqualTo("https://example.com");
+    }
+
+    @Test
+    void sendText_nullReplyMarkup_omitsKeyField() throws Exception {
+        Project project = saveActiveProject(USER_ID);
+        Bot bot = seedConnectedBotWithRealToken(project.getId());
+        mockTelegram.enqueue(okSendMessage(43L, 555L));
+
+        // 6-arg overload with null reply_markup must produce the identical body shape as the 5-arg
+        // path: no reply_markup key (only-if-non-null idiom, mirrors parse_mode).
+        telegramSender.sendText(bot.getId(), 555L, "Plain", null, USER_ID, null);
+
+        List<RecordedRequest> requests = drainRequests();
+        assertThat(requests).hasSize(1);
+        JsonNode body = OBJECT_MAPPER.readTree(requests.get(0).getBody().readUtf8());
+        assertThat(body.has("reply_markup")).isFalse();
+        assertThat(body.get("text").asText()).isEqualTo("Plain");
+    }
+
+    @Test
+    void answerCallbackQuery_postsToAnswerCallbackQueryEndpoint() throws Exception {
+        Project project = saveActiveProject(USER_ID);
+        Bot bot = seedConnectedBotWithRealToken(project.getId());
+        mockTelegram.enqueue(okAnswerCallbackQuery());
+
+        telegramSender.answerCallbackQuery(bot.getId(), "cbq-123", "Done");
+
+        List<RecordedRequest> requests = drainRequests();
+        assertThat(requests).hasSize(1);
+        RecordedRequest req = requests.get(0);
+        assertThat(req.getMethod()).isEqualTo("POST");
+        assertThat(req.getPath()).isEqualTo("/bot" + VALID_TOKEN + "/answerCallbackQuery");
+
+        JsonNode body = OBJECT_MAPPER.readTree(req.getBody().readUtf8());
+        assertThat(body.get("callback_query_id").asText()).isEqualTo("cbq-123");
+        assertThat(body.get("text").asText()).isEqualTo("Done");
+    }
+
+    @Test
+    void answerCallbackQuery_nullText_omitsTextField() throws Exception {
+        Project project = saveActiveProject(USER_ID);
+        Bot bot = seedConnectedBotWithRealToken(project.getId());
+        mockTelegram.enqueue(okAnswerCallbackQuery());
+
+        telegramSender.answerCallbackQuery(bot.getId(), "cbq-456", null);
+
+        List<RecordedRequest> requests = drainRequests();
+        assertThat(requests).hasSize(1);
+        JsonNode body = OBJECT_MAPPER.readTree(requests.get(0).getBody().readUtf8());
+        assertThat(body.get("callback_query_id").asText()).isEqualTo("cbq-456");
+        assertThat(body.has("text")).isFalse();
+    }
+
+    @Test
+    void answerCallbackQuery_telegram5xx_bestEffortDoesNotThrow() {
+        Project project = saveActiveProject(USER_ID);
+        Bot bot = seedConnectedBotWithRealToken(project.getId());
+        // 5xx on every attempt (initial + MAX_RETRIES) → transient exhausted; best-effort swallows.
+        for (int i = 0; i <= 3; i++) {
+            mockTelegram.enqueue(jsonResponse(503,
+                    "{\"ok\":false,\"error_code\":503,\"description\":\"Service Unavailable\"}"));
+        }
+
+        // Decision 8: ack failure must NOT propagate (would otherwise block funnel advance).
+        assertThatCode(() -> telegramSender.answerCallbackQuery(bot.getId(), "cbq-5xx", "x"))
+                .doesNotThrowAnyException();
+        // It did attempt (retry loop ran) — at least one request reached MockWebServer.
+        assertThat(drainRequests()).isNotEmpty();
+    }
+
+    @Test
+    void answerCallbackQuery_disconnectedBot_noTelegramCall() {
+        Project project = saveActiveProject(USER_ID);
+        Bot bot = seedConnectedBotWithRealToken(project.getId());
+        bot.setStatus(BotStatus.DISCONNECTED);
+        botRepository.save(bot);
+
+        // CONNECTED filter rejects → best-effort swallows the 404; no HTTP traffic.
+        assertThatCode(() -> telegramSender.answerCallbackQuery(bot.getId(), "cbq-off", "x"))
+                .doesNotThrowAnyException();
+        assertThat(drainRequests()).isEmpty();
     }
 }

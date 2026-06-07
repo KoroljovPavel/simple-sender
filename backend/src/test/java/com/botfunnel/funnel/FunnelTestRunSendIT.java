@@ -17,6 +17,7 @@ import com.botfunnel.user.UserStatus;
 import okhttp3.mockwebserver.MockResponse;
 import okhttp3.mockwebserver.MockWebServer;
 import okhttp3.mockwebserver.QueueDispatcher;
+import okhttp3.mockwebserver.RecordedRequest;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
@@ -100,7 +101,7 @@ class FunnelTestRunSendIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void testRunLinkedBotSends() {
+    void testRunLinkedBotSends() throws InterruptedException {
         seedConnectedBot();
         Subscriber owner = seedActiveOwnerSubscriber();
         Funnel f = seedDraftFunnel("hello from test-run");
@@ -124,6 +125,15 @@ class FunnelTestRunSendIT extends AbstractIntegrationTest {
         assertThat(sentCount()).isEqualTo(1);
         assertThat(mongoTemplate.findById(execs.get(0).getId(), FunnelExecution.class).getStatus())
                 .isEqualTo(ExecutionStatus.completed);
+
+        // Delivery proof: inspect the recorded request — it must be a Telegram /bot<token>/sendMessage
+        // carrying the owner's chat_id and the rendered step text (not merely "a request happened").
+        RecordedRequest sent = TELEGRAM.takeRequest();
+        assertThat(sent).isNotNull();
+        assertThat(sent.getPath()).isEqualTo("/bot" + TOKEN + "/sendMessage");
+        String body = sent.getBody().readUtf8();
+        assertThat(body).contains("\"chat_id\":" + OWNER_CHAT_ID);
+        assertThat(body).contains("hello from test-run");
     }
 
     // ─── helpers ───────────────────────────────────────────────────────────────

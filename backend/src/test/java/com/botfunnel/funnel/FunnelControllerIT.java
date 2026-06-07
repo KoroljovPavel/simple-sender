@@ -639,6 +639,57 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void previewMenuStepRendersAsMessage() throws Exception {
+        // MENU is a message-kind step (isMessageStep true): its on-the-fly body text renders with
+        // substitution and kind=message, mirroring SEND_MESSAGE. The saved MENU has no required text;
+        // the REQUEST text is what renders (on-the-fly, Decision 9).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("Менютест");
+        subscriberRepository.save(owner);
+        String stepId = "menu-1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(menuStep(stepId, callbackButton("Go", null)))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "MENU",
+                                "text", "Оберіть, {user.first_name}"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value("Оберіть, Менютест"))
+                .andExpect(jsonPath("$.sampleData").value(false))
+                .andExpect(jsonPath("$.kind").value("message"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewSendImageStepRendersCaptionAsMessage() throws Exception {
+        // SEND_IMAGE is a message-kind step: its on-the-fly caption (carried in the request `text` field)
+        // renders with substitution and kind=message, mirroring SEND_MESSAGE.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("Фотоклієнт");
+        subscriberRepository.save(owner);
+        String stepId = "img-1";
+        FunnelStep image = new FunnelStep();
+        image.setStepType(StepType.SEND_IMAGE);
+        image.setId(stepId);
+        image.setImageUrl("https://example.com/x.png");
+        image.setCaption("saved caption");
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go", new ArrayList<>(List.of(image)));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SEND_IMAGE",
+                                "text", "Привіт, {user.first_name}!"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.rendered").value("Привіт, Фотоклієнт!"))
+                .andExpect(jsonPath("$.sampleData").value(false))
+                .andExpect(jsonPath("$.kind").value("message"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void previewHtmlEscapes() throws Exception {
         // parseMode=HTML → substituted value escapes & < > " ; author markup <b> stays untouched.
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);

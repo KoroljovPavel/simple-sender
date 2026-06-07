@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 import { mockNuxtImport } from '@nuxt/test-utils/runtime'
-import type { FunnelSummaryResponse, FunnelResponse } from '../../types/funnel'
+import type {
+  FunnelSummaryResponse,
+  FunnelResponse,
+  PreviewStepRequest,
+  PreviewStepResponse,
+} from '../../types/funnel'
 
 const { apiMock } = vi.hoisted(() => ({ apiMock: vi.fn() }))
 mockNuxtImport('useApi', () => () => apiMock)
@@ -165,5 +170,97 @@ describe('funnels store', () => {
 
     expect(apiMock).toHaveBeenLastCalledWith(`${URL}/a`, { method: 'DELETE' })
     expect(store.funnels.map((f) => f.id)).toEqual(['b'])
+  })
+
+  // --- Task 3: author-tooling actions (duplicate / stopAllExecutions / testRun / preview) ---
+
+  it('duplicate posts and returns the new draft funnel', async () => {
+    // Source 'a' is in the loaded list; the returned copy 'a-copy' is NOT — syncRow is a no-op
+    // for the new id (must not crash). The list page surfaces the new row separately.
+    apiMock.mockResolvedValueOnce([summary('a')])
+    const store = useFunnelsStore()
+    await store.fetch()
+
+    apiMock.mockResolvedValueOnce(full('a-copy'))
+    const created = await store.duplicate('a')
+
+    expect(created.id).toBe('a-copy')
+    expect(apiMock).toHaveBeenLastCalledWith(`${URL}/a/duplicate`, { method: 'POST' })
+    // No synthetic row fabricated for the new copy.
+    expect(store.funnels.map((f) => f.id)).toEqual(['a'])
+  })
+
+  it('duplicate re-throws and flags error on api failure', async () => {
+    apiMock.mockRejectedValueOnce({ statusCode: 500 })
+    const store = useFunnelsStore()
+
+    await expect(store.duplicate('a')).rejects.toMatchObject({ statusCode: 500 })
+    expect(store.error).toBe(true)
+  })
+
+  it('stopAllExecutions posts and returns cancelled count', async () => {
+    apiMock.mockResolvedValueOnce({ cancelled: 3 })
+    const store = useFunnelsStore()
+    const res = await store.stopAllExecutions('a')
+
+    expect(res).toEqual({ cancelled: 3 })
+    expect(apiMock).toHaveBeenLastCalledWith(`${URL}/a/executions/stop`, { method: 'POST' })
+  })
+
+  it('stopAllExecutions re-throws and flags error', async () => {
+    apiMock.mockRejectedValueOnce({ statusCode: 500 })
+    const store = useFunnelsStore()
+
+    await expect(store.stopAllExecutions('a')).rejects.toMatchObject({ statusCode: 500 })
+    expect(store.error).toBe(true)
+  })
+
+  it('testRun posts to test-run endpoint', async () => {
+    apiMock.mockResolvedValueOnce(undefined)
+    const store = useFunnelsStore()
+    await expect(store.testRun('a')).resolves.toBeUndefined()
+
+    expect(apiMock).toHaveBeenLastCalledWith(`${URL}/a/test-run`, { method: 'POST' })
+  })
+
+  it('testRun re-throws 422 funnel_owner_not_linked', async () => {
+    // Store does NOT map the code — it only flips error and re-throws; the component maps inline.
+    apiMock.mockRejectedValueOnce({ statusCode: 422, data: { code: 'funnel_owner_not_linked' } })
+    const store = useFunnelsStore()
+
+    await expect(store.testRun('a')).rejects.toMatchObject({ statusCode: 422 })
+    expect(store.error).toBe(true)
+  })
+
+  it('preview posts current step content and returns render', async () => {
+    const payload: PreviewStepRequest = {
+      stepType: 'SEND_MESSAGE',
+      text: 'Hi {{first_name}}',
+      parseMode: 'HTML',
+    }
+    const response: PreviewStepResponse = {
+      rendered: 'Hi John',
+      sampleData: true,
+      kind: 'message',
+    }
+    apiMock.mockResolvedValueOnce(response)
+    const store = useFunnelsStore()
+    const res = await store.preview('a', 's1', payload)
+
+    expect(res).toEqual(response)
+    expect(apiMock).toHaveBeenLastCalledWith(`${URL}/a/steps/s1/preview`, {
+      method: 'POST',
+      body: payload,
+    })
+  })
+
+  it('preview re-throws on failure', async () => {
+    const store = useFunnelsStore()
+    apiMock.mockRejectedValueOnce({ statusCode: 500 })
+
+    await expect(
+      store.preview('a', 's1', { stepType: 'DELAY', text: '' }),
+    ).rejects.toMatchObject({ statusCode: 500 })
+    expect(store.error).toBe(true)
   })
 })

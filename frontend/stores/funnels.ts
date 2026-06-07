@@ -4,6 +4,9 @@ import type {
   FunnelResponse,
   FunnelStatusFilter,
   FunnelSummaryResponse,
+  PreviewStepRequest,
+  PreviewStepResponse,
+  StopAllResponse,
   UpdateFunnelRequest,
 } from '~/types/funnel'
 
@@ -164,6 +167,70 @@ export const useFunnelsStore = defineStore('funnels', () => {
     }
   }
 
+  // POST .../duplicate → 201 verbatim graph copy as a fresh draft FunnelResponse (Decision: Task 1).
+  // syncRow is called for contract symmetry with activate/pause, but the copy's id is NOT yet in the
+  // loaded list, so it is a no-op here — the list page (Task 5) surfaces the new row (refetch/navigate).
+  // Do NOT fabricate a FunnelSummaryResponse from the detail response.
+  async function duplicate(funnelId: string): Promise<FunnelResponse> {
+    error.value = false
+    try {
+      const created = await useApi()<FunnelResponse>(`${listUrl()}/${funnelId}/duplicate`, {
+        method: 'POST',
+      })
+      syncRow(created)
+      return created
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
+  // POST .../executions/stop → 200 { cancelled } bulk-cancel count (Decision 7). The store returns the
+  // payload verbatim; the component decides how to surface the count.
+  async function stopAllExecutions(funnelId: string): Promise<StopAllResponse> {
+    error.value = false
+    try {
+      return await useApi()<StopAllResponse>(`${listUrl()}/${funnelId}/executions/stop`, {
+        method: 'POST',
+      })
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
+  // POST .../test-run → 2xx enroll-registered (void). 422 (funnel_owner_not_linked / validation codes)
+  // and network errors both re-throw unmapped — the component maps inline-vs-toast via useApiError.
+  async function testRun(funnelId: string): Promise<void> {
+    error.value = false
+    try {
+      await useApi()<void>(`${listUrl()}/${funnelId}/test-run`, { method: 'POST' })
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
+  // POST .../steps/{stepId}/preview → 200 PreviewStepResponse. Sends the CURRENT (possibly unsaved) step
+  // content as the body (Decision 9); returns the rendered payload verbatim (kind/sampleData drive no
+  // branching in the store).
+  async function preview(
+    funnelId: string,
+    stepId: string,
+    payload: PreviewStepRequest,
+  ): Promise<PreviewStepResponse> {
+    error.value = false
+    try {
+      return await useApi()<PreviewStepResponse>(`${listUrl()}/${funnelId}/steps/${stepId}/preview`, {
+        method: 'POST',
+        body: payload,
+      })
+    } catch (err) {
+      error.value = true
+      throw err
+    }
+  }
+
   return {
     funnels,
     loading,
@@ -174,6 +241,10 @@ export const useFunnelsStore = defineStore('funnels', () => {
     update,
     activate,
     pause,
+    duplicate,
+    stopAllExecutions,
+    testRun,
+    preview,
     // `delete` is a reserved word for a method name in object shorthand; expose under the spec'd name.
     delete: delete_,
   }

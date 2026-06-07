@@ -125,3 +125,29 @@ export interface UpdateFunnelRequest {
   allowReEnter?: boolean
   steps?: FunnelStep[]
 }
+
+// POST .../funnels/{id}/steps/{stepId}/preview body — mirrors backend PreviewStepRequest
+// (com.botfunnel.funnel.dto.PreviewStepRequest). Decision 9: preview renders the CURRENT (possibly
+// unsaved) editor content of the step, NOT the persisted step — so the editor sends stepType/text/parseMode
+// on the fly. parseMode is optional (null = plain text, like FunnelStep.parseMode).
+export interface PreviewStepRequest {
+  stepType: StepType
+  text: string
+  parseMode?: string | null
+}
+
+// POST .../steps/{stepId}/preview → PreviewStepResponse (com.botfunnel.funnel.dto.PreviewStepResponse).
+// Exactly these three fields — no ownerChatId/identity leakage (Decision 9). `kind` is 'message' for a
+// renderable message step or 'non_message' (placeholder `rendered`) for steps with no message body;
+// `sampleData` is true when sample placeholders were substituted (e.g. bot owner not linked).
+export interface PreviewStepResponse {
+  rendered: string
+  sampleData: boolean
+  kind: 'message' | 'non_message'
+}
+
+// POST .../funnels/{id}/executions/stop → StopAllResponse (com.botfunnel.funnel.dto.StopAllResponse,
+// Decision 7). `cancelled` is the bulk-cancel `modifiedCount` (backend field is a `long`).
+export interface StopAllResponse {
+  cancelled: number
+}

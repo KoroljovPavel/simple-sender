@@ -63,6 +63,7 @@ public class FunnelEventService {
     // (SubscriberServiceImpl tag/field hooks, StepExecutor EMIT_EVENT, EventsController) pass these to
     // dispatchForSubscriber's triggerType param instead of re-typing the literals. Mirror the
     // package-private FunnelService.TRIGGER_* values (same module, single source of truth).
+    public static final String TRIGGER_KEYWORD = FunnelService.TRIGGER_KEYWORD;
     public static final String TRIGGER_TAG_ADDED = FunnelService.TRIGGER_TAG_ADDED;
     public static final String TRIGGER_CUSTOM_FIELD_SET = FunnelService.TRIGGER_CUSTOM_FIELD_SET;
     public static final String TRIGGER_EVENT = FunnelService.TRIGGER_EVENT;

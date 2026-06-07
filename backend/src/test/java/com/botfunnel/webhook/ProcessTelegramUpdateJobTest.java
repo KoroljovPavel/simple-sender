@@ -10,10 +10,16 @@ import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.events.Event;
 import com.botfunnel.events.EventRepository;
+import com.botfunnel.funnel.ExecutionStatus;
+import com.botfunnel.funnel.FunnelEventService;
+import com.botfunnel.funnel.FunnelExecution;
 import com.botfunnel.funnel.FunnelTriggerService;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
+import com.botfunnel.subscriber.Subscriber;
+import com.botfunnel.subscriber.SubscriberRepository;
 import com.botfunnel.subscriber.SubscriberService;
+import com.botfunnel.subscriber.SubscriberStatus;
 import io.micrometer.core.instrument.MeterRegistry;
 import org.bson.Document;
 import org.junit.jupiter.api.AfterEach;
@@ -24,6 +30,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.Mockito;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.mongodb.core.MongoTemplate;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 
 import java.time.Instant;
@@ -55,11 +62,14 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
     @Autowired BotRepository botRepository;
     @Autowired ProjectRepository projectRepository;
     @Autowired EventRepository eventRepository;
+    @Autowired SubscriberRepository subscriberRepository;
+    @Autowired MongoTemplate mongoTemplate;
     @Autowired MeterRegistry meterRegistry;
     @Autowired ProcessTelegramUpdateJob job;
 
     @MockitoSpyBean SubscriberService subscriberService;
     @MockitoSpyBean FunnelTriggerService funnelTriggerService;
+    @MockitoSpyBean FunnelEventService funnelEventService;
     @MockitoSpyBean com.botfunnel.events.EventService eventService;
 
     private String projectId;
@@ -89,7 +99,9 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         rawUpdateRepository.deleteAll();
         botRepository.deleteAll();
         projectRepository.deleteAll();
-        Mockito.reset(subscriberService, funnelTriggerService, eventService);
+        subscriberRepository.deleteAll();
+        mongoTemplate.dropCollection(FunnelExecution.class);
+        Mockito.reset(subscriberService, funnelTriggerService, funnelEventService, eventService);
 
         Project p = new Project();
         p.setOwnerId(OWNER_ID);
@@ -342,6 +354,127 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
         assertThat(event.getEventType()).isEqualTo("telegram_message_received");
         verify(subscriberService, never())
                 .upsertFromTelegramUpdate(any(), any(), any(), any(), any(), any(), any(), any(), any());
+    }
+
+    // ─── Task 6 — keyword webhook path + waiting_for_reply precedence ──────────
+
+    @Test
+    void plainText_dispatchesKeyword() {
+        // Plain text in a private chat, subscriber NOT in a menu (no waiting_for_reply execution) →
+        // dispatchForSubscriber(projectId, subscriberId, "keyword", text, 0) is invoked exactly once.
+        seedSubscriber(100L);
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "give me the bonus"), 1L);
+
+        job.handle(raw.getId());
+
+        verify(funnelEventService, times(1)).dispatchForSubscriber(
+                eq(projectId), eq(subscriberIdFor(100L)),
+                eq(FunnelEventService.TRIGGER_KEYWORD), eq("give me the bonus"), eq(0));
+        // Phase-1 audit event still written (keyword is additive, not a replacement).
+        assertThat(onlyEvent().getEventType()).isEqualTo("telegram_message_received");
+        assertRawUpdateDone(raw.getId());
+    }
+
+    @Test
+    void plainText_keywordSuppressedWhileWaitingForReply() {
+        // Subscriber parked in a MENU step (in-flight waiting_for_reply execution) → keyword is
+        // suppressed: dispatchForSubscriber NOT invoked AND the menu execution is left untouched.
+        Subscriber sub = seedSubscriber(100L);
+        String executionId = seedWaitingForReplyExecution(sub.getId());
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "bonus"), 1L);
+
+        job.handle(raw.getId());
+
+        verify(funnelEventService, never())
+                .dispatchForSubscriber(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
+        // The waiting_for_reply execution must remain untouched (status unchanged, not cancelled).
+        FunnelExecution reloaded = mongoTemplate.findById(executionId, FunnelExecution.class);
+        assertThat(reloaded).isNotNull();
+        assertThat(reloaded.getStatus())
+                .as("menu precedence: the waiting execution must stay waiting_for_reply, untouched")
+                .isEqualTo(ExecutionStatus.waiting_for_reply);
+        // Suppression is logged with a greppable marker (ids only).
+        assertThat(jobAppender.list.stream().anyMatch(e ->
+                e.getFormattedMessage().contains("KEYWORD_SUPPRESSED_WAITING_FOR_REPLY")))
+                .as("suppression must emit the greppable precedence marker").isTrue();
+        assertThat(onlyEvent().getEventType()).isEqualTo("telegram_message_received");
+        assertRawUpdateDone(raw.getId());
+    }
+
+    @Test
+    void plainText_keywordDispatchThrows_workerStillSucceeds() {
+        // dispatchForSubscriber throws → the fault is swallowed (greppable WARN), the worker still
+        // completes: rawUpdate flips to DONE (HTTP 200), the JobRunr job is NOT failed (no rethrow,
+        // failure counter does not tick), and the message-received event is still written.
+        seedSubscriber(100L);
+        Mockito.doThrow(new RuntimeException("boom"))
+                .when(funnelEventService).dispatchForSubscriber(
+                        any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
+        RawUpdate raw = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "bonus"), 1L);
+
+        long beforeFailure = failureCount();
+        long beforeSuccess = successCount();
+
+        // No throw escapes the worker.
+        job.handle(raw.getId());
+
+        assertRawUpdateDone(raw.getId());
+        assertThat(failureCount())
+                .as("keyword fault is error-isolated — JobRunr job must NOT be failed")
+                .isEqualTo(beforeFailure);
+        assertThat(successCount() - beforeSuccess)
+                .as("worker still resolves to success after a swallowed keyword fault")
+                .isEqualTo(1L);
+        assertThat(jobAppender.list.stream().anyMatch(e ->
+                e.getLevel() == Level.WARN
+                        && e.getFormattedMessage().contains("KEYWORD_DISPATCH_ERROR")))
+                .as("swallowed keyword fault must emit a greppable WARN").isTrue();
+        assertThat(onlyEvent().getEventType()).isEqualTo("telegram_message_received");
+    }
+
+    @Test
+    void command_doesNotTriggerKeyword() {
+        // /start and /stop keep their own branch — keyword never touches commands.
+        seedSubscriber(100L);
+
+        RawUpdate start = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "/start ref_X"), 1L);
+        job.handle(start.getId());
+
+        eventRepository.deleteAll();
+        RawUpdate stop = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "/stop"), 2L);
+        job.handle(stop.getId());
+
+        verify(funnelEventService, never())
+                .dispatchForSubscriber(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
+    }
+
+    @Test
+    void nonPrivate_or_noSubscriber_skipsKeyword() {
+        // Non-private chat → never reaches the keyword block.
+        RawUpdate group = seedRawUpdate(RawUpdateStatus.PENDING,
+                messagePayload(-100L, "group", 999L, "bonus", 1L), 1L);
+        job.handle(group.getId());
+        verify(funnelEventService, never())
+                .dispatchForSubscriber(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
+
+        // Private chat but the subscriber resolve misses (findByChat → empty) → keyword skipped,
+        // message-received event still written.
+        Mockito.reset(funnelEventService);
+        Mockito.doReturn(java.util.Optional.empty())
+                .when(subscriberService).findByChat(any(), any(), any());
+        eventRepository.deleteAll();
+        RawUpdate priv = seedRawUpdate(RawUpdateStatus.PENDING,
+                privateStartPayload(100L, 100L, "bonus"), 2L);
+        job.handle(priv.getId());
+
+        verify(funnelEventService, never())
+                .dispatchForSubscriber(any(), any(), any(), any(), org.mockito.ArgumentMatchers.anyInt());
+        assertThat(onlyEvent().getEventType()).isEqualTo("telegram_message_received");
     }
 
     // ─── AC11 — non-message update kinds ───────────────────────────────────────
@@ -736,6 +869,37 @@ class ProcessTelegramUpdateJobTest extends AbstractIntegrationTest {
     }
 
     // ─── helpers ───────────────────────────────────────────────────────────────
+
+    private Subscriber seedSubscriber(Long chatId) {
+        Subscriber s = new Subscriber();
+        s.setProjectId(projectId);
+        s.setTelegramBotId(TELEGRAM_BOT_ID);
+        s.setTelegramChatId(chatId);
+        s.setTelegramUserId(chatId);
+        s.setStatus(SubscriberStatus.ACTIVE);
+        s.setSubscribedAt(Instant.now());
+        return subscriberRepository.save(s);
+    }
+
+    private String subscriberIdFor(Long chatId) {
+        return subscriberRepository
+                .findByProjectIdAndTelegramBotIdAndTelegramChatId(projectId, TELEGRAM_BOT_ID, chatId)
+                .orElseThrow().getId();
+    }
+
+    // Seeds an in-flight waiting_for_reply execution (a subscriber parked in a MENU step). Status is
+    // persisted via the lowercase enum so it matches the precedence query literal (Decision 14).
+    private String seedWaitingForReplyExecution(String subscriberId) {
+        FunnelExecution exec = new FunnelExecution();
+        exec.setProjectId(projectId);
+        exec.setFunnelId("funnel-menu-1");
+        exec.setSubscriberId(subscriberId);
+        exec.setTelegramBotId(TELEGRAM_BOT_ID);
+        exec.setStatus(ExecutionStatus.waiting_for_reply);
+        exec.setCreatedAt(Instant.now());
+        exec.setUpdatedAt(Instant.now());
+        return mongoTemplate.insert(exec).getId();
+    }
 
     private RawUpdate seedRawUpdate(RawUpdateStatus status, Document payload, long updateId) {
         RawUpdate raw = new RawUpdate();

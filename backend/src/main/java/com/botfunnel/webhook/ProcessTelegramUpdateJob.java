@@ -5,9 +5,13 @@ import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.bot.TelegramApiClient;
 import com.botfunnel.events.EventService;
+import com.botfunnel.funnel.ExecutionStatus;
+import com.botfunnel.funnel.FunnelEventService;
+import com.botfunnel.funnel.FunnelExecution;
 import com.botfunnel.funnel.FunnelTriggerService;
 import com.botfunnel.project.Project;
 import com.botfunnel.project.ProjectRepository;
+import com.botfunnel.subscriber.Subscriber;
 import com.botfunnel.subscriber.SubscriberService;
 import com.botfunnel.webhook.dto.CallbackQuery;
 import com.botfunnel.webhook.dto.Chat;
@@ -47,6 +51,11 @@ public class ProcessTelegramUpdateJob {
     private static final String COUNTER = "telegram_worker_outcome_total";
     private static final int ERROR_MAX_LEN = 1024;
 
+    // Greppable markers for the keyword dispatch block (Decision 12 error-isolation + Decision 3
+    // menu precedence). ids/codes only — never the subscriber's message text (Decision 16 PII rule).
+    static final String LOG_KEYWORD_DISPATCH_ERROR = "KEYWORD_DISPATCH_ERROR";
+    static final String LOG_KEYWORD_SUPPRESSED_WAITING_FOR_REPLY = "KEYWORD_SUPPRESSED_WAITING_FOR_REPLY";
+
     private final RawUpdateRepository rawUpdateRepository;
     private final BotRepository botRepository;
     private final ProjectRepository projectRepository;
@@ -54,6 +63,7 @@ public class ProcessTelegramUpdateJob {
     private final EventService eventService;
     private final SubscriberService subscriberService;
     private final FunnelTriggerService funnelTriggerService;
+    private final FunnelEventService funnelEventService;
     private final MeterRegistry meterRegistry;
     private final ObjectMapper objectMapper;
 
@@ -64,6 +74,7 @@ public class ProcessTelegramUpdateJob {
                                     EventService eventService,
                                     SubscriberService subscriberService,
                                     FunnelTriggerService funnelTriggerService,
+                                    FunnelEventService funnelEventService,
                                     MeterRegistry meterRegistry,
                                     ObjectMapper objectMapper) {
         this.rawUpdateRepository = rawUpdateRepository;
@@ -73,6 +84,7 @@ public class ProcessTelegramUpdateJob {
         this.eventService = eventService;
         this.subscriberService = subscriberService;
         this.funnelTriggerService = funnelTriggerService;
+        this.funnelEventService = funnelEventService;
         this.meterRegistry = meterRegistry;
         this.objectMapper = objectMapper;
     }
@@ -203,8 +215,55 @@ public class ProcessTelegramUpdateJob {
                     from == null ? null : from.last_name(),
                     from == null ? null : from.username(),
                     from == null ? null : from.language_code());
+            dispatchKeyword(projectId, bot.getTelegramBotId(), chatId, text);
         }
         logEventMessageReceived(projectId, userId, chatId);
+    }
+
+    // Keyword trigger (Phase 3 / Decisions 3, 12). Resolves the subscriber, enforces menu precedence
+    // (an in-flight waiting_for_reply execution suppresses keyword), then fans out keyword matching via
+    // FunnelEventService. The ENTIRE block is best-effort swallow-all (Decision 12): any fault is
+    // logged (greppable WARN, ids/codes only) and swallowed so the worker still flips the rawUpdate to
+    // DONE (HTTP 200) and the JobRunr job does not fail. Mirrors the advanceOnCallback convention — but
+    // here we DO add a local swallow because keyword is additive (not the worker's primary job) and a
+    // keyword fault must never poison the message-received audit write that follows.
+    private void dispatchKeyword(String projectId, Long telegramBotId, Long chatId, String text) {
+        try {
+            Subscriber subscriber = subscriberService.findByChat(projectId, telegramBotId, chatId).orElse(null);
+            if (subscriber == null) {
+                // Should not happen right after the upsert above, but a concurrent delete is possible —
+                // skip keyword (the message-received event still fires in the caller).
+                return;
+            }
+            if (hasWaitingForReplyExecution(projectId, subscriber.getId())) {
+                // Menu precedence (Decision 3): the subscriber is parked in a MENU step waiting for a
+                // button press; keyword is suppressed and the menu execution is left untouched.
+                log.info("{} projectId={} subscriberId={}", LOG_KEYWORD_SUPPRESSED_WAITING_FOR_REPLY,
+                        projectId, subscriber.getId());
+                return;
+            }
+            // keyword is a human-root → originDepth 0. The dispatcher contains-matches the text against
+            // each active keyword funnel's keywords list and fans out (Task 4).
+            funnelEventService.dispatchForSubscriber(
+                    projectId, subscriber.getId(), FunnelEventService.TRIGGER_KEYWORD, text, 0);
+        } catch (Throwable t) {
+            // Decision 12 error-isolation: a keyword fault must NOT poison the webhook pipeline. Log a
+            // greppable WARN (ids/codes only — never the message text) and swallow so the worker returns
+            // 200 and the JobRunr job is not failed.
+            log.warn("{} projectId={} error={}", LOG_KEYWORD_DISPATCH_ERROR,
+                    projectId, t.getClass().getSimpleName());
+        }
+    }
+
+    // Read-only precedence probe: does the subscriber have an in-flight waiting_for_reply execution?
+    // Status persisted as lowercase .name() (Decision 14) — UPPERCASE would match zero rows and break
+    // precedence. mongoTemplate.exists(...) only — NEVER an update (cancelActiveFor's updateMulti is
+    // destructive and must not run here).
+    private boolean hasWaitingForReplyExecution(String projectId, String subscriberId) {
+        Query query = Query.query(Criteria.where("projectId").is(projectId)
+                .and("subscriberId").is(subscriberId)
+                .and("status").is(ExecutionStatus.waiting_for_reply.name()));
+        return mongoTemplate.exists(query, FunnelExecution.class);
     }
 
     private void handleStart(String projectId, String userId, boolean isPrivate, Long chatId,

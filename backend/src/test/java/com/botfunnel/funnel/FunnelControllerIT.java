@@ -654,6 +654,22 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
     }
 
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void activateMenuLabelExactly64IsAccepted() throws Exception {
+        // Boundary: a 64-char label is exactly at the limit and must be accepted (off-by-one guard:
+        // the check is `> 64`, not `>= 64`).
+        seedConnectedBot("promo_bot");
+        String label64 = "x".repeat(64);
+        FunnelStep menu = menuStep("step-menu", callbackButton(label64, null));
+        Funnel f = seedFunnel("MaxLabel", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(menu)));
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.status").value("active"));
+    }
+
     // ─── helpers ────────────────────────────────────────────────────────────────
 
     private static FunnelStep menuStep(String id, Button... buttons) {

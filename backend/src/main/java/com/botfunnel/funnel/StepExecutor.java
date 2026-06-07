@@ -93,6 +93,10 @@ public class StepExecutor {
                 yield StepResult.cont();
             }
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
+            // MENU is wired in Task 3 (park-on-reply). Until then no MENU step can exist (the type is
+            // not yet offered by the editor/validator), so reaching this arm is a programming error.
+            case MENU -> throw new UnsupportedOperationException(
+                    "MENU step execution is not implemented until Task 3 (Phase 2 engine)");
         };
     }
 

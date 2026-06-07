@@ -147,7 +147,8 @@ public class FunnelService {
         // no double-processing). Enum statuses written as lowercase name() literals (Decision 14).
         mongoTemplate.updateMulti(
                 Query.query(Criteria.where("funnelId").is(funnelId)
-                        .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name())),
+                        .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
+                                ExecutionStatus.waiting_for_reply.name())),
                 new Update()
                         .set("status", ExecutionStatus.cancelled.name())
                         // Also flip stepRunStatus→done so the engine's claim-conditional in-tick writes

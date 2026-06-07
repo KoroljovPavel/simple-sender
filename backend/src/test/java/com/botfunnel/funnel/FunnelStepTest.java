@@ -2,6 +2,9 @@ package com.botfunnel.funnel;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -26,6 +29,12 @@ class FunnelStepTest {
         original.setTagSlug("vip");
         original.setCustomFieldKey("plan");
         original.setCustomFieldValue("gold"); // validated immutable scalar (String)
+        // Graph scalars (Task 1 / Decision 2).
+        original.setId("step-1");
+        original.setNext("step-2");
+        original.setTimeoutValue(15);
+        original.setTimeoutUnit("minutes");
+        original.setTimeoutTargetStepId("step-3");
 
         FunnelStep copy = FunnelStep.copyOf(original);
 
@@ -41,6 +50,11 @@ class FunnelStepTest {
         assertThat(copy.getTagSlug()).isEqualTo("vip");
         assertThat(copy.getCustomFieldKey()).isEqualTo("plan");
         assertThat(copy.getCustomFieldValue()).isEqualTo("gold");
+        assertThat(copy.getId()).isEqualTo("step-1");
+        assertThat(copy.getNext()).isEqualTo("step-2");
+        assertThat(copy.getTimeoutValue()).isEqualTo(15);
+        assertThat(copy.getTimeoutUnit()).isEqualTo("minutes");
+        assertThat(copy.getTimeoutTargetStepId()).isEqualTo("step-3");
 
         // ...but mutating the copy does not touch the source.
         copy.setStepType(StepType.SEND_IMAGE);
@@ -54,6 +68,11 @@ class FunnelStepTest {
         copy.setTagSlug("blocked");
         copy.setCustomFieldKey("tier");
         copy.setCustomFieldValue("silver");
+        copy.setId("step-1-copy");
+        copy.setNext("step-2-copy");
+        copy.setTimeoutValue(99);
+        copy.setTimeoutUnit("hours");
+        copy.setTimeoutTargetStepId("step-3-copy");
 
         assertThat(original.getStepType()).isEqualTo(StepType.SEND_MESSAGE);
         assertThat(original.getOrder()).isEqualTo(0);
@@ -66,6 +85,11 @@ class FunnelStepTest {
         assertThat(original.getTagSlug()).isEqualTo("vip");
         assertThat(original.getCustomFieldKey()).isEqualTo("plan");
         assertThat(original.getCustomFieldValue()).isEqualTo("gold");
+        assertThat(original.getId()).isEqualTo("step-1");
+        assertThat(original.getNext()).isEqualTo("step-2");
+        assertThat(original.getTimeoutValue()).isEqualTo(15);
+        assertThat(original.getTimeoutUnit()).isEqualTo("minutes");
+        assertThat(original.getTimeoutTargetStepId()).isEqualTo("step-3");
 
         // ...and mutating the source does not touch the copy.
         original.setStepType(StepType.DELAY);
@@ -91,10 +115,61 @@ class FunnelStepTest {
         assertThat(copy.getTagSlug()).isEqualTo("blocked");
         assertThat(copy.getCustomFieldKey()).isEqualTo("tier");
         assertThat(copy.getCustomFieldValue()).isEqualTo("silver");
+        assertThat(copy.getId()).isEqualTo("step-1-copy");
+        assertThat(copy.getNext()).isEqualTo("step-2-copy");
+        assertThat(copy.getTimeoutValue()).isEqualTo(99);
+        assertThat(copy.getTimeoutUnit()).isEqualTo("hours");
+        assertThat(copy.getTimeoutTargetStepId()).isEqualTo("step-3-copy");
     }
 
     @Test
     void copyOfNullIsNull() {
         assertThat(FunnelStep.copyOf(null)).isNull();
+    }
+
+    /**
+     * Decision 5: {@code buttons} is a mutable list, so {@code copyOf} must defensively copy it —
+     * mutating the source list (or the copy) after copyOf must not leak into the other, otherwise
+     * editing a funnel's buttons would corrupt an in-flight execution snapshot.
+     */
+    @Test
+    void deepCopyButtonsAreIndependent() {
+        FunnelStep original = new FunnelStep();
+        original.setStepType(StepType.MENU);
+        List<Button> buttons = new ArrayList<>();
+        buttons.add(new Button("callback", "Buy", "step-buy", null));
+        buttons.add(new Button("url", "Site", null, "https://example.com"));
+        original.setButtons(buttons);
+
+        FunnelStep copy = FunnelStep.copyOf(original);
+
+        assertThat(copy.getButtons())
+                .as("copy starts list-equal to source")
+                .containsExactlyElementsOf(original.getButtons());
+        // ...but the list reference is distinct.
+        assertThat(copy.getButtons()).isNotSameAs(original.getButtons());
+
+        // Mutating the source list does not touch the copy.
+        original.getButtons().add(new Button("callback", "Extra", "step-x", null));
+        assertThat(copy.getButtons()).hasSize(2);
+
+        // Mutating the copy list does not touch the source.
+        copy.getButtons().clear();
+        assertThat(original.getButtons()).hasSize(3);
+    }
+
+    /**
+     * Edge case: a step with {@code buttons == null} (any non-MENU step) must copy to a {@code null}
+     * list, not an empty one, and must not NPE.
+     */
+    @Test
+    void copyOfNullButtonsStaysNull() {
+        FunnelStep original = new FunnelStep();
+        original.setStepType(StepType.SEND_MESSAGE);
+        assertThat(original.getButtons()).isNull();
+
+        FunnelStep copy = FunnelStep.copyOf(original);
+
+        assertThat(copy.getButtons()).isNull();
     }
 }

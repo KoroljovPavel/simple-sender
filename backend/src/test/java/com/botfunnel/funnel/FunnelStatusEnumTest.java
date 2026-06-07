@@ -22,6 +22,7 @@ class FunnelStatusEnumTest {
         assertThat(ExecutionStatus.completed.name()).isEqualTo("completed");
         assertThat(ExecutionStatus.cancelled.name()).isEqualTo("cancelled");
         assertThat(ExecutionStatus.failed.name()).isEqualTo("failed");
+        assertThat(ExecutionStatus.waiting_for_reply.name()).isEqualTo("waiting_for_reply");
 
         assertThat(StepRunStatus.pending.name()).isEqualTo("pending");
         assertThat(StepRunStatus.in_progress.name()).isEqualTo("in_progress");
@@ -36,5 +37,6 @@ class FunnelStatusEnumTest {
         assertThat(StepType.ADD_TAG.name()).isEqualTo("ADD_TAG");
         assertThat(StepType.REMOVE_TAG.name()).isEqualTo("REMOVE_TAG");
         assertThat(StepType.SET_CUSTOM_FIELD.name()).isEqualTo("SET_CUSTOM_FIELD");
+        assertThat(StepType.MENU.name()).isEqualTo("MENU");
     }
 }

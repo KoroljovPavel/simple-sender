@@ -24,19 +24,21 @@ import java.util.List;
         @CompoundIndex(name = "funnelId_subscriberId_unique_active",
                 def = "{'funnelId': 1, 'subscriberId': 1}",
                 unique = true,
-                partialFilter = "{ 'status': { $in: ['running', 'waiting'] } }")
+                partialFilter = "{ 'status': { $in: ['running', 'waiting', 'waiting_for_reply'] } }")
 })
 public class FunnelExecution {
 
-    // Defensive class-load assertion: the partialFilter literals 'running'/'waiting' must stay
-    // byte-identical with ExecutionStatus.name() (Spring Data persists via name()). A silent rename
-    // would make the unique partial index match zero rows, voiding the at-most-once re-enter guard.
+    // Defensive class-load assertion: the partialFilter literals 'running'/'waiting'/'waiting_for_reply'
+    // must stay byte-identical with ExecutionStatus.name() (Spring Data persists via name()). A silent
+    // rename would make the unique partial index match zero rows, voiding the at-most-once re-enter guard.
     static {
         if (!"running".equals(ExecutionStatus.running.name())
-                || !"waiting".equals(ExecutionStatus.waiting.name())) {
+                || !"waiting".equals(ExecutionStatus.waiting.name())
+                || !"waiting_for_reply".equals(ExecutionStatus.waiting_for_reply.name())) {
             throw new IllegalStateException(
                     "ExecutionStatus name() drifted from partial-filter literals: "
-                            + ExecutionStatus.running.name() + "/" + ExecutionStatus.waiting.name());
+                            + ExecutionStatus.running.name() + "/" + ExecutionStatus.waiting.name()
+                            + "/" + ExecutionStatus.waiting_for_reply.name());
         }
     }
 
@@ -52,8 +54,15 @@ public class FunnelExecution {
 
     private ExecutionStatus status;
     private int currentStepIndex;
+    // Graph cursor (Phase 2 / Decision 2). Kept alongside currentStepIndex, which remains for draining
+    // legacy linear Phase-1 runs (Decision 7). The engine reads currentStepId with a fallback to
+    // currentStepIndex when null.
+    private String currentStepId;
     private StepRunStatus stepRunStatus;
     private Instant nextRunAt;
+
+    // Last button clicked on a MENU step (Phase 2 / Decision 9 — analytics; ids/codes only, no PII).
+    private String lastButtonClicked;
 
     private List<FunnelStep> stepsSnapshot;  // deep copy at fire() (Decision 3)
 
@@ -81,6 +90,12 @@ public class FunnelExecution {
 
     public int getCurrentStepIndex() { return currentStepIndex; }
     public void setCurrentStepIndex(int currentStepIndex) { this.currentStepIndex = currentStepIndex; }
+
+    public String getCurrentStepId() { return currentStepId; }
+    public void setCurrentStepId(String currentStepId) { this.currentStepId = currentStepId; }
+
+    public String getLastButtonClicked() { return lastButtonClicked; }
+    public void setLastButtonClicked(String lastButtonClicked) { this.lastButtonClicked = lastButtonClicked; }
 
     public StepRunStatus getStepRunStatus() { return stepRunStatus; }
     public void setStepRunStatus(StepRunStatus stepRunStatus) { this.stepRunStatus = stepRunStatus; }

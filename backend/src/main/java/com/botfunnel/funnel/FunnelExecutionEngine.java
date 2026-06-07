@@ -88,7 +88,8 @@ public class FunnelExecutionEngine {
         // Oldest-first (nextRunAt asc) so no execution starves; capped at batchSize per tick. Backed by
         // the (status, nextRunAt) index. Statuses as lowercase .name() literals (Decision 14).
         Query query = Query.query(Criteria.where("status")
-                        .in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name())
+                        .in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
+                                ExecutionStatus.waiting_for_reply.name())
                         .and("nextRunAt").lte(now))
                 .with(Sort.by(Sort.Direction.ASC, "nextRunAt"))
                 .limit(batchSize);
@@ -198,7 +199,8 @@ public class FunnelExecutionEngine {
     // claimed doc (returnNew). null = lost the race / no longer eligible.
     private FunnelExecution claim(String executionId, Instant now) {
         Query query = Query.query(Criteria.where("_id").is(executionId)
-                .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name())
+                .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
+                        ExecutionStatus.waiting_for_reply.name())
                 .and("nextRunAt").lte(now)
                 .and("stepRunStatus").is(StepRunStatus.pending.name()));
         Update update = new Update()

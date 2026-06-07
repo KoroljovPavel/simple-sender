@@ -11,5 +11,7 @@ public enum StepType {
     DELAY,
     ADD_TAG,
     REMOVE_TAG,
-    SET_CUSTOM_FIELD
+    SET_CUSTOM_FIELD,
+    // Phase 2 (Decision 1): composite step — message + inline keyboard + park-on-reply + branch.
+    MENU
 }

@@ -102,7 +102,7 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
         List<String> in = (List<String>) statusClause.get("$in");
         assertThat(in)
                 .as("partialFilter status $in literals (lowercase, declared order)")
-                .containsExactly("running", "waiting");
+                .containsExactly("running", "waiting", "waiting_for_reply");
     }
 
     /**

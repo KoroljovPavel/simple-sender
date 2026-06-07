@@ -153,7 +153,8 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
             mongoTemplate.updateMulti(
                     Query.query(Criteria.where("projectId").is(projectId)
                             .and("subscriberId").is(subscriber.getId())
-                            .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name())),
+                            .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
+                                ExecutionStatus.waiting_for_reply.name())),
                     new Update()
                             .set("status", ExecutionStatus.cancelled.name())
                             .set("stepRunStatus", StepRunStatus.done.name())
@@ -174,7 +175,8 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
                 Query.query(Criteria.where("projectId").is(projectId)
                         .and("funnelId").is(funnelId)
                         .and("subscriberId").is(subscriberId)
-                        .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name())),
+                        .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
+                                ExecutionStatus.waiting_for_reply.name())),
                 new Update()
                         .set("status", ExecutionStatus.cancelled.name())
                         .set("stepRunStatus", StepRunStatus.done.name())

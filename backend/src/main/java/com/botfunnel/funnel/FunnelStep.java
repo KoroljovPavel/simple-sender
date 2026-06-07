@@ -1,17 +1,33 @@
 package com.botfunnel.funnel;
 
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * Flat embedded persistence POJO for a single funnel step (Decision 12: no {@code _class}
  * discriminator). {@code stepType} + {@code order} are always set; the remaining fields are
  * type-specific and nullable. No bean-validation here — validation lives in the DTO/service layer
  * (Task 5). {@link #copyOf(FunnelStep)} produces a deep copy for the execution snapshot (Decision 3);
- * all fields are immutable value types (String / boxed primitives / enum), so a field-wise copy is a
- * genuine deep copy.
+ * all scalar fields are immutable value types (String / boxed primitives / enum) and copy field-wise,
+ * but the {@code buttons} list (Phase 2 / Decision 5) is a mutable container and must be copied
+ * defensively (see {@link #copyOf(FunnelStep)}).
  */
 public class FunnelStep {
 
     private StepType stepType;
     private int order;
+
+    // Graph model (Phase 2 / Decision 2): stable id + outgoing edge(s). id is minted server-side
+    // (ObjectId hex / UUID); next is the default outgoing target (null = next step in list).
+    private String id;
+    private String next;
+
+    // MENU only (Phase 2): inline-keyboard buttons + optional timeout edge. buttons is a mutable
+    // list of immutable Button records — deep-copied in copyOf (Decision 5).
+    private List<Button> buttons;
+    private Integer timeoutValue;
+    private String timeoutUnit;          // "minutes" | "hours" | "days"
+    private String timeoutTargetStepId;  // null = completed
 
     // SEND_MESSAGE
     private String text;
@@ -47,12 +63,15 @@ public class FunnelStep {
      * Deep copy for the execution snapshot (Decision 3). Returns {@code null} for a {@code null} input
      * so callers can map a list element-wise without null-guarding each entry.
      *
-     * <p>Deep-copy contract: every field is an immutable value type — {@code String} / boxed primitive
-     * / enum — and {@link #customFieldValue} is a validated immutable scalar (Double / Boolean /
-     * Instant / String, enforced by CustomFieldValueValidator in Task 4/5). A field-wise reference
-     * copy is therefore a sufficient deep copy. No collection-defensive-copy logic is needed (and is
-     * intentionally absent): storing a mutable collection in {@link #customFieldValue} would violate
-     * Decision 3 and is disallowed by the validator.
+     * <p>Deep-copy contract: every scalar field is an immutable value type — {@code String} / boxed
+     * primitive / enum — and {@link #customFieldValue} is a validated immutable scalar (Double /
+     * Boolean / Instant / String, enforced by CustomFieldValueValidator in Task 4/5), so all scalars
+     * copy by reference and still satisfy the contract. The one exception is {@link #buttons} (Phase 2
+     * / Decision 5): it is a mutable {@code List}, so it is copied <b>defensively</b>
+     * ({@code new ArrayList<>(buttons)}). A shallow list copy suffices because the elements
+     * ({@link Button}) are immutable records. A {@code null} list copies to {@code null} (not an empty
+     * list). Storing a mutable collection in {@link #customFieldValue} would violate Decision 3 and is
+     * disallowed by the validator.
      */
     public static FunnelStep copyOf(FunnelStep source) {
         if (source == null) {
@@ -70,6 +89,14 @@ public class FunnelStep {
         copy.tagSlug = source.tagSlug;
         copy.customFieldKey = source.customFieldKey;
         copy.customFieldValue = source.customFieldValue;
+        // Graph scalars (immutable Strings/boxed) — reference copy.
+        copy.id = source.id;
+        copy.next = source.next;
+        copy.timeoutValue = source.timeoutValue;
+        copy.timeoutUnit = source.timeoutUnit;
+        copy.timeoutTargetStepId = source.timeoutTargetStepId;
+        // Mutable list of immutable records — defensive shallow copy (Decision 5), null stays null.
+        copy.buttons = source.buttons == null ? null : new ArrayList<>(source.buttons);
         return copy;
     }
 
@@ -105,4 +132,22 @@ public class FunnelStep {
 
     public Object getCustomFieldValue() { return customFieldValue; }
     public void setCustomFieldValue(Object customFieldValue) { this.customFieldValue = customFieldValue; }
+
+    public String getId() { return id; }
+    public void setId(String id) { this.id = id; }
+
+    public String getNext() { return next; }
+    public void setNext(String next) { this.next = next; }
+
+    public List<Button> getButtons() { return buttons; }
+    public void setButtons(List<Button> buttons) { this.buttons = buttons; }
+
+    public Integer getTimeoutValue() { return timeoutValue; }
+    public void setTimeoutValue(Integer timeoutValue) { this.timeoutValue = timeoutValue; }
+
+    public String getTimeoutUnit() { return timeoutUnit; }
+    public void setTimeoutUnit(String timeoutUnit) { this.timeoutUnit = timeoutUnit; }
+
+    public String getTimeoutTargetStepId() { return timeoutTargetStepId; }
+    public void setTimeoutTargetStepId(String timeoutTargetStepId) { this.timeoutTargetStepId = timeoutTargetStepId; }
 }

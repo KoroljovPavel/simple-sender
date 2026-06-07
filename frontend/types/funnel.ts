@@ -14,6 +14,17 @@ export type StepType =
   | 'ADD_TAG'
   | 'REMOVE_TAG'
   | 'SET_CUSTOM_FIELD'
+  | 'MENU'
+
+// Inline-keyboard button on a MENU step — mirrors backend Button record (com.botfunnel.funnel.Button).
+// type is 'callback' (advances the funnel to targetStepId, or End when null) or 'url' (opens an
+// http(s) link, does not advance). targetStepId and url are mutually exclusive by type, hence optional.
+export interface Button {
+  type: 'callback' | 'url'
+  label: string
+  targetStepId?: string | null
+  url?: string | null
+}
 
 // Delay unit — mirrors backend requireDelay (MIN | HOUR | DAY).
 export type DelayUnit = 'MIN' | 'HOUR' | 'DAY'
@@ -38,6 +49,14 @@ export interface FunnelStep {
   tagSlug?: string | null
   customFieldKey?: string | null
   customFieldValue?: unknown
+  // Graph model (Phase 2) — mirrors backend FunnelStep graph fields. id is server-minted; next is the
+  // default outgoing edge (null = next step in list). buttons/timeout* apply to MENU steps only.
+  id?: string | null
+  next?: string | null
+  buttons?: Button[] | null
+  timeoutValue?: number | null
+  timeoutUnit?: string | null
+  timeoutTargetStepId?: string | null
 }
 
 // GET .../funnels?status= → FunnelSummaryResponse[] (metadata without steps; stepCount is a cheap hint).

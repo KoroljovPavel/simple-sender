@@ -16,6 +16,8 @@ export type StepType =
   | 'SET_CUSTOM_FIELD'
   | 'MENU'
   | 'EMIT_EVENT'
+  // Cross-funnel composition (Phase 5): enrolls the subscriber into ANOTHER funnel of the project.
+  | 'SUBSCRIBE_TO_FUNNEL'
 
 // Funnel entry trigger — mirrors backend triggerType values byte-for-byte (Phase 3). The backend value
 // for the API-event path is `event`; the UI labels it "api-event" (Decision 4 — external POST /events and
@@ -59,6 +61,13 @@ export interface FunnelStep {
   customFieldValue?: unknown
   // EMIT_EVENT only — the event_name this step dispatches into the shared `event` namespace (Decision 4).
   eventName?: string | null
+  // SUBSCRIBE_TO_FUNNEL only (Phase 5) — mirrors backend FunnelStep cross-funnel fields. targetFunnelId =
+  // the funnel to enroll into; targetEntryStepId = the step to start at (null = from the start). The entry
+  // field is `targetEntryStepId` (NOT `targetStepId` — Decision 5) so it is never confused with the MENU
+  // Button.targetStepId. endParentAfter = end THIS funnel right after enrolling (recommended for transfer).
+  targetFunnelId?: string | null
+  targetEntryStepId?: string | null
+  endParentAfter?: boolean | null
   // Graph model (Phase 2) — mirrors backend FunnelStep graph fields. id is server-minted; next is the
   // default outgoing edge (null = next step in list). buttons/timeout* apply to MENU steps only.
   id?: string | null

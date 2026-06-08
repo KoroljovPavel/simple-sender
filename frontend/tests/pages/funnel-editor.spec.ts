@@ -1,11 +1,12 @@
 // @vitest-environment nuxt
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { ref } from 'vue'
 import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
 import { DOMWrapper } from '@vue/test-utils'
 import { settle } from '../helpers/settle'
 import FunnelEditorPage from '../../pages/projects/[projectId]/funnels/[funnelId].vue'
 import FunnelStepForm from '../../components/funnels/FunnelStepForm.vue'
-import type { FunnelResponse, FunnelStep } from '../../types/funnel'
+import type { FunnelResponse, FunnelStep, FunnelSummaryResponse } from '../../types/funnel'
 
 // The editor page owns the headline Task-10 behaviour: 422-code → inline errors.funnels.* (NOT a global
 // toast) and the anti-IDOR 404 → graceful list redirect. The E2E covers it only against a live backend
@@ -22,11 +23,19 @@ const { storeMock, botStoreMock, navMock, toastMock } = vi.hoisted(() => ({
     testRun: vi.fn(),
     // Task 6: message-preview panel action (only called when a message step is in focus).
     preview: vi.fn(),
+    // Task 4 (Phase 5): SUBSCRIBE_TO_FUNNEL target picker reads funnels + lazy-fetches via fetch('all').
+    // `funnels` is assigned a real ref below (out of vi.hoisted, where `ref` is not yet importable) so the
+    // form's storeToRefs(...) unwraps it — a plain array would not be reactive.
+    fetch: vi.fn(),
+    funnels: undefined as unknown as ReturnType<typeof ref<FunnelSummaryResponse[]>>,
   },
   botStoreMock: { current: null as { telegramUsername: string } | null, fetch: vi.fn() },
   navMock: vi.fn(),
   toastMock: { success: vi.fn(), error: vi.fn() },
 }))
+
+// Attach the reactive funnels ref now that `ref` is imported (vi.hoisted runs before imports).
+storeMock.funnels = ref<FunnelSummaryResponse[]>([])
 
 mockNuxtImport('useFunnelsStore', () => () => storeMock)
 mockNuxtImport('useBotStore', () => () => botStoreMock)
@@ -808,5 +817,158 @@ describe('FunnelStepForm — MENU', () => {
     expect((($('[data-test="step-menu-button-label-1"]').element) as HTMLInputElement).value).toBe('Site')
     // Row 1 is a URL button → its url input shows the stored link.
     expect((($('[data-test="step-menu-button-url-1"]').element) as HTMLInputElement).value).toBe('https://example.com')
+  })
+})
+
+// ─── SUBSCRIBE_TO_FUNNEL step form (Phase 5, Task 4) ──────────────────────────
+// The step enrolls the subscriber into ANOTHER funnel of the project. The form picks a target funnel
+// (status-aware, so it can hint when the target is not active), an optional entry step (sentinel = from
+// the start), and an "end this funnel after starting" checkbox. The target picker pulls funnels through
+// the shared store (fetch('all') + funnels ref), entry steps via fetchOne(targetFunnelId).steps.
+function summary(over: Partial<FunnelSummaryResponse> = {}): FunnelSummaryResponse {
+  return {
+    id: 'sub1',
+    projectId: 'p1',
+    name: 'Sub funnel',
+    description: null,
+    status: 'active',
+    triggerType: 'on_start',
+    triggerValue: '',
+    keywords: null,
+    allowReEnter: false,
+    stepCount: 2,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+    ...over,
+  }
+}
+
+async function mountSubscribeForm(initial: FunnelStep | null = null) {
+  const wrapper = await mountSuspended(FunnelStepForm, {
+    props: { initial, submitLabel: 'Save' },
+    attachTo: document.body,
+  })
+  await settle()
+  await $('[data-test="step-type-select"]').setValue('SUBSCRIBE_TO_FUNNEL')
+  await settle()
+  return wrapper
+}
+
+describe('FunnelStepForm — SUBSCRIBE_TO_FUNNEL', () => {
+  beforeEach(() => {
+    // Non-vacuous fixtures: at least one ACTIVE and one non-active funnel so the picker carries both and
+    // the inactive-target hint can actually be exercised.
+    storeMock.funnels.value = [
+      summary({ id: 'active1', name: 'Active funnel', status: 'active' }),
+      summary({ id: 'draft1', name: 'Draft funnel', status: 'draft' }),
+    ]
+    storeMock.fetch.mockReset().mockResolvedValue(undefined)
+    storeMock.fetchOne.mockReset().mockResolvedValue(
+      draft({
+        id: 'active1',
+        status: 'active',
+        steps: [
+          { stepType: 'SEND_MESSAGE', id: 'st1', text: 'Hi' },
+          { stepType: 'DELAY', id: 'st2', delayValue: 1, delayUnit: 'MIN' },
+        ],
+      }),
+    )
+  })
+  afterEach(() => {
+    document.body.innerHTML = ''
+  })
+
+  it('renders SUBSCRIBE_TO_FUNNEL in the type picker + the target/entry pickers and the end checkbox', async () => {
+    const wrapper = await mountSubscribeForm()
+    const options = wrapper.findAll('[data-test="step-type-select"] option').map((o) => o.attributes('value'))
+    expect(options).toContain('SUBSCRIBE_TO_FUNNEL')
+
+    expect(maybe('[data-test="step-subscribe-target-select"]')).not.toBeNull()
+    expect(maybe('[data-test="step-subscribe-entry-select"]')).not.toBeNull()
+    expect(maybe('[data-test="step-subscribe-end-parent"]')).not.toBeNull()
+    // The return-pattern hint under the checkbox is always shown (recommends endParentAfter=true).
+    expect(maybe('[data-test="step-subscribe-return-hint"]')).not.toBeNull()
+    // The target picker fetched the project's funnels via the store.
+    expect(storeMock.fetch).toHaveBeenCalledWith('all')
+  })
+
+  it('emits the SUBSCRIBE payload with the chosen target, entry step and end flag', async () => {
+    const wrapper = await mountSubscribeForm()
+    // Pick the active target funnel.
+    await $('[data-test="step-subscribe-target-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-subscribe-target-option-active1"]').trigger('mousedown')
+    await settle()
+    // Its steps are lazily fetched → pick the first one as the entry step.
+    await $('[data-test="step-subscribe-entry-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-subscribe-entry-option-st1"]').trigger('mousedown')
+    await settle()
+    // Tick the "end this funnel after starting" checkbox.
+    await $('[data-test="step-subscribe-end-parent"]').setValue(true)
+    await settle()
+    await submitForm()
+
+    const emitted = wrapper.emitted('submit')
+    expect(emitted).toBeTruthy()
+    const step = emitted![0][0] as FunnelStep
+    expect(step.stepType).toBe('SUBSCRIBE_TO_FUNNEL')
+    expect(step.targetFunnelId).toBe('active1')
+    expect(step.targetEntryStepId).toBe('st1')
+    expect(step.endParentAfter).toBe(true)
+  })
+
+  it('encodes the "from the start" entry sentinel as targetEntryStepId null', async () => {
+    const wrapper = await mountSubscribeForm()
+    await $('[data-test="step-subscribe-target-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-subscribe-target-option-active1"]').trigger('mousedown')
+    await settle()
+    // Leave the entry picker on its default "from the start" sentinel → null.
+    await submitForm()
+
+    const emitted = wrapper.emitted('submit')
+    expect(emitted).toBeTruthy()
+    const step = emitted![0][0] as FunnelStep
+    expect(step.targetFunnelId).toBe('active1')
+    expect(step.targetEntryStepId).toBeNull()
+    // Unchecked checkbox → endParentAfter false.
+    expect(step.endParentAfter).toBe(false)
+  })
+
+  it('shows the inactive-target hint only when a non-active funnel is chosen', async () => {
+    const wrapper = await mountSubscribeForm()
+    // Non-vacuous guard: the picker must carry BOTH the active and the non-active option, otherwise the
+    // hint would be unreachable for the wrong reason (the inactive funnel simply absent from the list).
+    await $('[data-test="step-subscribe-target-input"]').trigger('focus')
+    await settle()
+    expect(maybe('[data-test="step-subscribe-target-option-active1"]')).not.toBeNull()
+    expect(maybe('[data-test="step-subscribe-target-option-draft1"]')).not.toBeNull()
+
+    // Active target → no hint.
+    await $('[data-test="step-subscribe-target-option-active1"]').trigger('mousedown')
+    await settle()
+    expect(maybe('[data-test="step-subscribe-inactive-hint"]')).toBeNull()
+
+    // Switch to the draft (non-active) target → the inline hint appears.
+    await $('[data-test="step-subscribe-target-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-subscribe-target-option-draft1"]').trigger('mousedown')
+    await settle()
+    expect(maybe('[data-test="step-subscribe-inactive-hint"]')).not.toBeNull()
+    expect(wrapper).toBeTruthy()
+  })
+
+  it('pre-fills target / entry / end flag from an edited SUBSCRIBE step', async () => {
+    await mountSubscribeForm({
+      stepType: 'SUBSCRIBE_TO_FUNNEL',
+      targetFunnelId: 'active1',
+      targetEntryStepId: 'st2',
+      endParentAfter: true,
+    })
+    // Target funnel label shows in the closed picker input.
+    expect((($('[data-test="step-subscribe-target-input"]').element) as HTMLInputElement).value).toContain('Active funnel')
+    // The end-parent checkbox is checked.
+    expect((($('[data-test="step-subscribe-end-parent"]').element) as HTMLInputElement).checked).toBe(true)
   })
 })

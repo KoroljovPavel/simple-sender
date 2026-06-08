@@ -461,7 +461,11 @@
       "funnel_broken_edge": "Кнопка веде на видалений крок. Виправте ціль перед активацією.",
       "funnel_owner_not_linked": "Відкрийте свого бота в Telegram і надішліть /start, потім повторіть тест.",
       "funnel_invalid_trigger_type": "Невідомий тип тригера.",
-      "funnel_invalid_keywords": "Некоректні ключові слова."
+      "funnel_invalid_keywords": "Некоректні ключові слова.",
+      "funnel_subscribe_target_required": "Оберіть воронку для запуску.",
+      "funnel_subscribe_target_not_found": "Обрана воронка більше не існує. Оберіть іншу.",
+      "funnel_subscribe_target_step_not_found": "Обраний крок входу більше не існує в цій воронці.",
+      "funnel_subscribe_target_inactive": "Обрана воронка не активна. Активуйте її перед активацією цієї."
     }
   },
   "subscribers": {
@@ -750,7 +754,8 @@
         "REMOVE_TAG": "Зняти тег",
         "SET_CUSTOM_FIELD": "Задати кастомне поле",
         "MENU": "Меню (кнопки)",
-        "EMIT_EVENT": "Надіслати подію"
+        "EMIT_EVENT": "Надіслати подію",
+        "SUBSCRIBE_TO_FUNNEL": "Почати воронку"
       },
       "unit": {
         "MIN": "хв",
@@ -813,6 +818,20 @@
         "eventName": "Назва події",
         "eventNamePlaceholder": "напр. order_paid",
         "eventNameHint": "Надсилає цю подію, щоб спрацювали інші воронки, які її очікують.",
+        "subscribeTarget": "Воронка для запуску",
+        "subscribeTargetPlaceholder": "Почніть вводити для пошуку…",
+        "subscribeTargetLoading": "Завантаження…",
+        "subscribeTargetEmpty": "У проєкті немає інших воронок",
+        "subscribeTargetNoMatches": "Нічого не знайдено",
+        "subscribeInactiveHint": "Ця воронка ще не активна — підписник потрапить до неї лише після її активації.",
+        "subscribeEntry": "Крок входу (необов'язково)",
+        "subscribeEntryStart": "З початку",
+        "subscribeEntryPlaceholder": "Оберіть крок входу…",
+        "subscribeEntryLoading": "Завантаження…",
+        "subscribeEntryEmpty": "Спочатку оберіть воронку",
+        "subscribeEntryNoMatches": "Нічого не знайдено",
+        "subscribeEndParent": "Завершити цю воронку після старту іншої",
+        "subscribeReturnHint": "Рекомендовано для сценаріїв передавання/повернення. Якщо не ввімкнути, повернення в ще-живу батьківську воронку з вимкненим повторним входом нічого не зробить.",
         "submitAdd": "Додати",
         "submitSave": "Зберегти"
       },

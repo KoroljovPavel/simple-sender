@@ -461,7 +461,11 @@
       "funnel_broken_edge": "A button points at a deleted step. Fix the target before activating.",
       "funnel_owner_not_linked": "Open your bot in Telegram and send /start, then try the test again.",
       "funnel_invalid_trigger_type": "Unknown trigger type.",
-      "funnel_invalid_keywords": "Invalid keywords."
+      "funnel_invalid_keywords": "Invalid keywords.",
+      "funnel_subscribe_target_required": "Choose the funnel to start.",
+      "funnel_subscribe_target_not_found": "The selected funnel no longer exists. Pick another one.",
+      "funnel_subscribe_target_step_not_found": "The selected entry step no longer exists in that funnel.",
+      "funnel_subscribe_target_inactive": "The selected funnel is not active. Activate it before activating this one."
     }
   },
   "subscribers": {
@@ -750,7 +754,8 @@
         "REMOVE_TAG": "Remove tag",
         "SET_CUSTOM_FIELD": "Set custom field",
         "MENU": "Menu (buttons)",
-        "EMIT_EVENT": "Emit event"
+        "EMIT_EVENT": "Emit event",
+        "SUBSCRIBE_TO_FUNNEL": "Start a funnel"
       },
       "unit": {
         "MIN": "min",
@@ -813,6 +818,20 @@
         "eventName": "Event name",
         "eventNamePlaceholder": "e.g. order_paid",
         "eventNameHint": "Dispatches this event so other funnels listening for it can fire.",
+        "subscribeTarget": "Funnel to start",
+        "subscribeTargetPlaceholder": "Type to search…",
+        "subscribeTargetLoading": "Loading…",
+        "subscribeTargetEmpty": "No other funnels in this project",
+        "subscribeTargetNoMatches": "No matches",
+        "subscribeInactiveHint": "This funnel is not active yet — the subscriber will only be enrolled once it is activated.",
+        "subscribeEntry": "Entry step (optional)",
+        "subscribeEntryStart": "From the start",
+        "subscribeEntryPlaceholder": "Choose an entry step…",
+        "subscribeEntryLoading": "Loading…",
+        "subscribeEntryEmpty": "Pick a funnel first",
+        "subscribeEntryNoMatches": "No matches",
+        "subscribeEndParent": "End this funnel after starting the other one",
+        "subscribeReturnHint": "Recommended for transfer/return flows. If left off, returning into a still-running parent funnel with re-entry disabled does nothing.",
         "submitAdd": "Add",
         "submitSave": "Save"
       },

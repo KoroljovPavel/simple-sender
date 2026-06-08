@@ -6,6 +6,8 @@ import { CURRENT_DATE_TOKEN } from '~/types/funnel'
 import type { Button, DelayUnit, FunnelStep, StepType } from '~/types/funnel'
 import type { CustomFieldDefinition, CustomFieldType, Tag } from '~/types/subscriber'
 import SearchableSelect from '~/components/funnels/SearchableSelect.vue'
+import { useFunnelsStore } from '~/stores/funnels'
+import { storeToRefs } from 'pinia'
 
 // Shared per-type step form used by BOTH AddStepDialog and EditStepDialog (Task 10 endorses extracting
 // the common form). The picker `StepType` lives OUTSIDE the form so the computed() schema can depend on
@@ -36,6 +38,7 @@ const STEP_TYPES: StepType[] = [
   'SET_CUSTOM_FIELD',
   'MENU',
   'EMIT_EVENT',
+  'SUBSCRIBE_TO_FUNNEL',
 ]
 const PARSE_MODES = ['', 'HTML', 'MarkdownV2'] as const
 const DELAY_UNITS: DelayUnit[] = ['MIN', 'HOUR', 'DAY']
@@ -57,6 +60,11 @@ const MENU_LABEL_MAX = 64
 // Sentinel for the "End the funnel" target inside the picker ONLY. It is mapped to targetStepId=null on
 // emit — an empty string "" would be a non-null id matching no step → server 422 funnel_broken_edge.
 const MENU_END_TARGET = '__END__'
+
+// ── SUBSCRIBE_TO_FUNNEL constants (Phase 5 / Decision 5) ─────────────────────────────────────────────
+// Sentinel for "enter the target funnel from its first step" inside the entry-step picker ONLY. Mapped to
+// targetEntryStepId=null on emit — the backend reads null as "from the start". Distinct from a real step id.
+const SUBSCRIBE_ENTRY_START = '__START__'
 
 const selectedType = ref<StepType>(props.initial?.stepType ?? 'SEND_MESSAGE')
 
@@ -210,11 +218,33 @@ async function ensureTagsLoaded() {
     tagsLoading.value = false
   }
 }
+// ── SUBSCRIBE_TO_FUNNEL store source + lazy loader (Phase 5 / Decision 5) ─────────────────────────────
+// Declared BEFORE the selectedType watch because that watch is `immediate` and may call ensureFunnelsLoaded
+// during setup (when an edited SUBSCRIBE step is the initial type) — referencing it later would hit its TDZ.
+// We read the project's funnels from the shared store so the picker can carry each funnel's status and
+// surface a hint when the target is not `active`. NOTE: store.fetch('all') OVERWRITES the shared funnels
+// list (the list page's status-filtered slice) — a deliberate trade-off (the editor specs already mock the
+// store, least-friction source). Switch to a local useApi() fetch if that overwrite ever flickers a filter.
+// We fetch 'all' (not 'active') on purpose — the inactive-target hint needs the non-active funnels present.
+const funnelsStore = useFunnelsStore()
+const { funnels: storeFunnels } = storeToRefs(funnelsStore)
+let funnelsRequested = false
+async function ensureFunnelsLoaded() {
+  if (funnelsRequested) return
+  funnelsRequested = true
+  try {
+    await funnelsStore.fetch('all')
+  } catch {
+    // Network/permission failure → the store keeps whatever it had; the picker shows its empty-state.
+  }
+}
+
 watch(
   selectedType,
   (ty) => {
     if (ty === 'SET_CUSTOM_FIELD') ensureDefinitionsLoaded()
     if (ty === 'ADD_TAG' || ty === 'REMOVE_TAG') ensureTagsLoaded()
+    if (ty === 'SUBSCRIBE_TO_FUNNEL') ensureFunnelsLoaded()
   },
   { immediate: true },
 )
@@ -226,6 +256,74 @@ const cfOptions = computed(() =>
 const tagOptions = computed(() =>
   tags.value.map((tg) => ({ value: tg.slug, label: tg.label ?? tg.slug })),
 )
+
+// ── SUBSCRIBE_TO_FUNNEL form state (Phase 5 / Decision 5) ─────────────────────────────────────────────
+// (The store source + ensureFunnelsLoaded loader are declared above the selectedType watch — see there.)
+// Pre-fill from an edited SUBSCRIBE step. Entry: a stored targetEntryStepId, else the "from the start"
+// sentinel (which a null/absent value maps to). The checkbox mirrors endParentAfter (default false).
+const subscribeTargetFunnelId = ref<string>(
+  props.initial?.stepType === 'SUBSCRIBE_TO_FUNNEL' ? (props.initial.targetFunnelId ?? '') : '',
+)
+const subscribeEntryStepId = ref<string>(
+  props.initial?.stepType === 'SUBSCRIBE_TO_FUNNEL' && props.initial.targetEntryStepId
+    ? props.initial.targetEntryStepId
+    : SUBSCRIBE_ENTRY_START,
+)
+const subscribeEndParent = ref<boolean>(
+  props.initial?.stepType === 'SUBSCRIBE_TO_FUNNEL' ? Boolean(props.initial.endParentAfter) : false,
+)
+
+// Target funnel options carry the status so the hint below can read it. Self-target is allowed (cycles are
+// a feature) — the currently-edited funnel may appear here, which is fine.
+const subscribeTargetOptions = computed(() =>
+  storeFunnels.value.map((f) => ({ value: f.id, label: f.name })),
+)
+// The chosen target's status drives the inactive hint (shown when it is not `active`).
+const subscribeTargetStatus = computed(
+  () => storeFunnels.value.find((f) => f.id === subscribeTargetFunnelId.value)?.status ?? null,
+)
+const subscribeTargetInactive = computed(
+  () => !!subscribeTargetFunnelId.value && subscribeTargetStatus.value !== 'active',
+)
+
+// Entry-step options for the chosen target, lazily fetched (fetchOne returns the full FunnelResponse, NOT
+// cached in the store). Steps without an id (not yet persisted) are skipped — no stable target. The "from
+// the start" sentinel is always first.
+const subscribeTargetSteps = ref<FunnelStep[]>([])
+const subscribeStepsLoading = ref(false)
+const subscribeEntryOptions = computed(() => {
+  const stepOptions = subscribeTargetSteps.value
+    .map((s, position) => ({ s, position }))
+    .filter(({ s }) => !!s.id)
+    .map(({ s, position }) => ({
+      value: s.id as string,
+      label: `${position + 1}. ${t(`funnels.steps.type.${s.stepType}`)}`,
+    }))
+  return [
+    { value: SUBSCRIBE_ENTRY_START, label: t('funnels.steps.form.subscribeEntryStart') },
+    ...stepOptions,
+  ]
+})
+
+// Reload the target's steps whenever the target changes, and reset the entry pick back to "from the start"
+// (step ids are unique only within one funnel, so a carried-over id would be meaningless).
+watch(subscribeTargetFunnelId, async (id, prev) => {
+  // Skip the reset on the seeding run (prev === undefined) so an edited step keeps its pre-filled entry.
+  if (prev !== undefined && id !== prev) subscribeEntryStepId.value = SUBSCRIBE_ENTRY_START
+  if (!id) {
+    subscribeTargetSteps.value = []
+    return
+  }
+  subscribeStepsLoading.value = true
+  try {
+    const funnel = await funnelsStore.fetchOne(id)
+    subscribeTargetSteps.value = funnel.steps ?? []
+  } catch {
+    subscribeTargetSteps.value = [] // Failure → only the sentinel remains; the step is not blocked.
+  } finally {
+    subscribeStepsLoading.value = false
+  }
+}, { immediate: true })
 // Plain ref (NOT a computed over customFieldKey): the validation `schema` below is evaluated by useForm
 // during setup, BEFORE defineField creates customFieldKey — a computed that read customFieldKey there
 // would hit its temporal dead zone. A watcher keeps this in sync once the form fields exist (below).
@@ -486,6 +584,18 @@ const onSubmit = handleSubmit((values) => {
       }
       break
     }
+    case 'SUBSCRIBE_TO_FUNNEL':
+      // Cross-funnel enroll (Decision 5): the entry "from the start" sentinel → targetEntryStepId null.
+      // No client-side block here — the backend owns target_required/_not_found/_inactive validation and
+      // returns the funnel_subscribe_* 422 codes, mapped inline by the editor page.
+      step = {
+        stepType: type,
+        targetFunnelId: blankToNull(subscribeTargetFunnelId.value),
+        targetEntryStepId:
+          subscribeEntryStepId.value === SUBSCRIBE_ENTRY_START ? null : subscribeEntryStepId.value,
+        endParentAfter: subscribeEndParent.value,
+      }
+      break
   }
   emit('submit', step)
 })
@@ -890,6 +1000,62 @@ const onSubmit = handleSubmit((values) => {
         />
         <p class="mt-1 text-xs text-gray-500">{{ t('funnels.steps.form.eventNameHint') }}</p>
         <p v-if="errors.eventName" data-test="step-event-name-error" class="mt-1 text-sm text-red-600">{{ errors.eventName }}</p>
+      </div>
+    </template>
+
+    <!-- SUBSCRIBE_TO_FUNNEL: enroll the subscriber into ANOTHER funnel of the project (Phase 5, Decision 5).
+         Target picker carries each funnel's status → inline hint when the target is not `active`. Entry
+         picker = a step of the target (or "from the start" sentinel). End-parent checkbox ends THIS funnel. -->
+    <template v-else-if="selectedType === 'SUBSCRIBE_TO_FUNNEL'">
+      <div>
+        <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.subscribeTarget') }}</label>
+        <SearchableSelect
+          v-model="subscribeTargetFunnelId"
+          :options="subscribeTargetOptions"
+          :loading="storeFunnels.length === 0"
+          test-prefix="step-subscribe-target"
+          :placeholder="t('funnels.steps.form.subscribeTargetPlaceholder')"
+          :loading-text="t('funnels.steps.form.subscribeTargetLoading')"
+          :empty-text="t('funnels.steps.form.subscribeTargetEmpty')"
+          :no-matches-text="t('funnels.steps.form.subscribeTargetNoMatches')"
+        />
+        <p
+          v-if="subscribeTargetInactive"
+          data-test="step-subscribe-inactive-hint"
+          class="mt-1 text-sm text-amber-600"
+        >
+          {{ t('funnels.steps.form.subscribeInactiveHint') }}
+        </p>
+      </div>
+
+      <div>
+        <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.subscribeEntry') }}</label>
+        <SearchableSelect
+          v-model="subscribeEntryStepId"
+          :options="subscribeEntryOptions"
+          :loading="subscribeStepsLoading"
+          :show-value="false"
+          test-prefix="step-subscribe-entry"
+          :placeholder="t('funnels.steps.form.subscribeEntryPlaceholder')"
+          :loading-text="t('funnels.steps.form.subscribeEntryLoading')"
+          :empty-text="t('funnels.steps.form.subscribeEntryEmpty')"
+          :no-matches-text="t('funnels.steps.form.subscribeEntryNoMatches')"
+        />
+      </div>
+
+      <div>
+        <label class="inline-flex items-center gap-2 text-sm">
+          <input
+            v-model="subscribeEndParent"
+            data-test="step-subscribe-end-parent"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300"
+          />
+          {{ t('funnels.steps.form.subscribeEndParent') }}
+        </label>
+        <p data-test="step-subscribe-return-hint" class="mt-1 text-xs text-gray-500">
+          {{ t('funnels.steps.form.subscribeReturnHint') }}
+        </p>
       </div>
     </template>
 

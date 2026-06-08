@@ -24,8 +24,8 @@ function messageStep(over: Partial<FunnelStep> = {}): FunnelStep {
   return { stepType: 'SEND_MESSAGE', id: 's1', text: 'Hi {user.first_name}!', parseMode: null, ...over }
 }
 
-async function mountWith(step: FunnelStep | null) {
-  const wrapper = await mountSuspended(FunnelMessagePreview, { props: { step } })
+async function mountWith(step: FunnelStep | null, stepNumber: number | null = null) {
+  const wrapper = await mountSuspended(FunnelMessagePreview, { props: { step, stepNumber } })
   await settle()
   return wrapper
 }
@@ -117,5 +117,33 @@ describe('FunnelMessagePreview', () => {
 
     expect(previewMock).not.toHaveBeenCalled()
     expect(wrapper.find('[data-test="funnel-preview-empty"]').exists()).toBe(true)
+  })
+
+  it('shows the "Step N · type" heading for a message step', async () => {
+    previewMock.mockResolvedValueOnce({ rendered: 'Hi Olena!', sampleData: false, kind: 'message' })
+    const wrapper = await mountWith(messageStep(), 2)
+
+    const heading = wrapper.find('[data-test="funnel-preview-step-heading"]')
+    expect(heading.exists()).toBe(true)
+    // 1-based number + the localized SEND_MESSAGE type name (not a raw i18n key).
+    expect(heading.text()).toContain('2')
+    expect(heading.text()).not.toContain('funnels.editor.previewStepHeading')
+    expect(heading.text()).not.toContain('SEND_MESSAGE')
+  })
+
+  it('shows the heading for a non-message step too (alongside the placeholder)', async () => {
+    const wrapper = await mountWith({ stepType: 'DELAY', id: 's2', delayValue: 1, delayUnit: 'MIN' }, 3)
+
+    const heading = wrapper.find('[data-test="funnel-preview-step-heading"]')
+    expect(heading.exists()).toBe(true)
+    expect(heading.text()).toContain('3')
+    expect(heading.text()).not.toContain('DELAY')
+    // The placeholder still renders for the non-message step.
+    expect(wrapper.find('[data-test="funnel-preview-placeholder"]').exists()).toBe(true)
+  })
+
+  it('omits the heading in the empty state (no step)', async () => {
+    const wrapper = await mountWith(null)
+    expect(wrapper.find('[data-test="funnel-preview-step-heading"]').exists()).toBe(false)
   })
 })

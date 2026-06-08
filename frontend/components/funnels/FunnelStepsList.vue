@@ -4,12 +4,16 @@ import type { FunnelStep } from '~/types/funnel'
 // Vertical ordered list of steps. Position = order, so reordering is just emitting a new (from,to) pair
 // the parent applies to its local array (then PATCHes the full array). Delete uses an inline two-click
 // confirm (no extra modal) so a misclick never silently drops a step.
-const props = defineProps<{ steps: FunnelStep[] }>()
+// selectedIndex highlights the row currently driving the preview panel; clicking a row's title/summary
+// block emits `select` so the parent can preview THAT step (the action buttons @click.stop so they edit/
+// move/delete without also hijacking selection).
+const props = defineProps<{ steps: FunnelStep[]; selectedIndex?: number }>()
 const emit = defineEmits<{
   move: [from: number, to: number]
   edit: [index: number]
   delete: [index: number]
   add: []
+  select: [index: number]
 }>()
 
 const { t } = useI18n()
@@ -76,12 +80,18 @@ function confirmDelete(index: number) {
         :key="index"
         :data-test="`funnel-step-row-${index}`"
         class="flex items-center gap-3 rounded-md border px-3 py-2"
+        :class="props.selectedIndex === index ? 'ring-2 ring-blue-400 border-blue-400' : ''"
       >
         <span class="text-xs font-medium text-gray-400 w-5 text-right">{{ index + 1 }}</span>
-        <span class="min-w-0 flex-1">
+        <button
+          type="button"
+          :data-test="`funnel-step-select-${index}`"
+          class="min-w-0 flex-1 text-left"
+          @click="emit('select', index)"
+        >
           <span class="block text-sm font-medium">{{ t(`funnels.steps.type.${step.stepType}`) }}</span>
           <span v-if="summary(step)" class="block truncate text-sm text-gray-500">{{ summary(step) }}</span>
-        </span>
+        </button>
 
         <template v-if="confirmIndex === index">
           <span class="text-sm text-gray-600">{{ t('funnels.steps.confirmDelete') }}</span>

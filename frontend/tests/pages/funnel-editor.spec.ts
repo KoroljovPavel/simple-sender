@@ -431,6 +431,87 @@ describe('funnels/[funnelId] editor page', () => {
       expect(wrapper.find('[data-test="funnel-stop-all-confirm"]').exists()).toBe(false)
     })
   })
+
+  // ─── Preview selection: click any step row to drive the preview panel ──────────
+  // The panel previews the clicked step (message → render via store.preview; non-message → placeholder).
+  // Default (no click, no edit dialog) = the first message step. The clicked row gets a highlight.
+  describe('preview step selection', () => {
+    // Steps: a non-message DELAY first, then two message steps, so the default (first MESSAGE step) is
+    // NOT row 0 — proving the fallback skips non-message steps, and a click can override it.
+    const MIXED_STEPS: FunnelStep[] = [
+      { stepType: 'DELAY', id: 'd0', delayValue: 1, delayUnit: 'MIN' },
+      { stepType: 'SEND_MESSAGE', id: 'm1', text: 'First message', parseMode: null },
+      { stepType: 'SEND_MESSAGE', id: 'm2', text: 'Second message', parseMode: null },
+    ]
+
+    async function mountWithPreview(steps: FunnelStep[] = MIXED_STEPS) {
+      storeMock.fetchOne.mockResolvedValue(draft({ steps }))
+      storeMock.preview.mockReset().mockResolvedValue({ rendered: 'rendered', sampleData: false, kind: 'message' })
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+      await wrapper.get('[data-test="funnel-preview-toggle"]').trigger('click')
+      await settle()
+      return wrapper
+    }
+
+    it('defaults to the first MESSAGE step (skips the leading non-message step)', async () => {
+      const wrapper = await mountWithPreview()
+      // Default with no click = row 1 (m1) → backend previewed with its id (render path), heading shows
+      // step 2 (1-based). The first-tick preview is synchronous (panel primes immediately on mount).
+      expect(storeMock.preview).toHaveBeenLastCalledWith('f1', 'm1', expect.objectContaining({ text: 'First message' }))
+      const heading = wrapper.get('[data-test="funnel-preview-step-heading"]')
+      expect(heading.text()).toContain('2')
+      // The defaulted row is highlighted.
+      expect(wrapper.get('[data-test="funnel-step-row-1"]').classes().join(' ')).toContain('ring-2')
+    })
+
+    it('clicking a message step row drives the preview to THAT step and highlights it', async () => {
+      const wrapper = await mountWithPreview()
+
+      await wrapper.get('[data-test="funnel-step-select-2"]').trigger('click')
+      await settle()
+
+      // Heading now names the clicked step (row 2 → step 3, 1-based) and the rendered (message) body shows.
+      expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('3')
+      expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(true)
+      // Highlight moved to the clicked row, off the default.
+      expect(wrapper.get('[data-test="funnel-step-row-2"]').classes().join(' ')).toContain('ring-2')
+      expect(wrapper.get('[data-test="funnel-step-row-1"]').classes().join(' ')).not.toContain('ring-2')
+    })
+
+    it('clicking a NON-message step row shows the placeholder (no backend call) + heading', async () => {
+      const wrapper = await mountWithPreview()
+      storeMock.preview.mockClear()
+
+      await wrapper.get('[data-test="funnel-step-select-0"]').trigger('click')
+      await settle()
+
+      expect(storeMock.preview).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-test="funnel-preview-placeholder"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(false)
+      // Heading still tells which step (row 0 → step 1) is in focus.
+      expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('1')
+      expect(wrapper.get('[data-test="funnel-step-row-0"]').classes().join(' ')).toContain('ring-2')
+    })
+
+    it('the action buttons (edit / move / delete) still work and do not hijack selection', async () => {
+      const wrapper = await mountWithPreview()
+      // Select m2 (row 2) first so we can prove the action buttons leave the selection where it is.
+      await wrapper.get('[data-test="funnel-step-select-2"]').trigger('click')
+      await settle()
+
+      // Edit opens the dialog (edit dialog now wins the preview — that's the documented priority).
+      await wrapper.get('[data-test="funnel-step-edit-1"]').trigger('click')
+      await settle()
+      expect(wrapper.find('[data-test="step-form"]').exists()).toBe(true)
+
+      // Move emits to the store-backed reorder (full PATCH) — the click did not throw / hijack into select.
+      storeMock.update.mockResolvedValue(draft({ steps: MIXED_STEPS }))
+      await wrapper.get('[data-test="funnel-step-move-down-1"]').trigger('click')
+      await settle()
+      expect(storeMock.update).toHaveBeenCalled()
+    })
+  })
 })
 
 // ─── MENU step form (Phase 2, Task 6) ────────────────────────────────────────

@@ -58,10 +58,22 @@ const editStep = computed<FunnelStep | null>(() => steps.value[editIndex.value] 
 // turning Preview on without an open dialog still shows something. No message step → neutral empty state.
 const previewOpen = ref(false)
 const MESSAGE_STEP_TYPES: StepType[] = ['SEND_MESSAGE', 'SEND_IMAGE', 'MENU']
-const previewStep = computed<FunnelStep | null>(() => {
-  if (editStep.value) return editStep.value
-  return steps.value.find((s) => MESSAGE_STEP_TYPES.includes(s.stepType)) ?? null
+// A step row click drives the preview to THAT step. -1 = nothing clicked → fall back to the first
+// message step (the original default). Cleared when the clicked index no longer points at a real step.
+const previewSelectedIndex = ref(-1)
+function onSelectStep(index: number) {
+  previewSelectedIndex.value = index
+}
+// Selection priority: edited step (edit dialog open) > clicked step > first message step.
+const firstMessageIndex = computed(() => steps.value.findIndex((s) => MESSAGE_STEP_TYPES.includes(s.stepType)))
+const previewIndex = computed(() => {
+  if (editStep.value) return editIndex.value
+  if (steps.value[previewSelectedIndex.value]) return previewSelectedIndex.value
+  return firstMessageIndex.value
 })
+const previewStep = computed<FunnelStep | null>(() => steps.value[previewIndex.value] ?? null)
+// 1-based number of the previewed step for the panel heading (null when no step is in focus).
+const previewStepNumber = computed<number | null>(() => (previewIndex.value >= 0 ? previewIndex.value + 1 : null))
 
 const botUsername = computed(() => botStore.current?.telegramUsername ?? null)
 const status = computed<FunnelStatus | null>(() => funnel.value?.status ?? null)
@@ -419,10 +431,12 @@ async function confirmStopAll() {
 
         <FunnelStepsList
           :steps="steps"
+          :selected-index="previewOpen ? previewIndex : undefined"
           @move="onMove"
           @edit="openEdit"
           @delete="onDeleteStep"
           @add="addOpen = true"
+          @select="onSelectStep"
         />
 
         <FunnelTriggerSettings
@@ -434,7 +448,7 @@ async function confirmStopAll() {
         />
       </div>
 
-      <FunnelMessagePreview v-if="previewOpen" :step="previewStep" class="mt-6 lg:mt-0" />
+      <FunnelMessagePreview v-if="previewOpen" :step="previewStep" :step-number="previewStepNumber" class="mt-6 lg:mt-0" />
     </div>
 
     <AddStepDialog v-model:open="addOpen" :sibling-steps="steps" @add="onAddStep" />

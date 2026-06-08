@@ -10,9 +10,21 @@ import type { FunnelStep, PreviewStepResponse, StepType } from '~/types/funnel'
 // Telegram escaping (MarkdownV2/HTML), which is NOT browser-safe. It is output EXCLUSIVELY as text via
 // {{ }} interpolation — NEVER v-html / innerHTML (matches the "never v-html" convention in
 // FunnelStepForm.vue). Line breaks are preserved via CSS (whitespace-pre-wrap), not markup.
-const props = defineProps<{ step: FunnelStep | null }>()
+const props = defineProps<{ step: FunnelStep | null; stepNumber?: number | null }>()
 
 const { t } = useI18n()
+
+// Heading for the focused step: "Крок {N} · {localized type}". Shown for BOTH message and non-message
+// steps so the author always knows WHICH step is previewed; hidden only in the empty (no step) state.
+// {type} reuses the existing funnels.steps.type.* keys — never a hardcoded type name. Output is plain
+// text via {{ }} (the heading composes localized strings, no markup).
+const stepHeading = computed<string | null>(() => {
+  if (!props.step || props.stepNumber == null) return null
+  return t('funnels.editor.previewStepHeading', {
+    number: props.stepNumber,
+    type: t(`funnels.steps.type.${props.step.stepType}`),
+  })
+})
 const route = useRoute()
 const funnelsStore = useFunnelsStore()
 // Error mapping lives in the component setup (NOT the store) — useApiError pulls useI18n() and the store
@@ -102,6 +114,14 @@ onBeforeUnmount(() => {
     aria-live="polite"
   >
     <h3 class="mb-3 font-semibold text-gray-700">{{ t('funnels.editor.preview') }}</h3>
+
+    <!-- Which step is previewed: "Крок {N} · {type}". Shown for any focused step (message or not); plain
+         text via {{ }}, never v-html. -->
+    <p
+      v-if="stepHeading"
+      data-test="funnel-preview-step-heading"
+      class="mb-3 text-xs font-medium text-gray-500"
+    >{{ stepHeading }}</p>
 
     <!-- No step in focus → neutral empty state (not an error). -->
     <p v-if="!step" data-test="funnel-preview-empty" class="text-gray-500">

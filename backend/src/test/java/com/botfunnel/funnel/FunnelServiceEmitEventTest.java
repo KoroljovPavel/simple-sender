@@ -241,4 +241,27 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
         FunnelResponse activated = funnelService.activate(USER_ID, projectId, parent);
         assertThat(activated.status()).isEqualTo(FunnelStatus.active);
     }
+
+    @Test
+    void subscribe_activate_blocksWhenAnySecondTargetInactive() {
+        // Two SUBSCRIBE steps: the first target is active, the second is draft. Activation must still fail
+        // (the loop validates every target, not just the first) → funnel_subscribe_target_inactive.
+        String activeTarget = seedTarget(projectId);
+        funnelService.activate(USER_ID, projectId, activeTarget);
+        String draftTarget = seedTarget(projectId);
+
+        String parent = createDraft();
+        UpdateFunnelRequest parentReq = new UpdateFunnelRequest(
+                "f", null, "on_start", "parent2", false, null,
+                List.of(subscribeStep(activeTarget, null, false), subscribeStep(draftTarget, null, false)));
+        funnelService.update(USER_ID, projectId, parent, parentReq);
+
+        assertThatThrownBy(() -> funnelService.activate(USER_ID, projectId, parent))
+                .isInstanceOf(AppException.class)
+                .satisfies(ex -> {
+                    AppException ae = (AppException) ex;
+                    assertThat(ae.getStatus().value()).isEqualTo(422);
+                    assertThat(ae.getCode()).isEqualTo(FunnelService.CODE_SUBSCRIBE_TARGET_INACTIVE);
+                });
+    }
 }

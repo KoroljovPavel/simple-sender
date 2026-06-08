@@ -101,6 +101,91 @@ describe('FunnelMessagePreview', () => {
     expect(sourceNoComments).not.toMatch(/\.innerHTML\s*=/)
   })
 
+  it('renders the image ABOVE the caption for a SEND_IMAGE step with a valid imageUrl', async () => {
+    previewMock.mockResolvedValueOnce({ rendered: 'Nice caption', sampleData: false, kind: 'message' })
+    const wrapper = await mountWith(
+      messageStep({ stepType: 'SEND_IMAGE', text: null, caption: 'Nice caption', imageUrl: 'https://cdn.example/pic.png' }),
+    )
+
+    // The image is rendered with the step's imageUrl as :src (bound, not v-html).
+    const img = wrapper.find('img[data-test="funnel-preview-image"]')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('https://cdn.example/pic.png')
+    // …and the caption is still rendered, BELOW the image.
+    const caption = wrapper.find('[data-test="funnel-preview-rendered"]')
+    expect(caption.exists()).toBe(true)
+    expect(caption.text()).toContain('Nice caption')
+    // DOM order: <img> precedes the caption box.
+    const panelHtml = wrapper.find('[data-test="funnel-preview-panel"]').html()
+    expect(panelHtml.indexOf('funnel-preview-image')).toBeLessThan(
+      panelHtml.indexOf('funnel-preview-rendered'),
+    )
+    // No placeholder when a valid image is present.
+    expect(wrapper.find('[data-test="funnel-preview-image-unavailable"]').exists()).toBe(false)
+  })
+
+  it('renders ONLY the image (no empty caption box) when the caption is empty', async () => {
+    previewMock.mockResolvedValueOnce({ rendered: '', sampleData: false, kind: 'message' })
+    const wrapper = await mountWith(
+      messageStep({ stepType: 'SEND_IMAGE', text: null, caption: '', imageUrl: 'https://cdn.example/pic.png' }),
+    )
+
+    expect(wrapper.find('img[data-test="funnel-preview-image"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(false)
+  })
+
+  it('shows a neutral placeholder (no broken <img>) when SEND_IMAGE imageUrl is blank, caption still shown', async () => {
+    previewMock.mockResolvedValueOnce({ rendered: 'Caption text', sampleData: false, kind: 'message' })
+    const wrapper = await mountWith(
+      messageStep({ stepType: 'SEND_IMAGE', text: null, caption: 'Caption text', imageUrl: '   ' }),
+    )
+
+    // No <img> element at all for a blank URL.
+    expect(wrapper.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
+    // Neutral "image unavailable" placeholder instead.
+    const placeholder = wrapper.find('[data-test="funnel-preview-image-unavailable"]')
+    expect(placeholder.exists()).toBe(true)
+    expect(placeholder.text().trim().length).toBeGreaterThan(0)
+    // Caption still renders below.
+    expect(wrapper.find('[data-test="funnel-preview-rendered"]').text()).toContain('Caption text')
+  })
+
+  it('shows the placeholder when the image fails to load (@error)', async () => {
+    previewMock.mockResolvedValueOnce({ rendered: 'Caption text', sampleData: false, kind: 'message' })
+    const wrapper = await mountWith(
+      messageStep({ stepType: 'SEND_IMAGE', text: null, caption: 'Caption text', imageUrl: 'https://cdn.example/broken.png' }),
+    )
+
+    const img = wrapper.find('img[data-test="funnel-preview-image"]')
+    expect(img.exists()).toBe(true)
+    await img.trigger('error')
+    await settle()
+
+    // After the load error the <img> is replaced by the neutral placeholder.
+    expect(wrapper.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-preview-image-unavailable"]').exists()).toBe(true)
+    // Caption still shown.
+    expect(wrapper.find('[data-test="funnel-preview-rendered"]').text()).toContain('Caption text')
+  })
+
+  it('does NOT render an image for SEND_MESSAGE / MENU / non-message steps', async () => {
+    // SEND_MESSAGE — even if it somehow carried an imageUrl, the image is SEND_IMAGE-only.
+    previewMock.mockResolvedValueOnce({ rendered: 'Hi Olena!', sampleData: false, kind: 'message' })
+    const sendMessage = await mountWith(messageStep({ imageUrl: 'https://cdn.example/x.png' }))
+    expect(sendMessage.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
+    expect(sendMessage.find('[data-test="funnel-preview-image-unavailable"]').exists()).toBe(false)
+
+    // MENU.
+    previewMock.mockResolvedValueOnce({ rendered: 'Menu body', sampleData: false, kind: 'message' })
+    const menu = await mountWith(messageStep({ stepType: 'MENU', text: 'Menu body', imageUrl: 'https://cdn.example/x.png' }))
+    expect(menu.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
+    expect(menu.find('[data-test="funnel-preview-image-unavailable"]').exists()).toBe(false)
+
+    // Non-message (DELAY) — backend not called, no image.
+    const delay = await mountWith({ stepType: 'DELAY', id: 's2', delayValue: 1, delayUnit: 'MIN', imageUrl: 'https://cdn.example/x.png' })
+    expect(delay.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
+  })
+
   it('renders neutral message on preview error', async () => {
     previewMock.mockRejectedValueOnce({ statusCode: 404 })
     const wrapper = await mountWith(messageStep())

@@ -37,6 +37,28 @@ const funnelId = computed(() => String(route.params.funnelId))
 const MESSAGE_TYPES: StepType[] = ['SEND_MESSAGE', 'SEND_IMAGE', 'MENU']
 const isMessageStep = computed(() => !!props.step && MESSAGE_TYPES.includes(props.step.stepType))
 
+// SEND_IMAGE preview: the image is shown ABOVE the rendered caption, sourced straight from the step's
+// imageUrl (no extra network call beyond the browser fetching the URL). Bound via :src — NOT v-html — so
+// the no-HTML-sink / stored-XSS invariant holds (an <img src> cannot execute JS; the URL is validated
+// http(s) on save). A blank/whitespace URL or an @error load failure flips to a neutral text placeholder
+// instead of a broken-image icon (SEND_IMAGE-only — every other step type is untouched).
+const imageUrl = computed(() => {
+  const step = props.step
+  if (!step || step.stepType !== 'SEND_IMAGE') return null
+  const url = (step.imageUrl ?? '').trim()
+  return url.length > 0 ? url : null
+})
+// Per-render load-failure flag; reset whenever the source URL changes so a new image gets a fresh chance.
+const imageLoadFailed = ref(false)
+watch(imageUrl, () => {
+  imageLoadFailed.value = false
+})
+// Show the actual <img> only with a non-blank URL that has not failed to load; otherwise the placeholder.
+const showImage = computed(() => imageUrl.value !== null && !imageLoadFailed.value)
+const showImagePlaceholder = computed(
+  () => !!props.step && props.step.stepType === 'SEND_IMAGE' && !showImage.value,
+)
+
 // The preview body for the active step: SEND_IMAGE previews its caption, SEND_MESSAGE/MENU their text.
 // MENU has no required text on the backend — an empty body is fine (renders empty/neutral, no crash).
 function previewText(step: FunnelStep): string {
@@ -161,9 +183,32 @@ onBeforeUnmount(() => {
           {{ t('funnels.editor.previewSampleData') }}
         </p>
 
-        <!-- The Telegram-rendered string — output as TEXT ONLY ({{ }}), NEVER v-html. Telegram escaping is
-             NOT browser-safe; v-html here would be a stored-XSS sink (OWASP A03). Line breaks via CSS. -->
+        <!-- SEND_IMAGE only — the image renders ABOVE the caption. :src binding (never v-html): an <img>
+             src cannot execute JS, so the no-HTML-sink invariant is preserved; the URL is http(s)-validated
+             on save. A blank URL or an @error load failure falls back to a neutral text placeholder below. -->
+        <img
+          v-if="showImage"
+          data-test="funnel-preview-image"
+          :src="imageUrl ?? undefined"
+          :alt="t('funnels.editor.previewImageAlt')"
+          referrerpolicy="no-referrer"
+          class="mb-2 max-h-64 w-full rounded-md border bg-white object-contain"
+          @error="imageLoadFailed = true"
+        >
+        <p
+          v-else-if="showImagePlaceholder"
+          data-test="funnel-preview-image-unavailable"
+          class="mb-2 rounded-md border border-dashed bg-white px-3 py-4 text-center text-gray-500"
+        >
+          {{ t('funnels.editor.previewImageUnavailable') }}
+        </p>
+
+        <!-- The Telegram-rendered string (caption for SEND_IMAGE) — output as TEXT ONLY ({{ }}), NEVER
+             v-html. Telegram escaping is NOT browser-safe; v-html here would be a stored-XSS sink (OWASP
+             A03). Line breaks via CSS. For SEND_IMAGE this is the caption, shown below the image; an empty
+             caption renders an empty box (image-only), matching the backend-rendered text. -->
         <div
+          v-if="rendered.rendered.length > 0 || step.stepType !== 'SEND_IMAGE'"
           data-test="funnel-preview-rendered"
           class="whitespace-pre-wrap break-words rounded-md border bg-white px-3 py-2 text-gray-900"
         >{{ rendered.rendered }}</div>

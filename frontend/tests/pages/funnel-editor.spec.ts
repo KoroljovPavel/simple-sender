@@ -959,8 +959,33 @@ describe('FunnelStepForm — SUBSCRIBE_TO_FUNNEL', () => {
     expect(wrapper).toBeTruthy()
   })
 
-  it('pre-fills target / entry / end flag from an edited SUBSCRIBE step', async () => {
-    await mountSubscribeForm({
+  it('resets the entry step to "from the start" when the target funnel changes', async () => {
+    const wrapper = await mountSubscribeForm()
+    // Pick target active1 then an explicit entry step.
+    await $('[data-test="step-subscribe-target-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-subscribe-target-option-active1"]').trigger('mousedown')
+    await settle()
+    await $('[data-test="step-subscribe-entry-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-subscribe-entry-option-st1"]').trigger('mousedown')
+    await settle()
+
+    // Switch the target → the previously-chosen entry id (funnel-local) must reset to the sentinel.
+    await $('[data-test="step-subscribe-target-input"]').trigger('focus')
+    await settle()
+    await $('[data-test="step-subscribe-target-option-draft1"]').trigger('mousedown')
+    await settle()
+    await submitForm()
+
+    const step = wrapper.emitted('submit')![0][0] as FunnelStep
+    expect(step.targetFunnelId).toBe('draft1')
+    // Reset to sentinel → null, NOT the stale st1 from the previous funnel.
+    expect(step.targetEntryStepId).toBeNull()
+  })
+
+  it('pre-fills target / entry / end flag from an edited SUBSCRIBE step and re-emits them', async () => {
+    const wrapper = await mountSubscribeForm({
       stepType: 'SUBSCRIBE_TO_FUNNEL',
       targetFunnelId: 'active1',
       targetEntryStepId: 'st2',
@@ -970,5 +995,12 @@ describe('FunnelStepForm — SUBSCRIBE_TO_FUNNEL', () => {
     expect((($('[data-test="step-subscribe-target-input"]').element) as HTMLInputElement).value).toContain('Active funnel')
     // The end-parent checkbox is checked.
     expect((($('[data-test="step-subscribe-end-parent"]').element) as HTMLInputElement).checked).toBe(true)
+
+    // Submitting without touching anything must re-emit the pre-filled entry id (not lost / not reset).
+    await submitForm()
+    const step = wrapper.emitted('submit')![0][0] as FunnelStep
+    expect(step.targetFunnelId).toBe('active1')
+    expect(step.targetEntryStepId).toBe('st2')
+    expect(step.endParentAfter).toBe(true)
   })
 })

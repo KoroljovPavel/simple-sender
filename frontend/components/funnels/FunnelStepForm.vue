@@ -228,14 +228,20 @@ async function ensureTagsLoaded() {
 // We fetch 'all' (not 'active') on purpose — the inactive-target hint needs the non-active funnels present.
 const funnelsStore = useFunnelsStore()
 const { funnels: storeFunnels } = storeToRefs(funnelsStore)
+// Explicit loading flag (mirrors the tag/cf loaders) so the picker shows its empty-state — not a stuck
+// spinner — once the fetch settles on a project that genuinely has no other funnels.
+const subscribeFunnelsLoading = ref(false)
 let funnelsRequested = false
 async function ensureFunnelsLoaded() {
   if (funnelsRequested) return
   funnelsRequested = true
+  subscribeFunnelsLoading.value = true
   try {
     await funnelsStore.fetch('all')
   } catch {
     // Network/permission failure → the store keeps whatever it had; the picker shows its empty-state.
+  } finally {
+    subscribeFunnelsLoading.value = false
   }
 }
 
@@ -1012,7 +1018,7 @@ const onSubmit = handleSubmit((values) => {
         <SearchableSelect
           v-model="subscribeTargetFunnelId"
           :options="subscribeTargetOptions"
-          :loading="storeFunnels.length === 0"
+          :loading="subscribeFunnelsLoading"
           test-prefix="step-subscribe-target"
           :placeholder="t('funnels.steps.form.subscribeTargetPlaceholder')"
           :loading-text="t('funnels.steps.form.subscribeTargetLoading')"

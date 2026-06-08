@@ -1176,7 +1176,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
             assertThat(activeChildren(target.getId(), subId)).hasSize(1);
             assertThat(activeChildren(target.getId(), subId).get(0).getId()).isEqualTo(existingChildId);
             assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
-            assertThat(infoAndWarn(appender)).anyMatch(m -> m.contains(FunnelEventService.LOG_ENROLL_REENTER_IGNORED));
+            assertThat(warn(appender)).anyMatch(m -> m.contains(FunnelEventService.LOG_ENROLL_REENTER_IGNORED));
         } finally {
             detach(eventLogger, appender);
         }
@@ -1460,10 +1460,6 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
                 .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
                 .map(ILoggingEvent::getFormattedMessage)
                 .toList();
-    }
-
-    private static List<String> infoAndWarn(ListAppender<ILoggingEvent> appender) {
-        return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     private String seedExecution(String subscriberId, Instant nextRunAt, FunnelStep... steps) {

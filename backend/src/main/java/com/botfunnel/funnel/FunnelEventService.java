@@ -303,7 +303,7 @@ public class FunnelEventService {
             // Re-enter disabled and a running|waiting execution already exists for this (funnelId,
             // subscriberId) — benign no-op (the subscriber is already in the target). Distinct id so this
             // re-enter no-op is greppable apart from the dispatch-path one.
-            log.info("{} targetFunnelId={} subscriberId={}", LOG_ENROLL_REENTER_IGNORED,
+            log.warn("{} targetFunnelId={} subscriberId={}", LOG_ENROLL_REENTER_IGNORED,
                     target.getId(), subscriberId);
         }
     }

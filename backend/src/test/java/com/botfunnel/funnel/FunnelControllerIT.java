@@ -815,6 +815,28 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void previewSubscribeToFunnelStepReturnsNonMessagePlaceholder() throws Exception {
+        // SUBSCRIBE_TO_FUNNEL is a non-message step (isMessageStep false) → kind=non_message,
+        // rendered="" placeholder (pins composition-step preview alongside the generic DELAY case).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String stepId = "s1";
+        FunnelStep subscribe = new FunnelStep();
+        subscribe.setStepType(StepType.SUBSCRIBE_TO_FUNNEL);
+        subscribe.setId(stepId);
+        subscribe.setTargetFunnelId("target-funnel");
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go", new ArrayList<>(List.of(subscribe)));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("stepType", "SUBSCRIBE_TO_FUNNEL", "text", "ignored"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("non_message"))
+                .andExpect(jsonPath("$.rendered").value(""));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void previewUnknownStepIdReturns404() throws Exception {
         // Unknown stepId in an OWNED, valid funnel → 404 (AppException.notFound).
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);

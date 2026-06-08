@@ -38,5 +38,12 @@ public record FunnelStepDto(
         Object customFieldValue,
         // EMIT_EVENT (Phase 3 / Decision 4): the named event this step emits (slug ^[A-Za-z0-9_-]{1,64}$).
         // Required for EMIT_EVENT, null for every other step type. Validated in FunnelService (→ 422).
-        String eventName
+        String eventName,
+        // SUBSCRIBE_TO_FUNNEL (Phase 5 / composition): targetFunnelId = the project funnel to enroll the
+        // subscriber into; targetEntryStepId = optional entry step inside the target (null = start the
+        // target from its first step); endParentAfter = mark the parent execution completed right after
+        // enroll. Required/target checks live in FunnelService (→ 422, Task 2); null for other step types.
+        String targetFunnelId,
+        String targetEntryStepId,
+        boolean endParentAfter
 ) {}

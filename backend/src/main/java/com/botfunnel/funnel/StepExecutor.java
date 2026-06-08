@@ -109,6 +109,10 @@ public class StepExecutor {
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
             case MENU -> menu(step, execution, subscriber, bot);
             case EMIT_EVENT -> emitEvent(step, execution);
+            // TODO Task 3: enroll the subscriber into step.targetFunnelId (at parent.enrollDepth + 1,
+            // optionally entering at targetEntryStepId), then yield COMPLETE when step.isEndParentAfter()
+            // else CONTINUE. For now a no-op continue keeps the exhaustive switch + build green.
+            case SUBSCRIBE_TO_FUNNEL -> StepResult.cont();
         };
     }
 

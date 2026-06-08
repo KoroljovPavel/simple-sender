@@ -70,7 +70,8 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
     private FunnelStepDto emitStep(String eventName) {
         return new FunnelStepDto(
                 StepType.EMIT_EVENT, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, eventName);
+                null, null, null, null, null, null, null, null, null, eventName,
+                null, null, false);
     }
 
     private UpdateFunnelRequest reqWithStep(FunnelStepDto step) {

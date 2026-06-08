@@ -609,6 +609,9 @@ public class FunnelService {
             step.setCustomFieldKey(dto.customFieldKey());
             step.setCustomFieldValue(dto.customFieldValue());
             step.setEventName(blankToNull(dto.eventName()));
+            step.setTargetFunnelId(blankToNull(dto.targetFunnelId()));
+            step.setTargetEntryStepId(blankToNull(dto.targetEntryStepId()));
+            step.setEndParentAfter(dto.endParentAfter());
             steps.add(step);
         }
         return steps;
@@ -659,6 +662,12 @@ public class FunnelService {
                 case SET_CUSTOM_FIELD -> requireCustomFieldKey(step.getCustomFieldKey());
                 case MENU -> validateMenu(step, stepIds);
                 case EMIT_EVENT -> requireEventName(step.getEventName());
+                // TODO Task 2: validate the enroll target — targetFunnelId exists in the same project,
+                // targetEntryStepId (if set) is a real step in that target, no self-enroll, etc. (→ 422).
+                // Intentionally not added to the generic edge-pass below: targetEntryStepId points into a
+                // DIFFERENT funnel, so requireExistingTarget (which checks this funnel's stepIds) must not
+                // see it, or it would falsely raise funnel_broken_edge (Decision 5).
+                case SUBSCRIBE_TO_FUNNEL -> { }
             }
             // Graph-edge pass (every step type): the default outgoing edge and the optional timeout edge
             // must point at an existing step id, or be null (null next = next-in-list; null timeout
@@ -875,7 +884,10 @@ public class FunnelService {
                 step.getTagSlug(),
                 step.getCustomFieldKey(),
                 step.getCustomFieldValue(),
-                step.getEventName());
+                step.getEventName(),
+                step.getTargetFunnelId(),
+                step.getTargetEntryStepId(),
+                step.isEndParentAfter());
     }
 
     private static List<ButtonDto> toButtonDtos(List<Button> buttons) {

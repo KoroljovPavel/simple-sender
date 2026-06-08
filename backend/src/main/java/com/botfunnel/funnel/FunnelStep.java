@@ -61,6 +61,16 @@ public class FunnelStep {
     // Immutable String slug (^[A-Za-z0-9_-]{1,64}$); shares the `event` namespace with the API event.
     private String eventName;
 
+    // SUBSCRIBE_TO_FUNNEL (Phase 5 / composition): enroll the same subscriber into another funnel of the
+    // project. targetFunnelId = the funnel to enroll into; targetEntryStepId = optional entry step inside
+    // the target (null = start the target from its first step). Named targetEntryStepId (NOT targetStepId)
+    // to avoid colliding with Button.targetStepId (intra-funnel MENU target) and to keep it out of the
+    // generic edge-pass in FunnelService.validateSteps (Decision 5). endParentAfter (primitive boolean,
+    // default false): true = mark the parent execution completed immediately after enroll.
+    private String targetFunnelId;
+    private String targetEntryStepId;
+    private boolean endParentAfter;
+
     public FunnelStep() {
     }
 
@@ -77,7 +87,10 @@ public class FunnelStep {
      * ({@link Button}) are immutable records. A {@code null} list copies to {@code null} (not an empty
      * list). Storing a mutable collection in {@link #customFieldValue} would violate Decision 3 and is
      * disallowed by the validator. {@link #eventName} (Phase 3 / Decision 4) is an immutable String, so
-     * it copies by reference; a {@code null} eventName stays null.
+     * it copies by reference; a {@code null} eventName stays null. The SUBSCRIBE_TO_FUNNEL scalars (Phase 5
+     * / composition) — {@link #targetFunnelId} / {@link #targetEntryStepId} (immutable Strings) and
+     * {@link #endParentAfter} (primitive {@code boolean}) — are immutable value types and copy field-wise
+     * (Strings by reference, the boolean by value), preserving snapshot isolation (Decision 3).
      */
     public static FunnelStep copyOf(FunnelStep source) {
         if (source == null) {
@@ -97,6 +110,11 @@ public class FunnelStep {
         copy.customFieldValue = source.customFieldValue;
         // EMIT_EVENT target (Phase 3 / Decision 4): immutable String — reference copy, null stays null.
         copy.eventName = source.eventName;
+        // SUBSCRIBE_TO_FUNNEL target (Phase 5 / composition): immutable Strings — reference copy (null stays
+        // null); endParentAfter is a primitive boolean — value copy. Snapshot isolation preserved (Decision 3).
+        copy.targetFunnelId = source.targetFunnelId;
+        copy.targetEntryStepId = source.targetEntryStepId;
+        copy.endParentAfter = source.endParentAfter;
         // Graph scalars (immutable Strings/boxed) — reference copy.
         copy.id = source.id;
         copy.next = source.next;
@@ -143,6 +161,15 @@ public class FunnelStep {
 
     public String getEventName() { return eventName; }
     public void setEventName(String eventName) { this.eventName = eventName; }
+
+    public String getTargetFunnelId() { return targetFunnelId; }
+    public void setTargetFunnelId(String targetFunnelId) { this.targetFunnelId = targetFunnelId; }
+
+    public String getTargetEntryStepId() { return targetEntryStepId; }
+    public void setTargetEntryStepId(String targetEntryStepId) { this.targetEntryStepId = targetEntryStepId; }
+
+    public boolean isEndParentAfter() { return endParentAfter; }
+    public void setEndParentAfter(boolean endParentAfter) { this.endParentAfter = endParentAfter; }
 
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }

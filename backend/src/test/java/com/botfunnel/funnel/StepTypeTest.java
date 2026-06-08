@@ -16,4 +16,10 @@ class StepTypeTest {
         assertThat(StepType.valueOf("EMIT_EVENT")).isEqualTo(StepType.EMIT_EVENT);
         assertThat(StepType.EMIT_EVENT.name()).isEqualTo("EMIT_EVENT");
     }
+
+    @Test
+    void subscribeToFunnel_present() {
+        assertThat(StepType.valueOf("SUBSCRIBE_TO_FUNNEL")).isEqualTo(StepType.SUBSCRIBE_TO_FUNNEL);
+        assertThat(StepType.SUBSCRIBE_TO_FUNNEL.name()).isEqualTo("SUBSCRIBE_TO_FUNNEL");
+    }
 }

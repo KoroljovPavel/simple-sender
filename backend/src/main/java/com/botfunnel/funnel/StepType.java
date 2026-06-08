@@ -16,5 +16,8 @@ public enum StepType {
     MENU,
     // Phase 3 (Decision 4): emit a named event for the current subscriber from inside a running funnel.
     // Shares the `event` trigger namespace with the external POST /events; the target is `eventName`.
-    EMIT_EVENT
+    EMIT_EVENT,
+    // Phase 5 (composition): enroll the same subscriber into another funnel of the project. The target is
+    // the pair (targetFunnelId, targetEntryStepId) — null entry step means start the target from its first step.
+    SUBSCRIBE_TO_FUNNEL
 }

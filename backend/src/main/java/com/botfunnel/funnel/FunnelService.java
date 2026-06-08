@@ -94,6 +94,17 @@ public class FunnelService {
     // same for the author ("send /start to the bot"). Always 422, never 500 (it is a predictable state).
     static final String CODE_OWNER_NOT_LINKED = "funnel_owner_not_linked";
 
+    // Phase 5 (composition / Task 2): SUBSCRIBE_TO_FUNNEL target validation. Save-time checks (required /
+    // not_found / step_not_found) plus an activation-only check (inactive). not_found deliberately covers
+    // missing id, malformed ObjectId hex AND a target owned by another project — one code, no
+    // cross-tenant existence leak (anti-enumeration, fail-closed by projectId — Decision 6 / §14.4).
+    static final String CODE_SUBSCRIBE_TARGET_REQUIRED = "funnel_subscribe_target_required";
+    static final String CODE_SUBSCRIBE_TARGET_NOT_FOUND = "funnel_subscribe_target_not_found";
+    static final String CODE_SUBSCRIBE_TARGET_STEP_NOT_FOUND = "funnel_subscribe_target_step_not_found";
+    // Activation-only (NOT checked at save — a draft target may be referenced while building two linked
+    // funnels; Decision 6 chicken-and-egg): every SUBSCRIBE target must be active to activate the parent.
+    static final String CODE_SUBSCRIBE_TARGET_INACTIVE = "funnel_subscribe_target_inactive";
+
     // MENU button limits (Phase 2). Telegram allows long keyboards, but the editor caps at 8 (1/row) and
     // labels at 64 chars (also Telegram's practical button-text ceiling).
     private static final int MAX_BUTTONS = 8;
@@ -173,7 +184,7 @@ public class FunnelService {
         }
 
         List<FunnelStep> steps = toSteps(request.steps());
-        validateSteps(steps);
+        validateSteps(steps, projectId);
         funnel.setSteps(steps);
         funnel.setUpdatedAt(Instant.now(clock));
         // Editing an ACTIVE funnel's trigger can collide with another active funnel (Decision 3 allows
@@ -278,7 +289,12 @@ public class FunnelService {
             throw AppException.unprocessableEntity(CODE_NO_STEPS,
                     "Funnel must have at least one step to activate");
         }
-        validateSteps(steps);
+        validateSteps(steps, projectId);
+
+        // Activation-only gate (Decision 6): every SUBSCRIBE_TO_FUNNEL target must itself be active before
+        // the parent can go live. Not enforced at save (a draft target may be referenced while building two
+        // linked funnels). Re-resolves the target fail-closed by projectId, then requires status=active.
+        requireSubscribeTargetsActive(steps, projectId);
 
         // Service pre-check (first line of the Decision 8 defense): another ACTIVE funnel already owns
         // this trigger → 422. The partial-unique index is the second line for the parallel-activate race.
@@ -348,7 +364,7 @@ public class FunnelService {
             throw AppException.unprocessableEntity(CODE_NO_STEPS,
                     "Funnel must have at least one step to test-run");
         }
-        validateSteps(steps);
+        validateSteps(steps, projectId);
 
         funnelExecutionFactory.cancelExistingForPair(projectId, funnelId, owner.getId());
         funnelExecutionFactory.insertExecution(projectId, funnel, owner.getId(), bot.getTelegramBotId(), 0);
@@ -633,7 +649,11 @@ public class FunnelService {
     // enroll so an empty/invalid funnel fails fast with the SAME 422 codes as activate, instead of
     // silently completing). Package-private (raised from private — Decision 4) so testRun can reuse it
     // with NO logic/code change. All failures are 422 with a business code.
-    void validateSteps(List<FunnelStep> steps) {
+    //
+    // projectId scopes the SUBSCRIBE_TO_FUNNEL target lookup fail-closed (Task 2): the first validation
+    // branch that touches the DB (every other check is in-memory). The lookup stays confined to the
+    // SUBSCRIBE_TO_FUNNEL case — no other step type incurs a DB read.
+    void validateSteps(List<FunnelStep> steps, String projectId) {
         if (steps.size() > maxSteps) {
             throw AppException.unprocessableEntity(CODE_STEP_LIMIT,
                     "Funnel exceeds the maximum of " + maxSteps + " steps");
@@ -662,12 +682,13 @@ public class FunnelService {
                 case SET_CUSTOM_FIELD -> requireCustomFieldKey(step.getCustomFieldKey());
                 case MENU -> validateMenu(step, stepIds);
                 case EMIT_EVENT -> requireEventName(step.getEventName());
-                // TODO Task 2: validate the enroll target — targetFunnelId exists in the same project,
-                // targetEntryStepId (if set) is a real step in that target, no self-enroll, etc. (→ 422).
-                // Intentionally not added to the generic edge-pass below: targetEntryStepId points into a
+                // Validate the enroll target: targetFunnelId is required, must resolve to a funnel in THIS
+                // project (fail-closed), and targetEntryStepId (if set) must be a real step in that target.
+                // Deliberately NOT added to the generic edge-pass below: targetEntryStepId points into a
                 // DIFFERENT funnel, so requireExistingTarget (which checks this funnel's stepIds) must not
-                // see it, or it would falsely raise funnel_broken_edge (Decision 5).
-                case SUBSCRIBE_TO_FUNNEL -> { }
+                // see it, or it would falsely raise funnel_broken_edge (Decision 5). active-status of the
+                // target is NOT checked here — only at activation (requireSubscribeTargetsActive, Decision 6).
+                case SUBSCRIBE_TO_FUNNEL -> validateSubscribeTarget(step, projectId);
             }
             // Graph-edge pass (every step type): the default outgoing edge and the optional timeout edge
             // must point at an existing step id, or be null (null next = next-in-list; null timeout
@@ -712,6 +733,70 @@ public class FunnelService {
         if (callbackCount == 0) {
             throw invalidStep("MENU step requires at least one callback button");
         }
+    }
+
+    // SUBSCRIBE_TO_FUNNEL save-time validation (Task 2): the target funnel must be specified, must resolve
+    // (fail-closed by projectId) and, if a targetEntryStepId is given, that id must be a real step in the
+    // resolved target. The target's active-status is NOT checked here (Decision 6 — only at activation).
+    private void validateSubscribeTarget(FunnelStep step, String projectId) {
+        Funnel target = resolveSubscribeTarget(step.getTargetFunnelId(), projectId);
+        String entryStepId = step.getTargetEntryStepId();
+        if (entryStepId != null) {
+            List<FunnelStep> targetSteps = target.getSteps();
+            boolean exists = targetSteps != null
+                    && targetSteps.stream().anyMatch(s -> entryStepId.equals(s.getId()));
+            if (!exists) {
+                throw AppException.unprocessableEntity(CODE_SUBSCRIBE_TARGET_STEP_NOT_FOUND,
+                        "SUBSCRIBE_TO_FUNNEL targetEntryStepId is not a step of the target funnel");
+            }
+        }
+    }
+
+    // Activation-only gate (Decision 6): every SUBSCRIBE_TO_FUNNEL target must be active before the parent
+    // can activate. Re-resolves each target fail-closed by projectId (same lookup as save), then requires
+    // status=active. Fails on the FIRST non-active target. Non-SUBSCRIBE steps are skipped (no DB read).
+    private void requireSubscribeTargetsActive(List<FunnelStep> steps, String projectId) {
+        for (FunnelStep step : steps) {
+            if (step.getStepType() != StepType.SUBSCRIBE_TO_FUNNEL) {
+                continue;
+            }
+            Funnel target = resolveSubscribeTarget(step.getTargetFunnelId(), projectId);
+            if (target.getStatus() != FunnelStatus.active) {
+                throw AppException.unprocessableEntity(CODE_SUBSCRIBE_TARGET_INACTIVE,
+                        "SUBSCRIBE_TO_FUNNEL target funnel must be active to activate this funnel");
+            }
+        }
+    }
+
+    // Shared fail-closed resolve for a SUBSCRIBE target, reused by save (validateSubscribeTarget) and
+    // activation (requireSubscribeTargetsActive). Returns the target Funnel or throws 422:
+    //   - blank/null targetFunnelId            → funnel_subscribe_target_required
+    //   - malformed ObjectId / missing / FOREIGN project → funnel_subscribe_target_not_found
+    // The projectId scope check (target.getProjectId().equals(projectId)) is the IDOR / cross-tenant guard:
+    // FunnelRepository.findById is NOT project-scoped at the DB level, so it is enforced here (mirrors
+    // requireFunnel). A malformed id makes findById throw IllegalArgumentException — caught and collapsed
+    // into the SAME not_found code so a probe cannot distinguish missing vs malformed vs foreign (no leak).
+    // No user-supplied id is logged or echoed in a way that would aid cross-tenant enumeration.
+    private Funnel resolveSubscribeTarget(String targetFunnelId, String projectId) {
+        if (targetFunnelId == null || targetFunnelId.isBlank()) {
+            throw AppException.unprocessableEntity(CODE_SUBSCRIBE_TARGET_REQUIRED,
+                    "SUBSCRIBE_TO_FUNNEL step requires a targetFunnelId");
+        }
+        Optional<Funnel> found;
+        try {
+            found = funnelRepository.findById(targetFunnelId);
+        } catch (IllegalArgumentException e) {
+            // Malformed ObjectId hex → same not_found as missing/foreign (anti-enumeration), never 500.
+            throw subscribeTargetNotFound();
+        }
+        return found
+                .filter(f -> projectId.equals(f.getProjectId()))
+                .orElseThrow(FunnelService::subscribeTargetNotFound);
+    }
+
+    private static AppException subscribeTargetNotFound() {
+        return AppException.unprocessableEntity(CODE_SUBSCRIBE_TARGET_NOT_FOUND,
+                "SUBSCRIBE_TO_FUNNEL target funnel not found in this project");
     }
 
     // A non-null edge target must point at an existing step id. null = default (next-in-list / End /

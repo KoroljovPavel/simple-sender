@@ -71,9 +71,22 @@ class FunnelExecutionFactory {
     // pinned telegramBotId (Decision 7), stamping the explicit enrollDepth (Phase 3 / Decision 6 — the
     // Redis-independent depth backstop). on_start fire() passes depth 0; the dispatcher passes originDepth.
     // Uses MongoTemplate.insert so a unique-index collision surfaces as DuplicateKeyException (the
-    // re-enter guard for allowReEnter=false).
+    // re-enter guard for allowReEnter=false). Thin delegate to insertExecutionAt(..., null) — the
+    // null start-step keeps the historical "start at step 0" behaviour for the 5 existing callsites.
     void insertExecution(String projectId, Funnel funnel, String subscriberId, Long telegramBotId,
                          int enrollDepth) {
+        insertExecutionAt(projectId, funnel, subscriberId, telegramBotId, enrollDepth, null);
+    }
+
+    // Phase 5 (composition) overload: start the child execution at an arbitrary step (startStepId) instead
+    // of the hard step 0. Used by FunnelEventService.enrollSpecificFunnel so a SUBSCRIBE_TO_FUNNEL step can
+    // enter the target at its targetEntryStepId. When startStepId is null OR does not resolve to a step in
+    // the target's snapshot, the cursor falls back to step 0 (the existing insertExecution behaviour) — a
+    // deleted/dangling entry step degrades gracefully instead of stranding the child on a broken cursor.
+    // Body is otherwise identical to the legacy insertExecution: MongoTemplate.insert (so a re-enter
+    // collision surfaces as DuplicateKeyException) and the same greppable LOG_EXECUTION_STARTED marker.
+    void insertExecutionAt(String projectId, Funnel funnel, String subscriberId, Long telegramBotId,
+                           int enrollDepth, String startStepId) {
         Instant now = Instant.now(clock);
         FunnelExecution execution = new FunnelExecution();
         execution.setProjectId(projectId);
@@ -87,15 +100,29 @@ class FunnelExecutionFactory {
         execution.setEnrollDepth(enrollDepth);
         List<FunnelStep> snapshot = deepCopySteps(funnel.getSteps());
         execution.setStepsSnapshot(snapshot);
-        // Seed the graph cursor (Decision 2/7) to the first step's id so the engine navigates by
-        // currentStepId from the start. null-safe for an empty snapshot. currentStepIndex stays 0 for
-        // drain compatibility.
-        execution.setCurrentStepId(snapshot.isEmpty() ? null : snapshot.get(0).getId());
+        // Seed the graph cursor (Decision 2/7). Prefer the requested startStepId when it resolves to a step
+        // in the snapshot; otherwise fall back to the first step's id (or null for an empty snapshot) —
+        // exactly the legacy "step 0" behaviour. currentStepIndex stays 0 for drain compatibility.
+        execution.setCurrentStepId(resolveStartCursor(snapshot, startStepId));
         execution.setCreatedAt(now);
         execution.setUpdatedAt(now);
         mongoTemplate.insert(execution);
         log.info("{} funnelId={} subscriberId={} executionId={} enrollDepth={}", LOG_EXECUTION_STARTED,
                 funnel.getId(), subscriberId, execution.getId(), enrollDepth);
+    }
+
+    // Resolve the starting cursor: the requested startStepId iff it matches a step id in the snapshot,
+    // else the first step's id (null for an empty snapshot). A null startStepId short-circuits to the
+    // step-0 fallback without scanning.
+    private static String resolveStartCursor(List<FunnelStep> snapshot, String startStepId) {
+        if (startStepId != null) {
+            for (FunnelStep step : snapshot) {
+                if (startStepId.equals(step.getId())) {
+                    return startStepId;
+                }
+            }
+        }
+        return snapshot.isEmpty() ? null : snapshot.get(0).getId();
     }
 
     // Deep copy of the funnel's steps via FunnelStep.copyOf (Decision 3 — snapshot isolation from later

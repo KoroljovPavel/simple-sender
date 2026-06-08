@@ -136,7 +136,92 @@ class FunnelTestRunSendIT extends AbstractIntegrationTest {
         assertThat(body).contains("hello from test-run");
     }
 
+    @Test
+    void testRunParentWithSubscribeStepEnrollsTargetAtChildDepth() throws InterruptedException {
+        // A depth-0 root test-run of a parent funnel whose ONLY step is SUBSCRIBE_TO_FUNNEL(target, end=true):
+        // the test-run enrolls the owner into the parent (depth 0); the first sweep runs the SUBSCRIBE step,
+        // which enrolls the SAME owner into the active target at child depth 1; the child-send is observed on
+        // the next sweep (the test-run HTTP response itself only confirms the parent enroll).
+        seedConnectedBot();
+        Subscriber owner = seedActiveOwnerSubscriber();
+        Funnel target = seedActiveTargetFunnel("child step text");
+        Funnel parent = seedDraftSubscribeFunnel(target.getId());
+
+        funnelService.testRun(USER_ID, projectId, parent.getId());
+
+        // The test-run created a fresh depth-0 parent execution, pinned to the bot.
+        FunnelExecution parentExec = onlyExecution(parent.getId(), owner.getId());
+        assertThat(parentExec.getEnrollDepth()).isZero();
+
+        // First sweep: the parent's SUBSCRIBE step enrolls the target (no parent send — SUBSCRIBE end=true).
+        engine.sweep();
+        assertThat(mongoTemplate.findById(parentExec.getId(), FunnelExecution.class).getStatus())
+                .isEqualTo(ExecutionStatus.completed);
+
+        FunnelExecution childExec = onlyExecution(target.getId(), owner.getId());
+        assertThat(childExec.getEnrollDepth()).isEqualTo(1);                  // parent 0 + 1
+        assertThat(childExec.getTelegramBotId()).isEqualTo(TELEGRAM_BOT_ID);  // inherited from parent
+
+        // Second sweep: the child actually sends (request-count delta proves a real Telegram send).
+        enqueueOk(1);
+        engine.sweep();
+        assertThat(sentCount()).isEqualTo(1);
+        assertThat(mongoTemplate.findById(childExec.getId(), FunnelExecution.class).getStatus())
+                .isEqualTo(ExecutionStatus.completed);
+
+        // Drain the recorded request from the JVM-singleton MockWebServer so it does not bleed into
+        // another test's takeRequest() (the server's request log is cumulative across the test class).
+        TELEGRAM.takeRequest();
+    }
+
     // ─── helpers ───────────────────────────────────────────────────────────────
+
+    private FunnelExecution onlyExecution(String funnelId, String subscriberId) {
+        List<FunnelExecution> execs = mongoTemplate.find(
+                org.springframework.data.mongodb.core.query.Query.query(
+                        org.springframework.data.mongodb.core.query.Criteria.where("funnelId").is(funnelId)
+                                .and("subscriberId").is(subscriberId)),
+                FunnelExecution.class);
+        assertThat(execs).hasSize(1);
+        return execs.get(0);
+    }
+
+    private Funnel seedActiveTargetFunnel(String text) {
+        FunnelStep step = new FunnelStep();
+        step.setStepType(StepType.SEND_MESSAGE);
+        step.setId("c1");
+        step.setText(text);
+        step.setOrder(0);
+        Funnel f = new Funnel();
+        f.setProjectId(projectId);
+        f.setName("Target");
+        f.setStatus(FunnelStatus.active);
+        f.setTriggerType(FunnelService.TRIGGER_ON_START);
+        f.setTriggerValue("target-trigger");
+        f.setSteps(new ArrayList<>(List.of(step)));
+        f.setCreatedAt(Instant.now());
+        f.setUpdatedAt(Instant.now());
+        return funnelRepository.save(f);
+    }
+
+    private Funnel seedDraftSubscribeFunnel(String targetFunnelId) {
+        FunnelStep step = new FunnelStep();
+        step.setStepType(StepType.SUBSCRIBE_TO_FUNNEL);
+        step.setId("p1");
+        step.setTargetFunnelId(targetFunnelId);
+        step.setEndParentAfter(true);
+        step.setOrder(0);
+        Funnel f = new Funnel();
+        f.setProjectId(projectId);
+        f.setName("Parent");
+        f.setStatus(FunnelStatus.draft);
+        f.setTriggerType(FunnelService.TRIGGER_ON_START);
+        f.setTriggerValue("");
+        f.setSteps(new ArrayList<>(List.of(step)));
+        f.setCreatedAt(Instant.now());
+        f.setUpdatedAt(Instant.now());
+        return funnelRepository.save(f);
+    }
 
     private void enqueueOk(int count) {
         for (int i = 0; i < count; i++) {

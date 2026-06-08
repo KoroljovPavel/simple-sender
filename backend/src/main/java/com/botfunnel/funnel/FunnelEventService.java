@@ -81,6 +81,19 @@ public class FunnelEventService {
     static final String LOG_AUTO_ENROLL_RATE_REDIS_FAIL_OPEN =
             "FUNNEL_DISPATCH_AUTO_ENROLL_RATE_REDIS_FAIL_OPEN";
 
+    // Phase 5 (composition) — SUBSCRIBE_TO_FUNNEL enroll markers. One distinct, greppable id per skip
+    // reason so an operator can tell apart a missing/foreign/inactive target, a re-enter no-op, an
+    // entry-step fallback, the two reused backstops (depth-cap / rate-limit), and a swallowed fault.
+    // Ids/codes only (Decision 16) — never the target name or any subscriber field.
+    static final String LOG_ENROLL_SKIP_TARGET_MISSING = "FUNNEL_ENROLL_SKIP_TARGET_MISSING";
+    static final String LOG_ENROLL_SKIP_TARGET_WRONG_PROJECT = "FUNNEL_ENROLL_SKIP_TARGET_WRONG_PROJECT";
+    static final String LOG_ENROLL_SKIP_TARGET_INACTIVE = "FUNNEL_ENROLL_SKIP_TARGET_INACTIVE";
+    static final String LOG_ENROLL_DROP_DEPTH_CAP = "FUNNEL_ENROLL_DROP_DEPTH_CAP_EXCEEDED";
+    static final String LOG_ENROLL_DROP_VOLUME = "FUNNEL_ENROLL_DROP_AUTO_ENROLL_RATE_EXCEEDED";
+    static final String LOG_ENROLL_REENTER_IGNORED = "FUNNEL_ENROLL_REENTER_IGNORED";
+    static final String LOG_ENROLL_ENTRY_STEP_FALLBACK = "FUNNEL_ENROLL_ENTRY_STEP_FALLBACK";
+    static final String LOG_ENROLL_ERROR = "FUNNEL_ENROLL_ERROR";
+
     private static final String RATE_KEY_PREFIX = "bf:rate:auto-enroll:";
     private static final Duration RATE_TTL = Duration.ofMinutes(1);
 
@@ -185,6 +198,129 @@ public class FunnelEventService {
             // the webhook pipeline or surface a 5xx to an external caller.
             log.warn("{} projectId={} error={}", LOG_DISPATCH_ERROR, projectId, t.getClass().getSimpleName());
         }
+    }
+
+    /**
+     * Phase 5 (composition) — non-matching enroll for a {@code SUBSCRIBE_TO_FUNNEL} step. Unlike
+     * {@link #dispatchForSubscriber} this skips trigger matching and fan-out (the target is named
+     * explicitly), but it reuses the SAME per-subscriber backstops (Decision 6) and re-enter semantics so
+     * one dispatcher still owns the runaway/DoS limits. NEVER throws outward (error-isolated) — an enroll
+     * fault must not fail the parent execution; the engine treats the step as a no-op continue/complete.
+     *
+     * <p>Order mirrors {@code dispatchForSubscriber}: <b>(a)</b> depth cap → <b>(b)</b> auto-enroll
+     * rate-limit → <b>(c)</b> resolve the target and FAIL CLOSED on {@code projectId} (the main IDOR
+     * guard: {@link FunnelRepository#findById} is NOT project-scoped) + active-status check → <b>(d)</b>
+     * inherited {@code telegramBotId} (no fresh CONNECTED-bot lookup, Decision 9) → <b>(e)</b> entry-step
+     * fallback (handled inside the factory) → <b>(f)</b> re-enter policy. Every skip logs a distinct
+     * greppable id (ids/codes only, Decision 16) and is a benign no-op.
+     *
+     * @param projectId         the parent execution's project (trusted/pinned by the engine)
+     * @param subscriberId      the subscriber to enroll into the target
+     * @param targetFunnelId    the funnel to enroll into (may be null/malformed → skip)
+     * @param targetEntryStepId optional entry step inside the target (null / unresolved → start at step 0)
+     * @param originDepth       {@code parent.enrollDepth + 1} — the child's depth and the cap/rate input
+     * @param telegramBotId     inherited from the parent execution (Decision 9 — one CONNECTED bot/project)
+     */
+    public void enrollSpecificFunnel(String projectId, String subscriberId, String targetFunnelId,
+                                     String targetEntryStepId, int originDepth, Long telegramBotId) {
+        try {
+            // (a) Depth cap — Redis-independent, gated up front (mirror dispatchForSubscriber). Holds even
+            // when Redis is down. Same maxEnrollDepth — reused, not a forked second limit.
+            if (originDepth > maxEnrollDepth) {
+                log.warn("{} projectId={} originDepth={} cap={}", LOG_ENROLL_DROP_DEPTH_CAP,
+                        projectId, originDepth, maxEnrollDepth);
+                return;
+            }
+
+            // (b) Volume — per-subscriber auto-enroll rate-limit. A SUBSCRIBE_TO_FUNNEL enroll is always an
+            // auto child (originDepth = parent + 1 >= 1), so it always counts (unlike depth==0 roots). Same
+            // private autoEnrollRateLimitExceeded / Redis key — reused, not duplicated.
+            if (autoEnrollRateLimitExceeded(subscriberId)) {
+                log.warn("{} projectId={} subscriberId={} originDepth={}", LOG_ENROLL_DROP_VOLUME,
+                        projectId, subscriberId, originDepth);
+                return;
+            }
+
+            // (c) Resolve the target by id (NOT project-scoped — MongoRepository.findById) then FAIL CLOSED
+            // on projectId before doing anything else. A null/malformed targetFunnelId yields an empty
+            // Optional (or throws, caught below) → skip. This explicit projectId check is the main IDOR
+            // guard against a cross-project funnel reference smuggled in via the step.
+            Funnel target = targetFunnelId == null
+                    ? null
+                    : funnelRepository.findById(targetFunnelId).orElse(null);
+            if (target == null) {
+                log.warn("{} projectId={}", LOG_ENROLL_SKIP_TARGET_MISSING, projectId);
+                return;
+            }
+            if (!projectId.equals(target.getProjectId())) {
+                // Fail-closed: the referenced funnel belongs to another project. Log only the CALLER's
+                // projectId (never the target's, which is foreign data) — anti-IDOR + anti-log-leak.
+                log.warn("{} projectId={} targetFunnelId={}", LOG_ENROLL_SKIP_TARGET_WRONG_PROJECT,
+                        projectId, targetFunnelId);
+                return;
+            }
+            if (target.getStatus() != FunnelStatus.active) {
+                // draft / paused / (effectively) deleted target → skip. The status is an enum code, safe to log.
+                log.warn("{} projectId={} targetFunnelId={} status={}", LOG_ENROLL_SKIP_TARGET_INACTIVE,
+                        projectId, targetFunnelId, target.getStatus());
+                return;
+            }
+
+            // (e) Entry-step fallback observability: if a non-null entry step does not resolve in the
+            // target's steps, the factory silently falls back to step 0 — emit a greppable WARN here so the
+            // fallback is visible (the factory itself stays log-quiet on the start-cursor choice).
+            if (targetEntryStepId != null && !stepExists(target, targetEntryStepId)) {
+                log.warn("{} projectId={} targetFunnelId={} targetEntryStepId={}",
+                        LOG_ENROLL_ENTRY_STEP_FALLBACK, projectId, targetFunnelId, targetEntryStepId);
+            }
+
+            // (d)+(f) Insert at the entry step, inheriting the parent's telegramBotId, honouring re-enter.
+            insertTargetExecution(projectId, target, subscriberId, telegramBotId, originDepth, targetEntryStepId);
+        } catch (Throwable t) {
+            // Decision 12: enrollSpecificFunnel never throws outward — an enroll fault must not fail the
+            // parent execution. Log a greppable WARN (exception class only, no message/PII) and swallow.
+            log.warn("{} projectId={} error={}", LOG_ENROLL_ERROR, projectId, t.getClass().getSimpleName());
+        }
+    }
+
+    // Insert the target execution at targetEntryStepId via the factory, honouring the target's re-enter
+    // policy (same pattern as insertOneFunnel, but starting at the entry step instead of step 0):
+    // allowReEnter=true → cancel-then-insert (restart from the entry step); allowReEnter=false → insert in
+    // a try and swallow a DuplicateKeyException (the re-enter guard) as a benign no-op + greppable WARN.
+    // Self-target A→A needs no special branch: it hits the same (funnelId, subscriberId) re-enter guard.
+    private void insertTargetExecution(String projectId, Funnel target, String subscriberId,
+                                       Long telegramBotId, int originDepth, String targetEntryStepId) {
+        if (target.isAllowReEnter()) {
+            executionFactory.cancelExistingForPair(projectId, target.getId(), subscriberId);
+            executionFactory.insertExecutionAt(projectId, target, subscriberId, telegramBotId,
+                    originDepth, targetEntryStepId);
+            return;
+        }
+        try {
+            executionFactory.insertExecutionAt(projectId, target, subscriberId, telegramBotId,
+                    originDepth, targetEntryStepId);
+        } catch (DuplicateKeyException dup) {
+            // Re-enter disabled and a running|waiting execution already exists for this (funnelId,
+            // subscriberId) — benign no-op (the subscriber is already in the target). Distinct id so this
+            // re-enter no-op is greppable apart from the dispatch-path one.
+            log.info("{} targetFunnelId={} subscriberId={}", LOG_ENROLL_REENTER_IGNORED,
+                    target.getId(), subscriberId);
+        }
+    }
+
+    // True iff the target funnel carries a step with the given id (entry-step resolution probe). Mirrors
+    // the factory's own resolveStartCursor scan so the WARN and the actual fallback agree.
+    private static boolean stepExists(Funnel funnel, String stepId) {
+        List<FunnelStep> steps = funnel.getSteps();
+        if (steps == null) {
+            return false;
+        }
+        for (FunnelStep step : steps) {
+            if (stepId.equals(step.getId())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // Insert one execution via the factory, honouring the funnel's re-enter policy. Returns true iff a

@@ -109,11 +109,25 @@ public class StepExecutor {
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
             case MENU -> menu(step, execution, subscriber, bot);
             case EMIT_EVENT -> emitEvent(step, execution);
-            // TODO Task 3: enroll the subscriber into step.targetFunnelId (at parent.enrollDepth + 1,
-            // optionally entering at targetEntryStepId), then yield COMPLETE when step.isEndParentAfter()
-            // else CONTINUE. For now a no-op continue keeps the exhaustive switch + build green.
-            case SUBSCRIBE_TO_FUNNEL -> StepResult.cont();
+            case SUBSCRIBE_TO_FUNNEL -> subscribeToFunnel(step, execution);
         };
+    }
+
+    // SUBSCRIBE_TO_FUNNEL (Phase 5 / composition): enroll the SAME subscriber into step.targetFunnelId as a
+    // fresh execution (fire-and-forget — the next sweep picks it up), then either end the parent (COMPLETE
+    // when endParentAfter) or let it continue in parallel (CONTINUE). The enroll runs at child depth
+    // (parent.enrollDepth + 1) and INHERITS the parent's telegramBotId (Decision 9 — no fresh bot lookup).
+    // The enroll is a side-effect BEFORE the engine's claim-conditional advance/complete (like EMIT_EVENT),
+    // so a crash-replay re-enrolls — harmless, the re-enter guard makes the duplicate a no-op (at-most-once
+    // effective). enrollSpecificFunnel is error-isolated and owns the depth-cap + rate-limit backstops + the
+    // fail-closed projectId resolve — no second try/catch here (it would mask a genuine engine fault). No
+    // FunnelExecutionFactory/Engine injection: the enroll rides the existing StepExecutor → FunnelEventService
+    // edge (Decision 2, anti-bean-cycle).
+    private StepResult subscribeToFunnel(FunnelStep step, FunnelExecution execution) {
+        funnelEventService.enrollSpecificFunnel(execution.getProjectId(), execution.getSubscriberId(),
+                step.getTargetFunnelId(), step.getTargetEntryStepId(), execution.getEnrollDepth() + 1,
+                execution.getTelegramBotId());
+        return step.isEndParentAfter() ? StepResult.complete() : StepResult.cont();
     }
 
     // EMIT_EVENT (Phase 3 / Decision 4): synchronously dispatch the step's event (the shared `event`
@@ -329,8 +343,12 @@ public class StepExecutor {
         };
     }
 
-    /** Outcome of one step, telling the runner how to advance the execution. */
-    public enum Outcome { CONTINUE, DELAY, CANCEL, FAIL, WAIT_FOR_REPLY }
+    /**
+     * Outcome of one step, telling the runner how to advance the execution. {@link #COMPLETE} (Phase 5 /
+     * composition) is a terminal success: the runner marks the execution {@code completed} without
+     * executing any further step — used by a {@code SUBSCRIBE_TO_FUNNEL} step with {@code endParentAfter}.
+     */
+    public enum Outcome { CONTINUE, DELAY, CANCEL, FAIL, WAIT_FOR_REPLY, COMPLETE }
 
     /**
      * Result of executing one step. {@code delay} is non-null only for {@link Outcome#DELAY};
@@ -342,6 +360,12 @@ public class StepExecutor {
     public record StepResult(Outcome outcome, Duration delay, String reasonCode, Instant nextRunAt) {
         public static StepResult cont() {
             return new StepResult(Outcome.CONTINUE, null, null, null);
+        }
+
+        // Terminal success (SUBSCRIBE_TO_FUNNEL with endParentAfter): the runner completes the execution
+        // and runs no further steps. Mirror of cont() — all non-outcome fields null.
+        public static StepResult complete() {
+            return new StepResult(Outcome.COMPLETE, null, null, null);
         }
 
         public static StepResult delay(Duration delay) {

@@ -384,6 +384,32 @@ class FunnelStepExecutorTest {
                 FunnelEventService.TRIGGER_EVENT, "ping", 3);
     }
 
+    // ─── SUBSCRIBE_TO_FUNNEL (Phase 5 / composition) ─────────────────────────
+
+    @Test
+    void subscribeStepEndParentFalseContinuesAndEnrolls() {
+        // endParentAfter=false → CONTINUE (parent runs on in parallel); the enroll is dispatched at child
+        // depth (parent enrollDepth 0 + 1 = 1) and inherits the parent execution's telegramBotId.
+        StepExecutor.StepResult result = executor.execute(
+                subscribeStep("target-f", "entry-s", false), execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        verify(funnelEventService).enrollSpecificFunnel(PROJECT_ID, SUBSCRIBER_ID,
+                "target-f", "entry-s", 1, TELEGRAM_BOT_ID);
+    }
+
+    @Test
+    void subscribeStepEndParentTrueCompletesAndEnrolls() {
+        // endParentAfter=true → COMPLETE (parent ends after the enroll); same enroll call (child depth +
+        // inherited bot). Here the parent sits at depth 2 → child enroll depth 3.
+        StepExecutor.StepResult result = executor.execute(
+                subscribeStep("target-f", null, true), execution(0, 2), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.COMPLETE);
+        verify(funnelEventService).enrollSpecificFunnel(PROJECT_ID, SUBSCRIBER_ID,
+                "target-f", null, 3, TELEGRAM_BOT_ID);
+    }
+
     @Test
     void removeTagDelegatesToSubscriberService() {
         StepExecutor.StepResult result = executor.execute(
@@ -472,6 +498,16 @@ class FunnelStepExecutorTest {
         FunnelStep s = new FunnelStep();
         s.setStepType(StepType.EMIT_EVENT);
         s.setEventName(eventName);
+        return s;
+    }
+
+    private static FunnelStep subscribeStep(String targetFunnelId, String targetEntryStepId,
+                                            boolean endParentAfter) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.SUBSCRIBE_TO_FUNNEL);
+        s.setTargetFunnelId(targetFunnelId);
+        s.setTargetEntryStepId(targetEntryStepId);
+        s.setEndParentAfter(endParentAfter);
         return s;
     }
 

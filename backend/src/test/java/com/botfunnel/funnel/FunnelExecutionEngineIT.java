@@ -88,6 +88,8 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     @Autowired MongoTemplate mongoTemplate;
     @Autowired BotRepository botRepository;
     @Autowired SubscriberRepository subscriberRepository;
+    @Autowired FunnelRepository funnelRepository;
+    @Autowired org.springframework.data.redis.core.StringRedisTemplate redisTemplate;
     @Autowired TokenEncryptor tokenEncryptor;
     @Autowired StorageProvider storageProvider;
 
@@ -106,6 +108,13 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         mongoTemplate.remove(new org.springframework.data.mongodb.core.query.Query(), Event.class);
         subscriberRepository.deleteAll();
         botRepository.deleteAll();
+        funnelRepository.deleteAll();
+        // Clear the per-subscriber auto-enroll rate-limit keys so a prior test's enrolls do not leak into
+        // this one (the rate-limit IT seeds its own counter explicitly).
+        java.util.Set<String> rateKeys = redisTemplate.keys("bf:rate:auto-enroll:*");
+        if (rateKeys != null && !rateKeys.isEmpty()) {
+            redisTemplate.delete(rateKeys);
+        }
 
         projectId = "proj-" + seq.incrementAndGet();
         botId = seedConnectedBot();
@@ -919,6 +928,313 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         assertThat(sweepJob.getScheduleExpression()).isEqualTo("PT30S");
     }
 
+    // ─── Phase 5: SUBSCRIBE_TO_FUNNEL composition (enroll path) ─────────────────
+
+    @Test
+    void subscribeEnrollsTargetWithEntryStepAndInheritedBot() {
+        String subId = seedActiveSubscriber();
+        // Target has two steps; we enter at the SECOND (entry-2), proving the entry-step is honoured.
+        Funnel target = seedActiveTargetFunnel(
+                sendMessageStep("entry-1", "t1", null),
+                sendMessageStep("entry-2", "t2", null));
+        // Parent: SUBSCRIBE(target, entry=entry-2, end=true) at depth 0.
+        FunnelStep sub = subscribeStep("p1", target.getId(), "entry-2", true);
+        String parentId = seedGraphExecution(subId, BASE, sub);
+
+        engine.sweep();
+
+        FunnelExecution child = childExecution(target.getId(), subId);
+        assertThat(child).isNotNull();
+        assertThat(child.getCurrentStepId()).isEqualTo("entry-2");
+        assertThat(child.getEnrollDepth()).isEqualTo(1);                 // parent 0 + 1
+        assertThat(child.getTelegramBotId()).isEqualTo(TELEGRAM_BOT_ID); // inherited from the parent
+        assertThat(child.getSubscriberId()).isEqualTo(subId);
+        assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+    }
+
+    @Test
+    void subscribeEndParentTrueCompletesParentNoFurtherSteps() {
+        String subId = seedActiveSubscriber();
+        Funnel target = seedActiveTargetFunnel(sendMessageStep("t1", "target", null));
+        // Parent: SUBSCRIBE(end=true) --next--> after (a send that must NOT run because the parent completed).
+        FunnelStep sub = subscribeStep("p1", target.getId(), null, true);
+        sub.setNext("after");
+        FunnelStep after = sendMessageStep("after", "should-not-send", null);
+        String parentId = seedGraphExecution(subId, BASE, sub, after);
+
+        engine.sweep();
+
+        assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        // The parent had no send step before SUBSCRIBE, and 'after' must be skipped → zero parent sends.
+        assertThat(sentCount()).isZero();
+        assertThat(childExecution(target.getId(), subId)).isNotNull();
+    }
+
+    @Test
+    void subscribeEndParentFalseParentContinuesParallel() {
+        String subId = seedActiveSubscriber();
+        Funnel target = seedActiveTargetFunnel(sendMessageStep("t1", "child-send", null));
+        // Parent: SUBSCRIBE(end=false) --next--> after (a parent send that MUST run in the same tick).
+        FunnelStep sub = subscribeStep("p1", target.getId(), null, false);
+        sub.setNext("after");
+        FunnelStep after = sendMessageStep("after", "parent-continues", null);
+        String parentId = seedGraphExecution(subId, BASE, sub, after);
+        enqueueOk(2); // parent 'after' send (this tick) + child send (next tick)
+
+        engine.sweep(); // parent enrolls child, continues to 'after', completes
+        assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(1); // only the parent 'after' send so far
+
+        FunnelExecution child = childExecution(target.getId(), subId);
+        assertThat(child).isNotNull();
+        assertThat(child.getStatus()).isEqualTo(ExecutionStatus.running);
+
+        engine.sweep(); // child progresses on the next sweep
+        assertThat(reload(child.getId()).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(2); // parent + child sends → both funnels progressed
+    }
+
+    @Test
+    void subscribeReturnToMenuLandsOnEntryStep() {
+        // The author's real case: funnel B calls sub-funnel A and returns the subscriber to A's menu (M).
+        String subId = seedActiveSubscriber();
+        Funnel target = seedActiveTargetFunnel(
+                sendMessageStep("intro", "A intro", null),
+                menu("M", "A menu", null, null, null, callbackButton("Yes", "intro")));
+        FunnelStep sub = subscribeStep("p1", target.getId(), "M", true); // enter A at its menu M
+        String parentId = seedGraphExecution(subId, BASE, sub);
+        enqueueOk(1); // child menu send on the next sweep
+
+        engine.sweep(); // parent enrolls child at M, completes
+        assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        FunnelExecution child = childExecution(target.getId(), subId);
+        assertThat(child).isNotNull();
+        assertThat(child.getCurrentStepId()).isEqualTo("M");
+
+        engine.sweep(); // child sends the menu and parks
+        FunnelExecution parked = reload(child.getId());
+        assertThat(parked.getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+        assertThat(parked.getCurrentStepId()).isEqualTo("M");
+    }
+
+    @Test
+    void subscribeDepthCapSkipsAndParentSurvives() {
+        Logger eventLogger = (Logger) LoggerFactory.getLogger(FunnelEventService.class);
+        ListAppender<ILoggingEvent> appender = attach(eventLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            Funnel target = seedActiveTargetFunnel(sendMessageStep("t1", "x", null));
+            // Parent at enrollDepth = max (10) → child depth 11 > cap → enroll skipped.
+            FunnelStep sub = subscribeStep("p1", target.getId(), null, false);
+            String parentId = seedGraphExecutionAtDepth(subId, BASE, 10, sub);
+
+            engine.sweep();
+
+            assertThat(childExecution(target.getId(), subId)).isNull(); // no child enrolled
+            assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed); // parent NOT failed
+            assertThat(warn(appender)).anyMatch(m -> m.contains(FunnelEventService.LOG_ENROLL_DROP_DEPTH_CAP));
+        } finally {
+            detach(eventLogger, appender);
+        }
+    }
+
+    @Test
+    void subscribeRateLimitBackstopSkipsAndParentSurvives() {
+        Logger eventLogger = (Logger) LoggerFactory.getLogger(FunnelEventService.class);
+        ListAppender<ILoggingEvent> appender = attach(eventLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            Funnel target = seedActiveTargetFunnel(sendMessageStep("t1", "x", null));
+            // Pre-seed the auto-enroll counter past the per-minute limit (default 20) for this subscriber so
+            // the next enroll trips the volume backstop (the SECOND backstop, separate from depth-cap).
+            seedRateLimitExhausted(subId);
+            FunnelStep sub = subscribeStep("p1", target.getId(), null, false);
+            String parentId = seedGraphExecution(subId, BASE, sub);
+
+            engine.sweep();
+
+            assertThat(childExecution(target.getId(), subId)).isNull();
+            assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed); // parent NOT failed
+            assertThat(warn(appender)).anyMatch(m -> m.contains(FunnelEventService.LOG_ENROLL_DROP_VOLUME));
+        } finally {
+            detach(eventLogger, appender);
+        }
+    }
+
+    @Test
+    void subscribeTargetDraftSkipsGracefully() {
+        Logger eventLogger = (Logger) LoggerFactory.getLogger(FunnelEventService.class);
+        ListAppender<ILoggingEvent> appender = attach(eventLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            // Target exists but is DRAFT (not active) → skip.
+            Funnel target = seedTargetFunnel(FunnelStatus.draft, sendMessageStep("t1", "x", null));
+            FunnelStep sub = subscribeStep("p1", target.getId(), null, false);
+            String parentId = seedGraphExecution(subId, BASE, sub);
+
+            engine.sweep();
+
+            assertThat(childExecution(target.getId(), subId)).isNull();
+            assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+            assertThat(warn(appender)).anyMatch(m -> m.contains(FunnelEventService.LOG_ENROLL_SKIP_TARGET_INACTIVE));
+        } finally {
+            detach(eventLogger, appender);
+        }
+    }
+
+    @Test
+    void subscribeTargetDeletedSkipsGracefully() {
+        Logger eventLogger = (Logger) LoggerFactory.getLogger(FunnelEventService.class);
+        ListAppender<ILoggingEvent> appender = attach(eventLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            // Reference a funnel id that does not exist (deleted) → target missing skip.
+            FunnelStep sub = subscribeStep("p1", "missing-funnel-id", null, false);
+            String parentId = seedGraphExecution(subId, BASE, sub);
+
+            engine.sweep();
+
+            assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+            assertThat(warn(appender)).anyMatch(m -> m.contains(FunnelEventService.LOG_ENROLL_SKIP_TARGET_MISSING));
+        } finally {
+            detach(eventLogger, appender);
+        }
+    }
+
+    @Test
+    void subscribeTargetWrongProjectSkipsGracefully() {
+        Logger eventLogger = (Logger) LoggerFactory.getLogger(FunnelEventService.class);
+        ListAppender<ILoggingEvent> appender = attach(eventLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            // Active target, but in ANOTHER project → fail-closed (IDOR guard) skip.
+            Funnel foreign = new Funnel();
+            foreign.setProjectId("other-project-" + seq.incrementAndGet());
+            foreign.setName("foreign");
+            foreign.setStatus(FunnelStatus.active);
+            foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
+            foreign.setTriggerValue("");
+            foreign.setSteps(new ArrayList<>(List.of(sendMessageStep("t1", "x", null))));
+            foreign.setCreatedAt(BASE);
+            foreign.setUpdatedAt(BASE);
+            foreign = funnelRepository.save(foreign);
+
+            FunnelStep sub = subscribeStep("p1", foreign.getId(), null, false);
+            String parentId = seedGraphExecution(subId, BASE, sub);
+
+            engine.sweep();
+
+            assertThat(childExecution(foreign.getId(), subId)).isNull();
+            assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+            assertThat(warn(appender)).anyMatch(m ->
+                    m.contains(FunnelEventService.LOG_ENROLL_SKIP_TARGET_WRONG_PROJECT));
+        } finally {
+            detach(eventLogger, appender);
+        }
+    }
+
+    @Test
+    void subscribeMissingEntryStepFallsBackToStart() {
+        Logger eventLogger = (Logger) LoggerFactory.getLogger(FunnelEventService.class);
+        ListAppender<ILoggingEvent> appender = attach(eventLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            Funnel target = seedActiveTargetFunnel(
+                    sendMessageStep("first", "t1", null),
+                    sendMessageStep("second", "t2", null));
+            // Entry step "ghost" does not exist in the target → fall back to step 0 (first) + WARN.
+            FunnelStep sub = subscribeStep("p1", target.getId(), "ghost", true);
+            String parentId = seedGraphExecution(subId, BASE, sub);
+
+            engine.sweep();
+
+            FunnelExecution child = childExecution(target.getId(), subId);
+            assertThat(child).isNotNull();
+            assertThat(child.getCurrentStepId()).isEqualTo("first"); // fell back to step 0
+            assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+            assertThat(warn(appender)).anyMatch(m -> m.contains(FunnelEventService.LOG_ENROLL_ENTRY_STEP_FALLBACK));
+        } finally {
+            detach(eventLogger, appender);
+        }
+    }
+
+    @Test
+    void subscribeReEnterNoOpWhenTargetInflight() {
+        Logger eventLogger = (Logger) LoggerFactory.getLogger(FunnelEventService.class);
+        ListAppender<ILoggingEvent> appender = attach(eventLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            // allowReEnter=false target, already in-flight for this subscriber → re-enter guard no-op.
+            Funnel target = seedActiveTargetFunnel(false, sendMessageStep("t1", "x", null));
+            String existingChildId = seedRunningChild(target.getId(), subId, "t1");
+            FunnelStep sub = subscribeStep("p1", target.getId(), null, false);
+            String parentId = seedGraphExecution(subId, BASE, sub);
+
+            engine.sweep();
+
+            // Still exactly one (running|waiting) child execution for the pair → no duplicate enrolled.
+            assertThat(activeChildren(target.getId(), subId)).hasSize(1);
+            assertThat(activeChildren(target.getId(), subId).get(0).getId()).isEqualTo(existingChildId);
+            assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+            assertThat(infoAndWarn(appender)).anyMatch(m -> m.contains(FunnelEventService.LOG_ENROLL_REENTER_IGNORED));
+        } finally {
+            detach(eventLogger, appender);
+        }
+    }
+
+    @Test
+    void subscribeReEnterTrueRestartsTargetFromEntry() {
+        String subId = seedActiveSubscriber();
+        // allowReEnter=true target, already in-flight → cancel-then-insert (restart) at the entry step.
+        Funnel target = seedActiveTargetFunnel(true,
+                sendMessageStep("intro", "t1", null),
+                sendMessageStep("mid", "t2", null));
+        String oldChildId = seedRunningChild(target.getId(), subId, "intro");
+        FunnelStep sub = subscribeStep("p1", target.getId(), "mid", true); // restart at "mid"
+        String parentId = seedGraphExecution(subId, BASE, sub);
+
+        engine.sweep();
+
+        // Old child cancelled; a fresh child started at the entry step "mid".
+        assertThat(reload(oldChildId).getStatus()).isEqualTo(ExecutionStatus.cancelled);
+        List<FunnelExecution> active = activeChildren(target.getId(), subId);
+        assertThat(active).hasSize(1);
+        assertThat(active.get(0).getId()).isNotEqualTo(oldChildId);
+        assertThat(active.get(0).getCurrentStepId()).isEqualTo("mid");
+        assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+    }
+
+    @Test
+    void subscribeSelfTargetReEnterFalseNoOp() {
+        // Self-target A→A with allowReEnter=false: the parent IS the in-flight execution for (funnelId,
+        // subscriberId), so the enroll hits the re-enter guard and is a no-op — no second A execution.
+        String subId = seedActiveSubscriber();
+        Funnel selfFunnel = seedActiveTargetFunnel(false,
+                subscribeStep("p1", null, null, false), // will be repointed to its own id below
+                sendMessageStep("after", "tail", null));
+        // Repoint the SUBSCRIBE step's target to the funnel's own id and persist; also seed the parent
+        // execution AS this funnel's running execution so the pair is already in-flight.
+        selfFunnel.getSteps().get(0).setTargetFunnelId(selfFunnel.getId());
+        selfFunnel.getSteps().get(0).setNext("after");
+        funnelRepository.save(selfFunnel);
+
+        FunnelStep selfSub = subscribeStep("p1", selfFunnel.getId(), null, false);
+        selfSub.setNext("after");
+        FunnelStep after = sendMessageStep("after", "tail", null);
+        String parentId = seedRunningChildGraph(selfFunnel.getId(), subId, BASE, selfSub, after);
+        enqueueOk(1); // the parent's own 'after' send
+
+        engine.sweep();
+
+        // Only the original (now completed) execution remains for the pair — no duplicate self-enroll.
+        List<FunnelExecution> all = mongoTemplate.find(
+                Query.query(Criteria.where("funnelId").is(selfFunnel.getId()).and("subscriberId").is(subId)),
+                FunnelExecution.class);
+        assertThat(all).hasSize(1);
+        assertThat(all.get(0).getId()).isEqualTo(parentId);
+        assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
+    }
+
     // ─── helpers ───────────────────────────────────────────────────────────────
 
     private FunnelExecution reload(String id) {
@@ -1014,6 +1330,140 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         e.setCreatedAt(BASE);
         e.setUpdatedAt(BASE);
         return mongoTemplate.save(e).getId();
+    }
+
+    // SUBSCRIBE_TO_FUNNEL step builder (Phase 5 / composition) — graph-shaped (carries a stable id).
+    private FunnelStep subscribeStep(String id, String targetFunnelId, String targetEntryStepId,
+                                     boolean endParentAfter) {
+        FunnelStep s = new FunnelStep();
+        s.setId(id);
+        s.setStepType(StepType.SUBSCRIBE_TO_FUNNEL);
+        s.setTargetFunnelId(targetFunnelId);
+        s.setTargetEntryStepId(targetEntryStepId);
+        s.setEndParentAfter(endParentAfter);
+        return s;
+    }
+
+    // Seed an ACTIVE target funnel in THIS project's funnels collection (allowReEnter=false by default).
+    private Funnel seedActiveTargetFunnel(FunnelStep... steps) {
+        return seedTargetFunnel(FunnelStatus.active, false, steps);
+    }
+
+    private Funnel seedActiveTargetFunnel(boolean allowReEnter, FunnelStep... steps) {
+        return seedTargetFunnel(FunnelStatus.active, allowReEnter, steps);
+    }
+
+    private Funnel seedTargetFunnel(FunnelStatus status, FunnelStep... steps) {
+        return seedTargetFunnel(status, false, steps);
+    }
+
+    private Funnel seedTargetFunnel(FunnelStatus status, boolean allowReEnter, FunnelStep... steps) {
+        Funnel f = new Funnel();
+        f.setProjectId(projectId);
+        f.setName("target-" + seq.incrementAndGet());
+        f.setStatus(status);
+        f.setTriggerType(FunnelService.TRIGGER_ON_START);
+        f.setTriggerValue("t-" + seq.incrementAndGet());
+        f.setAllowReEnter(allowReEnter);
+        f.setSteps(new ArrayList<>(List.of(steps)));
+        f.setCreatedAt(BASE);
+        f.setUpdatedAt(BASE);
+        return funnelRepository.save(f);
+    }
+
+    // A graph execution seeded at an explicit enrollDepth (depth-cap test).
+    private String seedGraphExecutionAtDepth(String subscriberId, Instant nextRunAt, int enrollDepth,
+                                             FunnelStep... steps) {
+        String id = seedGraphExecution(subscriberId, nextRunAt, steps);
+        FunnelExecution e = reload(id);
+        e.setEnrollDepth(enrollDepth);
+        return mongoTemplate.save(e).getId();
+    }
+
+    // Drive the auto-enroll rate-limit counter past the per-minute limit for a subscriber so the next
+    // enroll trips the volume backstop (mirrors FunnelEventService's Redis key + the default limit of 20).
+    private void seedRateLimitExhausted(String subscriberId) {
+        String key = "bf:rate:auto-enroll:" + subscriberId;
+        redisTemplate.opsForValue().set(key, "1000"); // far above the per-minute cap
+    }
+
+    // The single running|waiting child execution for the (targetFunnelId, subscriberId) pair, or null.
+    private FunnelExecution childExecution(String targetFunnelId, String subscriberId) {
+        List<FunnelExecution> children = activeChildren(targetFunnelId, subscriberId);
+        return children.isEmpty() ? null : children.get(0);
+    }
+
+    private List<FunnelExecution> activeChildren(String targetFunnelId, String subscriberId) {
+        return mongoTemplate.find(
+                Query.query(Criteria.where("funnelId").is(targetFunnelId)
+                        .and("subscriberId").is(subscriberId)
+                        .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
+                                ExecutionStatus.waiting_for_reply.name())),
+                FunnelExecution.class);
+    }
+
+    // Seed an already-running child execution for the (funnelId, subscriberId) pair (re-enter tests), with
+    // a snapshot so the engine could progress it — but the tests assert pre-/post-enroll, not its progress.
+    private String seedRunningChild(String funnelId, String subscriberId, String currentStepId) {
+        FunnelExecution e = new FunnelExecution();
+        e.setProjectId(projectId);
+        e.setFunnelId(funnelId);
+        e.setSubscriberId(subscriberId);
+        e.setTelegramBotId(TELEGRAM_BOT_ID);
+        e.setStatus(ExecutionStatus.running);
+        e.setStepRunStatus(StepRunStatus.pending);
+        // Far-future nextRunAt so the sweep does not claim/progress this seeded child within the test tick.
+        e.setNextRunAt(BASE.plus(Duration.ofDays(365)));
+        e.setCurrentStepId(currentStepId);
+        e.setCurrentStepIndex(0);
+        e.setStepsSnapshot(new ArrayList<>());
+        e.setCreatedAt(BASE);
+        e.setUpdatedAt(BASE);
+        return mongoTemplate.save(e).getId();
+    }
+
+    // Seed a running execution for (funnelId, subscriberId) that IS the parent being swept (self-target
+    // test): due now, with the given snapshot so the sweep drives it.
+    private String seedRunningChildGraph(String funnelId, String subscriberId, Instant nextRunAt,
+                                         FunnelStep... steps) {
+        FunnelExecution e = new FunnelExecution();
+        e.setProjectId(projectId);
+        e.setFunnelId(funnelId);
+        e.setSubscriberId(subscriberId);
+        e.setTelegramBotId(TELEGRAM_BOT_ID);
+        e.setStatus(ExecutionStatus.running);
+        e.setStepRunStatus(StepRunStatus.pending);
+        e.setNextRunAt(nextRunAt);
+        List<FunnelStep> snapshot = new ArrayList<>(List.of(steps));
+        e.setCurrentStepId(snapshot.isEmpty() ? null : snapshot.get(0).getId());
+        e.setCurrentStepIndex(0);
+        e.setStepsSnapshot(snapshot);
+        e.setCreatedAt(BASE);
+        e.setUpdatedAt(BASE);
+        return mongoTemplate.save(e).getId();
+    }
+
+    private static ListAppender<ILoggingEvent> attach(Logger logger) {
+        ListAppender<ILoggingEvent> appender = new ListAppender<>();
+        appender.start();
+        logger.addAppender(appender);
+        return appender;
+    }
+
+    private static void detach(Logger logger, ListAppender<ILoggingEvent> appender) {
+        logger.detachAppender(appender);
+        appender.stop();
+    }
+
+    private static List<String> warn(ListAppender<ILoggingEvent> appender) {
+        return appender.list.stream()
+                .filter(e -> e.getLevel() == ch.qos.logback.classic.Level.WARN)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+    }
+
+    private static List<String> infoAndWarn(ListAppender<ILoggingEvent> appender) {
+        return appender.list.stream().map(ILoggingEvent::getFormattedMessage).toList();
     }
 
     private String seedExecution(String subscriberId, Instant nextRunAt, FunnelStep... steps) {

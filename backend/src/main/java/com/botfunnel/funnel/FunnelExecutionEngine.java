@@ -285,6 +285,15 @@ public class FunnelExecutionEngine {
                     terminate(exec, ExecutionStatus.failed, now, LOG_EXECUTION_FAILED, result.reasonCode());
                     return;
                 }
+                case COMPLETE -> {
+                    // Terminal success from a SUBSCRIBE_TO_FUNNEL step with endParentAfter: the enroll
+                    // side-effect already ran inside the step; complete the parent (claim-conditional CAS,
+                    // like the end-of-graph path) and run no further steps. drive is a switch STATEMENT, so
+                    // this branch must be added explicitly — a missing case would fall through to a silent
+                    // no-op, leaving the execution stuck in_progress.
+                    complete(exec, now);
+                    return;
+                }
             }
         }
     }

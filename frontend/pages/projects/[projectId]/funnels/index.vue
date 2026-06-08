@@ -83,12 +83,14 @@ async function confirmDelete() {
   }
 }
 
-// Duplicate: store action syncs the new draft row into the list; success/failure → toast (no business
-// code to surface inline here).
+// Duplicate: the store's duplicate() can't append the new row (its id isn't in the loaded list — syncRow
+// is a no-op for it), so refetch the list respecting the current filter to surface the fresh draft copy.
+// success/failure → toast (no business code to surface inline here).
 async function duplicateFunnel(funnel: FunnelSummaryResponse) {
   try {
     await funnelsStore.duplicate(funnel.id)
     toast.success(t('funnels.editor.duplicateResult'))
+    await funnelsStore.fetch(statusFilter.value)
   } catch (err) {
     toast.error(resolveError(err, 'funnels.duplicate'))
   }

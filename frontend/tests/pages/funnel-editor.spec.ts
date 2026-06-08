@@ -309,7 +309,7 @@ describe('funnels/[funnelId] editor page', () => {
       expect(wrapper.find('[data-test="funnel-preview-panel"]').exists()).toBe(true)
     })
 
-    it('Duplicate calls the store with the funnelId and success-toasts', async () => {
+    it('Duplicate calls the store, success-toasts, and navigates into the NEW funnel editor', async () => {
       storeMock.fetchOne.mockResolvedValue(draft())
       storeMock.duplicate.mockResolvedValue(draft({ id: 'f1-copy', name: 'My funnel (copy)' }))
       const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
@@ -321,6 +321,23 @@ describe('funnels/[funnelId] editor page', () => {
       expect(storeMock.duplicate).toHaveBeenCalledWith('f1')
       expect(toastMock.success).toHaveBeenCalled()
       expect(toastMock.error).not.toHaveBeenCalled()
+      // Bug fix: redirect to the duplicated funnel's editor (NOT stay on the source funnel). useLocalePath
+      // is mocked to identity, so navigateTo receives the bare path with the NEW id.
+      expect(navMock).toHaveBeenCalledWith('/projects/p1/funnels/f1-copy')
+    })
+
+    it('Duplicate failure toasts and does NOT navigate', async () => {
+      storeMock.fetchOne.mockResolvedValue(draft())
+      storeMock.duplicate.mockRejectedValue({ statusCode: 500 })
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+
+      await wrapper.get('[data-test="funnel-editor-duplicate"]').trigger('click')
+      await settle()
+
+      expect(toastMock.error).toHaveBeenCalled()
+      expect(toastMock.success).not.toHaveBeenCalled()
+      expect(navMock).not.toHaveBeenCalled()
     })
 
     it('Test for me on an unlinked bot shows an inline hint (not a toast)', async () => {

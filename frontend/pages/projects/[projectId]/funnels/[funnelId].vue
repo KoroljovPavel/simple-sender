@@ -243,11 +243,13 @@ async function pause() {
 }
 
 // ─── Task 5: author tooling (Duplicate / Stop-all / Test for me) ──────────────
-// Duplicate: success → toast; any failure → toast (no inline — there's no business code to surface here).
+// Duplicate: success → toast + navigate into the NEW funnel's editor (server returns the fresh draft copy
+// with its own id); any failure → toast, no navigation (no inline — there's no business code to surface).
 async function duplicate() {
   try {
-    await funnelsStore.duplicate(funnelId.value)
+    const created = await funnelsStore.duplicate(funnelId.value)
     toast.success(t('funnels.editor.duplicateResult'))
+    await navigateTo(localePath(`/projects/${projectId.value}/funnels/${created.id}`))
   } catch (err) {
     toast.error(resolveError(err, 'funnels.duplicate'))
   }

@@ -93,18 +93,30 @@ describe('funnels/index list page — Task 5 row actions', () => {
     expect(wrapper.find('[data-test="funnel-test-run"]').exists()).toBe(false)
   })
 
-  it('Duplicate calls the store and the new draft row appears + success-toast', async () => {
+  it('Duplicate calls the store, refetches the list (current filter), and the new draft row appears + success-toast', async () => {
     const wrapper = await mountList([summary('a')])
-    // The store action syncs the list (here: the page reflects the new row the store pushed).
-    storeMock.duplicate.mockImplementation(async () => {
-      storeMock.funnels.push(summary('a-copy', { status: 'draft', name: 'Funnel a (copy)' }))
-      return { ...summary('a-copy'), steps: [], deepLink: null }
+    // Bug fix: the store's duplicate() can't append the copy (its id isn't in the loaded list — syncRow is
+    // a no-op for it), so the page must refetch to surface it. The duplicate mock does NOT touch the list;
+    // the refetch is what makes the new row appear — mirroring the real refetch-after-duplicate path.
+    storeMock.duplicate.mockResolvedValue({ ...summary('a-copy'), steps: [], deepLink: null })
+    storeMock.fetch.mockImplementation(async () => {
+      storeMock.funnels.splice(
+        0,
+        storeMock.funnels.length,
+        summary('a'),
+        summary('a-copy', { status: 'draft', name: 'Funnel a (copy)' }),
+      )
     })
+
+    // fetch was called once on mount; reset so we assert the refetch triggered by duplicate.
+    storeMock.fetch.mockClear()
 
     await wrapper.get('[data-test="funnel-duplicate-a"]').trigger('click')
     await settle()
 
     expect(storeMock.duplicate).toHaveBeenCalledWith('a')
+    // Refetch respects the active status filter ('all' by default in this mount).
+    expect(storeMock.fetch).toHaveBeenCalledWith('all')
     expect(toastMock.success).toHaveBeenCalled()
     expect(wrapper.find('[data-test="funnel-row-a-copy"]').exists()).toBe(true)
   })

@@ -227,7 +227,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         // it is never re-claimed: sentCount stays exactly K (the 3 attempted sends), not 3 + a replay.
         String subId = seedActiveSubscriber();
         String execId = seedExecution(subId, BASE,
-                multiTextMessage("m", null, "b1", "b2", "b3"));
+                multiTextMessageIndexed("b1", "b2", "b3"));
         // Blocks 1+2 succeed; block 3 fails 400-other (TerminalReason.OTHER) → execution failed mid-step.
         enqueueOk(2);
         TELEGRAM.enqueue(json(400, "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: boom\"}"));
@@ -247,7 +247,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         // (already-delivered blocks are lost-forward, never duplicated).
         String subId = seedActiveSubscriber();
         String execId = seedExecution(subId, BASE,
-                multiTextMessage("m", null, "b1", "b2", "b3"));
+                multiTextMessageIndexed("b1", "b2", "b3"));
         FunnelExecution e = reload(execId);
         e.setStepRunStatus(StepRunStatus.in_progress); // simulate crash after a partial multi-block send
         mongoTemplate.save(e);
@@ -265,7 +265,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         // Happy path for the composer: a 3-block MESSAGE sends exactly 3 messages in one sweep and completes.
         String subId = seedActiveSubscriber();
         String execId = seedExecution(subId, BASE,
-                multiTextMessage("m", null, "b1", "b2", "b3"));
+                multiTextMessageIndexed("b1", "b2", "b3"));
         enqueueOk(3);
 
         engine.sweep();
@@ -1418,13 +1418,33 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         return s;
     }
 
-    // A multi-block MESSAGE composer step: N TEXT blocks sent as N separate messages under ONE engine claim
-    // (Decision 3 per-node at-most-once). Used to prove crash-mid-block lost-forward + snapshot isolation on
-    // the List<ContentBlock> (15-message-composer).
+    // A multi-block MESSAGE composer step WITH a stable step id (GRAPH mode): N TEXT blocks sent as N separate
+    // messages under ONE engine claim (Decision 3 per-node at-most-once). The id makes the snapshot graph-mode
+    // (FunnelExecutionEngine.graphMode probes snapshot.get(0).getId() != null), so it MUST be seeded via
+    // seedGraphExecution (which sets currentStepId). Used by the snapshot-isolation test that drives
+    // resumeOnCallback by step id.
     private FunnelStep multiTextMessage(String id, String next, String... texts) {
-        FunnelStep s = new FunnelStep();
+        FunnelStep s = multiTextMessageBlocks(texts);
         s.setId(id);
         s.setNext(next);
+        return s;
+    }
+
+    // A multi-block MESSAGE composer step WITHOUT a step id (INDEX/linear mode). Used by the index-seeded
+    // crash + happy-path tests below: seedExecution drives by currentStepIndex and never sets currentStepId.
+    // Setting an id here would flip the snapshot into graph mode where a null currentStepId is the explicit
+    // "End" marker — the engine would complete the run WITHOUT executing the step (zero sends). Keeping the
+    // first step id-less keeps the run in index-drain mode so currentStepIndex=0 actually executes the step.
+    // Distinct name (not a multiTextMessage overload) so a call like ("b1","b2","b3") can never silently bind
+    // to the id-setting (String,String,String...) variant and re-introduce the graph-mode mismatch.
+    private FunnelStep multiTextMessageIndexed(String... texts) {
+        return multiTextMessageBlocks(texts);
+    }
+
+    // Shared block-builder: N TEXT blocks (no id/next). Each block sends ONE Telegram message; the step is
+    // sent under a single engine claim (Decision 3) so the send-count assertions hold across both modes.
+    private FunnelStep multiTextMessageBlocks(String... texts) {
+        FunnelStep s = new FunnelStep();
         s.setStepType(StepType.MESSAGE);
         List<ContentBlock> blocks = new ArrayList<>(texts.length);
         for (String t : texts) {

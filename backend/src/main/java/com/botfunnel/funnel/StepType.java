@@ -21,9 +21,12 @@ public enum StepType {
     // the pair (targetFunnelId, targetEntryStepId) — null entry step means start the target from its first step.
     SUBSCRIBE_TO_FUNNEL,
 
-    // Tolerant-read sentinel (15-message-composer / MAJ-1 fail-safe). NOT an author-selectable kind — the
-    // DTO/Jackson boundary rejects it (no UI option, and `valueOf("UNKNOWN")` only ever resolves it for an
-    // explicit literal, never produced by the editor). It exists solely so {@link StepTypeReadConverter}
+    // Tolerant-read sentinel (15-message-composer / MAJ-1 fail-safe). NOT an author-selectable kind — there
+    // is no UI option for it, and the editor never emits it. NOTE: because UNKNOWN is itself a valid enum
+    // constant, a hand-crafted request with stepType="UNKNOWN" DOES deserialise through Jackson and passes
+    // @NotNull — it is FunnelService.validateSteps (case UNKNOWN -> throw) that rejects it with a 422 on every
+    // create/update/activate/test-run path, NOT the Jackson boundary. That validateSteps case is therefore
+    // load-bearing: keep it. It exists solely so {@link StepTypeReadConverter}
     // can deserialise a persisted document whose stepType is a now-removed value (e.g. a legacy
     // "SEND_MESSAGE"/"SEND_IMAGE"/"MENU" snapshot that survived the manual wipe) to a benign sentinel
     // instead of throwing, so the engine skips/fails just that one execution rather than aborting the whole

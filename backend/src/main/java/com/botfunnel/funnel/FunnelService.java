@@ -423,7 +423,7 @@ public class FunnelService {
     // Render each composer block's text/caption through VariableTemplateRenderer (backend-side parseMode
     // escaping — Decision 8). Media URLs/items pass through verbatim WITHOUT any dereference (anti-SSRF,
     // Decision 6). A null/empty blocks request renders to an empty list. Unknown block types still render
-    // (preview is non-validating, Decision 9): the type is echoed back and text/caption rendered if present.
+    // (preview is non-validating, Decision 8): the type is echoed back and text/caption rendered if present.
     private static List<PreviewStepResponse.RenderedBlock> renderBlocks(List<ContentBlockDto> blocks,
                                                                         Subscriber subscriber) {
         if (blocks == null || blocks.isEmpty()) {
@@ -490,7 +490,7 @@ public class FunnelService {
                 .filter(s -> s.getStatus() == SubscriberStatus.ACTIVE);
     }
 
-    // Sample stub for preview when the owner is not linked (Decision 9). Sample identity values + empty
+    // Sample stub for preview when the owner is not linked (Decision 8). Sample identity values + empty
     // custom fields; NEVER persisted. Matches the runtime user.* placeholders so the author still sees a
     // representative render.
     private static Subscriber stubSubscriber() {

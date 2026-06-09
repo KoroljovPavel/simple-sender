@@ -22,9 +22,11 @@ import org.springframework.lang.NonNull;
  * loops), and every other valid execution in the same batch still processes.
  *
  * <p>It does NOT re-introduce the removed constants — the sentinel is distinct and the engine/validator both
- * reject it. Author input never reaches this converter: the editor saves through the Jackson DTO boundary
- * ({@code FunnelStepDto.stepType} is a strict {@code @NotNull StepType}), which rejects unknown values with a
- * 400 before persistence; this converter only runs on the Mongo read path.
+ * reject it. Author input never reaches this converter, but NOT because of Jackson: {@code UNKNOWN} is a valid
+ * enum constant, so a request with {@code stepType="UNKNOWN"} deserialises fine and passes {@code @NotNull}.
+ * The real author-input gate is {@link FunnelService#validateSteps} (case {@code UNKNOWN -> throw}), which
+ * rejects it with a 422 on every create/update/activate/test-run path before persistence. This converter only
+ * runs on the Mongo read path (legacy documents that bypass validateSteps).
  */
 @ReadingConverter
 public class StepTypeReadConverter implements Converter<String, StepType> {

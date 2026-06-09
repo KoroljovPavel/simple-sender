@@ -7,14 +7,14 @@ export type FunnelStatus = 'draft' | 'active' | 'paused'
 export type FunnelStatusFilter = 'all' | FunnelStatus
 
 // Step discriminator — mirrors backend StepType enum (com.botfunnel.funnel.StepType) byte-for-byte.
+// 15-message-composer (Decision 1): the single MESSAGE composer step carries an ordered list of
+// ContentBlocks; it replaces the former flat SEND_MESSAGE / SEND_IMAGE / MENU step-kinds.
 export type StepType =
-  | 'SEND_MESSAGE'
-  | 'SEND_IMAGE'
+  | 'MESSAGE'
   | 'DELAY'
   | 'ADD_TAG'
   | 'REMOVE_TAG'
   | 'SET_CUSTOM_FIELD'
-  | 'MENU'
   | 'EMIT_EVENT'
   // Cross-funnel composition (Phase 5): enrolls the subscriber into ANOTHER funnel of the project.
   | 'SUBSCRIBE_TO_FUNNEL'
@@ -26,9 +26,11 @@ export type StepType =
 // as the match key (tag slug / field key / event name).
 export type FunnelTriggerType = 'on_start' | 'keyword' | 'tag_added' | 'custom_field_set' | 'event'
 
-// Inline-keyboard button on a MENU step — mirrors backend Button record (com.botfunnel.funnel.Button).
-// type is 'callback' (advances the funnel to targetStepId, or End when null) or 'url' (opens an
-// http(s) link, does not advance). targetStepId and url are mutually exclusive by type, hence optional.
+// Inline-keyboard button on a MESSAGE composer step — mirrors backend Button record
+// (com.botfunnel.funnel.Button). type is 'callback' (advances the funnel to targetStepId, or End when
+// null) or 'url' (opens an http(s) link, does not advance). targetStepId and url are mutually exclusive
+// by type, hence optional. Buttons attach to the step (the last non-album block — Decision 2), not to a
+// ContentBlock.
 export interface Button {
   type: 'callback' | 'url'
   label: string
@@ -44,16 +46,51 @@ export type DelayUnit = 'MIN' | 'HOUR' | 'DAY'
 // StepExecutor.CURRENT_DATE_TOKEN byte-for-byte.
 export const CURRENT_DATE_TOKEN = '@now'
 
+// Block discriminator inside a MESSAGE composer step — mirrors backend BlockType enum
+// (com.botfunnel.funnel.BlockType) byte-for-byte (15-message-composer / Decision 1):
+//   - TEXT                    → a plain text message (optional parseMode).
+//   - IMAGE / VIDEO / AUDIO / FILE → a single media message (URL or file_id) with an optional caption.
+//   - ALBUM                   → a Telegram media group of 2–10 MediaItems.
+export type BlockType = 'TEXT' | 'IMAGE' | 'VIDEO' | 'AUDIO' | 'FILE' | 'ALBUM'
+
+// One element of a BlockType.ALBUM media group — mirrors backend MediaItemDto
+// (com.botfunnel.funnel.dto.MediaItemDto) one-to-one. `type` is the per-item media kind (the
+// type-mixing rule is enforced server-side in FunnelService); `mediaUrl` is an http(s) URL or an opaque
+// Telegram file_id; `caption` is meaningful only on the FIRST element of the album (Decision 5).
+export interface MediaItem {
+  type: BlockType
+  mediaUrl: string
+  caption?: string | null
+}
+
+// One content block of a MESSAGE composer step — mirrors backend ContentBlockDto
+// (com.botfunnel.funnel.dto.ContentBlockDto) one-to-one. Flat shape (no discriminated narrowing,
+// Decision 1): `type` is the BlockType discriminator and the remaining fields are type-specific and
+// nullable, populated only for their own `type` so a save round-trip never drops a field:
+//   - TEXT                    → text (+ optional parseMode)
+//   - IMAGE / VIDEO / AUDIO / FILE → mediaUrl (+ optional caption, parseMode)
+//   - ALBUM                   → items (2–10 MediaItems; caption meaningful only on the first)
+// Per-type required-field / album-size / type-mixing checks live server-side (→ 422), mirrored as a UX
+// hint client-side — they are NOT encoded in this type.
+export interface ContentBlock {
+  type: BlockType
+  text?: string | null
+  parseMode?: string | null
+  mediaUrl?: string | null
+  caption?: string | null
+  items?: MediaItem[] | null
+}
+
 // One ordered step. Flat shape mirroring backend FunnelStepDto (Decision 12 — no _class discriminator).
 // Position in the steps array IS the order; the server rewrites FunnelStep.order from the index, so the
 // editor never sends `order` explicitly. Per-type fields are optional and only the type's required ones
 // are populated/validated client-side (mirroring FunnelService.validateSteps).
+// 15-message-composer (Decision 1): the former flat msg fields (text/parseMode/imageUrl/caption) are
+// replaced by `blocks` — an ordered ContentBlock[] populated only for stepType 'MESSAGE'.
 export interface FunnelStep {
   stepType: StepType
-  text?: string | null
-  parseMode?: string | null
-  imageUrl?: string | null
-  caption?: string | null
+  // MESSAGE composer step only — the ordered content blocks this step sends as N Telegram messages.
+  blocks?: ContentBlock[] | null
   delayValue?: number | null
   delayUnit?: DelayUnit | null
   tagSlug?: string | null
@@ -69,7 +106,8 @@ export interface FunnelStep {
   targetEntryStepId?: string | null
   endParentAfter?: boolean | null
   // Graph model (Phase 2) — mirrors backend FunnelStep graph fields. id is server-minted; next is the
-  // default outgoing edge (null = next step in list). buttons/timeout* apply to MENU steps only.
+  // default outgoing edge (null = next step in list). buttons/timeout* apply to the MESSAGE composer step
+  // (attached to the last non-album block — Decision 2).
   id?: string | null
   next?: string | null
   buttons?: Button[] | null
@@ -136,21 +174,46 @@ export interface UpdateFunnelRequest {
 }
 
 // POST .../funnels/{id}/steps/{stepId}/preview body — mirrors backend PreviewStepRequest
-// (com.botfunnel.funnel.dto.PreviewStepRequest). Decision 9: preview renders the CURRENT (possibly
-// unsaved) editor content of the step, NOT the persisted step — so the editor sends stepType/text/parseMode
-// on the fly. parseMode is optional (null = plain text, like FunnelStep.parseMode).
+// (com.botfunnel.funnel.dto.PreviewStepRequest). Decision 8: preview renders the CURRENT (possibly
+// unsaved) multiblock content of the step, NOT the persisted step — so the editor sends stepType + the
+// ordered blocks on the fly. parseMode now lives per-block inside ContentBlock (not top-level). For a
+// non-message step `blocks` is null/empty → the server renders an empty array.
 export interface PreviewStepRequest {
   stepType: StepType
-  text: string
+  blocks: ContentBlock[]
+}
+
+// One rendered album element in a preview response — mirrors backend
+// PreviewStepResponse.RenderedMediaItem. mediaUrl is passed through VERBATIM (never dereferenced by the
+// backend — anti-SSRF, Decision 6); caption is already escaped per the album block's parseMode
+// (meaningful only on the first element — Decision 5).
+export interface RenderedMediaItem {
+  mediaUrl: string
+  caption?: string | null
+}
+
+// One rendered block in a preview response — mirrors backend PreviewStepResponse.RenderedBlock. text/
+// caption are already escaped per parseMode server-side (the frontend renders them text-only, never
+// v-html); mediaUrl/items are passed through verbatim (:src). Fields are nullable by block type:
+//   - TEXT                    → text (parseMode); media/caption/items null
+//   - IMAGE / VIDEO / AUDIO / FILE → mediaUrl + caption (parseMode); text/items null
+//   - ALBUM                   → items (each rendered caption escaped); text/mediaUrl/caption null
+export interface RenderedBlock {
+  type: BlockType
+  text?: string | null
   parseMode?: string | null
+  mediaUrl?: string | null
+  caption?: string | null
+  items?: RenderedMediaItem[] | null
 }
 
 // POST .../steps/{stepId}/preview → PreviewStepResponse (com.botfunnel.funnel.dto.PreviewStepResponse).
-// Exactly these three fields — no ownerChatId/identity leakage (Decision 9). `kind` is 'message' for a
-// renderable message step or 'non_message' (placeholder `rendered`) for steps with no message body;
-// `sampleData` is true when sample placeholders were substituted (e.g. bot owner not linked).
+// Exactly these three fields — no ownerChatId/identity leakage (Decision 8). `renderedBlocks` is the
+// ordered, rendered blocks (one per composer block; an empty array for a non-message step). `kind` is
+// 'message' for a renderable MESSAGE composer step or 'non_message' for an action step; `sampleData` is
+// true when sample placeholders were substituted (e.g. bot owner not linked).
 export interface PreviewStepResponse {
-  rendered: string
+  renderedBlocks: RenderedBlock[]
   sampleData: boolean
   kind: 'message' | 'non_message'
 }

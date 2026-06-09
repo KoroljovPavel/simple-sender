@@ -40,6 +40,13 @@ const REQUIRED_KEYS = [
   'errors.funnels.create.generic',
   'errors.funnels.list.generic',
   'errors.funnels.delete.generic',
+  // Task 8 — composer message preview media labels. FunnelMessagePreview.vue resolves
+  // `funnels.editor.previewMediaType.${block.type}` for VIDEO/AUDIO/FILE (and IMAGE on fallback);
+  // these were missing in both locales (parity check passes on symmetric absence), so guard them here.
+  'funnels.editor.previewMediaType.IMAGE',
+  'funnels.editor.previewMediaType.VIDEO',
+  'funnels.editor.previewMediaType.AUDIO',
+  'funnels.editor.previewMediaType.FILE',
 ] as const
 
 describe('i18n AC-25 required keys', () => {

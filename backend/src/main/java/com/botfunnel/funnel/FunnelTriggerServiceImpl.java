@@ -70,7 +70,7 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
     static final String LOG_CALLBACK_NO_EXECUTION = "FUNNEL_CALLBACK_NO_EXECUTION";
     static final String LOG_CALLBACK_NOT_WAITING = "FUNNEL_CALLBACK_NOT_WAITING_FOR_REPLY";
     static final String LOG_CALLBACK_IDOR = "FUNNEL_CALLBACK_OWNER_MISMATCH";
-    static final String LOG_CALLBACK_STEP_MISMATCH = "FUNNEL_CALLBACK_CURRENT_STEP_NOT_MENU";
+    static final String LOG_CALLBACK_STEP_MISMATCH = "FUNNEL_CALLBACK_CURRENT_STEP_NOT_MESSAGE";
     static final String LOG_CALLBACK_BAD_BUTTON = "FUNNEL_CALLBACK_BUTTON_NOT_CALLBACK_OR_OUT_OF_RANGE";
     static final String LOG_CALLBACK_ADVANCED = "FUNNEL_CALLBACK_ADVANCED";
     static final String LOG_CALLBACK_NO_OP = "FUNNEL_CALLBACK_NO_OP";
@@ -80,7 +80,7 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
 
     // Strict callback_data parse (Decision 6): the left segment must be a 24-char ObjectId hex (the
     // execution id shape) and the right an unsigned, bounded button index. Checked BEFORE any DB lookup.
-    // MAX_BUTTON_INDEX mirrors the editor's 8-button cap (indexes 0..7); the per-MENU buttons.size() is the
+    // MAX_BUTTON_INDEX mirrors the editor's 8-button cap (indexes 0..7); the per-step buttons.size() is the
     // authoritative bound enforced after the snapshot resolves. MAX_CALLBACK_DATA_BYTES is Telegram's hard
     // 64-byte ceiling — oversized data is rejected up front (cannot be a value we ever minted).
     private static final Pattern OBJECT_ID_HEX = Pattern.compile("^[0-9a-fA-F]{24}$");
@@ -264,17 +264,23 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
                 return;
             }
 
-            // Step 7: the current cursor must point at a MENU step in the snapshot (the run already passed
-            // this menu, or a broken cursor, → no-op).
-            FunnelStep menu = stepById(exec.getStepsSnapshot(), exec.getCurrentStepId());
-            if (menu == null || menu.getStepType() != StepType.MENU) {
+            // Step 7: the current cursor must point at a MESSAGE composer step in the snapshot (Decision 2 —
+            // positive guard, replacing the former "must be a MENU step": only a MESSAGE step parks
+            // waiting_for_reply, so a null cursor or any non-MESSAGE step → no-op, fail-closed). The
+            // inline keyboard is attached by StepExecutor to the last non-album block of this composer step;
+            // here that block only matters as the invariant "this step carries the parked keyboard" — the
+            // button index-addressing is resolved from the step-level getButtons() (Decision 2), unchanged.
+            FunnelStep step = stepById(exec.getStepsSnapshot(), exec.getCurrentStepId());
+            if (step == null || step.getStepType() != StepType.MESSAGE) {
                 log.info("{} projectId={}", LOG_CALLBACK_STEP_MISMATCH, projectId);
                 return;
             }
 
             // Step 8: the button index must be in range AND a callback-type button (a URL button or an
-            // out-of-range index does NOT advance the funnel — Decision 10).
-            List<Button> buttons = menu.getButtons();
+            // out-of-range index does NOT advance the funnel — Decision 10). Index-addressing is unchanged:
+            // buttons stay at the step level (Decision 2), the keyboard is pinned to the composer's last
+            // non-album block but the 0-based index maps onto getButtons() exactly as before.
+            List<Button> buttons = step.getButtons();
             int idx = parsed.buttonIndex();
             if (buttons == null || idx >= buttons.size()) {
                 log.info("{} projectId={}", LOG_CALLBACK_BAD_BUTTON, projectId);

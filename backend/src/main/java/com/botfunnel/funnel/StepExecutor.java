@@ -225,8 +225,8 @@ public class StepExecutor {
 
     // Build the AlbumItem list for /sendMediaGroup. The caption is meaningful only on the FIRST element
     // (Decision 5): render+trim that one (when present); later elements carry their stored caption as-is
-    // (normally null — save-validation in Task 4 guarantees caption only on the first). The Telegram
-    // media-group element type is mapped from the album's per-type discriminator hint via albumElementType.
+    // (normally null — save-validation in Task 4 guarantees caption only on the first). Each element's
+    // Telegram media-group type is ALBUM_ELEMENT_TYPE (see its declaration for the photo-only rationale).
     private List<AlbumItem> buildAlbum(ContentBlock block, Subscriber subscriber, FunnelExecution execution) {
         List<MediaItem> items = block.items();
         List<AlbumItem> out = new ArrayList<>(items.size());

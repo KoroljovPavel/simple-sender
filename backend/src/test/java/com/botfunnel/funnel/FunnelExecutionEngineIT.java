@@ -50,6 +50,7 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicLong;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatCode;
 
 // Full-context engine IT: Testcontainers Mongo + in-memory JobRunr + MockWebServer Telegram + a mutable
 // @Primary test Clock (declared LOCALLY here so it never leaks into other IT contexts). sweep() is
@@ -271,6 +272,49 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
 
         assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
         assertThat(sentCount()).isEqualTo(3);
+    }
+
+    // ─── tolerant-read fail-safe (MAJ-1 / F-MINOR-1) ─────────────────────────────
+
+    @Test
+    void legacyRemovedStepType_doesNotCrashSweep_andOtherExecutionsStillProcess() {
+        // Fail-safe (tech-spec Testing Strategy / MAJ-1): a legacy funnel_executions document whose
+        // stepsSnapshot[0].stepType is a now-REMOVED value (e.g. "MENU", killed in 15-message-composer) that
+        // survived the manual wipe (Decision 4) must NOT crash the engine. Spring Data's default enum reader
+        // would throw ConversionFailedException on the unknown name during sweep()'s find(...) — OUTSIDE the
+        // per-execution try/catch — aborting the WHOLE tick. The tolerant StepTypeReadConverter maps the
+        // unknown value to the StepType.UNKNOWN sentinel so the read succeeds and the engine isolates the bad
+        // row: it terminal-FAILS just that execution while every other valid execution in the same batch
+        // still processes.
+        String subId = seedActiveSubscriber();
+
+        // 1) Seed a valid single-block MESSAGE execution via the normal helper, then RAW-mutate its persisted
+        //    stepType to the removed literal "MENU" — exactly the shape a pre-composer document would have.
+        String legacyId = seedExecution(subId, BASE, sendMessage("legacy"));
+        org.bson.Document setUnknown = new org.bson.Document("$set",
+                new org.bson.Document("stepsSnapshot.0.stepType", "MENU"));
+        long matched = mongoTemplate.getCollection("funnel_executions")
+                .updateOne(new org.bson.Document("_id", new org.bson.types.ObjectId(legacyId)), setUnknown)
+                .getMatchedCount();
+        assertThat(matched).isEqualTo(1L); // guard: the raw mutation actually hit the legacy doc
+
+        // 2) Seed a second, fully VALID execution that must still process in the same tick.
+        String validId = seedExecution(subId, BASE, sendMessage("valid"));
+        enqueueOk(1); // exactly ONE send expected (the valid one); the legacy one never sends
+
+        // The sweep must NOT throw even though one document carries a removed enum value.
+        assertThatCode(() -> engine.sweep()).doesNotThrowAnyException();
+
+        // The valid execution completed and sent its one message — the tick was NOT aborted.
+        FunnelExecution valid = reload(validId);
+        assertThat(valid.getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(1);
+
+        // The legacy/unknown-type execution loaded tolerantly (UNKNOWN sentinel) and was terminal-failed —
+        // NOT left stuck in_progress and NOT re-claimed forever.
+        FunnelExecution legacy = reload(legacyId);
+        assertThat(legacy.getStatus()).isEqualTo(ExecutionStatus.failed);
+        assertThat(legacy.getStepRunStatus()).isEqualTo(StepRunStatus.done);
     }
 
     @Test

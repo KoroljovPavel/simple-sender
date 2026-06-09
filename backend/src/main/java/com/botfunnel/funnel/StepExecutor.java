@@ -124,6 +124,11 @@ public class StepExecutor {
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
             case EMIT_EVENT -> emitEvent(step, execution);
             case SUBSCRIBE_TO_FUNNEL -> subscribeToFunnel(step, execution);
+            // Tolerant-read sentinel (MAJ-1): a persisted document with a removed/unknown stepType
+            // deserialised to UNKNOWN (StepTypeReadConverter) instead of crashing the sweep. Terminal-fail
+            // just this execution so it self-resolves (never re-claimed, never loops) — the rest of the
+            // tick is unaffected. Author input can never reach here (DTO rejects UNKNOWN at the boundary).
+            case UNKNOWN -> StepResult.fail("unknown_step_type");
         };
     }
 
@@ -170,6 +175,14 @@ public class StepExecutor {
     // BotTokenInvalidException → fail("invalid_bot_token"), AppException → fail(codeOrStatus).
     private StepResult message(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
         List<ContentBlock> blocks = step.getBlocks();
+        // MAJ-2 defensive guard: validateMessage rejects null/empty blocks at save time, so a normal
+        // snapshot always has >=1 block. A malformed/legacy snapshot with null/empty blocks would NPE on
+        // blocks.size()/get(i) every tick (the engine catches the NPE but leaves the row in_progress →
+        // stuck + log-spam). Terminal-fail it instead so the stuck execution self-resolves. This defends a
+        // malformed snapshot only — it does not mask a genuine bug on the validated happy path.
+        if (blocks == null || blocks.isEmpty()) {
+            return StepResult.fail("empty_message_blocks");
+        }
         boolean hasButtons = step.getButtons() != null && !step.getButtons().isEmpty();
         // Index of the last NON-ALBUM block — the only block that may carry the inline keyboard (Decision 2).
         // Computed once via a reverse scan; -1 means every block is an album (then no keyboard attaches).

@@ -387,7 +387,7 @@ public class FunnelService {
         funnelExecutionFactory.insertExecution(projectId, funnel, owner.getId(), bot.getTelegramBotId(), 0);
     }
 
-    // Step preview (Decision 9): render a message step's CURRENT (possibly unsaved) content from the
+    // Step preview (Decision 8): render a message step's CURRENT (possibly unsaved) content from the
     // request body — NOT the saved step — so the editor preview is reactive to what the author types now,
     // with escaping computed on the backend byte-for-byte as the runtime (anti markup/XSS drift, A03).
     // requireFunnel runs FIRST (anti-IDOR): a foreign/missing funnel collapses to 404 and that 404
@@ -408,7 +408,7 @@ public class FunnelService {
         Subscriber subscriber = resolved.orElseGet(FunnelService::stubSubscriber);
 
         if (isMessageStep(step.getStepType())) {
-            // On-the-fly content (Decision 9 / Decision 8): render EACH request block's text+caption, NOT
+            // On-the-fly content (Decision 8): render EACH request block's text+caption, NOT
             // the saved step. The backend escapes substituted values per the block's parseMode exactly as
             // the runtime engine would (XSS-guard, OWASP A03). Media URLs/items are passed through VERBATIM
             // and NEVER dereferenced (anti-SSRF, Decision 6) — the frontend renders them via :src.
@@ -792,6 +792,11 @@ public class FunnelService {
                 // see it, or it would falsely raise funnel_broken_edge (Decision 5). active-status of the
                 // target is NOT checked here — only at activation (requireSubscribeTargetsActive, Decision 6).
                 case SUBSCRIBE_TO_FUNNEL -> validateSubscribeTarget(step, projectId);
+                // Tolerant-read sentinel (MAJ-1): UNKNOWN can only originate from a removed/legacy persisted
+                // stepType (StepTypeReadConverter); author input is rejected at the Jackson DTO boundary
+                // before this point. Defensive reject so the exhaustive switch stays complete and an UNKNOWN
+                // can never be re-saved as a valid step.
+                case UNKNOWN -> throw invalidStep("unknown step type");
             }
             // Graph-edge pass (every step type): the default outgoing edge and the optional timeout edge
             // must point at an existing step id, or be null (null next = next-in-list; null timeout

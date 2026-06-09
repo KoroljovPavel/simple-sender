@@ -212,7 +212,7 @@ export const useFunnelsStore = defineStore('funnels', () => {
   }
 
   // POST .../steps/{stepId}/preview → 200 PreviewStepResponse. Sends the CURRENT (possibly unsaved) step
-  // content as the body (Decision 9); returns the rendered payload verbatim (kind/sampleData drive no
+  // content as the body (Decision 8); returns the rendered payload verbatim (kind/sampleData drive no
   // branching in the store).
   async function preview(
     funnelId: string,

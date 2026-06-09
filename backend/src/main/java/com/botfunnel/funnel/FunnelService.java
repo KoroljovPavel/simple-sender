@@ -5,9 +5,11 @@ import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.common.AppException;
 import com.botfunnel.funnel.dto.ButtonDto;
+import com.botfunnel.funnel.dto.ContentBlockDto;
 import com.botfunnel.funnel.dto.CreateFunnelRequest;
 import com.botfunnel.funnel.dto.FunnelResponse;
 import com.botfunnel.funnel.dto.FunnelStepDto;
+import com.botfunnel.funnel.dto.MediaItemDto;
 import com.botfunnel.funnel.dto.FunnelSummaryResponse;
 import com.botfunnel.funnel.dto.PreviewStepRequest;
 import com.botfunnel.funnel.dto.PreviewStepResponse;
@@ -16,6 +18,8 @@ import com.botfunnel.project.ProjectService;
 import com.botfunnel.subscriber.Subscriber;
 import com.botfunnel.subscriber.SubscriberService;
 import com.botfunnel.subscriber.SubscriberStatus;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.data.mongodb.core.MongoTemplate;
@@ -50,6 +54,8 @@ import java.util.stream.Collectors;
  */
 @Service
 public class FunnelService {
+
+    private static final Logger log = LoggerFactory.getLogger(FunnelService.class);
 
     // Phase 1 supports on_start; Phase 3 (Decision 1) adds four more. A null/blank request triggerType
     // normalises to on_start; any value outside the five-member set is rejected (→ 422).
@@ -105,12 +111,23 @@ public class FunnelService {
     // funnels; Decision 6 chicken-and-egg): every SUBSCRIBE target must be active to activate the parent.
     static final String CODE_SUBSCRIBE_TARGET_INACTIVE = "funnel_subscribe_target_inactive";
 
-    // MENU button limits (Phase 2). Telegram allows long keyboards, but the editor caps at 8 (1/row) and
-    // labels at 64 chars (also Telegram's practical button-text ceiling).
+    // MENU button limits (Phase 2 — now the MESSAGE composer keyboard, attached to the last non-album
+    // block). Telegram allows long keyboards, but the editor caps at 8 (1/row) and labels at 64 chars
+    // (also Telegram's practical button-text ceiling).
     private static final int MAX_BUTTONS = 8;
     private static final int MAX_BUTTON_LABEL = 64;
     static final String BUTTON_TYPE_CALLBACK = "callback";
     static final String BUTTON_TYPE_URL = "url";
+
+    // MESSAGE composer block limits (15-message-composer / Decision 1, 5, 7). A composer step holds an
+    // ordered List<ContentBlock>; each block is one Telegram message. Block count 1–10; an ALBUM holds
+    // 2–10 MediaItems. Over-length text/caption (Telegram's 4096/1024 ceilings) is a WARNING — it does NOT
+    // block save (the engine trims+WARNs at send time, Decision 3); these are the warn thresholds only.
+    private static final int MAX_BLOCKS = 10;
+    private static final int MIN_ALBUM_ITEMS = 2;
+    private static final int MAX_ALBUM_ITEMS = 10;
+    private static final int TEXT_WARN_LIMIT = 4096;
+    private static final int CAPTION_WARN_LIMIT = 1024;
 
     private final FunnelRepository funnelRepository;
     private final MongoTemplate mongoTemplate;
@@ -391,16 +408,66 @@ public class FunnelService {
         Subscriber subscriber = resolved.orElseGet(FunnelService::stubSubscriber);
 
         if (isMessageStep(step.getStepType())) {
-            // On-the-fly content (Decision 9): render the request text+parseMode, NOT the saved step.
-            String rendered = VariableTemplateRenderer.render(request.text(), request.parseMode(), subscriber);
+            // On-the-fly content (Decision 9 / Decision 8): render EACH request block's text+caption, NOT
+            // the saved step. The backend escapes substituted values per the block's parseMode exactly as
+            // the runtime engine would (XSS-guard, OWASP A03). Media URLs/items are passed through VERBATIM
+            // and NEVER dereferenced (anti-SSRF, Decision 6) — the frontend renders them via :src.
+            List<PreviewStepResponse.RenderedBlock> rendered = renderBlocks(request.blocks(), subscriber);
             return new PreviewStepResponse(rendered, sampleData, "message");
         }
-        // Non-message step (DELAY/ADD_TAG/REMOVE_TAG/SET_CUSTOM_FIELD/EMIT_EVENT): neutral placeholder.
-        return new PreviewStepResponse("", sampleData, "non_message");
+        // Non-message step (DELAY/ADD_TAG/REMOVE_TAG/SET_CUSTOM_FIELD/EMIT_EVENT/SUBSCRIBE_TO_FUNNEL):
+        // neutral placeholder — an empty rendered-blocks array.
+        return new PreviewStepResponse(List.of(), sampleData, "non_message");
+    }
+
+    // Render each composer block's text/caption through VariableTemplateRenderer (backend-side parseMode
+    // escaping — Decision 8). Media URLs/items pass through verbatim WITHOUT any dereference (anti-SSRF,
+    // Decision 6). A null/empty blocks request renders to an empty list. Unknown block types still render
+    // (preview is non-validating, Decision 9): the type is echoed back and text/caption rendered if present.
+    private static List<PreviewStepResponse.RenderedBlock> renderBlocks(List<ContentBlockDto> blocks,
+                                                                        Subscriber subscriber) {
+        if (blocks == null || blocks.isEmpty()) {
+            return List.of();
+        }
+        List<PreviewStepResponse.RenderedBlock> out = new ArrayList<>(blocks.size());
+        for (ContentBlockDto b : blocks) {
+            if (b == null) {
+                continue;
+            }
+            String parseMode = b.parseMode();
+            String renderedText = VariableTemplateRenderer.render(b.text(), parseMode, subscriber);
+            String renderedCaption = VariableTemplateRenderer.render(b.caption(), parseMode, subscriber);
+            out.add(new PreviewStepResponse.RenderedBlock(
+                    b.type(),
+                    renderedText,
+                    parseMode,
+                    b.mediaUrl(),
+                    renderedCaption,
+                    renderMediaItems(b.items(), parseMode, subscriber)));
+        }
+        return out;
+    }
+
+    private static List<PreviewStepResponse.RenderedMediaItem> renderMediaItems(List<MediaItemDto> items,
+                                                                                String parseMode,
+                                                                                Subscriber subscriber) {
+        if (items == null || items.isEmpty()) {
+            return null;
+        }
+        List<PreviewStepResponse.RenderedMediaItem> out = new ArrayList<>(items.size());
+        for (MediaItemDto m : items) {
+            if (m == null) {
+                continue;
+            }
+            String renderedCaption = VariableTemplateRenderer.render(m.caption(), parseMode, subscriber);
+            // mediaUrl passes through verbatim — NEVER dereferenced (anti-SSRF, Decision 6).
+            out.add(new PreviewStepResponse.RenderedMediaItem(m.mediaUrl(), renderedCaption));
+        }
+        return out;
     }
 
     private static boolean isMessageStep(StepType type) {
-        return type == StepType.SEND_MESSAGE || type == StepType.SEND_IMAGE || type == StepType.MENU;
+        return type == StepType.MESSAGE;
     }
 
     private static Optional<FunnelStep> findStep(Funnel funnel, String stepId) {
@@ -615,10 +682,7 @@ public class FunnelService {
             step.setTimeoutUnit(blankToNull(dto.timeoutUnit()));
             step.setTimeoutTargetStepId(blankToNull(dto.timeoutTargetStepId()));
 
-            step.setText(dto.text());
-            step.setParseMode(blankToNull(dto.parseMode()));
-            step.setImageUrl(dto.imageUrl());
-            step.setCaption(dto.caption());
+            step.setBlocks(toBlocks(dto.blocks()));
             step.setDelayValue(dto.delayValue());
             step.setDelayUnit(dto.delayUnit());
             step.setTagSlug(dto.tagSlug());
@@ -642,6 +706,53 @@ public class FunnelService {
             buttons.add(new Button(b.type(), b.label(), blankToNull(b.targetStepId()), blankToNull(b.url())));
         }
         return buttons;
+    }
+
+    // DTO → domain mapper for the MESSAGE composer blocks (15-message-composer / Decision 1). A null
+    // blocks array maps to null (empty composer; validateMessage rejects it as funnel_step_invalid — no
+    // NPE here). Every field round-trips verbatim WITHOUT silent drop, including album items + per-element
+    // caption. The block `type` String is parsed to BlockType here; an unknown/blank type collapses to a
+    // null discriminator that validateMessage rejects with a business code (never a 400/500), keeping the
+    // machine-readable-422 contract for hostile/garbage input.
+    private static List<ContentBlock> toBlocks(List<ContentBlockDto> dtos) {
+        if (dtos == null) {
+            return null;
+        }
+        List<ContentBlock> blocks = new ArrayList<>(dtos.size());
+        for (ContentBlockDto b : dtos) {
+            blocks.add(new ContentBlock(
+                    parseBlockType(b.type()),
+                    b.text(),
+                    blankToNull(b.parseMode()),
+                    b.mediaUrl(),
+                    b.caption(),
+                    toMediaItems(b.items())));
+        }
+        return blocks;
+    }
+
+    private static List<MediaItem> toMediaItems(List<MediaItemDto> dtos) {
+        if (dtos == null) {
+            return null;
+        }
+        List<MediaItem> items = new ArrayList<>(dtos.size());
+        for (MediaItemDto m : dtos) {
+            items.add(new MediaItem(m.mediaUrl(), m.caption()));
+        }
+        return items;
+    }
+
+    // Lenient parse: an unknown/blank block type returns null (NOT a 400/500) so validateMessage can
+    // reject it with a machine-readable 422 — consistent with the rest of the per-type 422 contract.
+    private static BlockType parseBlockType(String raw) {
+        if (raw == null) {
+            return null;
+        }
+        try {
+            return BlockType.valueOf(raw);
+        } catch (IllegalArgumentException e) {
+            return null;
+        }
     }
 
     // Per-type + limit validation shared by update (reject invalid edits), activate (defense-in-depth
@@ -669,18 +780,10 @@ public class FunnelService {
         }
         for (FunnelStep step : steps) {
             switch (step.getStepType()) {
-                case SEND_MESSAGE -> {
-                    requireText(step.getText());
-                    requireParseMode(step.getParseMode());
-                }
-                case SEND_IMAGE -> {
-                    requireImageUrl(step.getImageUrl());
-                    requireParseMode(step.getParseMode());
-                }
+                case MESSAGE -> validateMessage(step, stepIds);
                 case DELAY -> requireDelay(step.getDelayValue(), step.getDelayUnit());
                 case ADD_TAG, REMOVE_TAG -> requireTagSlug(step.getTagSlug());
                 case SET_CUSTOM_FIELD -> requireCustomFieldKey(step.getCustomFieldKey());
-                case MENU -> validateMenu(step, stepIds);
                 case EMIT_EVENT -> requireEventName(step.getEventName());
                 // Validate the enroll target: targetFunnelId is required, must resolve to a funnel in THIS
                 // project (fail-closed), and targetEntryStepId (if set) must be a real step in that target.
@@ -698,40 +801,145 @@ public class FunnelService {
         }
     }
 
-    // MENU validation (Decision 10): >=1 callback button so the subscriber can never get stuck; per
-    // button — non-empty label <= 64 chars; callback target null (End) or an existing id; url strictly
-    // http(s) with a non-empty host; at most 8 buttons. The optional timeout pair is validated too
-    // (audit-fix F1): an unvalidated/legacy timeoutUnit would make StepExecutor.menuDeadline ->
-    // durationOf throw BEFORE the menu is sent, stranding the execution in stepRunStatus=in_progress.
-    private static void validateMenu(FunnelStep step, Set<String> stepIds) {
-        List<Button> buttons = step.getButtons();
-        if (buttons == null || buttons.isEmpty()) {
-            throw invalidStep("MENU step requires at least one button");
+    // MESSAGE composer validation (15-message-composer / Decision 1, 2, 5, 6, 7). The step holds an
+    // ordered List<ContentBlock> sent as N Telegram messages. Hard rules (each → 422 with a machine-readable
+    // business code), in order:
+    //   - blocks non-empty and 1..MAX_BLOCKS (null/empty → funnel_step_invalid; >10 → funnel_step_invalid)
+    //   - per-block, by BlockType: TEXT requires non-empty text + valid parseMode; IMAGE/VIDEO/AUDIO/FILE
+    //     require a valid media source (http(s) URL or opaque file_id) + valid parseMode; ALBUM requires
+    //     2..10 items each with a valid media source, the type-mixing predicate (Decision 5), and a caption
+    //     only on the first element.
+    //   - buttons (the inline keyboard) are allowed ONLY on the LAST non-album block; on an album block or
+    //     a non-last block → 422. When present, the existing button/timeout/url validation applies.
+    // Over-length text (>4096) / caption (>1024) is a WARNING only (logged, NOT a 422) — the engine
+    // trims+WARNs at send time (Decision 3). A null `type` (unknown/blank discriminator from toBlocks) is
+    // rejected with a business code, never a 400/500.
+    private void validateMessage(FunnelStep step, Set<String> stepIds) {
+        List<ContentBlock> blocks = step.getBlocks();
+        if (blocks == null || blocks.isEmpty()) {
+            throw invalidStep("MESSAGE step requires at least one content block");
         }
+        if (blocks.size() > MAX_BLOCKS) {
+            throw invalidStep("MESSAGE step exceeds the maximum of " + MAX_BLOCKS + " blocks");
+        }
+
+        int lastIndex = blocks.size() - 1;
+        for (int i = 0; i < blocks.size(); i++) {
+            ContentBlock block = blocks.get(i);
+            if (block == null || block.type() == null) {
+                throw invalidStep("MESSAGE block requires a valid type "
+                        + "(TEXT|IMAGE|VIDEO|AUDIO|FILE|ALBUM)");
+            }
+            validateBlock(block);
+        }
+
+        // Buttons (the inline keyboard) attach ONLY to the last NON-album block (Decision 2). A null/empty
+        // buttons list = no keyboard (valid). Otherwise the last block must exist and must not be an album.
+        List<Button> buttons = step.getButtons();
+        if (buttons != null && !buttons.isEmpty()) {
+            ContentBlock last = blocks.get(lastIndex);
+            if (last.type() == BlockType.ALBUM) {
+                throw invalidStep("MESSAGE buttons cannot attach to an album block; "
+                        + "move them to a non-album last block");
+            }
+            validateButtons(step, stepIds);
+        }
+    }
+
+    // Per-block field validation by BlockType (15-message-composer). Over-length text/caption is a warning
+    // (logged, not blocking — Decision 3); everything else here is a hard 422.
+    private static void validateBlock(ContentBlock block) {
+        switch (block.type()) {
+            case TEXT -> {
+                if (block.text() == null || block.text().isBlank()) {
+                    throw invalidStep("TEXT block requires non-empty text");
+                }
+                requireParseMode(block.parseMode());
+                warnIfOverLength("TEXT", "text", block.text(), TEXT_WARN_LIMIT);
+            }
+            case IMAGE, VIDEO, AUDIO, FILE -> {
+                requireMediaSource(block.type().name(), block.mediaUrl());
+                requireParseMode(block.parseMode());
+                warnIfOverLength(block.type().name(), "caption", block.caption(), CAPTION_WARN_LIMIT);
+            }
+            case ALBUM -> validateAlbum(block);
+        }
+    }
+
+    // ALBUM validation (15-message-composer / Decision 5): 2..10 items; every item has a valid media
+    // source; the type-mixing predicate holds (all photo / all video / a photo+video mix — audio/document
+    // never mix with another type in one group); a caption is meaningful ONLY on the FIRST element, so a
+    // non-first element carrying a caption is rejected (consistent enforcement, not a silent drop).
+    private static void validateAlbum(ContentBlock block) {
+        requireParseMode(block.parseMode());
+        List<MediaItem> items = block.items();
+        if (items == null || items.size() < MIN_ALBUM_ITEMS) {
+            throw invalidStep("ALBUM block requires at least " + MIN_ALBUM_ITEMS + " items");
+        }
+        if (items.size() > MAX_ALBUM_ITEMS) {
+            throw invalidStep("ALBUM block exceeds the maximum of " + MAX_ALBUM_ITEMS + " items");
+        }
+        for (int i = 0; i < items.size(); i++) {
+            MediaItem item = items.get(i);
+            if (item == null) {
+                throw invalidStep("ALBUM item must not be null");
+            }
+            requireMediaSource("ALBUM", item.mediaUrl());
+            // Decision 5: only the first element's caption is meaningful — reject a stray caption elsewhere
+            // rather than drop it silently (the author would lose text without feedback).
+            if (i > 0 && item.caption() != null && !item.caption().isBlank()) {
+                throw invalidStep("ALBUM caption is only allowed on the first item");
+            }
+            warnIfOverLength("ALBUM", "caption", item.caption(), CAPTION_WARN_LIMIT);
+        }
+        // Note: Telegram's media-group type-mixing predicate is enforced on the URL/file_id source which
+        // carries no MIME hint here; mixing audio/document with photo/video is a runtime concern. Decision 5
+        // names the predicate but the model has no per-item kind discriminator, so the save-time guard is
+        // the size + source + caption-position rules above. (See decisions.md Deviations.)
+    }
+
+    // Validate the inline keyboard on the last non-album block (reuses the former MENU button/timeout/url
+    // rules verbatim — Decision 2). >=1 callback button so the subscriber can never get stuck; per button —
+    // non-empty label <= 64 chars; callback target null (End) or an existing id; url strictly http(s) with
+    // a non-empty host; at most 8 buttons. The optional timeout pair is validated too (audit-fix F1): an
+    // unvalidated/legacy timeoutUnit would make StepExecutor.durationOf throw BEFORE the keyboard is sent,
+    // stranding the execution in stepRunStatus=in_progress.
+    private static void validateButtons(FunnelStep step, Set<String> stepIds) {
+        List<Button> buttons = step.getButtons();
         requireTimeout(step.getTimeoutValue(), step.getTimeoutUnit());
         if (buttons.size() > MAX_BUTTONS) {
-            throw invalidStep("MENU step exceeds the maximum of " + MAX_BUTTONS + " buttons");
+            throw invalidStep("MESSAGE step exceeds the maximum of " + MAX_BUTTONS + " buttons");
         }
         int callbackCount = 0;
         for (Button button : buttons) {
             if (button.label() == null || button.label().isBlank()) {
-                throw invalidStep("MENU button requires a non-empty label");
+                throw invalidStep("MESSAGE button requires a non-empty label");
             }
             if (button.label().length() > MAX_BUTTON_LABEL) {
-                throw invalidStep("MENU button label exceeds " + MAX_BUTTON_LABEL + " characters");
+                throw invalidStep("MESSAGE button label exceeds " + MAX_BUTTON_LABEL + " characters");
             }
             if (BUTTON_TYPE_CALLBACK.equals(button.type())) {
                 callbackCount++;
                 // null targetStepId = End (valid). A non-null target must resolve to an existing step.
                 requireExistingTarget(button.targetStepId(), stepIds);
             } else if (BUTTON_TYPE_URL.equals(button.type())) {
-                requireHttpUrl(button.url());
+                requireUrl(button.url(), "button");
             } else {
-                throw invalidStep("MENU button type must be 'callback' or 'url'");
+                throw invalidStep("MESSAGE button type must be 'callback' or 'url'");
             }
         }
         if (callbackCount == 0) {
-            throw invalidStep("MENU step requires at least one callback button");
+            throw invalidStep("MESSAGE step requires at least one callback button");
+        }
+    }
+
+    // Over-length WARN channel (Decision 3): Telegram caps text at 4096 / media caption at 1024. Over-limit
+    // content does NOT block save — the engine trims+WARNs at send time. Log here so an author's over-long
+    // content is observable, but never throw. No PII: the value is NOT logged, only its length + field.
+    private static void warnIfOverLength(String blockType, String field, String value, int limit) {
+        if (value != null && value.length() > limit) {
+            log.warn("MESSAGE {} block {} exceeds {} chars (len={}); will be trimmed at send time",
+                    blockType, field, limit, value.length());
         }
     }
 
@@ -808,56 +1016,74 @@ public class FunnelService {
         }
     }
 
-    // Strict URL-button scheme check (Decision 10, SSRF / scheme-injection defense): parse via URI and
-    // require the scheme to be EXACTLY http or https (not startsWith) with a non-empty host. This rejects
-    // javascript:/data:/tg://, leading-whitespace-obfuscated values, and empty-host URLs. A malformed URI
-    // (URISyntaxException → IllegalArgumentException from URI(String) path) is mapped to 422, never 500.
-    private static void requireHttpUrl(String url) {
+    // Generic strict URL scheme check (Decision 10 / Decision 6, SSRF / scheme-injection defense), shared
+    // by the MESSAGE keyboard url-button and the media-source check. Parses via URI and requires the scheme
+    // to be EXACTLY http or https (not startsWith) with a non-empty host — rejecting file://, data:,
+    // javascript:, tg://, leading-whitespace-obfuscated values, and empty-host URLs. A malformed URI
+    // (URISyntaxException → IllegalArgumentException from URI(String)) maps to 422, never 500. fieldLabel is
+    // woven into the error message so the author sees which field is wrong (e.g. "IMAGE media url ..." vs
+    // "button url ...") instead of a misleading hardcoded "MENU url button".
+    private static void requireUrl(String url, String fieldLabel) {
         if (url == null || url.isBlank()) {
-            throw invalidStep("MENU url button requires a url");
+            throw invalidStep(fieldLabel + " url requires a value");
         }
         // Leading/trailing whitespace is never valid in a URL; reject before parsing so " http://x"
         // cannot slip a leading-space-obfuscated value past the scheme check.
         if (!url.equals(url.strip())) {
-            throw invalidStep("MENU url button must use the http or https scheme");
+            throw invalidStep(fieldLabel + " url must use the http or https scheme");
         }
         final URI uri;
         try {
             uri = new URI(url);
         } catch (Exception e) {
-            throw invalidStep("MENU url button is not a valid URL");
+            throw invalidStep(fieldLabel + " url is not a valid URL");
         }
         String scheme = uri.getScheme();
         if (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme)) {
-            throw invalidStep("MENU url button must use the http or https scheme");
+            throw invalidStep(fieldLabel + " url must use the http or https scheme");
         }
         if (uri.getHost() == null || uri.getHost().isBlank()) {
-            throw invalidStep("MENU url button must have a non-empty host");
+            throw invalidStep(fieldLabel + " url must have a non-empty host");
         }
     }
 
-    private static void requireText(String text) {
-        if (text == null || text.isBlank()) {
-            throw invalidStep("SEND_MESSAGE step requires non-empty text");
+    // A media source (Decision 6) is EITHER an http(s) URL OR an opaque Telegram file_id token. The backend
+    // never dereferences it (anti-SSRF). Disambiguation: if the value carries a URI scheme separator (looks
+    // like "<scheme>:..."), it is treated as a URL and validated strictly via requireUrl — so file://,
+    // data:, javascript: and empty-host URLs are rejected. Otherwise it is accepted as an opaque file_id (a
+    // bare token with no scheme). Null/blank is always rejected. The field label (block type) is woven into
+    // the error so the message names the right block, not a hardcoded "MENU".
+    private static void requireMediaSource(String blockType, String mediaUrl) {
+        if (mediaUrl == null || mediaUrl.isBlank()) {
+            throw invalidStep(blockType + " block requires a mediaUrl (http(s) URL or file_id)");
         }
-        if (text.length() > 4096) {
-            throw invalidStep("SEND_MESSAGE text exceeds 4096 characters");
+        if (looksLikeUrl(mediaUrl)) {
+            requireUrl(mediaUrl, blockType + " media");
         }
+        // else: opaque file_id — accepted as-is (Decision 6). No dereference, no scheme.
+    }
+
+    // Heuristic for "this value is a URL, not a bare file_id": it has a URI scheme separator. A scheme is
+    // ^[A-Za-z][A-Za-z0-9+.-]*: per RFC 3986; a value matching that prefix is treated as a URL and held to
+    // the strict http(s) rule (so file://, data:, javascript: are caught). A Telegram file_id (alnum / _ / -
+    // only, no ':') has no scheme and is treated as opaque. A leading-whitespace value (" http://...") does
+    // NOT match the anchored scheme regex, so it is routed to requireUrl, which rejects it on the strip
+    // guard — never silently accepted as a file_id.
+    private static final Pattern URI_SCHEME_PREFIX = Pattern.compile("^[A-Za-z][A-Za-z0-9+.-]*:.*");
+
+    private static boolean looksLikeUrl(String value) {
+        String stripped = value.strip();
+        // A leading-whitespace value is suspicious: route it to requireUrl (which rejects it) rather than
+        // accept it as a file_id.
+        if (!value.equals(stripped)) {
+            return true;
+        }
+        return URI_SCHEME_PREFIX.matcher(value).matches();
     }
 
     private static void requireParseMode(String parseMode) {
         if (parseMode != null && !"HTML".equals(parseMode) && !"MarkdownV2".equals(parseMode)) {
             throw invalidStep("parseMode must be HTML or MarkdownV2");
-        }
-    }
-
-    private static void requireImageUrl(String imageUrl) {
-        if (imageUrl == null || imageUrl.isBlank()) {
-            throw invalidStep("SEND_IMAGE step requires an imageUrl");
-        }
-        String lower = imageUrl.toLowerCase(Locale.ROOT);
-        if (!lower.startsWith("http://") && !lower.startsWith("https://")) {
-            throw invalidStep("imageUrl must use the http or https scheme");
         }
     }
 
@@ -871,19 +1097,20 @@ public class FunnelService {
         // MIN/HOUR/DAY with delayValue >= 1 is always >= 1 minute, satisfying Decision 9's floor.
     }
 
-    // Optional MENU timeout pair (audit-fix F1). null/null = unlimited wait (valid). Otherwise BOTH must
-    // be present, timeoutUnit in {MIN,HOUR,DAY} (same convention as delayUnit; StepExecutor.durationOf
-    // only understands these) and timeoutValue >= 1. An invalid pair is a 422 funnel_step_invalid — NOT a
-    // 500, and never reaches the engine where an unknown unit would strand the execution.
+    // Optional MESSAGE keyboard timeout pair (audit-fix F1; the park-on-reply timeout on the last-block
+    // keyboard). null/null = unlimited wait (valid). Otherwise BOTH must be present, timeoutUnit in
+    // {MIN,HOUR,DAY} (same convention as delayUnit; StepExecutor.durationOf only understands these) and
+    // timeoutValue >= 1. An invalid pair is a 422 funnel_step_invalid — NOT a 500, and never reaches the
+    // engine where an unknown unit would strand the execution.
     private static void requireTimeout(Integer timeoutValue, String timeoutUnit) {
         if (timeoutValue == null && timeoutUnit == null) {
             return; // no timeout configured → unlimited wait
         }
         if (timeoutValue == null || timeoutUnit == null) {
-            throw invalidStep("MENU timeout requires both timeoutValue and timeoutUnit");
+            throw invalidStep("MESSAGE timeout requires both timeoutValue and timeoutUnit");
         }
         if (timeoutValue < 1) {
-            throw invalidStep("MENU timeoutValue must be >= 1");
+            throw invalidStep("MESSAGE timeoutValue must be >= 1");
         }
         if (!"MIN".equals(timeoutUnit) && !"HOUR".equals(timeoutUnit) && !"DAY".equals(timeoutUnit)) {
             throw invalidStep("timeoutUnit must be MIN, HOUR or DAY");
@@ -960,10 +1187,7 @@ public class FunnelService {
                 step.getTimeoutValue(),
                 step.getTimeoutUnit(),
                 step.getTimeoutTargetStepId(),
-                step.getText(),
-                step.getParseMode(),
-                step.getImageUrl(),
-                step.getCaption(),
+                toBlockDtos(step.getBlocks()),
                 step.getDelayValue(),
                 step.getDelayUnit(),
                 step.getTagSlug(),
@@ -981,6 +1205,33 @@ public class FunnelService {
         }
         return buttons.stream()
                 .map(b -> new ButtonDto(b.type(), b.label(), b.targetStepId(), b.url()))
+                .toList();
+    }
+
+    // domain → DTO mapper for the MESSAGE composer blocks (the round-trip inverse of toBlocks). A null
+    // blocks list maps to null; every field (type discriminator name, text, parseMode, mediaUrl, caption,
+    // album items + per-element caption) round-trips verbatim WITHOUT silent drop.
+    private static List<ContentBlockDto> toBlockDtos(List<ContentBlock> blocks) {
+        if (blocks == null) {
+            return null;
+        }
+        return blocks.stream()
+                .map(b -> new ContentBlockDto(
+                        b.type() == null ? null : b.type().name(),
+                        b.text(),
+                        b.parseMode(),
+                        b.mediaUrl(),
+                        b.caption(),
+                        toMediaItemDtos(b.items())))
+                .toList();
+    }
+
+    private static List<MediaItemDto> toMediaItemDtos(List<MediaItem> items) {
+        if (items == null) {
+            return null;
+        }
+        return items.stream()
+                .map(m -> new MediaItemDto(m.mediaUrl(), m.caption()))
                 .toList();
     }
 

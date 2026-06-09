@@ -9,15 +9,20 @@ import java.util.List;
 // One step in the UpdateFunnelRequest steps array. stepType is the discriminator; the remaining
 // fields are type-specific and nullable (flat shape, Decision 12 — no _class discriminator). Only
 // stepType is bean-validated here (@NotNull → 400): all per-type required-field / format checks
-// (empty text, http(s) imageUrl, tagSlug slug shape, delay >= 1 min, MENU button/edge rules) are
-// conditional on stepType and therefore live in FunnelService → 422 with a business code, not as
-// field-level bean validation (which would fire regardless of stepType and could only produce 400).
+// (composer blocks 1–10, per-type block fields, album size/type-mixing, http(s) media URL, tagSlug
+// slug shape, delay >= 1 min, button/edge rules) are conditional on stepType and therefore live in
+// FunnelService → 422 with a business code, not as field-level bean validation (which would fire
+// regardless of stepType and could only produce 400).
 // `order` is intentionally absent: the server rewrites it from the array index (position = order).
 //
 // Phase 2 (graph model, Decision 2): `id` is the stable step id round-tripped to/from the client
 // (minted server-side in toSteps when absent); `next` is the default outgoing edge; `buttons` +
-// timeout fields apply to MENU steps. Targets (`next`, button targetStepId, timeoutTargetStepId) are
-// stable ids, never array indices, so reorder in the editor is safe without remapping.
+// timeout fields apply to the MESSAGE composer step (attached to the last non-album block — Decision 2).
+// Targets (`next`, button targetStepId, timeoutTargetStepId) are stable ids, never array indices, so
+// reorder in the editor is safe without remapping.
+//
+// 15-message-composer (Decision 1): the former flat msg fields (text/parseMode/imageUrl/caption) are
+// replaced by `blocks` — an ordered List<ContentBlockDto> carrying the composer's content blocks.
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record FunnelStepDto(
         @NotNull StepType stepType,
@@ -27,10 +32,7 @@ public record FunnelStepDto(
         Integer timeoutValue,
         String timeoutUnit,
         String timeoutTargetStepId,
-        String text,
-        String parseMode,
-        String imageUrl,
-        String caption,
+        List<ContentBlockDto> blocks,
         Integer delayValue,
         String delayUnit,
         String tagSlug,

@@ -23,6 +23,7 @@ import org.springframework.http.MediaType;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -83,7 +84,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @WithMockAppUser(userId = USER_ID)
     void listFiltersByStatus() throws Exception {
         seedFunnel("Draft one", FunnelStatus.draft, "", List.of());
-        seedFunnel("Active one", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        seedFunnel("Active one", FunnelStatus.active, "promo", List.of(messageStep("hi")));
 
         mockMvc.perform(get(url() + "?status=active"))
                 .andExpect(status().isOk())
@@ -102,12 +103,14 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void getReturnsFullFunnelWithSteps() throws Exception {
         seedConnectedBot("my_bot");
         Funnel f = seedFunnel("Active", FunnelStatus.active, "promo",
-                List.of(sendMessage("hello"), delayStep(5, "MIN")));
+                List.of(messageStep("hello"), delayStep(5, "MIN")));
 
         mockMvc.perform(get(url() + "/" + f.getId()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.steps.length()").value(2))
-                .andExpect(jsonPath("$.steps[0].stepType").value("SEND_MESSAGE"))
+                .andExpect(jsonPath("$.steps[0].stepType").value("MESSAGE"))
+                .andExpect(jsonPath("$.steps[0].blocks[0].type").value("TEXT"))
+                .andExpect(jsonPath("$.steps[0].blocks[0].text").value("hello"))
                 .andExpect(jsonPath("$.steps[1].stepType").value("DELAY"))
                 // deepLink present for an active funnel (survives page reload, not only activate resp).
                 .andExpect(jsonPath("$.deepLink").value("t.me/my_bot?start=promo"));
@@ -124,7 +127,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 "name", "Draft",
                 "triggerValue", "",
                 "steps", List.of(
-                        stepMap("SEND_MESSAGE", Map.of("text", "first")),
+                        messageStepMap(textBlock("first")),
                         stepMap("DELAY", Map.of("delayValue", 2, "delayUnit", "HOUR")),
                         stepMap("ADD_TAG", Map.of("tagSlug", "vip"))));
 
@@ -141,7 +144,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         assertThat(steps.get(0).getOrder()).isZero();
         assertThat(steps.get(1).getOrder()).isEqualTo(1);
         assertThat(steps.get(2).getOrder()).isEqualTo(2);
-        assertThat(steps.get(0).getStepType()).isEqualTo(StepType.SEND_MESSAGE);
+        assertThat(steps.get(0).getStepType()).isEqualTo(StepType.MESSAGE);
         assertThat(steps.get(2).getStepType()).isEqualTo(StepType.ADD_TAG);
     }
 
@@ -150,10 +153,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void deleteReturns204AndCancelsActiveExecutions() throws Exception {
-        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(messageStep("hi")));
         String runningId = seedExecution(f.getId(), ExecutionStatus.running);
         String waitingId = seedExecution(f.getId(), ExecutionStatus.waiting);
-        // A parked MENU execution (waiting_for_reply) must be cancelled by delete too (audit-fix F5).
+        // A parked composer execution (waiting_for_reply) must be cancelled by delete too (audit-fix F5).
         String waitingForReplyId = seedExecution(f.getId(), ExecutionStatus.waiting_for_reply);
         String completedId = seedExecution(f.getId(), ExecutionStatus.completed);
 
@@ -184,7 +187,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void duplicateReturns201DraftWithResetTrigger() throws Exception {
         // An ACTIVE funnel with a non-default trigger (on_start, "promo"); the copy must be born draft
         // with the trigger reset to (on_start, "") regardless of the original's trigger.
-        Funnel f = seedFunnel("Promo", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Promo", FunnelStatus.active, "promo", List.of(messageStep("hi")));
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
                 .andExpect(status().isCreated())
@@ -197,15 +200,12 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void duplicateCopiesGraphVerbatim() throws Exception {
-        // Build a two-step graph with explicit ids + edges: a MENU (with a callback targetStepId + a
-        // timeout edge) and its SEND_MESSAGE target. The copy must preserve step ids and every edge
-        // verbatim, copy keywords/allowReEnter/description, and leave the original untouched.
-        FunnelStep target = new FunnelStep();
-        target.setStepType(StepType.SEND_MESSAGE);
-        target.setText("branch");
-        target.setId("target-1");
+        // Build a two-step graph with explicit ids + edges: a composer MESSAGE (with a callback
+        // targetStepId on its last-block keyboard + a timeout edge) and its MESSAGE target. The copy must
+        // preserve step ids and every edge verbatim, copy keywords/allowReEnter/description, leave original.
+        FunnelStep target = textStep("target-1", "branch");
 
-        FunnelStep menu = menuStep("menu-1", callbackButton("Go", "target-1"));
+        FunnelStep menu = composerWithButtons("menu-1", "menu", callbackButton("Go", "target-1"));
         menu.setNext("target-1");
         menu.setTimeoutValue(2);
         menu.setTimeoutUnit("HOUR");
@@ -242,7 +242,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         assertThat(copiedMenu.getButtons().get(0).targetStepId()).isEqualTo("target-1");
         assertThat(copiedTarget.getId()).isEqualTo("target-1");
 
-        // Original is unchanged: still draft was its seed status here, still its own id, steps intact.
+        // Original is unchanged.
         Funnel original = funnelRepository.findById(f.getId()).orElseThrow();
         assertThat(original.getName()).isEqualTo("Graph");
         assertThat(original.getSteps()).hasSize(2);
@@ -318,7 +318,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void stopAllCancelsActiveAndSetsStepRunDone() throws Exception {
-        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(messageStep("hi")));
         String runningId = seedExecution(f.getId(), ExecutionStatus.running);
         String waitingId = seedExecution(f.getId(), ExecutionStatus.waiting);
         String waitingForReplyId = seedExecution(f.getId(), ExecutionStatus.waiting_for_reply);
@@ -344,7 +344,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void stopAllWithNoActiveReturnsZero() throws Exception {
-        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(messageStep("hi")));
         seedExecution(f.getId(), ExecutionStatus.completed);
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/executions/stop").with(csrf()))
@@ -355,11 +355,11 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void stopAllScopedByProjectAndFunnel() throws Exception {
-        Funnel f = seedFunnel("Target", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Target", FunnelStatus.active, "promo", List.of(messageStep("hi")));
         String mineRunning = seedExecution(f.getId(), ExecutionStatus.running);
 
         // Sibling execution under ANOTHER funnel in the SAME project — must NOT be cancelled.
-        Funnel sibling = seedFunnel("Sibling", FunnelStatus.active, "other", List.of(sendMessage("x")));
+        Funnel sibling = seedFunnel("Sibling", FunnelStatus.active, "other", List.of(messageStep("x")));
         String siblingRunning = seedExecution(sibling.getId(), ExecutionStatus.running);
 
         // Execution under ANOTHER project but the SAME funnelId — must NOT be cancelled (tenant scope).
@@ -409,10 +409,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void activateValidatesRequiredFields() throws Exception {
-        // Seed (directly) a draft whose SEND_MESSAGE step is missing its required text — activate must
+        // Seed (directly) a draft whose MESSAGE composer step has an empty blocks list — activate must
         // re-validate per-type fields and reject with 422 (defense-in-depth beyond the update path).
         FunnelStep broken = new FunnelStep();
-        broken.setStepType(StepType.SEND_MESSAGE);
+        broken.setStepType(StepType.MESSAGE);
         broken.setOrder(0);
         Funnel f = seedFunnel("Broken", FunnelStatus.draft, "promo",
                 new ArrayList<>(List.of(broken)));
@@ -426,7 +426,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @WithMockAppUser(userId = USER_ID)
     void activateSucceedsAndReturnsDeepLink() throws Exception {
         seedConnectedBot("promo_bot");
-        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(messageStep("hi")));
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
                 .andExpect(status().isOk())
@@ -437,7 +437,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void pauseTransitionsActiveToPaused() throws Exception {
-        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Active", FunnelStatus.active, "promo", List.of(messageStep("hi")));
         mockMvc.perform(post(url() + "/" + f.getId() + "/pause").with(csrf()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.status").value("paused"));
@@ -448,8 +448,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void activateTriggerConflictReturns422() throws Exception {
         // An already-active funnel owns (on_start, "promo"); activating a second draft with the same
         // trigger trips the SERVICE pre-check → 422 funnel_trigger_conflict (first line of Decision 8).
-        seedFunnel("First", FunnelStatus.active, "promo", List.of(sendMessage("a")));
-        Funnel second = seedFunnel("Second", FunnelStatus.draft, "promo", List.of(sendMessage("b")));
+        seedFunnel("First", FunnelStatus.active, "promo", List.of(messageStep("a")));
+        Funnel second = seedFunnel("Second", FunnelStatus.draft, "promo", List.of(messageStep("b")));
 
         mockMvc.perform(post(url() + "/" + second.getId() + "/activate").with(csrf()))
                 .andExpect(status().isUnprocessableEntity())
@@ -461,13 +461,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         // Both funnels start in draft, so two simultaneous activate() calls BOTH pass the service
         // pre-check (no active funnel exists yet) and race to save status=active. The partial-unique
         // index lets exactly one win; the loser's DuplicateKeyException MUST be mapped to 422
-        // funnel_trigger_conflict (NOT surface as a 500). Driven at the service layer (no HTTP/session
-        // needed — activate takes ownerId directly) to isolate the index branch deterministically.
-        Funnel a = seedFunnel("A", FunnelStatus.draft, "race", List.of(sendMessage("a")));
-        Funnel b = seedFunnel("B", FunnelStatus.draft, "race", List.of(sendMessage("b")));
+        // funnel_trigger_conflict (NOT surface as a 500). Driven at the service layer to isolate the index.
+        Funnel a = seedFunnel("A", FunnelStatus.draft, "race", List.of(messageStep("a")));
+        Funnel b = seedFunnel("B", FunnelStatus.draft, "race", List.of(messageStep("b")));
 
-        // parallelInvoke runs the SAME callable n times; an atomic counter routes invocation 0 → a,
-        // invocation 1 → b so the two parked VTs activate distinct funnels on simultaneous release.
         java.util.concurrent.atomic.AtomicInteger idx = new java.util.concurrent.atomic.AtomicInteger();
         List<Object> outcomes = ConcurrencyTestUtils.parallelInvoke(2, () ->
                 activateCatching(idx.getAndIncrement() == 0 ? a.getId() : b.getId()));
@@ -478,7 +475,6 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         assertThat(activated).as("exactly one funnel becomes active").isEqualTo(1L);
         assertThat(conflicts).as("the loser is mapped to 422 funnel_trigger_conflict, not 500")
                 .isEqualTo(1L);
-        // And the index left exactly one active row for this trigger.
         assertThat(funnelRepository.findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
                 projectId, FunnelService.TRIGGER_ON_START, "race", FunnelStatus.active)).isPresent();
     }
@@ -493,7 +489,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void testRunOwnerChatIdNullReturns422() throws Exception {
         // Bot connected but ownerChatId not captured → 422 funnel_owner_not_linked, NOT 500 (HTTP-shape).
         seedConnectedBot("my_bot"); // no ownerChatId
-        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(messageStep("hi")));
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
                 .andExpect(status().isUnprocessableEntity())
@@ -505,7 +501,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void testRunSubscriberMissingReturns422() throws Exception {
         // ownerChatId set but no subscriber doc for it → 422 funnel_owner_not_linked.
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
-        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(messageStep("hi")));
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
                 .andExpect(status().isUnprocessableEntity())
@@ -518,7 +514,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         // Subscriber exists for ownerChatId but is BLOCKED (not ACTIVE) → 422 funnel_owner_not_linked.
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.BLOCKED);
-        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Ready", FunnelStatus.draft, "go", List.of(messageStep("hi")));
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
                 .andExpect(status().isUnprocessableEntity())
@@ -541,11 +537,11 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void testRunInvalidStepsReturns422() throws Exception {
-        // Linked owner but a SEND_MESSAGE step missing required text → same 422 funnel_step_invalid.
+        // Linked owner but a MESSAGE step with no blocks → same 422 funnel_step_invalid.
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
         FunnelStep broken = new FunnelStep();
-        broken.setStepType(StepType.SEND_MESSAGE);
+        broken.setStepType(StepType.MESSAGE);
         broken.setOrder(0);
         Funnel f = seedFunnel("Broken", FunnelStatus.draft, "go", new ArrayList<>(List.of(broken)));
 
@@ -560,12 +556,11 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         // A DRAFT (valid, non-empty) funnel is test-runnable — the status-gate does not block (Decision 2).
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "go", List.of(messageStep("hi")));
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
                 .andExpect(status().is2xxSuccessful());
 
-        // An execution was created from step 0 with depth 0, pinned to the bot's telegramBotId.
         List<FunnelExecution> execs = inFlightExecutions(f.getId(), owner.getId());
         assertThat(execs).hasSize(1);
         FunnelExecution e = execs.get(0);
@@ -578,13 +573,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void testRunRestartCancelsPrevious() throws Exception {
-        // A repeat test-run cancels the previous in-flight execution of the (funnel, subscriber) pair
-        // (cancelExistingForPair BEFORE insertExecution) and starts fresh — the previous row → cancelled,
-        // a new running row exists. This also proves the cancel-before-insert ORDER: were insert first,
-        // the re-enter partial-unique index would trip a DuplicateKeyException (→ 500), not a clean 2xx.
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "go", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "go", List.of(messageStep("hi")));
 
         mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
                 .andExpect(status().is2xxSuccessful());
@@ -593,7 +584,6 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         mockMvc.perform(post(url() + "/" + f.getId() + "/test-run").with(csrf()))
                 .andExpect(status().is2xxSuccessful());
 
-        // Previous run was cancelled; exactly one in-flight row remains (the fresh one, a new id).
         assertThat(execStatus(firstExecId)).isEqualTo(ExecutionStatus.cancelled);
         List<FunnelExecution> inFlight = inFlightExecutions(f.getId(), owner.getId());
         assertThat(inFlight).hasSize(1);
@@ -613,7 +603,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(status().isNotFound());
     }
 
-    // ─── preview ─────────────────────────────────────────────────────────────────
+    // ─── preview (multiblock) ──────────────────────────────────────────────────
 
     @Test
     @WithMockAppUser(userId = USER_ID)
@@ -625,87 +615,106 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         subscriberRepository.save(owner);
         String stepId = "s1";
         Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+                new ArrayList<>(List.of(textStep(stepId, "saved"))));
 
         mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE",
-                                "text", "Hi {user.first_name}!"))))
+                        .content(previewBody("MESSAGE", textBlock("Hi {user.first_name}!"))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value("Hi a & b < c > d!"))
+                .andExpect(jsonPath("$.renderedBlocks.length()").value(1))
+                .andExpect(jsonPath("$.renderedBlocks[0].type").value("TEXT"))
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value("Hi a & b < c > d!"))
                 .andExpect(jsonPath("$.sampleData").value(false))
                 .andExpect(jsonPath("$.kind").value("message"));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void previewMenuStepRendersAsMessage() throws Exception {
-        // MENU is a message-kind step (isMessageStep true): its on-the-fly body text renders with
-        // substitution and kind=message, mirroring SEND_MESSAGE. The saved MENU has no required text;
-        // the REQUEST text is what renders (on-the-fly, Decision 9).
-        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
-        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
-        owner.setFirstName("Менютест");
-        subscriberRepository.save(owner);
-        String stepId = "menu-1";
-        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(menuStep(stepId, callbackButton("Go", null)))));
-
-        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "MENU",
-                                "text", "Оберіть, {user.first_name}"))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value("Оберіть, Менютест"))
-                .andExpect(jsonPath("$.sampleData").value(false))
-                .andExpect(jsonPath("$.kind").value("message"));
-    }
-
-    @Test
-    @WithMockAppUser(userId = USER_ID)
-    void previewSendImageStepRendersCaptionAsMessage() throws Exception {
-        // SEND_IMAGE is a message-kind step: its on-the-fly caption (carried in the request `text` field)
-        // renders with substitution and kind=message, mirroring SEND_MESSAGE.
+    void previewMediaCaptionRendersAsMessage() throws Exception {
+        // An IMAGE block: its on-the-fly caption renders with substitution; mediaUrl passes through
+        // verbatim (never dereferenced).
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
         owner.setFirstName("Фотоклієнт");
         subscriberRepository.save(owner);
         String stepId = "img-1";
-        FunnelStep image = new FunnelStep();
-        image.setStepType(StepType.SEND_IMAGE);
-        image.setId(stepId);
-        image.setImageUrl("https://example.com/x.png");
-        image.setCaption("saved caption");
+        FunnelStep image = composer(stepId, imageBlock("https://example.com/x.png", "saved caption"));
         Funnel f = seedFunnel("F", FunnelStatus.draft, "go", new ArrayList<>(List.of(image)));
 
         mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_IMAGE",
-                                "text", "Привіт, {user.first_name}!"))))
+                        .content(previewBody("MESSAGE",
+                                imageBlockMap("https://example.com/x.png", "Привіт, {user.first_name}!"))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value("Привіт, Фотоклієнт!"))
-                .andExpect(jsonPath("$.sampleData").value(false))
+                .andExpect(jsonPath("$.renderedBlocks[0].type").value("IMAGE"))
+                .andExpect(jsonPath("$.renderedBlocks[0].mediaUrl").value("https://example.com/x.png"))
+                .andExpect(jsonPath("$.renderedBlocks[0].caption").value("Привіт, Фотоклієнт!"))
                 .andExpect(jsonPath("$.kind").value("message"));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void previewHtmlEscapes() throws Exception {
-        // parseMode=HTML → substituted value escapes & < > " ; author markup <b> stays untouched.
+    void previewMultiblockReturnsRenderedArray() throws Exception {
+        // A multiblock composer (TEXT + IMAGE + ALBUM) → renderedBlocks array preserves order + types,
+        // renders text/caption with substitution, passes media verbatim (no dereference).
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
-        owner.setFirstName("& < > \"");
+        owner.setFirstName("Ірина");
         subscriberRepository.save(owner);
         String stepId = "s1";
         Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+                new ArrayList<>(List.of(textStep(stepId, "saved"))));
+
+        List<Map<String, Object>> blocks = List.of(
+                textBlock("Привіт {user.first_name}"),
+                imageBlockMap("https://example.com/a.jpg", "img {user.first_name}"),
+                albumBlock(
+                        mediaItem("https://example.com/1.jpg", "first {user.first_name}"),
+                        mediaItem("https://example.com/2.jpg", null)));
 
         mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE",
-                                "text", "<b>{user.first_name}</b>", "parseMode", "HTML"))))
+                        .content(previewBodyBlocks("MESSAGE", blocks)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value("<b>&amp; &lt; &gt; &quot;</b>"));
+                .andExpect(jsonPath("$.kind").value("message"))
+                .andExpect(jsonPath("$.renderedBlocks.length()").value(3))
+                .andExpect(jsonPath("$.renderedBlocks[0].type").value("TEXT"))
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value("Привіт Ірина"))
+                .andExpect(jsonPath("$.renderedBlocks[1].type").value("IMAGE"))
+                .andExpect(jsonPath("$.renderedBlocks[1].mediaUrl").value("https://example.com/a.jpg"))
+                .andExpect(jsonPath("$.renderedBlocks[1].caption").value("img Ірина"))
+                .andExpect(jsonPath("$.renderedBlocks[2].type").value("ALBUM"))
+                .andExpect(jsonPath("$.renderedBlocks[2].items.length()").value(2))
+                .andExpect(jsonPath("$.renderedBlocks[2].items[0].caption").value("first Ірина"))
+                .andExpect(jsonPath("$.renderedBlocks[2].items[0].mediaUrl").value("https://example.com/1.jpg"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewEscapesHostilePayload() throws Exception {
+        // XSS-negative (OWASP A03, Decision 8): a hostile <script> payload in a substituted value with
+        // parseMode=HTML must be escaped (&lt;script&gt;); no unescaped markup leaks. Author markup <b>
+        // in the template stays untouched (only substituted values are escaped).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("<script>alert(1)</script>");
+        subscriberRepository.save(owner);
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(textStep(stepId, "saved"))));
+
+        Map<String, Object> block = textBlock("<b>{user.first_name}</b>");
+        block.put("parseMode", "HTML");
+
+        String body = mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewBody("MESSAGE", block)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.renderedBlocks[0].text")
+                        .value("<b>&lt;script&gt;alert(1)&lt;/script&gt;</b>"))
+                .andReturn().getResponse().getContentAsString();
+        // Defense-in-depth: the raw response must NOT contain the unescaped hostile tag.
+        assertThat(body).doesNotContain("<script>");
     }
 
     @Test
@@ -719,82 +728,45 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         subscriberRepository.save(owner);
         String stepId = "s1";
         Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+                new ArrayList<>(List.of(textStep(stepId, "saved"))));
 
         StringBuilder expected = new StringBuilder();
         for (char c : specials.toCharArray()) {
             expected.append('\\').append(c);
         }
 
-        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE",
-                                "text", "{user.first_name}", "parseMode", "MarkdownV2"))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value(expected.toString()));
-    }
-
-    @Test
-    @WithMockAppUser(userId = USER_ID)
-    void previewLiteralBraces() throws Exception {
-        // {{ / }} render as literal { / } ; an unclosed { is left verbatim — renderer never throws.
-        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
-        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
-        String stepId = "s1";
-        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+        Map<String, Object> block = textBlock("{user.first_name}");
+        block.put("parseMode", "MarkdownV2");
 
         mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE",
-                                "text", "{{literal}} and {unclosed"))))
+                        .content(previewBody("MESSAGE", block)))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value("{literal} and {unclosed"));
-    }
-
-    @Test
-    @WithMockAppUser(userId = USER_ID)
-    void previewDoubleDropsTrailingZero() throws Exception {
-        // An integral Double custom value 30.0 renders as 30 (no trailing .0), like the runtime.
-        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
-        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
-        owner.setCustomFields(Map.of("age", 30.0d));
-        subscriberRepository.save(owner);
-        String stepId = "s1";
-        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
-
-        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE",
-                                "text", "Age: {custom.age}"))))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value("Age: 30"));
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value(expected.toString()));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void previewUnlinkedBotUsesStubSubscriber() throws Exception {
         // No linked owner → render on sample stub (Іван/Петренко/ivan), sampleData=true, no NPE/500.
-        // No bot seeded at all.
         String stepId = "s1";
         Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(sendMessageStep(stepId, "saved"))));
+                new ArrayList<>(List.of(textStep(stepId, "saved"))));
 
         mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE",
-                                "text", "{user.first_name} {user.last_name} @{user.username}"))))
+                        .content(previewBody("MESSAGE",
+                                textBlock("{user.first_name} {user.last_name} @{user.username}"))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value("Іван Петренко @ivan"))
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value("Іван Петренко @ivan"))
                 .andExpect(jsonPath("$.sampleData").value(true))
                 .andExpect(jsonPath("$.kind").value("message"));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void previewNonMessageStepReturnsPlaceholder() throws Exception {
-        // A non-message step (DELAY) → kind=non_message, rendered="" — placeholder, not 500.
+    void previewNonMessageStepReturnsEmptyArray() throws Exception {
+        // A non-message step (DELAY) → kind=non_message, renderedBlocks=[] — placeholder, not 500.
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
         String stepId = "d1";
@@ -807,17 +779,16 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
         mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "DELAY", "text", "ignored"))))
+                        .content(json(Map.of("stepType", "DELAY"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.kind").value("non_message"))
-                .andExpect(jsonPath("$.rendered").value(""));
+                .andExpect(jsonPath("$.renderedBlocks.length()").value(0));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void previewSubscribeToFunnelStepReturnsNonMessagePlaceholder() throws Exception {
-        // SUBSCRIBE_TO_FUNNEL is a non-message step (isMessageStep false) → kind=non_message,
-        // rendered="" placeholder (pins composition-step preview alongside the generic DELAY case).
+        // SUBSCRIBE_TO_FUNNEL is a non-message step → kind=non_message, renderedBlocks=[].
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
         String stepId = "s1";
@@ -829,42 +800,41 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
         mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SUBSCRIBE_TO_FUNNEL", "text", "ignored"))))
+                        .content(json(Map.of("stepType", "SUBSCRIBE_TO_FUNNEL"))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.kind").value("non_message"))
-                .andExpect(jsonPath("$.rendered").value(""));
+                .andExpect(jsonPath("$.renderedBlocks.length()").value(0));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void previewUnknownStepIdReturns404() throws Exception {
-        // Unknown stepId in an OWNED, valid funnel → 404 (AppException.notFound).
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
         Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(sendMessageStep("s1", "saved"))));
+                new ArrayList<>(List.of(textStep("s1", "saved"))));
 
         mockMvc.perform(post(previewUrl(f, "no-such-step")).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE", "text", "hi"))))
+                        .content(previewBody("MESSAGE", textBlock("hi"))))
                 .andExpect(status().isNotFound());
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void previewOnTheFlyContentNotSavedStep() throws Exception {
-        // The request text differs from the saved step text → the REQUEST text renders (proves on-the-fly).
+        // The request block text differs from the saved step text → the REQUEST text renders.
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
         String stepId = "s1";
         Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
-                new ArrayList<>(List.of(sendMessageStep(stepId, "SAVED-TEXT"))));
+                new ArrayList<>(List.of(textStep(stepId, "SAVED-TEXT"))));
 
         mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE", "text", "LIVE-TEXT"))))
+                        .content(previewBody("MESSAGE", textBlock("LIVE-TEXT"))))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.rendered").value("LIVE-TEXT"));
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value("LIVE-TEXT"));
     }
 
     @Test
@@ -875,7 +845,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
         mockMvc.perform(post(url() + "/" + foreignId + "/steps/s1/preview").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE", "text", "hi"))))
+                        .content(previewBody("MESSAGE", textBlock("hi"))))
                 .andExpect(status().isNotFound());
     }
 
@@ -883,13 +853,12 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @WithMockAppUser(userId = USER_ID)
     void previewIdorPrecedenceOver422AndStepId404() throws Exception {
         // A foreign funnel + an unknown stepId: the requireFunnel-404 PRECEDES the stepId-404, so the
-        // 404-vs-404 result never becomes an existence oracle (Decision 9). (Both collapse to 404; the
-        // point is that the foreign-funnel check runs FIRST — a 200/422 here would leak step existence.)
+        // 404-vs-404 result never becomes an existence oracle (Decision 9).
         String foreignId = seedForeignFunnel();
 
         mockMvc.perform(post(url() + "/" + foreignId + "/steps/does-not-exist/preview").with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("stepType", "SEND_MESSAGE", "text", "hi"))))
+                        .content(previewBody("MESSAGE", textBlock("hi"))))
                 .andExpect(status().isNotFound());
     }
 
@@ -898,7 +867,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void pauseNonActiveReturns422() throws Exception {
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of(sendMessage("hi")));
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of(messageStep("hi")));
         mockMvc.perform(post(url() + "/" + f.getId() + "/pause").with(csrf()))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_invalid_state"));
@@ -907,13 +876,11 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateActiveFunnelToCollidingTriggerReturns422() throws Exception {
-        // Editing an active funnel's trigger to collide with ANOTHER active funnel must be 422
-        // (defense-in-depth on the update path), never a 500 from the partial-unique index.
-        seedFunnel("First", FunnelStatus.active, "taken", List.of(sendMessage("a")));
-        Funnel second = seedFunnel("Second", FunnelStatus.active, "free", List.of(sendMessage("b")));
+        seedFunnel("First", FunnelStatus.active, "taken", List.of(messageStep("a")));
+        Funnel second = seedFunnel("Second", FunnelStatus.active, "free", List.of(messageStep("b")));
 
         Map<String, Object> body = Map.of("name", "Second", "triggerValue", "taken",
-                "steps", List.of(stepMap("SEND_MESSAGE", Map.of("text", "b"))));
+                "steps", List.of(messageStepMap(textBlock("b"))));
         mockMvc.perform(put(url() + "/" + second.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(body)))
@@ -924,8 +891,6 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void malformedFunnelIdReturns404() throws Exception {
-        // Non-hex funnelId must collapse to the uniform anti-enumeration 404, not a 500 from the
-        // ObjectId conversion inside findById.
         mockMvc.perform(get(url() + "/not-a-valid-objectid"))
                 .andExpect(status().isNotFound());
     }
@@ -933,8 +898,6 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void crossProjectFunnelReturnsUniform404() throws Exception {
-        // A funnel that belongs to ANOTHER project must collapse to 404 on every verb, even though the
-        // caller owns the project in the path — never 403, never 500, never a leak of existence.
         seedUser(OTHER_USER_ID, "other@test.com");
         String foreignProject = saveProject(OTHER_USER_ID, null).getId();
         Funnel foreign = new Funnel();
@@ -948,7 +911,6 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         foreign.setUpdatedAt(Instant.now());
         String foreignId = funnelRepository.save(foreign).getId();
 
-        // GET, PUT, DELETE, activate of the foreign funnel under MY project path → uniform 404.
         mockMvc.perform(get(url() + "/" + foreignId)).andExpect(status().isNotFound());
         mockMvc.perform(put(url() + "/" + foreignId).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -995,11 +957,11 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void emptyTextInSendMessageReturns422() throws Exception {
+    void emptyTextInTextBlockReturns422() throws Exception {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         Map<String, Object> body = Map.of(
                 "name", "Draft", "triggerValue", "",
-                "steps", List.of(stepMap("SEND_MESSAGE", Map.of("text", "  "))));
+                "steps", List.of(messageStepMap(textBlock("  "))));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(body)))
@@ -1013,7 +975,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         Map<String, Object> body = Map.of(
                 "name", "Draft", "triggerValue", "has space",
-                "steps", List.of(stepMap("SEND_MESSAGE", Map.of("text", "ok"))));
+                "steps", List.of(messageStepMap(textBlock("ok"))));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(body)))
@@ -1027,26 +989,13 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         List<Map<String, Object>> steps = new ArrayList<>();
         for (int i = 0; i < 51; i++) { // default max-steps = 50
-            steps.add(stepMap("SEND_MESSAGE", Map.of("text", "s" + i)));
+            steps.add(messageStepMap(textBlock("s" + i)));
         }
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(Map.of("name", "Draft", "triggerValue", "", "steps", steps))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_limit_reached"));
-    }
-
-    @Test
-    @WithMockAppUser(userId = USER_ID)
-    void invalidImageUrlReturns422() throws Exception {
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
-        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
-                "steps", List.of(stepMap("SEND_IMAGE", Map.of("imageUrl", "ftp://evil/x.png"))));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(body)))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
     }
 
     @Test
@@ -1062,14 +1011,312 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
     }
 
-    // ─── Phase 2: graph validation (MENU + edges) ──────────────────────────────
+    // ─── 15-message-composer: save-validation ───────────────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateEmptyComposerReturns422() throws Exception {
+        // MESSAGE step with blocks: [] → 422 (empty composer).
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "MESSAGE");
+        step.put("blocks", List.of());
+        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+                "steps", List.of(step));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateOverTenBlocksReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        List<Map<String, Object>> blocks = new ArrayList<>();
+        for (int i = 0; i < 11; i++) {
+            blocks.add(textBlock("b" + i));
+        }
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMapBlocks(blocks))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateAlbumUnderTwoReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(mediaItem("https://example.com/1.jpg", "only one"));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(album))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateAlbumOverTenReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object>[] items = new Map[11];
+        for (int i = 0; i < 11; i++) {
+            items[i] = mediaItem("https://example.com/" + i + ".jpg", i == 0 ? "first" : null);
+        }
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(albumBlock(items)))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateAlbumCaptionOnNonFirstReturns422() throws Exception {
+        // Decision 5: a caption on a non-first album element is rejected (not silently dropped).
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(
+                mediaItem("https://example.com/1.jpg", "first"),
+                mediaItem("https://example.com/2.jpg", "second-not-allowed"));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(album))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateButtonsOnNonLastBlockReturns422() throws Exception {
+        // Buttons attach only to the LAST non-album block. Here the last block is an album → 422 even
+        // though a text block precedes it (the keyboard cannot land on the album).
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(
+                mediaItem("https://example.com/1.jpg", "first"),
+                mediaItem("https://example.com/2.jpg", null));
+        Map<String, Object> step = messageStepMapBlocks(List.of(textBlock("hi"), album));
+        step.put("buttons", List.of(Map.of("type", "callback", "label", "Go")));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(step)))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateButtonsOnAlbumBlockReturns422() throws Exception {
+        // A single-block composer whose only (= last) block is an album, with buttons → 422.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(
+                mediaItem("https://example.com/1.jpg", "first"),
+                mediaItem("https://example.com/2.jpg", null));
+        Map<String, Object> step = messageStepMap(album);
+        step.put("buttons", List.of(Map.of("type", "callback", "label", "Go")));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(step)))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateButtonsOnLastTextBlockSucceeds() throws Exception {
+        // Buttons on the last NON-album block (text) with a callback button → valid save (200).
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> step = messageStepMapBlocks(List.of(
+                imageBlockMap("https://example.com/a.jpg", "cap"),
+                textBlock("choose")));
+        step.put("buttons", List.of(Map.of("type", "callback", "label", "Go")));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(step)))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].buttons.length()").value(1));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateNonHttpMediaUrlReturns422() throws Exception {
+        // A media URL with the file:// scheme (looks like a URL via scheme separator) → 422.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(
+                                        imageBlockMap("file:///etc/passwd", null)))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateJavascriptMediaUrlReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(
+                                        imageBlockMap("javascript:alert(1)", null)))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateFileIdMediaSourceAccepted() throws Exception {
+        // A bare file_id token (no scheme separator) is accepted as an opaque media source → 200.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(
+                                        imageBlockMap("AgACAgIAAxkBAAE_file_id_token-123", "cap")))))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].blocks[0].mediaUrl")
+                        .value("AgACAgIAAxkBAAE_file_id_token-123"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateOverLengthTextFlaggedNotBlocking() throws Exception {
+        // text >4096 and caption >1024 are warnings — save SUCCEEDS (not 422).
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        String longText = "x".repeat(5000);
+        String longCaption = "y".repeat(2000);
+        List<Map<String, Object>> blocks = List.of(
+                imageBlockMap("https://example.com/a.jpg", longCaption),
+                textBlock(longText));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMapBlocks(blocks))))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].blocks.length()").value(2));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void saveFetchRoundTripPreservesBlocks() throws Exception {
+        // DTO round-trip: save a MESSAGE step with a full set of block types → GET returns blocks with no
+        // field dropped (incl. album items + per-element caption).
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> text = textBlock("hello {user.first_name}");
+        text.put("parseMode", "HTML");
+        Map<String, Object> image = imageBlockMap("https://example.com/i.png", "img cap");
+        Map<String, Object> video = mediaBlockMap("VIDEO", "https://example.com/v.mp4", "vid cap");
+        Map<String, Object> audio = mediaBlockMap("AUDIO", "file_id_audio_123", null);
+        Map<String, Object> file = mediaBlockMap("FILE", "https://example.com/doc.pdf", "doc");
+        Map<String, Object> album = albumBlock(
+                mediaItem("https://example.com/1.jpg", "first only"),
+                mediaItem("https://example.com/2.jpg", null),
+                mediaItem("https://example.com/3.jpg", null));
+
+        Map<String, Object> step = messageStepMapBlocks(
+                List.of(text, image, video, audio, file, album));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(step)))))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].stepType").value("MESSAGE"))
+                .andExpect(jsonPath("$.steps[0].blocks.length()").value(6))
+                .andExpect(jsonPath("$.steps[0].blocks[0].type").value("TEXT"))
+                .andExpect(jsonPath("$.steps[0].blocks[0].text").value("hello {user.first_name}"))
+                .andExpect(jsonPath("$.steps[0].blocks[0].parseMode").value("HTML"))
+                .andExpect(jsonPath("$.steps[0].blocks[1].type").value("IMAGE"))
+                .andExpect(jsonPath("$.steps[0].blocks[1].mediaUrl").value("https://example.com/i.png"))
+                .andExpect(jsonPath("$.steps[0].blocks[1].caption").value("img cap"))
+                .andExpect(jsonPath("$.steps[0].blocks[2].type").value("VIDEO"))
+                .andExpect(jsonPath("$.steps[0].blocks[3].type").value("AUDIO"))
+                .andExpect(jsonPath("$.steps[0].blocks[3].mediaUrl").value("file_id_audio_123"))
+                .andExpect(jsonPath("$.steps[0].blocks[4].type").value("FILE"))
+                .andExpect(jsonPath("$.steps[0].blocks[5].type").value("ALBUM"))
+                .andExpect(jsonPath("$.steps[0].blocks[5].items.length()").value(3))
+                .andExpect(jsonPath("$.steps[0].blocks[5].items[0].mediaUrl")
+                        .value("https://example.com/1.jpg"))
+                .andExpect(jsonPath("$.steps[0].blocks[5].items[0].caption").value("first only"))
+                .andExpect(jsonPath("$.steps[0].blocks[5].items[1].caption")
+                        .value(org.hamcrest.Matchers.nullValue()));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void composerButtonsRoundTripThroughPutAndGet() throws Exception {
+        // PUT a funnel: a MESSAGE target step + a MESSAGE composer with a text block + 2 callback buttons
+        // (one → the target step, one → End). GET must return the same buttons/targets + minted ids.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> sendStep = messageStepMap(textBlock("branch"));
+        sendStep.put("id", "target-1"); // client-supplied stable id, preserved by toSteps
+        Map<String, Object> menuStep = messageStepMap(textBlock("choose"));
+        menuStep.put("buttons", List.of(
+                Map.of("type", "callback", "label", "Go", "targetStepId", "target-1"),
+                Map.of("type", "callback", "label", "Quit"))); // no target = End
+
+        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+                "steps", List.of(menuStep, sendStep));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps.length()").value(2));
+
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].stepType").value("MESSAGE"))
+                .andExpect(jsonPath("$.steps[0].id").isNotEmpty())
+                .andExpect(jsonPath("$.steps[0].buttons.length()").value(2))
+                .andExpect(jsonPath("$.steps[0].buttons[0].label").value("Go"))
+                .andExpect(jsonPath("$.steps[0].buttons[0].targetStepId").value("target-1"))
+                .andExpect(jsonPath("$.steps[0].buttons[1].label").value("Quit"))
+                .andExpect(jsonPath("$.steps[0].buttons[1].targetStepId")
+                        .value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.steps[1].id").value("target-1"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void duplicateStepIdReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> a = messageStepMap(textBlock("a"));
+        a.put("id", "dup");
+        Map<String, Object> b = messageStepMap(textBlock("b"));
+        b.put("id", "dup");
+        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+                "steps", List.of(a, b));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    // ─── Phase 2: graph validation (buttons + edges) ───────────────────────────
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void activateBrokenEdgeReturns422() throws Exception {
-        // A MENU whose callback button points at a step id that is NOT in the funnel (e.g. the target
-        // was deleted) → 422 funnel_broken_edge on activate.
-        FunnelStep menu = menuStep("step-menu",
+        // A composer whose callback button points at a step id that is NOT in the funnel → 422.
+        FunnelStep menu = composerWithButtons("step-menu", "menu",
                 callbackButton("Go", "deleted-step-id"),
                 callbackButton("Stay", null));
         Funnel f = seedFunnel("Broken", FunnelStatus.draft, "promo",
@@ -1083,11 +1330,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void activateBrokenNextEdgeReturns422() throws Exception {
-        // A non-MENU step whose `next` points at a non-existent id → 422 funnel_broken_edge.
-        FunnelStep send = new FunnelStep();
-        send.setStepType(StepType.SEND_MESSAGE);
-        send.setText("hi");
-        send.setId("step-send");
+        // A step whose `next` points at a non-existent id → 422 funnel_broken_edge.
+        FunnelStep send = textStep("step-send", "hi");
         send.setNext("ghost-step");
         Funnel f = seedFunnel("BrokenNext", FunnelStatus.draft, "promo",
                 new ArrayList<>(List.of(send)));
@@ -1099,9 +1343,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuWithoutCallbackReturns422() throws Exception {
-        // A MENU with only a URL button (0 callback) would strand the subscriber → 422.
-        FunnelStep menu = menuStep("step-menu", urlButton("Site", "https://example.com"));
+    void activateComposerWithoutCallbackReturns422() throws Exception {
+        // A composer keyboard with only a URL button (0 callback) would strand the subscriber → 422.
+        FunnelStep menu = composerWithButtons("step-menu", "menu",
+                urlButton("Site", "https://example.com"));
         Funnel f = seedFunnel("NoCallback", FunnelStatus.draft, "promo",
                 new ArrayList<>(List.of(menu)));
 
@@ -1112,9 +1357,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuUrlButtonRejectsNonHttpScheme() throws Exception {
-        // javascript: scheme on a URL button → 422 (Decision 10 strict scheme check).
-        FunnelStep menu = menuStep("step-menu",
+    void activateComposerUrlButtonRejectsNonHttpScheme() throws Exception {
+        FunnelStep menu = composerWithButtons("step-menu", "menu",
                 callbackButton("Ok", null),
                 urlButton("Evil", "javascript:alert(1)"));
         Funnel f = seedFunnel("BadScheme", FunnelStatus.draft, "promo",
@@ -1127,9 +1371,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuUrlButtonRejectsLeadingWhitespace() throws Exception {
-        // Leading-whitespace-obfuscated " http://..." must NOT slip past the scheme check → 422.
-        FunnelStep menu = menuStep("step-menu",
+    void activateComposerUrlButtonRejectsLeadingWhitespace() throws Exception {
+        FunnelStep menu = composerWithButtons("step-menu", "menu",
                 callbackButton("Ok", null),
                 urlButton("Sneaky", " http://example.com"));
         Funnel f = seedFunnel("Whitespace", FunnelStatus.draft, "promo",
@@ -1142,9 +1385,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuUrlButtonRejectsEmptyHost() throws Exception {
-        // http:/// has scheme http but an empty host → 422.
-        FunnelStep menu = menuStep("step-menu",
+    void activateComposerUrlButtonRejectsEmptyHost() throws Exception {
+        FunnelStep menu = composerWithButtons("step-menu", "menu",
                 callbackButton("Ok", null),
                 urlButton("NoHost", "http:///path"));
         Funnel f = seedFunnel("EmptyHost", FunnelStatus.draft, "promo",
@@ -1157,11 +1399,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuRejectsTooManyButtons() throws Exception {
-        FunnelStep menu = new FunnelStep();
-        menu.setStepType(StepType.MENU);
-        menu.setId("step-menu");
-        menu.setText("pick");
+    void activateComposerRejectsTooManyButtons() throws Exception {
+        FunnelStep menu = composer("step-menu", textBlockDomain("pick"));
         List<Button> buttons = new ArrayList<>();
         buttons.add(new Button("callback", "first", null, null));
         for (int i = 0; i < 8; i++) { // 1 callback + 8 url = 9 > MAX_BUTTONS(8)
@@ -1178,10 +1417,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuWithValidTimeoutSucceeds() throws Exception {
-        // A MENU with a valid timeout pair (value >= 1, unit in {MIN,HOUR,DAY}) and null target (= End)
-        // activates cleanly (audit-fix F1 — the pair is validated but legitimate values pass).
-        FunnelStep menu = menuStep("step-menu", callbackButton("Go", null));
+    void activateComposerWithValidTimeoutSucceeds() throws Exception {
+        FunnelStep menu = composerWithButtons("step-menu", "menu", callbackButton("Go", null));
         menu.setTimeoutValue(2);
         menu.setTimeoutUnit("HOUR");
         Funnel f = seedFunnel("WithTimeout", FunnelStatus.draft, "promo",
@@ -1195,11 +1432,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuRejectsUnknownTimeoutUnit() throws Exception {
-        // An invalid/legacy timeoutUnit (e.g. the old "hours") must be rejected at activate with a 422 —
-        // NOT pass through to the engine where StepExecutor.durationOf would throw and strand the run
-        // (audit-fix F1).
-        FunnelStep menu = menuStep("step-menu", callbackButton("Go", null));
+    void activateComposerRejectsUnknownTimeoutUnit() throws Exception {
+        FunnelStep menu = composerWithButtons("step-menu", "menu", callbackButton("Go", null));
         menu.setTimeoutValue(2);
         menu.setTimeoutUnit("hours");
         Funnel f = seedFunnel("BadUnit", FunnelStatus.draft, "promo",
@@ -1212,8 +1446,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuRejectsTimeoutValueBelowOne() throws Exception {
-        FunnelStep menu = menuStep("step-menu", callbackButton("Go", null));
+    void activateComposerRejectsTimeoutValueBelowOne() throws Exception {
+        FunnelStep menu = composerWithButtons("step-menu", "menu", callbackButton("Go", null));
         menu.setTimeoutValue(0);
         menu.setTimeoutUnit("MIN");
         Funnel f = seedFunnel("ZeroTimeout", FunnelStatus.draft, "promo",
@@ -1226,9 +1460,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuRejectsHalfTimeoutPair() throws Exception {
-        // Only timeoutValue present (unit missing) → 422: a half-configured pair is ambiguous.
-        FunnelStep menu = menuStep("step-menu", callbackButton("Go", null));
+    void activateComposerRejectsHalfTimeoutPair() throws Exception {
+        FunnelStep menu = composerWithButtons("step-menu", "menu", callbackButton("Go", null));
         menu.setTimeoutValue(5);
         menu.setTimeoutUnit(null);
         Funnel f = seedFunnel("HalfPair", FunnelStatus.draft, "promo",
@@ -1241,74 +1474,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void menuButtonsRoundTripThroughPatchAndGet() throws Exception {
-        // PATCH a funnel: a SEND_MESSAGE target step + a MENU with 2 callback buttons (one → the send
-        // step, one → End). GET must return the same buttons/targets, and every step must have a
-        // server-minted id.
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
-
-        Map<String, Object> sendStep = stepMap("SEND_MESSAGE", Map.of("text", "branch"));
-        sendStep.put("id", "target-1"); // client-supplied stable id, preserved by toSteps
-        Map<String, Object> menuStep = stepMap("MENU", Map.of(
-                "text", "choose",
-                "buttons", List.of(
-                        Map.of("type", "callback", "label", "Go", "targetStepId", "target-1"),
-                        Map.of("type", "callback", "label", "Quit")))); // no target = End
-
-        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
-                "steps", List.of(menuStep, sendStep));
-
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(body)))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.steps.length()").value(2));
-
-        mockMvc.perform(get(url() + "/" + f.getId()))
-                .andExpect(status().isOk())
-                .andExpect(jsonPath("$.steps[0].stepType").value("MENU"))
-                .andExpect(jsonPath("$.steps[0].id").isNotEmpty())
-                .andExpect(jsonPath("$.steps[0].buttons.length()").value(2))
-                .andExpect(jsonPath("$.steps[0].buttons[0].label").value("Go"))
-                .andExpect(jsonPath("$.steps[0].buttons[0].targetStepId").value("target-1"))
-                .andExpect(jsonPath("$.steps[0].buttons[1].label").value("Quit"))
-                .andExpect(jsonPath("$.steps[0].buttons[1].targetStepId").value(org.hamcrest.Matchers.nullValue()))
-                // The preserved client id round-trips; the MENU got a server-minted id (non-empty).
-                .andExpect(jsonPath("$.steps[1].id").value("target-1"));
-    }
-
-    @Test
-    @WithMockAppUser(userId = USER_ID)
-    void duplicateStepIdReturns422() throws Exception {
-        // Client sends two steps with the same id → corrupt graph → 422.
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
-
-        Map<String, Object> a = stepMap("SEND_MESSAGE", Map.of("text", "a"));
-        a.put("id", "dup");
-        Map<String, Object> b = stepMap("SEND_MESSAGE", Map.of("text", "b"));
-        b.put("id", "dup");
-        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
-                "steps", List.of(a, b));
-
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(body)))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
-    }
-
-    @Test
-    @WithMockAppUser(userId = USER_ID)
     void reorderPreservesButtonTargetsById() throws Exception {
-        // Reorder the array (MENU first vs target first). Because targets are stable ids (not indices),
-        // the edge stays valid and activate succeeds regardless of array position.
         seedConnectedBot("promo_bot");
-        FunnelStep target = new FunnelStep();
-        target.setStepType(StepType.SEND_MESSAGE);
-        target.setText("hi");
-        target.setId("target-x");
-        FunnelStep menu = menuStep("menu-x", callbackButton("Go", "target-x"));
-        // Array order: MENU before its target — forward edge is irrelevant, id resolves either way.
+        FunnelStep target = textStep("target-x", "hi");
+        FunnelStep menu = composerWithButtons("menu-x", "menu", callbackButton("Go", "target-x"));
         Funnel f = seedFunnel("Reorder", FunnelStatus.draft, "go",
                 new ArrayList<>(List.of(menu, target)));
 
@@ -1320,14 +1489,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void menuFanInAndLoopTargetsValidate() throws Exception {
-        // fan-in: two callback buttons → the same step; loop: a button → back to the MENU itself.
-        // Both are valid graph edges → activate passes.
         seedConnectedBot("promo_bot");
-        FunnelStep shared = new FunnelStep();
-        shared.setStepType(StepType.SEND_MESSAGE);
-        shared.setText("shared");
-        shared.setId("shared-step");
-        FunnelStep menu = menuStep("menu-loop",
+        FunnelStep shared = textStep("shared-step", "shared");
+        FunnelStep menu = composerWithButtons("menu-loop", "menu",
                 callbackButton("A", "shared-step"),
                 callbackButton("B", "shared-step"),   // fan-in
                 callbackButton("Back", "menu-loop"));  // loop to self
@@ -1341,10 +1505,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuLabelTooLongReturns422() throws Exception {
-        // 65-char label is over the 64 limit → 422; 64 is the boundary (accepted elsewhere).
+    void activateComposerLabelTooLongReturns422() throws Exception {
         String label65 = "x".repeat(65);
-        FunnelStep menu = menuStep("step-menu", callbackButton(label65, null));
+        FunnelStep menu = composerWithButtons("step-menu", "menu", callbackButton(label65, null));
         Funnel f = seedFunnel("LongLabel", FunnelStatus.draft, "promo",
                 new ArrayList<>(List.of(menu)));
 
@@ -1355,12 +1518,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void activateMenuLabelExactly64IsAccepted() throws Exception {
-        // Boundary: a 64-char label is exactly at the limit and must be accepted (off-by-one guard:
-        // the check is `> 64`, not `>= 64`).
+    void activateComposerLabelExactly64IsAccepted() throws Exception {
         seedConnectedBot("promo_bot");
         String label64 = "x".repeat(64);
-        FunnelStep menu = menuStep("step-menu", callbackButton(label64, null));
+        FunnelStep menu = composerWithButtons("step-menu", "menu", callbackButton(label64, null));
         Funnel f = seedFunnel("MaxLabel", FunnelStatus.draft, "go",
                 new ArrayList<>(List.of(menu)));
 
@@ -1369,15 +1530,36 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.status").value("active"));
     }
 
-    // ─── helpers ────────────────────────────────────────────────────────────────
+    // ─── domain-object helpers (direct seeding) ────────────────────────────────
 
-    private static FunnelStep menuStep(String id, Button... buttons) {
-        FunnelStep step = new FunnelStep();
-        step.setStepType(StepType.MENU);
-        step.setId(id);
-        step.setText("menu");
-        step.setButtons(new ArrayList<>(List.of(buttons)));
-        return step;
+    private static FunnelStep textStep(String id, String text) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.MESSAGE);
+        s.setId(id);
+        s.setBlocks(new ArrayList<>(List.of(textBlockDomain(text))));
+        return s;
+    }
+
+    private static FunnelStep composer(String id, ContentBlock... blocks) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.MESSAGE);
+        s.setId(id);
+        s.setBlocks(new ArrayList<>(List.of(blocks)));
+        return s;
+    }
+
+    private static FunnelStep composerWithButtons(String id, String text, Button... buttons) {
+        FunnelStep s = composer(id, textBlockDomain(text));
+        s.setButtons(new ArrayList<>(List.of(buttons)));
+        return s;
+    }
+
+    private static ContentBlock textBlockDomain(String text) {
+        return new ContentBlock(BlockType.TEXT, text, null, null, null, null);
+    }
+
+    private static ContentBlock imageBlock(String mediaUrl, String caption) {
+        return new ContentBlock(BlockType.IMAGE, null, null, mediaUrl, caption, null);
     }
 
     private static Button callbackButton(String label, String targetStepId) {
@@ -1388,6 +1570,73 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         return new Button("url", label, null, url);
     }
 
+    // ─── JSON-map helpers (request bodies) ──────────────────────────────────────
+
+    private static Map<String, Object> textBlock(String text) {
+        Map<String, Object> b = new LinkedHashMap<>();
+        b.put("type", "TEXT");
+        b.put("text", text);
+        return b;
+    }
+
+    private static Map<String, Object> imageBlockMap(String mediaUrl, String caption) {
+        return mediaBlockMap("IMAGE", mediaUrl, caption);
+    }
+
+    private static Map<String, Object> mediaBlockMap(String type, String mediaUrl, String caption) {
+        Map<String, Object> b = new LinkedHashMap<>();
+        b.put("type", type);
+        b.put("mediaUrl", mediaUrl);
+        if (caption != null) {
+            b.put("caption", caption);
+        }
+        return b;
+    }
+
+    @SafeVarargs
+    private static Map<String, Object> albumBlock(Map<String, Object>... items) {
+        Map<String, Object> b = new LinkedHashMap<>();
+        b.put("type", "ALBUM");
+        b.put("items", List.of(items));
+        return b;
+    }
+
+    private static Map<String, Object> mediaItem(String mediaUrl, String caption) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("mediaUrl", mediaUrl);
+        if (caption != null) {
+            m.put("caption", caption);
+        }
+        return m;
+    }
+
+    private static Map<String, Object> messageStep(String text) {
+        return messageStepMap(textBlock(text));
+    }
+
+    private static Map<String, Object> messageStepMap(Map<String, Object> block) {
+        return messageStepMapBlocks(List.of(block));
+    }
+
+    private static Map<String, Object> messageStepMapBlocks(List<Map<String, Object>> blocks) {
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "MESSAGE");
+        step.put("blocks", blocks);
+        return step;
+    }
+
+    private String previewBody(String stepType, Map<String, Object> block) throws Exception {
+        return previewBodyBlocks(stepType, List.of(block));
+    }
+
+    private String previewBodyBlocks(String stepType, List<Map<String, Object>> blocks) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("stepType", stepType);
+        body.put("blocks", blocks);
+        return json(body);
+    }
+
+    // ─── generic helpers ────────────────────────────────────────────────────────
 
     private Object activateCatching(String funnelId) {
         try {
@@ -1406,32 +1655,15 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         return objectMapper.writeValueAsString(body);
     }
 
-    private static Map<String, Object> sendMessage(String text) {
-        return stepMap("SEND_MESSAGE", Map.of("text", text));
-    }
-
     private static Map<String, Object> delayStep(int value, String unit) {
         return stepMap("DELAY", Map.of("delayValue", value, "delayUnit", unit));
     }
 
     private static Map<String, Object> stepMap(String stepType, Map<String, Object> fields) {
-        Map<String, Object> step = new java.util.HashMap<>();
+        Map<String, Object> step = new LinkedHashMap<>();
         step.put("stepType", stepType);
         step.putAll(fields);
         return step;
-    }
-
-    private FunnelStep buildStep(Map<String, Object> dto) {
-        FunnelStep s = new FunnelStep();
-        s.setStepType(StepType.valueOf((String) dto.get("stepType")));
-        s.setText((String) dto.get("text"));
-        s.setImageUrl((String) dto.get("imageUrl"));
-        s.setCaption((String) dto.get("caption"));
-        s.setDelayValue((Integer) dto.get("delayValue"));
-        s.setDelayUnit((String) dto.get("delayUnit"));
-        s.setTagSlug((String) dto.get("tagSlug"));
-        s.setCustomFieldKey((String) dto.get("customFieldKey"));
-        return s;
     }
 
     private Funnel seedFunnel(String name, FunnelStatus status, String triggerValue,
@@ -1454,6 +1686,36 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         f.setCreatedAt(Instant.now());
         f.setUpdatedAt(Instant.now());
         return funnelRepository.save(f);
+    }
+
+    // Builds a directly-seeded domain step from a request-shaped map (used only by seedFunnel for the
+    // MESSAGE/DELAY specs the seed helpers produce). MESSAGE → one TEXT block from the map's text.
+    @SuppressWarnings("unchecked")
+    private FunnelStep buildStep(Map<String, Object> dto) {
+        FunnelStep s = new FunnelStep();
+        StepType type = StepType.valueOf((String) dto.get("stepType"));
+        s.setStepType(type);
+        if (type == StepType.MESSAGE) {
+            List<Map<String, Object>> blocks = (List<Map<String, Object>>) dto.get("blocks");
+            List<ContentBlock> domain = new ArrayList<>();
+            if (blocks != null) {
+                for (Map<String, Object> b : blocks) {
+                    domain.add(new ContentBlock(
+                            BlockType.valueOf((String) b.get("type")),
+                            (String) b.get("text"),
+                            (String) b.get("parseMode"),
+                            (String) b.get("mediaUrl"),
+                            (String) b.get("caption"),
+                            null));
+                }
+            }
+            s.setBlocks(domain);
+        }
+        s.setDelayValue((Integer) dto.get("delayValue"));
+        s.setDelayUnit((String) dto.get("delayUnit"));
+        s.setTagSlug((String) dto.get("tagSlug"));
+        s.setCustomFieldKey((String) dto.get("customFieldKey"));
+        return s;
     }
 
     @SuppressWarnings("unchecked")
@@ -1498,8 +1760,6 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         seedConnectedBotWithOwner(username, null);
     }
 
-    // seedConnectedBot did not set ownerChatId; this overload does so the linked-bot test-run path can be
-    // exercised (a Bot with ownerChatId + a matching ACTIVE Subscriber doc).
     private void seedConnectedBotWithOwner(String username, Long ownerChatId) {
         Bot bot = new Bot();
         bot.setProjectId(projectId);
@@ -1511,12 +1771,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         botRepository.save(bot);
     }
 
-    // An owner subscriber keyed by (projectId, BOT_TG_ID, chatId) so resolveOwnerSubscriber.findByChat
-    // resolves it. Distinct firstName lets the "real subscriber" preview assertions differ from the stub.
     private Subscriber seedOwnerSubscriber(Long chatId, SubscriberStatus status) {
         Subscriber s = new Subscriber();
         s.setProjectId(projectId);
-        s.setTelegramUserId(chatId); // unique per (project, telegramUserId)
+        s.setTelegramUserId(chatId);
         s.setTelegramChatId(chatId);
         s.setTelegramBotId(BOT_TG_ID);
         s.setFirstName("Owner");
@@ -1539,14 +1797,6 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         foreign.setCreatedAt(Instant.now());
         foreign.setUpdatedAt(Instant.now());
         return funnelRepository.save(foreign).getId();
-    }
-
-    private static FunnelStep sendMessageStep(String id, String text) {
-        FunnelStep s = new FunnelStep();
-        s.setStepType(StepType.SEND_MESSAGE);
-        s.setId(id);
-        s.setText(text);
-        return s;
     }
 
     private String previewUrl(Funnel f, String stepId) {

@@ -737,7 +737,7 @@ public class FunnelService {
         }
         List<MediaItem> items = new ArrayList<>(dtos.size());
         for (MediaItemDto m : dtos) {
-            items.add(new MediaItem(m.mediaUrl(), m.caption()));
+            items.add(new MediaItem(m.type(), m.mediaUrl(), m.caption()));
         }
         return items;
     }
@@ -879,10 +879,22 @@ public class FunnelService {
         if (items.size() > MAX_ALBUM_ITEMS) {
             throw invalidStep("ALBUM block exceeds the maximum of " + MAX_ALBUM_ITEMS + " items");
         }
+        boolean hasVisual = false;   // IMAGE or VIDEO (these may mix with each other)
+        boolean hasAudio = false;
+        boolean hasFile = false;
         for (int i = 0; i < items.size(); i++) {
             MediaItem item = items.get(i);
             if (item == null) {
                 throw invalidStep("ALBUM item must not be null");
+            }
+            // Each album item must carry a media kind in {IMAGE, VIDEO, AUDIO, FILE} (Decision 5). TEXT,
+            // ALBUM and a null/unknown discriminator are never valid here.
+            switch (item.type()) {
+                case IMAGE, VIDEO -> hasVisual = true;
+                case AUDIO -> hasAudio = true;
+                case FILE -> hasFile = true;
+                case null, default -> throw invalidStep("ALBUM item requires a media kind "
+                        + "(IMAGE|VIDEO|AUDIO|FILE)");
             }
             requireMediaSource("ALBUM", item.mediaUrl());
             // Decision 5: only the first element's caption is meaningful — reject a stray caption elsewhere
@@ -892,10 +904,15 @@ public class FunnelService {
             }
             warnIfOverLength("ALBUM", "caption", item.caption(), CAPTION_WARN_LIMIT);
         }
-        // Note: Telegram's media-group type-mixing predicate is enforced on the URL/file_id source which
-        // carries no MIME hint here; mixing audio/document with photo/video is a runtime concern. Decision 5
-        // names the predicate but the model has no per-item kind discriminator, so the save-time guard is
-        // the size + source + caption-position rules above. (See decisions.md Deviations.)
+        // Decision 5 type-mixing predicate: a Telegram media group is valid only as all photo, all video,
+        // or a photo+video mix (collapsed here to "visual"); OR all audio; OR all file (document). AUDIO or
+        // FILE must NEVER mix with another kind in the same group. Anything that touches more than one of
+        // {visual, audio, file} is an invalid mix.
+        int kinds = (hasVisual ? 1 : 0) + (hasAudio ? 1 : 0) + (hasFile ? 1 : 0);
+        if (kinds > 1) {
+            throw invalidStep("ALBUM mixes incompatible media kinds; allowed groups are "
+                    + "photo/video, all audio, or all document");
+        }
     }
 
     // Validate the inline keyboard on the last non-album block (reuses the former MENU button/timeout/url
@@ -1231,7 +1248,7 @@ public class FunnelService {
             return null;
         }
         return items.stream()
-                .map(m -> new MediaItemDto(m.mediaUrl(), m.caption()))
+                .map(m -> new MediaItemDto(m.type(), m.mediaUrl(), m.caption()))
                 .toList();
     }
 

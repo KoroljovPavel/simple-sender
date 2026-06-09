@@ -54,11 +54,20 @@ public class StepExecutor {
     static final String LOG_CAPTION_TRIMMED = "FUNNEL_STEP_CAPTION_TRIMMED";
     static final String LOG_CUSTOM_FIELD_SKIPPED = "FUNNEL_STEP_CUSTOM_FIELD_SKIPPED_DELETED_DEFINITION";
 
-    // Telegram media-group element type for an ALBUM block. The Task 1 model carries no per-item media
-    // type (MediaItem is just url+caption, ContentBlock.type is the single ALBUM discriminator), so the
-    // executor cannot distinguish photo vs video per item — an ALBUM sends as a homogeneous photo group.
-    // Per-type album mixing (photo+video) is deferred until the model carries an element-type hint.
-    private static final String ALBUM_ELEMENT_TYPE = "photo";
+    // Map a per-item album media kind (MediaItem.type, restricted by validation to IMAGE|VIDEO|AUDIO|FILE)
+    // to the Telegram media-group element type. Lets a photo+video mix (Decision 5) send with the correct
+    // per-element type instead of a homogeneous photo group. TEXT/ALBUM are never valid item kinds (save
+    // validation rejects them) — they are mapped defensively and should be unreachable at runtime.
+    private static String albumElementType(BlockType itemType) {
+        return switch (itemType) {
+            case IMAGE -> "photo";
+            case VIDEO -> "video";
+            case AUDIO -> "audio";
+            case FILE -> "document";
+            case TEXT, ALBUM -> throw new IllegalStateException(
+                    "album item has an unsupported media kind: " + itemType);
+        };
+    }
 
     // callback_data wire contract with Task 5 (Decision 6): EXACTLY "{executionId}:{buttonIndex}" — the
     // ObjectId-hex execution id + a single ':' separator + the 0-based button index. Task 5's parser is
@@ -223,10 +232,11 @@ public class StepExecutor {
                 MAX_CAPTION_LENGTH, LOG_CAPTION_TRIMMED);
     }
 
-    // Build the AlbumItem list for /sendMediaGroup. The caption is meaningful only on the FIRST element
+    // Build the AlbumItem list for /sendMediaGroup. Each element's Telegram media-group type derives from
+    // the item's own media kind (albumElementType): a photo+video mix is sent with the correct per-element
+    // type (Decision 5), not a homogeneous photo group. The caption is meaningful only on the FIRST element
     // (Decision 5): render+trim that one (when present); later elements carry their stored caption as-is
-    // (normally null — save-validation in Task 4 guarantees caption only on the first). Each element's
-    // Telegram media-group type is ALBUM_ELEMENT_TYPE (see its declaration for the photo-only rationale).
+    // (normally null — save-validation guarantees caption only on the first).
     private List<AlbumItem> buildAlbum(ContentBlock block, Subscriber subscriber, FunnelExecution execution) {
         List<MediaItem> items = block.items();
         List<AlbumItem> out = new ArrayList<>(items.size());
@@ -237,7 +247,7 @@ public class StepExecutor {
                 caption = renderTrimmed(item.caption(), block.parseMode(), subscriber, execution,
                         MAX_CAPTION_LENGTH, LOG_CAPTION_TRIMMED);
             }
-            out.add(new AlbumItem(ALBUM_ELEMENT_TYPE, item.mediaUrl(), caption, block.parseMode()));
+            out.add(new AlbumItem(albumElementType(item.type()), item.mediaUrl(), caption, block.parseMode()));
         }
         return out;
     }

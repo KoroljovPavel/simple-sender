@@ -223,9 +223,9 @@ class FunnelStepExecutorTest {
         Subscriber sub = activeSubscriber();
         sub.setFirstName("Ann");
         FunnelStep step = messageStep(albumBlock("HTML",
-                new MediaItem("a1", "first {user.first_name}"),
-                new MediaItem("a2", "ignored-second"),
-                new MediaItem("a3", null)));
+                new MediaItem(BlockType.IMAGE, "a1", "first {user.first_name}"),
+                new MediaItem(BlockType.IMAGE, "a2", "ignored-second"),
+                new MediaItem(BlockType.IMAGE, "a3", null)));
 
         StepExecutor.StepResult result = executor.execute(step, execution(0), sub, connectedBot());
 
@@ -237,6 +237,26 @@ class FunnelStepExecutorTest {
         assertThat(items.get(0).caption()).isEqualTo("first Ann"); // rendered on the first item
         assertThat(items.get(1).caption()).isNull();
         assertThat(items.get(2).caption()).isNull();
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void message_albumElementTypeDerivesFromItemKind() {
+        // Decision 5: each album element's Telegram media-group type derives from the item's own media kind
+        // (IMAGE→photo, VIDEO→video, AUDIO→audio, FILE→document) — not a hardcoded homogeneous "photo" group.
+        when(sender.sendMediaGroup(anyString(), any(), any(), any()))
+                .thenReturn(List.of(new SentMessage(CHAT_ID, 1L, Instant.now())));
+        FunnelStep step = messageStep(albumBlock(null,
+                new MediaItem(BlockType.IMAGE, "a1", null),
+                new MediaItem(BlockType.VIDEO, "a2", null)));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        ArgumentCaptor<List<AlbumItem>> itemsCap = ArgumentCaptor.forClass(List.class);
+        verify(sender).sendMediaGroup(eq(BOT_ID), eq(CHAT_ID), itemsCap.capture(), eq(null));
+        List<AlbumItem> items = itemsCap.getValue();
+        assertThat(items).extracting(AlbumItem::type).containsExactly("photo", "video");
     }
 
     @Test
@@ -365,7 +385,8 @@ class FunnelStepExecutorTest {
         FunnelStep step = messageStep(
                 List.of(new Button("callback", "Yes", "step-yes", null)), 5, "MIN",
                 textBlock("first", null),
-                albumBlock(null, new MediaItem("a1", null), new MediaItem("a2", null)),
+                albumBlock(null, new MediaItem(BlockType.IMAGE, "a1", null),
+                        new MediaItem(BlockType.IMAGE, "a2", null)),
                 textBlock("last", null));
 
         StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
@@ -409,7 +430,8 @@ class FunnelStepExecutorTest {
         FunnelStep step = messageStep(
                 List.of(new Button("callback", "Yes", "s", null)), 3, "MIN",
                 textBlock("only-text", null),
-                albumBlock(null, new MediaItem("a1", null), new MediaItem("a2", null)));
+                albumBlock(null, new MediaItem(BlockType.IMAGE, "a1", null),
+                        new MediaItem(BlockType.IMAGE, "a2", null)));
 
         StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
 

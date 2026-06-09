@@ -189,8 +189,8 @@ class FunnelStepTest {
                 new ContentBlock(BlockType.TEXT, "hello {user.first_name}", "HTML", null, null, null),
                 new ContentBlock(BlockType.IMAGE, null, null, "https://example.com/a.png", "cap", null),
                 new ContentBlock(BlockType.ALBUM, null, "HTML", null, null,
-                        List.of(new MediaItem("https://example.com/1.png", "first"),
-                                new MediaItem("https://example.com/2.png", null)))
+                        List.of(new MediaItem(BlockType.IMAGE, "https://example.com/1.png", "first"),
+                                new MediaItem(BlockType.IMAGE, "https://example.com/2.png", null)))
         ));
         original.setBlocks(blocks);
 

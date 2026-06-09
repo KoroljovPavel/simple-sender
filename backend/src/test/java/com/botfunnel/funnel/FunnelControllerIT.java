@@ -1093,6 +1093,88 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void updateAlbumInvalidTypeMixReturns422() throws Exception {
+        // Decision 5: audio/document never mix with another kind in the same group. An IMAGE + AUDIO album
+        // is an invalid mix → 422 with the funnel_step_invalid business code.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(
+                mediaItem("IMAGE", "https://example.com/1.jpg", "first"),
+                mediaItem("AUDIO", "https://example.com/2.mp3", null));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(album))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateAlbumImageFileMixReturns422() throws Exception {
+        // Decision 5: document (FILE) never mixes with a visual kind → 422.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(
+                mediaItem("IMAGE", "https://example.com/1.jpg", "first"),
+                mediaItem("FILE", "https://example.com/2.pdf", null));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(album))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateAlbumMissingItemTypeReturns422() throws Exception {
+        // Decision 5: an album item without a media kind is rejected (null discriminator → 422).
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(
+                mediaItem(null, "https://example.com/1.jpg", "first"),
+                mediaItem(null, "https://example.com/2.jpg", null));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(album))))))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateAlbumAllAudioSucceeds() throws Exception {
+        // Decision 5: all-audio is a valid homogeneous group → 200.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(
+                mediaItem("AUDIO", "https://example.com/1.mp3", "first"),
+                mediaItem("AUDIO", "https://example.com/2.mp3", null));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(album))))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].blocks[0].items[0].type").value("AUDIO"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void updateAlbumPhotoVideoMixSucceeds() throws Exception {
+        // Decision 5: a photo+video mix is a valid media group → 200. Round-trips the per-item type.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> album = albumBlock(
+                mediaItem("IMAGE", "https://example.com/1.jpg", "first"),
+                mediaItem("VIDEO", "https://example.com/2.mp4", null));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                                "steps", List.of(messageStepMap(album))))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].blocks[0].items[0].type").value("IMAGE"))
+                .andExpect(jsonPath("$.steps[0].blocks[0].items[1].type").value("VIDEO"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void updateButtonsOnNonLastBlockReturns422() throws Exception {
         // Buttons attach only to the LAST non-album block. Here the last block is an album → 422 even
         // though a text block precedes it (the keyboard cannot land on the album).
@@ -1248,6 +1330,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.steps[0].blocks[4].type").value("FILE"))
                 .andExpect(jsonPath("$.steps[0].blocks[5].type").value("ALBUM"))
                 .andExpect(jsonPath("$.steps[0].blocks[5].items.length()").value(3))
+                .andExpect(jsonPath("$.steps[0].blocks[5].items[0].type").value("IMAGE"))
                 .andExpect(jsonPath("$.steps[0].blocks[5].items[0].mediaUrl")
                         .value("https://example.com/1.jpg"))
                 .andExpect(jsonPath("$.steps[0].blocks[5].items[0].caption").value("first only"))
@@ -1601,8 +1684,16 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         return b;
     }
 
+    // Album item with an implicit IMAGE kind (the common photo-group case).
     private static Map<String, Object> mediaItem(String mediaUrl, String caption) {
+        return mediaItem("IMAGE", mediaUrl, caption);
+    }
+
+    private static Map<String, Object> mediaItem(String type, String mediaUrl, String caption) {
         Map<String, Object> m = new LinkedHashMap<>();
+        if (type != null) {
+            m.put("type", type);
+        }
         m.put("mediaUrl", mediaUrl);
         if (caption != null) {
             m.put("caption", caption);

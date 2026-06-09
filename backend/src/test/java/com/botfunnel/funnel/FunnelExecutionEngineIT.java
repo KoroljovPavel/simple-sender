@@ -218,6 +218,62 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     }
 
     @Test
+    void multiBlockMessage_crashMidBlocks_doesNotResendOnReClaim() {
+        // Per-node at-most-once for the composer (Decision 3): a multi-block MESSAGE sends all its blocks
+        // under ONE claim. We crash mid-send — the FIRST two blocks deliver, then the THIRD send fails
+        // terminally (400-other → fail), leaving the step terminal-failed without advancing. A second sweep
+        // must NOT re-send the already-delivered blocks (lost-forward) — the failed execution is terminal so
+        // it is never re-claimed: sentCount stays exactly K (the 3 attempted sends), not 3 + a replay.
+        String subId = seedActiveSubscriber();
+        String execId = seedExecution(subId, BASE,
+                multiTextMessage("m", null, "b1", "b2", "b3"));
+        // Blocks 1+2 succeed; block 3 fails 400-other (TerminalReason.OTHER) → execution failed mid-step.
+        enqueueOk(2);
+        TELEGRAM.enqueue(json(400, "{\"ok\":false,\"error_code\":400,\"description\":\"Bad Request: boom\"}"));
+
+        engine.sweep(); // 3 send attempts (b1, b2, b3-fails) under one claim → failed
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.failed);
+        assertThat(sentCount()).isEqualTo(3); // K=3 send attempts, blocks 1+2 lost-forward
+
+        engine.sweep(); // terminal → not re-claimed → no replay of any block
+        assertThat(sentCount()).isEqualTo(3);
+    }
+
+    @Test
+    void multiBlockMessage_leftInProgress_isNotReClaimed() {
+        // A genuine crash mid-multiblock leaves the row claimed (stepRunStatus=in_progress) but not advanced.
+        // The claim predicate requires pending → the next sweep cannot re-claim → ZERO blocks re-sent
+        // (already-delivered blocks are lost-forward, never duplicated).
+        String subId = seedActiveSubscriber();
+        String execId = seedExecution(subId, BASE,
+                multiTextMessage("m", null, "b1", "b2", "b3"));
+        FunnelExecution e = reload(execId);
+        e.setStepRunStatus(StepRunStatus.in_progress); // simulate crash after a partial multi-block send
+        mongoTemplate.save(e);
+
+        engine.sweep();
+
+        assertThat(sentCount()).isZero(); // no block re-sent
+        FunnelExecution after = reload(execId);
+        assertThat(after.getStatus()).isEqualTo(ExecutionStatus.running);
+        assertThat(after.getStepRunStatus()).isEqualTo(StepRunStatus.in_progress);
+    }
+
+    @Test
+    void multiBlockMessage_runsAllBlocksInOneTickAndCompletes() {
+        // Happy path for the composer: a 3-block MESSAGE sends exactly 3 messages in one sweep and completes.
+        String subId = seedActiveSubscriber();
+        String execId = seedExecution(subId, BASE,
+                multiTextMessage("m", null, "b1", "b2", "b3"));
+        enqueueOk(3);
+
+        engine.sweep();
+
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(3);
+    }
+
+    @Test
     void atomicClaimRaceAcrossTwoReplicasRunsStepOnce() {
         String subId = seedActiveSubscriber();
         String execId = seedExecution(subId, BASE, sendMessage("once-only"));
@@ -616,6 +672,46 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         // Followed the snapshot (s2 still reachable there) → branch sent + completed, despite the live edit.
         assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
         assertThat(sentCount()).isEqualTo(2); // menu + snapshot branch send
+    }
+
+    @Test
+    void multiBlockMessage_snapshotIsolation_ignoresLiveBlockEdit() {
+        // Snapshot isolation on the List<ContentBlock> (Decision 1+3): an execution runs on the blocks frozen
+        // at enroll. We seed a parked 2-block MESSAGE, then MUTATE the live funnel definition to a single
+        // 1-block message. On resume the engine drains the SNAPSHOT (2 blocks → 2 sends), proving the live
+        // edit to blocks is ignored by the in-flight run.
+        String subId = seedActiveSubscriber();
+        // m1 (menu, button Yes → s2) ; s2 is a TWO-block MESSAGE in the snapshot.
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = multiTextMessage("s2", null, "snap-1", "snap-2");
+        String execId = seedGraphExecution(subId, BASE, menu, s2);
+        String funnelId = reload(execId).getFunnelId();
+        enqueueOk(3); // menu + 2 snapshot blocks
+
+        engine.sweep(); // park on menu (snapshot frozen with the 2-block s2)
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.waiting_for_reply);
+
+        // Author edits the LIVE funnel: s2 now has a SINGLE block. The in-flight snapshot must be unaffected.
+        FunnelStep liveMenu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep liveS2 = multiTextMessage("s2", null, "EDITED-single");
+        Funnel live = new Funnel();
+        live.setId(funnelId);
+        live.setProjectId(projectId);
+        live.setName("edited-blocks");
+        live.setStatus(FunnelStatus.active);
+        live.setTriggerType(FunnelService.TRIGGER_ON_START);
+        live.setTriggerValue("");
+        live.setSteps(new ArrayList<>(List.of(liveMenu, liveS2)));
+        live.setCreatedAt(BASE);
+        live.setUpdatedAt(BASE);
+        mongoTemplate.save(live);
+
+        boolean moved = engine.resumeOnCallback(execId, subId, "s2");
+
+        assertThat(moved).isTrue();
+        assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+        // Snapshot s2 had TWO blocks → menu + 2 sends = 3 (NOT 2, which the single-block live edit would give).
+        assertThat(sentCount()).isEqualTo(3);
     }
 
     @Test
@@ -1252,17 +1348,21 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
                 .setHeader("Content-Type", "application/json").setBody(body);
     }
 
+    // Composer (MESSAGE) seed-helpers — replace the former flat SEND_MESSAGE/SEND_IMAGE/MENU types
+    // (15-message-composer / Decision 1). Each builds a single-block MESSAGE step so the engine sends ONE
+    // Telegram message per step, preserving each IT's send-count assertions. Graph form (id/next) and the
+    // step-level buttons/timeout (Decision 2) are unchanged.
     private FunnelStep sendMessage(String text) {
         FunnelStep s = new FunnelStep();
-        s.setStepType(StepType.SEND_MESSAGE);
-        s.setText(text);
+        s.setStepType(StepType.MESSAGE);
+        s.setBlocks(List.of(new ContentBlock(BlockType.TEXT, text, null, null, null, null)));
         return s;
     }
 
     private FunnelStep sendImage(String url) {
         FunnelStep s = new FunnelStep();
-        s.setStepType(StepType.SEND_IMAGE);
-        s.setImageUrl(url);
+        s.setStepType(StepType.MESSAGE);
+        s.setBlocks(List.of(new ContentBlock(BlockType.IMAGE, null, null, url, null, null)));
         return s;
     }
 
@@ -1274,14 +1374,30 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         return s;
     }
 
+    // A multi-block MESSAGE composer step: N TEXT blocks sent as N separate messages under ONE engine claim
+    // (Decision 3 per-node at-most-once). Used to prove crash-mid-block lost-forward + snapshot isolation on
+    // the List<ContentBlock> (15-message-composer).
+    private FunnelStep multiTextMessage(String id, String next, String... texts) {
+        FunnelStep s = new FunnelStep();
+        s.setId(id);
+        s.setNext(next);
+        s.setStepType(StepType.MESSAGE);
+        List<ContentBlock> blocks = new ArrayList<>(texts.length);
+        for (String t : texts) {
+            blocks.add(new ContentBlock(BlockType.TEXT, t, null, null, null, null));
+        }
+        s.setBlocks(blocks);
+        return s;
+    }
+
     // Graph-shaped step builders (Phase 2): steps carry stable ids so the engine navigates by
     // currentStepId. seedGraphExecution seeds currentStepId to the first step's id.
     private FunnelStep sendMessageStep(String id, String text, String next) {
         FunnelStep s = new FunnelStep();
         s.setId(id);
         s.setNext(next);
-        s.setStepType(StepType.SEND_MESSAGE);
-        s.setText(text);
+        s.setStepType(StepType.MESSAGE);
+        s.setBlocks(List.of(new ContentBlock(BlockType.TEXT, text, null, null, null, null)));
         return s;
     }
 
@@ -1294,12 +1410,15 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         return s;
     }
 
+    // Composer (MESSAGE) menu-equivalent: a single TEXT block with the step-level inline keyboard + timeout
+    // attached to that (last non-album) block by the executor (Decision 2). Replaces the former MENU type;
+    // park-on-reply + callback wire-contract {executionId}:{buttonIndex} are unchanged.
     private FunnelStep menu(String id, String text, Integer timeoutValue, String timeoutUnit,
                             String timeoutTargetStepId, Button... buttons) {
         FunnelStep s = new FunnelStep();
         s.setId(id);
-        s.setStepType(StepType.MENU);
-        s.setText(text);
+        s.setStepType(StepType.MESSAGE);
+        s.setBlocks(List.of(new ContentBlock(BlockType.TEXT, text, null, null, null, null)));
         s.setButtons(List.of(buttons));
         s.setTimeoutValue(timeoutValue);
         s.setTimeoutUnit(timeoutUnit);

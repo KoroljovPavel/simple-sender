@@ -8,6 +8,7 @@ import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.bot.TelegramSendException;
 import com.botfunnel.bot.TelegramSender;
+import com.botfunnel.bot.dto.AlbumItem;
 import com.botfunnel.bot.dto.SentMessage;
 import com.botfunnel.common.AppException;
 import com.botfunnel.project.CustomFieldDefinition;
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
 
 import java.time.Clock;
@@ -41,8 +43,10 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -91,42 +95,148 @@ class FunnelStepExecutorTest {
         logAppender.stop();
     }
 
+    // ─── MESSAGE composer (15-message-composer) ────────────────────────────────
+
     @Test
-    void sendMessageOver4096TrimsAndContinues() {
-        when(sender.sendText(anyString(), any(), anyString(), any(), any()))
+    void message_sendsBlocksInOrder() {
+        // A composer step with [text, image, file] sends exactly three messages in block order.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
                 .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
-        FunnelStep step = sendMessageStep("a".repeat(5000), null);
+        when(sender.sendPhoto(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 2L, Instant.now()));
+        when(sender.sendDocument(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 3L, Instant.now()));
+        FunnelStep step = messageStep(
+                textBlock("hi", null),
+                imageBlock("https://example.com/p.png", null, null),
+                fileBlock("https://example.com/d.pdf", null, null));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        InOrder inOrder = inOrder(sender);
+        inOrder.verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("hi"), any(), eq(null), eq(null));
+        inOrder.verify(sender).sendPhoto(eq(BOT_ID), eq(CHAT_ID), eq("https://example.com/p.png"),
+                eq(null), any(), any());
+        inOrder.verify(sender).sendDocument(eq(BOT_ID), eq(CHAT_ID), eq("https://example.com/d.pdf"),
+                eq(null), any(), any());
+        inOrder.verifyNoMoreInteractions();
+    }
+
+    @Test
+    void message_substitutesVariablesInTextAndAllCaptions() {
+        // {user.first_name} is substituted (and HTML-escaped) in the TEXT text AND in every media caption
+        // type — image/video/audio/file. Each caption is captured and verified.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        when(sender.sendPhoto(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 2L, Instant.now()));
+        when(sender.sendVideo(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 3L, Instant.now()));
+        when(sender.sendAudio(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 4L, Instant.now()));
+        when(sender.sendDocument(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 5L, Instant.now()));
+        Subscriber sub = activeSubscriber();
+        sub.setFirstName("<b>");
+        FunnelStep step = messageStep(
+                textBlock("hi {user.first_name}", "HTML"),
+                imageBlock("u1", "img {user.first_name}", "HTML"),
+                videoBlock("u2", "vid {user.first_name}", "HTML"),
+                audioBlock("u3", "aud {user.first_name}", "HTML"),
+                fileBlock("u4", "file {user.first_name}", "HTML"));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), sub, connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("hi &lt;b&gt;"), eq("HTML"), eq(null), eq(null));
+        verify(sender).sendPhoto(eq(BOT_ID), eq(CHAT_ID), eq("u1"), eq("img &lt;b&gt;"), eq("HTML"), any());
+        verify(sender).sendVideo(eq(BOT_ID), eq(CHAT_ID), eq("u2"), eq("vid &lt;b&gt;"), eq("HTML"), any());
+        verify(sender).sendAudio(eq(BOT_ID), eq(CHAT_ID), eq("u3"), eq("aud &lt;b&gt;"), eq("HTML"), any());
+        verify(sender).sendDocument(eq(BOT_ID), eq(CHAT_ID), eq("u4"), eq("file &lt;b&gt;"), eq("HTML"), any());
+    }
+
+    @Test
+    void message_trimsTextOver4096AndWarns() {
+        // A TEXT block >4096 is trimmed to MAX_MESSAGE_LENGTH, LOG_TEXT_TRIMMED is logged, the step does
+        // NOT fail (CONTINUE), and the WARN carries no rendered payload (PII, Decision 16).
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep step = messageStep(textBlock("a".repeat(5000), null));
 
         StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
 
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
         ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
-        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), textCaptor.capture(), any(), any());
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), textCaptor.capture(), any(), eq(null), eq(null));
         assertThat(textCaptor.getValue()).hasSize(StepExecutor.MAX_MESSAGE_LENGTH);
-        // WARN constant logged, and NO rendered payload in the message (PII, Decision 16).
         assertThat(warnMessages()).anyMatch(m -> m.contains(StepExecutor.LOG_TEXT_TRIMMED));
         assertThat(warnMessages()).noneMatch(m -> m.contains("aaaa"));
     }
 
     @Test
-    void sendImageCaptionEscapedAndTrimmedTo1024() {
+    void message_trimsCaptionOver1024PerType() {
+        // The caption of EACH media type (image/video/audio/file) >1024 is trimmed to MAX_CAPTION_LENGTH
+        // with LOG_CAPTION_TRIMMED; the substituted value is HTML-escaped and survives the trim.
         when(sender.sendPhoto(anyString(), any(), anyString(), any(), any(), any()))
                 .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
-        // Placeholder up front so the HTML-escaped value survives the 1024 trim and is observable.
+        when(sender.sendVideo(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 2L, Instant.now()));
+        when(sender.sendAudio(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 3L, Instant.now()));
+        when(sender.sendDocument(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 4L, Instant.now()));
         Subscriber sub = activeSubscriber();
         sub.setFirstName("<b>");
-        FunnelStep step = sendImageStep("https://example.com/p.png",
-                "{user.first_name}" + "a".repeat(2000), "HTML");
+        String longCaption = "{user.first_name}" + "a".repeat(2000);
+        FunnelStep step = messageStep(
+                imageBlock("u1", longCaption, "HTML"),
+                videoBlock("u2", longCaption, "HTML"),
+                audioBlock("u3", longCaption, "HTML"),
+                fileBlock("u4", longCaption, "HTML"));
 
         StepExecutor.StepResult result = executor.execute(step, execution(0), sub, connectedBot());
 
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
-        ArgumentCaptor<String> captionCaptor = ArgumentCaptor.forClass(String.class);
-        verify(sender).sendPhoto(eq(BOT_ID), eq(CHAT_ID), eq("https://example.com/p.png"),
-                captionCaptor.capture(), eq("HTML"), any());
-        String caption = captionCaptor.getValue();
-        assertThat(caption).hasSize(StepExecutor.MAX_CAPTION_LENGTH);
-        assertThat(caption).startsWith("&lt;b&gt;"); // substituted value HTML-escaped
+        for (String url : List.of("u1", "u2", "u3", "u4")) {
+            ArgumentCaptor<String> cap = ArgumentCaptor.forClass(String.class);
+            switch (url) {
+                case "u1" -> verify(sender).sendPhoto(eq(BOT_ID), eq(CHAT_ID), eq(url), cap.capture(), any(), any());
+                case "u2" -> verify(sender).sendVideo(eq(BOT_ID), eq(CHAT_ID), eq(url), cap.capture(), any(), any());
+                case "u3" -> verify(sender).sendAudio(eq(BOT_ID), eq(CHAT_ID), eq(url), cap.capture(), any(), any());
+                default -> verify(sender).sendDocument(eq(BOT_ID), eq(CHAT_ID), eq(url), cap.capture(), any(), any());
+            }
+            assertThat(cap.getValue()).hasSize(StepExecutor.MAX_CAPTION_LENGTH);
+            assertThat(cap.getValue()).startsWith("&lt;b&gt;");
+        }
+        assertThat(warnMessages()).anyMatch(m -> m.contains(StepExecutor.LOG_CAPTION_TRIMMED));
+        assertThat(warnMessages()).noneMatch(m -> m.contains("aaaa"));
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void message_albumCaptionOnlyOnFirstItem() {
+        // An ALBUM block is sent via sendMediaGroup; only the FIRST MediaItem carries a (rendered) caption,
+        // the rest carry none; the first caption substitutes variables.
+        when(sender.sendMediaGroup(anyString(), any(), any(), any()))
+                .thenReturn(List.of(new SentMessage(CHAT_ID, 1L, Instant.now())));
+        Subscriber sub = activeSubscriber();
+        sub.setFirstName("Ann");
+        FunnelStep step = messageStep(albumBlock("HTML",
+                new MediaItem("a1", "first {user.first_name}"),
+                new MediaItem("a2", "ignored-second"),
+                new MediaItem("a3", null)));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), sub, connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        ArgumentCaptor<List<AlbumItem>> itemsCap = ArgumentCaptor.forClass(List.class);
+        verify(sender).sendMediaGroup(eq(BOT_ID), eq(CHAT_ID), itemsCap.capture(), eq(null));
+        List<AlbumItem> items = itemsCap.getValue();
+        assertThat(items).hasSize(3);
+        assertThat(items.get(0).caption()).isEqualTo("first Ann"); // rendered on the first item
+        assertThat(items.get(1).caption()).isNull();
+        assertThat(items.get(2).caption()).isNull();
     }
 
     @Test
@@ -241,104 +351,134 @@ class FunnelStepExecutorTest {
         assertThat(oldCap.getValue()).containsExactly(entry("age", null));
     }
 
-    // ─── MENU (Phase 2) ────────────────────────────────────────────────────────
+    // ─── MESSAGE composer — keyboard on last non-album block (Decision 2) ───────
 
     @Test
-    void menu_sends_text_with_reply_markup() {
-        // MENU step → 6-arg sendText with a non-null reply_markup, outcome WAIT_FOR_REPLY.
+    @SuppressWarnings("unchecked")
+    void message_keyboardOnlyOnLastNonAlbumBlock_waitForReply() {
+        // Step [text, album, text] with non-empty buttons: the keyboard attaches ONLY to the send of the
+        // LAST text block (not the album, not the first text); result WAIT_FOR_REPLY with deadline now+timeout.
         when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
                 .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
-        FunnelStep step = menuStep("Pick one", List.of(
-                new Button("callback", "Yes", "step-yes", null)), null, null);
+        when(sender.sendMediaGroup(anyString(), any(), any(), any()))
+                .thenReturn(List.of(new SentMessage(CHAT_ID, 2L, Instant.now())));
+        FunnelStep step = messageStep(
+                List.of(new Button("callback", "Yes", "step-yes", null)), 5, "MIN",
+                textBlock("first", null),
+                albumBlock(null, new MediaItem("a1", null), new MediaItem("a2", null)),
+                textBlock("last", null));
 
         StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
 
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.WAIT_FOR_REPLY);
+        assertThat(result.nextRunAt()).isEqualTo(FIXED_NOW.plus(Duration.ofMinutes(5)));
+        // First text → no keyboard.
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("first"), any(), eq(null), eq(null));
+        // Last text → keyboard.
         ArgumentCaptor<Object> markupCaptor = ArgumentCaptor.forClass(Object.class);
-        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("Pick one"), any(), eq(null),
-                markupCaptor.capture());
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("last"), any(), eq(null), markupCaptor.capture());
+        assertThat(markupCaptor.getValue()).isNotNull();
+        // Sanity: the markup encodes the Task 5 callback-data contract for the step's buttons.
+        Map<String, Object> markup = (Map<String, Object>) markupCaptor.getValue();
+        List<List<Map<String, Object>>> rows = (List<List<Map<String, Object>>>) markup.get("inline_keyboard");
+        assertThat(rows.get(0).get(0).get("callback_data")).isEqualTo("exec-1:0");
+    }
+
+    @Test
+    void message_noButtons_returnsContinue() {
+        // No buttons → no send carries reply_markup, result CONTINUE.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep step = messageStep(textBlock("plain", null));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("plain"), any(), eq(null), eq(null));
+    }
+
+    @Test
+    void message_lastBlockIsAlbum_keyboardNotAttached() {
+        // Step [text, album] with non-empty buttons. Negative: the album send (sendMediaGroup) takes no
+        // reply_markup (an album never carries a keyboard). Positive: the preceding last NON-album text
+        // block DOES get the keyboard, and the branch returns WAIT_FOR_REPLY parked on that text block.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        when(sender.sendMediaGroup(anyString(), any(), any(), any()))
+                .thenReturn(List.of(new SentMessage(CHAT_ID, 2L, Instant.now())));
+        FunnelStep step = messageStep(
+                List.of(new Button("callback", "Yes", "s", null)), 3, "MIN",
+                textBlock("only-text", null),
+                albumBlock(null, new MediaItem("a1", null), new MediaItem("a2", null)));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.WAIT_FOR_REPLY);
+        assertThat(result.nextRunAt()).isEqualTo(FIXED_NOW.plus(Duration.ofMinutes(3)));
+        // Album never carries a keyboard — sendMediaGroup's 4-arg signature has no reply_markup slot.
+        verify(sender).sendMediaGroup(eq(BOT_ID), eq(CHAT_ID), any(), eq(null));
+        // The keyboard attached to the preceding text block (park anchored there, not on the album).
+        ArgumentCaptor<Object> markupCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("only-text"), any(), eq(null), markupCaptor.capture());
         assertThat(markupCaptor.getValue()).isNotNull();
     }
 
     @Test
-    void menu_with_timeout_returns_deadline() {
+    void message_blockKThrowsTelegramSend_returnsCancelOrFail_stepNotAdvanced() {
+        // Block K's send throws TelegramSendException(BLOCKED_BY_USER) → CANCEL with reasonCode; blocks
+        // 1..K-1 already sent; step NOT advanced. A different terminal reason → FAIL.
         when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
                 .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
-        FunnelStep withTimeout = menuStep("Hurry", List.of(
-                new Button("callback", "Go", "step-go", null)), 5, "MIN");
+        // doThrow (not when().thenThrow) so re-stubbing the throwing method later doesn't re-invoke it.
+        doThrow(new TelegramSendException(403, "blocked", 1,
+                TelegramSendException.TerminalReason.BLOCKED_BY_USER))
+                .when(sender).sendPhoto(anyString(), any(), anyString(), any(), any(), any());
+        FunnelStep step = messageStep(
+                textBlock("ok-1", null),
+                imageBlock("boom", null, null),
+                textBlock("never-reached", null));
 
-        StepExecutor.StepResult timed = executor.execute(withTimeout, execution(0), activeSubscriber(), connectedBot());
+        StepExecutor.StepResult cancel = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
 
-        assertThat(timed.outcome()).isEqualTo(StepExecutor.Outcome.WAIT_FOR_REPLY);
-        assertThat(timed.nextRunAt()).isEqualTo(FIXED_NOW.plus(Duration.ofMinutes(5)));
+        assertThat(cancel.outcome()).isEqualTo(StepExecutor.Outcome.CANCEL);
+        assertThat(cancel.reasonCode()).isEqualTo("BLOCKED_BY_USER");
+        // Block 1 (text) sent; block 3 never reached (send threw on block 2).
+        verify(sender, times(1)).sendText(eq(BOT_ID), eq(CHAT_ID), eq("ok-1"), any(), eq(null), eq(null));
+        verify(sender, never()).sendText(eq(BOT_ID), eq(CHAT_ID), eq("never-reached"), any(), any(), any());
 
-        FunnelStep noTimeout = menuStep("Relax", List.of(
-                new Button("callback", "Go", "step-go", null)), null, null);
-
-        StepExecutor.StepResult untimed = executor.execute(noTimeout, execution(0), activeSubscriber(), connectedBot());
-
-        assertThat(untimed.outcome()).isEqualTo(StepExecutor.Outcome.WAIT_FOR_REPLY);
-        assertThat(untimed.nextRunAt()).isNull();
+        // Other terminal reason → FAIL.
+        doThrow(new TelegramSendException(null, "transient_failure_exhausted", 4))
+                .when(sender).sendPhoto(anyString(), any(), anyString(), any(), any(), any());
+        StepExecutor.StepResult fail = executor.execute(
+                messageStep(imageBlock("boom2", null, null)), execution(0), activeSubscriber(), connectedBot());
+        assertThat(fail.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(fail.reasonCode()).isEqualTo("OTHER");
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void menu_callbackButtons_encodeCorrectCallbackData() {
-        // Build-side of the Task 5 round-trip contract (Decision 6): each callback button carries
-        // callback_data = "{executionId}:{index}" (0-based); URL button carries url, NO callback_data.
+    void message_invalidBotToken_fails() {
+        // BotTokenInvalidException mid-blocks → FAIL with reasonCode "invalid_bot_token".
         when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
-                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
-        FunnelStep step = menuStep("Menu", List.of(
-                new Button("callback", "First", "s1", null),
-                new Button("callback", "Second", "s2", null),
-                new Button("url", "Site", null, "https://example.com")), null, null);
-        FunnelExecution exec = execution(0); // id == "exec-1"
-
-        executor.execute(step, exec, activeSubscriber(), connectedBot());
-
-        ArgumentCaptor<Object> markupCaptor = ArgumentCaptor.forClass(Object.class);
-        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("Menu"), any(), eq(null), markupCaptor.capture());
-        Map<String, Object> markup = (Map<String, Object>) markupCaptor.getValue();
-        List<List<Map<String, Object>>> rows = (List<List<Map<String, Object>>>) markup.get("inline_keyboard");
-        assertThat(rows).hasSize(3);
-
-        Map<String, Object> b0 = rows.get(0).get(0);
-        assertThat(b0.get("text")).isEqualTo("First");
-        assertThat(b0.get("callback_data")).isEqualTo("exec-1:0");
-        assertThat(b0).doesNotContainKey("url");
-
-        Map<String, Object> b1 = rows.get(1).get(0);
-        assertThat(b1.get("callback_data")).isEqualTo("exec-1:1");
-
-        Map<String, Object> b2 = rows.get(2).get(0);
-        assertThat(b2.get("text")).isEqualTo("Site");
-        assertThat(b2.get("url")).isEqualTo("https://example.com");
-        assertThat(b2).doesNotContainKey("callback_data");
-    }
-
-    @Test
-    void sendMessageBlockedByUserCancels() {
-        when(sender.sendText(anyString(), any(), anyString(), any(), any()))
-                .thenThrow(new TelegramSendException(403, "blocked", 1,
-                        TelegramSendException.TerminalReason.BLOCKED_BY_USER));
+                .thenThrow(new com.botfunnel.bot.BotTokenInvalidException(BOT_ID, "Token is invalid or revoked"));
 
         StepExecutor.StepResult result = executor.execute(
-                sendMessageStep("hi", null), execution(0), activeSubscriber(), connectedBot());
-
-        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CANCEL);
-        assertThat(result.reasonCode()).isEqualTo("BLOCKED_BY_USER");
-    }
-
-    @Test
-    void sendMessageOtherTerminalFails() {
-        when(sender.sendText(anyString(), any(), anyString(), any(), any()))
-                .thenThrow(new TelegramSendException(null, "transient_failure_exhausted", 4));
-
-        StepExecutor.StepResult result = executor.execute(
-                sendMessageStep("hi", null), execution(0), activeSubscriber(), connectedBot());
+                messageStep(textBlock("hi", null)), execution(0), activeSubscriber(), connectedBot());
 
         assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
-        assertThat(result.reasonCode()).isEqualTo("OTHER");
+        assertThat(result.reasonCode()).isEqualTo("invalid_bot_token");
+    }
+
+    @Test
+    void message_appException_fails() {
+        // AppException (e.g. 404 bot-not-found) → FAIL with codeOrStatus.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenThrow(AppException.notFound("Bot not found"));
+
+        StepExecutor.StepResult result = executor.execute(
+                messageStep(textBlock("hi", null)), execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(result.reasonCode()).isEqualTo("404"); // notFound has null code → HTTP status string
     }
 
     @Test
@@ -418,18 +558,6 @@ class FunnelStepExecutorTest {
         verify(subscriberService).removeTag(PROJECT_ID, SUBSCRIBER_ID, "vip");
     }
 
-    @Test
-    void sendMessageInvalidBotTokenFails() {
-        when(sender.sendText(anyString(), any(), anyString(), any(), any()))
-                .thenThrow(new com.botfunnel.bot.BotTokenInvalidException(BOT_ID, "Token is invalid or revoked"));
-
-        StepExecutor.StepResult result = executor.execute(
-                sendMessageStep("hi", null), execution(0), activeSubscriber(), connectedBot());
-
-        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
-        assertThat(result.reasonCode()).isEqualTo("invalid_bot_token");
-    }
-
     // ─── helpers ─────────────────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
@@ -444,20 +572,47 @@ class FunnelStepExecutorTest {
                 .toList();
     }
 
-    private static FunnelStep sendMessageStep(String text, String parseMode) {
-        FunnelStep s = new FunnelStep();
-        s.setStepType(StepType.SEND_MESSAGE);
-        s.setText(text);
-        s.setParseMode(parseMode);
-        return s;
+    // ─── composer (MESSAGE) block-builders ──────────────────────────────────────
+
+    private static ContentBlock textBlock(String text, String parseMode) {
+        return new ContentBlock(BlockType.TEXT, text, parseMode, null, null, null);
     }
 
-    private static FunnelStep sendImageStep(String url, String caption, String parseMode) {
+    private static ContentBlock imageBlock(String url, String caption, String parseMode) {
+        return new ContentBlock(BlockType.IMAGE, null, parseMode, url, caption, null);
+    }
+
+    private static ContentBlock videoBlock(String url, String caption, String parseMode) {
+        return new ContentBlock(BlockType.VIDEO, null, parseMode, url, caption, null);
+    }
+
+    private static ContentBlock audioBlock(String url, String caption, String parseMode) {
+        return new ContentBlock(BlockType.AUDIO, null, parseMode, url, caption, null);
+    }
+
+    private static ContentBlock fileBlock(String url, String caption, String parseMode) {
+        return new ContentBlock(BlockType.FILE, null, parseMode, url, caption, null);
+    }
+
+    private static ContentBlock albumBlock(String parseMode, MediaItem... items) {
+        return new ContentBlock(BlockType.ALBUM, null, parseMode, null, null, List.of(items));
+    }
+
+    // A MESSAGE composer step with the given blocks and no keyboard/timeout.
+    private static FunnelStep messageStep(ContentBlock... blocks) {
+        return messageStep(null, null, null, blocks);
+    }
+
+    // A MESSAGE composer step with step-level buttons + optional timeout (the executor attaches them to the
+    // last non-album block, Decision 2).
+    private static FunnelStep messageStep(List<Button> buttons, Integer timeoutValue, String timeoutUnit,
+                                          ContentBlock... blocks) {
         FunnelStep s = new FunnelStep();
-        s.setStepType(StepType.SEND_IMAGE);
-        s.setImageUrl(url);
-        s.setCaption(caption);
-        s.setParseMode(parseMode);
+        s.setStepType(StepType.MESSAGE);
+        s.setBlocks(List.of(blocks));
+        s.setButtons(buttons);
+        s.setTimeoutValue(timeoutValue);
+        s.setTimeoutUnit(timeoutUnit);
         return s;
     }
 
@@ -473,16 +628,6 @@ class FunnelStepExecutorTest {
         FunnelStep s = new FunnelStep();
         s.setStepType(type);
         s.setTagSlug(slug);
-        return s;
-    }
-
-    private static FunnelStep menuStep(String text, List<Button> buttons, Integer timeoutValue, String timeoutUnit) {
-        FunnelStep s = new FunnelStep();
-        s.setStepType(StepType.MENU);
-        s.setText(text);
-        s.setButtons(buttons);
-        s.setTimeoutValue(timeoutValue);
-        s.setTimeoutUnit(timeoutUnit);
         return s;
     }
 

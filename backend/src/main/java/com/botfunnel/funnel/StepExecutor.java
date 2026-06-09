@@ -4,6 +4,7 @@ import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotTokenInvalidException;
 import com.botfunnel.bot.TelegramSendException;
 import com.botfunnel.bot.TelegramSender;
+import com.botfunnel.bot.dto.AlbumItem;
 import com.botfunnel.common.AppException;
 import com.botfunnel.project.CustomFieldDefinition;
 import com.botfunnel.project.CustomFieldType;
@@ -53,6 +54,12 @@ public class StepExecutor {
     static final String LOG_CAPTION_TRIMMED = "FUNNEL_STEP_CAPTION_TRIMMED";
     static final String LOG_CUSTOM_FIELD_SKIPPED = "FUNNEL_STEP_CUSTOM_FIELD_SKIPPED_DELETED_DEFINITION";
 
+    // Telegram media-group element type for an ALBUM block. The Task 1 model carries no per-item media
+    // type (MediaItem is just url+caption, ContentBlock.type is the single ALBUM discriminator), so the
+    // executor cannot distinguish photo vs video per item — an ALBUM sends as a homogeneous photo group.
+    // Per-type album mixing (photo+video) is deferred until the model carries an element-type hint.
+    private static final String ALBUM_ELEMENT_TYPE = "photo";
+
     // callback_data wire contract with Task 5 (Decision 6): EXACTLY "{executionId}:{buttonIndex}" — the
     // ObjectId-hex execution id + a single ':' separator + the 0-based button index. Task 5's parser is
     // strict (one ':', ObjectId-hex shape, bounded index); any deviation here silently drops real taps.
@@ -91,8 +98,7 @@ public class StepExecutor {
      */
     public StepResult execute(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
         return switch (step.getStepType()) {
-            case SEND_MESSAGE -> sendMessage(step, execution, subscriber, bot);
-            case SEND_IMAGE -> sendImage(step, execution, subscriber, bot);
+            case MESSAGE -> message(step, execution, subscriber, bot);
             case DELAY -> StepResult.delay(delayDuration(step));
             case ADD_TAG -> {
                 // Funnel-step-originated write → child enroll depth (parent + 1) so a tag_added trigger
@@ -107,7 +113,6 @@ public class StepExecutor {
                 yield StepResult.cont();
             }
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
-            case MENU -> menu(step, execution, subscriber, bot);
             case EMIT_EVENT -> emitEvent(step, execution);
             case SUBSCRIBE_TO_FUNNEL -> subscribeToFunnel(step, execution);
         };
@@ -142,30 +147,125 @@ public class StepExecutor {
         return StepResult.cont();
     }
 
-    // MENU (Phase 2, park-on-reply): render the menu text (same renderer/trim rules as SEND_MESSAGE) and
-    // an inline keyboard from step.getButtons(), send via the 6-arg sendText overload (reply_markup), then
-    // return WAIT_FOR_REPLY carrying the timeout deadline (now + timeoutValue/timeoutUnit) or null (wait
-    // indefinitely). The runner applies the park (status=waiting_for_reply, currentStepId stays, nextRunAt).
-    private StepResult menu(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
-        String rendered = VariableTemplateRenderer.render(step.getText(), step.getParseMode(), subscriber);
-        if (rendered.length() > MAX_MESSAGE_LENGTH) {
-            log.warn("{} executionId={} stepIndex={} originalLength={} trimmedTo={}", LOG_TEXT_TRIMMED,
-                    execution.getId(), execution.getCurrentStepIndex(), rendered.length(), MAX_MESSAGE_LENGTH);
-            rendered = rendered.substring(0, MAX_MESSAGE_LENGTH);
-        }
-        Object replyMarkup = buildReplyMarkup(step, execution);
-        Instant deadline = menuDeadline(step);
+    // MESSAGE composer (15-message-composer / Decision 1+2+3): send the step's ordered List<ContentBlock>
+    // as N separate Telegram messages, one per block, under a SINGLE engine claim (per-node at-most-once —
+    // Decision 3: a crash mid-block leaves the step in_progress with the already-sent blocks lost-forward,
+    // never re-sent). Each TEXT text and each media caption (incl. the FIRST album item's caption) is
+    // rendered through VariableTemplateRenderer with the BLOCK's own parseMode (not a step-level mode), then
+    // trimmed+WARNed over the Telegram hard limit (4096 text / 1024 caption); over-length is NOT a step
+    // failure. The inline keyboard + timeout park-on-reply (MENU parity) attach to the LAST non-album block
+    // only (Decision 2 — buttons live on the step, never on a block, and an album never carries a keyboard);
+    // with buttons → WAIT_FOR_REPLY(deadline), without → CONTINUE. The whole loop is wrapped in ONE
+    // try/catch (NOT per-block) so the failure mapping and lost-forward semantics match the former flat
+    // sendMessage/sendImage/menu branches exactly: TelegramSendException → fromTerminalReason (cancel/fail),
+    // BotTokenInvalidException → fail("invalid_bot_token"), AppException → fail(codeOrStatus).
+    private StepResult message(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
+        List<ContentBlock> blocks = step.getBlocks();
+        boolean hasButtons = step.getButtons() != null && !step.getButtons().isEmpty();
+        // Index of the last NON-ALBUM block — the only block that may carry the inline keyboard (Decision 2).
+        // Computed once via a reverse scan; -1 means every block is an album (then no keyboard attaches).
+        int lastNonAlbumIndex = lastNonAlbumIndex(blocks);
         try {
-            sender.sendText(bot.getId(), subscriber.getTelegramChatId(), rendered, step.getParseMode(),
-                    null, replyMarkup);
-            return StepResult.waitForReply(deadline);
+            for (int i = 0; i < blocks.size(); i++) {
+                ContentBlock block = blocks.get(i);
+                // Only the last non-album block carries the keyboard, and only when the step has buttons.
+                Object replyMarkup = (hasButtons && i == lastNonAlbumIndex)
+                        ? buildReplyMarkup(step, execution)
+                        : null;
+                sendBlock(block, execution, subscriber, bot, replyMarkup);
+            }
+            // All blocks sent. Park-on-reply only when the step has buttons (they were attached to the last
+            // non-album block above); otherwise advance. menuDeadline yields null for an untimed park.
+            return hasButtons ? StepResult.waitForReply(menuDeadline(step)) : StepResult.cont();
         } catch (TelegramSendException ex) {
             return fromTerminalReason(ex);
         } catch (BotTokenInvalidException ex) {
             return StepResult.fail("invalid_bot_token");
         } catch (AppException ex) {
+            // e.g. bot disconnected between the engine's pin-check and a send (404 bot-not-found).
             return StepResult.fail(codeOrStatus(ex));
         }
+    }
+
+    // Dispatch one block to its Telegram send method. replyMarkup is non-null only for the keyboard-bearing
+    // block (the caller enforces "last non-album block only"). The per-block switch is exhaustive over
+    // BlockType (no default). Media value (mediaUrl / item URL) is passed as-is — Telegram fetches it; the
+    // backend never dereferences it (no SSRF, Decision 6).
+    private void sendBlock(ContentBlock block, FunnelExecution execution, Subscriber subscriber, Bot bot,
+                           Object replyMarkup) {
+        Long chatId = subscriber.getTelegramChatId();
+        switch (block.type()) {
+            case TEXT -> {
+                String text = renderTrimmed(block.text(), block.parseMode(), subscriber, execution,
+                        MAX_MESSAGE_LENGTH, LOG_TEXT_TRIMMED);
+                sender.sendText(bot.getId(), chatId, text, block.parseMode(), null, replyMarkup);
+            }
+            case IMAGE -> sender.sendPhoto(bot.getId(), chatId, block.mediaUrl(),
+                    renderCaption(block, subscriber, execution), block.parseMode(), null);
+            case VIDEO -> sender.sendVideo(bot.getId(), chatId, block.mediaUrl(),
+                    renderCaption(block, subscriber, execution), block.parseMode(), null);
+            case AUDIO -> sender.sendAudio(bot.getId(), chatId, block.mediaUrl(),
+                    renderCaption(block, subscriber, execution), block.parseMode(), null);
+            case FILE -> sender.sendDocument(bot.getId(), chatId, block.mediaUrl(),
+                    renderCaption(block, subscriber, execution), block.parseMode(), null);
+            case ALBUM -> sender.sendMediaGroup(bot.getId(), chatId, buildAlbum(block, subscriber, execution),
+                    null);
+        }
+    }
+
+    // The single-media caption (IMAGE/VIDEO/AUDIO/FILE): render + trim only when present. A null caption is
+    // passed through as null (the sender omits the body key) — never rendered or trimmed.
+    private String renderCaption(ContentBlock block, Subscriber subscriber, FunnelExecution execution) {
+        if (block.caption() == null) {
+            return null;
+        }
+        return renderTrimmed(block.caption(), block.parseMode(), subscriber, execution,
+                MAX_CAPTION_LENGTH, LOG_CAPTION_TRIMMED);
+    }
+
+    // Build the AlbumItem list for /sendMediaGroup. The caption is meaningful only on the FIRST element
+    // (Decision 5): render+trim that one (when present); later elements carry their stored caption as-is
+    // (normally null — save-validation in Task 4 guarantees caption only on the first). The Telegram
+    // media-group element type is mapped from the album's per-type discriminator hint via albumElementType.
+    private List<AlbumItem> buildAlbum(ContentBlock block, Subscriber subscriber, FunnelExecution execution) {
+        List<MediaItem> items = block.items();
+        List<AlbumItem> out = new ArrayList<>(items.size());
+        for (int i = 0; i < items.size(); i++) {
+            MediaItem item = items.get(i);
+            String caption = null;
+            if (i == 0 && item.caption() != null) {
+                caption = renderTrimmed(item.caption(), block.parseMode(), subscriber, execution,
+                        MAX_CAPTION_LENGTH, LOG_CAPTION_TRIMMED);
+            }
+            out.add(new AlbumItem(ALBUM_ELEMENT_TYPE, item.mediaUrl(), caption, block.parseMode()));
+        }
+        return out;
+    }
+
+    // Render a text/caption through the variable renderer with the given parseMode, then trim to the limit
+    // with a codes-only WARN (Decision 16 / PII — the rendered payload is NEVER logged). Shared by TEXT
+    // (4096 / LOG_TEXT_TRIMMED) and every media caption (1024 / LOG_CAPTION_TRIMMED) so the trim+WARN logic
+    // lives in one place. Over-length is NOT a step failure — it trims and continues.
+    private String renderTrimmed(String template, String parseMode, Subscriber subscriber,
+                                 FunnelExecution execution, int limit, String logCode) {
+        String rendered = VariableTemplateRenderer.render(template, parseMode, subscriber);
+        if (rendered.length() > limit) {
+            log.warn("{} executionId={} stepIndex={} originalLength={} trimmedTo={}", logCode,
+                    execution.getId(), execution.getCurrentStepIndex(), rendered.length(), limit);
+            rendered = rendered.substring(0, limit);
+        }
+        return rendered;
+    }
+
+    // Reverse scan for the last non-album block index (the keyboard anchor, Decision 2). Returns -1 when the
+    // list is empty or every block is an album (then no block carries the keyboard).
+    private static int lastNonAlbumIndex(List<ContentBlock> blocks) {
+        for (int i = blocks.size() - 1; i >= 0; i--) {
+            if (blocks.get(i).type() != BlockType.ALBUM) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     // Build a Telegram inline_keyboard ({"inline_keyboard":[[{text, callback_data|url}]]}) — one button
@@ -205,51 +305,6 @@ public class StepExecutor {
             return null;
         }
         return Instant.now(clock).plus(durationOf(value, unit));
-    }
-
-    private StepResult sendMessage(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
-        String rendered = VariableTemplateRenderer.render(step.getText(), step.getParseMode(), subscriber);
-        if (rendered.length() > MAX_MESSAGE_LENGTH) {
-            // Trim, WARN, and CONTINUE — over-length after substitution is NOT a step failure.
-            log.warn("{} executionId={} stepIndex={} originalLength={} trimmedTo={}", LOG_TEXT_TRIMMED,
-                    execution.getId(), execution.getCurrentStepIndex(), rendered.length(), MAX_MESSAGE_LENGTH);
-            rendered = rendered.substring(0, MAX_MESSAGE_LENGTH);
-        }
-        try {
-            sender.sendText(bot.getId(), subscriber.getTelegramChatId(), rendered, step.getParseMode(), null);
-            return StepResult.cont();
-        } catch (TelegramSendException ex) {
-            return fromTerminalReason(ex);
-        } catch (BotTokenInvalidException ex) {
-            return StepResult.fail("invalid_bot_token");
-        } catch (AppException ex) {
-            // e.g. bot disconnected between the engine's pin-check and the send (404 bot-not-found).
-            return StepResult.fail(codeOrStatus(ex));
-        }
-    }
-
-    private StepResult sendImage(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
-        String caption = step.getCaption();
-        if (caption != null) {
-            caption = VariableTemplateRenderer.render(caption, step.getParseMode(), subscriber);
-            if (caption.length() > MAX_CAPTION_LENGTH) {
-                log.warn("{} executionId={} stepIndex={} originalLength={} trimmedTo={}", LOG_CAPTION_TRIMMED,
-                        execution.getId(), execution.getCurrentStepIndex(), caption.length(), MAX_CAPTION_LENGTH);
-                caption = caption.substring(0, MAX_CAPTION_LENGTH);
-            }
-        }
-        try {
-            // Telegram fetches the imageUrl itself — the backend never dereferences it (no SSRF).
-            sender.sendPhoto(bot.getId(), subscriber.getTelegramChatId(), step.getImageUrl(),
-                    caption, step.getParseMode(), null);
-            return StepResult.cont();
-        } catch (TelegramSendException ex) {
-            return fromTerminalReason(ex);
-        } catch (BotTokenInvalidException ex) {
-            return StepResult.fail("invalid_bot_token");
-        } catch (AppException ex) {
-            return StepResult.fail(codeOrStatus(ex));
-        }
     }
 
     private StepResult setCustomField(FunnelStep step, FunnelExecution execution, Subscriber subscriber) {

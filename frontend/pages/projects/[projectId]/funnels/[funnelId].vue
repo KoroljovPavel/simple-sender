@@ -57,7 +57,7 @@ const editStep = computed<FunnelStep | null>(() => steps.value[editIndex.value] 
 // the step in focus: the one being edited (edit dialog open) wins; otherwise the first message step, so
 // turning Preview on without an open dialog still shows something. No message step → neutral empty state.
 const previewOpen = ref(false)
-const MESSAGE_STEP_TYPES: StepType[] = ['SEND_MESSAGE', 'SEND_IMAGE', 'MENU']
+const MESSAGE_STEP_TYPES: StepType[] = ['MESSAGE']
 // A step row click drives the preview to THAT step. -1 = nothing clicked → fall back to the first
 // message step (the original default). Cleared when the clicked index no longer points at a real step.
 const previewSelectedIndex = ref(-1)

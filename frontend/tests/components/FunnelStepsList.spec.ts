@@ -6,7 +6,7 @@ import FunnelStepsList from '../../components/funnels/FunnelStepsList.vue'
 import type { FunnelStep } from '../../types/funnel'
 
 const STEPS: FunnelStep[] = [
-  { stepType: 'SEND_MESSAGE', text: 'Hi' },
+  { stepType: 'MESSAGE', blocks: [{ type: 'TEXT', text: 'Hi' }] },
   { stepType: 'DELAY', delayValue: 5, delayUnit: 'MIN' },
   { stepType: 'ADD_TAG', tagSlug: 'vip' },
 ]

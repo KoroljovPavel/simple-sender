@@ -46,14 +46,14 @@ mockNuxtImport('useRoute', () => () => ({ params: { projectId: 'p1', funnelId: '
 // vue-sonner's `toast` is imported directly (not auto-imported) — mock the module so success/error
 // fan-out is observable. Task 5: success → toast, network/unexpected error → toast, 422 code → inline.
 vi.mock('vue-sonner', () => ({ toast: toastMock }))
-// MENU has no remote fetch, but the shared FunnelStepForm auto-imports useApi for the tag/cf pickers —
-// stub it so a direct mount never hits a real fetch.
+// The composer keyboard has no remote fetch, but the shared FunnelStepForm auto-imports useApi for the
+// tag/cf pickers — stub it so a direct mount never hits a real fetch.
 mockNuxtImport('useApi', () => () => () => Promise.resolve([]))
 
 // Render Teleport content inline for EVERY editor-page mount so (a) wrapper.find() sees the DialogPortal'd
 // confirm dialog, and (b) the page's always-mounted Add/Edit/Stop dialogs unmount with the wrapper instead
-// of leaving body-teleported fragments that race with the MENU section's body-wipe (nextSibling-of-null on
-// a later unmount). Same per-mount stub used by settings/bot.spec.ts.
+// of leaving body-teleported fragments that race with the composer keyboard's body-wipe (nextSibling-of-null
+// on a later unmount). Same per-mount stub used by settings/bot.spec.ts.
 const editorMountOptions = {
   global: { stubs: { teleport: { template: '<div data-test-teleport><slot /></div>' } } },
 }
@@ -157,9 +157,9 @@ describe('funnels/[funnelId] editor page', () => {
 
   it('pause flips an active funnel and renders steps', async () => {
     storeMock.fetchOne.mockResolvedValue(
-      draft({ status: 'active', steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }], deepLink: 't.me/bot?start=' }),
+      draft({ status: 'active', steps: [{ stepType: 'MESSAGE', blocks: [{ type: 'TEXT', text: 'Hi' }] }], deepLink: 't.me/bot?start=' }),
     )
-    storeMock.pause.mockResolvedValue(draft({ status: 'paused', steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] }))
+    storeMock.pause.mockResolvedValue(draft({ status: 'paused', steps: [{ stepType: 'MESSAGE', blocks: [{ type: 'TEXT', text: 'Hi' }] }] }))
 
     const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
     await settle()
@@ -271,8 +271,8 @@ describe('funnels/[funnelId] editor page', () => {
   })
 
   it('maps a funnel_broken_edge 422 to an inline error and keeps status draft', async () => {
-    storeMock.fetchOne.mockResolvedValue(draft({ steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] }))
-    storeMock.update.mockResolvedValue(draft({ steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] }))
+    storeMock.fetchOne.mockResolvedValue(draft({ steps: [{ stepType: 'MESSAGE', blocks: [{ type: 'TEXT', text: 'Hi' }] }] }))
+    storeMock.update.mockResolvedValue(draft({ steps: [{ stepType: 'MESSAGE', blocks: [{ type: 'TEXT', text: 'Hi' }] }] }))
     storeMock.activate.mockRejectedValue({ statusCode: 422, data: { code: 'funnel_broken_edge' } })
 
     const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
@@ -449,13 +449,21 @@ describe('funnels/[funnelId] editor page', () => {
     // NOT row 0 — proving the fallback skips non-message steps, and a click can override it.
     const MIXED_STEPS: FunnelStep[] = [
       { stepType: 'DELAY', id: 'd0', delayValue: 1, delayUnit: 'MIN' },
-      { stepType: 'SEND_MESSAGE', id: 'm1', text: 'First message', parseMode: null },
-      { stepType: 'SEND_MESSAGE', id: 'm2', text: 'Second message', parseMode: null },
+      { stepType: 'MESSAGE', id: 'm1', blocks: [{ type: 'TEXT', text: 'First message', parseMode: null }] },
+      { stepType: 'MESSAGE', id: 'm2', blocks: [{ type: 'TEXT', text: 'Second message', parseMode: null }] },
     ]
 
+    // NOTE (Task 7/8 boundary): the preview RENDER details (block markers, response shape) are owned by
+    // Task 8's FunnelMessagePreview. These page-level cases only assert the editor's step-SELECTION wiring
+    // (which step drives the panel + the row highlight); they use Task 8's current component contract
+    // (preview({stepType, blocks}) → {renderedBlocks, sampleData, kind}; funnel-preview-block-N markers).
     async function mountWithPreview(steps: FunnelStep[] = MIXED_STEPS) {
       storeMock.fetchOne.mockResolvedValue(draft({ steps }))
-      storeMock.preview.mockReset().mockResolvedValue({ rendered: 'rendered', sampleData: false, kind: 'message' })
+      storeMock.preview.mockReset().mockResolvedValue({
+        renderedBlocks: [{ type: 'TEXT', text: 'rendered' }],
+        sampleData: false,
+        kind: 'message',
+      })
       const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
       await settle()
       await wrapper.get('[data-test="funnel-preview-toggle"]').trigger('click')
@@ -467,7 +475,7 @@ describe('funnels/[funnelId] editor page', () => {
       const wrapper = await mountWithPreview()
       // Default with no click = row 1 (m1) → backend previewed with its id (render path), heading shows
       // step 2 (1-based). The first-tick preview is synchronous (panel primes immediately on mount).
-      expect(storeMock.preview).toHaveBeenLastCalledWith('f1', 'm1', expect.objectContaining({ text: 'First message' }))
+      expect(storeMock.preview).toHaveBeenLastCalledWith('f1', 'm1', expect.objectContaining({ stepType: 'MESSAGE' }))
       const heading = wrapper.get('[data-test="funnel-preview-step-heading"]')
       expect(heading.text()).toContain('2')
       // The defaulted row is highlighted.
@@ -482,7 +490,7 @@ describe('funnels/[funnelId] editor page', () => {
 
       // Heading now names the clicked step (row 2 → step 3, 1-based) and the rendered (message) body shows.
       expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('3')
-      expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-preview-block-0"]').exists()).toBe(true)
       // Highlight moved to the clicked row, off the default.
       expect(wrapper.get('[data-test="funnel-step-row-2"]').classes().join(' ')).toContain('ring-2')
       expect(wrapper.get('[data-test="funnel-step-row-1"]').classes().join(' ')).not.toContain('ring-2')
@@ -497,7 +505,7 @@ describe('funnels/[funnelId] editor page', () => {
 
       expect(storeMock.preview).not.toHaveBeenCalled()
       expect(wrapper.find('[data-test="funnel-preview-placeholder"]').exists()).toBe(true)
-      expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="funnel-preview-block-0"]').exists()).toBe(false)
       // Heading still tells which step (row 0 → step 1) is in focus.
       expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('1')
       expect(wrapper.get('[data-test="funnel-step-row-0"]').classes().join(' ')).toContain('ring-2')
@@ -523,12 +531,13 @@ describe('funnels/[funnelId] editor page', () => {
   })
 })
 
-// ─── MENU step form (Phase 2, Task 6) ────────────────────────────────────────
-// The MENU step is a message + inline keyboard: ≥1 callback button (label + target = another step or
-// "End"), URL buttons (label + http(s) link). Mounted standalone (lighter than via the dialog) with the
-// sibling-step context the target picker needs. data-test idiom throughout (patterns.md).
+// ─── MESSAGE composer keyboard (Decision 2) ──────────────────────────────────
+// The inline keyboard now attaches to the LAST non-album block of a MESSAGE composer step (it replaces the
+// former MENU step-kind). ≥1 callback button (label + target = another step or "End"), URL buttons (label +
+// http(s) link). Mounted standalone (lighter than via the dialog) with the sibling-step context the target
+// picker needs. The keyboard is opt-in — the helper adds the first button row. data-test idiom throughout.
 const SIBLINGS: FunnelStep[] = [
-  { stepType: 'SEND_MESSAGE', text: 'Welcome', id: 's1' },
+  { stepType: 'MESSAGE', id: 's1', blocks: [{ type: 'TEXT', text: 'Welcome' }] },
   { stepType: 'DELAY', delayValue: 5, delayUnit: 'MIN', id: 's2' },
 ]
 
@@ -541,44 +550,52 @@ function maybe(sel: string): Element | null {
   return document.querySelector(sel)
 }
 
+// Mount the composer (default MESSAGE) and add ONE keyboard button row so the per-button tests have a row 0.
 async function mountMenuForm(initial: FunnelStep | null = null) {
   const wrapper = await mountSuspended(FunnelStepForm, {
     props: { initial, siblingSteps: SIBLINGS, submitLabel: 'Save' },
     attachTo: document.body,
   })
   await settle()
-  await $('[data-test="step-type-select"]').setValue('MENU')
-  await settle()
+  // The seeded TEXT block is the last non-album block → the keyboard section is available. Add a row.
+  if (!maybe('[data-test="step-menu-button-row-0"]')) {
+    await $('[data-test="step-menu-add-button"]').trigger('click')
+    await settle()
+  }
   return wrapper
 }
 async function submitForm() {
   await $('[data-test="step-form"]').trigger('submit')
   await settle()
 }
+// Fill the seeded text block so a valid composer never blocks a keyboard-focused submit.
+async function fillText(text = 'Pick one') {
+  await $('[data-test="step-block-text-0"]').setValue(text)
+}
 
-describe('FunnelStepForm — MENU', () => {
+describe('FunnelStepForm — MESSAGE keyboard', () => {
   afterEach(() => {
     document.body.innerHTML = ''
   })
 
-  it('renders MENU in the step-type picker and shows the buttons section', async () => {
+  it('renders MESSAGE in the step-type picker and shows the buttons section', async () => {
     const wrapper = await mountSuspended(FunnelStepForm, {
       props: { siblingSteps: SIBLINGS, submitLabel: 'Save' },
       attachTo: document.body,
     })
     await settle()
     const options = wrapper.findAll('[data-test="step-type-select"] option').map((o) => o.attributes('value'))
-    expect(options).toContain('MENU')
+    expect(options).toContain('MESSAGE')
+    expect(options).not.toContain('MENU')
 
-    await $('[data-test="step-type-select"]').setValue('MENU')
-    await settle()
+    // The default composer's last block is a non-album TEXT block → the keyboard section is available.
     expect(maybe('[data-test="step-menu-buttons"]')).not.toBeNull()
-    expect(maybe('[data-test="step-menu-text-input"]')).not.toBeNull()
+    expect(maybe('[data-test="step-block-text-0"]')).not.toBeNull()
   })
 
   it('adds and removes button rows', async () => {
     await mountMenuForm()
-    // Starts with one row (a menu needs ≥1 callback button anyway).
+    // The helper added one row.
     expect(maybe('[data-test="step-menu-button-row-0"]')).not.toBeNull()
     await $('[data-test="step-menu-add-button"]').trigger('click')
     await settle()
@@ -634,7 +651,7 @@ describe('FunnelStepForm — MENU', () => {
 
   it('blocks submit on an empty button label', async () => {
     const wrapper = await mountMenuForm()
-    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await fillText('Pick one')
     // Leave the label blank; set a valid target so only the label is wrong.
     await $('[data-test="step-menu-target-0-input"]').trigger('focus')
     await settle()
@@ -645,9 +662,9 @@ describe('FunnelStepForm — MENU', () => {
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
-  it('blocks submit when the MENU has no callback button', async () => {
+  it('blocks submit when the keyboard has no callback button', async () => {
     const wrapper = await mountMenuForm()
-    await $('[data-test="step-menu-text-input"]').setValue('Links only')
+    await fillText('Links only')
     // Turn the single row into a URL button → zero callback buttons.
     await $('[data-test="step-menu-button-type-0"]').setValue('url')
     await settle()
@@ -660,7 +677,7 @@ describe('FunnelStepForm — MENU', () => {
 
   it('blocks a non-http(s) url button', async () => {
     const wrapper = await mountMenuForm()
-    await $('[data-test="step-menu-text-input"]').setValue('Menu')
+    await fillText('Menu')
     // Row 0 = a valid callback (so the ≥1-callback rule passes and only the URL is wrong).
     await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
     await $('[data-test="step-menu-target-0-input"]').trigger('focus')
@@ -679,15 +696,15 @@ describe('FunnelStepForm — MENU', () => {
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
-  it('emits a valid MENU with End encoded as targetStepId null and preserves id/next', async () => {
+  it('emits a valid MESSAGE keyboard with End encoded as targetStepId null and preserves id/next', async () => {
     const wrapper = await mountMenuForm({
-      stepType: 'MENU',
-      text: 'Old',
+      stepType: 'MESSAGE',
+      blocks: [{ type: 'TEXT', text: 'Old' }],
       buttons: [],
       id: 'menu1',
       next: null,
     })
-    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await fillText('Pick one')
     // Row 0: callback → step s1.
     await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
     await $('[data-test="step-menu-target-0-input"]').trigger('focus')
@@ -707,8 +724,8 @@ describe('FunnelStepForm — MENU', () => {
     const emitted = wrapper.emitted('submit')
     expect(emitted).toBeTruthy()
     const step = emitted![0][0] as FunnelStep
-    expect(step.stepType).toBe('MENU')
-    expect(step.text).toBe('Pick one')
+    expect(step.stepType).toBe('MESSAGE')
+    expect(step.blocks).toEqual([{ type: 'TEXT', text: 'Pick one', parseMode: null }])
     expect(step.id).toBe('menu1')
     expect(step.buttons).toEqual([
       { type: 'callback', label: 'Continue', targetStepId: 's1', url: null },
@@ -719,7 +736,7 @@ describe('FunnelStepForm — MENU', () => {
 
   it('omits timeout fields when the author leaves the timeout blank', async () => {
     const wrapper = await mountMenuForm()
-    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await fillText('Pick one')
     // A single valid callback button; the timeout inputs are left untouched.
     await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
     await $('[data-test="step-menu-target-0-input"]').trigger('focus')
@@ -739,7 +756,7 @@ describe('FunnelStepForm — MENU', () => {
 
   it('emits the timeout fields with the chosen unit and a step target', async () => {
     const wrapper = await mountMenuForm()
-    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await fillText('Pick one')
     await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
     await $('[data-test="step-menu-target-0-input"]').trigger('focus')
     await settle()
@@ -765,7 +782,7 @@ describe('FunnelStepForm — MENU', () => {
 
   it('encodes a timeout target of End as timeoutTargetStepId null', async () => {
     const wrapper = await mountMenuForm()
-    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await fillText('Pick one')
     await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
     await $('[data-test="step-menu-target-0-input"]').trigger('focus')
     await settle()
@@ -788,7 +805,7 @@ describe('FunnelStepForm — MENU', () => {
 
   it('blocks submit when a timeout unit is set without a value', async () => {
     const wrapper = await mountMenuForm()
-    await $('[data-test="step-menu-text-input"]').setValue('Pick one')
+    await fillText('Pick one')
     await $('[data-test="step-menu-button-label-0"]').setValue('Continue')
     await $('[data-test="step-menu-target-0-input"]').trigger('focus')
     await settle()
@@ -803,10 +820,10 @@ describe('FunnelStepForm — MENU', () => {
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
-  it('pre-fills the buttons of an edited MENU step', async () => {
+  it('pre-fills the buttons of an edited MESSAGE step', async () => {
     await mountMenuForm({
-      stepType: 'MENU',
-      text: 'Existing',
+      stepType: 'MESSAGE',
+      blocks: [{ type: 'TEXT', text: 'Existing' }],
       id: 'menu1',
       buttons: [
         { type: 'callback', label: 'Go', targetStepId: 's1', url: null },
@@ -868,7 +885,7 @@ describe('FunnelStepForm — SUBSCRIBE_TO_FUNNEL', () => {
         id: 'active1',
         status: 'active',
         steps: [
-          { stepType: 'SEND_MESSAGE', id: 'st1', text: 'Hi' },
+          { stepType: 'MESSAGE', id: 'st1', blocks: [{ type: 'TEXT', text: 'Hi' }] },
           { stepType: 'DELAY', id: 'st2', delayValue: 1, delayUnit: 'MIN' },
         ],
       }),

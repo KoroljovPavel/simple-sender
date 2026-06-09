@@ -53,10 +53,13 @@ describe('EditStepDialog', () => {
     expect(emitted![0][1]).toMatchObject({ stepType: 'ADD_TAG', tagSlug: 'gold' })
   })
 
-  it('prefills a send-message step text', async () => {
-    const step: FunnelStep = { stepType: 'SEND_MESSAGE', text: 'Hello', parseMode: 'HTML' }
+  it('prefills a MESSAGE step text block', async () => {
+    const step: FunnelStep = {
+      stepType: 'MESSAGE',
+      blocks: [{ type: 'TEXT', text: 'Hello', parseMode: 'HTML' }],
+    }
     await mountSuspended(EditStepDialog, { props: { open: true, step, index: 0 } })
     await settle()
-    expect(($('[data-test="step-text-input"]').element as HTMLTextAreaElement).value).toBe('Hello')
+    expect(($('[data-test="step-block-text-0"]').element as HTMLTextAreaElement).value).toBe('Hello')
   })
 })

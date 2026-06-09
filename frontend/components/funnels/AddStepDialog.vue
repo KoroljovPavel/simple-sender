@@ -10,8 +10,9 @@ import FunnelStepForm from '~/components/funnels/FunnelStepForm.vue'
 import type { FunnelStep } from '~/types/funnel'
 
 // Add dialog: picks a StepType + fills the per-type form (shared FunnelStepForm), then emits the new
-// step. The parent appends it to the END of the steps array (position = order). No initial → SEND_MESSAGE.
-// siblingSteps = the funnel's other steps, threaded into the form so a MENU callback button can target one.
+// step. The parent appends it to the END of the steps array (position = order). No initial → MESSAGE.
+// siblingSteps = the funnel's other steps, threaded into the form so a MESSAGE keyboard callback button can
+// target one.
 const props = defineProps<{ open: boolean; siblingSteps?: FunnelStep[] }>()
 const emit = defineEmits<{ 'update:open': [value: boolean]; add: [step: FunnelStep] }>()
 

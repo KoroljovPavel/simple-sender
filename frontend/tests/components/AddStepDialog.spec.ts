@@ -41,14 +41,14 @@ describe('AddStepDialog', () => {
 
   it('renders type picker and per-type form', async () => {
     await mountOpen()
-    // default SEND_MESSAGE → text + parseMode visible.
-    expect(maybe('[data-test="step-text-input"]')).not.toBeNull()
-    expect(maybe('[data-test="step-parsemode-select"]')).not.toBeNull()
+    // default MESSAGE → composer with a seeded TEXT block visible.
+    expect(maybe('[data-test="step-composer"]')).not.toBeNull()
+    expect(maybe('[data-test="step-block-text-0"]')).not.toBeNull()
 
     await setType('DELAY')
     expect(maybe('[data-test="step-delay-value-input"]')).not.toBeNull()
     expect(maybe('[data-test="step-delay-unit-select"]')).not.toBeNull()
-    expect(maybe('[data-test="step-text-input"]')).toBeNull()
+    expect(maybe('[data-test="step-composer"]')).toBeNull()
 
     await setType('ADD_TAG')
     expect(maybe('[data-test="step-tag-input"]')).not.toBeNull()
@@ -56,9 +56,9 @@ describe('AddStepDialog', () => {
 
   it('blocks emit on empty required field', async () => {
     const wrapper = await mountOpen()
-    // SEND_MESSAGE with empty text → validation error, NO add emit.
+    // MESSAGE with an empty seeded TEXT block → validation error, NO add emit.
     await submit()
-    expect(maybe('[data-test="step-text-error"]')).not.toBeNull()
+    expect(maybe('[data-test="step-block-error-0"]')).not.toBeNull()
     expect(wrapper.emitted('add')).toBeFalsy()
   })
 
@@ -90,13 +90,16 @@ describe('AddStepDialog', () => {
     expect(wrapper.emitted('add')![0][0]).toMatchObject({ stepType: 'ADD_TAG', tagSlug: 'vip' })
   })
 
-  it('emits a valid send-message step', async () => {
+  it('emits a valid MESSAGE step with a TEXT block', async () => {
     const wrapper = await mountOpen()
-    await $('[data-test="step-text-input"]').setValue('Welcome!')
+    await $('[data-test="step-block-text-0"]').setValue('Welcome!')
     await submit()
     const emitted = wrapper.emitted('add')
     expect(emitted).toBeTruthy()
-    expect(emitted![0][0]).toMatchObject({ stepType: 'SEND_MESSAGE', text: 'Welcome!' })
+    expect(emitted![0][0]).toMatchObject({
+      stepType: 'MESSAGE',
+      blocks: [{ type: 'TEXT', text: 'Welcome!' }],
+    })
   })
 
   it('blocks emit on empty custom-field key, emits the selected field', async () => {
@@ -188,12 +191,17 @@ describe('AddStepDialog', () => {
     expect(emitted![0][0]).toMatchObject({ stepType: 'REMOVE_TAG', tagSlug: 'vip' })
   })
 
-  it('rejects non-http image url', async () => {
+  it('rejects a non-http(s) media url in an IMAGE block', async () => {
     const wrapper = await mountOpen()
-    await setType('SEND_IMAGE')
-    await $('[data-test="step-imageurl-input"]').setValue('ftp://example.com/a.png')
+    // Replace the seeded TEXT block with an IMAGE block carrying a non-http(s) URL.
+    await $('[data-test="step-block-remove-0"]').trigger('click')
+    await settle()
+    await $('[data-test="step-block-type-picker"]').setValue('IMAGE')
+    await $('[data-test="step-add-block"]').trigger('click')
+    await settle()
+    await $('[data-test="step-block-media-url-0"]').setValue('javascript:alert(1)')
     await submit()
-    expect(maybe('[data-test="step-imageurl-error"]')).not.toBeNull()
+    expect(maybe('[data-test="step-block-error-0"]')).not.toBeNull()
     expect(wrapper.emitted('add')).toBeFalsy()
   })
 
@@ -202,7 +210,7 @@ describe('AddStepDialog', () => {
     await setType('EMIT_EVENT')
     expect(maybe('[data-test="step-event-name-input"]')).not.toBeNull()
     // Non-EMIT_EVENT fields are gone.
-    expect(maybe('[data-test="step-text-input"]')).toBeNull()
+    expect(maybe('[data-test="step-composer"]')).toBeNull()
   })
 
   it('EMIT_EVENT emits a step with eventName', async () => {

@@ -3,7 +3,7 @@ import { toTypedSchema } from '@vee-validate/zod'
 import { useForm } from 'vee-validate'
 import { z } from 'zod'
 import { CURRENT_DATE_TOKEN } from '~/types/funnel'
-import type { Button, DelayUnit, FunnelStep, StepType } from '~/types/funnel'
+import type { BlockType, ContentBlock, DelayUnit, FunnelStep, MediaItem, StepType } from '~/types/funnel'
 import type { CustomFieldDefinition, CustomFieldType, Tag } from '~/types/subscriber'
 import SearchableSelect from '~/components/funnels/SearchableSelect.vue'
 import { useFunnelsStore } from '~/stores/funnels'
@@ -12,12 +12,16 @@ import { storeToRefs } from 'pinia'
 // Shared per-type step form used by BOTH AddStepDialog and EditStepDialog (Task 10 endorses extracting
 // the common form). The picker `StepType` lives OUTSIDE the form so the computed() schema can depend on
 // it (same idiom as AddCustomFieldDialog) — switching type re-runs validation against the right rules.
-// All client validation MIRRORS backend FunnelService.validateSteps byte-for-byte (Decision 9/12):
-// empty text, http(s) imageUrl, delayValue >= 1, tagSlug ^[a-z0-9_-]{1,32}$, customFieldKey non-empty.
+// All client validation MIRRORS backend FunnelService.validateSteps byte-for-byte (Decision 9/12). The
+// MESSAGE composer (Task 7) is an ordered ContentBlock[] (a local reactive array, validated by hand like
+// the keyboard rows): 1..10 blocks, per-type required fields, media source = http(s) URL or opaque file_id,
+// album 2..10 items + type-mixing (Decision 5), the inline keyboard only on the last non-album block
+// (Decision 2), over-length text/caption a soft warning (not blocking). delayValue >= 1, tagSlug
+// ^[a-z0-9_-]{1,32}$, customFieldKey non-empty.
 // For SET_CUSTOM_FIELD the value widget + validation additionally mirror the field's TYPE (the same
 // per-type inputs the subscriber custom-fields tab uses), resolved from the project's definitions.
 // siblingSteps = the OTHER steps of the funnel (threaded down from the page via Add/EditStepDialog) so a
-// MENU callback button can target another step by its stable id. Empty/absent for non-MENU usage.
+// MESSAGE keyboard callback button can target another step by its stable id. Empty/absent otherwise.
 const props = defineProps<{
   initial?: FunnelStep | null
   submitLabel: string
@@ -30,18 +34,34 @@ const route = useRoute()
 const projectId = computed(() => String(route.params.projectId))
 
 const STEP_TYPES: StepType[] = [
-  'SEND_MESSAGE',
-  'SEND_IMAGE',
+  'MESSAGE',
   'DELAY',
   'ADD_TAG',
   'REMOVE_TAG',
   'SET_CUSTOM_FIELD',
-  'MENU',
   'EMIT_EVENT',
   'SUBSCRIBE_TO_FUNNEL',
 ]
 const PARSE_MODES = ['', 'HTML', 'MarkdownV2'] as const
 const DELAY_UNITS: DelayUnit[] = ['MIN', 'HOUR', 'DAY']
+
+// ── MESSAGE composer constants (mirror backend FunnelService.validateMessage byte-for-byte) ──────────
+// Block types the author can add. The album add-block sub-picker reuses MEDIA_BLOCK_TYPES (its items each
+// carry a media kind ∈ IMAGE/VIDEO/AUDIO/FILE — Decision 5).
+const BLOCK_TYPES: BlockType[] = ['TEXT', 'IMAGE', 'VIDEO', 'AUDIO', 'FILE', 'ALBUM']
+const MEDIA_BLOCK_TYPES: BlockType[] = ['IMAGE', 'VIDEO', 'AUDIO', 'FILE']
+const MIN_BLOCKS = 1
+const MAX_BLOCKS = 10
+const MIN_ALBUM_ITEMS = 2
+const MAX_ALBUM_ITEMS = 10
+// Over-length WARN limits (Decision 3): a soft inline warning, NOT a hard block — the engine trims+WARNs
+// at send time. Mirrors FunnelService.TEXT_WARN_LIMIT / CAPTION_WARN_LIMIT.
+const TEXT_WARN_LIMIT = 4096
+const CAPTION_WARN_LIMIT = 1024
+// A media source is EITHER an http(s) URL OR an opaque Telegram file_id. Disambiguation mirrors backend
+// requireMediaSource/looksLikeUrl: a value with a URI scheme prefix (^[A-Za-z][A-Za-z0-9+.-]*:) is treated
+// as a URL and held to the strict http(s) rule; a bare token (no scheme) is accepted as an opaque file_id.
+const URI_SCHEME_PREFIX_RE = /^[A-Za-z][A-Za-z0-9+.-]*:/
 
 // CANONICAL — MUST match backend requireTagSlug @Pattern byte-for-byte (FunnelService).
 const TAG_SLUG_RE = /^[a-z0-9_-]{1,32}$/
@@ -66,7 +86,115 @@ const MENU_END_TARGET = '__END__'
 // targetEntryStepId=null on emit — the backend reads null as "from the start". Distinct from a real step id.
 const SUBSCRIBE_ENTRY_START = '__START__'
 
-const selectedType = ref<StepType>(props.initial?.stepType ?? 'SEND_MESSAGE')
+const selectedType = ref<StepType>(props.initial?.stepType ?? 'MESSAGE')
+
+// ── MESSAGE composer block sub-editor ────────────────────────────────────────────────────────────────
+// A local reactive array of content blocks (NOT vee-validate fields), validated by hand on submit — the
+// same idiom as the MENU button rows. Each block is a flat editable shape mirroring ContentBlock; only the
+// fields meaningful for its `type` are read on submit. Album items carry their own media kind (Decision 5).
+type AlbumItemRow = { uid: number; type: BlockType; mediaUrl: string; caption: string }
+type BlockRow = {
+  // Stable per-row id used as the v-for :key so reordering preserves component identity (an index key
+  // would re-key on move and break the teleported keyboard's fragment removal — nextSibling-of-null).
+  uid: number
+  type: BlockType
+  text: string
+  parseMode: string
+  mediaUrl: string
+  caption: string
+  items: AlbumItemRow[]
+}
+let uidSeq = 0
+function nextUid(): number {
+  return ++uidSeq
+}
+function blankBlock(type: BlockType): BlockRow {
+  return {
+    uid: nextUid(),
+    type,
+    text: '',
+    parseMode: '',
+    mediaUrl: '',
+    caption: '',
+    // Albums seed with the minimum of 2 image items so the author starts from a valid shape.
+    items:
+      type === 'ALBUM'
+        ? [blankAlbumItem(), blankAlbumItem()]
+        : [],
+  }
+}
+function blankAlbumItem(): AlbumItemRow {
+  return { uid: nextUid(), type: 'IMAGE', mediaUrl: '', caption: '' }
+}
+// Seed from an edited MESSAGE step's blocks; otherwise one empty TEXT block so the author has a start.
+function initialBlocks(): BlockRow[] {
+  const existing = props.initial?.stepType === 'MESSAGE' ? props.initial?.blocks : null
+  if (existing && existing.length > 0) {
+    return existing.map((b) => ({
+      uid: nextUid(),
+      type: b.type,
+      text: b.text ?? '',
+      parseMode: b.parseMode ?? '',
+      mediaUrl: b.mediaUrl ?? '',
+      caption: b.caption ?? '',
+      items:
+        b.type === 'ALBUM' && b.items
+          ? b.items.map((it) => ({
+              uid: nextUid(),
+              type: it.type,
+              mediaUrl: it.mediaUrl ?? '',
+              caption: it.caption ?? '',
+            }))
+          : [],
+    }))
+  }
+  return [blankBlock('TEXT')]
+}
+const blocks = ref<BlockRow[]>(initialBlocks())
+// The block-type picker for the "Add block" button.
+const newBlockType = ref<BlockType>('TEXT')
+// Touched on submit so per-block errors only render after the author tries to save (parity with menuTouched).
+const composerTouched = ref(false)
+
+function addBlock() {
+  if (blocks.value.length >= MAX_BLOCKS) return
+  blocks.value.push(blankBlock(newBlockType.value))
+}
+function removeBlock(index: number) {
+  blocks.value.splice(index, 1)
+}
+function moveBlock(from: number, to: number) {
+  if (to < 0 || to >= blocks.value.length) return
+  const arr = blocks.value
+  const [moved] = arr.splice(from, 1)
+  arr.splice(to, 0, moved)
+}
+function addAlbumItem(blockIndex: number) {
+  const items = blocks.value[blockIndex].items
+  if (items.length >= MAX_ALBUM_ITEMS) return
+  items.push(blankAlbumItem())
+}
+function removeAlbumItem(blockIndex: number, itemIndex: number) {
+  blocks.value[blockIndex].items.splice(itemIndex, 1)
+}
+
+// The inline keyboard attaches to the LAST block ONLY when it is non-album (Decision 2) — so the buttons
+// render after the trailing content. An album as the last block hides the section (the author is hinted to
+// add a text tail). This mirrors backend validateMessage, which rejects buttons on an album last block.
+const buttonsAllowed = computed(
+  () => blocks.value.length > 0 && blocks.value[blocks.value.length - 1].type !== 'ALBUM',
+)
+
+// Strict media-source check (mirror backend requireMediaSource). A scheme-prefixed value must be http(s);
+// a bare token is an opaque file_id (accepted). Returns true when the value is a valid source.
+function mediaSourceValid(raw: string): boolean {
+  const v = raw.trim()
+  if (!v) return false
+  // A leading-whitespace original value is suspicious → treat as a URL (which then fails the strict check).
+  const looksUrl = v !== raw || URI_SCHEME_PREFIX_RE.test(v)
+  if (!looksUrl) return true // opaque file_id
+  return IMAGE_URL_RE.test(v) // must be http(s)
+}
 
 // MENU button sub-editor: a local reactive array (not a single vee-validate field), validated by hand on
 // submit. Each row keeps an internal targetStepId where the MENU_END_TARGET sentinel stands in for End.
@@ -77,7 +205,7 @@ function blankButtonRow(): ButtonRow {
 // Pre-fill from an edited MENU step (End/null target → the sentinel), else seed one empty callback row so
 // the author always has a starting point.
 function initialButtonRows(): ButtonRow[] {
-  const existing = props.initial?.stepType === 'MENU' ? props.initial?.buttons : null
+  const existing = props.initial?.stepType === 'MESSAGE' ? props.initial?.buttons : null
   if (existing && existing.length > 0) {
     return existing.map((b) => ({
       type: b.type === 'url' ? 'url' : 'callback',
@@ -86,7 +214,9 @@ function initialButtonRows(): ButtonRow[] {
       url: b.url ?? '',
     }))
   }
-  return [blankButtonRow()]
+  // A MESSAGE step's inline keyboard is OPTIONAL (Decision 2) — start with no rows so the author opts in
+  // by clicking "Add button". An empty list emits no buttons (valid; no keyboard).
+  return []
 }
 const menuButtons = ref<ButtonRow[]>(initialButtonRows())
 // Per-row touched flag so an error only shows after the author tried to submit (or edited the row).
@@ -100,15 +230,15 @@ const menuTouched = ref(false)
 // Bound to a number <input>: vee-validate is not involved, so v-model writes either '' (empty) or a
 // coerced number. Kept loosely typed and normalized via String() at the read sites.
 const menuTimeoutValue = ref<string | number>(
-  props.initial?.stepType === 'MENU' && props.initial?.timeoutValue != null
+  props.initial?.stepType === 'MESSAGE' && props.initial?.timeoutValue != null
     ? props.initial.timeoutValue
     : '',
 )
 const menuTimeoutUnit = ref<DelayUnit | ''>(
-  props.initial?.stepType === 'MENU' && props.initial?.timeoutUnit ? props.initial.timeoutUnit : '',
+  props.initial?.stepType === 'MESSAGE' && props.initial?.timeoutUnit ? props.initial.timeoutUnit : '',
 )
 const menuTimeoutTarget = ref<string>(
-  props.initial?.stepType === 'MENU' && props.initial?.timeoutTargetStepId
+  props.initial?.stepType === 'MESSAGE' && props.initial?.timeoutTargetStepId
     ? props.initial.timeoutTargetStepId
     : MENU_END_TARGET,
 )
@@ -169,16 +299,99 @@ function menuButtonUrlError(row: ButtonRow): string | null {
   if (!IMAGE_URL_RE.test(url)) return t('funnels.steps.validation.menuButtonUrlScheme')
   return null
 }
-// Menu-level rule: ≥1 callback button (Decision 10) so the funnel can never get stuck.
+// Whether the author has engaged the inline keyboard at all. Empty list = no keyboard (valid). The MESSAGE
+// step's buttons are OPTIONAL (Decision 2) — only when ≥1 row exists do the keyboard rules apply.
+const hasButtons = computed(() => menuButtons.value.length > 0)
+// Keyboard-level rule (mirror backend validateButtons): when buttons are present, ≥1 must be a callback so
+// the subscriber can never get stuck.
 const menuNeedsCallback = computed(
-  () => selectedType.value === 'MENU' && !menuButtons.value.some((b) => b.type === 'callback'),
+  () => hasButtons.value && !menuButtons.value.some((b) => b.type === 'callback'),
 )
+// Valid when there is no keyboard, OR the keyboard's rows + timeout all pass. The timeout error always
+// applies (a half-filled timeout is invalid even without buttons, mirroring requireTimeout).
 const menuButtonsValid = computed(
   () =>
-    menuButtons.value.length > 0 &&
-    !menuNeedsCallback.value &&
     !menuTimeoutError.value &&
-    menuButtons.value.every((b) => !menuButtonLabelError(b) && !menuButtonUrlError(b)),
+    (!hasButtons.value ||
+      (!menuNeedsCallback.value &&
+        menuButtons.value.every((b) => !menuButtonLabelError(b) && !menuButtonUrlError(b)))),
+)
+
+// ── MESSAGE composer hard-validation (mirror backend validateMessage byte-for-byte) ─────────────────
+// Each *Error() returns a localized string or null. composerError is the array-level rule (1..10 blocks);
+// blockError(block) is the per-type hard rule; albumTypeMix is folded into blockError for ALBUM.
+const composerError = computed<string | null>(() => {
+  if (blocks.value.length < MIN_BLOCKS) return t('funnels.steps.validation.composerEmpty')
+  if (blocks.value.length > MAX_BLOCKS) return t('funnels.steps.validation.composerTooMany')
+  return null
+})
+function blockError(block: BlockRow): string | null {
+  switch (block.type) {
+    case 'TEXT':
+      if (!block.text.trim()) return t('funnels.steps.validation.blockTextRequired')
+      return null
+    case 'IMAGE':
+    case 'VIDEO':
+    case 'AUDIO':
+    case 'FILE':
+      if (!mediaSourceValid(block.mediaUrl)) return t('funnels.steps.validation.mediaUrlScheme')
+      return null
+    case 'ALBUM': {
+      const items = block.items
+      if (items.length < MIN_ALBUM_ITEMS) return t('funnels.steps.validation.albumTooFew')
+      if (items.length > MAX_ALBUM_ITEMS) return t('funnels.steps.validation.albumTooMany')
+      let hasVisual = false
+      let hasAudio = false
+      let hasFile = false
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        if (!mediaSourceValid(it.mediaUrl)) return t('funnels.steps.validation.mediaUrlScheme')
+        // Decision 5: caption is meaningful only on the FIRST item.
+        if (i > 0 && it.caption.trim()) return t('funnels.steps.validation.albumCaptionFirst')
+        switch (it.type) {
+          case 'IMAGE':
+          case 'VIDEO':
+            hasVisual = true
+            break
+          case 'AUDIO':
+            hasAudio = true
+            break
+          case 'FILE':
+            hasFile = true
+            break
+          default:
+            return t('funnels.steps.validation.albumItemKind')
+        }
+      }
+      // Type-mixing predicate: photo/video mix, OR all audio, OR all document — never across kinds.
+      const kinds = (hasVisual ? 1 : 0) + (hasAudio ? 1 : 0) + (hasFile ? 1 : 0)
+      if (kinds > 1) return t('funnels.steps.validation.albumTypeMix')
+      return null
+    }
+    default:
+      return null
+  }
+}
+// Soft over-length warning (Decision 3) — shown inline, NEVER blocks submit.
+function blockWarning(block: BlockRow): string | null {
+  if (block.type === 'TEXT' && block.text.length > TEXT_WARN_LIMIT) {
+    return t('funnels.steps.validation.textTooLong')
+  }
+  const captionOver =
+    (MEDIA_BLOCK_TYPES.includes(block.type) && block.caption.length > CAPTION_WARN_LIMIT) ||
+    (block.type === 'ALBUM' && (block.items[0]?.caption.length ?? 0) > CAPTION_WARN_LIMIT)
+  if (captionOver) return t('funnels.steps.validation.captionTooLong')
+  return null
+}
+// The whole composer passes when block-count + every block are valid, AND the keyboard is valid only when
+// it can actually attach (last block non-album). When the last block IS an album the keyboard section is
+// hidden and its rows are never emitted (buildBlock/onSubmit skip them), so stale hidden rows must NOT
+// block submit — mirrors backend validateMessage, which only validates buttons it would attach.
+const composerValid = computed(
+  () =>
+    !composerError.value &&
+    blocks.value.every((b) => !blockError(b)) &&
+    (!buttonsAllowed.value || menuButtonsValid.value),
 )
 
 // Project custom-field definitions feed the key select AND the value widget/validation. Lazy-loaded the
@@ -369,22 +582,8 @@ function cfValueSchema(type: CustomFieldType | null): z.ZodTypeAny {
 // One schema computed over selectedType: only the active type's fields are validated; the rest fall back
 // to z.any() so a stale value from another branch never blocks submit.
 function schemaFor(type: StepType): z.ZodTypeAny {
-  // MENU text is the message body; the backend does NOT require it (validateMenu only checks buttons), so
-  // mirror that — only cap the length. SEND_MESSAGE requires non-empty text.
-  const text =
-    type === 'SEND_MESSAGE'
-      ? z.string().trim().min(1, t('funnels.steps.validation.textRequired')).max(4096, t('funnels.steps.validation.textMax'))
-      : type === 'MENU'
-        ? z.string().trim().max(4096, t('funnels.steps.validation.textMax'))
-        : z.any()
-  const imageUrl =
-    type === 'SEND_IMAGE'
-      ? z
-          .string()
-          .trim()
-          .min(1, t('funnels.steps.validation.imageUrlRequired'))
-          .regex(IMAGE_URL_RE, t('funnels.steps.validation.imageUrlScheme'))
-      : z.any()
+  // MESSAGE composer blocks are a LOCAL reactive array validated by hand (composerValid), NOT vee-validate
+  // fields — so the schema carries no message-body fields here (mirrors the MENU button rows idiom).
   const delayValue =
     type === 'DELAY'
       ? z.coerce
@@ -407,10 +606,6 @@ function schemaFor(type: StepType): z.ZodTypeAny {
       ? z.string().trim().regex(EVENT_NAME_RE, t('funnels.steps.validation.eventNamePattern'))
       : z.any()
   return z.object({
-    text,
-    parseMode: z.any(),
-    imageUrl,
-    caption: z.any(),
     delayValue,
     delayUnit: z.any(),
     tagSlug,
@@ -425,10 +620,6 @@ const schema = computed(() => toTypedSchema(schemaFor(selectedType.value)))
 const { defineField, handleSubmit, errors } = useForm({
   validationSchema: schema,
   initialValues: {
-    text: props.initial?.text ?? '',
-    parseMode: props.initial?.parseMode ?? '',
-    imageUrl: props.initial?.imageUrl ?? '',
-    caption: props.initial?.caption ?? '',
     delayValue: props.initial?.delayValue ?? 1,
     delayUnit: (props.initial?.delayUnit as DelayUnit | undefined) ?? 'MIN',
     tagSlug: props.initial?.tagSlug ?? '',
@@ -437,10 +628,6 @@ const { defineField, handleSubmit, errors } = useForm({
     eventName: props.initial?.eventName ?? '',
   },
 })
-const [text, textAttrs] = defineField('text')
-const [parseMode, parseModeAttrs] = defineField('parseMode')
-const [imageUrl, imageUrlAttrs] = defineField('imageUrl')
-const [caption, captionAttrs] = defineField('caption')
 const [delayValue, delayValueAttrs] = defineField('delayValue')
 const [delayUnit, delayUnitAttrs] = defineField('delayUnit')
 // tagSlug is bound to SearchableSelect via v-model (no vee-validate v-bind attrs — the combobox owns its
@@ -512,6 +699,36 @@ function blankToNull(v: unknown): string | null {
   return s === '' || s === null || s === undefined ? null : (s as string)
 }
 
+// Convert an editable BlockRow to the persisted ContentBlock: trim values, blank→null for optional fields,
+// and carry ONLY the fields meaningful for the block's type (the server ignores the rest, but a clean block
+// keeps the steps array readable and never leaks a stale value from a switched type).
+function buildBlock(row: BlockRow): ContentBlock {
+  switch (row.type) {
+    case 'TEXT':
+      return { type: 'TEXT', text: row.text.trim(), parseMode: blankToNull(row.parseMode) }
+    case 'ALBUM':
+      return {
+        type: 'ALBUM',
+        parseMode: blankToNull(row.parseMode),
+        items: row.items.map(
+          (it, i): MediaItem => ({
+            type: it.type,
+            mediaUrl: it.mediaUrl.trim(),
+            // Decision 5: a caption is meaningful only on the FIRST item; drop it everywhere else.
+            caption: i === 0 ? blankToNull(it.caption) : null,
+          }),
+        ),
+      }
+    default: // IMAGE / VIDEO / AUDIO / FILE
+      return {
+        type: row.type,
+        mediaUrl: row.mediaUrl.trim(),
+        caption: blankToNull(row.caption),
+        parseMode: blankToNull(row.parseMode),
+      }
+  }
+}
+
 // Coerce the flat UI model to the persisted custom-field value by the resolved field type, so the engine's
 // per-type validator accepts it at execution: number/boolean as-is, DATE → ISO (or the @now sentinel).
 function customFieldValueForSubmit(raw: unknown): unknown {
@@ -529,17 +746,41 @@ const onSubmit = handleSubmit((values) => {
   const type = selectedType.value
   let step: FunnelStep
   switch (type) {
-    case 'SEND_MESSAGE':
-      step = { stepType: type, text: (values.text as string).trim(), parseMode: blankToNull(values.parseMode) }
-      break
-    case 'SEND_IMAGE':
+    case 'MESSAGE': {
+      // Blocks + keyboard are local reactive arrays (not vee-validate fields), validated by hand. Mark
+      // touched so inline errors render, then block the emit if anything is invalid (mirrors validateMessage).
+      composerTouched.value = true
+      menuTouched.value = true
+      if (!composerValid.value) return
       step = {
         stepType: type,
-        imageUrl: (values.imageUrl as string).trim(),
-        caption: blankToNull(values.caption),
-        parseMode: blankToNull(values.parseMode),
+        blocks: blocks.value.map((b) => buildBlock(b)),
+        // Preserve the server-minted graph fields so a re-save / reorder keeps stable ids + edges.
+        id: props.initial?.id ?? undefined,
+        next: props.initial?.next ?? undefined,
+      }
+      // Buttons + timeout attach ONLY when the last block is non-album (Decision 2) AND the author added a
+      // keyboard. Otherwise they are omitted entirely (no keyboard → the step ends/continues normally).
+      if (buttonsAllowed.value && hasButtons.value) {
+        step.buttons = menuButtons.value.map((b) => ({
+          type: b.type,
+          label: b.label.trim(),
+          // End → targetStepId null (NOT "" — an empty string is a non-null id matching no step → server
+          // 422 funnel_broken_edge). URL buttons carry no target.
+          targetStepId:
+            b.type === 'callback' ? (b.targetStepId === MENU_END_TARGET ? null : b.targetStepId) : null,
+          url: b.type === 'url' ? b.url.trim() : null,
+        }))
+        // Optional timeout: emit the three fields ONLY when engaged. End → timeoutTargetStepId null.
+        if (menuTimeoutEnabled.value) {
+          step.timeoutValue = Number(menuTimeoutValueRaw.value)
+          step.timeoutUnit = menuTimeoutUnit.value as DelayUnit
+          step.timeoutTargetStepId =
+            menuTimeoutTarget.value === MENU_END_TARGET ? null : menuTimeoutTarget.value
+        }
       }
       break
+    }
     case 'DELAY':
       step = { stepType: type, delayValue: Number(values.delayValue), delayUnit: values.delayUnit as DelayUnit }
       break
@@ -557,39 +798,6 @@ const onSubmit = handleSubmit((values) => {
         customFieldValue: customFieldValueForSubmit(values.customFieldValue),
       }
       break
-    case 'MENU': {
-      // Button validation is manual (the rows are a local array, not vee-validate fields). Mark touched
-      // so inline errors render, then block the emit if anything is invalid (mirrors backend validateMenu).
-      menuTouched.value = true
-      if (!menuButtonsValid.value) return
-      const buttons: Button[] = menuButtons.value.map((b) => ({
-        type: b.type,
-        label: b.label.trim(),
-        // End → targetStepId null (NOT "" — an empty string is a non-null id matching no step → server
-        // 422 funnel_broken_edge). URL buttons carry no target.
-        targetStepId:
-          b.type === 'callback' ? (b.targetStepId === MENU_END_TARGET ? null : b.targetStepId) : null,
-        url: b.type === 'url' ? b.url.trim() : null,
-      }))
-      step = {
-        stepType: type,
-        text: blankToNull(values.text),
-        parseMode: blankToNull(values.parseMode),
-        buttons,
-        // Preserve the server-minted graph fields so a re-save / reorder keeps stable ids + edges.
-        id: props.initial?.id ?? undefined,
-        next: props.initial?.next ?? undefined,
-      }
-      // Optional timeout: emit the three fields ONLY when engaged (validated above). Otherwise leave them
-      // unset → the engine waits indefinitely. End is encoded as timeoutTargetStepId=null.
-      if (menuTimeoutEnabled.value) {
-        step.timeoutValue = Number(menuTimeoutValueRaw.value)
-        step.timeoutUnit = menuTimeoutUnit.value as DelayUnit
-        step.timeoutTargetStepId =
-          menuTimeoutTarget.value === MENU_END_TARGET ? null : menuTimeoutTarget.value
-      }
-      break
-    }
     case 'SUBSCRIBE_TO_FUNNEL':
       // Cross-funnel enroll (Decision 5): the entry "from the start" sentinel → targetEntryStepId null.
       // No client-side block here — the backend owns target_required/_not_found/_inactive validation and
@@ -621,61 +829,359 @@ const onSubmit = handleSubmit((values) => {
       </select>
     </div>
 
-    <!-- SEND_MESSAGE -->
-    <template v-if="selectedType === 'SEND_MESSAGE'">
-      <div>
-        <label for="step-text" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.text') }}</label>
-        <textarea
-          id="step-text"
-          v-model="text"
-          v-bind="textAttrs"
-          data-test="step-text-input"
-          rows="3"
-          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <p v-if="errors.text" data-test="step-text-error" class="mt-1 text-sm text-red-600">{{ errors.text }}</p>
-      </div>
-      <div>
-        <label for="step-parsemode" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.parseMode') }}</label>
-        <select
-          id="step-parsemode"
-          v-model="parseMode"
-          v-bind="parseModeAttrs"
-          data-test="step-parsemode-select"
-          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option v-for="pm in PARSE_MODES" :key="pm" :value="pm">
-            {{ pm === '' ? t('funnels.steps.form.parseModeNone') : pm }}
-          </option>
-        </select>
-      </div>
-    </template>
+    <!-- MESSAGE composer: an ordered list of content blocks (each → one Telegram message). The author adds
+         blocks via the type picker, reorders / removes them, and (optionally) attaches an inline keyboard to
+         the LAST non-album block. All labels/text render via {{ }} interpolation (never v-html — XSS). -->
+    <template v-if="selectedType === 'MESSAGE'">
+      <div data-test="step-composer" class="space-y-3">
+        <!-- Block-type picker + Add block -->
+        <div class="flex items-end gap-2">
+          <div class="flex-1">
+            <label for="step-block-type" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.blockType') }}</label>
+            <select
+              id="step-block-type"
+              v-model="newBlockType"
+              data-test="step-block-type-picker"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option v-for="bt in BLOCK_TYPES" :key="bt" :value="bt">{{ t(`funnels.steps.blockType.${bt}`) }}</option>
+            </select>
+          </div>
+          <button
+            type="button"
+            data-test="step-add-block"
+            :disabled="blocks.length >= MAX_BLOCKS"
+            class="rounded-md border px-3 py-2 text-sm hover:bg-gray-50 disabled:opacity-40"
+            @click="addBlock"
+          >
+            {{ t('funnels.steps.form.addBlock') }}
+          </button>
+        </div>
 
-    <!-- SEND_IMAGE -->
-    <template v-else-if="selectedType === 'SEND_IMAGE'">
-      <div>
-        <label for="step-imageurl" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.imageUrl') }}</label>
-        <input
-          id="step-imageurl"
-          v-model="imageUrl"
-          v-bind="imageUrlAttrs"
-          data-test="step-imageurl-input"
-          type="text"
-          autocomplete="off"
-          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <p v-if="errors.imageUrl" data-test="step-imageurl-error" class="mt-1 text-sm text-red-600">{{ errors.imageUrl }}</p>
-      </div>
-      <div>
-        <label for="step-caption" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.caption') }}</label>
-        <input
-          id="step-caption"
-          v-model="caption"
-          v-bind="captionAttrs"
-          data-test="step-caption-input"
-          type="text"
-          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
+        <p v-if="composerTouched && composerError" data-test="step-composer-error" class="text-sm text-red-600">
+          {{ composerError }}
+        </p>
+
+        <!-- Block rows -->
+        <div
+          v-for="(block, index) in blocks"
+          :key="block.uid"
+          :data-test="`step-block-${index}`"
+          class="space-y-2 rounded-md border p-3"
+        >
+          <div class="flex items-center justify-between">
+            <span class="text-xs font-medium uppercase text-gray-500">{{ t(`funnels.steps.blockType.${block.type}`) }}</span>
+            <div class="flex gap-1">
+              <button
+                type="button"
+                :data-test="`step-block-move-up-${index}`"
+                :disabled="index === 0"
+                :aria-label="t('funnels.steps.form.blockMoveUp')"
+                class="rounded-md border px-2 py-1 text-sm hover:bg-gray-50 disabled:opacity-40"
+                @click="moveBlock(index, index - 1)"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                :data-test="`step-block-move-down-${index}`"
+                :disabled="index === blocks.length - 1"
+                :aria-label="t('funnels.steps.form.blockMoveDown')"
+                class="rounded-md border px-2 py-1 text-sm hover:bg-gray-50 disabled:opacity-40"
+                @click="moveBlock(index, index + 1)"
+              >
+                ↓
+              </button>
+              <button
+                type="button"
+                :data-test="`step-block-remove-${index}`"
+                :aria-label="t('funnels.steps.form.blockRemove')"
+                class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50"
+                @click="removeBlock(index)"
+              >
+                ×
+              </button>
+            </div>
+          </div>
+
+          <!-- TEXT block -->
+          <template v-if="block.type === 'TEXT'">
+            <textarea
+              v-model="block.text"
+              :data-test="`step-block-text-${index}`"
+              rows="3"
+              :aria-label="t('funnels.steps.form.text')"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <select
+              v-model="block.parseMode"
+              :data-test="`step-block-parsemode-${index}`"
+              :aria-label="t('funnels.steps.form.parseMode')"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option v-for="pm in PARSE_MODES" :key="pm" :value="pm">
+                {{ pm === '' ? t('funnels.steps.form.parseModeNone') : pm }}
+              </option>
+            </select>
+          </template>
+
+          <!-- IMAGE / VIDEO / AUDIO / FILE block -->
+          <template v-else-if="block.type !== 'ALBUM'">
+            <input
+              v-model="block.mediaUrl"
+              :data-test="`step-block-media-url-${index}`"
+              type="text"
+              autocomplete="off"
+              :placeholder="t('funnels.steps.form.mediaUrl')"
+              :aria-label="t('funnels.steps.form.mediaUrl')"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <input
+              v-model="block.caption"
+              :data-test="`step-block-caption-${index}`"
+              type="text"
+              :placeholder="t('funnels.steps.form.caption')"
+              :aria-label="t('funnels.steps.form.caption')"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <select
+              v-model="block.parseMode"
+              :data-test="`step-block-parsemode-${index}`"
+              :aria-label="t('funnels.steps.form.parseMode')"
+              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option v-for="pm in PARSE_MODES" :key="pm" :value="pm">
+                {{ pm === '' ? t('funnels.steps.form.parseModeNone') : pm }}
+              </option>
+            </select>
+          </template>
+
+          <!-- ALBUM block: 2..10 media items, each with its own media kind. Caption only on the first. -->
+          <template v-else>
+            <div class="mb-1 flex items-center justify-between">
+              <span class="text-sm font-medium">{{ t('funnels.steps.form.albumItems') }}</span>
+              <button
+                type="button"
+                :data-test="`step-album-add-item-${index}`"
+                :disabled="block.items.length >= MAX_ALBUM_ITEMS"
+                class="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-40"
+                @click="addAlbumItem(index)"
+              >
+                {{ t('funnels.steps.form.albumAddItem') }}
+              </button>
+            </div>
+            <div
+              v-for="(item, j) in block.items"
+              :key="item.uid"
+              :data-test="`step-album-item-${index}-${j}`"
+              class="mb-2 space-y-2 rounded-md border border-dashed p-2"
+            >
+              <div class="flex gap-2">
+                <select
+                  v-model="item.type"
+                  :data-test="`step-album-item-type-${index}-${j}`"
+                  :aria-label="t('funnels.steps.form.albumItemType')"
+                  class="rounded-md border px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option v-for="mt in MEDIA_BLOCK_TYPES" :key="mt" :value="mt">{{ t(`funnels.steps.blockType.${mt}`) }}</option>
+                </select>
+                <input
+                  v-model="item.mediaUrl"
+                  :data-test="`step-album-item-url-${index}-${j}`"
+                  type="text"
+                  autocomplete="off"
+                  :placeholder="t('funnels.steps.form.mediaUrl')"
+                  :aria-label="t('funnels.steps.form.mediaUrl')"
+                  class="flex-1 rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  :data-test="`step-album-remove-item-${index}-${j}`"
+                  :aria-label="t('funnels.steps.form.albumRemoveItem')"
+                  class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50"
+                  @click="removeAlbumItem(index, j)"
+                >
+                  ×
+                </button>
+              </div>
+              <!-- Decision 5: caption is meaningful only on the FIRST item. -->
+              <input
+                v-if="j === 0"
+                v-model="item.caption"
+                :data-test="`step-album-item-caption-${index}-${j}`"
+                type="text"
+                :placeholder="t('funnels.steps.form.caption')"
+                :aria-label="t('funnels.steps.form.caption')"
+                class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+            </div>
+          </template>
+
+          <p v-if="composerTouched && blockError(block)" :data-test="`step-block-error-${index}`" class="text-sm text-red-600">
+            {{ blockError(block) }}
+          </p>
+          <p v-if="blockWarning(block)" :data-test="`step-block-warn-${index}`" class="text-sm text-amber-600">
+            {{ blockWarning(block) }}
+          </p>
+        </div>
+
+        <!-- Inline keyboard: attaches to the LAST non-album block only (Decision 2). Hidden when the last
+             block is an album — the author is hinted to add a text tail to carry the buttons. -->
+        <template v-if="buttonsAllowed">
+          <!-- Button sub-editor: one row per inline-keyboard button. Labels render via {{ }} interpolation
+               (never v-html) — author-entered plain text must not be parsed as markup (XSS). -->
+          <div data-test="step-menu-buttons" class="rounded-md border border-blue-200 bg-blue-50/40 p-3">
+            <div class="mb-1 flex items-center justify-between">
+              <label class="block text-sm font-medium">{{ t('funnels.steps.form.menuButtons') }}</label>
+              <button
+                type="button"
+                data-test="step-menu-add-button"
+                :disabled="menuButtons.length >= MENU_MAX_BUTTONS"
+                class="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-40"
+                @click="addMenuButton"
+              >
+                {{ t('funnels.steps.form.menuAddButton') }}
+              </button>
+            </div>
+            <p class="mb-2 text-xs text-gray-500">{{ t('funnels.steps.form.menuButtonsHint') }}</p>
+
+            <div
+              v-for="(row, index) in menuButtons"
+              :key="index"
+              :data-test="`step-menu-button-row-${index}`"
+              class="mb-2 space-y-2 rounded-md border p-2"
+            >
+              <div class="flex gap-2">
+                <select
+                  v-model="row.type"
+                  :data-test="`step-menu-button-type-${index}`"
+                  :aria-label="t('funnels.steps.form.menuButtonType')"
+                  class="rounded-md border px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="callback">{{ t('funnels.steps.form.menuButtonTypeCallback') }}</option>
+                  <option value="url">{{ t('funnels.steps.form.menuButtonTypeUrl') }}</option>
+                </select>
+                <input
+                  v-model="row.label"
+                  :data-test="`step-menu-button-label-${index}`"
+                  type="text"
+                  :placeholder="t('funnels.steps.form.menuButtonLabel')"
+                  :aria-label="t('funnels.steps.form.menuButtonLabel')"
+                  class="flex-1 rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  :data-test="`step-menu-button-remove-${index}`"
+                  :aria-label="t('funnels.steps.form.menuRemoveButton')"
+                  class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50"
+                  @click="removeMenuButton(index)"
+                >
+                  ×
+                </button>
+              </div>
+
+              <p
+                v-if="menuTouched && menuButtonLabelError(row)"
+                :data-test="`step-menu-button-label-error-${index}`"
+                class="text-sm text-red-600"
+              >
+                {{ menuButtonLabelError(row) }}
+              </p>
+
+              <!-- Callback: target = another step or End, via the shared SearchableSelect. -->
+              <template v-if="row.type === 'callback'">
+                <SearchableSelect
+                  v-model="row.targetStepId"
+                  :options="menuTargetOptions"
+                  :show-value="false"
+                  :test-prefix="`step-menu-target-${index}`"
+                  :placeholder="t('funnels.steps.form.menuTargetPlaceholder')"
+                  :loading-text="t('funnels.steps.form.menuTargetLoading')"
+                  :empty-text="t('funnels.steps.form.menuTargetEmpty')"
+                  :no-matches-text="t('funnels.steps.form.menuTargetNoMatches')"
+                />
+              </template>
+
+              <!-- URL: an http(s) link (the funnel does not advance on click). -->
+              <template v-else>
+                <input
+                  v-model="row.url"
+                  :data-test="`step-menu-button-url-${index}`"
+                  type="text"
+                  autocomplete="off"
+                  :placeholder="t('funnels.steps.form.menuButtonUrl')"
+                  :aria-label="t('funnels.steps.form.menuButtonUrl')"
+                  class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <p
+                  v-if="menuTouched && menuButtonUrlError(row)"
+                  :data-test="`step-menu-button-url-error-${index}`"
+                  class="text-sm text-red-600"
+                >
+                  {{ menuButtonUrlError(row) }}
+                </p>
+              </template>
+            </div>
+
+            <p v-if="menuTouched && menuNeedsCallback" data-test="step-menu-error" class="mt-1 text-sm text-red-600">
+              {{ t('funnels.steps.validation.menuNeedsCallback') }}
+            </p>
+
+            <!-- Optional timeout: leave blank to wait indefinitely. Filling value + unit emits the timeout
+                 edge; the target picker reuses the callback step/End options (End → timeoutTargetStepId null). -->
+            <div data-test="step-menu-timeout" class="mt-3">
+              <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuTimeout') }}</label>
+              <p class="mb-2 text-xs text-gray-500">{{ t('funnels.steps.form.menuTimeoutHint') }}</p>
+              <div class="flex gap-2">
+                <div class="flex-1">
+                  <input
+                    v-model="menuTimeoutValue"
+                    data-test="step-menu-timeout-value"
+                    type="number"
+                    min="1"
+                    :placeholder="t('funnels.steps.form.menuTimeoutValue')"
+                    :aria-label="t('funnels.steps.form.menuTimeoutValue')"
+                    class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  />
+                </div>
+                <div class="flex-1">
+                  <select
+                    v-model="menuTimeoutUnit"
+                    data-test="step-menu-timeout-unit"
+                    :aria-label="t('funnels.steps.form.menuTimeoutUnit')"
+                    class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  >
+                    <option value="">{{ t('funnels.steps.form.menuTimeoutUnitNone') }}</option>
+                    <option v-for="u in DELAY_UNITS" :key="u" :value="u">{{ t(`funnels.steps.unit.${u}`) }}</option>
+                  </select>
+                </div>
+              </div>
+              <div v-if="menuTimeoutEnabled" class="mt-2">
+                <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuTimeoutTarget') }}</label>
+                <SearchableSelect
+                  v-model="menuTimeoutTarget"
+                  :options="menuTargetOptions"
+                  :show-value="false"
+                  test-prefix="step-menu-timeout-target"
+                  :placeholder="t('funnels.steps.form.menuTargetPlaceholder')"
+                  :loading-text="t('funnels.steps.form.menuTargetLoading')"
+                  :empty-text="t('funnels.steps.form.menuTargetEmpty')"
+                  :no-matches-text="t('funnels.steps.form.menuTargetNoMatches')"
+                />
+              </div>
+              <p
+                v-if="menuTouched && menuTimeoutError"
+                data-test="step-menu-timeout-error"
+                class="mt-1 text-sm text-red-600"
+              >
+                {{ menuTimeoutError }}
+              </p>
+            </div>
+          </div>
+        </template>
+        <p v-else data-test="step-composer-album-tail-hint" class="text-xs text-gray-500">
+          {{ t('funnels.steps.form.albumTailHint') }}
+        </p>
       </div>
     </template>
 
@@ -727,186 +1233,6 @@ const onSubmit = handleSubmit((values) => {
           :no-matches-text="t('funnels.steps.form.tagNoMatches')"
         />
         <p v-if="errors.tagSlug" data-test="step-tag-error" class="mt-1 text-sm text-red-600">{{ errors.tagSlug }}</p>
-      </div>
-    </template>
-
-    <!-- MENU -->
-    <template v-else-if="selectedType === 'MENU'">
-      <div>
-        <label for="step-menu-text" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuText') }}</label>
-        <textarea
-          id="step-menu-text"
-          v-model="text"
-          v-bind="textAttrs"
-          data-test="step-menu-text-input"
-          rows="3"
-          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        />
-        <p v-if="errors.text" data-test="step-menu-text-error" class="mt-1 text-sm text-red-600">{{ errors.text }}</p>
-      </div>
-      <div>
-        <label for="step-menu-parsemode" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.parseMode') }}</label>
-        <select
-          id="step-menu-parsemode"
-          v-model="parseMode"
-          v-bind="parseModeAttrs"
-          data-test="step-menu-parsemode-select"
-          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-        >
-          <option v-for="pm in PARSE_MODES" :key="pm" :value="pm">
-            {{ pm === '' ? t('funnels.steps.form.parseModeNone') : pm }}
-          </option>
-        </select>
-      </div>
-
-      <!-- Button sub-editor: one row per inline-keyboard button. Labels render via {{ }} interpolation
-           (never v-html) — they are author-entered plain text and must not be parsed as markup (XSS). -->
-      <div data-test="step-menu-buttons">
-        <div class="mb-1 flex items-center justify-between">
-          <label class="block text-sm font-medium">{{ t('funnels.steps.form.menuButtons') }}</label>
-          <button
-            type="button"
-            data-test="step-menu-add-button"
-            :disabled="menuButtons.length >= MENU_MAX_BUTTONS"
-            class="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-40"
-            @click="addMenuButton"
-          >
-            {{ t('funnels.steps.form.menuAddButton') }}
-          </button>
-        </div>
-
-        <div
-          v-for="(row, index) in menuButtons"
-          :key="index"
-          :data-test="`step-menu-button-row-${index}`"
-          class="mb-2 space-y-2 rounded-md border p-2"
-        >
-          <div class="flex gap-2">
-            <select
-              v-model="row.type"
-              :data-test="`step-menu-button-type-${index}`"
-              :aria-label="t('funnels.steps.form.menuButtonType')"
-              class="rounded-md border px-2 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="callback">{{ t('funnels.steps.form.menuButtonTypeCallback') }}</option>
-              <option value="url">{{ t('funnels.steps.form.menuButtonTypeUrl') }}</option>
-            </select>
-            <input
-              v-model="row.label"
-              :data-test="`step-menu-button-label-${index}`"
-              type="text"
-              :placeholder="t('funnels.steps.form.menuButtonLabel')"
-              :aria-label="t('funnels.steps.form.menuButtonLabel')"
-              class="flex-1 rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <button
-              type="button"
-              :data-test="`step-menu-button-remove-${index}`"
-              :aria-label="t('funnels.steps.form.menuRemoveButton')"
-              class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50"
-              @click="removeMenuButton(index)"
-            >
-              ×
-            </button>
-          </div>
-
-          <p
-            v-if="menuTouched && menuButtonLabelError(row)"
-            :data-test="`step-menu-button-label-error-${index}`"
-            class="text-sm text-red-600"
-          >
-            {{ menuButtonLabelError(row) }}
-          </p>
-
-          <!-- Callback: target = another step or End, via the shared SearchableSelect. -->
-          <template v-if="row.type === 'callback'">
-            <SearchableSelect
-              v-model="row.targetStepId"
-              :options="menuTargetOptions"
-              :show-value="false"
-              :test-prefix="`step-menu-target-${index}`"
-              :placeholder="t('funnels.steps.form.menuTargetPlaceholder')"
-              :loading-text="t('funnels.steps.form.menuTargetLoading')"
-              :empty-text="t('funnels.steps.form.menuTargetEmpty')"
-              :no-matches-text="t('funnels.steps.form.menuTargetNoMatches')"
-            />
-          </template>
-
-          <!-- URL: an http(s) link (the funnel does not advance on click). -->
-          <template v-else>
-            <input
-              v-model="row.url"
-              :data-test="`step-menu-button-url-${index}`"
-              type="text"
-              autocomplete="off"
-              :placeholder="t('funnels.steps.form.menuButtonUrl')"
-              :aria-label="t('funnels.steps.form.menuButtonUrl')"
-              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            <p
-              v-if="menuTouched && menuButtonUrlError(row)"
-              :data-test="`step-menu-button-url-error-${index}`"
-              class="text-sm text-red-600"
-            >
-              {{ menuButtonUrlError(row) }}
-            </p>
-          </template>
-        </div>
-
-        <p v-if="menuTouched && menuNeedsCallback" data-test="step-menu-error" class="mt-1 text-sm text-red-600">
-          {{ t('funnels.steps.validation.menuNeedsCallback') }}
-        </p>
-      </div>
-
-      <!-- Optional timeout: leave blank to wait indefinitely. Filling value + unit emits the timeout edge;
-           the target picker reuses the callback step/End options (End → timeoutTargetStepId null). -->
-      <div data-test="step-menu-timeout">
-        <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuTimeout') }}</label>
-        <p class="mb-2 text-xs text-gray-500">{{ t('funnels.steps.form.menuTimeoutHint') }}</p>
-        <div class="flex gap-2">
-          <div class="flex-1">
-            <input
-              v-model="menuTimeoutValue"
-              data-test="step-menu-timeout-value"
-              type="number"
-              min="1"
-              :placeholder="t('funnels.steps.form.menuTimeoutValue')"
-              :aria-label="t('funnels.steps.form.menuTimeoutValue')"
-              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div class="flex-1">
-            <select
-              v-model="menuTimeoutUnit"
-              data-test="step-menu-timeout-unit"
-              :aria-label="t('funnels.steps.form.menuTimeoutUnit')"
-              class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="">{{ t('funnels.steps.form.menuTimeoutUnitNone') }}</option>
-              <option v-for="u in DELAY_UNITS" :key="u" :value="u">{{ t(`funnels.steps.unit.${u}`) }}</option>
-            </select>
-          </div>
-        </div>
-        <div v-if="menuTimeoutEnabled" class="mt-2">
-          <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuTimeoutTarget') }}</label>
-          <SearchableSelect
-            v-model="menuTimeoutTarget"
-            :options="menuTargetOptions"
-            :show-value="false"
-            test-prefix="step-menu-timeout-target"
-            :placeholder="t('funnels.steps.form.menuTargetPlaceholder')"
-            :loading-text="t('funnels.steps.form.menuTargetLoading')"
-            :empty-text="t('funnels.steps.form.menuTargetEmpty')"
-            :no-matches-text="t('funnels.steps.form.menuTargetNoMatches')"
-          />
-        </div>
-        <p
-          v-if="menuTouched && menuTimeoutError"
-          data-test="step-menu-timeout-error"
-          class="mt-1 text-sm text-red-600"
-        >
-          {{ menuTimeoutError }}
-        </p>
       </div>
     </template>
 

@@ -22,10 +22,8 @@ const confirmIndex = ref<number | null>(null)
 
 function summary(step: FunnelStep): string {
   switch (step.stepType) {
-    case 'SEND_MESSAGE':
-      return truncate(step.text ?? '')
-    case 'SEND_IMAGE':
-      return step.caption ? truncate(step.caption) : truncate(step.imageUrl ?? '')
+    case 'MESSAGE':
+      return t('funnels.steps.summary.message', { count: step.blocks?.length ?? 0 })
     case 'DELAY':
       return t('funnels.steps.summary.delay', {
         value: step.delayValue ?? '',
@@ -37,8 +35,10 @@ function summary(step: FunnelStep): string {
       return t('funnels.steps.summary.removeTag', { tag: step.tagSlug ?? '' })
     case 'SET_CUSTOM_FIELD':
       return t('funnels.steps.summary.setCustomField', { key: step.customFieldKey ?? '' })
-    case 'MENU':
-      return t('funnels.steps.summary.menu', { count: step.buttons?.length ?? 0 })
+    case 'EMIT_EVENT':
+      return step.eventName ?? ''
+    case 'SUBSCRIBE_TO_FUNNEL':
+      return ''
   }
 }
 

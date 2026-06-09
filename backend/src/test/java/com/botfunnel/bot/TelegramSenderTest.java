@@ -4,6 +4,7 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.botfunnel.bot.dto.AlbumItem;
 import com.botfunnel.bot.dto.SentMessage;
 import com.botfunnel.common.AppException;
 import com.botfunnel.common.crypto.EncryptedValue;
@@ -961,5 +962,252 @@ class TelegramSenderTest {
         // appear in any log line.
         assertThat(logSites).noneMatch(m -> m.contains(TOKEN));
         assertThat(logSites).anyMatch(m -> m.contains("[REDACTED_TOKEN]"));
+    }
+
+    // ---------- sendVideo / sendAudio / sendDocument (thin wrappers over shared send) ----------
+
+    private static final String VIDEO_URL = "https://example.com/clip.mp4";
+    private static final String AUDIO_URL = "https://example.com/song.mp3";
+    private static final String DOC_URL = "https://example.com/report.pdf";
+
+    @Test
+    void sendVideo_success_returnsSentMessage() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(okSendMessage(77L, 5L));
+
+        SentMessage sm = sender.sendVideo(BOT_ID, CALLER_CHAT_ID, VIDEO_URL, CAPTION, "HTML", OWNER_ID);
+
+        assertThat(sm).isNotNull();
+        assertThat(sm.messageId()).isEqualTo(77L);
+        assertThat(sm.chatId()).isEqualTo(5L);
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
+
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        assertThat(req.getPath()).isEqualTo("/bot" + TOKEN + "/sendVideo");
+        assertThat(req.getMethod()).isEqualTo("POST");
+        Map<String, Object> body = new ObjectMapper().readValue(
+                req.getBody().readUtf8(), new TypeReference<>() {});
+        assertThat(body).containsEntry("video", VIDEO_URL);
+        assertThat(body).containsEntry("caption", CAPTION);
+        assertThat(body).containsEntry("parse_mode", "HTML");
+        assertThat(((Number) body.get("chat_id")).longValue()).isEqualTo(CALLER_CHAT_ID);
+
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
+                isNull(), isNull(), any());
+    }
+
+    @Test
+    void sendVideo_captionAndParseModeNull_omitsFieldsFromBody() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(okSendMessage(1L, CALLER_CHAT_ID));
+
+        sender.sendVideo(BOT_ID, CALLER_CHAT_ID, VIDEO_URL, null, null, OWNER_ID);
+
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        Map<String, Object> body = new ObjectMapper().readValue(
+                req.getBody().readUtf8(), new TypeReference<>() {});
+        assertThat(body).containsEntry("video", VIDEO_URL);
+        assertThat(body).doesNotContainKey("caption");
+        assertThat(body).doesNotContainKey("parse_mode");
+    }
+
+    @Test
+    void sendAudio_success_returnsSentMessage() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(okSendMessage(88L, 5L));
+
+        SentMessage sm = sender.sendAudio(BOT_ID, CALLER_CHAT_ID, AUDIO_URL, CAPTION, "HTML", OWNER_ID);
+
+        assertThat(sm).isNotNull();
+        assertThat(sm.messageId()).isEqualTo(88L);
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
+
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        assertThat(req.getPath()).isEqualTo("/bot" + TOKEN + "/sendAudio");
+        Map<String, Object> body = new ObjectMapper().readValue(
+                req.getBody().readUtf8(), new TypeReference<>() {});
+        assertThat(body).containsEntry("audio", AUDIO_URL);
+        assertThat(body).containsEntry("caption", CAPTION);
+        assertThat(body).containsEntry("parse_mode", "HTML");
+
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
+                isNull(), isNull(), any());
+    }
+
+    @Test
+    void sendDocument_success_returnsSentMessage() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(okSendMessage(99L, 5L));
+
+        SentMessage sm = sender.sendDocument(BOT_ID, CALLER_CHAT_ID, DOC_URL, CAPTION, "HTML", OWNER_ID);
+
+        assertThat(sm).isNotNull();
+        assertThat(sm.messageId()).isEqualTo(99L);
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
+
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        assertThat(req.getPath()).isEqualTo("/bot" + TOKEN + "/sendDocument");
+        Map<String, Object> body = new ObjectMapper().readValue(
+                req.getBody().readUtf8(), new TypeReference<>() {});
+        assertThat(body).containsEntry("document", DOC_URL);
+        assertThat(body).containsEntry("caption", CAPTION);
+        assertThat(body).containsEntry("parse_mode", "HTML");
+
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
+                isNull(), isNull(), any());
+    }
+
+    @Test
+    void sendVideo_rateLimited_retriesThenSucceeds() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(status429(1));
+        mockServer.enqueue(okSendMessage(42L, 5L));
+
+        SentMessage sm = sender.sendVideo(BOT_ID, CALLER_CHAT_ID, VIDEO_URL, CAPTION, "HTML", OWNER_ID);
+
+        assertThat(sm).isNotNull();
+        assertThat(sm.messageId()).isEqualTo(42L);
+        assertThat(mockServer.getRequestCount()).isEqualTo(2);
+
+        // Both attempts (initial 429 + retry) must hit /sendVideo — proves the inherited 429 loop.
+        RecordedRequest first = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        RecordedRequest second = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(first).isNotNull();
+        assertThat(second).isNotNull();
+        assertThat(first.getPath()).isEqualTo("/bot" + TOKEN + "/sendVideo");
+        assertThat(second.getPath()).isEqualTo("/bot" + TOKEN + "/sendVideo");
+    }
+
+    @Test
+    void sendVideo_5xxExhausted_throwsTransientExhausted() {
+        stubFindReturns(connectedBot());
+        for (int i = 0; i < 4; i++) {
+            mockServer.enqueue(status5xx(503));
+        }
+
+        assertThatThrownBy(() -> sender.sendVideo(BOT_ID, CALLER_CHAT_ID, VIDEO_URL, CAPTION, "HTML", OWNER_ID))
+                .isInstanceOf(TelegramSendException.class)
+                .hasMessage("transient_failure_exhausted");
+
+        assertThat(mockServer.getRequestCount()).isEqualTo(4);
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED),
+                isNull(), isNull(), any());
+    }
+
+    // ---------- sendMediaGroup (album array-mapper) ----------
+
+    private static MockResponse okSendMediaGroup(long messageId1, long messageId2, long chatId) {
+        return jsonResponse(200, String.format(
+                "{\"ok\":true,\"result\":["
+                        + "{\"message_id\":%d,\"chat\":{\"id\":%d}},"
+                        + "{\"message_id\":%d,\"chat\":{\"id\":%d}}]}",
+                messageId1, chatId, messageId2, chatId));
+    }
+
+    private static List<AlbumItem> photoPair() {
+        return List.of(
+                new AlbumItem("photo", IMAGE_URL, CAPTION, "HTML"),
+                new AlbumItem("photo", VIDEO_URL, "second caption ignored", "HTML"));
+    }
+
+    @Test
+    void sendMediaGroup_success_mapsArrayResponse() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(okSendMediaGroup(101L, 102L, 5L));
+
+        List<SentMessage> sent = sender.sendMediaGroup(BOT_ID, CALLER_CHAT_ID, photoPair(), OWNER_ID);
+
+        assertThat(sent).hasSize(2);
+        assertThat(sent.get(0).messageId()).isEqualTo(101L);
+        assertThat(sent.get(0).chatId()).isEqualTo(5L);
+        assertThat(sent.get(1).messageId()).isEqualTo(102L);
+        assertThat(mockServer.getRequestCount()).isEqualTo(1);
+
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        assertThat(req.getPath()).isEqualTo("/bot" + TOKEN + "/sendMediaGroup");
+        assertThat(req.getMethod()).isEqualTo("POST");
+        Map<String, Object> body = new ObjectMapper().readValue(
+                req.getBody().readUtf8(), new TypeReference<>() {});
+        assertThat(((Number) body.get("chat_id")).longValue()).isEqualTo(CALLER_CHAT_ID);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> media = (List<Map<String, Object>>) body.get("media");
+        assertThat(media).hasSize(2);
+        assertThat(media.get(0)).containsEntry("type", "photo").containsEntry("media", IMAGE_URL);
+        assertThat(media.get(1)).containsEntry("type", "photo").containsEntry("media", VIDEO_URL);
+
+        verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_MESSAGE_SENT),
+                isNull(), isNull(), any());
+    }
+
+    @Test
+    void sendMediaGroup_captionOnlyOnFirstItem() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(okSendMediaGroup(1L, 2L, 5L));
+
+        sender.sendMediaGroup(BOT_ID, CALLER_CHAT_ID, photoPair(), OWNER_ID);
+
+        RecordedRequest req = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(req).isNotNull();
+        Map<String, Object> body = new ObjectMapper().readValue(
+                req.getBody().readUtf8(), new TypeReference<>() {});
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> media = (List<Map<String, Object>>) body.get("media");
+        // Only the first element carries caption + parse_mode (Decision 5).
+        assertThat(media.get(0)).containsEntry("caption", CAPTION).containsEntry("parse_mode", "HTML");
+        assertThat(media.get(1)).doesNotContainKey("caption");
+        assertThat(media.get(1)).doesNotContainKey("parse_mode");
+    }
+
+    @Test
+    void sendMediaGroup_okFalseWithToken_scrubbedInLog() {
+        stubFindReturns(connectedBot());
+        // ok=false (200 body) whose description embeds the token — the album mapper's error path
+        // must scrub it exactly like mapBodyToSentMessage.
+        mockServer.enqueue(jsonResponse(200, "{\"ok\":false,\"description\":\""
+                + "album failed for token " + TOKEN + "\"}"));
+
+        assertThatThrownBy(() -> sender.sendMediaGroup(BOT_ID, CALLER_CHAT_ID, photoPair(), OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
+
+        List<String> logSites = logAppender.list.stream()
+                .filter(e -> e.getLevel() == Level.WARN || e.getLevel() == Level.ERROR)
+                .map(ILoggingEvent::getFormattedMessage)
+                .toList();
+        assertThat(logSites).isNotEmpty();
+        assertThat(logSites).noneMatch(m -> m.contains(TOKEN));
+        assertThat(logSites).anyMatch(m -> m.contains("[REDACTED_TOKEN]"));
+    }
+
+    @Test
+    void sendMediaGroup_emptyArrayResponse_throwsTelegramSendException() {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(jsonResponse(200, "{\"ok\":true,\"result\":[]}"));
+
+        assertThatThrownBy(() -> sender.sendMediaGroup(BOT_ID, CALLER_CHAT_ID, photoPair(), OWNER_ID))
+                .isInstanceOf(TelegramSendException.class);
+    }
+
+    @Test
+    void sendMediaGroup_rateLimited_retriesThenSucceeds() throws Exception {
+        stubFindReturns(connectedBot());
+        mockServer.enqueue(status429(1));
+        mockServer.enqueue(okSendMediaGroup(101L, 102L, 5L));
+
+        List<SentMessage> sent = sender.sendMediaGroup(BOT_ID, CALLER_CHAT_ID, photoPair(), OWNER_ID);
+
+        assertThat(sent).hasSize(2);
+        assertThat(mockServer.getRequestCount()).isEqualTo(2);
+
+        RecordedRequest first = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        RecordedRequest second = mockServer.takeRequest(2, TimeUnit.SECONDS);
+        assertThat(first).isNotNull();
+        assertThat(second).isNotNull();
+        assertThat(first.getPath()).isEqualTo("/bot" + TOKEN + "/sendMediaGroup");
+        assertThat(second.getPath()).isEqualTo("/bot" + TOKEN + "/sendMediaGroup");
     }
 }

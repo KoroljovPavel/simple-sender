@@ -1,5 +1,6 @@
 package com.botfunnel.bot;
 
+import com.botfunnel.bot.dto.AlbumItem;
 import com.botfunnel.bot.dto.SentMessage;
 import com.botfunnel.bot.dto.TelegramSendParameters;
 import com.botfunnel.bot.dto.TelegramSendResult;
@@ -34,7 +35,8 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
- * Outbound sender for Telegram {@code sendMessage} / {@code sendPhoto}. Owns: per-call AES-GCM token decrypt, 5xx
+ * Outbound sender for Telegram {@code sendMessage} / {@code sendPhoto} / {@code sendVideo} /
+ * {@code sendAudio} / {@code sendDocument} / {@code sendMediaGroup}. Owns: per-call AES-GCM token decrypt, 5xx
  * exponential backoff (1s/2s/4s, 3 retries), 429 {@code retry_after} loop wrapping the 5xx loop,
  * overall 30s timeout, typed-exception mapping, audit-event emission, and token-scrubbed logging.
  *
@@ -193,25 +195,118 @@ public class TelegramSender {
 
     public SentMessage sendPhoto(String botId, Long chatId, String imageUrl, String caption,
                                  String parseMode, String ownerId) {
-        // Body for /sendPhoto. photo is the URL — Telegram fetches it; the backend never
-        // dereferences it (no SSRF). caption/parse_mode added only when non-null.
+        return sendSingleMedia(botId, chatId, "/bot{token}/sendPhoto", "photo",
+                imageUrl, caption, parseMode, ownerId);
+    }
+
+    /**
+     * {@code /sendVideo} — thin wrapper over the shared {@link #send} path (Decision 5: no new heavy
+     * resources). Inherits the CONNECTED filter, 5xx/429 retry-backoff loop, 30s deadline, audit
+     * events, Decision-4 subscriber hook, and token-scrubbed logging unchanged. {@code videoUrl} is a
+     * URL or {@code file_id} — Telegram fetches it; the backend never dereferences it (Decision 6).
+     */
+    public SentMessage sendVideo(String botId, Long chatId, String videoUrl, String caption,
+                                 String parseMode, String ownerId) {
+        return sendSingleMedia(botId, chatId, "/bot{token}/sendVideo", "video",
+                videoUrl, caption, parseMode, ownerId);
+    }
+
+    /** {@code /sendAudio} — thin wrapper over {@link #send} (see {@link #sendVideo}). */
+    public SentMessage sendAudio(String botId, Long chatId, String audioUrl, String caption,
+                                 String parseMode, String ownerId) {
+        return sendSingleMedia(botId, chatId, "/bot{token}/sendAudio", "audio",
+                audioUrl, caption, parseMode, ownerId);
+    }
+
+    /** {@code /sendDocument} — thin wrapper over {@link #send} (see {@link #sendVideo}). */
+    public SentMessage sendDocument(String botId, Long chatId, String fileUrl, String caption,
+                                    String parseMode, String ownerId) {
+        return sendSingleMedia(botId, chatId, "/bot{token}/sendDocument", "document",
+                fileUrl, caption, parseMode, ownerId);
+    }
+
+    // Shared single-media body shape for sendPhoto/sendVideo/sendAudio/sendDocument. Only the
+    // endpoint path and the media content key (photo/video/audio/document) differ; caption/parse_mode
+    // are added only when non-null (the sendText idiom). The media value is a URL or file_id —
+    // Telegram fetches it; the backend never dereferences it (no SSRF, Decision 6).
+    private SentMessage sendSingleMedia(String botId, Long chatId, String endpoint, String mediaKey,
+                                        String mediaUrl, String caption, String parseMode, String ownerId) {
         Map<String, Object> contentFields = new HashMap<>();
-        contentFields.put("photo", imageUrl);
+        contentFields.put(mediaKey, mediaUrl);
         if (caption != null) {
             contentFields.put("caption", caption);
         }
         if (parseMode != null) {
             contentFields.put("parse_mode", parseMode);
         }
-        return send(botId, chatId, "/bot{token}/sendPhoto", contentFields, ownerId);
+        return send(botId, chatId, endpoint, contentFields, ownerId);
     }
 
-    // Shared orchestration for every outbound send (sendText / sendPhoto). The only per-method
-    // difference is the endpoint path and the content fields of the request body — everything else
-    // (CONNECTED filter, retry/backoff/429 loop, audit, Decision-4 subscriber hook, typed mapping)
-    // is identical and lives here so the failure-matrix is byte-identical across endpoints.
+    /**
+     * {@code /sendMediaGroup} — sends a Telegram media group (album, 2–10 items) and maps the
+     * <strong>array</strong> {@code Message} response (Decision 5). Reuses the exact same shared seam
+     * as {@link #send}: CONNECTED filter, 5xx/429 retry-backoff loop, 30s deadline, audit events,
+     * Decision-4 subscriber hook, and token-scrubbed logging. The <em>only</em> delta is the response
+     * mapper — {@link #mapBodyToSentAlbum} instead of {@link #mapBodyToSentMessage} (the latter assumes
+     * a single {@code message_id} and would fail on the array response).
+     *
+     * <p>{@code caption}/{@code parse_mode} are meaningful only on the first item (Decision 5); the
+     * builder drops them on later items. Each item's media value is a URL or {@code file_id} — Telegram
+     * fetches it; the backend never dereferences it (no SSRF, Decision 6).
+     *
+     * @return one {@link SentMessage} per delivered album element, in order.
+     */
+    public java.util.List<SentMessage> sendMediaGroup(String botId, Long chatId,
+                                                      java.util.List<AlbumItem> items, String ownerId) {
+        Map<String, Object> contentFields = new HashMap<>();
+        contentFields.put("media", buildMediaArray(items));
+        return sendMapped(botId, chatId, "/bot{token}/sendMediaGroup", contentFields, ownerId,
+                (result, attempts) -> mapBodyToSentAlbum(result, chatId, attempts),
+                sent -> albumSentMetadata(botId, sent));
+    }
+
+    // Builds the Telegram media-group "media" JSON array. caption/parse_mode are emitted only on the
+    // FIRST element (Decision 5) regardless of what later items carry — defensive, so a caller that
+    // populated later captions can't leak them onto the wire.
+    private static java.util.List<Map<String, Object>> buildMediaArray(java.util.List<AlbumItem> items) {
+        java.util.List<Map<String, Object>> media = new java.util.ArrayList<>(items.size());
+        for (int i = 0; i < items.size(); i++) {
+            AlbumItem item = items.get(i);
+            Map<String, Object> element = new HashMap<>();
+            element.put("type", item.type());
+            element.put("media", item.mediaUrl());
+            if (i == 0) {
+                if (item.caption() != null) {
+                    element.put("caption", item.caption());
+                }
+                if (item.parseMode() != null) {
+                    element.put("parse_mode", item.parseMode());
+                }
+            }
+            media.add(element);
+        }
+        return media;
+    }
+
+    // Shared orchestration for the single-message sends (sendText / sendPhoto / sendVideo /
+    // sendAudio / sendDocument). Delegates to the generic sendMapped seam with the single-message
+    // mapper + metadata; kept as a named method so existing call-sites and tests are untouched.
     private SentMessage send(String botId, Long chatId, String endpoint,
                              Map<String, Object> contentFields, String ownerId) {
+        return sendMapped(botId, chatId, endpoint, contentFields, ownerId,
+                (result, attempts) -> mapBodyToSentMessage(result, chatId, attempts),
+                sm -> sentMetadata(botId, sm));
+    }
+
+    // Generic orchestration for every outbound content send. The only per-method differences are the
+    // endpoint path, the request body content fields, the response MAPPER, and the success-event
+    // metadata builder — everything else (CONNECTED filter, retry/backoff/429 loop, 30s deadline,
+    // audit, Decision-4 subscriber hook, typed failure mapping, token scrubbing) is identical and
+    // lives here so the failure-matrix is byte-identical across single-message and album sends.
+    private <R> R sendMapped(String botId, Long chatId, String endpoint,
+                             Map<String, Object> contentFields, String ownerId,
+                             java.util.function.BiFunction<TelegramSendResult<JsonNode>, AtomicInteger, R> mapper,
+                             java.util.function.Function<R, Map<String, Object>> successMetadata) {
         // Outermost AtomicInteger. Persists across BOTH retry loops: each HTTP attempt increments
         // it once at the request site. The [5xx, 429, 5xx, 200] interleaving invariant asserts
         // attempts==4 — the counter survives 429 outer-loop re-entry into the 5xx inner loop.
@@ -231,10 +326,10 @@ public class TelegramSender {
 
             TelegramSendResult<JsonNode> result = sendWithRateLimitRetry(bot, botId, chatId, endpoint,
                     contentFields, attempts, deadline);
-            SentMessage sm = mapBodyToSentMessage(result, chatId, attempts);
+            R mapped = mapper.apply(result, attempts);
             eventService.logEvent(ownerId, EVENT_TELEGRAM_MESSAGE_SENT,
-                    null, null, sentMetadata(botId, sm));
-            return sm;
+                    null, null, successMetadata.apply(mapped));
+            return mapped;
         } catch (RuntimeException ex) {
             if (isTerminalAuditable(ex)) {
                 log.error("Telegram send terminal failure attempts={}: {}",
@@ -442,6 +537,38 @@ public class TelegramSender {
         throw new TelegramSendException(null, scrubbed, attempts.get());
     }
 
+    // Album array-mapper (Decision 5). /sendMediaGroup returns result as a JSON ARRAY of Message
+    // objects, not a single message_id — mapBodyToSentMessage would fail on it. Maps each element
+    // into a SentMessage (reusing extractChatId). On null body / ok=false / non-array / empty array /
+    // an element missing message_id → throws TelegramSendException AFTER running the raw
+    // description through scrubTokens, exactly mirroring mapBodyToSentMessage's token-scrub parity.
+    private java.util.List<SentMessage> mapBodyToSentAlbum(TelegramSendResult<JsonNode> result,
+                                                          Long fallbackChatId,
+                                                          AtomicInteger attempts) {
+        if (result == null) {
+            log.warn("Telegram empty response body");
+            throw new TelegramSendException(null, "empty response body", attempts.get());
+        }
+        JsonNode resultNode = result.result();
+        if (result.ok() && resultNode != null && resultNode.isArray() && !resultNode.isEmpty()) {
+            java.util.List<SentMessage> sent = new java.util.ArrayList<>(resultNode.size());
+            for (JsonNode element : resultNode) {
+                if (!element.has("message_id")) {
+                    String scrubbed = TelegramApiClient.scrubTokens(result.description());
+                    log.warn("Telegram sendMediaGroup element missing message_id: {}", scrubbed);
+                    throw new TelegramSendException(null, scrubbed, attempts.get());
+                }
+                Long messageId = element.get("message_id").asLong();
+                Long chatId = extractChatId(element, fallbackChatId);
+                sent.add(new SentMessage(chatId, messageId, Instant.now()));
+            }
+            return sent;
+        }
+        String scrubbed = TelegramApiClient.scrubTokens(result.description());
+        log.warn("Telegram sendMediaGroup ok=false or missing/empty result array: {}", scrubbed);
+        throw new TelegramSendException(null, scrubbed, attempts.get());
+    }
+
     private static Long extractChatId(JsonNode resultNode, Long fallback) {
         // JsonNode.get(String) returns Jackson's MissingNode (not Java null) for absent fields;
         // .has(...) is the correct presence check.
@@ -494,6 +621,19 @@ public class TelegramSender {
         meta.put("botId", botId);
         meta.put("chatId", sm.chatId());
         meta.put("messageId", sm.messageId());
+        return meta;
+    }
+
+    // Success metadata for an album send. Mirrors sentMetadata but carries the list of delivered
+    // message-ids (one per album element) plus the common chatId — keeps the sent-event schema
+    // predictable for consumers while reflecting the multi-message shape.
+    private static Map<String, Object> albumSentMetadata(String botId, java.util.List<SentMessage> sent) {
+        Map<String, Object> meta = new HashMap<>();
+        meta.put("botId", botId);
+        if (!sent.isEmpty()) {
+            meta.put("chatId", sent.get(0).chatId());
+        }
+        meta.put("messageIds", sent.stream().map(SentMessage::messageId).toList());
         return meta;
     }
 

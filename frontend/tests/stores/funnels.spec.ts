@@ -129,7 +129,7 @@ describe('funnels store', () => {
     const store = useFunnelsStore()
     await store.fetch()
 
-    apiMock.mockResolvedValueOnce({ ...full('a'), status: 'active', steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] })
+    apiMock.mockResolvedValueOnce({ ...full('a'), status: 'active', steps: [{ stepType: 'MESSAGE', blocks: [{ type: 'TEXT', text: 'Hi' }] }] })
     const res = await store.activate('a')
 
     expect(res.status).toBe('active')
@@ -232,14 +232,22 @@ describe('funnels store', () => {
     expect(store.error).toBe(true)
   })
 
-  it('preview posts current step content and returns render', async () => {
+  it('preview action sends the blocks request and returns renderedBlocks', async () => {
+    // New multiblock DTO shape (Task 6/8): the body is { stepType, blocks: ContentBlock[] }, the
+    // response is { renderedBlocks: RenderedBlock[], sampleData, kind } — NOT the old flat
+    // { stepType, text, parseMode } / { rendered }.
     const payload: PreviewStepRequest = {
-      stepType: 'SEND_MESSAGE',
-      text: 'Hi {{first_name}}',
-      parseMode: 'HTML',
+      stepType: 'MESSAGE',
+      blocks: [
+        { type: 'TEXT', text: 'Hi {{first_name}}', parseMode: 'HTML' },
+        { type: 'IMAGE', mediaUrl: 'https://cdn.example/pic.png', caption: 'Look' },
+      ],
     }
     const response: PreviewStepResponse = {
-      rendered: 'Hi John',
+      renderedBlocks: [
+        { type: 'TEXT', text: 'Hi John', parseMode: 'HTML' },
+        { type: 'IMAGE', mediaUrl: 'https://cdn.example/pic.png', caption: 'Look' },
+      ],
       sampleData: true,
       kind: 'message',
     }
@@ -247,19 +255,21 @@ describe('funnels store', () => {
     const store = useFunnelsStore()
     const res = await store.preview('a', 's1', payload)
 
+    // Store returns the payload verbatim (no branching on kind/sampleData).
     expect(res).toEqual(response)
+    // Body is passed through unchanged — the blocks array reaches the backend as-is.
     expect(apiMock).toHaveBeenLastCalledWith(`${URL}/a/steps/s1/preview`, {
       method: 'POST',
       body: payload,
     })
   })
 
-  it('preview re-throws on failure', async () => {
+  it('preview re-throws on failure (store contract: flip error, no useApiError)', async () => {
     const store = useFunnelsStore()
     apiMock.mockRejectedValueOnce({ statusCode: 500 })
 
     await expect(
-      store.preview('a', 's1', { stepType: 'DELAY', text: '' }),
+      store.preview('a', 's1', { stepType: 'DELAY', blocks: [] }),
     ).rejects.toMatchObject({ statusCode: 500 })
     expect(store.error).toBe(true)
   })

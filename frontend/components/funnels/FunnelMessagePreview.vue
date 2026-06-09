@@ -1,18 +1,29 @@
 <script setup lang="ts">
-import type { FunnelStep, PreviewStepResponse, StepType } from '~/types/funnel'
+import type { FunnelStep, PreviewStepResponse, RenderedBlock } from '~/types/funnel'
 
-// Message-preview panel for the funnel editor (Task 6). Renders the CURRENT (possibly unsaved) step the
-// author is editing AS IT WILL LOOK IN TELEGRAM — variables substituted + parse_mode-escaped on the
-// backend (Decision 9, Task 2). The front-end only calls the store `preview` action and outputs the
-// rendered string.
+// Message-preview panel for the funnel composer (15-message-composer, Task 8). Renders the CURRENT
+// (possibly unsaved) MESSAGE step the author is editing AS IT WILL LOOK IN TELEGRAM: an ordered STACK of
+// heterogeneous content blocks (one rendered "message" per block), in the same order as step.blocks. Each
+// block's text/caption is substituted + parse_mode-escaped on the backend (Decision 8); the panel only
+// calls the store `preview` action and renders the structured result.
 //
-// CRITICAL (stored-XSS guard, OWASP A03 — Decision 9 / tech-spec Risks): the rendered string carries
-// Telegram escaping (MarkdownV2/HTML), which is NOT browser-safe. It is output EXCLUSIVELY as text via
+// CRITICAL (stored-XSS guard, OWASP A03 — Decision 8 / tech-spec Risks): the rendered text/caption carry
+// Telegram escaping (MarkdownV2/HTML), which is NOT browser-safe. They are output EXCLUSIVELY as text via
 // {{ }} interpolation — NEVER v-html / innerHTML (matches the "never v-html" convention in
-// FunnelStepForm.vue). Line breaks are preserved via CSS (whitespace-pre-wrap), not markup.
+// FunnelStepForm.vue). Line breaks are preserved via CSS (whitespace-pre-wrap), not markup. Media is bound
+// via :src / :href (never v-html): an <img src> / <a href> cannot execute JS, so the no-HTML-sink invariant
+// holds. FILE/document hrefs are additionally scheme-guarded (http(s) only — anti-SSRF/anti-XSS, Decision 6).
 const props = defineProps<{ step: FunnelStep | null; stepNumber?: number | null }>()
 
 const { t } = useI18n()
+
+// http(s)-only scheme guard for clickable media. Mirrors FunnelStepForm IMAGE_URL_RE — rejects
+// file:// / data: / javascript: AND opaque Telegram file_id tokens (which carry no scheme). A media URL
+// that fails this guard is NOT turned into a clickable :href / :src; it falls back to a type icon.
+const HTTP_URL_RE = /^https?:\/\//i
+function isHttpUrl(url: string | null | undefined): boolean {
+  return typeof url === 'string' && HTTP_URL_RE.test(url.trim())
+}
 
 // Heading for the focused step: "Крок {N} · {localized type}". Shown for BOTH message and non-message
 // steps so the author always knows WHICH step is previewed; hidden only in the empty (no step) state.
@@ -25,6 +36,7 @@ const stepHeading = computed<string | null>(() => {
     type: t(`funnels.steps.type.${props.step.stepType}`),
   })
 })
+
 const route = useRoute()
 const funnelsStore = useFunnelsStore()
 // Error mapping lives in the component setup (NOT the store) — useApiError pulls useI18n() and the store
@@ -33,41 +45,34 @@ const resolveError = useApiError()
 
 const funnelId = computed(() => String(route.params.funnelId))
 
-// Message steps render a Telegram message; everything else gets a neutral placeholder (no backend call).
-const MESSAGE_TYPES: StepType[] = ['SEND_MESSAGE', 'SEND_IMAGE', 'MENU']
-const isMessageStep = computed(() => !!props.step && MESSAGE_TYPES.includes(props.step.stepType))
-
-// SEND_IMAGE preview: the image is shown ABOVE the rendered caption, sourced straight from the step's
-// imageUrl (no extra network call beyond the browser fetching the URL). Bound via :src — NOT v-html — so
-// the no-HTML-sink / stored-XSS invariant holds (an <img src> cannot execute JS; the URL is validated
-// http(s) on save). A blank/whitespace URL or an @error load failure flips to a neutral text placeholder
-// instead of a broken-image icon (SEND_IMAGE-only — every other step type is untouched).
-const imageUrl = computed(() => {
-  const step = props.step
-  if (!step || step.stepType !== 'SEND_IMAGE') return null
-  const url = (step.imageUrl ?? '').trim()
-  return url.length > 0 ? url : null
-})
-// Per-render load-failure flag; reset whenever the source URL changes so a new image gets a fresh chance.
-const imageLoadFailed = ref(false)
-watch(imageUrl, () => {
-  imageLoadFailed.value = false
-})
-// Show the actual <img> only with a non-blank URL that has not failed to load; otherwise the placeholder.
-const showImage = computed(() => imageUrl.value !== null && !imageLoadFailed.value)
-const showImagePlaceholder = computed(
-  () => !!props.step && props.step.stepType === 'SEND_IMAGE' && !showImage.value,
-)
-
-// The preview body for the active step: SEND_IMAGE previews its caption, SEND_MESSAGE/MENU their text.
-// MENU has no required text on the backend — an empty body is fine (renders empty/neutral, no crash).
-function previewText(step: FunnelStep): string {
-  return (step.stepType === 'SEND_IMAGE' ? step.caption : step.text) ?? ''
-}
+// Only the MESSAGE composer step renders a Telegram message stack; everything else gets a neutral
+// placeholder (no backend call). The former SEND_MESSAGE/SEND_IMAGE/MENU kinds are gone (Task 1/6).
+const isMessageStep = computed(() => props.step?.stepType === 'MESSAGE')
 
 const rendered = ref<PreviewStepResponse | null>(null)
 const errorMessage = ref<string | null>(null)
 const loading = ref(false)
+
+// The rendered blocks paired with the step's own blocks, clamped to the shorter length so a backend/front
+// desync (renderedBlocks shorter/longer than blocks) renders safely instead of crashing. Each rendered
+// block already carries everything the panel needs (type/text/caption/mediaUrl/items), so we render off
+// `renderedBlocks` and use the original block only to keep counts aligned.
+const previewBlocks = computed<RenderedBlock[]>(() => {
+  const blocks = props.step?.blocks ?? []
+  const renderedList = rendered.value?.renderedBlocks ?? []
+  return renderedList.slice(0, Math.min(blocks.length, renderedList.length))
+})
+
+// Per-block media-load-failure flags (replaces the old single global imageLoadFailed ref). Keyed by block
+// index; an @error on a block's <img> flips ONLY that block to the neutral placeholder. Reset whenever a
+// fresh preview arrives so re-rendered media gets a new chance.
+const mediaLoadFailed = ref<Record<number, boolean>>({})
+function onMediaError(index: number) {
+  mediaLoadFailed.value = { ...mediaLoadFailed.value, [index]: true }
+}
+
+// Buttons attach to the step (the last non-album block — Decision 2); rendered under the last block.
+const buttons = computed(() => props.step?.buttons ?? [])
 
 async function runPreview() {
   const step = props.step
@@ -79,11 +84,11 @@ async function runPreview() {
   }
   loading.value = true
   errorMessage.value = null
+  mediaLoadFailed.value = {}
   try {
     rendered.value = await funnelsStore.preview(funnelId.value, step.id ?? '', {
       stepType: step.stepType,
-      text: previewText(step),
-      parseMode: step.parseMode ?? null,
+      blocks: step.blocks ?? [],
     })
   } catch (err) {
     // 404 (unknown step) / network / 5xx → neutral in-panel message, never a throw or blank screen.
@@ -95,24 +100,20 @@ async function runPreview() {
 }
 
 // Debounced reactive preview — mirrors the scheduleTriggerPersist/triggerTimer idiom in [funnelId].vue so
-// typing in the editor does not bombard the backend on every keystroke.
+// editing the composer does not bombard the backend on every keystroke.
 let previewTimer: ReturnType<typeof setTimeout> | null = null
 function schedulePreview() {
   if (previewTimer) clearTimeout(previewTimer)
   previewTimer = setTimeout(() => void runPreview(), 600)
 }
 
-// Re-run when the focused step OR its previewable fields change. immediate so the panel renders on mount
-// (tests rely on the first call happening without an edit). Run directly on first tick, debounce edits.
+// Re-run when the focused step OR its content blocks change. immediate so the panel renders on mount
+// (tests rely on the first call happening without an edit). Run directly on the first tick, debounce edits.
+// Deep-watch step.blocks so an in-place block edit (text/caption/mediaUrl/album item) re-triggers preview —
+// the old flat text/caption/parseMode fields are gone (Task 1/6).
 let primed = false
 watch(
-  () => [
-    props.step?.stepType,
-    props.step?.id,
-    props.step?.text,
-    props.step?.caption,
-    props.step?.parseMode,
-  ],
+  () => [props.step?.stepType, props.step?.id, props.step?.blocks] as const,
   () => {
     if (!primed) {
       primed = true
@@ -121,7 +122,7 @@ watch(
       schedulePreview()
     }
   },
-  { immediate: true },
+  { immediate: true, deep: true },
 )
 
 onBeforeUnmount(() => {
@@ -183,35 +184,129 @@ onBeforeUnmount(() => {
           {{ t('funnels.editor.previewSampleData') }}
         </p>
 
-        <!-- SEND_IMAGE only — the image renders ABOVE the caption. :src binding (never v-html): an <img>
-             src cannot execute JS, so the no-HTML-sink invariant is preserved; the URL is http(s)-validated
-             on save. A blank URL or an @error load failure falls back to a neutral text placeholder below. -->
-        <img
-          v-if="showImage"
-          data-test="funnel-preview-image"
-          :src="imageUrl ?? undefined"
-          :alt="t('funnels.editor.previewImageAlt')"
-          referrerpolicy="no-referrer"
-          class="mb-2 max-h-64 w-full rounded-md border bg-white object-contain"
-          @error="imageLoadFailed = true"
-        >
-        <p
-          v-else-if="showImagePlaceholder"
-          data-test="funnel-preview-image-unavailable"
-          class="mb-2 rounded-md border border-dashed bg-white px-3 py-4 text-center text-gray-500"
-        >
-          {{ t('funnels.editor.previewImageUnavailable') }}
-        </p>
+        <!-- The ordered stack of rendered blocks — one "message" per block, in step.blocks order. Each
+             block renders per its BlockType. ALL text/caption is output as TEXT ONLY ({{ }}), NEVER v-html
+             (Telegram escaping is not browser-safe → v-html would be a stored-XSS sink, OWASP A03). -->
+        <div class="space-y-3">
+          <div
+            v-for="(block, index) in previewBlocks"
+            :key="index"
+            :data-test="`funnel-preview-block-${index}`"
+            :data-block-type="block.type"
+            class="rounded-md border bg-white"
+          >
+            <!-- TEXT — the Telegram-rendered string as plain text. Line breaks via CSS. -->
+            <div
+              v-if="block.type === 'TEXT'"
+              class="whitespace-pre-wrap break-words px-3 py-2 text-gray-900"
+            >{{ block.text }}</div>
 
-        <!-- The Telegram-rendered string (caption for SEND_IMAGE) — output as TEXT ONLY ({{ }}), NEVER
-             v-html. Telegram escaping is NOT browser-safe; v-html here would be a stored-XSS sink (OWASP
-             A03). Line breaks via CSS. For SEND_IMAGE this is the caption, shown below the image; an empty
-             caption renders an empty box (image-only), matching the backend-rendered text. -->
+            <!-- IMAGE — :src bind (never v-html). An @error load failure (per-block) falls back to a
+                 neutral type-icon placeholder instead of a broken-image. Caption below as text. -->
+            <template v-else-if="block.type === 'IMAGE'">
+              <img
+                v-if="!mediaLoadFailed[index]"
+                :src="block.mediaUrl ?? undefined"
+                :alt="t('funnels.editor.previewImageAlt')"
+                referrerpolicy="no-referrer"
+                class="max-h-64 w-full rounded-t-md object-contain"
+                @error="onMediaError(index)"
+              >
+              <div
+                v-else
+                data-test="funnel-preview-media-unavailable"
+                class="flex items-center gap-2 border-b border-dashed px-3 py-4 text-gray-500"
+              >
+                <span data-test="funnel-preview-media-icon" aria-hidden="true">🖼️</span>
+                <span>{{ t('funnels.editor.previewImageUnavailable') }}</span>
+              </div>
+              <p
+                v-if="block.caption"
+                data-test="funnel-preview-caption"
+                class="whitespace-pre-wrap break-words px-3 py-2 text-gray-900"
+              >{{ block.caption }}</p>
+            </template>
+
+            <!-- VIDEO / AUDIO / FILE — a type icon (inline players are undesirable in a preview). FILE
+                 additionally renders a clickable :href ONLY for an http(s) scheme (opaque file_id / non-http
+                 → icon without href, anti-SSRF/anti-XSS, Decision 6). Caption below as text. -->
+            <template v-else-if="block.type === 'VIDEO' || block.type === 'AUDIO' || block.type === 'FILE'">
+              <a
+                v-if="block.type === 'FILE' && isHttpUrl(block.mediaUrl)"
+                data-test="funnel-preview-file-link"
+                :href="block.mediaUrl ?? undefined"
+                target="_blank"
+                rel="noopener noreferrer nofollow"
+                referrerpolicy="no-referrer"
+                class="flex items-center gap-2 px-3 py-2 text-blue-600 underline"
+              >
+                <span data-test="funnel-preview-media-icon" aria-hidden="true">📎</span>
+                <span class="break-all">{{ block.mediaUrl }}</span>
+              </a>
+              <div
+                v-else
+                class="flex items-center gap-2 px-3 py-2 text-gray-600"
+              >
+                <span data-test="funnel-preview-media-icon" aria-hidden="true">{{
+                  block.type === 'VIDEO' ? '🎬' : block.type === 'AUDIO' ? '🎵' : '📎'
+                }}</span>
+                <span>{{ t(`funnels.editor.previewMediaType.${block.type}`) }}</span>
+              </div>
+              <p
+                v-if="block.caption"
+                data-test="funnel-preview-caption"
+                class="whitespace-pre-wrap break-words px-3 py-2 text-gray-900"
+              >{{ block.caption }}</p>
+            </template>
+
+            <!-- ALBUM — a grid of 2–10 items. The album caption is meaningful only on the FIRST item
+                 (Decision 5) — rendered once, below the grid, as text. Each item's media is :src-bound. -->
+            <template v-else-if="block.type === 'ALBUM'">
+              <div class="grid grid-cols-3 gap-1 p-1">
+                <div
+                  v-for="(item, itemIndex) in block.items ?? []"
+                  :key="itemIndex"
+                  :data-test="`funnel-preview-album-item-${itemIndex}`"
+                  class="aspect-square overflow-hidden rounded bg-gray-100"
+                >
+                  <img
+                    v-if="!mediaLoadFailed[index] && isHttpUrl(item.mediaUrl)"
+                    :src="item.mediaUrl"
+                    :alt="t('funnels.editor.previewImageAlt')"
+                    referrerpolicy="no-referrer"
+                    class="h-full w-full object-cover"
+                    @error="onMediaError(index)"
+                  >
+                  <div
+                    v-else
+                    class="flex h-full w-full items-center justify-center text-gray-400"
+                  >
+                    <span data-test="funnel-preview-media-icon" aria-hidden="true">🖼️</span>
+                  </div>
+                </div>
+              </div>
+              <p
+                v-if="(block.items ?? [])[0]?.caption"
+                data-test="funnel-preview-caption"
+                class="whitespace-pre-wrap break-words px-3 py-2 text-gray-900"
+              >{{ (block.items ?? [])[0]?.caption }}</p>
+            </template>
+          </div>
+        </div>
+
+        <!-- Inline keyboard — attaches to the step (the last non-album block, Decision 2), so it renders
+             under the whole stack. Labels are plain text ({{ }}); url buttons are display-only here. -->
         <div
-          v-if="rendered.rendered.length > 0 || step.stepType !== 'SEND_IMAGE'"
-          data-test="funnel-preview-rendered"
-          class="whitespace-pre-wrap break-words rounded-md border bg-white px-3 py-2 text-gray-900"
-        >{{ rendered.rendered }}</div>
+          v-if="buttons.length > 0"
+          data-test="funnel-preview-buttons"
+          class="mt-3 flex flex-col gap-1"
+        >
+          <span
+            v-for="(btn, btnIndex) in buttons"
+            :key="btnIndex"
+            class="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-center text-blue-700"
+          >{{ btn.label }}</span>
+        </div>
       </template>
     </template>
   </aside>

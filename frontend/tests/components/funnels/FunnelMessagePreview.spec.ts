@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../../helpers/settle'
 import FunnelMessagePreview from '../../../components/funnels/FunnelMessagePreview.vue'
-import type { FunnelStep } from '../../../types/funnel'
+import type { ContentBlock, FunnelStep, PreviewStepResponse, RenderedBlock } from '../../../types/funnel'
 
 // Read the component's own source for the static no-v-html guard (the compiled SFC object does not
 // expose its template string). vitest runs with cwd = frontend/.
@@ -20,8 +20,12 @@ mockNuxtImport('useFunnelsStore', () => () => ({ preview: previewMock }))
 // useRoute supplies funnelId; the panel needs it to call preview(funnelId, stepId, payload).
 mockNuxtImport('useRoute', () => () => ({ params: { projectId: 'p1', funnelId: 'f1' } }))
 
-function messageStep(over: Partial<FunnelStep> = {}): FunnelStep {
-  return { stepType: 'SEND_MESSAGE', id: 's1', text: 'Hi {user.first_name}!', parseMode: null, ...over }
+function messageStep(blocks: ContentBlock[], over: Partial<FunnelStep> = {}): FunnelStep {
+  return { stepType: 'MESSAGE', id: 's1', blocks, ...over }
+}
+
+function response(renderedBlocks: RenderedBlock[], over: Partial<PreviewStepResponse> = {}): PreviewStepResponse {
+  return { renderedBlocks, sampleData: false, kind: 'message', ...over }
 }
 
 async function mountWith(step: FunnelStep | null, stepNumber: number | null = null) {
@@ -35,64 +39,107 @@ describe('FunnelMessagePreview', () => {
     previewMock.mockReset()
   })
 
-  it('renders backend result for a message step', async () => {
-    previewMock.mockResolvedValueOnce({ rendered: 'Hi Olena!', sampleData: false, kind: 'message' })
-    const wrapper = await mountWith(messageStep())
+  it('renders an ordered stack of mixed block types', async () => {
+    const blocks: ContentBlock[] = [
+      { type: 'TEXT', text: 'Hello' },
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/pic.png', caption: 'A pic' },
+      { type: 'ALBUM', items: [
+        { type: 'IMAGE', mediaUrl: 'https://cdn.example/a.png', caption: 'first' },
+        { type: 'IMAGE', mediaUrl: 'https://cdn.example/b.png' },
+      ] },
+    ]
+    previewMock.mockResolvedValueOnce(response([
+      { type: 'TEXT', text: 'Hello' },
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/pic.png', caption: 'A pic' },
+      { type: 'ALBUM', items: [
+        { mediaUrl: 'https://cdn.example/a.png', caption: 'first' },
+        { mediaUrl: 'https://cdn.example/b.png' },
+      ] },
+    ]))
+    const wrapper = await mountWith(messageStep(blocks))
+
+    const rendered = wrapper.findAll('[data-test^="funnel-preview-block-"]')
+    expect(rendered).toHaveLength(3)
+    // DOM order matches the blocks order: TEXT, then IMAGE, then ALBUM.
+    const panelHtml = wrapper.find('[data-test="funnel-preview-panel"]').html()
+    const iText = panelHtml.indexOf('funnel-preview-block-0')
+    const iImage = panelHtml.indexOf('funnel-preview-block-1')
+    const iAlbum = panelHtml.indexOf('funnel-preview-block-2')
+    expect(iText).toBeLessThan(iImage)
+    expect(iImage).toBeLessThan(iAlbum)
+    // Each block carries its type as a data hook so order+type are both verifiable.
+    expect(wrapper.find('[data-test="funnel-preview-block-0"]').attributes('data-block-type')).toBe('TEXT')
+    expect(wrapper.find('[data-test="funnel-preview-block-1"]').attributes('data-block-type')).toBe('IMAGE')
+    expect(wrapper.find('[data-test="funnel-preview-block-2"]').attributes('data-block-type')).toBe('ALBUM')
+  })
+
+  it('calls store preview with the blocks request shape', async () => {
+    const blocks: ContentBlock[] = [{ type: 'TEXT', text: 'Hi {user.first_name}!', parseMode: null }]
+    previewMock.mockResolvedValueOnce(response([{ type: 'TEXT', text: 'Hi Olena!' }]))
+    await mountWith(messageStep(blocks))
 
     expect(previewMock).toHaveBeenCalledTimes(1)
     expect(previewMock).toHaveBeenCalledWith('f1', 's1', {
-      stepType: 'SEND_MESSAGE',
-      text: 'Hi {user.first_name}!',
-      parseMode: null,
+      stepType: 'MESSAGE',
+      blocks,
     })
-    const panel = wrapper.find('[data-test="funnel-preview-panel"]')
-    expect(panel.text()).toContain('Hi Olena!')
   })
 
-  it('shows placeholder for a non-message step', async () => {
-    const wrapper = await mountWith({ stepType: 'DELAY', id: 's2', delayValue: 1, delayUnit: 'MIN' })
+  it('reactive block change re-triggers debounced preview', async () => {
+    vi.useFakeTimers()
+    try {
+      const blocks: ContentBlock[] = [{ type: 'TEXT', text: 'Hi' }]
+      previewMock.mockResolvedValue(response([{ type: 'TEXT', text: 'Hi' }]))
+      const step = messageStep(blocks)
+      const wrapper = await mountSuspended(FunnelMessagePreview, { props: { step, stepNumber: 1 } })
+      // immediate run on mount.
+      await vi.runOnlyPendingTimersAsync()
+      expect(previewMock).toHaveBeenCalledTimes(1)
 
-    // Non-message steps never call the backend.
-    expect(previewMock).not.toHaveBeenCalled()
-    const placeholder = wrapper.find('[data-test="funnel-preview-placeholder"]')
-    expect(placeholder.exists()).toBe(true)
-    expect(placeholder.text().trim().length).toBeGreaterThan(0)
-    // The rendered output area is not shown for non-message steps.
-    expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(false)
+      // Mutate a block in place (deep) — watch on step.blocks must catch it and debounce a new run.
+      step.blocks![0].text = 'Hi there'
+      await wrapper.setProps({ step: { ...step } })
+      // Before the debounce fires, no extra call yet.
+      expect(previewMock).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(600)
+      await vi.runOnlyPendingTimersAsync()
+
+      expect(previewMock).toHaveBeenCalledTimes(2)
+      expect(previewMock).toHaveBeenLastCalledWith('f1', 's1', {
+        stepType: 'MESSAGE',
+        blocks: [{ type: 'TEXT', text: 'Hi there' }],
+      })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
-  it('shows sample-data indicator when flagged', async () => {
-    previewMock.mockResolvedValueOnce({ rendered: 'Hi Sample!', sampleData: true, kind: 'message' })
-    const wrapper = await mountWith(messageStep())
-
-    const indicator = wrapper.find('[data-test="funnel-preview-sample-data"]')
-    expect(indicator.exists()).toBe(true)
-    expect(indicator.text().trim().length).toBeGreaterThan(0)
-  })
-
-  it('does NOT show sample-data indicator when not flagged', async () => {
-    previewMock.mockResolvedValueOnce({ rendered: 'Hi Olena!', sampleData: false, kind: 'message' })
-    const wrapper = await mountWith(messageStep())
-
-    expect(wrapper.find('[data-test="funnel-preview-sample-data"]').exists()).toBe(false)
-  })
-
-  it('renders rendered output as TEXT, never via v-html', async () => {
-    // Telegram escaping is NOT browser-safe. A markup payload in `rendered` MUST surface as literal text,
+  it('renders text/caption as TEXT, never via v-html', async () => {
+    // Telegram escaping is NOT browser-safe. A markup payload MUST surface as literal text,
     // never as a created DOM element (stored-XSS guard, OWASP A03).
     const payload = '<img src=x onerror=alert(1)><b>x</b>'
-    previewMock.mockResolvedValueOnce({ rendered: payload, sampleData: false, kind: 'message' })
-    const wrapper = await mountWith(messageStep())
+    previewMock.mockResolvedValueOnce(response([
+      { type: 'TEXT', text: payload },
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/p.png', caption: payload },
+    ]))
+    const wrapper = await mountWith(messageStep([
+      { type: 'TEXT', text: payload },
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/p.png', caption: payload },
+    ]))
 
-    const rendered = wrapper.find('[data-test="funnel-preview-rendered"]')
+    const textBlock = wrapper.find('[data-test="funnel-preview-block-0"]')
     // The payload appears as LITERAL text…
-    expect(rendered.text()).toContain(payload)
-    // …and produced NO real elements (no v-html / innerHTML).
-    expect(rendered.find('img').exists()).toBe(false)
-    expect(rendered.find('b').exists()).toBe(false)
-    expect(rendered.element.querySelector('img')).toBeNull()
-    // Hard guard: the component source must not USE v-html / innerHTML (a v-html="" directive binding or
-    // an .innerHTML assignment). Comments that merely mention the words are stripped first.
+    expect(textBlock.text()).toContain(payload)
+    // …and produced NO real elements from the hostile string (no v-html / innerHTML). The IMAGE block
+    // has its own real <img> (the media), so we assert against the TEXT block, which must have none.
+    expect(textBlock.find('img').exists()).toBe(false)
+    expect(textBlock.find('b').exists()).toBe(false)
+    // The IMAGE caption is also literal text — no <b> injected from the caption.
+    const captionEl = wrapper.find('[data-test="funnel-preview-block-1"] [data-test="funnel-preview-caption"]')
+    expect(captionEl.text()).toContain(payload)
+    expect(captionEl.find('b').exists()).toBe(false)
+
+    // Hard guard: the component source must not USE v-html / innerHTML. Comments are stripped first.
     const sourceNoComments = componentSource
       .replace(/<!--[\s\S]*?-->/g, '') // HTML comments
       .replace(/\/\/[^\n]*/g, '') // line comments
@@ -101,100 +148,203 @@ describe('FunnelMessagePreview', () => {
     expect(sourceNoComments).not.toMatch(/\.innerHTML\s*=/)
   })
 
-  it('renders the image ABOVE the caption for a SEND_IMAGE step with a valid imageUrl', async () => {
-    previewMock.mockResolvedValueOnce({ rendered: 'Nice caption', sampleData: false, kind: 'message' })
-    const wrapper = await mountWith(
-      messageStep({ stepType: 'SEND_IMAGE', text: null, caption: 'Nice caption', imageUrl: 'https://cdn.example/pic.png' }),
-    )
+  it('binds media via :src for an IMAGE block', async () => {
+    previewMock.mockResolvedValueOnce(response([
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/pic.png', caption: 'Nice caption' },
+    ]))
+    const wrapper = await mountWith(messageStep([
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/pic.png', caption: 'Nice caption' },
+    ]))
 
-    // The image is rendered with the step's imageUrl as :src (bound, not v-html).
-    const img = wrapper.find('img[data-test="funnel-preview-image"]')
+    const img = wrapper.find('[data-test="funnel-preview-block-0"] img')
     expect(img.exists()).toBe(true)
     expect(img.attributes('src')).toBe('https://cdn.example/pic.png')
-    // …and the caption is still rendered, BELOW the image.
-    const caption = wrapper.find('[data-test="funnel-preview-rendered"]')
+    // referrerpolicy is preserved (existing pattern).
+    expect(img.attributes('referrerpolicy')).toBe('no-referrer')
+    // Caption renders as text BELOW the image.
+    const caption = wrapper.find('[data-test="funnel-preview-block-0"] [data-test="funnel-preview-caption"]')
     expect(caption.exists()).toBe(true)
     expect(caption.text()).toContain('Nice caption')
-    // DOM order: <img> precedes the caption box.
-    const panelHtml = wrapper.find('[data-test="funnel-preview-panel"]').html()
-    expect(panelHtml.indexOf('funnel-preview-image')).toBeLessThan(
-      panelHtml.indexOf('funnel-preview-rendered'),
-    )
-    // No placeholder when a valid image is present.
-    expect(wrapper.find('[data-test="funnel-preview-image-unavailable"]').exists()).toBe(false)
+    const html = wrapper.find('[data-test="funnel-preview-block-0"]').html()
+    expect(html.indexOf('<img')).toBeLessThan(html.indexOf('funnel-preview-caption'))
   })
 
-  it('renders ONLY the image (no empty caption box) when the caption is empty', async () => {
-    previewMock.mockResolvedValueOnce({ rendered: '', sampleData: false, kind: 'message' })
-    const wrapper = await mountWith(
-      messageStep({ stepType: 'SEND_IMAGE', text: null, caption: '', imageUrl: 'https://cdn.example/pic.png' }),
-    )
+  it('falls back to a neutral placeholder when an IMAGE fails to load (@error, per-block)', async () => {
+    previewMock.mockResolvedValueOnce(response([
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/a.png' },
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/b.png' },
+    ]))
+    const wrapper = await mountWith(messageStep([
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/a.png' },
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/b.png' },
+    ]))
 
-    expect(wrapper.find('img[data-test="funnel-preview-image"]').exists()).toBe(true)
-    expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(false)
-  })
-
-  it('shows a neutral placeholder (no broken <img>) when SEND_IMAGE imageUrl is blank, caption still shown', async () => {
-    previewMock.mockResolvedValueOnce({ rendered: 'Caption text', sampleData: false, kind: 'message' })
-    const wrapper = await mountWith(
-      messageStep({ stepType: 'SEND_IMAGE', text: null, caption: 'Caption text', imageUrl: '   ' }),
-    )
-
-    // No <img> element at all for a blank URL.
-    expect(wrapper.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
-    // Neutral "image unavailable" placeholder instead.
-    const placeholder = wrapper.find('[data-test="funnel-preview-image-unavailable"]')
-    expect(placeholder.exists()).toBe(true)
-    expect(placeholder.text().trim().length).toBeGreaterThan(0)
-    // Caption still renders below.
-    expect(wrapper.find('[data-test="funnel-preview-rendered"]').text()).toContain('Caption text')
-  })
-
-  it('shows the placeholder when the image fails to load (@error)', async () => {
-    previewMock.mockResolvedValueOnce({ rendered: 'Caption text', sampleData: false, kind: 'message' })
-    const wrapper = await mountWith(
-      messageStep({ stepType: 'SEND_IMAGE', text: null, caption: 'Caption text', imageUrl: 'https://cdn.example/broken.png' }),
-    )
-
-    const img = wrapper.find('img[data-test="funnel-preview-image"]')
-    expect(img.exists()).toBe(true)
-    await img.trigger('error')
+    const firstImg = wrapper.find('[data-test="funnel-preview-block-0"] img')
+    expect(firstImg.exists()).toBe(true)
+    await firstImg.trigger('error')
     await settle()
 
-    // After the load error the <img> is replaced by the neutral placeholder.
-    expect(wrapper.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
-    expect(wrapper.find('[data-test="funnel-preview-image-unavailable"]').exists()).toBe(true)
-    // Caption still shown.
-    expect(wrapper.find('[data-test="funnel-preview-rendered"]').text()).toContain('Caption text')
+    // The failing block (0) shows the placeholder; block 1 is untouched (per-block state).
+    expect(wrapper.find('[data-test="funnel-preview-block-0"] img').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-preview-block-0"] [data-test="funnel-preview-media-unavailable"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-preview-block-1"] img').exists()).toBe(true)
   })
 
-  it('does NOT render an image for SEND_MESSAGE / MENU / non-message steps', async () => {
-    // SEND_MESSAGE — even if it somehow carried an imageUrl, the image is SEND_IMAGE-only.
-    previewMock.mockResolvedValueOnce({ rendered: 'Hi Olena!', sampleData: false, kind: 'message' })
-    const sendMessage = await mountWith(messageStep({ imageUrl: 'https://cdn.example/x.png' }))
-    expect(sendMessage.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
-    expect(sendMessage.find('[data-test="funnel-preview-image-unavailable"]').exists()).toBe(false)
+  it('renders VIDEO / AUDIO via a type icon, not an inline <img> player', async () => {
+    previewMock.mockResolvedValueOnce(response([
+      { type: 'VIDEO', mediaUrl: 'https://cdn.example/v.mp4', caption: 'clip' },
+      { type: 'AUDIO', mediaUrl: 'https://cdn.example/a.mp3' },
+    ]))
+    const wrapper = await mountWith(messageStep([
+      { type: 'VIDEO', mediaUrl: 'https://cdn.example/v.mp4', caption: 'clip' },
+      { type: 'AUDIO', mediaUrl: 'https://cdn.example/a.mp3' },
+    ]))
 
-    // MENU.
-    previewMock.mockResolvedValueOnce({ rendered: 'Menu body', sampleData: false, kind: 'message' })
-    const menu = await mountWith(messageStep({ stepType: 'MENU', text: 'Menu body', imageUrl: 'https://cdn.example/x.png' }))
-    expect(menu.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
-    expect(menu.find('[data-test="funnel-preview-image-unavailable"]').exists()).toBe(false)
-
-    // Non-message (DELAY) — backend not called, no image.
-    const delay = await mountWith({ stepType: 'DELAY', id: 's2', delayValue: 1, delayUnit: 'MIN', imageUrl: 'https://cdn.example/x.png' })
-    expect(delay.find('img[data-test="funnel-preview-image"]').exists()).toBe(false)
+    // No <img> media element for video/audio (inline player undesirable).
+    expect(wrapper.find('[data-test="funnel-preview-block-0"] img').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-preview-block-1"] img').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-preview-block-0"] [data-test="funnel-preview-media-icon"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-preview-block-1"] [data-test="funnel-preview-media-icon"]').exists()).toBe(true)
+    // Video caption still rendered as text.
+    expect(wrapper.find('[data-test="funnel-preview-block-0"] [data-test="funnel-preview-caption"]').text()).toContain('clip')
   })
 
-  it('renders neutral message on preview error', async () => {
+  it('renders a FILE href only for an http(s) scheme', async () => {
+    previewMock.mockResolvedValueOnce(response([
+      { type: 'FILE', mediaUrl: 'https://cdn.example/doc.pdf', caption: 'Doc' },
+    ]))
+    const wrapper = await mountWith(messageStep([
+      { type: 'FILE', mediaUrl: 'https://cdn.example/doc.pdf', caption: 'Doc' },
+    ]))
+
+    const link = wrapper.find('[data-test="funnel-preview-block-0"] a[data-test="funnel-preview-file-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('https://cdn.example/doc.pdf')
+  })
+
+  it('renders a FILE as a non-clickable icon for a non-http scheme / file_id (anti-SSRF/XSS)', async () => {
+    for (const url of ['BAADAgADfile_id_token', 'file:///etc/passwd', 'javascript:alert(1)', 'data:text/html,x']) {
+      previewMock.mockReset()
+      previewMock.mockResolvedValueOnce(response([{ type: 'FILE', mediaUrl: url, caption: 'F' }]))
+      const wrapper = await mountWith(messageStep([{ type: 'FILE', mediaUrl: url, caption: 'F' }]))
+
+      // No clickable href for an opaque token / non-http scheme.
+      expect(wrapper.find('[data-test="funnel-preview-block-0"] a[data-test="funnel-preview-file-link"]').exists()).toBe(false)
+      // …rendered as a type icon instead.
+      expect(wrapper.find('[data-test="funnel-preview-block-0"] [data-test="funnel-preview-media-icon"]').exists()).toBe(true)
+    }
+  })
+
+  it('renders an ALBUM as a grid of items; caption only on the first', async () => {
+    previewMock.mockResolvedValueOnce(response([
+      { type: 'ALBUM', items: [
+        { mediaUrl: 'https://cdn.example/1.png', caption: 'first cap' },
+        { mediaUrl: 'https://cdn.example/2.png' },
+        { mediaUrl: 'https://cdn.example/3.png' },
+      ] },
+    ]))
+    const wrapper = await mountWith(messageStep([
+      { type: 'ALBUM', items: [
+        { type: 'IMAGE', mediaUrl: 'https://cdn.example/1.png', caption: 'first cap' },
+        { type: 'IMAGE', mediaUrl: 'https://cdn.example/2.png' },
+        { type: 'IMAGE', mediaUrl: 'https://cdn.example/3.png' },
+      ] },
+    ]))
+
+    const items = wrapper.findAll('[data-test="funnel-preview-block-0"] [data-test^="funnel-preview-album-item-"]')
+    expect(items).toHaveLength(3)
+    // Caption is shown once (only the first album element).
+    const captions = wrapper.findAll('[data-test="funnel-preview-block-0"] [data-test="funnel-preview-caption"]')
+    expect(captions).toHaveLength(1)
+    expect(captions[0].text()).toContain('first cap')
+  })
+
+  it('renders buttons under the last block', async () => {
+    previewMock.mockResolvedValueOnce(response([
+      { type: 'TEXT', text: 'Hello' },
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/p.png' },
+    ]))
+    const wrapper = await mountWith(messageStep(
+      [
+        { type: 'TEXT', text: 'Hello' },
+        { type: 'IMAGE', mediaUrl: 'https://cdn.example/p.png' },
+      ],
+      { buttons: [
+        { type: 'callback', label: 'Yes', targetStepId: 's2' },
+        { type: 'url', label: 'Open', url: 'https://example.com' },
+      ] },
+    ))
+
+    const buttons = wrapper.find('[data-test="funnel-preview-buttons"]')
+    expect(buttons.exists()).toBe(true)
+    expect(buttons.text()).toContain('Yes')
+    expect(buttons.text()).toContain('Open')
+    // Buttons come AFTER the last block (block-1) in the DOM.
+    const panelHtml = wrapper.find('[data-test="funnel-preview-panel"]').html()
+    expect(panelHtml.indexOf('funnel-preview-block-1')).toBeLessThan(panelHtml.indexOf('funnel-preview-buttons'))
+  })
+
+  it('renders safely when renderedBlocks is shorter than blocks (backend/front desync)', async () => {
+    // Two blocks requested, only one rendered back → render the min length, never crash.
+    previewMock.mockResolvedValueOnce(response([{ type: 'TEXT', text: 'Only one' }]))
+    const wrapper = await mountWith(messageStep([
+      { type: 'TEXT', text: 'Only one' },
+      { type: 'IMAGE', mediaUrl: 'https://cdn.example/p.png' },
+    ]))
+
+    const blocks = wrapper.findAll('[data-test^="funnel-preview-block-"]')
+    expect(blocks).toHaveLength(1)
+    expect(blocks[0].text()).toContain('Only one')
+  })
+
+  it('shows placeholder for a non-message step and makes no backend call', async () => {
+    const wrapper = await mountWith({ stepType: 'DELAY', id: 's2', delayValue: 1, delayUnit: 'MIN' })
+
+    expect(previewMock).not.toHaveBeenCalled()
+    const placeholder = wrapper.find('[data-test="funnel-preview-placeholder"]')
+    expect(placeholder.exists()).toBe(true)
+    expect(placeholder.text().trim().length).toBeGreaterThan(0)
+    expect(wrapper.findAll('[data-test^="funnel-preview-block-"]')).toHaveLength(0)
+  })
+
+  it('shows a neutral message on a preview error', async () => {
     previewMock.mockRejectedValueOnce({ statusCode: 404 })
-    const wrapper = await mountWith(messageStep())
+    const wrapper = await mountWith(messageStep([{ type: 'TEXT', text: 'Hi' }]))
 
     const error = wrapper.find('[data-test="funnel-preview-error"]')
     expect(error.exists()).toBe(true)
     expect(error.text().trim().length).toBeGreaterThan(0)
-    // The panel did not blow up / stay blank — the rendered output is not shown on error.
-    expect(wrapper.find('[data-test="funnel-preview-rendered"]').exists()).toBe(false)
+    // The panel did not blow up / stay blank — no rendered blocks on error.
+    expect(wrapper.findAll('[data-test^="funnel-preview-block-"]')).toHaveLength(0)
+  })
+
+  it('shows the loading state while the preview is in flight', async () => {
+    let resolveFn: (v: PreviewStepResponse) => void = () => {}
+    previewMock.mockImplementationOnce(() => new Promise<PreviewStepResponse>((r) => { resolveFn = r }))
+    const wrapper = await mountSuspended(FunnelMessagePreview, {
+      props: { step: messageStep([{ type: 'TEXT', text: 'Hi' }]), stepNumber: 1 },
+    })
+    // Before resolving, the loading indicator is visible.
+    expect(wrapper.find('[data-test="funnel-preview-loading"]').exists()).toBe(true)
+    resolveFn(response([{ type: 'TEXT', text: 'Hi' }]))
+    await settle()
+    expect(wrapper.find('[data-test="funnel-preview-loading"]').exists()).toBe(false)
+  })
+
+  it('shows the sample-data indicator when flagged', async () => {
+    previewMock.mockResolvedValueOnce(response([{ type: 'TEXT', text: 'Hi' }], { sampleData: true }))
+    const wrapper = await mountWith(messageStep([{ type: 'TEXT', text: 'Hi' }]))
+
+    const indicator = wrapper.find('[data-test="funnel-preview-sample-data"]')
+    expect(indicator.exists()).toBe(true)
+    expect(indicator.text().trim().length).toBeGreaterThan(0)
+  })
+
+  it('does NOT show the sample-data indicator when not flagged', async () => {
+    previewMock.mockResolvedValueOnce(response([{ type: 'TEXT', text: 'Hi' }]))
+    const wrapper = await mountWith(messageStep([{ type: 'TEXT', text: 'Hi' }]))
+
+    expect(wrapper.find('[data-test="funnel-preview-sample-data"]').exists()).toBe(false)
   })
 
   it('shows a neutral empty state when no step is selected', async () => {
@@ -205,15 +355,14 @@ describe('FunnelMessagePreview', () => {
   })
 
   it('shows the "Step N · type" heading for a message step', async () => {
-    previewMock.mockResolvedValueOnce({ rendered: 'Hi Olena!', sampleData: false, kind: 'message' })
-    const wrapper = await mountWith(messageStep(), 2)
+    previewMock.mockResolvedValueOnce(response([{ type: 'TEXT', text: 'Hi' }]))
+    const wrapper = await mountWith(messageStep([{ type: 'TEXT', text: 'Hi' }]), 2)
 
     const heading = wrapper.find('[data-test="funnel-preview-step-heading"]')
     expect(heading.exists()).toBe(true)
-    // 1-based number + the localized SEND_MESSAGE type name (not a raw i18n key).
     expect(heading.text()).toContain('2')
+    // The heading composes a localized template, never the raw template key.
     expect(heading.text()).not.toContain('funnels.editor.previewStepHeading')
-    expect(heading.text()).not.toContain('SEND_MESSAGE')
   })
 
   it('shows the heading for a non-message step too (alongside the placeholder)', async () => {
@@ -222,8 +371,6 @@ describe('FunnelMessagePreview', () => {
     const heading = wrapper.find('[data-test="funnel-preview-step-heading"]')
     expect(heading.exists()).toBe(true)
     expect(heading.text()).toContain('3')
-    expect(heading.text()).not.toContain('DELAY')
-    // The placeholder still renders for the non-message step.
     expect(wrapper.find('[data-test="funnel-preview-placeholder"]').exists()).toBe(true)
   })
 

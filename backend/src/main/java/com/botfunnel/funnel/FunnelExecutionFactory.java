@@ -126,7 +126,9 @@ class FunnelExecutionFactory {
     }
 
     // Deep copy of the funnel's steps via FunnelStep.copyOf (Decision 3 — snapshot isolation from later
-    // funnel edits). null steps → empty snapshot.
+    // funnel edits). FunnelStep.copyOf now also carries the MESSAGE composer's `blocks` list onto the
+    // snapshot (defensive shallow copy of immutable ContentBlock records — 15-message-composer /
+    // Decision 1), so no structural change is needed here. null steps → empty snapshot.
     private static List<FunnelStep> deepCopySteps(List<FunnelStep> steps) {
         List<FunnelStep> snapshot = new ArrayList<>();
         if (steps != null) {

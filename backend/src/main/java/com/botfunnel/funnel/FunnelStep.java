@@ -7,11 +7,15 @@ import java.util.List;
  * Flat embedded persistence POJO for a single funnel step (Decision 12: no {@code _class}
  * discriminator). {@code stepType} + {@code order} are always set; the remaining fields are
  * type-specific and nullable. No bean-validation here — validation lives in the DTO/service layer
- * (Task 5). {@link #copyOf(FunnelStep)} produces a deep copy for the execution snapshot (Decision 3);
+ * (Task 4). {@link #copyOf(FunnelStep)} produces a deep copy for the execution snapshot (Decision 3);
  * all scalar fields are immutable value types (String / boxed primitives / enum) and copy field-wise
  * — including {@code eventName} (Phase 3 / Decision 4, the EMIT_EVENT target) — but the {@code buttons}
- * list (Phase 2 / Decision 5) is a mutable container and must be copied defensively (see
- * {@link #copyOf(FunnelStep)}).
+ * (Phase 2 / Decision 5) and {@code blocks} (15-message-composer / Decision 1) lists are mutable
+ * containers and must be copied defensively (see {@link #copyOf(FunnelStep)}).
+ *
+ * <p>The {@code buttons} + {@code timeout*} fields now belong to the {@link StepType#MESSAGE} composer
+ * step (Decision 2): the inline keyboard and park-on-reply timeout attach to the last non-album block
+ * of {@code blocks}. (Previously these were MENU-step fields.)
  */
 public class FunnelStep {
 
@@ -23,20 +27,19 @@ public class FunnelStep {
     private String id;
     private String next;
 
-    // MENU only (Phase 2): inline-keyboard buttons + optional timeout edge. buttons is a mutable
-    // list of immutable Button records — deep-copied in copyOf (Decision 5).
+    // MESSAGE composer (15-message-composer / Decision 2): inline-keyboard buttons + optional timeout edge,
+    // attached to the last non-album block. buttons is a mutable list of immutable Button records —
+    // defensively copied in copyOf (Decision 5).
     private List<Button> buttons;
     private Integer timeoutValue;
     private String timeoutUnit;          // "MIN" | "HOUR" | "DAY" (reuses delayUnit convention, Task 3 deviation)
     private String timeoutTargetStepId;  // null = completed
 
-    // SEND_MESSAGE
-    private String text;
-    private String parseMode;     // null | HTML | MarkdownV2 (null = None)
-
-    // SEND_IMAGE
-    private String imageUrl;
-    private String caption;
+    // MESSAGE composer (15-message-composer / Decision 1): ordered list of content blocks sent as N
+    // separate Telegram messages. Mutable list of immutable ContentBlock records — defensively copied in
+    // copyOf (Decision 3). Per-block validation (count, per-type fields, album 2–10, type-mixing) lives in
+    // the DTO/service layer (Task 4).
+    private List<ContentBlock> blocks;
 
     // DELAY
     private Integer delayValue;   // total >= 1 minute
@@ -81,11 +84,12 @@ public class FunnelStep {
      * <p>Deep-copy contract: every scalar field is an immutable value type — {@code String} / boxed
      * primitive / enum — and {@link #customFieldValue} is a validated immutable scalar (Double /
      * Boolean / Instant / String, enforced by CustomFieldValueValidator in Task 4/5), so all scalars
-     * copy by reference and still satisfy the contract. The one exception is {@link #buttons} (Phase 2
-     * / Decision 5): it is a mutable {@code List}, so it is copied <b>defensively</b>
-     * ({@code new ArrayList<>(buttons)}). A shallow list copy suffices because the elements
-     * ({@link Button}) are immutable records. A {@code null} list copies to {@code null} (not an empty
-     * list). Storing a mutable collection in {@link #customFieldValue} would violate Decision 3 and is
+     * copy by reference and still satisfy the contract. The exceptions are the mutable {@code List}
+     * fields {@link #buttons} (Phase 2 / Decision 5) and {@link #blocks} (15-message-composer /
+     * Decision 1): each is copied <b>defensively</b> ({@code new ArrayList<>(...)}). A shallow list copy
+     * suffices because the elements ({@link Button} / {@link ContentBlock}) are immutable records. A
+     * {@code null} list copies to {@code null} (not an empty list). Storing a mutable collection in
+     * {@link #customFieldValue} would violate Decision 3 and is
      * disallowed by the validator. {@link #eventName} (Phase 3 / Decision 4) is an immutable String, so
      * it copies by reference; a {@code null} eventName stays null. The SUBSCRIBE_TO_FUNNEL scalars (Phase 5
      * / composition) — {@link #targetFunnelId} / {@link #targetEntryStepId} (immutable Strings) and
@@ -99,10 +103,6 @@ public class FunnelStep {
         FunnelStep copy = new FunnelStep();
         copy.stepType = source.stepType;
         copy.order = source.order;
-        copy.text = source.text;
-        copy.parseMode = source.parseMode;
-        copy.imageUrl = source.imageUrl;
-        copy.caption = source.caption;
         copy.delayValue = source.delayValue;
         copy.delayUnit = source.delayUnit;
         copy.tagSlug = source.tagSlug;
@@ -121,8 +121,10 @@ public class FunnelStep {
         copy.timeoutValue = source.timeoutValue;
         copy.timeoutUnit = source.timeoutUnit;
         copy.timeoutTargetStepId = source.timeoutTargetStepId;
-        // Mutable list of immutable records — defensive shallow copy (Decision 5), null stays null.
+        // Mutable lists of immutable records — defensive shallow copy (buttons: Decision 5; blocks:
+        // Decision 1), null stays null.
         copy.buttons = source.buttons == null ? null : new ArrayList<>(source.buttons);
+        copy.blocks = source.blocks == null ? null : new ArrayList<>(source.blocks);
         return copy;
     }
 
@@ -132,17 +134,8 @@ public class FunnelStep {
     public int getOrder() { return order; }
     public void setOrder(int order) { this.order = order; }
 
-    public String getText() { return text; }
-    public void setText(String text) { this.text = text; }
-
-    public String getParseMode() { return parseMode; }
-    public void setParseMode(String parseMode) { this.parseMode = parseMode; }
-
-    public String getImageUrl() { return imageUrl; }
-    public void setImageUrl(String imageUrl) { this.imageUrl = imageUrl; }
-
-    public String getCaption() { return caption; }
-    public void setCaption(String caption) { this.caption = caption; }
+    public List<ContentBlock> getBlocks() { return blocks; }
+    public void setBlocks(List<ContentBlock> blocks) { this.blocks = blocks; }
 
     public Integer getDelayValue() { return delayValue; }
     public void setDelayValue(Integer delayValue) { this.delayValue = delayValue; }

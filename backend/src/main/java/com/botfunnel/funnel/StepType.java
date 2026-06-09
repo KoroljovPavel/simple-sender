@@ -6,14 +6,14 @@ package com.botfunnel.funnel;
  * the codebase convention for enum discriminators.
  */
 public enum StepType {
-    SEND_MESSAGE,
-    SEND_IMAGE,
+    // Phase 6 (15-message-composer / Decision 1): composer step — sends an ordered List<ContentBlock> as
+    // N separate Telegram messages; optional inline keyboard + timeout park-on-reply attach to the last
+    // non-album block. Replaces the former flat SEND_MESSAGE / SEND_IMAGE / MENU step-kinds.
+    MESSAGE,
     DELAY,
     ADD_TAG,
     REMOVE_TAG,
     SET_CUSTOM_FIELD,
-    // Phase 2 (Decision 1): composite step — message + inline keyboard + park-on-reply + branch.
-    MENU,
     // Phase 3 (Decision 4): emit a named event for the current subscriber from inside a running funnel.
     // Shares the `event` trigger namespace with the external POST /events; the target is `eventName`.
     EMIT_EVENT,

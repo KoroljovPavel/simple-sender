@@ -27,12 +27,16 @@ import org.springframework.web.util.DefaultUriBuilderFactory;
 import java.net.http.HttpClient;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
  * Outbound sender for Telegram {@code sendMessage} / {@code sendPhoto} / {@code sendVideo} /
@@ -256,8 +260,8 @@ public class TelegramSender {
      *
      * @return one {@link SentMessage} per delivered album element, in order.
      */
-    public java.util.List<SentMessage> sendMediaGroup(String botId, Long chatId,
-                                                      java.util.List<AlbumItem> items, String ownerId) {
+    public List<SentMessage> sendMediaGroup(String botId, Long chatId,
+                                                      List<AlbumItem> items, String ownerId) {
         Map<String, Object> contentFields = new HashMap<>();
         contentFields.put("media", buildMediaArray(items));
         return sendMapped(botId, chatId, "/bot{token}/sendMediaGroup", contentFields, ownerId,
@@ -268,8 +272,8 @@ public class TelegramSender {
     // Builds the Telegram media-group "media" JSON array. caption/parse_mode are emitted only on the
     // FIRST element (Decision 5) regardless of what later items carry — defensive, so a caller that
     // populated later captions can't leak them onto the wire.
-    private static java.util.List<Map<String, Object>> buildMediaArray(java.util.List<AlbumItem> items) {
-        java.util.List<Map<String, Object>> media = new java.util.ArrayList<>(items.size());
+    private static List<Map<String, Object>> buildMediaArray(List<AlbumItem> items) {
+        List<Map<String, Object>> media = new ArrayList<>(items.size());
         for (int i = 0; i < items.size(); i++) {
             AlbumItem item = items.get(i);
             Map<String, Object> element = new HashMap<>();
@@ -305,8 +309,8 @@ public class TelegramSender {
     // lives here so the failure-matrix is byte-identical across single-message and album sends.
     private <R> R sendMapped(String botId, Long chatId, String endpoint,
                              Map<String, Object> contentFields, String ownerId,
-                             java.util.function.BiFunction<TelegramSendResult<JsonNode>, AtomicInteger, R> mapper,
-                             java.util.function.Function<R, Map<String, Object>> successMetadata) {
+                             BiFunction<TelegramSendResult<JsonNode>, AtomicInteger, R> mapper,
+                             Function<R, Map<String, Object>> successMetadata) {
         // Outermost AtomicInteger. Persists across BOTH retry loops: each HTTP attempt increments
         // it once at the request site. The [5xx, 429, 5xx, 200] interleaving invariant asserts
         // attempts==4 — the counter survives 429 outer-loop re-entry into the 5xx inner loop.
@@ -542,7 +546,7 @@ public class TelegramSender {
     // into a SentMessage (reusing extractChatId). On null body / ok=false / non-array / empty array /
     // an element missing message_id → throws TelegramSendException AFTER running the raw
     // description through scrubTokens, exactly mirroring mapBodyToSentMessage's token-scrub parity.
-    private java.util.List<SentMessage> mapBodyToSentAlbum(TelegramSendResult<JsonNode> result,
+    private List<SentMessage> mapBodyToSentAlbum(TelegramSendResult<JsonNode> result,
                                                           Long fallbackChatId,
                                                           AtomicInteger attempts) {
         if (result == null) {
@@ -551,7 +555,7 @@ public class TelegramSender {
         }
         JsonNode resultNode = result.result();
         if (result.ok() && resultNode != null && resultNode.isArray() && !resultNode.isEmpty()) {
-            java.util.List<SentMessage> sent = new java.util.ArrayList<>(resultNode.size());
+            List<SentMessage> sent = new ArrayList<>(resultNode.size());
             for (JsonNode element : resultNode) {
                 if (!element.has("message_id")) {
                     String scrubbed = TelegramApiClient.scrubTokens(result.description());
@@ -627,7 +631,7 @@ public class TelegramSender {
     // Success metadata for an album send. Mirrors sentMetadata but carries the list of delivered
     // message-ids (one per album element) plus the common chatId — keeps the sent-event schema
     // predictable for consumers while reflecting the multi-message shape.
-    private static Map<String, Object> albumSentMetadata(String botId, java.util.List<SentMessage> sent) {
+    private static Map<String, Object> albumSentMetadata(String botId, List<SentMessage> sent) {
         Map<String, Object> meta = new HashMap<>();
         meta.put("botId", botId);
         if (!sent.isEmpty()) {

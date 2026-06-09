@@ -169,6 +169,20 @@ describe('FunnelMessagePreview', () => {
     expect(html.indexOf('<img')).toBeLessThan(html.indexOf('funnel-preview-caption'))
   })
 
+  it('renders an IMAGE with a file_id / non-http src as the neutral icon, not an <img> (anti-SSRF/XSS)', async () => {
+    for (const url of ['BAADAgADfile_id_token', 'data:image/svg+xml,<svg/>', 'javascript:alert(1)']) {
+      previewMock.mockReset()
+      previewMock.mockResolvedValueOnce(response([{ type: 'IMAGE', mediaUrl: url, caption: 'cap' }]))
+      const wrapper = await mountWith(messageStep([{ type: 'IMAGE', mediaUrl: url, caption: 'cap' }]))
+
+      // No real <img> for an opaque token / non-http scheme — the doomed/unsafe request is skipped.
+      expect(wrapper.find('[data-test="funnel-preview-block-0"] img').exists()).toBe(false)
+      expect(wrapper.find('[data-test="funnel-preview-block-0"] [data-test="funnel-preview-media-unavailable"]').exists()).toBe(true)
+      // Caption still rendered as text.
+      expect(wrapper.find('[data-test="funnel-preview-block-0"] [data-test="funnel-preview-caption"]').text()).toContain('cap')
+    }
+  })
+
   it('falls back to a neutral placeholder when an IMAGE fails to load (@error, per-block)', async () => {
     previewMock.mockResolvedValueOnce(response([
       { type: 'IMAGE', mediaUrl: 'https://cdn.example/a.png' },

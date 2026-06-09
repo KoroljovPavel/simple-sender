@@ -201,11 +201,13 @@ onBeforeUnmount(() => {
               class="whitespace-pre-wrap break-words px-3 py-2 text-gray-900"
             >{{ block.text }}</div>
 
-            <!-- IMAGE — :src bind (never v-html). An @error load failure (per-block) falls back to a
-                 neutral type-icon placeholder instead of a broken-image. Caption below as text. -->
+            <!-- IMAGE — :src bind (never v-html). The src is shown only for an http(s) URL; an opaque
+                 file_id / non-http scheme falls back to the neutral icon placeholder (consistent with
+                 ALBUM items + Decision 6) rather than attempting a doomed <img src> request. An @error
+                 load failure (per-block) likewise falls back. Caption below as text. -->
             <template v-else-if="block.type === 'IMAGE'">
               <img
-                v-if="!mediaLoadFailed[index]"
+                v-if="!mediaLoadFailed[index] && isHttpUrl(block.mediaUrl)"
                 :src="block.mediaUrl ?? undefined"
                 :alt="t('funnels.editor.previewImageAlt')"
                 referrerpolicy="no-referrer"

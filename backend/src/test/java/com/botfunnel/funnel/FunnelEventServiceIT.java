@@ -209,8 +209,8 @@ class FunnelEventServiceIT extends AbstractIntegrationTest {
         f.setKeywords(keywords);
         f.setAllowReEnter(false);
         FunnelStep step = new FunnelStep();
-        step.setStepType(StepType.SEND_MESSAGE);
-        step.setText("hi");
+        step.setStepType(StepType.MESSAGE);
+        step.setBlocks(List.of(new ContentBlock(BlockType.TEXT, "hi", null, null, null, null)));
         f.setSteps(new ArrayList<>(List.of(step)));
         f.setCreatedAt(Instant.now());
         f.setUpdatedAt(Instant.now());

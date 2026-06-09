@@ -2,6 +2,7 @@ package com.botfunnel.funnel;
 
 import com.botfunnel.AbstractIntegrationTest;
 import com.botfunnel.common.AppException;
+import com.botfunnel.funnel.dto.ContentBlockDto;
 import com.botfunnel.funnel.dto.CreateFunnelRequest;
 import com.botfunnel.funnel.dto.FunnelResponse;
 import com.botfunnel.funnel.dto.FunnelStepDto;
@@ -68,10 +69,12 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
     }
 
     private FunnelStepDto emitStep(String eventName) {
+        // FunnelStepDto positional: (stepType, id, next, buttons, timeoutValue, timeoutUnit,
+        // timeoutTargetStepId, blocks, delayValue, delayUnit, tagSlug, customFieldKey,
+        // customFieldValue, eventName, targetFunnelId, targetEntryStepId, endParentAfter).
         return new FunnelStepDto(
                 StepType.EMIT_EVENT, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, eventName,
-                null, null, false);
+                null, null, null, null, null, null, eventName, null, null, false);
     }
 
     // SUBSCRIBE_TO_FUNNEL step (Task 2): only the three composition fields are set; every other
@@ -79,7 +82,7 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
     private FunnelStepDto subscribeStep(String targetFunnelId, String targetEntryStepId, boolean endParentAfter) {
         return new FunnelStepDto(
                 StepType.SUBSCRIBE_TO_FUNNEL, null, null, null, null, null, null,
-                null, null, null, null, null, null, null, null, null, null,
+                null, null, null, null, null, null, null,
                 targetFunnelId, targetEntryStepId, endParentAfter);
     }
 
@@ -92,9 +95,9 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
     // target for the cross-tenant fail-closed test.
     private FunnelStepDto messageStep() {
         return new FunnelStepDto(
-                StepType.SEND_MESSAGE, null, null, null, null, null, null,
-                "hello", null, null, null, null, null, null, null, null, null,
-                null, null, false);
+                StepType.MESSAGE, null, null, null, null, null, null,
+                List.of(new ContentBlockDto("TEXT", "hello", null, null, null, null)),
+                null, null, null, null, null, null, null, null, false);
     }
 
     private String seedTarget(String ownerProjectId) {

@@ -31,12 +31,10 @@ class FunnelStatusEnumTest {
 
     @Test
     void stepTypeDiscriminatorIsUppercase() {
-        assertThat(StepType.SEND_MESSAGE.name()).isEqualTo("SEND_MESSAGE");
-        assertThat(StepType.SEND_IMAGE.name()).isEqualTo("SEND_IMAGE");
+        assertThat(StepType.MESSAGE.name()).isEqualTo("MESSAGE");
         assertThat(StepType.DELAY.name()).isEqualTo("DELAY");
         assertThat(StepType.ADD_TAG.name()).isEqualTo("ADD_TAG");
         assertThat(StepType.REMOVE_TAG.name()).isEqualTo("REMOVE_TAG");
         assertThat(StepType.SET_CUSTOM_FIELD.name()).isEqualTo("SET_CUSTOM_FIELD");
-        assertThat(StepType.MENU.name()).isEqualTo("MENU");
     }
 }

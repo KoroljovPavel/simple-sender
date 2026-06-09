@@ -188,9 +188,9 @@ class FunnelTestRunSendIT extends AbstractIntegrationTest {
 
     private Funnel seedActiveTargetFunnel(String text) {
         FunnelStep step = new FunnelStep();
-        step.setStepType(StepType.SEND_MESSAGE);
+        step.setStepType(StepType.MESSAGE);
         step.setId("c1");
-        step.setText(text);
+        step.setBlocks(List.of(new ContentBlock(BlockType.TEXT, text, null, null, null, null)));
         step.setOrder(0);
         Funnel f = new Funnel();
         f.setProjectId(projectId);
@@ -260,9 +260,9 @@ class FunnelTestRunSendIT extends AbstractIntegrationTest {
 
     private Funnel seedDraftFunnel(String text) {
         FunnelStep step = new FunnelStep();
-        step.setStepType(StepType.SEND_MESSAGE);
+        step.setStepType(StepType.MESSAGE);
         step.setId("s1");
-        step.setText(text);
+        step.setBlocks(List.of(new ContentBlock(BlockType.TEXT, text, null, null, null, null)));
         step.setOrder(0);
         Funnel f = new Funnel();
         f.setProjectId(projectId);

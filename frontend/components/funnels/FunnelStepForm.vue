@@ -626,10 +626,10 @@ function removeKeyboardButton(rowIndex: number, buttonIndex: number) {
   keyboardRows.value[rowIndex].buttons.splice(buttonIndex, 1)
 }
 
-// Mandatory text: non-blank and ≤4096 (HARD block — Decision 6, NOT the composer's soft warn).
+// Mandatory text: non-blank and ≤4096 (HARD block — Decision 6, NOT the composer's soft warn). The cap is
+// checked against the RAW length, mirroring backend requireKeyboardText (text.length(), not trimmed).
 const keyboardTextError = computed<string | null>(() => {
-  const text = keyboardText.value.trim()
-  if (!text) return t('funnels.steps.validation.keyboardTextRequired')
+  if (!keyboardText.value.trim()) return t('funnels.steps.validation.keyboardTextRequired')
   if (keyboardText.value.length > KEYBOARD_TEXT_MAX) return t('funnels.steps.validation.keyboardTextMax')
   return null
 })

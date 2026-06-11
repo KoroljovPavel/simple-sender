@@ -93,8 +93,11 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     await mountForm()
     expect(maybe('[data-test="step-keyboard-text"]')).not.toBeNull()
     expect(maybe('[data-test="step-keyboard-parsemode"]')).not.toBeNull()
-    // Seeded with one row + one button.
+    // Seeded with EXACTLY one row + one button (load-bearing for the cap/add/remove tests' arithmetic).
+    expect(document.querySelectorAll('[data-test^="step-keyboard-row-"]')).toHaveLength(1)
     expect(maybe('[data-test="step-keyboard-button-0-0"]')).not.toBeNull()
+    expect(maybe('[data-test="step-keyboard-button-0-1"]')).toBeNull()
+    expect(maybe('[data-test="step-keyboard-button-1-0"]')).toBeNull()
     expect(maybe('[data-test="step-keyboard-persistent"]')).not.toBeNull()
     expect(maybe('[data-test="step-keyboard-onetime"]')).not.toBeNull()
   })
@@ -199,9 +202,25 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
-  it('renders no resize_keyboard control', async () => {
+  it('renders no resize_keyboard control (exactly two keyboard checkboxes)', async () => {
     await mountForm()
     expect(maybe('[data-test="step-keyboard-resize"]')).toBeNull()
+    // resize_keyboard is hardcoded true server-side and never surfaced — only persistent + one-time exist.
+    const checkboxes = [
+      maybe('[data-test="step-keyboard-persistent"]'),
+      maybe('[data-test="step-keyboard-onetime"]'),
+    ].filter(Boolean)
+    expect(checkboxes).toHaveLength(2)
+    expect(document.querySelectorAll('[data-test="step-keyboard-rows"] input[type="checkbox"]')).toHaveLength(0)
+  })
+
+  it('blocks submit on blank CLEAR_KEYBOARD text', async () => {
+    const wrapper = await mountForm()
+    await selectType('CLEAR_KEYBOARD')
+    await $('[data-test="step-keyboard-text"]').setValue('   ')
+    await submitForm()
+    expect(maybe('[data-test="step-keyboard-text-error"]')).not.toBeNull()
+    expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
   it('checkbox defaults — persistent ON, one-time OFF on a fresh SET_KEYBOARD step', async () => {

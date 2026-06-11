@@ -71,10 +71,12 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
     private FunnelStepDto emitStep(String eventName) {
         // FunnelStepDto positional: (stepType, id, next, buttons, timeoutValue, timeoutUnit,
         // timeoutTargetStepId, blocks, delayValue, delayUnit, tagSlug, customFieldKey,
-        // customFieldValue, eventName, targetFunnelId, targetEntryStepId, endParentAfter).
+        // customFieldValue, eventName, targetFunnelId, targetEntryStepId, endParentAfter,
+        // keyboardText, keyboardParseMode, keyboardRows, isPersistent, oneTimeKeyboard).
         return new FunnelStepDto(
                 StepType.EMIT_EVENT, null, null, null, null, null, null,
-                null, null, null, null, null, null, eventName, null, null, false);
+                null, null, null, null, null, null, eventName, null, null, false,
+                null, null, null, null, null);
     }
 
     // SUBSCRIBE_TO_FUNNEL step (Task 2): only the three composition fields are set; every other
@@ -83,7 +85,8 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
         return new FunnelStepDto(
                 StepType.SUBSCRIBE_TO_FUNNEL, null, null, null, null, null, null,
                 null, null, null, null, null, null, null,
-                targetFunnelId, targetEntryStepId, endParentAfter);
+                targetFunnelId, targetEntryStepId, endParentAfter,
+                null, null, null, null, null);
     }
 
     private UpdateFunnelRequest reqWithStep(FunnelStepDto step) {
@@ -97,7 +100,8 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
         return new FunnelStepDto(
                 StepType.MESSAGE, null, null, null, null, null, null,
                 List.of(new ContentBlockDto("TEXT", "hello", null, null, null, null)),
-                null, null, null, null, null, null, null, null, false);
+                null, null, null, null, null, null, null, null, false,
+                null, null, null, null, null);
     }
 
     private String seedTarget(String ownerProjectId) {

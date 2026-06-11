@@ -124,6 +124,12 @@ public class StepExecutor {
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
             case EMIT_EVENT -> emitEvent(step, execution);
             case SUBSCRIBE_TO_FUNNEL -> subscribeToFunnel(step, execution);
+            // SET_KEYBOARD / CLEAR_KEYBOARD (16-persistent-keyboard / Task 1 compile-fix only): the real
+            // send logic (render text, build reply_markup, sendText, cont()) lands in Task 3. Until then,
+            // terminal-fail just this execution (mirroring UNKNOWN) so the exhaustive switch stays complete
+            // and the default lane compiles/stays green. Author-saved keyboard steps already validate, but
+            // they would not be executable yet — Task 3 replaces these two cases.
+            case SET_KEYBOARD, CLEAR_KEYBOARD -> StepResult.fail("keyboard_step_not_implemented");
             // Tolerant-read sentinel (MAJ-1): a persisted document with a removed/unknown stepType
             // deserialised to UNKNOWN (StepTypeReadConverter) instead of crashing the sweep. Terminal-fail
             // just this execution so it self-resolves (never re-claimed, never loops) — the rest of the

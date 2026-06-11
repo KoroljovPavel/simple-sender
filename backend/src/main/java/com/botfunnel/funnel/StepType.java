@@ -21,6 +21,14 @@ public enum StepType {
     // the pair (targetFunnelId, targetEntryStepId) — null entry step means start the target from its first step.
     SUBSCRIBE_TO_FUNNEL,
 
+    // Phase 7 (16-persistent-keyboard / Decision 1): send a mandatory text message and set a persistent
+    // Telegram bottom reply keyboard (ReplyKeyboardMarkup). Fire-and-forget — never parks the execution
+    // (Outcome.CONTINUE, Decision 4); the keyboard survives execution completion.
+    SET_KEYBOARD,
+    // Phase 7 (16-persistent-keyboard / Decision 1): send a mandatory text message and remove the
+    // persistent reply keyboard (ReplyKeyboardRemove). Fire-and-forget, like SET_KEYBOARD.
+    CLEAR_KEYBOARD,
+
     // Tolerant-read sentinel (15-message-composer / MAJ-1 fail-safe). NOT an author-selectable kind — there
     // is no UI option for it, and the editor never emits it. NOTE: because UNKNOWN is itself a valid enum
     // constant, a hand-crafted request with stepType="UNKNOWN" DOES deserialise through Jackson and passes

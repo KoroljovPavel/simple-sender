@@ -243,4 +243,108 @@ class FunnelStepTest {
         original.getBlocks().clear();
         assertThat(copy.getBlocks()).hasSize(3);
     }
+
+    // ─── 16-persistent-keyboard (Task 1): keyboard fields survive copyOf ──────────────────────────
+    // User-spec Risk 1 (load-bearing): if copyOf drops a keyboard field, the keyboard silently vanishes
+    // from the execution snapshot AND from a funnel duplicate.
+
+    /**
+     * The keyboard scalar fields ({@code keyboardText}/{@code keyboardParseMode}/{@code isPersistent}/
+     * {@code oneTimeKeyboard}) are immutable value types (String / boxed Boolean), so {@code copyOf}
+     * carries them onto the execution snapshot by reference — otherwise a SET_KEYBOARD step would lose
+     * its text/flags when the funnel fires.
+     */
+    @Test
+    void copyOf_preservesKeyboardScalars() {
+        FunnelStep original = new FunnelStep();
+        original.setStepType(StepType.SET_KEYBOARD);
+        original.setKeyboardText("Головне меню {user.first_name}");
+        original.setKeyboardParseMode("HTML");
+        original.setIsPersistent(true);
+        original.setOneTimeKeyboard(false);
+
+        FunnelStep copy = FunnelStep.copyOf(original);
+
+        assertThat(copy.getKeyboardText()).isEqualTo("Головне меню {user.first_name}");
+        assertThat(copy.getKeyboardParseMode()).isEqualTo("HTML");
+        assertThat(copy.getIsPersistent()).isTrue();
+        assertThat(copy.getOneTimeKeyboard()).isFalse();
+
+        // Mutating the copy does not touch the source.
+        copy.setKeyboardText("changed");
+        copy.setKeyboardParseMode("MarkdownV2");
+        copy.setIsPersistent(false);
+        copy.setOneTimeKeyboard(true);
+
+        assertThat(original.getKeyboardText()).isEqualTo("Головне меню {user.first_name}");
+        assertThat(original.getKeyboardParseMode()).isEqualTo("HTML");
+        assertThat(original.getIsPersistent()).isTrue();
+        assertThat(original.getOneTimeKeyboard()).isFalse();
+    }
+
+    /**
+     * {@code keyboardRows} is a mutable list of immutable {@link KeyboardRow}/{@link KeyboardButton}
+     * records. {@code copyOf} must defensively copy the list into a <b>new instance</b> while sharing
+     * the (immutable) elements — pattern of {@code copyOf_copiesBlocksToNewListInstance}.
+     */
+    @Test
+    void copyOf_copiesKeyboardRowsToNewListInstance() {
+        FunnelStep original = new FunnelStep();
+        original.setStepType(StepType.SET_KEYBOARD);
+        List<KeyboardRow> rows = new ArrayList<>(List.of(
+                new KeyboardRow(List.of(new KeyboardButton("Згенерувати бонус"), new KeyboardButton("Профіль"))),
+                new KeyboardRow(List.of(new KeyboardButton("Допомога")))
+        ));
+        original.setKeyboardRows(rows);
+
+        FunnelStep copy = FunnelStep.copyOf(original);
+
+        // New list instance — not the same reference (defensive copy).
+        assertThat(copy.getKeyboardRows()).isNotSameAs(original.getKeyboardRows());
+        // ...but content-equal element-wise (KeyboardRow is an immutable record → value equality).
+        assertThat(copy.getKeyboardRows()).containsExactlyElementsOf(original.getKeyboardRows());
+        // Elements shared by reference — KeyboardRow is immutable, so a shallow element copy is intended.
+        assertThat(copy.getKeyboardRows().get(0)).isSameAs(original.getKeyboardRows().get(0));
+    }
+
+    /**
+     * Edge case: a step with {@code keyboardRows == null} (CLEAR_KEYBOARD, or any non-keyboard step)
+     * must copy to a {@code null} list, not an empty one, and must not NPE — parity with {@code buttons}/
+     * {@code blocks}.
+     */
+    @Test
+    void copyOf_nullKeyboardRowsStaysNull() {
+        FunnelStep original = new FunnelStep();
+        original.setStepType(StepType.CLEAR_KEYBOARD);
+        assertThat(original.getKeyboardRows()).isNull();
+
+        FunnelStep copy = FunnelStep.copyOf(original);
+
+        assertThat(copy.getKeyboardRows()).isNull();
+    }
+
+    /**
+     * Snapshot isolation at the list level (user-spec Risk 1, load-bearing): adding/removing an element
+     * on the copy's {@code keyboardRows} must not affect the source list, and vice versa.
+     */
+    @Test
+    void copyOf_mutatingCopyKeyboardRowsDoesNotAffectSource() {
+        FunnelStep original = new FunnelStep();
+        original.setStepType(StepType.SET_KEYBOARD);
+        List<KeyboardRow> rows = new ArrayList<>(List.of(
+                new KeyboardRow(List.of(new KeyboardButton("a"))),
+                new KeyboardRow(List.of(new KeyboardButton("b")))
+        ));
+        original.setKeyboardRows(rows);
+
+        FunnelStep copy = FunnelStep.copyOf(original);
+
+        // Mutating the copy list does not touch the source.
+        copy.getKeyboardRows().add(new KeyboardRow(List.of(new KeyboardButton("c"))));
+        assertThat(original.getKeyboardRows()).hasSize(2);
+
+        // Mutating the source list does not touch the copy.
+        original.getKeyboardRows().clear();
+        assertThat(copy.getKeyboardRows()).hasSize(3);
+    }
 }

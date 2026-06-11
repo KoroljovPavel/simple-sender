@@ -148,6 +148,68 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         assertThat(steps.get(2).getStepType()).isEqualTo(StepType.ADD_TAG);
     }
 
+    // ─── 16-persistent-keyboard round-trip (Task 1) ───────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void keyboardStepsRoundTripThroughUpdateAndGet() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggerValue", "",
+                "steps", List.of(
+                        setKeyboardStepMap("Меню {user.first_name}", true, false,
+                                keyboardRow("Згенерувати бонус", "Профіль"),
+                                keyboardRow("Допомога")),
+                        clearKeyboardStepMap("Меню сховано")));
+
+        // PUT → all keyboard fields survive in the response.
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps.length()").value(2))
+                .andExpect(jsonPath("$.steps[0].stepType").value("SET_KEYBOARD"))
+                .andExpect(jsonPath("$.steps[0].keyboardText").value("Меню {user.first_name}"))
+                .andExpect(jsonPath("$.steps[0].isPersistent").value(true))
+                .andExpect(jsonPath("$.steps[0].oneTimeKeyboard").value(false))
+                .andExpect(jsonPath("$.steps[0].keyboardRows.length()").value(2))
+                .andExpect(jsonPath("$.steps[0].keyboardRows[0].buttons[0].text").value("Згенерувати бонус"))
+                .andExpect(jsonPath("$.steps[0].keyboardRows[0].buttons[1].text").value("Профіль"))
+                .andExpect(jsonPath("$.steps[0].keyboardRows[1].buttons[0].text").value("Допомога"))
+                .andExpect(jsonPath("$.steps[1].stepType").value("CLEAR_KEYBOARD"))
+                .andExpect(jsonPath("$.steps[1].keyboardText").value("Меню сховано"))
+                .andExpect(jsonPath("$.steps[1].keyboardRows").value(org.hamcrest.Matchers.nullValue()));
+
+        // GET → same fields survive the full HTTP round-trip (toStepDto wiring, both directions).
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].keyboardText").value("Меню {user.first_name}"))
+                .andExpect(jsonPath("$.steps[0].keyboardRows[0].buttons[1].text").value("Профіль"))
+                .andExpect(jsonPath("$.steps[0].isPersistent").value(true))
+                .andExpect(jsonPath("$.steps[1].keyboardText").value("Меню сховано"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void invalidKeyboardStepReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        // Duplicate button texts in one keyboard → 422 funnel_step_invalid.
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggerValue", "",
+                "steps", List.of(setKeyboardStepMap("Меню", true, false,
+                        keyboardRow("Бонус"), keyboardRow("Бонус"))));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
     // ─── delete ──────────────────────────────────────────────────────────────
 
     @Test
@@ -1713,6 +1775,42 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Map<String, Object> step = new LinkedHashMap<>();
         step.put("stepType", "MESSAGE");
         step.put("blocks", blocks);
+        return step;
+    }
+
+    // ─── 16-persistent-keyboard step maps (Task 1) ───────────────────────────────
+    private static Map<String, Object> keyboardRow(String... labels) {
+        List<Map<String, Object>> buttons = new ArrayList<>();
+        for (String label : labels) {
+            Map<String, Object> b = new LinkedHashMap<>();
+            b.put("text", label);
+            buttons.add(b);
+        }
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("buttons", buttons);
+        return row;
+    }
+
+    @SafeVarargs
+    private static Map<String, Object> setKeyboardStepMap(String text, Boolean isPersistent,
+                                                          Boolean oneTime, Map<String, Object>... rows) {
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "SET_KEYBOARD");
+        step.put("keyboardText", text);
+        step.put("keyboardRows", List.of(rows));
+        if (isPersistent != null) {
+            step.put("isPersistent", isPersistent);
+        }
+        if (oneTime != null) {
+            step.put("oneTimeKeyboard", oneTime);
+        }
+        return step;
+    }
+
+    private static Map<String, Object> clearKeyboardStepMap(String text) {
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "CLEAR_KEYBOARD");
+        step.put("keyboardText", text);
         return step;
     }
 

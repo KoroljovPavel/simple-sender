@@ -10,8 +10,9 @@ import java.util.List;
  * (Task 4). {@link #copyOf(FunnelStep)} produces a deep copy for the execution snapshot (Decision 3);
  * all scalar fields are immutable value types (String / boxed primitives / enum) and copy field-wise
  * — including {@code eventName} (Phase 3 / Decision 4, the EMIT_EVENT target) — but the {@code buttons}
- * (Phase 2 / Decision 5) and {@code blocks} (15-message-composer / Decision 1) lists are mutable
- * containers and must be copied defensively (see {@link #copyOf(FunnelStep)}).
+ * (Phase 2 / Decision 5), {@code blocks} (15-message-composer / Decision 1) and {@code keyboardRows}
+ * (16-persistent-keyboard / Decision 2, the SET_KEYBOARD rows) lists are mutable containers and must be
+ * copied defensively (see {@link #copyOf(FunnelStep)}).
  *
  * <p>The {@code buttons} + {@code timeout*} fields now belong to the {@link StepType#MESSAGE} composer
  * step (Decision 2): the inline keyboard and park-on-reply timeout attach to the last non-album block
@@ -74,6 +75,18 @@ public class FunnelStep {
     private String targetEntryStepId;
     private boolean endParentAfter;
 
+    // SET_KEYBOARD / CLEAR_KEYBOARD (Phase 7 / 16-persistent-keyboard / Decision 1, 2, 3). Both step
+    // types send a mandatory text message (keyboardText + keyboardParseMode — same domain as a TEXT
+    // block). keyboardRows / isPersistent / oneTimeKeyboard are SET_KEYBOARD-only (CLEAR_KEYBOARD rejects
+    // them — Decision 6). keyboardRows is a mutable list of immutable KeyboardRow records — defensively
+    // copied in copyOf (snapshot isolation, Decision 3 / user-spec Risk 1). resize_keyboard is NOT stored
+    // — it is hardcoded true in the StepExecutor builder (Decision 5, Task 3).
+    private String keyboardText;            // mandatory by validation, <=4096, variables + parse mode
+    private String keyboardParseMode;       // null | "HTML" | "MarkdownV2"
+    private List<KeyboardRow> keyboardRows; // SET_KEYBOARD only: 1..10 rows
+    private Boolean isPersistent;           // SET_KEYBOARD only: Telegram is_persistent
+    private Boolean oneTimeKeyboard;        // SET_KEYBOARD only: Telegram one_time_keyboard
+
     public FunnelStep() {
     }
 
@@ -85,10 +98,14 @@ public class FunnelStep {
      * primitive / enum — and {@link #customFieldValue} is a validated immutable scalar (Double /
      * Boolean / Instant / String, enforced by CustomFieldValueValidator in Task 4/5), so all scalars
      * copy by reference and still satisfy the contract. The exceptions are the mutable {@code List}
-     * fields {@link #buttons} (Phase 2 / Decision 5) and {@link #blocks} (15-message-composer /
-     * Decision 1): each is copied <b>defensively</b> ({@code new ArrayList<>(...)}). A shallow list copy
-     * suffices because the elements ({@link Button} / {@link ContentBlock}) are immutable records. A
-     * {@code null} list copies to {@code null} (not an empty list). Storing a mutable collection in
+     * fields {@link #buttons} (Phase 2 / Decision 5), {@link #blocks} (15-message-composer /
+     * Decision 1) and {@link #keyboardRows} (16-persistent-keyboard / Decision 2): each is copied
+     * <b>defensively</b> ({@code new ArrayList<>(...)}). A shallow list copy suffices because the elements
+     * ({@link Button} / {@link ContentBlock} / {@link KeyboardRow}) are immutable records. A
+     * {@code null} list copies to {@code null} (not an empty list). The keyboard scalars
+     * ({@link #keyboardText} / {@link #keyboardParseMode} immutable Strings, {@link #isPersistent} /
+     * {@link #oneTimeKeyboard} immutable boxed {@code Boolean}) copy by reference; null stays null.
+     * Storing a mutable collection in
      * {@link #customFieldValue} would violate Decision 3 and is
      * disallowed by the validator. {@link #eventName} (Phase 3 / Decision 4) is an immutable String, so
      * it copies by reference; a {@code null} eventName stays null. The SUBSCRIBE_TO_FUNNEL scalars (Phase 5
@@ -121,10 +138,18 @@ public class FunnelStep {
         copy.timeoutValue = source.timeoutValue;
         copy.timeoutUnit = source.timeoutUnit;
         copy.timeoutTargetStepId = source.timeoutTargetStepId;
+        // SET_KEYBOARD / CLEAR_KEYBOARD scalars (Phase 7 / 16-persistent-keyboard): keyboardText /
+        // keyboardParseMode are immutable Strings, isPersistent / oneTimeKeyboard are immutable boxed
+        // Booleans — reference copy, null stays null.
+        copy.keyboardText = source.keyboardText;
+        copy.keyboardParseMode = source.keyboardParseMode;
+        copy.isPersistent = source.isPersistent;
+        copy.oneTimeKeyboard = source.oneTimeKeyboard;
         // Mutable lists of immutable records — defensive shallow copy (buttons: Decision 5; blocks:
-        // Decision 1), null stays null.
+        // Decision 1; keyboardRows: 16-persistent-keyboard / Decision 2), null stays null.
         copy.buttons = source.buttons == null ? null : new ArrayList<>(source.buttons);
         copy.blocks = source.blocks == null ? null : new ArrayList<>(source.blocks);
+        copy.keyboardRows = source.keyboardRows == null ? null : new ArrayList<>(source.keyboardRows);
         return copy;
     }
 
@@ -181,4 +206,19 @@ public class FunnelStep {
 
     public String getTimeoutTargetStepId() { return timeoutTargetStepId; }
     public void setTimeoutTargetStepId(String timeoutTargetStepId) { this.timeoutTargetStepId = timeoutTargetStepId; }
+
+    public String getKeyboardText() { return keyboardText; }
+    public void setKeyboardText(String keyboardText) { this.keyboardText = keyboardText; }
+
+    public String getKeyboardParseMode() { return keyboardParseMode; }
+    public void setKeyboardParseMode(String keyboardParseMode) { this.keyboardParseMode = keyboardParseMode; }
+
+    public List<KeyboardRow> getKeyboardRows() { return keyboardRows; }
+    public void setKeyboardRows(List<KeyboardRow> keyboardRows) { this.keyboardRows = keyboardRows; }
+
+    public Boolean getIsPersistent() { return isPersistent; }
+    public void setIsPersistent(Boolean isPersistent) { this.isPersistent = isPersistent; }
+
+    public Boolean getOneTimeKeyboard() { return oneTimeKeyboard; }
+    public void setOneTimeKeyboard(Boolean oneTimeKeyboard) { this.oneTimeKeyboard = oneTimeKeyboard; }
 }

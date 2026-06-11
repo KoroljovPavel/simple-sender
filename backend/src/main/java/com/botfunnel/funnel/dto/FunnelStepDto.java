@@ -47,5 +47,15 @@ public record FunnelStepDto(
         // enroll. Required/target checks live in FunnelService (→ 422, Task 2); null for other step types.
         String targetFunnelId,
         String targetEntryStepId,
-        boolean endParentAfter
+        boolean endParentAfter,
+        // SET_KEYBOARD / CLEAR_KEYBOARD (Phase 7 / 16-persistent-keyboard / Decision 1, 2, 3): both steps
+        // carry a mandatory text (keyboardText + keyboardParseMode). keyboardRows / isPersistent /
+        // oneTimeKeyboard are SET_KEYBOARD-only (CLEAR_KEYBOARD rejects them — Decision 6); null for every
+        // other step type. All per-type required-field / cap / duplicate checks live in FunnelService
+        // (→ 422 funnel_step_invalid), not as bean validation here.
+        String keyboardText,
+        String keyboardParseMode,
+        List<KeyboardRowDto> keyboardRows,
+        Boolean isPersistent,
+        Boolean oneTimeKeyboard
 ) {}

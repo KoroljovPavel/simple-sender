@@ -11,6 +11,8 @@ import com.botfunnel.funnel.dto.FunnelResponse;
 import com.botfunnel.funnel.dto.FunnelStepDto;
 import com.botfunnel.funnel.dto.MediaItemDto;
 import com.botfunnel.funnel.dto.FunnelSummaryResponse;
+import com.botfunnel.funnel.dto.KeyboardButtonDto;
+import com.botfunnel.funnel.dto.KeyboardRowDto;
 import com.botfunnel.funnel.dto.PreviewStepRequest;
 import com.botfunnel.funnel.dto.PreviewStepResponse;
 import com.botfunnel.funnel.dto.UpdateFunnelRequest;
@@ -128,6 +130,14 @@ public class FunnelService {
     private static final int MAX_ALBUM_ITEMS = 10;
     private static final int TEXT_WARN_LIMIT = 4096;
     private static final int CAPTION_WARN_LIMIT = 1024;
+
+    // SET_KEYBOARD / CLEAR_KEYBOARD caps (16-persistent-keyboard / Decision 6). Unlike the MESSAGE block
+    // warn-channel, keyboardText over-length is a HARD 422 (Decision 6/3). Button text cap equals
+    // MAX_KEYWORD_LENGTH (64) deliberately, so a button text can always be an exact keyword.
+    private static final int MAX_KEYBOARD_TEXT = 4096;
+    private static final int MAX_KEYBOARD_ROWS = 10;
+    private static final int MAX_KEYBOARD_ROW_BUTTONS = 4;
+    private static final int MAX_KEYBOARD_BUTTON_TEXT = MAX_KEYWORD_LENGTH;
 
     private final FunnelRepository funnelRepository;
     private final MongoTemplate mongoTemplate;
@@ -692,6 +702,15 @@ public class FunnelService {
             step.setTargetFunnelId(blankToNull(dto.targetFunnelId()));
             step.setTargetEntryStepId(blankToNull(dto.targetEntryStepId()));
             step.setEndParentAfter(dto.endParentAfter());
+            // SET_KEYBOARD / CLEAR_KEYBOARD (16-persistent-keyboard). keyboardText is kept VERBATIM (blank
+            // is a validation error, not a silent normalization — validateSetKeyboard/validateClearKeyboard
+            // reject it); keyboardParseMode is routed through blankToNull (blank → null = plain text, same
+            // as block parseMode). keyboardRows maps via toKeyboardRows (null in → null out).
+            step.setKeyboardText(dto.keyboardText());
+            step.setKeyboardParseMode(blankToNull(dto.keyboardParseMode()));
+            step.setKeyboardRows(toKeyboardRows(dto.keyboardRows()));
+            step.setIsPersistent(dto.isPersistent());
+            step.setOneTimeKeyboard(dto.oneTimeKeyboard());
             steps.add(step);
         }
         return steps;
@@ -706,6 +725,34 @@ public class FunnelService {
             buttons.add(new Button(b.type(), b.label(), blankToNull(b.targetStepId()), blankToNull(b.url())));
         }
         return buttons;
+    }
+
+    // DTO → domain mapper for SET_KEYBOARD rows (16-persistent-keyboard / Decision 2). A null rows array
+    // maps to null (validateSetKeyboard rejects a SET_KEYBOARD with no rows — no NPE here). Button text is
+    // mapped VERBATIM (blank is a validation error, not a silent normalization — trim is applied only
+    // inside the duplicate check). A null row element / null buttons list / null button element is carried
+    // through as-is so validateSetKeyboard rejects it with a 422, never an NPE.
+    private static List<KeyboardRow> toKeyboardRows(List<KeyboardRowDto> dtos) {
+        if (dtos == null) {
+            return null;
+        }
+        List<KeyboardRow> rows = new ArrayList<>(dtos.size());
+        for (KeyboardRowDto r : dtos) {
+            if (r == null) {
+                rows.add(null); // null row carried through → validateSetKeyboard rejects it (422, no NPE)
+                continue;
+            }
+            if (r.buttons() == null) {
+                rows.add(new KeyboardRow(null)); // null buttons list → rejected (422, no NPE)
+                continue;
+            }
+            List<KeyboardButton> buttons = new ArrayList<>(r.buttons().size());
+            for (KeyboardButtonDto b : r.buttons()) {
+                buttons.add(b == null ? null : new KeyboardButton(b.text()));
+            }
+            rows.add(new KeyboardRow(buttons));
+        }
+        return rows;
     }
 
     // DTO → domain mapper for the MESSAGE composer blocks (15-message-composer / Decision 1). A null
@@ -792,6 +839,12 @@ public class FunnelService {
                 // see it, or it would falsely raise funnel_broken_edge (Decision 5). active-status of the
                 // target is NOT checked here — only at activation (requireSubscribeTargetsActive, Decision 6).
                 case SUBSCRIBE_TO_FUNNEL -> validateSubscribeTarget(step, projectId);
+                // SET_KEYBOARD / CLEAR_KEYBOARD (16-persistent-keyboard / Decision 6). Both send a mandatory
+                // text; SET_KEYBOARD additionally validates the rows/buttons/duplicates, CLEAR_KEYBOARD
+                // strictly rejects the SET_KEYBOARD-only fields. Keyboard steps with null `next` are valid
+                // (null = next-in-list — handled by the generic edge pass below).
+                case SET_KEYBOARD -> validateSetKeyboard(step);
+                case CLEAR_KEYBOARD -> validateClearKeyboard(step);
                 // Tolerant-read sentinel (MAJ-1): UNKNOWN can only originate from a removed/legacy persisted
                 // stepType (StepTypeReadConverter); author input is rejected at the Jackson DTO boundary
                 // before this point. Defensive reject so the exhaustive switch stays complete and an UNKNOWN
@@ -1159,6 +1212,76 @@ public class FunnelService {
         }
     }
 
+    // SET_KEYBOARD validation (16-persistent-keyboard / Decision 6). Order: text → parse mode → rows shape
+    // → per-button rules → duplicates. Each rule → 422 funnel_step_invalid (plain-English message, never
+    // i18n'd on the backend; the frontend maps the code). Messages name fields/limits but NEVER echo
+    // author content (PII rule — same as every other validate* method). The over-length text cap is HARD
+    // (Decision 6) — deliberately different from MESSAGE blocks where it is warn-only.
+    private static void validateSetKeyboard(FunnelStep step) {
+        requireKeyboardText(step.getKeyboardText());
+        requireParseMode(step.getKeyboardParseMode());
+
+        List<KeyboardRow> rows = step.getKeyboardRows();
+        if (rows == null || rows.isEmpty()) {
+            throw invalidStep("SET_KEYBOARD step requires at least one keyboard row");
+        }
+        if (rows.size() > MAX_KEYBOARD_ROWS) {
+            throw invalidStep("SET_KEYBOARD step exceeds the maximum of " + MAX_KEYBOARD_ROWS + " rows");
+        }
+        // Duplicate detection on TRIMMED button texts within the whole keyboard (case NOT folded —
+        // Decision 6). New logic, no precedent in validateButtons (inline keyboards allow dup labels).
+        Set<String> seenTexts = new HashSet<>();
+        for (KeyboardRow row : rows) {
+            if (row == null || row.buttons() == null || row.buttons().isEmpty()) {
+                throw invalidStep("SET_KEYBOARD row requires at least one button");
+            }
+            if (row.buttons().size() > MAX_KEYBOARD_ROW_BUTTONS) {
+                throw invalidStep("SET_KEYBOARD row exceeds the maximum of "
+                        + MAX_KEYBOARD_ROW_BUTTONS + " buttons");
+            }
+            for (KeyboardButton button : row.buttons()) {
+                if (button == null || button.text() == null || button.text().isBlank()) {
+                    throw invalidStep("SET_KEYBOARD button requires a non-empty text");
+                }
+                if (button.text().length() > MAX_KEYBOARD_BUTTON_TEXT) {
+                    throw invalidStep("SET_KEYBOARD button text exceeds "
+                            + MAX_KEYBOARD_BUTTON_TEXT + " characters");
+                }
+                if (!seenTexts.add(button.text().trim())) {
+                    throw invalidStep("SET_KEYBOARD has duplicate button texts");
+                }
+            }
+        }
+    }
+
+    // CLEAR_KEYBOARD validation (16-persistent-keyboard / Decision 6): mandatory non-blank text ≤4096 +
+    // valid parse mode, and STRICT rejection of the SET_KEYBOARD-only fields (keyboardRows / isPersistent /
+    // oneTimeKeyboard) being present (non-null) — symmetric strict rejection, no silently-ignored fields.
+    // An EMPTY (non-null) keyboardRows list still counts as "present".
+    private static void validateClearKeyboard(FunnelStep step) {
+        requireKeyboardText(step.getKeyboardText());
+        requireParseMode(step.getKeyboardParseMode());
+        if (step.getKeyboardRows() != null) {
+            throw invalidStep("CLEAR_KEYBOARD step must not carry keyboardRows");
+        }
+        if (step.getIsPersistent() != null) {
+            throw invalidStep("CLEAR_KEYBOARD step must not carry isPersistent");
+        }
+        if (step.getOneTimeKeyboard() != null) {
+            throw invalidStep("CLEAR_KEYBOARD step must not carry oneTimeKeyboard");
+        }
+    }
+
+    // Shared mandatory-text check for both keyboard step types: non-blank, ≤4096 (HARD cap — Decision 6).
+    private static void requireKeyboardText(String text) {
+        if (text == null || text.isBlank()) {
+            throw invalidStep("keyboard step requires a non-empty text");
+        }
+        if (text.length() > MAX_KEYBOARD_TEXT) {
+            throw invalidStep("keyboard step text exceeds " + MAX_KEYBOARD_TEXT + " characters");
+        }
+    }
+
     private static AppException invalidStep(String message) {
         return AppException.unprocessableEntity(CODE_INVALID_STEP, message);
     }
@@ -1218,7 +1341,15 @@ public class FunnelService {
                 step.getEventName(),
                 step.getTargetFunnelId(),
                 step.getTargetEntryStepId(),
-                step.isEndParentAfter());
+                step.isEndParentAfter(),
+                // SET_KEYBOARD / CLEAR_KEYBOARD (16-persistent-keyboard): the round-trip inverse of toSteps.
+                // Without these five mappings a saved keyboard would never return to the editor (the
+                // historically-missed toStepDto direction — the round-trip IT catches exactly that).
+                step.getKeyboardText(),
+                step.getKeyboardParseMode(),
+                toKeyboardRowDtos(step.getKeyboardRows()),
+                step.getIsPersistent(),
+                step.getOneTimeKeyboard());
     }
 
     private static List<ButtonDto> toButtonDtos(List<Button> buttons) {
@@ -1227,6 +1358,27 @@ public class FunnelService {
         }
         return buttons.stream()
                 .map(b -> new ButtonDto(b.type(), b.label(), b.targetStepId(), b.url()))
+                .toList();
+    }
+
+    // domain → DTO mapper for SET_KEYBOARD rows (the round-trip inverse of toKeyboardRows). A null rows
+    // list maps to null; rows/buttons round-trip verbatim. A null row / null button element is preserved
+    // (validateSetKeyboard would already have rejected such a step on save — but the mapper stays total).
+    private static List<KeyboardRowDto> toKeyboardRowDtos(List<KeyboardRow> rows) {
+        if (rows == null) {
+            return null;
+        }
+        return rows.stream()
+                .map(r -> r == null ? null : new KeyboardRowDto(toKeyboardButtonDtos(r.buttons())))
+                .toList();
+    }
+
+    private static List<KeyboardButtonDto> toKeyboardButtonDtos(List<KeyboardButton> buttons) {
+        if (buttons == null) {
+            return null;
+        }
+        return buttons.stream()
+                .map(b -> b == null ? null : new KeyboardButtonDto(b.text()))
                 .toList();
     }
 

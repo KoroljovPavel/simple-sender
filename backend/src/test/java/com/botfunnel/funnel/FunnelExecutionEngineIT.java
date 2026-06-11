@@ -1390,13 +1390,15 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     @Test
     void setKeyboardStep_sendsExactReplyKeyboardBody_andCompletes() throws Exception {
         String subId = seedActiveSubscriber();
-        // 2 rows × (2, 1) buttons with distinct labels so a transposed row/column fails loudly. is_persistent
-        // true / one_time_keyboard false are non-default-matching picks that prove the booleans are wired.
+        // 2 rows × (2, 1) buttons with distinct labels so a transposed row/column fails loudly. Seed the
+        // NON-default booleans (is_persistent=false, one_time_keyboard=true) — opposite the production
+        // null-fallback defaults (true / false) — so a builder that ignored the step fields and always
+        // emitted the defaults would fail loudly here, proving both booleans are genuinely wired.
         String execId = seedExecution(subId, BASE, setKeyboard("Choose:",
                 List.of(
                         new KeyboardRow(List.of(new KeyboardButton("Yes"), new KeyboardButton("No"))),
                         new KeyboardRow(List.of(new KeyboardButton("Maybe")))),
-                true, false));
+                false, true));
         enqueueOk(1);
         drainRecordedRequests(); // clear the cumulative backlog so the post-sweep takeRequest() is OURS
 
@@ -1421,9 +1423,9 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         assertThat(keyboard.get(0).get(1).get("text").asText()).isEqualTo("No");
         assertThat(keyboard.get(1)).hasSize(1);
         assertThat(keyboard.get(1).get(0).get("text").asText()).isEqualTo("Maybe");
-        assertThat(markup.path("is_persistent").asBoolean()).isTrue();
+        assertThat(markup.path("is_persistent").asBoolean()).isFalse(); // seeded false (≠ default true)
         assertThat(markup.path("resize_keyboard").asBoolean()).isTrue(); // hardcoded true (Decision 5)
-        assertThat(markup.path("one_time_keyboard").asBoolean()).isFalse();
+        assertThat(markup.path("one_time_keyboard").asBoolean()).isTrue(); // seeded true (≠ default false)
         assertThat(body.path("text").asText()).isEqualTo("Choose:"); // mandatory rendered keyboardText
     }
 

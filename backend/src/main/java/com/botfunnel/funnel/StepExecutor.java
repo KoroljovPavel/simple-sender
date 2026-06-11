@@ -124,12 +124,8 @@ public class StepExecutor {
             case SET_CUSTOM_FIELD -> setCustomField(step, execution, subscriber);
             case EMIT_EVENT -> emitEvent(step, execution);
             case SUBSCRIBE_TO_FUNNEL -> subscribeToFunnel(step, execution);
-            // SET_KEYBOARD / CLEAR_KEYBOARD (16-persistent-keyboard / Task 1 compile-fix only): the real
-            // send logic (render text, build reply_markup, sendText, cont()) lands in Task 3. Until then,
-            // terminal-fail just this execution (mirroring UNKNOWN) so the exhaustive switch stays complete
-            // and the default lane compiles/stays green. Author-saved keyboard steps already validate, but
-            // they would not be executable yet — Task 3 replaces these two cases.
-            case SET_KEYBOARD, CLEAR_KEYBOARD -> StepResult.fail("keyboard_step_not_implemented");
+            case SET_KEYBOARD -> setKeyboard(step, execution, subscriber, bot);
+            case CLEAR_KEYBOARD -> clearKeyboard(step, execution, subscriber, bot);
             // Tolerant-read sentinel (MAJ-1): a persisted document with a removed/unknown stepType
             // deserialised to UNKNOWN (StepTypeReadConverter) instead of crashing the sweep. Terminal-fail
             // just this execution so it self-resolves (never re-claimed, never loops) — the rest of the
@@ -334,6 +330,87 @@ public class StepExecutor {
             return null;
         }
         return Instant.now(clock).plus(durationOf(value, unit));
+    }
+
+    // SET_KEYBOARD (16-persistent-keyboard / Decision 4): fire-and-forget — render the mandatory
+    // keyboardText, attach a ReplyKeyboardMarkup, send ONE text message, return cont(). Never parks
+    // (waiting_for_reply is for inline-menu MESSAGE steps only); the keyboard survives execution
+    // completion and a button tap returns later as plain text through the untouched keyword dispatch.
+    // MAJ-2 defensive guard mirroring message(): validateSetKeyboard rejects null/empty keyboardRows at
+    // save time, so a normal snapshot always has 1..10 rows. A malformed/legacy snapshot with null/empty
+    // rows (or a row with no buttons) would otherwise build an empty wire keyboard / NPE-loop the sweep —
+    // terminal-fail it instead with a non-PII code so the stuck execution self-resolves.
+    private StepResult setKeyboard(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
+        List<KeyboardRow> rows = step.getKeyboardRows();
+        if (rows == null || rows.isEmpty() || rows.stream().anyMatch(StepExecutor::isEmptyRow)) {
+            return StepResult.fail("empty_keyboard_rows");
+        }
+        return sendKeyboardText(step, execution, subscriber, bot, buildReplyKeyboardMarkup(step));
+    }
+
+    // CLEAR_KEYBOARD (16-persistent-keyboard / Decision 4): same fire-and-forget send as SET_KEYBOARD but
+    // with the constant ReplyKeyboardRemove markup ({"remove_keyboard": true}). No rows guard — a
+    // CLEAR_KEYBOARD step has no rows (validation rejects them).
+    private StepResult clearKeyboard(FunnelStep step, FunnelExecution execution, Subscriber subscriber, Bot bot) {
+        return sendKeyboardText(step, execution, subscriber, bot, REMOVE_KEYBOARD_MARKUP);
+    }
+
+    // Shared send-and-map for both keyboard steps (they differ only in markup): render keyboardText through
+    // the renderer + 4096 trim (over-length is NOT a failure — it trims + WARNs), send the single text
+    // message with the supplied reply_markup, return cont(). The try/catch is byte-for-byte identical to
+    // message() so the failure mapping matches every other send step (TelegramSendException →
+    // fromTerminalReason, BotTokenInvalidException → fail("invalid_bot_token"), AppException →
+    // fail(codeOrStatus)). ownerId is null for funnel sends (sendBlock TEXT precedent).
+    private StepResult sendKeyboardText(FunnelStep step, FunnelExecution execution, Subscriber subscriber,
+                                        Bot bot, Object replyMarkup) {
+        try {
+            String text = renderTrimmed(step.getKeyboardText(), step.getKeyboardParseMode(), subscriber,
+                    execution, MAX_MESSAGE_LENGTH, LOG_TEXT_TRIMMED);
+            sender.sendText(bot.getId(), subscriber.getTelegramChatId(), text, step.getKeyboardParseMode(),
+                    null, replyMarkup);
+            return StepResult.cont();
+        } catch (TelegramSendException ex) {
+            return fromTerminalReason(ex);
+        } catch (BotTokenInvalidException ex) {
+            return StepResult.fail("invalid_bot_token");
+        } catch (AppException ex) {
+            return StepResult.fail(codeOrStatus(ex));
+        }
+    }
+
+    private static boolean isEmptyRow(KeyboardRow row) {
+        return row == null || row.buttons() == null || row.buttons().isEmpty();
+    }
+
+    // ReplyKeyboardRemove (Decision 5): constant wire markup {"remove_keyboard": true} for CLEAR_KEYBOARD.
+    // Immutable single-entry map — safe to share across sends (Jackson reads it, never mutates).
+    private static final Map<String, Object> REMOVE_KEYBOARD_MARKUP = Map.of("remove_keyboard", true);
+
+    // Build a Telegram ReplyKeyboardMarkup (Decision 5, verified against the Bot API):
+    // {"keyboard":[[{"text":…}]], "is_persistent":…, "resize_keyboard":true, "one_time_keyboard":…}.
+    // Buttons use the object form {"text": …} (not bare strings) for forward-compat (future
+    // request_contact/web_app fields). resize_keyboard is HARDCODED true (never read from the step,
+    // Decision 5). is_persistent / one_time_keyboard fall back to the documented form defaults (true /
+    // false) when the snapshot field is null — never emit a JSON null. The caller guarantees non-empty,
+    // non-blank-row keyboardRows (setKeyboard guard). LinkedHashMap/List mirror buildReplyMarkup.
+    private static Object buildReplyKeyboardMarkup(FunnelStep step) {
+        List<KeyboardRow> sourceRows = step.getKeyboardRows();
+        List<Object> rows = new ArrayList<>(sourceRows.size());
+        for (KeyboardRow sourceRow : sourceRows) {
+            List<Object> buttons = new ArrayList<>(sourceRow.buttons().size());
+            for (KeyboardButton button : sourceRow.buttons()) {
+                Map<String, Object> tgButton = new LinkedHashMap<>();
+                tgButton.put("text", button.text());
+                buttons.add(tgButton);
+            }
+            rows.add(buttons);
+        }
+        Map<String, Object> markup = new LinkedHashMap<>();
+        markup.put("keyboard", rows);
+        markup.put("is_persistent", step.getIsPersistent() != null ? step.getIsPersistent() : true);
+        markup.put("resize_keyboard", true);
+        markup.put("one_time_keyboard", step.getOneTimeKeyboard() != null ? step.getOneTimeKeyboard() : false);
+        return markup;
     }
 
     private StepResult setCustomField(FunnelStep step, FunnelExecution execution, Subscriber subscriber) {

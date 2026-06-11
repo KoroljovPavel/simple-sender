@@ -580,6 +580,165 @@ class FunnelStepExecutorTest {
         verify(subscriberService).removeTag(PROJECT_ID, SUBSCRIBER_ID, "vip");
     }
 
+    // ─── SET_KEYBOARD / CLEAR_KEYBOARD (16-persistent-keyboard / Task 3) ──────
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void setKeyboard_sendsTextWithReplyKeyboardMarkup_returnsContinue() {
+        // SET_KEYBOARD sends one text message carrying a ReplyKeyboardMarkup: rows of {"text": label}
+        // objects in author order, is_persistent/one_time_keyboard from the step, resize_keyboard hardcoded
+        // true; outcome CONTINUE (never WAIT_FOR_REPLY — fire-and-forget).
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep step = setKeyboardStep("Меню", null, true, false,
+                row("A", "B"), row("C"));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        ArgumentCaptor<Object> markupCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("Меню"), eq(null), eq(null),
+                markupCaptor.capture());
+        Map<String, Object> markup = (Map<String, Object>) markupCaptor.getValue();
+        List<List<Map<String, Object>>> rows = (List<List<Map<String, Object>>>) markup.get("keyboard");
+        assertThat(rows).hasSize(2);
+        assertThat(rows.get(0)).extracting(b -> b.get("text")).containsExactly("A", "B");
+        assertThat(rows.get(1)).extracting(b -> b.get("text")).containsExactly("C");
+        // Buttons are object form {"text": ...}, never bare strings.
+        assertThat(rows.get(0).get(0)).containsExactlyInAnyOrderEntriesOf(Map.of("text", "A"));
+        assertThat(markup.get("is_persistent")).isEqualTo(true);
+        assertThat(markup.get("resize_keyboard")).isEqualTo(true);
+        assertThat(markup.get("one_time_keyboard")).isEqualTo(false);
+        assertThat(markup).doesNotContainKey("remove_keyboard");
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void setKeyboard_rendersVariablesAndParseMode() {
+        // keyboardText with {user.first_name} is rendered (substituted + HTML-escaped per parse mode) and
+        // the step's keyboardParseMode is passed through to sendText.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        Subscriber sub = activeSubscriber();
+        sub.setFirstName("<b>");
+        FunnelStep step = setKeyboardStep("hi {user.first_name}", "HTML", true, false, row("A"));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), sub, connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("hi &lt;b&gt;"), eq("HTML"), eq(null), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void setKeyboard_persistentAndOneTimeNullDefaults() {
+        // Null isPersistent/oneTimeKeyboard on the snapshot emit the documented form defaults
+        // (is_persistent:true, one_time_keyboard:false) — never a JSON null.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep step = setKeyboardStep("x", null, null, null, row("A"));
+
+        executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        ArgumentCaptor<Object> markupCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("x"), eq(null), eq(null), markupCaptor.capture());
+        Map<String, Object> markup = (Map<String, Object>) markupCaptor.getValue();
+        assertThat(markup.get("is_persistent")).isEqualTo(true);
+        assertThat(markup.get("one_time_keyboard")).isEqualTo(false);
+        assertThat(markup.values()).doesNotContainNull();
+    }
+
+    @Test
+    void setKeyboard_nullOrEmptyRows_failsTerminally() {
+        // Defensive guard (mirrors empty_message_blocks): a malformed SET_KEYBOARD snapshot with null or
+        // empty keyboardRows terminal-fails with the non-PII reason code, and never sends.
+        FunnelStep nullRows = setKeyboardStep("text", null, true, false);
+        nullRows.setKeyboardRows(null);
+        StepExecutor.StepResult r1 = executor.execute(nullRows, execution(0), activeSubscriber(), connectedBot());
+        assertThat(r1.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(r1.reasonCode()).isEqualTo("empty_keyboard_rows");
+
+        FunnelStep emptyRows = setKeyboardStep("text", null, true, false);
+        emptyRows.setKeyboardRows(List.of());
+        StepExecutor.StepResult r2 = executor.execute(emptyRows, execution(0), activeSubscriber(), connectedBot());
+        assertThat(r2.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(r2.reasonCode()).isEqualTo("empty_keyboard_rows");
+
+        verify(sender, never()).sendText(anyString(), any(), anyString(), any(), any(), any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void clearKeyboard_sendsTextWithRemoveKeyboard_returnsContinue() {
+        // CLEAR_KEYBOARD sends one text message with markup exactly {"remove_keyboard": true}; CONTINUE.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep step = clearKeyboardStep("Меню сховано", null);
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        ArgumentCaptor<Object> markupCaptor = ArgumentCaptor.forClass(Object.class);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), eq("Меню сховано"), eq(null), eq(null),
+                markupCaptor.capture());
+        Map<String, Object> markup = (Map<String, Object>) markupCaptor.getValue();
+        assertThat(markup).containsExactlyInAnyOrderEntriesOf(Map.of("remove_keyboard", true));
+    }
+
+    @Test
+    void setKeyboard_blockedByUser_cancels() {
+        // TelegramSendException(BLOCKED_BY_USER) → CANCEL; CHAT_NOT_FOUND → CANCEL (same mapping as every
+        // send step).
+        doThrow(new TelegramSendException(403, "blocked", 1,
+                TelegramSendException.TerminalReason.BLOCKED_BY_USER))
+                .when(sender).sendText(anyString(), any(), anyString(), any(), any(), any());
+        StepExecutor.StepResult blocked = executor.execute(
+                setKeyboardStep("t", null, true, false, row("A")), execution(0), activeSubscriber(), connectedBot());
+        assertThat(blocked.outcome()).isEqualTo(StepExecutor.Outcome.CANCEL);
+        assertThat(blocked.reasonCode()).isEqualTo("BLOCKED_BY_USER");
+
+        doThrow(new TelegramSendException(400, "chat not found", 1,
+                TelegramSendException.TerminalReason.CHAT_NOT_FOUND))
+                .when(sender).sendText(anyString(), any(), anyString(), any(), any(), any());
+        StepExecutor.StepResult notFound = executor.execute(
+                setKeyboardStep("t", null, true, false, row("A")), execution(0), activeSubscriber(), connectedBot());
+        assertThat(notFound.outcome()).isEqualTo(StepExecutor.Outcome.CANCEL);
+        assertThat(notFound.reasonCode()).isEqualTo("CHAT_NOT_FOUND");
+    }
+
+    @Test
+    void setKeyboard_otherTelegramError_fails() {
+        // Other terminal reason (OTHER) → FAIL with the reason name.
+        doThrow(new TelegramSendException(null, "transient_failure_exhausted", 4))
+                .when(sender).sendText(anyString(), any(), anyString(), any(), any(), any());
+        StepExecutor.StepResult result = executor.execute(
+                setKeyboardStep("t", null, true, false, row("A")), execution(0), activeSubscriber(), connectedBot());
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(result.reasonCode()).isEqualTo("OTHER");
+    }
+
+    @Test
+    void setKeyboard_invalidBotToken_fails() {
+        // BotTokenInvalidException → FAIL with reasonCode "invalid_bot_token".
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenThrow(new com.botfunnel.bot.BotTokenInvalidException(BOT_ID, "Token is invalid or revoked"));
+        StepExecutor.StepResult result = executor.execute(
+                setKeyboardStep("t", null, true, false, row("A")), execution(0), activeSubscriber(), connectedBot());
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(result.reasonCode()).isEqualTo("invalid_bot_token");
+    }
+
+    @Test
+    void clearKeyboard_appException_fails() {
+        // AppException (e.g. 404 bot-not-found) → FAIL with codeOrStatus — covers the trio for CLEAR too.
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenThrow(AppException.notFound("Bot not found"));
+        StepExecutor.StepResult result = executor.execute(
+                clearKeyboardStep("bye", null), execution(0), activeSubscriber(), connectedBot());
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(result.reasonCode()).isEqualTo("404");
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
@@ -666,6 +825,36 @@ class FunnelStepExecutorTest {
         s.setStepType(StepType.EMIT_EVENT);
         s.setEventName(eventName);
         return s;
+    }
+
+    // A SET_KEYBOARD step: mandatory text + parse mode + the is_persistent/one_time_keyboard flags + rows.
+    private static FunnelStep setKeyboardStep(String text, String parseMode, Boolean isPersistent,
+                                              Boolean oneTimeKeyboard, KeyboardRow... rows) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.SET_KEYBOARD);
+        s.setKeyboardText(text);
+        s.setKeyboardParseMode(parseMode);
+        s.setIsPersistent(isPersistent);
+        s.setOneTimeKeyboard(oneTimeKeyboard);
+        s.setKeyboardRows(List.of(rows));
+        return s;
+    }
+
+    // A CLEAR_KEYBOARD step: mandatory text + parse mode only (no rows / flags).
+    private static FunnelStep clearKeyboardStep(String text, String parseMode) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.CLEAR_KEYBOARD);
+        s.setKeyboardText(text);
+        s.setKeyboardParseMode(parseMode);
+        return s;
+    }
+
+    private static KeyboardRow row(String... labels) {
+        List<KeyboardButton> buttons = new java.util.ArrayList<>(labels.length);
+        for (String label : labels) {
+            buttons.add(new KeyboardButton(label));
+        }
+        return new KeyboardRow(buttons);
     }
 
     private static FunnelStep subscribeStep(String targetFunnelId, String targetEntryStepId,

@@ -189,14 +189,24 @@ class FunnelServiceKeyboardStepTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void setKeyboard_buttonTextAtCaps_areValid() {
-        // text exactly 4096 and button text exactly 64 are the inclusive boundaries → valid.
+    void setKeyboard_textAtCap_isValid() {
+        // text exactly 4096 is the inclusive boundary → valid (4097 is rejected by textOverCap test).
         String id = createDraft();
-        FunnelStepDto step = setKeyboardStep(
-                "x".repeat(4096), null, List.of(row("y".repeat(64))), false, true);
+        FunnelStepDto step = setKeyboardStep("x".repeat(4096), null, List.of(row("A")), false, true);
 
         FunnelResponse resp = funnelService.update(USER_ID, projectId, id, reqWithStep(step));
         assertThat(resp.steps().get(0).keyboardText()).hasSize(4096);
+    }
+
+    @Test
+    void setKeyboard_buttonTextAtCap_isValidAndRoundTrips() {
+        // button text exactly 64 is the inclusive boundary → valid (65 is rejected by overCap test).
+        // Assert the label round-trips so a mapper that dropped the boundary button would NOT stay green.
+        String id = createDraft();
+        FunnelStepDto step = setKeyboardStep("Меню", null, List.of(row("y".repeat(64))), false, true);
+
+        FunnelResponse resp = funnelService.update(USER_ID, projectId, id, reqWithStep(step));
+        assertThat(resp.steps().get(0).keyboardRows().get(0).buttons().get(0).text()).hasSize(64);
     }
 
     // ─── SET_KEYBOARD rejections ──────────────────────────────────────────────────

@@ -205,13 +205,11 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
   it('renders no resize_keyboard control (exactly two keyboard checkboxes)', async () => {
     await mountForm()
     expect(maybe('[data-test="step-keyboard-resize"]')).toBeNull()
-    // resize_keyboard is hardcoded true server-side and never surfaced — only persistent + one-time exist.
-    const checkboxes = [
-      maybe('[data-test="step-keyboard-persistent"]'),
-      maybe('[data-test="step-keyboard-onetime"]'),
-    ].filter(Boolean)
-    expect(checkboxes).toHaveLength(2)
-    expect(document.querySelectorAll('[data-test="step-keyboard-rows"] input[type="checkbox"]')).toHaveLength(0)
+    // resize_keyboard is hardcoded true server-side and never surfaced — the keyboard block has EXACTLY
+    // two checkboxes (persistent + one-time). A future resize toggle would land here and break this count.
+    expect(document.querySelectorAll('input[type="checkbox"][data-test^="step-keyboard"]')).toHaveLength(2)
+    expect(maybe('[data-test="step-keyboard-persistent"]')).not.toBeNull()
+    expect(maybe('[data-test="step-keyboard-onetime"]')).not.toBeNull()
   })
 
   it('blocks submit on blank CLEAR_KEYBOARD text', async () => {

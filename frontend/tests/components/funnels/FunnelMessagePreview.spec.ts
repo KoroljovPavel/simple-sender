@@ -473,6 +473,23 @@ describe('FunnelMessagePreview', () => {
     expect(wrapper.find('[data-test="funnel-preview-keyboard"]').exists()).toBe(false)
   })
 
+  it('keyboard response with empty renderedBlocks renders no text node, no crash', async () => {
+    // Front/back desync: kind 'keyboard' but no rendered TEXT block → render nothing rather than crash
+    // (mirrors the MESSAGE "renderedBlocks shorter than blocks" defensive case).
+    previewMock.mockResolvedValueOnce({
+      renderedBlocks: [],
+      sampleData: false,
+      kind: 'keyboard',
+      keyboardRows: null,
+    })
+    const wrapper = await mountWith(setKeyboardStep())
+
+    expect(wrapper.find('[data-test="funnel-preview-keyboard-text"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-preview-keyboard"]').exists()).toBe(false)
+    // The panel still mounted (no thrown error) — the heading is present.
+    expect(wrapper.find('[data-test="funnel-preview-panel"]').exists()).toBe(true)
+  })
+
   it('keyboard step preview payload carries keyboardText/keyboardParseMode/keyboardRows', async () => {
     previewMock.mockResolvedValueOnce(keyboardResponse('Привіт, Olena!', [['Допомога']]))
     const step = setKeyboardStep({ keyboardParseMode: 'HTML' })
@@ -496,20 +513,30 @@ describe('FunnelMessagePreview', () => {
       await vi.runOnlyPendingTimersAsync()
       expect(previewMock).toHaveBeenCalledTimes(1)
 
-      // Edit the text — watch on keyboardText must catch it and debounce a new run.
+      // Edit the text — watch on keyboardText must catch it and debounce a new run with the new value.
       await wrapper.setProps({ step: { ...step, keyboardText: 'Новий текст' } })
       expect(previewMock).toHaveBeenCalledTimes(1)
       await vi.advanceTimersByTimeAsync(600)
       await vi.runOnlyPendingTimersAsync()
       expect(previewMock).toHaveBeenCalledTimes(2)
+      expect(previewMock).toHaveBeenLastCalledWith(
+        'f1',
+        's1',
+        expect.objectContaining({ keyboardText: 'Новий текст' }),
+      )
 
-      // Edit a row label — deep-watch on keyboardRows must catch it too.
+      // Edit a row label — deep-watch on keyboardRows must catch it too and send the mutated rows.
       await wrapper.setProps({
         step: { ...step, keyboardText: 'Новий текст', keyboardRows: [{ buttons: [{ text: 'B' }] }] },
       })
       await vi.advanceTimersByTimeAsync(600)
       await vi.runOnlyPendingTimersAsync()
       expect(previewMock).toHaveBeenCalledTimes(3)
+      expect(previewMock).toHaveBeenLastCalledWith(
+        'f1',
+        's1',
+        expect.objectContaining({ keyboardRows: [{ buttons: [{ text: 'B' }] }] }),
+      )
     } finally {
       vi.useRealTimers()
     }

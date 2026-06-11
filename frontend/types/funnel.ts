@@ -1,4 +1,4 @@
-// Mirrors the Task-5 backend DTOs (com.botfunnel.funnel.dto). FunnelStatus is the lowercase enum
+// Mirrors the backend DTOs (com.botfunnel.funnel.dto). FunnelStatus is the lowercase enum
 // (backend FunnelStatus: draft/active/paused). The list view (FunnelSummaryResponse) omits the steps
 // array — the editor (Task 10) loads steps lazily via the single GET (FunnelResponse).
 export type FunnelStatus = 'draft' | 'active' | 'paused'

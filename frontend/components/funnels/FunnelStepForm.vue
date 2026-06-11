@@ -3,7 +3,7 @@ import { toTypedSchema } from '@vee-validate/zod'
 import { useForm } from 'vee-validate'
 import { z } from 'zod'
 import { CURRENT_DATE_TOKEN } from '~/types/funnel'
-import type { BlockType, ContentBlock, DelayUnit, FunnelStep, MediaItem, StepType } from '~/types/funnel'
+import type { BlockType, ContentBlock, DelayUnit, FunnelStep, KeyboardRow, MediaItem, StepType } from '~/types/funnel'
 import type { CustomFieldDefinition, CustomFieldType, Tag } from '~/types/subscriber'
 import SearchableSelect from '~/components/funnels/SearchableSelect.vue'
 import { useFunnelsStore } from '~/stores/funnels'
@@ -41,6 +41,8 @@ const STEP_TYPES: StepType[] = [
   'SET_CUSTOM_FIELD',
   'EMIT_EVENT',
   'SUBSCRIBE_TO_FUNNEL',
+  'SET_KEYBOARD',
+  'CLEAR_KEYBOARD',
 ]
 const PARSE_MODES = ['', 'HTML', 'MarkdownV2'] as const
 const DELAY_UNITS: DelayUnit[] = ['MIN', 'HOUR', 'DAY']
@@ -85,6 +87,16 @@ const MENU_END_TARGET = '__END__'
 // Sentinel for "enter the target funnel from its first step" inside the entry-step picker ONLY. Mapped to
 // targetEntryStepId=null on emit — the backend reads null as "from the start". Distinct from a real step id.
 const SUBSCRIBE_ENTRY_START = '__START__'
+
+// ── SET_KEYBOARD / CLEAR_KEYBOARD constants (16-persistent-keyboard / Decision 6) ────────────────────
+// MUST mirror backend FunnelService.validateSetKeyboard/validateClearKeyboard byte-for-byte. Unlike the
+// composer's TEXT_WARN_LIMIT (a soft warn), the 4096 cap here is a HARD block — the keyboard text is a
+// single mandatory message that the backend rejects when blank or over the cap.
+const KEYBOARD_TEXT_MAX = 4096
+const KEYBOARD_MAX_ROWS = 10
+const KEYBOARD_MAX_BUTTONS_PER_ROW = 4
+// Button text cap = the keyword cap (64), so a button text can always be an exact keyword (user-spec).
+const KEYBOARD_BUTTON_TEXT_MAX = 64
 
 const selectedType = ref<StepType>(props.initial?.stepType ?? 'MESSAGE')
 
@@ -464,6 +476,9 @@ watch(
     if (ty === 'SET_CUSTOM_FIELD') ensureDefinitionsLoaded()
     if (ty === 'ADD_TAG' || ty === 'REMOVE_TAG') ensureTagsLoaded()
     if (ty === 'SUBSCRIBE_TO_FUNNEL') ensureFunnelsLoaded()
+    // SET_KEYBOARD needs the funnels store for the per-button keyword hint (Decision 8 — containsAnyKeyword
+    // mirror). CLEAR_KEYBOARD has no rows/buttons, so it needs no funnels.
+    if (ty === 'SET_KEYBOARD') ensureFunnelsLoaded()
   },
   { immediate: true },
 )
@@ -543,6 +558,134 @@ watch(subscribeTargetFunnelId, async (id, prev) => {
     subscribeStepsLoading.value = false
   }
 }, { immediate: true })
+
+// ── SET_KEYBOARD / CLEAR_KEYBOARD form state (16-persistent-keyboard / Decision 6) ────────────────────
+// Both step types share the mandatory text + parse mode (plain refs, validated by hand). SET_KEYBOARD
+// adds a rows sub-editor (a local reactive array of rows, each a local array of buttons — the same
+// uid-keyed local-array idiom as the composer blocks / MENU rows), validated on submit via keyboardTouched.
+// Seeded from props.initial when editing the matching type, else the defaults (one row, one blank button;
+// persistent ON, one-time OFF).
+const isKeyboardStep = (s: FunnelStep | null | undefined): boolean =>
+  s?.stepType === 'SET_KEYBOARD' || s?.stepType === 'CLEAR_KEYBOARD'
+
+const keyboardText = ref<string>(isKeyboardStep(props.initial) ? (props.initial?.keyboardText ?? '') : '')
+const keyboardParseMode = ref<string>(
+  isKeyboardStep(props.initial) ? (props.initial?.keyboardParseMode ?? '') : '',
+)
+
+type KeyboardButtonRow = { uid: number; text: string }
+type KeyboardRowRow = { uid: number; buttons: KeyboardButtonRow[] }
+function blankKeyboardButton(): KeyboardButtonRow {
+  return { uid: nextUid(), text: '' }
+}
+function blankKeyboardRow(): KeyboardRowRow {
+  return { uid: nextUid(), buttons: [blankKeyboardButton()] }
+}
+// Seed from an edited SET_KEYBOARD step's rows; otherwise one row with one blank button so the author has
+// a starting point (1..10 × 1..4 is mandatory — there is no "empty keyboard" valid state, unlike the
+// optional inline keyboard).
+function initialKeyboardRows(): KeyboardRowRow[] {
+  const existing = props.initial?.stepType === 'SET_KEYBOARD' ? props.initial?.keyboardRows : null
+  if (existing && existing.length > 0) {
+    return existing.map((r) => ({
+      uid: nextUid(),
+      buttons:
+        r.buttons && r.buttons.length > 0
+          ? r.buttons.map((b) => ({ uid: nextUid(), text: b.text ?? '' }))
+          : [blankKeyboardButton()],
+    }))
+  }
+  return [blankKeyboardRow()]
+}
+const keyboardRows = ref<KeyboardRowRow[]>(initialKeyboardRows())
+// Checkbox defaults: persistent ON, one-time OFF on a NEW step. When editing, seed the STORED value — a
+// stored explicit `false`/`true` must survive (?? on a stored false is the classic default-clobbering bug,
+// so seed via the type-guarded value with nullish-coalescing only for a genuinely absent field).
+const keyboardPersistent = ref<boolean>(
+  props.initial?.stepType === 'SET_KEYBOARD' ? (props.initial?.isPersistent ?? true) : true,
+)
+const keyboardOneTime = ref<boolean>(
+  props.initial?.stepType === 'SET_KEYBOARD' ? (props.initial?.oneTimeKeyboard ?? false) : false,
+)
+// Touched on submit so per-field errors only render after the author tries to save (parity with the rest).
+const keyboardTouched = ref(false)
+
+function addKeyboardRow() {
+  if (keyboardRows.value.length >= KEYBOARD_MAX_ROWS) return
+  keyboardRows.value.push(blankKeyboardRow())
+}
+function removeKeyboardRow(index: number) {
+  keyboardRows.value.splice(index, 1)
+}
+function addKeyboardButton(rowIndex: number) {
+  const buttons = keyboardRows.value[rowIndex].buttons
+  if (buttons.length >= KEYBOARD_MAX_BUTTONS_PER_ROW) return
+  buttons.push(blankKeyboardButton())
+}
+function removeKeyboardButton(rowIndex: number, buttonIndex: number) {
+  keyboardRows.value[rowIndex].buttons.splice(buttonIndex, 1)
+}
+
+// Mandatory text: non-blank and ≤4096 (HARD block — Decision 6, NOT the composer's soft warn).
+const keyboardTextError = computed<string | null>(() => {
+  const text = keyboardText.value.trim()
+  if (!text) return t('funnels.steps.validation.keyboardTextRequired')
+  if (keyboardText.value.length > KEYBOARD_TEXT_MAX) return t('funnels.steps.validation.keyboardTextMax')
+  return null
+})
+// Per-button rule: non-blank and ≤64. Returns a localized message or null (mirror of menuButtonLabelError).
+function keyboardButtonError(button: KeyboardButtonRow): string | null {
+  const text = button.text.trim()
+  if (!text) return t('funnels.steps.validation.keyboardButtonRequired')
+  if (text.length > KEYBOARD_BUTTON_TEXT_MAX) return t('funnels.steps.validation.keyboardButtonMax')
+  return null
+}
+// Keyboard-level duplicate rule: no two trimmed button texts repeat across the WHOLE keyboard (Set-based,
+// new logic — inline keyboards allow dup labels, reply-keyboard buttons must be unique). Blank texts are
+// skipped here (the per-button required rule already blocks them) so a duplicate-of-blank is not reported.
+const keyboardHasDuplicate = computed<boolean>(() => {
+  const seen = new Set<string>()
+  for (const row of keyboardRows.value) {
+    for (const button of row.buttons) {
+      const text = button.text.trim()
+      if (!text) continue
+      if (seen.has(text)) return true
+      seen.add(text)
+    }
+  }
+  return false
+})
+// The whole SET_KEYBOARD form passes when text + every button are valid, there are no duplicates, and the
+// row/button caps hold (the add controls already disable at the caps, so over-cap is unreachable via UI —
+// but a seeded edit could exceed them, so guard here too). CLEAR_KEYBOARD validates text only.
+const keyboardValid = computed<boolean>(() => {
+  if (keyboardTextError.value) return false
+  if (selectedType.value === 'CLEAR_KEYBOARD') return true
+  if (keyboardRows.value.length < 1 || keyboardRows.value.length > KEYBOARD_MAX_ROWS) return false
+  for (const row of keyboardRows.value) {
+    if (row.buttons.length < 1 || row.buttons.length > KEYBOARD_MAX_BUTTONS_PER_ROW) return false
+    if (row.buttons.some((b) => keyboardButtonError(b))) return false
+  }
+  return !keyboardHasDuplicate.value
+})
+
+// Non-blocking keyword hint (Decision 8): warn next to a button whose lowercased text contains NO keyword
+// of any active keyword funnel — a client-side mirror of backend containsAnyKeyword. Data comes from the
+// shared funnels store (storeFunnels, loaded by ensureFunnelsLoaded). Advisory only — never gates submit.
+// A blank button shows no hint (the required-text error covers it). `keywords` may be null on non-keyword
+// funnels — guarded. keywords arrive already lowercase-normalized (FunnelTriggerSettings.addKeyword).
+function keyboardButtonHint(button: KeyboardButtonRow): boolean {
+  const text = button.text.trim().toLowerCase()
+  if (!text) return false
+  const matched = storeFunnels.value.some(
+    (f) =>
+      f.status === 'active' &&
+      f.triggerType === 'keyword' &&
+      (f.keywords ?? []).some((kw) => kw && text.includes(kw)),
+  )
+  return !matched
+}
+
 // Plain ref (NOT a computed over customFieldKey): the validation `schema` below is evaluated by useForm
 // during setup, BEFORE defineField creates customFieldKey — a computed that read customFieldKey there
 // would hit its temporal dead zone. A watcher keeps this in sync once the form fields exist (below).
@@ -810,6 +953,41 @@ const onSubmit = handleSubmit((values) => {
         endParentAfter: subscribeEndParent.value,
       }
       break
+    case 'SET_KEYBOARD': {
+      // Text + rows are hand-validated local state (not vee-validate fields). Mark touched so inline errors
+      // render, then block the emit if anything is invalid (mirrors validateSetKeyboard byte-for-byte).
+      keyboardTouched.value = true
+      if (!keyboardValid.value) return
+      step = {
+        stepType: type,
+        keyboardText: keyboardText.value.trim(),
+        keyboardParseMode: blankToNull(keyboardParseMode.value),
+        // Emit trimmed button texts as the typed KeyboardRow[] shape.
+        keyboardRows: keyboardRows.value.map(
+          (r): KeyboardRow => ({ buttons: r.buttons.map((b) => ({ text: b.text.trim() })) }),
+        ),
+        isPersistent: keyboardPersistent.value,
+        oneTimeKeyboard: keyboardOneTime.value,
+        id: props.initial?.id ?? undefined,
+        next: props.initial?.next ?? undefined,
+      }
+      break
+    }
+    case 'CLEAR_KEYBOARD': {
+      keyboardTouched.value = true
+      if (!keyboardValid.value) return
+      // CLEAR_KEYBOARD carries ONLY text + parse mode — NEVER keyboardRows/isPersistent/oneTimeKeyboard.
+      // The backend strictly rejects those on this type (Decision 6 symmetric rejection) → a sloppy emit
+      // would 422 on save.
+      step = {
+        stepType: type,
+        keyboardText: keyboardText.value.trim(),
+        keyboardParseMode: blankToNull(keyboardParseMode.value),
+        id: props.initial?.id ?? undefined,
+        next: props.initial?.next ?? undefined,
+      }
+      break
+    }
   }
   emit('submit', step)
 })
@@ -1389,6 +1567,156 @@ const onSubmit = handleSubmit((values) => {
           {{ t('funnels.steps.form.subscribeReturnHint') }}
         </p>
       </div>
+    </template>
+
+    <!-- SET_KEYBOARD / CLEAR_KEYBOARD: a mandatory text message + (SET only) a reply-keyboard rows editor
+         (16-persistent-keyboard). Both share the text + parse mode. SET adds the rows sub-editor, the two
+         checkboxes, and the per-button keyword hint. All text via {{ }} interpolation (never v-html — XSS). -->
+    <template v-else-if="selectedType === 'SET_KEYBOARD' || selectedType === 'CLEAR_KEYBOARD'">
+      <div>
+        <label for="step-keyboard-text" class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.keyboardText') }}</label>
+        <textarea
+          id="step-keyboard-text"
+          v-model="keyboardText"
+          data-test="step-keyboard-text"
+          rows="3"
+          :aria-label="t('funnels.steps.form.keyboardText')"
+          class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+        <select
+          v-model="keyboardParseMode"
+          data-test="step-keyboard-parsemode"
+          :aria-label="t('funnels.steps.form.parseMode')"
+          class="mt-2 w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        >
+          <option v-for="pm in PARSE_MODES" :key="pm" :value="pm">
+            {{ pm === '' ? t('funnels.steps.form.parseModeNone') : pm }}
+          </option>
+        </select>
+        <p v-if="keyboardTouched && keyboardTextError" data-test="step-keyboard-text-error" class="mt-1 text-sm text-red-600">
+          {{ keyboardTextError }}
+        </p>
+      </div>
+
+      <!-- SET_KEYBOARD only: the reply-keyboard rows sub-editor (1..10 rows × 1..4 buttons) + checkboxes. -->
+      <template v-if="selectedType === 'SET_KEYBOARD'">
+        <div data-test="step-keyboard-rows" class="rounded-md border border-blue-200 bg-blue-50/40 p-3">
+          <div class="mb-1 flex items-center justify-between">
+            <label class="block text-sm font-medium">{{ t('funnels.steps.form.keyboardRows') }}</label>
+            <button
+              type="button"
+              data-test="step-keyboard-add-row"
+              :disabled="keyboardRows.length >= KEYBOARD_MAX_ROWS"
+              class="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-40"
+              @click="addKeyboardRow"
+            >
+              {{ t('funnels.steps.form.keyboardAddRow') }}
+            </button>
+          </div>
+          <p class="mb-2 text-xs text-gray-500">{{ t('funnels.steps.form.keyboardRowsHint') }}</p>
+
+          <div
+            v-for="(row, r) in keyboardRows"
+            :key="row.uid"
+            :data-test="`step-keyboard-row-${r}`"
+            class="mb-2 space-y-2 rounded-md border p-2"
+          >
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium uppercase text-gray-500">{{ t('funnels.steps.form.keyboardRow', { n: r + 1 }) }}</span>
+              <div class="flex gap-1">
+                <button
+                  type="button"
+                  :data-test="`step-keyboard-add-button-${r}`"
+                  :disabled="row.buttons.length >= KEYBOARD_MAX_BUTTONS_PER_ROW"
+                  class="rounded-md border px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-40"
+                  @click="addKeyboardButton(r)"
+                >
+                  {{ t('funnels.steps.form.keyboardAddButton') }}
+                </button>
+                <button
+                  type="button"
+                  :data-test="`step-keyboard-remove-row-${r}`"
+                  :disabled="keyboardRows.length <= 1"
+                  :aria-label="t('funnels.steps.form.keyboardRemoveRow')"
+                  class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50 disabled:opacity-40"
+                  @click="removeKeyboardRow(r)"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+
+            <div
+              v-for="(button, c) in row.buttons"
+              :key="button.uid"
+              :data-test="`step-keyboard-button-cell-${r}-${c}`"
+              class="space-y-1"
+            >
+              <div class="flex gap-2">
+                <input
+                  v-model="button.text"
+                  :data-test="`step-keyboard-button-${r}-${c}`"
+                  type="text"
+                  autocomplete="off"
+                  :placeholder="t('funnels.steps.form.keyboardButton')"
+                  :aria-label="t('funnels.steps.form.keyboardButton')"
+                  class="flex-1 rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  :data-test="`step-keyboard-remove-button-${r}-${c}`"
+                  :disabled="row.buttons.length <= 1"
+                  :aria-label="t('funnels.steps.form.keyboardRemoveButton')"
+                  class="rounded-md border border-red-300 px-2.5 py-1 text-sm text-red-700 hover:bg-red-50 disabled:opacity-40"
+                  @click="removeKeyboardButton(r, c)"
+                >
+                  ×
+                </button>
+              </div>
+              <p
+                v-if="keyboardTouched && keyboardButtonError(button)"
+                :data-test="`step-keyboard-button-error-${r}-${c}`"
+                class="text-sm text-red-600"
+              >
+                {{ keyboardButtonError(button) }}
+              </p>
+              <!-- Non-blocking amber keyword hint (Decision 8) — advisory, never blocks submit. -->
+              <p
+                v-if="keyboardButtonHint(button)"
+                :data-test="`step-keyboard-hint-${r}-${c}`"
+                class="text-sm text-amber-600"
+              >
+                {{ t('funnels.steps.form.keyboardKeywordHint') }}
+              </p>
+            </div>
+          </div>
+
+          <p v-if="keyboardTouched && keyboardHasDuplicate" data-test="step-keyboard-duplicate-error" class="mt-1 text-sm text-red-600">
+            {{ t('funnels.steps.validation.keyboardDuplicate') }}
+          </p>
+        </div>
+
+        <div class="space-y-2">
+          <label class="inline-flex items-center gap-2 text-sm">
+            <input
+              v-model="keyboardPersistent"
+              data-test="step-keyboard-persistent"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300"
+            />
+            {{ t('funnels.steps.form.keyboardPersistent') }}
+          </label>
+          <label class="flex items-center gap-2 text-sm">
+            <input
+              v-model="keyboardOneTime"
+              data-test="step-keyboard-onetime"
+              type="checkbox"
+              class="h-4 w-4 rounded border-gray-300"
+            />
+            {{ t('funnels.steps.form.keyboardOneTime') }}
+          </label>
+        </div>
+      </template>
     </template>
 
     <div class="flex justify-end gap-2 pt-2">

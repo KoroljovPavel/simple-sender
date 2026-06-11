@@ -759,7 +759,9 @@
         "REMOVE_TAG": "Remove tag",
         "SET_CUSTOM_FIELD": "Set custom field",
         "EMIT_EVENT": "Emit event",
-        "SUBSCRIBE_TO_FUNNEL": "Start a funnel"
+        "SUBSCRIBE_TO_FUNNEL": "Start a funnel",
+        "SET_KEYBOARD": "Set keyboard",
+        "CLEAR_KEYBOARD": "Clear keyboard"
       },
       "blockType": {
         "TEXT": "Text",
@@ -779,7 +781,9 @@
         "addTag": "Add tag: {tag}",
         "removeTag": "Remove tag: {tag}",
         "setCustomField": "Field: {key}",
-        "message": "Message · {count} block(s)"
+        "message": "Message · {count} block(s)",
+        "setKeyboard": "Keyboard · {count} row(s)",
+        "clearKeyboard": "Clear keyboard"
       },
       "dialog": {
         "addTitle": "Add step",
@@ -854,6 +858,18 @@
         "subscribeEntryNoMatches": "No matches",
         "subscribeEndParent": "End this funnel after starting the other one",
         "subscribeReturnHint": "Recommended for transfer/return flows. If left off, returning into a still-running parent funnel with re-entry disabled does nothing.",
+        "keyboardText": "Message text",
+        "keyboardRows": "Keyboard buttons",
+        "keyboardRowsHint": "Up to 10 rows × up to 4 buttons. Tapping a button sends its text as a normal message.",
+        "keyboardRow": "Row {n}",
+        "keyboardAddRow": "+ Add row",
+        "keyboardRemoveRow": "Remove row",
+        "keyboardAddButton": "+ Button",
+        "keyboardRemoveButton": "Remove button",
+        "keyboardButton": "Button text",
+        "keyboardKeywordHint": "No active keyword funnel matches this text — tapping this button will do nothing.",
+        "keyboardPersistent": "Persistent",
+        "keyboardOneTime": "Hide after a tap",
         "submitAdd": "Add",
         "submitSave": "Save"
       },
@@ -882,7 +898,12 @@
         "menuNeedsCallback": "A menu needs at least one button that leads to a step or End",
         "menuTimeoutValueMin": "Timeout must be a whole number of at least 1",
         "menuTimeoutUnitRequired": "Choose a timeout unit",
-        "eventNamePattern": "Only Latin letters, digits, _ and - are allowed (1 to 64 characters)"
+        "eventNamePattern": "Only Latin letters, digits, _ and - are allowed (1 to 64 characters)",
+        "keyboardTextRequired": "Message text cannot be empty",
+        "keyboardTextMax": "Message text exceeds 4096 characters",
+        "keyboardButtonRequired": "Button text cannot be empty",
+        "keyboardButtonMax": "Button text exceeds 64 characters",
+        "keyboardDuplicate": "Button texts in the keyboard must be unique"
       }
     },
     "trigger": {

@@ -39,6 +39,10 @@ function summary(step: FunnelStep): string {
       return step.eventName ?? ''
     case 'SUBSCRIBE_TO_FUNNEL':
       return ''
+    case 'SET_KEYBOARD':
+      return t('funnels.steps.summary.setKeyboard', { count: step.keyboardRows?.length ?? 0 })
+    case 'CLEAR_KEYBOARD':
+      return t('funnels.steps.summary.clearKeyboard')
   }
 }
 

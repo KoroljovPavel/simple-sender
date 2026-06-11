@@ -18,6 +18,10 @@ export type StepType =
   | 'EMIT_EVENT'
   // Cross-funnel composition (Phase 5): enrolls the subscriber into ANOTHER funnel of the project.
   | 'SUBSCRIBE_TO_FUNNEL'
+  // 16-persistent-keyboard: send a mandatory text message and SET a persistent bottom reply keyboard
+  // (ReplyKeyboardMarkup) / CLEAR it (ReplyKeyboardRemove). Fire-and-forget — the engine never parks.
+  | 'SET_KEYBOARD'
+  | 'CLEAR_KEYBOARD'
 
 // Funnel entry trigger — mirrors backend triggerType values byte-for-byte (Phase 3). The backend value
 // for the API-event path is `event`; the UI labels it "api-event" (Decision 4 — external POST /events and
@@ -36,6 +40,19 @@ export interface Button {
   label: string
   targetStepId?: string | null
   url?: string | null
+}
+
+// One button of a SET_KEYBOARD reply keyboard — mirrors backend KeyboardButton record
+// (com.botfunnel.funnel.KeyboardButton). Reply-keyboard buttons are PLAIN TEXT only (the tap arrives as a
+// normal message and routes through keyword dispatch) — DISTINCT from the inline Button (callback/url).
+export interface KeyboardButton {
+  text: string
+}
+
+// One row of a SET_KEYBOARD reply keyboard — mirrors backend KeyboardRow record
+// (com.botfunnel.funnel.KeyboardRow). 1..4 buttons per row; a keyboard has 1..10 rows.
+export interface KeyboardRow {
+  buttons: KeyboardButton[]
 }
 
 // Delay unit — mirrors backend requireDelay (MIN | HOUR | DAY).
@@ -105,6 +122,18 @@ export interface FunnelStep {
   targetFunnelId?: string | null
   targetEntryStepId?: string | null
   endParentAfter?: boolean | null
+  // 16-persistent-keyboard — mirrors backend FunnelStep keyboard fields (all nullable). SET_KEYBOARD and
+  // CLEAR_KEYBOARD share the mandatory text pair (keyboardText + keyboardParseMode, ≤4096, variables +
+  // parse mode). The remaining three are SET_KEYBOARD only: keyboardRows (1..10 rows × 1..4 buttons,
+  // button text non-blank ≤64, no duplicate trimmed texts), isPersistent (Telegram is_persistent, form
+  // default true) and oneTimeKeyboard (one_time_keyboard, form default false). resize_keyboard is NOT
+  // modeled here — the backend StepExecutor hardcodes it true. CLEAR_KEYBOARD must NOT carry the three
+  // SET-only fields — the backend strictly rejects them on that type (Decision 6).
+  keyboardText?: string | null
+  keyboardParseMode?: string | null
+  keyboardRows?: KeyboardRow[] | null
+  isPersistent?: boolean | null
+  oneTimeKeyboard?: boolean | null
   // Graph model (Phase 2) — mirrors backend FunnelStep graph fields. id is server-minted; next is the
   // default outgoing edge (null = next step in list). buttons/timeout* apply to the MESSAGE composer step
   // (attached to the last non-album block — Decision 2).

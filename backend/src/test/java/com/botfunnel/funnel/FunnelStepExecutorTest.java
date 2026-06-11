@@ -668,6 +668,37 @@ class FunnelStepExecutorTest {
     }
 
     @Test
+    void setKeyboard_rowWithNoButtons_failsTerminally() {
+        // Defensive guard third branch (isEmptyRow): a non-empty rows list containing a row whose buttons
+        // list is empty/null terminal-fails with empty_keyboard_rows and never sends — stops a malformed
+        // snapshot from emitting an empty wire row [[]].
+        FunnelStep emptyButtonsRow = setKeyboardStep("text", null, true, false, row("A"), row());
+        StepExecutor.StepResult r = executor.execute(
+                emptyButtonsRow, execution(0), activeSubscriber(), connectedBot());
+        assertThat(r.outcome()).isEqualTo(StepExecutor.Outcome.FAIL);
+        assertThat(r.reasonCode()).isEqualTo("empty_keyboard_rows");
+        verify(sender, never()).sendText(anyString(), any(), anyString(), any(), any(), any());
+    }
+
+    @Test
+    void setKeyboard_trimsTextOver4096AndWarns_pii() {
+        // keyboardText over 4096 after rendering is trimmed to MAX_MESSAGE_LENGTH with the codes-only
+        // LOG_TEXT_TRIMMED WARN — NOT a failure (CONTINUE), and the WARN carries no rendered payload (PII).
+        when(sender.sendText(anyString(), any(), anyString(), any(), any(), any()))
+                .thenReturn(new SentMessage(CHAT_ID, 1L, Instant.now()));
+        FunnelStep step = setKeyboardStep("a".repeat(5000), null, true, false, row("A"));
+
+        StepExecutor.StepResult result = executor.execute(step, execution(0), activeSubscriber(), connectedBot());
+
+        assertThat(result.outcome()).isEqualTo(StepExecutor.Outcome.CONTINUE);
+        ArgumentCaptor<String> textCaptor = ArgumentCaptor.forClass(String.class);
+        verify(sender).sendText(eq(BOT_ID), eq(CHAT_ID), textCaptor.capture(), any(), eq(null), any());
+        assertThat(textCaptor.getValue()).hasSize(StepExecutor.MAX_MESSAGE_LENGTH);
+        assertThat(warnMessages()).anyMatch(m -> m.contains(StepExecutor.LOG_TEXT_TRIMMED));
+        assertThat(warnMessages()).noneMatch(m -> m.contains("aaaa"));
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void clearKeyboard_sendsTextWithRemoveKeyboard_returnsContinue() {
         // CLEAR_KEYBOARD sends one text message with markup exactly {"remove_keyboard": true}; CONTINUE.

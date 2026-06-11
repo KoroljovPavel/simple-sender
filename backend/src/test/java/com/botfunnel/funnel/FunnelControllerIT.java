@@ -978,6 +978,98 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void previewSetKeyboardEscapesTextPerParseMode() throws Exception {
+        // Security-relevant AC: keyboard TEXT is rendered through VariableTemplateRenderer with escaping per
+        // keyboardParseMode — a hostile <script> substituted value with parseMode=HTML must be escaped
+        // (&lt;script&gt;), exactly like the message branch (previewEscapesHostilePayload). Guards against a
+        // regression where the keyboard render path silently drops the parseMode argument.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("<script>alert(1)</script>");
+        subscriberRepository.save(owner);
+        String stepId = "kb1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(setKeyboardStep(stepId, "saved"))));
+
+        String body = mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewKeyboardBody("SET_KEYBOARD", "<b>{user.first_name}</b>", "HTML",
+                                keyboardRow("Меню"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("keyboard"))
+                .andExpect(jsonPath("$.renderedBlocks[0].type").value("TEXT"))
+                .andExpect(jsonPath("$.renderedBlocks[0].parseMode").value("HTML"))
+                .andExpect(jsonPath("$.renderedBlocks[0].text")
+                        .value("<b>&lt;script&gt;alert(1)&lt;/script&gt;</b>"))
+                .andReturn().getResponse().getContentAsString();
+        // Defense-in-depth: the raw response must NOT contain the unescaped hostile tag.
+        assertThat(body).doesNotContain("<script>");
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewSetKeyboardBlankTextStillReturnsOneTextBlockNullRows() throws Exception {
+        // Preview is non-validating: a SET_KEYBOARD request with null keyboardText AND no keyboardRows still
+        // returns kind=keyboard, exactly one TEXT block (text rendered null-tolerantly → empty), and
+        // keyboardRows=null (the author has typed no rows → absent, not []). No 422, no NPE.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String stepId = "kb1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(setKeyboardStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewKeyboardBody("SET_KEYBOARD", null, null)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("keyboard"))
+                .andExpect(jsonPath("$.renderedBlocks.length()").value(1))
+                .andExpect(jsonPath("$.renderedBlocks[0].type").value("TEXT"))
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value(""))
+                .andExpect(jsonPath("$.keyboardRows").doesNotExist());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewSetKeyboardUnlinkedBotUsesStubSubscriber() throws Exception {
+        // No linked owner → keyboard text renders on the sample stub (Іван), sampleData=true, no NPE/500 —
+        // same stub fallback as the message branch (previewUnlinkedBotUsesStubSubscriber).
+        String stepId = "kb1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(setKeyboardStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewKeyboardBody("SET_KEYBOARD", "Привіт {user.first_name}", null,
+                                keyboardRow("Меню"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("keyboard"))
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value("Привіт Іван"))
+                .andExpect(jsonPath("$.sampleData").value(true));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewSetKeyboardLabelAtCapNotTruncated() throws Exception {
+        // Clamp boundary: a label of exactly 64 chars (== MAX_KEYBOARD_BUTTON_TEXT) is NOT truncated
+        // (truncation is strictly >, not >=). Pins the off-by-one boundary.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String stepId = "kb1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(setKeyboardStep(stepId, "saved"))));
+        String exactly64 = "y".repeat(64);
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewKeyboardBody("SET_KEYBOARD", "Текст", null,
+                                keyboardRow(exactly64))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.keyboardRows[0][0]").value(exactly64));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void previewMessageStepHasNullKeyboardRows() throws Exception {
         // Regression guard: a MESSAGE step preview never carries keyboardRows (the new field is null there).
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);

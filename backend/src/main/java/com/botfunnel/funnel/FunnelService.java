@@ -458,9 +458,15 @@ public class FunnelService {
     // caps (16-persistent-keyboard / Decision 7): ≤MAX_KEYBOARD_ROWS rows × ≤MAX_KEYBOARD_ROW_BUTTONS buttons,
     // each label truncated to MAX_KEYBOARD_BUTTON_TEXT chars. Clamp = TRUNCATE, not reject (preview is
     // non-validating). The ONLY transformation on a label is the length clamp — labels are NEVER
-    // variable-rendered (they are the keyword link). Null rows/buttons/labels are skipped defensively (DTO
-    // unknown-field tolerance — same idiom as renderBlocks/renderMediaItems). Null input → null (mirror "no
-    // data" rather than inventing an empty structure); never NPE.
+    // variable-rendered (they are the keyword link). Null rows/buttons/button-text are skipped defensively
+    // (DTO unknown-field tolerance — same idiom as renderBlocks/renderMediaItems); never NPE.
+    //
+    // Null vs empty (the SET_KEYBOARD discriminator is keyboardRows null-vs-present, so the distinction is
+    // load-bearing for the frontend): null input → null (the author has typed no rows). A NON-null input is
+    // ECHOED as a (clamped) structure even when it flattens to empty — an empty rows list → [], a row whose
+    // buttons all dropped → an empty inner [] — because preview is a faithful mirror of the live (possibly
+    // invalid) form state, not a validator: the panel shows exactly what the author has right now, and
+    // collapsing "present but empty" to "absent" would hide an in-progress edit.
     private static List<List<String>> clampKeyboardLabels(List<KeyboardRowDto> rows) {
         if (rows == null) {
             return null;

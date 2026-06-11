@@ -3,6 +3,8 @@ package com.botfunnel.funnel;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.botfunnel.AbstractIntegrationTest;
 import com.botfunnel.bot.Bot;
 import com.botfunnel.bot.BotRepository;
@@ -40,6 +42,7 @@ import org.springframework.test.context.DynamicPropertySource;
 
 import java.io.IOException;
 import java.time.Clock;
+import java.util.concurrent.TimeUnit;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneId;
@@ -63,6 +66,9 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     private static final Instant BASE = Instant.parse("2026-06-01T12:00:00Z");
     private static final String TOKEN = "1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789xyz";
     private static final Long TELEGRAM_BOT_ID = 778899L;
+    // Plain ObjectMapper for asserting exact /sendMessage wire bodies (Decision 9), mirroring
+    // TelegramSenderIT's static OBJECT_MAPPER — the body-assert JsonNode-walk idiom is borrowed verbatim.
+    private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
     // Mutable, advanceable clock shared with the engine via the @Primary bean below. Reset per test.
     static final MutableClock CLOCK = new MutableClock(BASE);
@@ -86,6 +92,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
 
     @Autowired FunnelExecutionEngine engine;
     @Autowired FunnelTriggerService triggerService;
+    @Autowired FunnelEventService eventService;
     @Autowired MongoTemplate mongoTemplate;
     @Autowired BotRepository botRepository;
     @Autowired SubscriberRepository subscriberRepository;
@@ -1375,6 +1382,99 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         assertThat(reload(parentId).getStatus()).isEqualTo(ExecutionStatus.completed);
     }
 
+    // ─── Phase 7: SET_KEYBOARD / CLEAR_KEYBOARD slow-lane wire-format (16-persistent-keyboard) ──────
+    // First engine ITs that assert the actual /sendMessage request BODY (Decision 9). The JsonNode
+    // body-walk is borrowed verbatim from TelegramSenderIT.sendText_withReplyMarkup_includesInlineKeyboardInBody;
+    // the takeRequest()/readUtf8() + drain pattern from FunnelTestRunSendIT (line 131-136 take, line 174 drain).
+
+    @Test
+    void setKeyboardStep_sendsExactReplyKeyboardBody_andCompletes() throws Exception {
+        String subId = seedActiveSubscriber();
+        // 2 rows × (2, 1) buttons with distinct labels so a transposed row/column fails loudly. is_persistent
+        // true / one_time_keyboard false are non-default-matching picks that prove the booleans are wired.
+        String execId = seedExecution(subId, BASE, setKeyboard("Choose:",
+                List.of(
+                        new KeyboardRow(List.of(new KeyboardButton("Yes"), new KeyboardButton("No"))),
+                        new KeyboardRow(List.of(new KeyboardButton("Maybe")))),
+                true, false));
+        enqueueOk(1);
+        drainRecordedRequests(); // clear the cumulative backlog so the post-sweep takeRequest() is OURS
+
+        engine.sweep();
+
+        // Fire-and-forget (Decision 4): the keyboard step never parks — it completes, NOT waiting_for_reply.
+        FunnelExecution done = reload(execId);
+        assertThat(done.getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(done.getStatus()).isNotEqualTo(ExecutionStatus.waiting_for_reply); // no park (no-park contract)
+        assertThat(sentCount()).isEqualTo(1);
+
+        RecordedRequest sent = TELEGRAM.takeRequest();
+        assertThat(sent.getPath()).isEqualTo("/bot" + TOKEN + "/sendMessage");
+        JsonNode body = OBJECT_MAPPER.readTree(sent.getBody().readUtf8());
+        JsonNode markup = body.path("reply_markup");
+        JsonNode keyboard = markup.path("keyboard");
+        // Object form {"text": …} per row/column (Decision 5), NOT bare strings.
+        assertThat(keyboard.isArray()).isTrue();
+        assertThat(keyboard).hasSize(2);
+        assertThat(keyboard.get(0)).hasSize(2);
+        assertThat(keyboard.get(0).get(0).get("text").asText()).isEqualTo("Yes");
+        assertThat(keyboard.get(0).get(1).get("text").asText()).isEqualTo("No");
+        assertThat(keyboard.get(1)).hasSize(1);
+        assertThat(keyboard.get(1).get(0).get("text").asText()).isEqualTo("Maybe");
+        assertThat(markup.path("is_persistent").asBoolean()).isTrue();
+        assertThat(markup.path("resize_keyboard").asBoolean()).isTrue(); // hardcoded true (Decision 5)
+        assertThat(markup.path("one_time_keyboard").asBoolean()).isFalse();
+        assertThat(body.path("text").asText()).isEqualTo("Choose:"); // mandatory rendered keyboardText
+    }
+
+    @Test
+    void clearKeyboardStep_sendsRemoveKeyboardBody_andCompletes() throws Exception {
+        String subId = seedActiveSubscriber();
+        String execId = seedExecution(subId, BASE, clearKeyboard("Keyboard removed."));
+        enqueueOk(1);
+        drainRecordedRequests(); // clear the cumulative backlog so the post-sweep takeRequest() is OURS
+
+        engine.sweep();
+
+        FunnelExecution done = reload(execId);
+        assertThat(done.getStatus()).isEqualTo(ExecutionStatus.completed); // fire-and-forget, never parks
+        assertThat(sentCount()).isEqualTo(1);
+
+        RecordedRequest sent = TELEGRAM.takeRequest();
+        assertThat(sent.getPath()).isEqualTo("/bot" + TOKEN + "/sendMessage");
+        JsonNode body = OBJECT_MAPPER.readTree(sent.getBody().readUtf8());
+        assertThat(body.path("reply_markup").path("remove_keyboard").asBoolean()).isTrue();
+        assertThat(body.path("text").asText()).isEqualTo("Keyboard removed."); // mandatory rendered text
+    }
+
+    @Test
+    void buttonLabelText_dispatchesMatchingKeywordFunnel() {
+        // A persistent-keyboard button is a plain reply-keyboard button: tapping it sends its LABEL back as
+        // ordinary text. That text leg (webhook → dispatchKeyword) is already covered by
+        // ProcessTelegramUpdateJobTest.plainText_dispatchesKeyword; here we pin the dispatch leg itself —
+        // a matching keyword funnel starts when the button label arrives via dispatchForSubscriber.
+        String subId = seedActiveSubscriber();
+        // Active keyword funnel; keywords stored lowercase (FunnelService normalizes on save, but the raw
+        // repository.save here bypasses that — seed lowercase ourselves). contains-match: "menu" ⊂ "Menu".
+        Funnel keywordFunnel = seedActiveKeywordFunnel(List.of("menu"));
+
+        // Pass the RAW button label with an uppercase letter to also prove case-insensitivity (dispatch
+        // lowercases the matchKey internally). originDepth 0 = human/external root (no rate-limit consult).
+        eventService.dispatchForSubscriber(projectId, subId, FunnelEventService.TRIGGER_KEYWORD, "Menu", 0);
+
+        List<FunnelExecution> created = mongoTemplate.find(
+                Query.query(Criteria.where("funnelId").is(keywordFunnel.getId())
+                        .and("subscriberId").is(subId)),
+                FunnelExecution.class);
+        // Exactly one execution for (funnel, subscriber): a silent no-op (misconfigured seed) would be zero;
+        // assert the identity + depth-0 so the dispatch genuinely created THIS funnel's root enroll.
+        assertThat(created).hasSize(1);
+        FunnelExecution exec = created.get(0);
+        assertThat(exec.getFunnelId()).isEqualTo(keywordFunnel.getId());
+        assertThat(exec.getSubscriberId()).isEqualTo(subId);
+        assertThat(exec.getEnrollDepth()).isZero();
+    }
+
     // ─── helpers ───────────────────────────────────────────────────────────────
 
     private FunnelExecution reload(String id) {
@@ -1384,6 +1484,17 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
     private void enqueueOk(int count) {
         for (int i = 0; i < count; i++) {
             TELEGRAM.enqueue(json(200, "{\"ok\":true,\"result\":{\"message_id\":1,\"chat\":{\"id\":99}}}"));
+        }
+    }
+
+    // Drain every request still sitting in the JVM-singleton MockWebServer's cumulative log (most engine
+    // ITs send without draining — they only assert getRequestCount() deltas — so the shared queue carries a
+    // backlog from earlier tests). A body-asserting test must clear that backlog BEFORE its sweep so the
+    // takeRequest() that follows pops ITS OWN /sendMessage, not a stale answerCallbackQuery. Non-blocking:
+    // takeRequest(timeout) returns null once the queue is empty.
+    private void drainRecordedRequests() throws InterruptedException {
+        while (TELEGRAM.takeRequest(0, TimeUnit.MILLISECONDS) != null) {
+            // discard
         }
     }
 
@@ -1415,6 +1526,30 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         s.setStepType(StepType.DELAY);
         s.setDelayValue(value);
         s.setDelayUnit(unit);
+        return s;
+    }
+
+    // SET_KEYBOARD step builder (16-persistent-keyboard / Decision 4): id-less (INDEX/linear mode) like
+    // sendMessage so seedExecution drives it by currentStepIndex — setting an id would flip the snapshot
+    // into graph mode (see the multiTextMessageIndexed comment). Carries the mandatory keyboardText +
+    // a List<KeyboardRow> of KeyboardButtons + the is_persistent / one_time_keyboard scalars.
+    private FunnelStep setKeyboard(String text, List<KeyboardRow> rows, boolean isPersistent,
+                                   boolean oneTimeKeyboard) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.SET_KEYBOARD);
+        s.setKeyboardText(text);
+        s.setKeyboardRows(rows);
+        s.setIsPersistent(isPersistent);
+        s.setOneTimeKeyboard(oneTimeKeyboard);
+        return s;
+    }
+
+    // CLEAR_KEYBOARD step builder (Decision 4): id-less like sendMessage; only the mandatory keyboardText
+    // (no rows — validation rejects them; the executor emits the constant ReplyKeyboardRemove markup).
+    private FunnelStep clearKeyboard(String text) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.CLEAR_KEYBOARD);
+        s.setKeyboardText(text);
         return s;
     }
 
@@ -1549,6 +1684,22 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         f.setTriggerValue("t-" + seq.incrementAndGet());
         f.setAllowReEnter(allowReEnter);
         f.setSteps(new ArrayList<>(List.of(steps)));
+        f.setCreatedAt(BASE);
+        f.setUpdatedAt(BASE);
+        return funnelRepository.save(f);
+    }
+
+    // Seed an ACTIVE triggerType="keyword" funnel in THIS project (button-label dispatch test). The
+    // repository.save bypasses FunnelService keyword normalization, so the caller MUST pass lowercase
+    // keywords. One simple MESSAGE step so the created execution is well-formed.
+    private Funnel seedActiveKeywordFunnel(List<String> lowercaseKeywords) {
+        Funnel f = new Funnel();
+        f.setProjectId(projectId);
+        f.setName("keyword-" + seq.incrementAndGet());
+        f.setStatus(FunnelStatus.active);
+        f.setTriggerType(FunnelService.TRIGGER_KEYWORD);
+        f.setKeywords(new ArrayList<>(lowercaseKeywords));
+        f.setSteps(new ArrayList<>(List.of(sendMessageStep("k1", "keyword hit", null))));
         f.setCreatedAt(BASE);
         f.setUpdatedAt(BASE);
         return funnelRepository.save(f);

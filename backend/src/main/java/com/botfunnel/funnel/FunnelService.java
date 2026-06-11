@@ -423,11 +423,76 @@ public class FunnelService {
             // the runtime engine would (XSS-guard, OWASP A03). Media URLs/items are passed through VERBATIM
             // and NEVER dereferenced (anti-SSRF, Decision 6) — the frontend renders them via :src.
             List<PreviewStepResponse.RenderedBlock> rendered = renderBlocks(request.blocks(), subscriber);
-            return new PreviewStepResponse(rendered, sampleData, "message");
+            return new PreviewStepResponse(rendered, sampleData, "message", null);
+        }
+        if (isKeyboardStep(step.getStepType())) {
+            // SET_KEYBOARD / CLEAR_KEYBOARD (16-persistent-keyboard / Decision 7): render the request's
+            // single text field through the same renderer (variables substituted, escaped per
+            // keyboardParseMode) as one TEXT block — byte-for-byte faithful to the runtime. The echoed
+            // button rows are returned VERBATIM (labels are the keyword link — never variable-rendered),
+            // but CLAMPED to the validation caps so the response never reflects an unbounded payload.
+            // SET_KEYBOARD echoes the clamped rows; CLEAR_KEYBOARD has no keyboard → null rows.
+            List<PreviewStepResponse.RenderedBlock> rendered = List.of(
+                    renderTextBlock(request.keyboardText(), request.keyboardParseMode(), subscriber));
+            List<List<String>> keyboardRows = step.getStepType() == StepType.SET_KEYBOARD
+                    ? clampKeyboardLabels(request.keyboardRows())
+                    : null;
+            return new PreviewStepResponse(rendered, sampleData, "keyboard", keyboardRows);
         }
         // Non-message step (DELAY/ADD_TAG/REMOVE_TAG/SET_CUSTOM_FIELD/EMIT_EVENT/SUBSCRIBE_TO_FUNNEL):
         // neutral placeholder — an empty rendered-blocks array.
-        return new PreviewStepResponse(List.of(), sampleData, "non_message");
+        return new PreviewStepResponse(List.of(), sampleData, "non_message", null);
+    }
+
+    // Render a single text field (keyboard step's text) as one TEXT RenderedBlock — same render call shape
+    // as renderBlocks, reused for the keyboard preview branch (16-persistent-keyboard / Decision 7). Text is
+    // null-tolerant (the renderer renders null as ""), so a blank/null keyboardText still yields one block
+    // (preview is non-validating). Media/caption/items are null — a keyboard step has no media.
+    private static PreviewStepResponse.RenderedBlock renderTextBlock(String text, String parseMode,
+                                                                     Subscriber subscriber) {
+        String renderedText = VariableTemplateRenderer.render(text, parseMode, subscriber);
+        return new PreviewStepResponse.RenderedBlock("TEXT", renderedText, parseMode, null, null, null);
+    }
+
+    // Flatten the request's button rows to raw label rows for the keyboard mock, CLAMPED to the validation
+    // caps (16-persistent-keyboard / Decision 7): ≤MAX_KEYBOARD_ROWS rows × ≤MAX_KEYBOARD_ROW_BUTTONS buttons,
+    // each label truncated to MAX_KEYBOARD_BUTTON_TEXT chars. Clamp = TRUNCATE, not reject (preview is
+    // non-validating). The ONLY transformation on a label is the length clamp — labels are NEVER
+    // variable-rendered (they are the keyword link). Null rows/buttons/labels are skipped defensively (DTO
+    // unknown-field tolerance — same idiom as renderBlocks/renderMediaItems). Null input → null (mirror "no
+    // data" rather than inventing an empty structure); never NPE.
+    private static List<List<String>> clampKeyboardLabels(List<KeyboardRowDto> rows) {
+        if (rows == null) {
+            return null;
+        }
+        List<List<String>> out = new ArrayList<>(Math.min(rows.size(), MAX_KEYBOARD_ROWS));
+        for (KeyboardRowDto row : rows) {
+            if (out.size() >= MAX_KEYBOARD_ROWS) {
+                break;
+            }
+            if (row == null || row.buttons() == null) {
+                continue;
+            }
+            List<String> labels = new ArrayList<>(Math.min(row.buttons().size(), MAX_KEYBOARD_ROW_BUTTONS));
+            for (KeyboardButtonDto button : row.buttons()) {
+                if (labels.size() >= MAX_KEYBOARD_ROW_BUTTONS) {
+                    break;
+                }
+                if (button == null || button.text() == null) {
+                    continue;
+                }
+                String text = button.text();
+                labels.add(text.length() > MAX_KEYBOARD_BUTTON_TEXT
+                        ? text.substring(0, MAX_KEYBOARD_BUTTON_TEXT)
+                        : text);
+            }
+            out.add(labels);
+        }
+        return out;
+    }
+
+    private static boolean isKeyboardStep(StepType type) {
+        return type == StepType.SET_KEYBOARD || type == StepType.CLEAR_KEYBOARD;
     }
 
     // Render each composer block's text/caption through VariableTemplateRenderer (backend-side parseMode

@@ -870,6 +870,132 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void previewSetKeyboardReturnsKeyboardKindWithRenderedTextAndRawRows() throws Exception {
+        // Saved SET_KEYBOARD step: the request's keyboardText renders through VariableTemplateRenderer
+        // (variable substituted), kind="keyboard", exactly one TEXT block, and keyboardRows echoes the
+        // request's raw label rows verbatim (row/button structure preserved).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("Олена");
+        subscriberRepository.save(owner);
+        String stepId = "kb1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(setKeyboardStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewKeyboardBody("SET_KEYBOARD", "Привіт {user.first_name}!", null,
+                                keyboardRow("Меню", "Бонус"), keyboardRow("Допомога"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("keyboard"))
+                .andExpect(jsonPath("$.renderedBlocks.length()").value(1))
+                .andExpect(jsonPath("$.renderedBlocks[0].type").value("TEXT"))
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value("Привіт Олена!"))
+                .andExpect(jsonPath("$.sampleData").value(false))
+                .andExpect(jsonPath("$.keyboardRows.length()").value(2))
+                .andExpect(jsonPath("$.keyboardRows[0].length()").value(2))
+                .andExpect(jsonPath("$.keyboardRows[0][0]").value("Меню"))
+                .andExpect(jsonPath("$.keyboardRows[0][1]").value("Бонус"))
+                .andExpect(jsonPath("$.keyboardRows[1].length()").value(1))
+                .andExpect(jsonPath("$.keyboardRows[1][0]").value("Допомога"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewSetKeyboardLabelsNotVariableRendered() throws Exception {
+        // A button label containing {user.first_name} comes back VERBATIM — labels are the keyword link,
+        // never passed through the variable renderer (rendering would break keyword matching).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("Олена");
+        subscriberRepository.save(owner);
+        String stepId = "kb1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(setKeyboardStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewKeyboardBody("SET_KEYBOARD", "Текст", null,
+                                keyboardRow("Привіт {user.first_name}"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("keyboard"))
+                .andExpect(jsonPath("$.keyboardRows[0][0]").value("Привіт {user.first_name}"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewSetKeyboardClampsOversizedRows() throws Exception {
+        // Preview is non-validating: an oversized payload (>10 rows, a row with >4 buttons, a label >64)
+        // is silently clamped (10 rows × 4 buttons, label truncated to 64) — never 422, never echoed unclamped.
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String stepId = "kb1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(setKeyboardStep(stepId, "saved"))));
+
+        // 12 rows; the FIRST row has 6 buttons (the first of which is a 70-char label).
+        String longLabel = "x".repeat(70);
+        List<Map<String, Object>> rows = new ArrayList<>();
+        rows.add(keyboardRow(longLabel, "b", "c", "d", "e", "f"));
+        for (int i = 1; i < 12; i++) {
+            rows.add(keyboardRow("r" + i));
+        }
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewKeyboardBodyRows("SET_KEYBOARD", "Текст", null, rows)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("keyboard"))
+                .andExpect(jsonPath("$.keyboardRows.length()").value(10))
+                .andExpect(jsonPath("$.keyboardRows[0].length()").value(4))
+                .andExpect(jsonPath("$.keyboardRows[0][0]").value("x".repeat(64)));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewClearKeyboardReturnsNullRows() throws Exception {
+        // Saved CLEAR_KEYBOARD step: kind="keyboard", one rendered TEXT block (variables substituted),
+        // keyboardRows is null (no rows on a clear).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        Subscriber owner = seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        owner.setFirstName("Олена");
+        subscriberRepository.save(owner);
+        String stepId = "clr1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(clearKeyboardStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewKeyboardBody("CLEAR_KEYBOARD", "Меню сховано, {user.first_name}",
+                                null)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("keyboard"))
+                .andExpect(jsonPath("$.renderedBlocks.length()").value(1))
+                .andExpect(jsonPath("$.renderedBlocks[0].type").value("TEXT"))
+                .andExpect(jsonPath("$.renderedBlocks[0].text").value("Меню сховано, Олена"))
+                .andExpect(jsonPath("$.keyboardRows").doesNotExist());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void previewMessageStepHasNullKeyboardRows() throws Exception {
+        // Regression guard: a MESSAGE step preview never carries keyboardRows (the new field is null there).
+        seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
+        seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
+        String stepId = "s1";
+        Funnel f = seedFunnel("F", FunnelStatus.draft, "go",
+                new ArrayList<>(List.of(textStep(stepId, "saved"))));
+
+        mockMvc.perform(post(previewUrl(f, stepId)).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(previewBody("MESSAGE", textBlock("hi"))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.kind").value("message"))
+                .andExpect(jsonPath("$.keyboardRows").doesNotExist());
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void previewUnknownStepIdReturns404() throws Exception {
         seedConnectedBotWithOwner("my_bot", OWNER_CHAT_ID);
         seedOwnerSubscriber(OWNER_CHAT_ID, SubscriberStatus.ACTIVE);
@@ -1693,6 +1819,27 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         return s;
     }
 
+    // Directly-seeded SET_KEYBOARD domain step (16-persistent-keyboard / Task 4). One minimal valid row
+    // so the saved step is well-formed; preview reads only the SAVED step's TYPE (the content comes from
+    // the request body), so the seeded rows/text are placeholders.
+    private static FunnelStep setKeyboardStep(String id, String text) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.SET_KEYBOARD);
+        s.setId(id);
+        s.setKeyboardText(text);
+        s.setKeyboardRows(new ArrayList<>(List.of(
+                new KeyboardRow(new ArrayList<>(List.of(new KeyboardButton("saved-btn")))))));
+        return s;
+    }
+
+    private static FunnelStep clearKeyboardStep(String id, String text) {
+        FunnelStep s = new FunnelStep();
+        s.setStepType(StepType.CLEAR_KEYBOARD);
+        s.setId(id);
+        s.setKeyboardText(text);
+        return s;
+    }
+
     private static FunnelStep composerWithButtons(String id, String text, Button... buttons) {
         FunnelStep s = composer(id, textBlockDomain(text));
         s.setButtons(new ArrayList<>(List.of(buttons)));
@@ -1812,6 +1959,30 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         step.put("stepType", "CLEAR_KEYBOARD");
         step.put("keyboardText", text);
         return step;
+    }
+
+    // Preview request body for a SET_KEYBOARD / CLEAR_KEYBOARD step (16-persistent-keyboard / Task 4):
+    // the live form state — keyboardText, keyboardParseMode, and keyboardRows (each row as
+    // {"buttons":[{"text":...}]}, matching the KeyboardRowDto JSON shape).
+    @SafeVarargs
+    private String previewKeyboardBody(String stepType, String text, String parseMode,
+                                       Map<String, Object>... rows) throws Exception {
+        return previewKeyboardBodyRows(stepType, text, parseMode,
+                rows.length == 0 ? null : new ArrayList<>(List.of(rows)));
+    }
+
+    private String previewKeyboardBodyRows(String stepType, String text, String parseMode,
+                                           List<Map<String, Object>> rows) throws Exception {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("stepType", stepType);
+        body.put("keyboardText", text);
+        if (parseMode != null) {
+            body.put("keyboardParseMode", parseMode);
+        }
+        if (rows != null) {
+            body.put("keyboardRows", rows);
+        }
+        return json(body);
     }
 
     private String previewBody(String stepType, Map<String, Object> block) throws Exception {

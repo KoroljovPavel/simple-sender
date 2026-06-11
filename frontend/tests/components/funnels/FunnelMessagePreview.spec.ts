@@ -4,7 +4,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mockNuxtImport, mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../../helpers/settle'
 import FunnelMessagePreview from '../../../components/funnels/FunnelMessagePreview.vue'
-import type { ContentBlock, FunnelStep, PreviewStepResponse, RenderedBlock } from '../../../types/funnel'
+import type { ContentBlock, FunnelStep, KeyboardRow, PreviewStepResponse, RenderedBlock } from '../../../types/funnel'
 
 // Read the component's own source for the static no-v-html guard (the compiled SFC object does not
 // expose its template string). vitest runs with cwd = frontend/.
@@ -26,6 +26,30 @@ function messageStep(blocks: ContentBlock[], over: Partial<FunnelStep> = {}): Fu
 
 function response(renderedBlocks: RenderedBlock[], over: Partial<PreviewStepResponse> = {}): PreviewStepResponse {
   return { renderedBlocks, sampleData: false, kind: 'message', ...over }
+}
+
+// Keyboard-step response shape (kind: 'keyboard'): one rendered TEXT block + raw label rows
+// (null for CLEAR_KEYBOARD). Mirrors the Task-4 backend contract.
+function keyboardResponse(
+  text: string,
+  keyboardRows: string[][] | null,
+  over: Partial<PreviewStepResponse> = {},
+): PreviewStepResponse {
+  return { renderedBlocks: [{ type: 'TEXT', text }], sampleData: false, kind: 'keyboard', keyboardRows, ...over }
+}
+
+function setKeyboardStep(over: Partial<FunnelStep> = {}): FunnelStep {
+  return {
+    stepType: 'SET_KEYBOARD',
+    id: 's1',
+    keyboardText: 'Привіт, {user.first_name}!',
+    keyboardParseMode: null,
+    keyboardRows: [
+      { buttons: [{ text: 'Згенерувати бонус' }] },
+      { buttons: [{ text: 'Допомога' }, { text: 'Меню' }] },
+    ] as KeyboardRow[],
+    ...over,
+  }
 }
 
 async function mountWith(step: FunnelStep | null, stepNumber: number | null = null) {
@@ -391,5 +415,119 @@ describe('FunnelMessagePreview', () => {
   it('omits the heading in the empty state (no step)', async () => {
     const wrapper = await mountWith(null)
     expect(wrapper.find('[data-test="funnel-preview-step-heading"]').exists()).toBe(false)
+  })
+
+  // --- 16-persistent-keyboard: keyboard step preview branch ---
+
+  it('SET_KEYBOARD renders the backend-rendered text and a keyboard mock of label rows', async () => {
+    previewMock.mockResolvedValueOnce(
+      keyboardResponse('Привіт, Olena!', [['Згенерувати бонус'], ['Допомога', 'Меню']]),
+    )
+    const wrapper = await mountWith(setKeyboardStep())
+
+    // The rendered (variable-substituted) text shows as plain text.
+    const text = wrapper.find('[data-test="funnel-preview-keyboard-text"]')
+    expect(text.exists()).toBe(true)
+    expect(text.text()).toContain('Привіт, Olena!')
+
+    // The bottom-keyboard mock shows 2 rows with the labels in order.
+    const mock = wrapper.find('[data-test="funnel-preview-keyboard"]')
+    expect(mock.exists()).toBe(true)
+    const rows = wrapper.findAll('[data-test^="funnel-preview-keyboard-row-"]')
+    expect(rows).toHaveLength(2)
+    expect(rows[0].text()).toContain('Згенерувати бонус')
+    expect(rows[1].text()).toContain('Допомога')
+    expect(rows[1].text()).toContain('Меню')
+    // Row order: row 0 before row 1 in the DOM.
+    const mockHtml = mock.html()
+    expect(mockHtml.indexOf('funnel-preview-keyboard-row-0')).toBeLessThan(
+      mockHtml.indexOf('funnel-preview-keyboard-row-1'),
+    )
+    // The chips are NOT the inline-button block — that hook must be absent for a keyboard step.
+    expect(wrapper.find('[data-test="funnel-preview-buttons"]').exists()).toBe(false)
+    // No MESSAGE block stack is rendered for a keyboard step.
+    expect(wrapper.findAll('[data-test^="funnel-preview-block-"]')).toHaveLength(0)
+  })
+
+  it('CLEAR_KEYBOARD renders the rendered text only, no keyboard mock', async () => {
+    previewMock.mockResolvedValueOnce(keyboardResponse('Клавіатуру прибрано', null))
+    const wrapper = await mountWith({
+      stepType: 'CLEAR_KEYBOARD',
+      id: 's1',
+      keyboardText: 'Клавіатуру прибрано',
+      keyboardParseMode: null,
+    })
+
+    const text = wrapper.find('[data-test="funnel-preview-keyboard-text"]')
+    expect(text.exists()).toBe(true)
+    expect(text.text()).toContain('Клавіатуру прибрано')
+    // No keyboard mock for a null keyboardRows response.
+    expect(wrapper.find('[data-test="funnel-preview-keyboard"]').exists()).toBe(false)
+  })
+
+  it('renders no keyboard mock when keyboardRows is an empty array', async () => {
+    previewMock.mockResolvedValueOnce(keyboardResponse('Текст', []))
+    const wrapper = await mountWith(setKeyboardStep())
+
+    expect(wrapper.find('[data-test="funnel-preview-keyboard-text"]').text()).toContain('Текст')
+    expect(wrapper.find('[data-test="funnel-preview-keyboard"]').exists()).toBe(false)
+  })
+
+  it('keyboard step preview payload carries keyboardText/keyboardParseMode/keyboardRows', async () => {
+    previewMock.mockResolvedValueOnce(keyboardResponse('Привіт, Olena!', [['Допомога']]))
+    const step = setKeyboardStep({ keyboardParseMode: 'HTML' })
+    await mountWith(step)
+
+    expect(previewMock).toHaveBeenCalledTimes(1)
+    expect(previewMock).toHaveBeenCalledWith('f1', 's1', {
+      stepType: 'SET_KEYBOARD',
+      keyboardText: step.keyboardText,
+      keyboardParseMode: 'HTML',
+      keyboardRows: step.keyboardRows,
+    })
+  })
+
+  it('editing a keyboard field re-triggers the debounced preview', async () => {
+    vi.useFakeTimers()
+    try {
+      previewMock.mockResolvedValue(keyboardResponse('text', [['A']]))
+      const step = setKeyboardStep()
+      const wrapper = await mountSuspended(FunnelMessagePreview, { props: { step, stepNumber: 1 } })
+      await vi.runOnlyPendingTimersAsync()
+      expect(previewMock).toHaveBeenCalledTimes(1)
+
+      // Edit the text — watch on keyboardText must catch it and debounce a new run.
+      await wrapper.setProps({ step: { ...step, keyboardText: 'Новий текст' } })
+      expect(previewMock).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(600)
+      await vi.runOnlyPendingTimersAsync()
+      expect(previewMock).toHaveBeenCalledTimes(2)
+
+      // Edit a row label — deep-watch on keyboardRows must catch it too.
+      await wrapper.setProps({
+        step: { ...step, keyboardText: 'Новий текст', keyboardRows: [{ buttons: [{ text: 'B' }] }] },
+      })
+      await vi.advanceTimersByTimeAsync(600)
+      await vi.runOnlyPendingTimersAsync()
+      expect(previewMock).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('hostile keyboard label and rendered text surface as literal text (never v-html)', async () => {
+    const payload = '<img src=x onerror=alert(1)><b>x</b>'
+    previewMock.mockResolvedValueOnce(keyboardResponse(payload, [[payload]]))
+    const wrapper = await mountWith(setKeyboardStep())
+
+    const text = wrapper.find('[data-test="funnel-preview-keyboard-text"]')
+    expect(text.text()).toContain(payload)
+    expect(text.find('img').exists()).toBe(false)
+    expect(text.find('b').exists()).toBe(false)
+
+    const mock = wrapper.find('[data-test="funnel-preview-keyboard"]')
+    expect(mock.text()).toContain(payload)
+    expect(mock.find('img').exists()).toBe(false)
+    expect(mock.find('b').exists()).toBe(false)
   })
 })

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { FunnelStep, PreviewStepResponse, RenderedBlock } from '~/types/funnel'
+import type { FunnelStep, PreviewStepRequest, PreviewStepResponse, RenderedBlock } from '~/types/funnel'
 
 // Message-preview panel for the funnel composer (15-message-composer, Task 8). Renders the CURRENT
 // (possibly unsaved) MESSAGE step the author is editing AS IT WILL LOOK IN TELEGRAM: an ordered STACK of
@@ -45,9 +45,17 @@ const resolveError = useApiError()
 
 const funnelId = computed(() => String(route.params.funnelId))
 
-// Only the MESSAGE composer step renders a Telegram message stack; everything else gets a neutral
-// placeholder (no backend call). The former SEND_MESSAGE/SEND_IMAGE/MENU kinds are gone (Task 1/6).
+// Only the MESSAGE composer step renders a Telegram message STACK (the block branch); SET_KEYBOARD and
+// CLEAR_KEYBOARD render a single rendered text line + (SET only) a bottom-keyboard mock (the keyboard
+// branch — 16-persistent-keyboard / Decision 7). Every OTHER type gets a neutral placeholder and never
+// calls the backend. The former SEND_MESSAGE/SEND_IMAGE/MENU kinds are gone (Task 1/6).
 const isMessageStep = computed(() => props.step?.stepType === 'MESSAGE')
+const isKeyboardStep = computed(
+  () => props.step?.stepType === 'SET_KEYBOARD' || props.step?.stepType === 'CLEAR_KEYBOARD',
+)
+// A renderable step is one the panel previews via the backend (message OR keyboard); the gate that
+// decides placeholder-vs-backend-call. Non-renderable types (DELAY, ADD_TAG, …) stay on the placeholder.
+const isRenderableStep = computed(() => isMessageStep.value || isKeyboardStep.value)
 
 const rendered = ref<PreviewStepResponse | null>(null)
 const errorMessage = ref<string | null>(null)
@@ -63,6 +71,22 @@ const previewBlocks = computed<RenderedBlock[]>(() => {
   return renderedList.slice(0, Math.min(blocks.length, renderedList.length))
 })
 
+// Keyboard branch (16-persistent-keyboard / Decision 7): the backend returns the step's single text as
+// exactly one rendered TEXT block (already escaped per parseMode — rendered text-only, never v-html). An
+// empty renderedBlocks (front/back desync) yields null → the template renders nothing rather than crash.
+const keyboardText = computed<string | null>(() => {
+  if (rendered.value?.kind !== 'keyboard') return null
+  const first = rendered.value.renderedBlocks?.[0]
+  return first?.type === 'TEXT' ? first.text ?? null : null
+})
+// The bottom-keyboard mock rows come from the RESPONSE keyboardRows (raw labels, already clamped server-side
+// to ≤10×≤4, label ≤64 — one source of truth, the clamp is free). Non-empty ONLY for a SET_KEYBOARD preview
+// (null for CLEAR_KEYBOARD, or an empty draft) → no mock shell rendered in those cases.
+const keyboardMockRows = computed<string[][]>(() => {
+  if (rendered.value?.kind !== 'keyboard') return []
+  return (rendered.value.keyboardRows ?? []).filter((row) => Array.isArray(row) && row.length > 0)
+})
+
 // Per-block media-load-failure flags (replaces the old single global imageLoadFailed ref). Keyed by block
 // index; an @error on a block's <img> flips ONLY that block to the neutral placeholder. Reset whenever a
 // fresh preview arrives so re-rendered media gets a new chance.
@@ -76,8 +100,8 @@ const buttons = computed(() => props.step?.buttons ?? [])
 
 async function runPreview() {
   const step = props.step
-  // No step / non-message step → nothing to fetch; the template shows the empty/placeholder state.
-  if (!step || !isMessageStep.value) {
+  // No step / non-renderable step → nothing to fetch; the template shows the empty/placeholder state.
+  if (!step || !isRenderableStep.value) {
     rendered.value = null
     errorMessage.value = null
     return
@@ -85,11 +109,18 @@ async function runPreview() {
   loading.value = true
   errorMessage.value = null
   mediaLoadFailed.value = {}
+  // Keyboard steps carry no blocks — they send the live text/parseMode (+ rows for SET_KEYBOARD); MESSAGE
+  // sends its ordered blocks. The backend drops the fields the step's type does not use (@JsonIgnoreProperties).
+  const payload: PreviewStepRequest = isKeyboardStep.value
+    ? {
+        stepType: step.stepType,
+        keyboardText: step.keyboardText ?? null,
+        keyboardParseMode: step.keyboardParseMode ?? null,
+        keyboardRows: step.keyboardRows ?? null,
+      }
+    : { stepType: step.stepType, blocks: step.blocks ?? [] }
   try {
-    rendered.value = await funnelsStore.preview(funnelId.value, step.id ?? '', {
-      stepType: step.stepType,
-      blocks: step.blocks ?? [],
-    })
+    rendered.value = await funnelsStore.preview(funnelId.value, step.id ?? '', payload)
   } catch (err) {
     // 404 (unknown step) / network / 5xx → neutral in-panel message, never a throw or blank screen.
     rendered.value = null
@@ -113,7 +144,17 @@ function schedulePreview() {
 // the old flat text/caption/parseMode fields are gone (Task 1/6).
 let primed = false
 watch(
-  () => [props.step?.stepType, props.step?.id, props.step?.blocks] as const,
+  () =>
+    [
+      props.step?.stepType,
+      props.step?.id,
+      props.step?.blocks,
+      // Keyboard-step inputs — edits to the text, parse mode or row labels must re-trigger the preview
+      // (deep watch already on, so an in-place row/button mutation is caught too). 16-persistent-keyboard.
+      props.step?.keyboardText,
+      props.step?.keyboardParseMode,
+      props.step?.keyboardRows,
+    ] as const,
   () => {
     if (!primed) {
       primed = true
@@ -151,9 +192,9 @@ onBeforeUnmount(() => {
       {{ t('funnels.editor.previewPlaceholder') }}
     </p>
 
-    <!-- Non-message step → neutral placeholder; the backend is never called. -->
+    <!-- Non-renderable step (DELAY, ADD_TAG, …) → neutral placeholder; the backend is never called. -->
     <p
-      v-else-if="!isMessageStep"
+      v-else-if="!isRenderableStep"
       data-test="funnel-preview-placeholder"
       class="text-gray-500"
     >
@@ -184,6 +225,42 @@ onBeforeUnmount(() => {
           {{ t('funnels.editor.previewSampleData') }}
         </p>
 
+        <!-- KEYBOARD branch (SET_KEYBOARD / CLEAR_KEYBOARD — 16-persistent-keyboard / Decision 7): the
+             rendered text (single TEXT block, escaped server-side) as plain text, then — only for
+             SET_KEYBOARD (non-null/non-empty response keyboardRows) — a bottom-keyboard mock. ALL output is
+             {{ }} text, NEVER v-html: rendered text + raw labels both carry Telegram escaping that is not
+             browser-safe (stored-XSS sink, OWASP A03). The mock is styled distinctly from the inline-button
+             chips below (neutral gray, horizontal rows) — it mocks the Telegram bottom reply keyboard. -->
+        <template v-if="rendered.kind === 'keyboard'">
+          <p
+            v-if="keyboardText !== null"
+            data-test="funnel-preview-keyboard-text"
+            class="whitespace-pre-wrap break-words rounded-md border bg-white px-3 py-2 text-gray-900"
+          >{{ keyboardText }}</p>
+
+          <div
+            v-if="keyboardMockRows.length > 0"
+            data-test="funnel-preview-keyboard"
+            :aria-label="t('funnels.editor.previewKeyboardAria')"
+            class="mt-3 space-y-1"
+          >
+            <p class="mb-1 text-xs text-gray-500">{{ t('funnels.editor.previewKeyboardCaption') }}</p>
+            <div
+              v-for="(row, rowIndex) in keyboardMockRows"
+              :key="rowIndex"
+              :data-test="`funnel-preview-keyboard-row-${rowIndex}`"
+              class="flex flex-wrap gap-1"
+            >
+              <span
+                v-for="(label, labelIndex) in row"
+                :key="labelIndex"
+                class="flex-1 rounded-md border border-gray-300 bg-gray-100 px-3 py-1.5 text-center text-gray-700"
+              >{{ label }}</span>
+            </div>
+          </div>
+        </template>
+
+        <template v-else>
         <!-- The ordered stack of rendered blocks — one "message" per block, in step.blocks order. Each
              block renders per its BlockType. ALL text/caption is output as TEXT ONLY ({{ }}), NEVER v-html
              (Telegram escaping is not browser-safe → v-html would be a stored-XSS sink, OWASP A03). -->
@@ -309,6 +386,7 @@ onBeforeUnmount(() => {
             class="rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-center text-blue-700"
           >{{ btn.label }}</span>
         </div>
+        </template>
       </template>
     </template>
   </aside>

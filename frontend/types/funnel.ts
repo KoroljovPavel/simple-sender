@@ -203,13 +203,23 @@ export interface UpdateFunnelRequest {
 }
 
 // POST .../funnels/{id}/steps/{stepId}/preview body — mirrors backend PreviewStepRequest
-// (com.botfunnel.funnel.dto.PreviewStepRequest). Decision 8: preview renders the CURRENT (possibly
-// unsaved) multiblock content of the step, NOT the persisted step — so the editor sends stepType + the
-// ordered blocks on the fly. parseMode now lives per-block inside ContentBlock (not top-level). For a
-// non-message step `blocks` is null/empty → the server renders an empty array.
+// (com.botfunnel.funnel.dto.PreviewStepRequest). Decision 8 / 16-persistent-keyboard Decision 7: preview
+// renders the CURRENT (possibly unsaved) content of the step, NOT the persisted step — so the editor sends
+// stepType + the live form state on the fly. parseMode now lives per-block inside ContentBlock (not
+// top-level). For a non-message step `blocks` is null/empty → the server renders an empty array. The
+// backend drops unknown/absent fields (@JsonIgnoreProperties), so a request only carries the fields its
+// stepType needs:
+//   - MESSAGE                  → `blocks` (the ordered composer blocks).
+//   - SET_KEYBOARD/CLEAR_KEYBOARD → `keyboardText` + `keyboardParseMode`; SET_KEYBOARD also `keyboardRows`
+//     (labels echoed verbatim, never variable-rendered). `blocks` is irrelevant for keyboard steps.
 export interface PreviewStepRequest {
   stepType: StepType
-  blocks: ContentBlock[]
+  blocks?: ContentBlock[]
+  // SET_KEYBOARD / CLEAR_KEYBOARD — the mandatory text pair rendered server-side (variables + parse mode).
+  keyboardText?: string | null
+  keyboardParseMode?: string | null
+  // SET_KEYBOARD only — the button rows; labels are echoed verbatim (the keyword link), never rendered.
+  keyboardRows?: KeyboardRow[] | null
 }
 
 // One rendered album element in a preview response — mirrors backend
@@ -237,14 +247,20 @@ export interface RenderedBlock {
 }
 
 // POST .../steps/{stepId}/preview → PreviewStepResponse (com.botfunnel.funnel.dto.PreviewStepResponse).
-// Exactly these three fields — no ownerChatId/identity leakage (Decision 8). `renderedBlocks` is the
-// ordered, rendered blocks (one per composer block; an empty array for a non-message step). `kind` is
-// 'message' for a renderable MESSAGE composer step or 'non_message' for an action step; `sampleData` is
-// true when sample placeholders were substituted (e.g. bot owner not linked).
+// Exactly these four fields — no ownerChatId/identity leakage (Decision 8). `renderedBlocks` is the
+// ordered, rendered blocks (one per composer block; an empty array for a non-message step; exactly one
+// rendered TEXT block for a keyboard step). `kind` is 'message' for a renderable MESSAGE composer step,
+// 'non_message' for an action step, or 'keyboard' for both SET_KEYBOARD and CLEAR_KEYBOARD (16-persistent-
+// keyboard Decision 7 — the discriminator between them is `keyboardRows` non-null vs null). `sampleData`
+// is true when sample placeholders were substituted (e.g. bot owner not linked). `keyboardRows` are the
+// raw button-label rows for the bottom-keyboard mock — VERBATIM (labels are the keyword link, never
+// variable-rendered) but CLAMPED server-side to the validation caps (≤10 rows × ≤4 buttons, label ≤64);
+// non-null ONLY for a SET_KEYBOARD preview, null for every other kind (CLEAR_KEYBOARD, message, non_message).
 export interface PreviewStepResponse {
   renderedBlocks: RenderedBlock[]
   sampleData: boolean
-  kind: 'message' | 'non_message'
+  kind: 'message' | 'non_message' | 'keyboard'
+  keyboardRows?: string[][] | null
 }
 
 // POST .../funnels/{id}/executions/stop → StopAllResponse (com.botfunnel.funnel.dto.StopAllResponse,

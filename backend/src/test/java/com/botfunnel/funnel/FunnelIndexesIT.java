@@ -14,6 +14,7 @@ import org.springframework.data.mongodb.core.query.Query;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -25,14 +26,22 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * actually created at context startup (auto-index-creation=true) — keys, uniqueness, and the
  * lowercase partial-filter expressions that gate the trigger-conflict and re-enter guards.
  *
- * Tagged "slow" because it boots the full Testcontainers context only to inspect index metadata;
- * run with {@code -PrunSlow=true}.
+ * <p>Phase 8 (17-funnel-multi-entry / Decision 6): the {@code funnels} trigger guard is now the
+ * {@code {projectId, onStartTriggerValue}} partial-unique index filtered
+ * {@code {status:'active', onStartTriggerValue:{$exists:true}}}; the old flat-trio index is gone (the
+ * Task-2 reconciliation dropped it at startup). This class also covers the array-aware repository derived
+ * queries against real embedded Mongo.
+ *
+ * <p>Tagged "slow" because it boots the full Testcontainers context; run with {@code -PrunSlow=true}.
  */
 @Tag("slow")
 class FunnelIndexesIT extends AbstractIntegrationTest {
 
     @Autowired
     MongoTemplate mongoTemplate;
+
+    @Autowired
+    FunnelRepository funnelRepository;
 
     private List<Document> indexes(String collection) {
         List<Document> result = new ArrayList<>();
@@ -46,6 +55,12 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
                 .findFirst()
                 .orElseThrow(() -> new AssertionError(
                         "No index with key " + expectedKey.toJson() + " in " + indexes));
+    }
+
+    private Optional<Document> findByKey(List<Document> indexes, Document expectedKey) {
+        return indexes.stream()
+                .filter(ix -> expectedKey.equals(ix.get("key", Document.class)))
+                .findFirst();
     }
 
     @Test
@@ -67,21 +82,23 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
         // (projectId, status) lookup/list index — byKey throws if absent.
         byKey(idx, new Document("projectId", 1).append("status", 1));
 
-        // partial-unique (projectId, triggerType, triggerValue) filtered status=active
-        Document triggerUnique = byKey(idx,
-                new Document("projectId", 1).append("triggerType", 1).append("triggerValue", 1));
-        assertThat(triggerUnique.getBoolean("unique", false)).isTrue();
+        // partial-unique (projectId, onStartTriggerValue) filtered {status:'active', onStartTriggerValue:{$exists:true}}
+        Document onStartUnique = byKey(idx,
+                new Document("projectId", 1).append("onStartTriggerValue", 1));
+        assertThat(onStartUnique.getBoolean("unique", false)).isTrue();
 
-        // Phase 3 (Decision 1 + Task 2): the partial filter now carries BOTH status='active' AND
-        // triggerType='on_start' — the old broad {status:'active'}-only filter is gone (the Task-2
-        // reconciliation runner dropped it at context startup, and auto-index-creation recreated the
-        // on_start-only shape from the Funnel annotation).
-        Document pfe = triggerUnique.get("partialFilterExpression", Document.class);
-        assertThat(pfe).as("triggerUnique partialFilterExpression").isNotNull();
+        Document pfe = onStartUnique.get("partialFilterExpression", Document.class);
+        assertThat(pfe).as("onStartUnique partialFilterExpression").isNotNull();
         assertThat(pfe.getString("status")).isEqualTo("active");
-        assertThat(pfe.getString("triggerType"))
-                .as("Phase 3: uniqueness is scoped to on_start only")
-                .isEqualTo("on_start");
+        assertThat(pfe.get("onStartTriggerValue", Document.class))
+                .as("uniqueness is scoped to funnels that HAVE an on_start payload ($exists guard)")
+                .isEqualTo(new Document("$exists", true));
+
+        // The old flat-trio trigger index must be gone (dropped by the Task-2 reconciliation at startup).
+        assertThat(findByKey(idx,
+                new Document("projectId", 1).append("triggerType", 1).append("triggerValue", 1)))
+                .as("old {projectId,triggerType,triggerValue} index must be absent")
+                .isEmpty();
     }
 
     @Test
@@ -114,92 +131,153 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
     }
 
     /**
-     * The partial-unique guard must fire even for the bare "/start" case where triggerValue is the
-     * empty string (""), not null — otherwise two active funnels could claim the same bare trigger.
-     * Also proves the guard is scoped to (projectId, triggerType, triggerValue): two active funnels
-     * with DIFFERENT triggerValue in the same project coexist.
+     * The partial-unique guard fires for two active funnels sharing the same non-null
+     * {@code onStartTriggerValue} (including the bare "/start" empty-string payload), but never binds
+     * event-only funnels whose {@code onStartTriggerValue} is null — a partial {@code {$exists:true}} index
+     * does not index documents whose key is absent (Decision 6, Variant A).
      */
     @Test
-    void activeFunnelTriggerUniquenessHoldsForEmptyTriggerValue() {
+    void onStartUniquenessHoldsAndNullDoesNotBind() {
         String projectId = "proj-" + UUID.randomUUID();
         try {
-            // First active funnel with empty-string triggerValue inserts cleanly.
-            mongoTemplate.insert(activeFunnel(projectId, ""));
-
-            // Second active funnel, SAME (projectId, triggerType, triggerValue="") -> duplicate key.
-            assertThatThrownBy(() -> mongoTemplate.insert(activeFunnel(projectId, "")))
-                    .as("partial-unique guard must fire for empty-string triggerValue")
+            // Two active funnels with the same non-null onStartTriggerValue → duplicate key.
+            mongoTemplate.insert(onStartFunnel(projectId, "promo"));
+            assertThatThrownBy(() -> mongoTemplate.insert(onStartFunnel(projectId, "promo")))
+                    .as("two active funnels with the same onStartTriggerValue must collide")
                     .isInstanceOfAny(DuplicateKeyException.class, DataIntegrityViolationException.class);
 
-            // Two active funnels with DIFFERENT triggerValue in the same project both insert.
-            mongoTemplate.insert(activeFunnel(projectId, "promo"));
-            mongoTemplate.insert(activeFunnel(projectId, "vip"));
+            // Bare /start (empty-string onStartTriggerValue) is still indexed (not null) → uniqueness fires.
+            mongoTemplate.insert(onStartFunnel(projectId, ""));
+            assertThatThrownBy(() -> mongoTemplate.insert(onStartFunnel(projectId, "")))
+                    .as("empty-string onStartTriggerValue is indexed (not null) → guard fires")
+                    .isInstanceOfAny(DuplicateKeyException.class, DataIntegrityViolationException.class);
 
-            long active = mongoTemplate.count(
-                    new Query(Criteria.where("projectId").is(projectId).and("status").is(FunnelStatus.active)),
-                    Funnel.class);
-            assertThat(active)
-                    .as("one empty-trigger funnel + two distinct-trigger funnels")
-                    .isEqualTo(3);
-        } finally {
-            mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
-        }
-    }
-
-    /**
-     * Phase 3 fan-out (Decision 1): two active {@code event} funnels in the same project sharing the SAME
-     * triggerValue must coexist — the relaxed partial filter ({@code triggerType:'on_start'}) no longer
-     * applies uniqueness to {@code event}. Proves the index migration unblocked fan-out.
-     */
-    @Test
-    void twoActiveEventFunnelsWithSameTriggerValueCoexist() {
-        String projectId = "proj-" + UUID.randomUUID();
-        try {
-            mongoTemplate.insert(activeFunnel(projectId, "event", "purchase"));
-
-            assertThatCode(() -> mongoTemplate.insert(activeFunnel(projectId, "event", "purchase")))
-                    .as("two active event funnels with the same triggerValue must coexist (fan-out)")
+            // Multiple active event-only funnels (null onStartTriggerValue) sharing an event value coexist.
+            mongoTemplate.insert(eventOnlyFunnel(projectId, "purchase"));
+            assertThatCode(() -> mongoTemplate.insert(eventOnlyFunnel(projectId, "purchase")))
+                    .as("event-only funnels (null onStartTriggerValue) never bind the partial-unique index")
                     .doesNotThrowAnyException();
-
-            long active = mongoTemplate.count(
-                    new Query(Criteria.where("projectId").is(projectId)
-                            .and("triggerType").is("event").and("status").is(FunnelStatus.active)),
-                    Funnel.class);
-            assertThat(active).as("both event funnels persisted").isEqualTo(2);
         } finally {
             mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
         }
     }
 
     /**
-     * Phase 3 (Decision 1): the {@code on_start} uniqueness guard survives the relax — two active
-     * {@code on_start} funnels in the same project with the same triggerValue still collide.
+     * Array-aware fan-out derived query: {@code findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus}
+     * matches funnels whose {@code triggers[]} contains a matching {@code (triggerType, triggerValue)}
+     * element (multikey element-match) and excludes non-matching funnels.
      */
     @Test
-    void twoActiveOnStartFunnelsWithSamePayloadStillCollide() {
+    void findByTriggersTriggerTypeAndValueMatchesArrayElement() {
         String projectId = "proj-" + UUID.randomUUID();
         try {
-            mongoTemplate.insert(activeFunnel(projectId, "on_start", "promo"));
+            // A funnel whose triggers[] contains the event element AND an unrelated keyword element.
+            Funnel match = activeFunnel(projectId);
+            match.setTriggers(List.of(
+                    trigger("keyword", null, List.of("hi")),
+                    trigger("event", "purchase", null)));
+            mongoTemplate.insert(match);
 
-            assertThatThrownBy(() -> mongoTemplate.insert(activeFunnel(projectId, "on_start", "promo")))
-                    .as("two active on_start funnels with the same triggerValue must still collide")
-                    .isInstanceOfAny(DuplicateKeyException.class, DataIntegrityViolationException.class);
+            // A funnel with a non-matching event value.
+            Funnel other = activeFunnel(projectId);
+            other.setTriggers(List.of(trigger("event", "refund", null)));
+            mongoTemplate.insert(other);
+
+            List<Funnel> found = funnelRepository
+                    .findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
+                            projectId, "event", "purchase", FunnelStatus.active);
+
+            assertThat(found)
+                    .as("only the funnel whose triggers[] contains (event, purchase) matches")
+                    .extracting(Funnel::getId)
+                    .containsExactly(match.getId());
         } finally {
             mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
         }
     }
 
-    private Funnel activeFunnel(String projectId, String triggerValue) {
-        return activeFunnel(projectId, "on_start", triggerValue);
+    /**
+     * {@code findByProjectIdAndOnStartTriggerValueAndStatus} resolves the on_start funnel by the
+     * denormalized scalar (the Task-4 conflict pre-check / Task-5 fire lookup).
+     */
+    @Test
+    void findByOnStartTriggerValueResolvesScalar() {
+        String projectId = "proj-" + UUID.randomUUID();
+        try {
+            Funnel onStart = onStartFunnel(projectId, "promo");
+            mongoTemplate.insert(onStart);
+            // A noise funnel with a different on_start payload.
+            mongoTemplate.insert(onStartFunnel(projectId, "vip"));
+
+            Optional<Funnel> found = funnelRepository
+                    .findByProjectIdAndOnStartTriggerValueAndStatus(projectId, "promo", FunnelStatus.active);
+
+            assertThat(found).isPresent();
+            assertThat(found.get().getId()).isEqualTo(onStart.getId());
+        } finally {
+            mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
+        }
     }
 
-    private Funnel activeFunnel(String projectId, String triggerType, String triggerValue) {
+    /**
+     * {@code findByProjectIdAndTriggersTriggerTypeAndStatus} returns all active funnels carrying a
+     * keyword-type trigger element (the candidate set for the in-code contains-match).
+     */
+    @Test
+    void findByTriggersTriggerTypeReturnsAllKeywordFunnels() {
+        String projectId = "proj-" + UUID.randomUUID();
+        try {
+            Funnel kw1 = activeFunnel(projectId);
+            kw1.setTriggers(List.of(trigger("keyword", null, List.of("buy"))));
+            mongoTemplate.insert(kw1);
+
+            Funnel kw2 = activeFunnel(projectId);
+            kw2.setTriggers(List.of(trigger("keyword", null, List.of("sale", "deal"))));
+            mongoTemplate.insert(kw2);
+
+            // An event-only funnel must NOT appear in the keyword candidate set.
+            Funnel ev = activeFunnel(projectId);
+            ev.setTriggers(List.of(trigger("event", "purchase", null)));
+            mongoTemplate.insert(ev);
+
+            List<Funnel> found = funnelRepository
+                    .findByProjectIdAndTriggersTriggerTypeAndStatus(projectId, "keyword", FunnelStatus.active);
+
+            assertThat(found)
+                    .extracting(Funnel::getId)
+                    .containsExactlyInAnyOrder(kw1.getId(), kw2.getId());
+        } finally {
+            mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
+        }
+    }
+
+    private Trigger trigger(String triggerType, String triggerValue, List<String> keywords) {
+        Trigger t = new Trigger();
+        t.setTriggerType(triggerType);
+        t.setTriggerValue(triggerValue);
+        t.setKeywords(keywords);
+        return t;
+    }
+
+    private Funnel onStartFunnel(String projectId, String onStartValue) {
+        Funnel f = activeFunnel(projectId);
+        f.setTriggers(List.of(trigger("on_start", onStartValue, null)));
+        f.setOnStartTriggerValue(onStartValue);
+        return f;
+    }
+
+    private Funnel eventOnlyFunnel(String projectId, String eventValue) {
+        Funnel f = activeFunnel(projectId);
+        f.setTriggers(List.of(trigger("event", eventValue, null)));
+        f.setOnStartTriggerValue(null);
+        return f;
+    }
+
+    private Funnel activeFunnel(String projectId) {
         Funnel f = new Funnel();
         f.setProjectId(projectId);
         f.setName("funnel-" + UUID.randomUUID());
         f.setStatus(FunnelStatus.active);
-        f.setTriggerType(triggerType);
-        f.setTriggerValue(triggerValue);
         f.setCreatedAt(Instant.now());
         f.setUpdatedAt(Instant.now());
         return f;

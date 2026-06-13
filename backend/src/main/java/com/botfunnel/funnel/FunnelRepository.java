@@ -6,14 +6,21 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Narrow lookup surface for Wave 2 consumers only. {@code findByProjectId} / the status-filtered
- * variant back the CRUD list endpoint (Task 5); {@code findByProjectIdAndTriggerTypeAndTriggerValueAndStatus}
- * resolves the active funnel for a given trigger at fire() time (Task 7). Engine state mutations go
- * through {@code MongoTemplate.findAndModify} (Task 6), not this repository.
+ * Narrow lookup surface for the funnel feature. {@code findByProjectId} / the status-filtered variant
+ * back the CRUD list endpoints; the trigger-bearing queries below resolve active funnels for trigger
+ * dispatch. Engine state mutations go through {@code MongoTemplate.findAndModify}, not this repository.
  *
- * <p>Phase 3: this interface is the SOLE owner of every {@code FunnelRepository} change for the
- * 12-funnels-triggers feature — the Task-4 dispatcher ({@code FunnelEventService}) CONSUMES the new
- * list queries but adds none of its own (single owner → no merge conflict).
+ * <p>Phase 8 (17-funnel-multi-entry / Decision 1 + 6): a funnel now carries a {@code List<Trigger>}
+ * instead of a flat trigger trio, plus a denormalized nullable {@code onStartTriggerValue} scalar. The
+ * trigger lookups are therefore array-aware (multikey nested-property derivation: Spring Data traverses
+ * {@code triggers} then the element field, applying the predicate per array element and returning the
+ * funnel if ANY element matches), except the on_start conflict pre-check, which keys on the denormalized
+ * scalar so it can lean on the partial-unique {@code {projectId, onStartTriggerValue}} index.
+ *
+ * <p><b>Matched-element re-scan idiom.</b> The array-aware fan-out query narrows the candidate set to
+ * funnels whose {@code triggers[]} contains a matching element; it does NOT tell the caller WHICH element
+ * matched. The dispatcher (Task 5) re-scans each returned funnel's {@code triggers[]} to find the matched
+ * element and read its {@code entryStepId} (start vs redirect routing).
  */
 public interface FunnelRepository extends MongoRepository<Funnel, String> {
 
@@ -21,21 +28,26 @@ public interface FunnelRepository extends MongoRepository<Funnel, String> {
 
     List<Funnel> findByProjectIdAndStatus(String projectId, FunnelStatus status);
 
-    // on_start conflict pre-check (Decision 8 / Optional-retention policy): exactly one active funnel may
-    // own a given (triggerType, triggerValue). KEEP this single-result method — the List sibling below is
-    // ADDED alongside it for fan-out, not a replacement.
-    Optional<Funnel> findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
+    // on_start conflict pre-check (Decision 6): at most one active funnel per (projectId, on_start payload).
+    // Keys on the DENORMALIZED onStartTriggerValue scalar — the same field the partial-unique index guards —
+    // so a service-level pre-check and the DB constraint agree. Used by FunnelService.checkTriggerConflict
+    // (Task 4) and FunnelTriggerServiceImpl.fire's on_start lookup (Task 5).
+    Optional<Funnel> findByProjectIdAndOnStartTriggerValueAndStatus(
+            String projectId, String onStartTriggerValue, FunnelStatus status);
+
+    // Fan-out trigger lookup (Decision 1) — all active funnels whose triggers[] contains an element matching
+    // (triggerType, triggerValue), for `event` / `tag_added` / `custom_field_set`. Multikey nested-property
+    // derivation over the triggers array: the predicate matches per element, returning the funnel if any
+    // element matches. The caller (Task 5) re-scans triggers[] to locate the matched element + its
+    // entryStepId. Used by FunnelEventService fan-out (Task 5).
+    List<Funnel> findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
             String projectId, String triggerType, String triggerValue, FunnelStatus status);
 
-    // Phase 3 (Decision 1) — fan-out trigger lookup: all active funnels matching a (triggerType,
-    // triggerValue) for `event` / `tag_added` / `custom_field_set`. List sibling of the Optional method
-    // above (Spring Data derives single-vs-many from the return type; the distinct name avoids a clash).
-    List<Funnel> findAllByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
-            String projectId, String triggerType, String triggerValue, FunnelStatus status);
-
-    // Phase 3 (Decision 3) — keyword fan-out: all active keyword funnels for a project. The
-    // contains-match (case-insensitive, any-of-many) against each funnel's `keywords` runs in code,
-    // because the exact-match triggerValue index cannot express "contains, multiple keywords".
-    List<Funnel> findByProjectIdAndTriggerTypeAndStatus(
+    // Keyword fan-out (Decision 3) — all active funnels carrying a keyword trigger, for in-code contains-
+    // match (case-insensitive, any-of-many) against each matched trigger element's `keywords`. The exact-
+    // match index cannot express "contains, multiple keywords", so the contains-match runs in code over the
+    // returned candidates. Array-aware: matches funnels whose triggers[] contains a keyword-type element.
+    // Used by FunnelEventService keyword scan (Task 5).
+    List<Funnel> findByProjectIdAndTriggersTriggerTypeAndStatus(
             String projectId, String triggerType, FunnelStatus status);
 }

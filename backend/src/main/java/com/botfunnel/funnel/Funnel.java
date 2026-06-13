@@ -84,6 +84,11 @@ public class Funnel {
 
     private List<FunnelStep> steps;
 
+    // Free-floating canvas notes (18-funnel-canvas / Task 1, Decision 7): editor-only annotations that live
+    // OUTSIDE steps[] and are never executed by the engine. Additive + nullable (Decision 8) — an old
+    // document without this field reads back as null, no migration. Each Note is a flat embedded record.
+    private List<Note> notes;
+
     private Instant createdAt;
     private Instant updatedAt;
 
@@ -116,6 +121,9 @@ public class Funnel {
     // FunnelStep.copyOf at fire() time, so reads here never feed engine state.
     public List<FunnelStep> getSteps() { return steps; }
     public void setSteps(List<FunnelStep> steps) { this.steps = steps; }
+
+    public List<Note> getNotes() { return notes; }
+    public void setNotes(List<Note> notes) { this.notes = notes; }
 
     public Instant getCreatedAt() { return createdAt; }
     public void setCreatedAt(Instant createdAt) { this.createdAt = createdAt; }

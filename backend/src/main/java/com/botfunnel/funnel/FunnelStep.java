@@ -87,6 +87,12 @@ public class FunnelStep {
     private Boolean isPersistent;           // SET_KEYBOARD only: Telegram is_persistent
     private Boolean oneTimeKeyboard;        // SET_KEYBOARD only: Telegram one_time_keyboard
 
+    // Canvas node coordinate (18-funnel-canvas / Task 1, Decision 8): the step's {x,y} on the editor
+    // surface. Additive + nullable — an old document without it reads back as null and the frontend
+    // auto-layouts the node (no migration). Immutable record → reference copy in copyOf (snapshot
+    // isolation, Decision 3). Rendering-only metadata; never read by the execution engine.
+    private CanvasPosition canvasPosition;
+
     public FunnelStep() {
     }
 
@@ -150,6 +156,9 @@ public class FunnelStep {
         copy.buttons = source.buttons == null ? null : new ArrayList<>(source.buttons);
         copy.blocks = source.blocks == null ? null : new ArrayList<>(source.blocks);
         copy.keyboardRows = source.keyboardRows == null ? null : new ArrayList<>(source.keyboardRows);
+        // Canvas coordinate (18-funnel-canvas / Task 1): immutable CanvasPosition record — reference copy,
+        // null stays null. Carried so a snapshot retains the node position; the engine ignores it.
+        copy.canvasPosition = source.canvasPosition;
         return copy;
     }
 
@@ -221,4 +230,7 @@ public class FunnelStep {
 
     public Boolean getOneTimeKeyboard() { return oneTimeKeyboard; }
     public void setOneTimeKeyboard(Boolean oneTimeKeyboard) { this.oneTimeKeyboard = oneTimeKeyboard; }
+
+    public CanvasPosition getCanvasPosition() { return canvasPosition; }
+    public void setCanvasPosition(CanvasPosition canvasPosition) { this.canvasPosition = canvasPosition; }
 }

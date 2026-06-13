@@ -210,6 +210,164 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
     }
 
+    // ─── 18-funnel-canvas round-trip + bounds (Task 1) ────────────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void canvasPosition_step_and_trigger_round_trips() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        // A MESSAGE step carrying canvasPosition + a sibling `next` edge that must NOT change; an on_start
+        // trigger also carrying canvasPosition.
+        Map<String, Object> step = messageStepMap(textBlock("hi"));
+        step.put("id", "step-A");
+        step.put("next", "step-A"); // self-edge is fine as a stable, asserted-unchanged sibling value
+        step.put("canvasPosition", canvasPositionMap(120.5, -42.0));
+
+        Map<String, Object> trigger = onStartTriggerMap("");
+        trigger.put("canvasPosition", canvasPositionMap(10.0, 20.0));
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(trigger),
+                "steps", List.of(step));
+
+        // PUT → both canvasPosition values + the sibling `next` survive in the response.
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].canvasPosition.x").value(120.5))
+                .andExpect(jsonPath("$.steps[0].canvasPosition.y").value(-42.0))
+                .andExpect(jsonPath("$.steps[0].next").value("step-A"))
+                .andExpect(jsonPath("$.triggers[0].canvasPosition.x").value(10.0))
+                .andExpect(jsonPath("$.triggers[0].canvasPosition.y").value(20.0));
+
+        // GET → same coordinates survive the full HTTP round-trip (forward + reverse mapper, both seams).
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].canvasPosition.x").value(120.5))
+                .andExpect(jsonPath("$.steps[0].canvasPosition.y").value(-42.0))
+                .andExpect(jsonPath("$.steps[0].next").value("step-A"))
+                .andExpect(jsonPath("$.triggers[0].canvasPosition.x").value(10.0))
+                .andExpect(jsonPath("$.triggers[0].canvasPosition.y").value(20.0));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void notes_round_trip_with_server_minted_id() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> note = noteMap(null, "hi", canvasPositionMap(5.0, 7.0));
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("")),
+                "steps", List.of(messageStep("step")),
+                "notes", List.of(note));
+
+        // PUT → the note returns with text + coordinates and a server-minted non-null id.
+        String resp = mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.notes.length()").value(1))
+                .andExpect(jsonPath("$.notes[0].text").value("hi"))
+                .andExpect(jsonPath("$.notes[0].canvasPosition.x").value(5.0))
+                .andExpect(jsonPath("$.notes[0].canvasPosition.y").value(7.0))
+                .andExpect(jsonPath("$.notes[0].id").isNotEmpty())
+                .andReturn().getResponse().getContentAsString();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> parsed = objectMapper.readValue(resp, Map.class);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> notes = (List<Map<String, Object>>) parsed.get("notes");
+        String mintedId = (String) notes.get(0).get("id");
+        // ObjectId hex shape: 24 lowercase hex chars.
+        assertThat(mintedId).matches("[0-9a-f]{24}");
+
+        // GET → coordinates + minted id survive the full round-trip.
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.notes[0].id").value(mintedId))
+                .andExpect(jsonPath("$.notes[0].text").value("hi"));
+
+        // Second PATCH echoing the minted id → id is preserved (NOT re-minted).
+        Map<String, Object> echoed = noteMap(mintedId, "hi", canvasPositionMap(5.0, 7.0));
+        Map<String, Object> body2 = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("")),
+                "steps", List.of(messageStep("step")),
+                "notes", List.of(echoed));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body2)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.notes[0].id").value(mintedId));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void rejects_notes_over_cap_and_oversized_text() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        // Over MAX_NOTES (50): the DTO @Size fires first → 400. The service re-check is the second line of
+        // defense (asserted directly in FunnelServiceNotesTest).
+        List<Map<String, Object>> tooMany = new ArrayList<>();
+        for (int i = 0; i < 51; i++) {
+            tooMany.add(noteMap(null, "n" + i, null));
+        }
+        Map<String, Object> overCap = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("")),
+                "steps", List.of(messageStep("step")),
+                "notes", tooMany);
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(overCap)))
+                .andExpect(status().isBadRequest());
+
+        // Oversized text (> NOTE_TEXT_MAX = 2000) → 400/422.
+        Map<String, Object> bigText = noteMap(null, "x".repeat(2001), null);
+        Map<String, Object> overText = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("")),
+                "steps", List.of(messageStep("step")),
+                "notes", List.of(bigText));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(overText)))
+                .andExpect(status().is4xxClientError());
+
+        // The funnel was not mutated by the rejected requests.
+        Funnel reloaded = funnelRepository.findById(f.getId()).orElseThrow();
+        assertThat(reloaded.getNotes()).isNull();
+    }
+
+    // NOTE: the optional parse-layer NaN/Infinity IT from the task's TDD anchor is intentionally OMITTED.
+    // In this codebase a bare NaN/Infinity token IS rejected by Jackson at parse time
+    // (HttpMessageNotReadableException, ALLOW_NON_NUMERIC_NUMBERS disabled) — but the GlobalErrorHandler has
+    // no handler for that exception, so it surfaces as 500 (catch-all), not 400. Asserting 400 would fail;
+    // asserting 500 would pin an incidental error-mapping gap that is out of this task's scope. The
+    // finite-value constraint is proven by the path that actually reaches Double.isFinite —
+    // CanvasPositionDtoTest::rejects_non_finite_coordinates (the validator unit test).
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void starts_on_coordinate_less_funnel() throws Exception {
+        // A funnel saved with no canvasPosition / no notes reads back without error (additive-nullable, no
+        // migration). seedFunnel produces exactly such a legacy-shaped funnel.
+        Funnel f = seedFunnel("Legacy", FunnelStatus.draft, "", List.of(messageStep("hello")));
+
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].canvasPosition").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.triggers[0].canvasPosition").value(org.hamcrest.Matchers.nullValue()))
+                .andExpect(jsonPath("$.notes").value(org.hamcrest.Matchers.nullValue()));
+    }
+
     // ─── delete ──────────────────────────────────────────────────────────────
 
     @Test
@@ -2135,6 +2293,26 @@ class FunnelControllerIT extends AbstractIntegrationTest {
             t.put("entryStepId", entryStepId);
         }
         return t;
+    }
+
+    // ─── 18-funnel-canvas request maps (Task 1) ──────────────────────────────────
+    private static Map<String, Object> canvasPositionMap(Double x, Double y) {
+        Map<String, Object> p = new LinkedHashMap<>();
+        p.put("x", x);
+        p.put("y", y);
+        return p;
+    }
+
+    private static Map<String, Object> noteMap(String id, String text, Map<String, Object> canvasPosition) {
+        Map<String, Object> n = new LinkedHashMap<>();
+        if (id != null) {
+            n.put("id", id);
+        }
+        n.put("text", text);
+        if (canvasPosition != null) {
+            n.put("canvasPosition", canvasPosition);
+        }
+        return n;
     }
 
     private static Map<String, Object> messageStep(String text) {

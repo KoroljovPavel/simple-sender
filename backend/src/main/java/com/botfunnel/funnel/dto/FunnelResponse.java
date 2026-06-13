@@ -21,6 +21,9 @@ public record FunnelResponse(
         boolean allowReEnter,
         List<TriggerDto> triggers,
         List<FunnelStepDto> steps,
+        // Free-floating canvas notes (18-funnel-canvas / Task 1, Decision 7): editor-only annotations
+        // outside steps[]. Null for a legacy funnel saved before this feature (additive-nullable).
+        List<NoteDto> notes,
         String deepLink,
         Instant createdAt,
         Instant updatedAt

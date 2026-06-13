@@ -34,6 +34,14 @@ public class Trigger {
     private List<String> keywords;
     private String entryStepId;
 
+    // Canvas node coordinate (18-funnel-canvas / Task 1, Decision 8): the start/entry node's {x,y} on the
+    // editor surface. Additive + nullable. DELIBERATELY EXCLUDED from equals/hashCode below — those compare
+    // and hash EXACTLY the four routing fields (triggerType, triggerValue, keywords, entryStepId).
+    // canvasPosition is rendering-only metadata; keeping it out preserves the structural equality the
+    // 17-funnel-multi-entry redirect re-scan / dedupe relies on (a moved node must still equal its prior
+    // self for routing).
+    private CanvasPosition canvasPosition;
+
     public Trigger() {
     }
 
@@ -48,6 +56,9 @@ public class Trigger {
 
     public String getEntryStepId() { return entryStepId; }
     public void setEntryStepId(String entryStepId) { this.entryStepId = entryStepId; }
+
+    public CanvasPosition getCanvasPosition() { return canvasPosition; }
+    public void setCanvasPosition(CanvasPosition canvasPosition) { this.canvasPosition = canvasPosition; }
 
     // Value equality over all four fields. Mongo re-hydrates triggers as fresh instances (so reference
     // identity is useless across a round-trip), and Task 5's redirect re-scans triggers[] to locate the

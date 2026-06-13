@@ -1,6 +1,7 @@
 package com.botfunnel.funnel.dto;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.Size;
 
 import java.util.List;
@@ -31,7 +32,10 @@ public record TriggerDto(
         String triggerType,
         String triggerValue,
         @Size(max = MAX_KEYWORDS) List<String> keywords,
-        String entryStepId
+        String entryStepId,
+        // Canvas node coordinate (18-funnel-canvas / Task 1): the start/entry node's {x,y} on the editor
+        // surface. Nullable; @Valid cascades the DTO's finite-value check. Rendering-only metadata.
+        @Valid CanvasPositionDto canvasPosition
 ) {
     // Decision 14 / mirrors FunnelService.MAX_KEYWORDS: the per-trigger keyword count cap. Annotated here
     // (vs only in the service) so the cap is enforced at the contract boundary across every element of the

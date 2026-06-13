@@ -28,10 +28,20 @@ public record UpdateFunnelRequest(
         @Size(max = 1024) String description,
         Boolean allowReEnter,
         @Valid @Size(max = MAX_TRIGGERS) List<TriggerDto> triggers,
-        @Valid List<FunnelStepDto> steps
+        @Valid List<FunnelStepDto> steps,
+        // Free-floating canvas notes (18-funnel-canvas / Task 1, Decision 7). @Size(max=MAX_NOTES) is the
+        // first-line DoS ceiling (mirrors the MAX_TRIGGERS guard); a service-side re-check of the same cap
+        // runs in FunnelService. @Valid cascades each NoteDto's @Size text cap + the CanvasPositionDto
+        // finite-value check. Null/empty is shape-valid (a funnel may carry no notes).
+        @Valid @Size(max = MAX_NOTES) List<NoteDto> notes
 ) {
     // Decision 14: ceiling on the entry-trigger array. Aligned with the same-order caps in FunnelService
     // (max-steps / fan-out = 50). The service re-checks this bound (Task 4); the annotation is the
     // first-line contract guard.
     public static final int MAX_TRIGGERS = 50;
+
+    // 18-funnel-canvas / Task 1 (Decision 7): ceiling on the free-floating notes array. Same order of
+    // magnitude as MAX_TRIGGERS / max-steps so a hostile notes array cannot bloat the document. The service
+    // re-checks this bound (mirrors the MAX_TRIGGERS DoS guard); this annotation is the first-line guard.
+    public static final int MAX_NOTES = 50;
 }

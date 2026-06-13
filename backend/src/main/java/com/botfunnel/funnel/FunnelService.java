@@ -5,6 +5,7 @@ import com.botfunnel.bot.BotRepository;
 import com.botfunnel.bot.BotStatus;
 import com.botfunnel.common.AppException;
 import com.botfunnel.funnel.dto.ButtonDto;
+import com.botfunnel.funnel.dto.CanvasPositionDto;
 import com.botfunnel.funnel.dto.ContentBlockDto;
 import com.botfunnel.funnel.dto.CreateFunnelRequest;
 import com.botfunnel.funnel.dto.FunnelResponse;
@@ -13,6 +14,7 @@ import com.botfunnel.funnel.dto.MediaItemDto;
 import com.botfunnel.funnel.dto.FunnelSummaryResponse;
 import com.botfunnel.funnel.dto.KeyboardButtonDto;
 import com.botfunnel.funnel.dto.KeyboardRowDto;
+import com.botfunnel.funnel.dto.NoteDto;
 import com.botfunnel.funnel.dto.PreviewStepRequest;
 import com.botfunnel.funnel.dto.PreviewStepResponse;
 import com.botfunnel.funnel.dto.TriggerDto;
@@ -90,6 +92,12 @@ public class FunnelService {
     // Mirrors UpdateFunnelRequest.MAX_TRIGGERS (the DTO @Size first line); this is the service re-check.
     private static final int MAX_TRIGGERS = 50;
 
+    // 18-funnel-canvas / Task 1 (Decision 7): the free-floating canvas notes caps. Mirror
+    // UpdateFunnelRequest.MAX_NOTES / NoteDto.NOTE_TEXT_MAX (the DTO @Size first line); these are the
+    // service-side re-checks (defense-in-depth, mirroring the MAX_TRIGGERS DoS guard).
+    private static final int MAX_NOTES = UpdateFunnelRequest.MAX_NOTES;
+    private static final int NOTE_TEXT_MAX = NoteDto.NOTE_TEXT_MAX;
+
     private static final String MESSAGE_NOT_FOUND = "Funnel not found";
 
     static final String CODE_TRIGGER_CONFLICT = "funnel_trigger_conflict";
@@ -111,6 +119,10 @@ public class FunnelService {
     static final String CODE_INVALID_ENTRY_STEP = "funnel_invalid_entry_step";
     //   - the triggers array exceeds the Decision 14 size cap.
     static final String CODE_TRIGGER_LIMIT = "funnel_trigger_limit_reached";
+    // 18-funnel-canvas / Task 1 (Decision 7): the free-floating notes array exceeds the MAX_NOTES cap, or a
+    // note's text exceeds NOTE_TEXT_MAX. Service-side re-check (mirrors CODE_TRIGGER_LIMIT) → 422.
+    static final String CODE_NOTE_LIMIT = "funnel_note_limit_reached";
+    static final String CODE_NOTE_INVALID = "funnel_note_invalid";
     static final String CODE_NO_STEPS = "funnel_no_steps";
     static final String CODE_INVALID_STATE = "funnel_invalid_state";
     // Phase 2 (Decision 2 / Decision 10): a graph edge (next / button targetStepId / timeoutTargetStepId)
@@ -242,6 +254,7 @@ public class FunnelService {
         funnel.setSteps(steps);
 
         applyTriggers(funnel, request.triggers(), stepIdsOf(steps));
+        applyNotes(funnel, request.notes());
         funnel.setUpdatedAt(Instant.now(clock));
         // Editing an ACTIVE funnel's trigger can collide with another active funnel (Decision 3 allows
         // editing while active). Only an active row participates in the partial-unique index, so the
@@ -747,11 +760,49 @@ public class FunnelService {
                 }
                 default -> throw invalidTriggerType(type);
             }
+            // Canvas node coordinate (18-funnel-canvas / Task 1): type-independent rendering metadata — set
+            // on every trigger regardless of type. Null in → null out. NOT part of Trigger.equals/hashCode,
+            // so it never affects the redirect re-scan / dedupe (17-funnel-multi-entry).
+            trigger.setCanvasPosition(toCanvasPosition(dto.canvasPosition()));
             validated.add(trigger);
         }
 
         funnel.setTriggers(validated);
         syncOnStartTriggerValue(funnel);
+    }
+
+    // Notes-forward pass (18-funnel-canvas / Task 1, Decision 7). Free-floating canvas notes live OUTSIDE
+    // steps[] and are never executed. Mirrors the applyTriggers DoS-guard shape:
+    //   - null/empty request notes → funnel.notes = null (additive-nullable; a funnel may carry no notes);
+    //   - array size re-checked against MAX_NOTES (defense-in-depth behind the DTO @Size) → 422;
+    //   - each note's text length re-checked against NOTE_TEXT_MAX → 422;
+    //   - id is SERVER-MINTED: an incoming null id gets a fresh ObjectId hex (same convention as toSteps'
+    //     step-id minting); a non-null incoming id is preserved verbatim (echoed from a prior read). The
+    //     body's id is never trusted for shape.
+    private void applyNotes(Funnel funnel, List<NoteDto> requested) {
+        if (requested == null || requested.isEmpty()) {
+            funnel.setNotes(null);
+            return;
+        }
+        if (requested.size() > MAX_NOTES) {
+            throw AppException.unprocessableEntity(CODE_NOTE_LIMIT,
+                    "Funnel exceeds the maximum of " + MAX_NOTES + " notes");
+        }
+        List<Note> notes = new ArrayList<>(requested.size());
+        for (NoteDto dto : requested) {
+            if (dto == null) {
+                throw AppException.unprocessableEntity(CODE_NOTE_INVALID, "Note must not be null");
+            }
+            String text = dto.text();
+            if (text != null && text.length() > NOTE_TEXT_MAX) {
+                throw AppException.unprocessableEntity(CODE_NOTE_INVALID,
+                        "Note text exceeds the maximum of " + NOTE_TEXT_MAX + " characters");
+            }
+            String incomingId = blankToNull(dto.id());
+            String id = incomingId != null ? incomingId : new org.bson.types.ObjectId().toHexString();
+            notes.add(new Note(id, text, toCanvasPosition(dto.canvasPosition())));
+        }
+        funnel.setNotes(notes);
     }
 
     // A non-event trigger must NOT carry an entryStepId — mid-entry routing is event-only (Decision 10).
@@ -963,6 +1014,9 @@ public class FunnelService {
             step.setKeyboardRows(toKeyboardRows(dto.keyboardRows()));
             step.setIsPersistent(dto.isPersistent());
             step.setOneTimeKeyboard(dto.oneTimeKeyboard());
+            // Canvas node coordinate (18-funnel-canvas / Task 1): forward-map the editor position. Null in →
+            // null out (an unpositioned node; the frontend auto-layouts it). Rendering-only metadata.
+            step.setCanvasPosition(toCanvasPosition(dto.canvasPosition()));
             steps.add(step);
         }
         return steps;
@@ -1551,6 +1605,7 @@ public class FunnelService {
                 funnel.isAllowReEnter(),
                 toTriggerDtos(funnel.getTriggers()),
                 steps,
+                toNoteDtos(funnel.getNotes()),
                 resolveDeepLink(funnel),
                 funnel.getCreatedAt(),
                 funnel.getUpdatedAt());
@@ -1581,8 +1636,35 @@ public class FunnelService {
         }
         return triggers.stream()
                 .map(t -> new TriggerDto(t.getTriggerType(), t.getTriggerValue(),
-                        t.getKeywords(), t.getEntryStepId()))
+                        t.getKeywords(), t.getEntryStepId(),
+                        // Canvas coordinate reverse-map (18-funnel-canvas / Task 1): without this the saved
+                        // trigger node position would silently drop on read (the @JsonIgnoreProperties seam).
+                        toCanvasPositionDto(t.getCanvasPosition())))
                 .toList();
+    }
+
+    // domain → DTO mapper for the canvas notes array (18-funnel-canvas / Task 1, Decision 7; reverse of the
+    // notes-forward pass in update). A null notes list maps to null (additive-nullable, a legacy doc has no
+    // notes); the engine never touches notes, so this is pure editor round-trip.
+    private static List<NoteDto> toNoteDtos(List<Note> notes) {
+        if (notes == null) {
+            return null;
+        }
+        return notes.stream()
+                .map(n -> new NoteDto(n.id(), n.text(), toCanvasPositionDto(n.canvasPosition())))
+                .toList();
+    }
+
+    // domain CanvasPosition → CanvasPositionDto (18-funnel-canvas / Task 1). Null stays null (an unpositioned
+    // node). Shared by the step / trigger / note reverse mappers.
+    private static CanvasPositionDto toCanvasPositionDto(CanvasPosition position) {
+        return position == null ? null : new CanvasPositionDto(position.x(), position.y());
+    }
+
+    // CanvasPositionDto → domain CanvasPosition (18-funnel-canvas / Task 1; forward direction). Null stays
+    // null. The finite-value guard already ran at the DTO bean-validation boundary (@Valid cascade).
+    private static CanvasPosition toCanvasPosition(CanvasPositionDto dto) {
+        return dto == null ? null : new CanvasPosition(dto.x(), dto.y());
     }
 
     private static FunnelStepDto toStepDto(FunnelStep step) {
@@ -1611,7 +1693,11 @@ public class FunnelService {
                 step.getKeyboardParseMode(),
                 toKeyboardRowDtos(step.getKeyboardRows()),
                 step.getIsPersistent(),
-                step.getOneTimeKeyboard());
+                step.getOneTimeKeyboard(),
+                // Canvas coordinate reverse-map (18-funnel-canvas / Task 1): the toStepDto direction is the
+                // historically-missed silent-drop seam — without it the saved step node position never
+                // returns to the editor (the round-trip IT guards exactly this).
+                toCanvasPositionDto(step.getCanvasPosition()));
     }
 
     private static List<ButtonDto> toButtonDtos(List<Button> buttons) {

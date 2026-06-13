@@ -46,11 +46,11 @@ class TriggerDtoTest {
     @Test
     void roundTripsTriggerArray() throws Exception {
         List<TriggerDto> triggers = List.of(
-                new TriggerDto("on_start", "", null, null),
-                new TriggerDto("event", "purchase", null, "step-7"),
-                new TriggerDto("keyword", "", List.of("hello", "hi"), "step-9"));
+                new TriggerDto("on_start", "", null, null, null),
+                new TriggerDto("event", "purchase", null, "step-7", null),
+                new TriggerDto("keyword", "", List.of("hello", "hi"), "step-9", null));
         UpdateFunnelRequest request = new UpdateFunnelRequest(
-                "My funnel", "desc", false, triggers, List.of());
+                "My funnel", "desc", false, triggers, List.of(), null);
 
         String json = objectMapper.writeValueAsString(request);
         UpdateFunnelRequest back = objectMapper.readValue(json, UpdateFunnelRequest.class);
@@ -93,11 +93,11 @@ class TriggerDtoTest {
     @Test
     void funnelResponseRoundTrip() throws Exception {
         List<TriggerDto> triggers = List.of(
-                new TriggerDto("on_start", "promo", null, null),
-                new TriggerDto("event", "signup", null, "step-2"));
+                new TriggerDto("on_start", "promo", null, null, null),
+                new TriggerDto("event", "signup", null, "step-2", null));
 
         FunnelResponse response = new FunnelResponse(
-                "f1", "p1", "Name", "Desc", null, false, triggers, List.of(),
+                "f1", "p1", "Name", "Desc", null, false, triggers, List.of(), null,
                 "t.me/bot?start=promo", null, null);
         FunnelResponse backResponse =
                 objectMapper.readValue(objectMapper.writeValueAsString(response), FunnelResponse.class);
@@ -117,10 +117,10 @@ class TriggerDtoTest {
     void sizeCapViolationFlaggedByValidator() {
         // One trigger over the @Size ceiling → a constraint violation on the `triggers` field.
         List<TriggerDto> overCap = IntStream.range(0, UpdateFunnelRequest.MAX_TRIGGERS + 1)
-                .mapToObj(i -> new TriggerDto("event", "e" + i, null, null))
+                .mapToObj(i -> new TriggerDto("event", "e" + i, null, null, null))
                 .collect(Collectors.toList());
         UpdateFunnelRequest request = new UpdateFunnelRequest(
-                "n", null, false, overCap, List.of());
+                "n", null, false, overCap, List.of(), null);
 
         Set<ConstraintViolation<UpdateFunnelRequest>> violations = validator.validate(request);
 
@@ -133,10 +133,10 @@ class TriggerDtoTest {
     void sizeCapBoundaryAccepted() {
         // Exactly MAX_TRIGGERS is allowed (off-by-one guard on the ceiling).
         List<TriggerDto> atCap = IntStream.range(0, UpdateFunnelRequest.MAX_TRIGGERS)
-                .mapToObj(i -> new TriggerDto("event", "e" + i, null, null))
+                .mapToObj(i -> new TriggerDto("event", "e" + i, null, null, null))
                 .collect(Collectors.toList());
         UpdateFunnelRequest request = new UpdateFunnelRequest(
-                "n", null, false, atCap, List.of());
+                "n", null, false, atCap, List.of(), null);
 
         Set<ConstraintViolation<UpdateFunnelRequest>> violations = validator.validate(request);
 
@@ -153,9 +153,9 @@ class TriggerDtoTest {
                 .mapToObj(i -> "k" + i)
                 .collect(Collectors.toList());
         List<TriggerDto> triggers = new ArrayList<>();
-        triggers.add(new TriggerDto("keyword", "", tooManyKeywords, null));
+        triggers.add(new TriggerDto("keyword", "", tooManyKeywords, null, null));
         UpdateFunnelRequest request = new UpdateFunnelRequest(
-                "n", null, false, triggers, List.of());
+                "n", null, false, triggers, List.of(), null);
 
         Set<ConstraintViolation<UpdateFunnelRequest>> violations = validator.validate(request);
 

@@ -2,6 +2,7 @@ package com.botfunnel.funnel.dto;
 
 import com.botfunnel.funnel.StepType;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotNull;
 
 import java.util.List;
@@ -57,5 +58,9 @@ public record FunnelStepDto(
         String keyboardParseMode,
         List<KeyboardRowDto> keyboardRows,
         Boolean isPersistent,
-        Boolean oneTimeKeyboard
+        Boolean oneTimeKeyboard,
+        // Canvas node coordinate (18-funnel-canvas / Task 1): the step's {x,y} on the editor surface.
+        // Nullable; @Valid cascades the DTO's finite-value check (reject NaN/Infinity). Rendering-only —
+        // round-trips to/from the editor, never read by the engine.
+        @Valid CanvasPositionDto canvasPosition
 ) {}

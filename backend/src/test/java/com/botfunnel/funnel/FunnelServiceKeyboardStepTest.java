@@ -84,7 +84,7 @@ class FunnelServiceKeyboardStepTest extends AbstractIntegrationTest {
         return new FunnelStepDto(
                 StepType.SET_KEYBOARD, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, false,
-                text, parseMode, rows, isPersistent, oneTime);
+                text, parseMode, rows, isPersistent, oneTime, null);
     }
 
     private FunnelStepDto clearKeyboardStep(String text, String parseMode, List<KeyboardRowDto> rows,
@@ -92,7 +92,7 @@ class FunnelServiceKeyboardStepTest extends AbstractIntegrationTest {
         return new FunnelStepDto(
                 StepType.CLEAR_KEYBOARD, null, null, null, null, null, null,
                 null, null, null, null, null, null, null, null, null, false,
-                text, parseMode, rows, isPersistent, oneTime);
+                text, parseMode, rows, isPersistent, oneTime, null);
     }
 
     private static KeyboardRowDto row(String... labels) {
@@ -106,7 +106,7 @@ class FunnelServiceKeyboardStepTest extends AbstractIntegrationTest {
     private UpdateFunnelRequest reqWithStep(FunnelStepDto step) {
         // Phase 8 (17-funnel-multi-entry): a single bare on_start trigger replaces the former flat trio.
         return new UpdateFunnelRequest("f", null, false,
-                List.of(new com.botfunnel.funnel.dto.TriggerDto("on_start", "", null, null)), List.of(step));
+                List.of(new com.botfunnel.funnel.dto.TriggerDto("on_start", "", null, null, null)), List.of(step), null);
     }
 
     private void assert422(FunnelStepDto step) {

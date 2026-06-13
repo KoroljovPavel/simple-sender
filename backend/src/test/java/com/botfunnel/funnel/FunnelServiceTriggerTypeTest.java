@@ -77,15 +77,15 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
     }
 
     private static TriggerDto onStart(String value) {
-        return new TriggerDto("on_start", value, null, null);
+        return new TriggerDto("on_start", value, null, null, null);
     }
 
     private static TriggerDto event(String value, String entryStepId) {
-        return new TriggerDto("event", value, null, entryStepId);
+        return new TriggerDto("event", value, null, entryStepId, null);
     }
 
     private static TriggerDto keyword(List<String> keywords) {
-        return new TriggerDto("keyword", null, keywords, null);
+        return new TriggerDto("keyword", null, keywords, null, null);
     }
 
     // A minimal valid MESSAGE step (one TEXT block) carrying a caller-chosen stable id, so an event
@@ -94,11 +94,11 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
         ContentBlockDto block = new ContentBlockDto("TEXT", text, null, null, null, null);
         return new FunnelStepDto(StepType.MESSAGE, id, null, null, null, null, null,
                 List.of(block), null, null, null, null, null, null, null, null, false,
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     private UpdateFunnelRequest req(List<TriggerDto> triggers, List<FunnelStepDto> steps) {
-        return new UpdateFunnelRequest("f", null, false, triggers, steps);
+        return new UpdateFunnelRequest("f", null, false, triggers, steps, null);
     }
 
     private FunnelResponse update(String id, List<TriggerDto> triggers, List<FunnelStepDto> steps) {
@@ -121,7 +121,7 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
     @Test
     void triggerType_unknownRejected() {
         String id = createDraft();
-        assert422(id, List.of(new TriggerDto("totally_bogus", "x", null, null)), List.of(),
+        assert422(id, List.of(new TriggerDto("totally_bogus", "x", null, null, null)), List.of(),
                 FunnelService.CODE_INVALID_TRIGGER_TYPE);
     }
 
@@ -175,7 +175,7 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
         // Decision 10: mid-entry is event-only; an on_start carrying an entryStepId → 422.
         String id = createDraft();
         FunnelStepDto s = messageStep("step-1", "hi");
-        assert422(id, List.of(new TriggerDto("on_start", "", null, "step-1")), List.of(s),
+        assert422(id, List.of(new TriggerDto("on_start", "", null, "step-1", null)), List.of(s),
                 FunnelService.CODE_INVALID_ENTRY_STEP);
     }
 

@@ -71,7 +71,7 @@ class FunnelServiceKeywordTest extends AbstractIntegrationTest {
     // top level. A keyword funnel is a single keyword trigger element.
     private UpdateFunnelRequest keywordReq(List<String> keywords, List<com.botfunnel.funnel.dto.FunnelStepDto> steps) {
         return new UpdateFunnelRequest("f", null, false,
-                List.of(new com.botfunnel.funnel.dto.TriggerDto("keyword", null, keywords, null)), steps);
+                List.of(new com.botfunnel.funnel.dto.TriggerDto("keyword", null, keywords, null, null)), steps, null);
     }
 
     @Test
@@ -114,7 +114,7 @@ class FunnelServiceKeywordTest extends AbstractIntegrationTest {
         String id = createDraft();
         // Sending keywords on an on_start trigger → 422 (tight contract; Decision 3 reject-vs-ignore).
         assertInvalidKeywords(id, new UpdateFunnelRequest("f", null, false,
-                List.of(new com.botfunnel.funnel.dto.TriggerDto("on_start", "", List.of("bonus"), null)),
-                List.of()));
+                List.of(new com.botfunnel.funnel.dto.TriggerDto("on_start", "", List.of("bonus"), null, null)),
+                List.of(), null));
     }
 }

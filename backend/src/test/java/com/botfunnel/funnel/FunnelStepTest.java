@@ -347,4 +347,28 @@ class FunnelStepTest {
         original.getKeyboardRows().clear();
         assertThat(copy.getKeyboardRows()).hasSize(3);
     }
+
+    /**
+     * 18-funnel-canvas / Task 1: {@code canvasPosition} is an immutable {@link CanvasPosition} record, so
+     * {@code copyOf} carries it onto the execution snapshot by reference; a null position stays null. The
+     * coordinate is rendering-only metadata — it survives the snapshot but the engine never reads it.
+     */
+    @Test
+    void copyOf_carries_canvasPosition() {
+        FunnelStep original = new FunnelStep();
+        original.setStepType(StepType.MESSAGE);
+        original.setCanvasPosition(new CanvasPosition(120.5, -42.0));
+
+        FunnelStep copy = FunnelStep.copyOf(original);
+
+        assertThat(copy.getCanvasPosition()).isEqualTo(new CanvasPosition(120.5, -42.0));
+        // Immutable record → reference copy is the intended behaviour (no needless deep copy).
+        assertThat(copy.getCanvasPosition()).isSameAs(original.getCanvasPosition());
+
+        // A null canvasPosition copies to null (additive-nullable; the node auto-layouts in the editor).
+        FunnelStep noPosition = new FunnelStep();
+        noPosition.setStepType(StepType.MESSAGE);
+        assertThat(noPosition.getCanvasPosition()).isNull();
+        assertThat(FunnelStep.copyOf(noPosition).getCanvasPosition()).isNull();
+    }
 }

@@ -22,11 +22,23 @@ import { storeToRefs } from 'pinia'
 // per-type inputs the subscriber custom-fields tab uses), resolved from the project's definitions.
 // siblingSteps = the OTHER steps of the funnel (threaded down from the page via Add/EditStepDialog) so a
 // MESSAGE keyboard callback button can target another step by its stable id. Empty/absent otherwise.
-const props = defineProps<{
-  initial?: FunnelStep | null
-  submitLabel: string
-  siblingSteps?: FunnelStep[]
-}>()
+// hideTargetPickers (canvas opt-in, 18-funnel-canvas Task 6): when true, the three target SearchableSelects
+// (callback button targetStepId, timeout target, SUBSCRIBE entry) are hidden — on the canvas the EDGES own
+// those targets, so the form must not double-edit them. withDefaults is REQUIRED here: Vue coerces an absent
+// declared Boolean prop to `false`, but a plain optional `hideTargetPickers?: boolean` reads as `undefined`
+// in the template (truthy guards still work, but withDefaults makes the false default explicit and matches
+// SearchableSelect's showValue idiom). The default is `false`, so list/dialog callers are unaffected and the
+// emitted FunnelStep is byte-for-byte identical — the hidden values still flow through on submit from
+// `props.initial`-seeded state (menuButtons / menuTimeoutTarget / subscribeEntryStepId), never dropped/zeroed.
+const props = withDefaults(
+  defineProps<{
+    initial?: FunnelStep | null
+    submitLabel: string
+    siblingSteps?: FunnelStep[]
+    hideTargetPickers?: boolean
+  }>(),
+  { hideTargetPickers: false },
+)
 const emit = defineEmits<{ submit: [step: FunnelStep]; cancel: [] }>()
 
 const { t } = useI18n()
@@ -1278,8 +1290,10 @@ const onSubmit = handleSubmit((values) => {
                 {{ menuButtonLabelError(row) }}
               </p>
 
-              <!-- Callback: target = another step or End, via the shared SearchableSelect. -->
-              <template v-if="row.type === 'callback'">
+              <!-- Callback: target = another step or End, via the shared SearchableSelect. On the canvas the
+                   edge owns the target (hideTargetPickers) so this picker is hidden; row.targetStepId is
+                   preserved unchanged and still flows through on submit. -->
+              <template v-if="row.type === 'callback' && !hideTargetPickers">
                 <SearchableSelect
                   v-model="row.targetStepId"
                   :options="menuTargetOptions"
@@ -1346,7 +1360,7 @@ const onSubmit = handleSubmit((values) => {
                   </select>
                 </div>
               </div>
-              <div v-if="menuTimeoutEnabled" class="mt-2">
+              <div v-if="menuTimeoutEnabled && !hideTargetPickers" class="mt-2">
                 <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.menuTimeoutTarget') }}</label>
                 <SearchableSelect
                   v-model="menuTimeoutTarget"
@@ -1550,7 +1564,9 @@ const onSubmit = handleSubmit((values) => {
         </p>
       </div>
 
-      <div>
+      <!-- SUBSCRIBE entry picker — hidden on the canvas (hideTargetPickers); the value is preserved unchanged
+           and still flows through on submit. The cross-funnel target is rendered as a node exit badge there. -->
+      <div v-if="!hideTargetPickers">
         <label class="block text-sm font-medium mb-1">{{ t('funnels.steps.form.subscribeEntry') }}</label>
         <SearchableSelect
           v-model="subscribeEntryStepId"

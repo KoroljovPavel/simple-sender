@@ -5,11 +5,15 @@ import type { Connection } from '@vue-flow/core'
 // so importing it here too is harmless and satisfies the strict "component imports it" acceptance criterion.
 import '@vue-flow/core/dist/style.css'
 import FunnelCanvasNode from './FunnelCanvasNode.vue'
-import type { FunnelNote, FunnelResponse, FunnelStep, FunnelTrigger } from '~/types/funnel'
+import FunnelCanvasPalette from './FunnelCanvasPalette.vue'
+import FunnelCanvasSidePanel from './FunnelCanvasSidePanel.vue'
+import type { SelectedNode } from './FunnelCanvasSidePanel.vue'
+import type { FunnelNote, FunnelResponse, FunnelStep, FunnelTrigger, StepType } from '~/types/funnel'
 import {
   buildEdges,
   buildNodes,
   connectEdge,
+  deleteStepNode,
   detectBrokenEdges,
   layoutNodes,
   type BrokenEdge,
@@ -34,11 +38,14 @@ const props = defineProps<{
   steps: FunnelStep[]
   triggers: FunnelTrigger[]
   notes?: FunnelNote[] | null
+  botUsername?: string | null
+  deepLink?: string | null
 }>()
 
 const emit = defineEmits<{
   'update:steps': [steps: FunnelStep[]]
   'update:triggers': [triggers: FunnelTrigger[]]
+  'update:notes': [notes: FunnelNote[]]
 }>()
 
 const { t } = useI18n()
@@ -195,20 +202,177 @@ function handleFieldKind(handle: string | null | undefined): EdgeFieldKind | nul
 
 onConnect(handleConnect)
 
+// ── Task 6: authoring interactions (palette / start-node lifecycle / delete / side panel) ─────────────
+
+// A funnel has at most one on_start start node (Decision 11) → the palette's start-node entry disables when
+// one already exists.
+const onStartExists = computed(() => (props.triggers ?? []).some((tr) => tr.triggerType === 'on_start'))
+
+// ── Palette: add a node ────────────────────────────────────────────────────────────────────────────────
+// Adding a node appends a fresh model object (id null for steps — it has no id until the page persists it,
+// minting the id via the PATCH round-trip before the node can be wired, Decision 10). The canvas only mutates
+// and emits the model arrays; persistence + id minting are the page's job (Task 7).
+
+// A minimal fresh step skeleton per type — just enough for the node to render + the form to seed. The page's
+// persist() round-trip mints the id; until then the node carries id: null and refuses inbound edges.
+function newStep(type: StepType): FunnelStep {
+  const base = { stepType: type, id: null } as FunnelStep
+  if (type === 'MESSAGE') return { ...base, blocks: [{ type: 'TEXT', text: '' }] }
+  return base
+}
+
+function addStep(type: StepType): void {
+  emit('update:steps', [...(props.steps ?? []), newStep(type)])
+}
+
+// Adding the start node creates an on_start trigger (its outgoing edge writes on_start.entryStepId later via
+// the mapping layer). Guarded by onStartExists so we never create a second one.
+function addStart(): void {
+  if (onStartExists.value) return
+  const trigger: FunnelTrigger = { triggerType: 'on_start', triggerValue: '', entryStepId: null }
+  emit('update:triggers', [...(props.triggers ?? []), trigger])
+}
+
+// A generic (event) trigger node — its type is then editable in the side panel (FunnelTriggerSettings).
+function addTrigger(): void {
+  const trigger: FunnelTrigger = { triggerType: 'event', triggerValue: '', entryStepId: null }
+  emit('update:triggers', [...(props.triggers ?? []), trigger])
+}
+
+function addNote(): void {
+  emit('update:notes', [...(props.notes ?? []), { id: null, text: '', canvasPosition: null }])
+}
+
+// ── Node selection → side panel ──────────────────────────────────────────────────────────────────────
+const selectedNode = ref<SelectedNode | null>(null)
+
+function selectNode(node: CanvasNode): void {
+  const { kind, stepIndex, triggerIndex } = node.data
+  selectedNode.value = {
+    kind,
+    nodeId: node.id,
+    step: stepIndex != null ? (props.steps ?? [])[stepIndex] ?? null : null,
+    trigger: triggerIndex != null ? (props.triggers ?? [])[triggerIndex] ?? null : null,
+    botUsername: props.botUsername ?? null,
+    deepLink: props.deepLink ?? null,
+  }
+}
+
+function clearSelection(): void {
+  selectedNode.value = null
+}
+
+// Relay the side panel's step edit back into the steps array (matched by id; an unsaved node is matched by
+// its array index via the selected node's stepIndex). Persistence is the page's job (Task 7).
+function onPanelStepSubmit(step: FunnelStep): void {
+  const sel = selectedNode.value
+  if (!sel || sel.kind !== 'step') return
+  const next = (props.steps ?? []).map((s) => (s.id != null && s.id === sel.step?.id ? step : s))
+  emit('update:steps', next)
+}
+
+function onPanelTriggerUpdate(trigger: FunnelTrigger): void {
+  const sel = selectedNode.value
+  if (!sel || (sel.kind !== 'trigger' && sel.kind !== 'start')) return
+  const idx = (props.triggers ?? []).findIndex((tr) => tr === sel.trigger)
+  if (idx < 0) return
+  const next = (props.triggers ?? []).map((tr, i) => (i === idx ? trigger : tr))
+  emit('update:triggers', next)
+}
+
+// ── Node delete with edge auto-cleanup + disconnect-count warning ────────────────────────────────────
+// requestDelete computes (does not yet apply) the deletion. For a step node the mapping layer's deleteStepNode
+// reports the exact inbound-edge disconnect count; a "N connections will be disconnected" warning is shown
+// before the author confirms. confirmDelete then emits the cleaned model. Deleting the start node removes the
+// on_start trigger entry (Decision 11) — no step-edge count, but its own entry edge goes away with it.
+interface PendingDelete {
+  nodeId: string
+  kind: 'step' | 'start' | 'trigger' | 'note'
+  disconnectedCount: number
+}
+const pendingDelete = ref<PendingDelete | null>(null)
+
+function nodeKindOf(nodeId: string): 'step' | 'start' | 'trigger' | 'note' {
+  if (nodeId === 'start') return 'start'
+  if (nodeId.startsWith('trigger:')) return 'trigger'
+  if (nodeId.startsWith('note:')) return 'note'
+  return 'step'
+}
+
+function requestDelete(nodeId: string): void {
+  const kind = nodeKindOf(nodeId)
+  let disconnectedCount = 0
+  if (kind === 'step') {
+    // Reuse the mapping layer for the exact inbound-edge count — never recompute it here.
+    disconnectedCount = deleteStepNode(model.value, nodeId).disconnectedCount
+  }
+  pendingDelete.value = { nodeId, kind, disconnectedCount }
+}
+
+function cancelDelete(): void {
+  pendingDelete.value = null
+}
+
+function confirmDelete(): void {
+  const pending = pendingDelete.value
+  if (!pending) return
+
+  if (pending.kind === 'step') {
+    const result = deleteStepNode(model.value, pending.nodeId)
+    emit('update:steps', result.funnel.steps ?? [])
+    // Inbound entry edges may have been nulled too — emit triggers so the page persists the cleanup.
+    emit('update:triggers', result.funnel.triggers ?? [])
+  } else if (pending.kind === 'start') {
+    // Removing the start node removes the on_start trigger entry entirely (Decision 11).
+    emit(
+      'update:triggers',
+      (props.triggers ?? []).filter((tr) => tr.triggerType !== 'on_start'),
+    )
+  } else if (pending.kind === 'trigger') {
+    const idx = Number(pending.nodeId.slice('trigger:'.length))
+    emit(
+      'update:triggers',
+      (props.triggers ?? []).filter((_, i) => i !== idx),
+    )
+  } else if (pending.kind === 'note') {
+    const idx = Number(pending.nodeId.slice('note:'.length))
+    emit(
+      'update:notes',
+      (props.notes ?? []).filter((_, i) => i !== idx),
+    )
+  }
+
+  // If the deleted node was the selected one, clear the side panel.
+  if (selectedNode.value?.nodeId === pending.nodeId) clearSelection()
+  pendingDelete.value = null
+}
+
 // Exposed for the component test to drive a draw-to-connect deterministically (asserting the field write +
 // emit) without simulating a real Vue Flow drag — live drag is user-verified, not unit-tested (Testing
-// Strategy / no E2E). Production wiring goes through the onConnect callback above.
-defineExpose({ handleConnect })
+// Strategy / no E2E). requestDelete/confirmDelete are likewise exposed so the delete flow (warning → apply)
+// is unit-testable without a live node click. Production wiring goes through the onConnect callback above.
+defineExpose({ handleConnect, selectNode, requestDelete, confirmDelete })
 </script>
 
 <template>
   <div data-test="funnel-canvas" class="funnel-canvas" :aria-label="t('funnels.canvas.aria')">
+    <!-- Palette (left): add a node of any of the 9 step types + trigger + note + the optional start node. -->
+    <FunnelCanvasPalette
+      :on-start-exists="onStartExists"
+      @add-step="addStep"
+      @add-trigger="addTrigger"
+      @add-note="addNote"
+      @add-start="addStart"
+    />
+
+    <div class="funnel-canvas__stage">
     <VueFlow
       :nodes="flowNodes"
       :edges="flowEdges"
       :only-render-visible-elements="true"
       :min-zoom="0.2"
       :max-zoom="2"
+      @node-click="(e: { node: { id: string } }) => { const n = rawNodes.find((x) => x.id === e.node.id); if (n) selectNode(n) }"
     >
       <!-- Custom node renderers per mapping-layer node type. The slot props (id, data, …) are bound through. -->
       <template #node-step="nodeProps">
@@ -254,15 +418,104 @@ defineExpose({ handleConnect })
         class="funnel-canvas__broken-edge"
       >{{ t('funnels.canvas.brokenEdge') }}</li>
     </ul>
+
+    <!-- Delete confirmation: shows the EXACT inbound-edge disconnect count (mapping-layer disconnectedCount)
+         before the author confirms a node deletion (Decision 9). -->
+    <div
+      v-if="pendingDelete"
+      data-test="funnel-canvas-delete-warning"
+      :data-disconnect-count="pendingDelete.disconnectedCount"
+      class="funnel-canvas__delete-warning"
+      role="alertdialog"
+    >
+      <p class="funnel-canvas__delete-text">
+        {{ t('funnels.canvas.delete.warning', { count: pendingDelete.disconnectedCount }) }}
+      </p>
+      <div class="funnel-canvas__delete-actions">
+        <button
+          type="button"
+          data-test="funnel-canvas-delete-confirm"
+          class="funnel-canvas__delete-confirm"
+          @click="confirmDelete"
+        >{{ t('funnels.canvas.delete.button') }}</button>
+        <button
+          type="button"
+          data-test="funnel-canvas-delete-cancel"
+          class="funnel-canvas__delete-cancel"
+          @click="cancelDelete"
+        >{{ t('funnels.canvas.sidePanel.close') }}</button>
+      </div>
+    </div>
+    </div>
+
+    <!-- Side panel (right): the selected node's field editor — FunnelStepForm (steps, target pickers hidden)
+         or FunnelTriggerSettings (trigger/start). Clears on deselect. -->
+    <FunnelCanvasSidePanel
+      :node="selectedNode"
+      @submit="onPanelStepSubmit"
+      @update:trigger="onPanelTriggerUpdate"
+      @close="clearSelection"
+    />
   </div>
 </template>
 
 <style scoped>
 .funnel-canvas {
+  display: flex;
   position: relative;
   width: 100%;
   height: 100%;
   min-height: 480px;
+}
+
+.funnel-canvas__stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+}
+
+.funnel-canvas__delete-warning {
+  position: absolute;
+  top: 0.5rem;
+  left: 50%;
+  z-index: 10;
+  transform: translateX(-50%);
+  border: 1px solid #fca5a5;
+  border-radius: 0.375rem;
+  background: #fef2f2;
+  padding: 0.5rem 0.75rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.12);
+}
+
+.funnel-canvas__delete-text {
+  margin-bottom: 0.5rem;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+}
+
+.funnel-canvas__delete-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.funnel-canvas__delete-confirm {
+  border-radius: 0.25rem;
+  background: #dc2626;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.8125rem;
+  color: #ffffff;
+  cursor: pointer;
+}
+
+.funnel-canvas__delete-cancel {
+  border: 1px solid #d1d5db;
+  border-radius: 0.25rem;
+  background: #ffffff;
+  padding: 0.25rem 0.625rem;
+  font-size: 0.8125rem;
+  color: #374151;
+  cursor: pointer;
 }
 
 .funnel-canvas__broken-edges {

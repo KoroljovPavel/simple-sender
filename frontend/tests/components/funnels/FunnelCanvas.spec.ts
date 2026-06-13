@@ -192,4 +192,129 @@ describe('FunnelCanvas', () => {
     expect(wrapper.find('[data-node-id="s2"]').exists()).toBe(true)
     expect(wrapper.find('[data-node-id="start"]').exists()).toBe(true)
   })
+
+  // ── Task 6: authoring interactions (palette / start-node lifecycle / delete-warning) ──────────────────
+
+  it('start node not rendered for an event-only funnel', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'event', triggerValue: 'evt', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    expect(wrapper.find('[data-node-id="start"]').exists()).toBe(false)
+  })
+
+  it('start node rendered when on_start exists', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    expect(wrapper.find('[data-node-id="start"]').exists()).toBe(true)
+  })
+
+  it('re-adding on_start is disabled while it already exists', async () => {
+    // With an on_start entry present, the palette's start-node entry is disabled (a funnel has at most one).
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const startItem = wrapper.find('[data-test="funnel-canvas-palette-start"]')
+    expect(startItem.exists()).toBe(true)
+    expect((startItem.element as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('adding on_start from the palette is enabled and emits an on_start trigger for an event-only funnel', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'event', triggerValue: 'evt', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const startItem = wrapper.find('[data-test="funnel-canvas-palette-start"]')
+    expect((startItem.element as HTMLButtonElement).disabled).toBe(false)
+    await startItem.trigger('click')
+    await settle()
+
+    const emitted = wrapper.emitted('update:triggers')
+    expect(emitted).toBeTruthy()
+    const updated = emitted![emitted!.length - 1][0] as FunnelTrigger[]
+    expect(updated.some((tr) => tr.triggerType === 'on_start')).toBe(true)
+  })
+
+  it('deleting the start node removes the on_start entry', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // Drive delete of the start node deterministically (live click is user-verified).
+    ;(wrapper.vm as unknown as { requestDelete: (id: string) => void }).requestDelete('start')
+    await settle()
+    ;(wrapper.vm as unknown as { confirmDelete: () => void }).confirmDelete()
+    await settle()
+
+    const emitted = wrapper.emitted('update:triggers')
+    expect(emitted).toBeTruthy()
+    const updated = emitted![emitted!.length - 1][0] as FunnelTrigger[]
+    expect(updated.some((tr) => tr.triggerType === 'on_start')).toBe(false)
+  })
+
+  it('deleting only the start edge leaves a highlighted broken edge', async () => {
+    // on_start present but entryStepId null (its edge deleted, node kept) → broken-edge highlight, no error.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: null }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const startNode = wrapper.find('[data-node-id="start"]')
+    expect(startNode.exists()).toBe(true)
+    expect(startNode.classes()).toContain('funnel-canvas-node--broken')
+    const broken = wrapper.findAll('[data-test="funnel-canvas-broken-edge"]')
+    expect(broken.some((b) => b.attributes('data-edge-field') === 'entry')).toBe(true)
+  })
+
+  it('deleting a node warns with the exact disconnect count', async () => {
+    // s2 has THREE inbound edges: s1.next, s1 callback button, s3.timeout → deleting s2 warns "3".
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: 's2',
+        buttons: [{ type: 'callback', label: 'B', targetStepId: 's2' }],
+      }),
+      messageStep({ id: 's2' }),
+      messageStep({ id: 's3', timeoutValue: 5, timeoutUnit: 'MIN', timeoutTargetStepId: 's2' }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    ;(wrapper.vm as unknown as { requestDelete: (id: string) => void }).requestDelete('s2')
+    await settle()
+
+    const warning = wrapper.find('[data-test="funnel-canvas-delete-warning"]')
+    expect(warning.exists()).toBe(true)
+    // The exact count surfaced to the operator (mapping-layer disconnectedCount).
+    expect(warning.attributes('data-disconnect-count')).toBe('3')
+    expect(warning.text()).toContain('3')
+  })
+
+  it('the palette offers exactly the 9 existing step types (no new executable types)', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const stepItems = wrapper.findAll('[data-test^="funnel-canvas-palette-step-"]')
+    const types = stepItems.map((i) => i.attributes('data-step-type')).sort()
+    expect(types).toEqual(
+      [
+        'ADD_TAG',
+        'CLEAR_KEYBOARD',
+        'DELAY',
+        'EMIT_EVENT',
+        'MESSAGE',
+        'REMOVE_TAG',
+        'SET_CUSTOM_FIELD',
+        'SET_KEYBOARD',
+        'SUBSCRIBE_TO_FUNNEL',
+      ].sort(),
+    )
+    // trigger + note + start are separate (non-executable) palette entries.
+    expect(wrapper.find('[data-test="funnel-canvas-palette-trigger"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-canvas-palette-note"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-canvas-palette-start"]').exists()).toBe(true)
+  })
 })

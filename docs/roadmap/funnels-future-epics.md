@@ -80,10 +80,21 @@ command menu / `setChatMenuButton`. Spec assumes reply keyboard.
 
 ## Epic 8 — Multi-entry funnel graph (trigger nodes + independent subflows)
 
+> **SPLIT (user-spec approved 2026-06-13).** This epic became TWO roadmap phases:
+> **Phase 8 `17-funnel-multi-entry`** = the model + engine + minimal vertical-list editor (below), and
+> **Phase 9 `18-funnel-canvas`** = the editable Vue Flow canvas. The canvas can't precede the model it
+> renders. Approved execution semantic: ONE execution per funnel/subscriber — a fired `event` trigger
+> (carrying an `entryStepId`) **redirects** the in-flight cursor or **starts fresh** mid-graph (respects
+> `allowReEnter`). The **fire-side already exists** (`EMIT_EVENT` step / API events = the competitor's
+> "Запустити подію" action, screens `15`–`18`); Phase 8 adds only the **listen-side** trigger node. The
+> composite "Виконати дії" action grouping stays an editor refinement (see below), out of Phase 8 scope.
+
 **Screens:** `05-trigger-node.png` (a "Тригер" node: "Буде запущено, коли буде запущена подія
 SOME_TRIGGER" → its own branch), `06-independent-steps.png` (same shape — disconnected subgraph),
 `07-node-palette.png` + `08-canvas-overview.png` (full node palette and canvas with multiple
-independent islands).
+independent islands); `15-action-fire-event.png` + `16-trigger-node-vs-emit-event.png` (LISTEN node vs
+FIRE action), `17-action-dropdown-integrations.png` + `18-action-dropdown-core.png` (the "Виконати дії"
+action dropdown — mostly future/nice-to-have items).
 
 **Idea (bundles user questions 3 + 4 — same model change).**
 - **Trigger node:** a node placed inside the graph that is itself an entry point; it fires on a named

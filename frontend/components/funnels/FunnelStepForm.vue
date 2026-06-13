@@ -598,14 +598,20 @@ function initialKeyboardRows(): KeyboardRowRow[] {
   return [blankKeyboardRow()]
 }
 const keyboardRows = ref<KeyboardRowRow[]>(initialKeyboardRows())
-// Checkbox defaults: persistent ON, one-time OFF on a NEW step. When editing, seed the STORED value — a
-// stored explicit `false`/`true` must survive (?? on a stored false is the classic default-clobbering bug,
-// so seed via the type-guarded value with nullish-coalescing only for a genuinely absent field).
-const keyboardPersistent = ref<boolean>(
-  props.initial?.stepType === 'SET_KEYBOARD' ? (props.initial?.isPersistent ?? true) : true,
-)
-const keyboardOneTime = ref<boolean>(
-  props.initial?.stepType === 'SET_KEYBOARD' ? (props.initial?.oneTimeKeyboard ?? false) : false,
+// Keyboard behaviour is a single 3-way choice (mutually exclusive) that maps to Telegram's two independent
+// boolean fields `is_persistent` / `one_time_keyboard`. A radio removes the contradictory true+true combo
+// the two old checkboxes allowed. Default 'persistent' on a NEW step. When editing, derive the mode from the
+// STORED booleans: persistent WINS on a contradictory true+true seed (matches Telegram client behaviour).
+// Nullish-coalesce only the genuinely-absent fields so a stored explicit `false` is not clobbered.
+type KeyboardMode = 'persistent' | 'normal' | 'oneTime'
+const keyboardMode = ref<KeyboardMode>(
+  props.initial?.stepType === 'SET_KEYBOARD'
+    ? (props.initial?.isPersistent ?? true)
+      ? 'persistent'
+      : (props.initial?.oneTimeKeyboard ?? false)
+        ? 'oneTime'
+        : 'normal'
+    : 'persistent',
 )
 // Touched on submit so per-field errors only render after the author tries to save (parity with the rest).
 const keyboardTouched = ref(false)
@@ -966,8 +972,9 @@ const onSubmit = handleSubmit((values) => {
         keyboardRows: keyboardRows.value.map(
           (r): KeyboardRow => ({ buttons: r.buttons.map((b) => ({ text: b.text.trim() })) }),
         ),
-        isPersistent: keyboardPersistent.value,
-        oneTimeKeyboard: keyboardOneTime.value,
+        // Map the 3-way mode back to Telegram's two independent booleans.
+        isPersistent: keyboardMode.value === 'persistent',
+        oneTimeKeyboard: keyboardMode.value === 'oneTime',
         id: props.initial?.id ?? undefined,
         next: props.initial?.next ?? undefined,
       }
@@ -1696,26 +1703,31 @@ const onSubmit = handleSubmit((values) => {
           </p>
         </div>
 
-        <div class="space-y-2">
-          <label class="inline-flex items-center gap-2 text-sm">
+        <fieldset class="space-y-2">
+          <legend class="text-sm font-medium text-gray-700">
+            {{ t('funnels.steps.form.keyboardModeLabel') }}
+          </legend>
+          <label
+            v-for="mode in (['persistent', 'normal', 'oneTime'] as const)"
+            :key="mode"
+            class="flex items-start gap-2 text-sm"
+          >
             <input
-              v-model="keyboardPersistent"
-              data-test="step-keyboard-persistent"
-              type="checkbox"
-              class="h-4 w-4 rounded border-gray-300"
+              v-model="keyboardMode"
+              :value="mode"
+              :data-test="`step-keyboard-mode-${mode}`"
+              type="radio"
+              name="keyboard-mode"
+              class="mt-0.5 h-4 w-4 border-gray-300"
             />
-            {{ t('funnels.steps.form.keyboardPersistent') }}
+            <span>
+              {{ t(`funnels.steps.form.keyboardMode_${mode}`) }}
+              <span class="block text-xs text-gray-500">
+                {{ t(`funnels.steps.form.keyboardMode_${mode}_hint`) }}
+              </span>
+            </span>
           </label>
-          <label class="flex items-center gap-2 text-sm">
-            <input
-              v-model="keyboardOneTime"
-              data-test="step-keyboard-onetime"
-              type="checkbox"
-              class="h-4 w-4 rounded border-gray-300"
-            />
-            {{ t('funnels.steps.form.keyboardOneTime') }}
-          </label>
-        </div>
+        </fieldset>
       </template>
     </template>
 

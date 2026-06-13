@@ -98,8 +98,9 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     expect(maybe('[data-test="step-keyboard-button-0-0"]')).not.toBeNull()
     expect(maybe('[data-test="step-keyboard-button-0-1"]')).toBeNull()
     expect(maybe('[data-test="step-keyboard-button-1-0"]')).toBeNull()
-    expect(maybe('[data-test="step-keyboard-persistent"]')).not.toBeNull()
-    expect(maybe('[data-test="step-keyboard-onetime"]')).not.toBeNull()
+    expect(maybe('[data-test="step-keyboard-mode-persistent"]')).not.toBeNull()
+    expect(maybe('[data-test="step-keyboard-mode-normal"]')).not.toBeNull()
+    expect(maybe('[data-test="step-keyboard-mode-oneTime"]')).not.toBeNull()
   })
 
   it('renders the CLEAR_KEYBOARD form block', async () => {
@@ -107,11 +108,11 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     await selectType('CLEAR_KEYBOARD')
     expect(maybe('[data-test="step-keyboard-text"]')).not.toBeNull()
     expect(maybe('[data-test="step-keyboard-parsemode"]')).not.toBeNull()
-    // No rows sub-editor, no checkboxes for CLEAR_KEYBOARD.
+    // No rows sub-editor, no mode radios for CLEAR_KEYBOARD.
     expect(maybe('[data-test="step-keyboard-button-0-0"]')).toBeNull()
     expect(maybe('[data-test="step-keyboard-add-row"]')).toBeNull()
-    expect(maybe('[data-test="step-keyboard-persistent"]')).toBeNull()
-    expect(maybe('[data-test="step-keyboard-onetime"]')).toBeNull()
+    expect(maybe('[data-test="step-keyboard-mode-persistent"]')).toBeNull()
+    expect(maybe('[data-test="step-keyboard-mode-oneTime"]')).toBeNull()
   })
 
   it('rows sub-editor adds and removes rows and buttons', async () => {
@@ -202,14 +203,13 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
-  it('renders no resize_keyboard control (exactly two keyboard checkboxes)', async () => {
+  it('renders no resize_keyboard control — behaviour is a single 3-way radio group', async () => {
     await mountForm()
     expect(maybe('[data-test="step-keyboard-resize"]')).toBeNull()
-    // resize_keyboard is hardcoded true server-side and never surfaced — the keyboard block has EXACTLY
-    // two checkboxes (persistent + one-time). A future resize toggle would land here and break this count.
-    expect(document.querySelectorAll('input[type="checkbox"][data-test^="step-keyboard"]')).toHaveLength(2)
-    expect(maybe('[data-test="step-keyboard-persistent"]')).not.toBeNull()
-    expect(maybe('[data-test="step-keyboard-onetime"]')).not.toBeNull()
+    // resize_keyboard is hardcoded true server-side and never surfaced — behaviour is the mutually exclusive
+    // persistent/normal/one-time choice, so the block has NO checkboxes and EXACTLY three mode radios.
+    expect(document.querySelectorAll('input[type="checkbox"][data-test^="step-keyboard"]')).toHaveLength(0)
+    expect(document.querySelectorAll('input[type="radio"][data-test^="step-keyboard-mode-"]')).toHaveLength(3)
   })
 
   it('blocks submit on blank CLEAR_KEYBOARD text', async () => {
@@ -221,10 +221,11 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     expect(wrapper.emitted('submit')).toBeFalsy()
   })
 
-  it('checkbox defaults — persistent ON, one-time OFF on a fresh SET_KEYBOARD step', async () => {
+  it('mode default — Persistent selected on a fresh SET_KEYBOARD step', async () => {
     await mountForm()
-    expect(checked('[data-test="step-keyboard-persistent"]')).toBe(true)
-    expect(checked('[data-test="step-keyboard-onetime"]')).toBe(false)
+    expect(checked('[data-test="step-keyboard-mode-persistent"]')).toBe(true)
+    expect(checked('[data-test="step-keyboard-mode-normal"]')).toBe(false)
+    expect(checked('[data-test="step-keyboard-mode-oneTime"]')).toBe(false)
   })
 
   it('shows the keyword hint for a button matching no active keyword funnel', async () => {
@@ -279,9 +280,10 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     expect(val('[data-test="step-keyboard-text"]')).toBe('Головне меню')
     expect(val('[data-test="step-keyboard-button-0-0"]')).toBe('Згенерувати бонус')
     expect(val('[data-test="step-keyboard-button-0-1"]')).toBe('Профіль')
-    // Explicit false/true seed (not the defaults).
-    expect(checked('[data-test="step-keyboard-persistent"]')).toBe(false)
-    expect(checked('[data-test="step-keyboard-onetime"]')).toBe(true)
+    // Stored is_persistent=false + one_time=true derives the One-time mode (not the defaults).
+    expect(checked('[data-test="step-keyboard-mode-persistent"]')).toBe(false)
+    expect(checked('[data-test="step-keyboard-mode-normal"]')).toBe(false)
+    expect(checked('[data-test="step-keyboard-mode-oneTime"]')).toBe(true)
     await submitForm()
     const step = wrapper.emitted('submit')![0][0] as FunnelStep
     expect(step.stepType).toBe('SET_KEYBOARD')
@@ -328,5 +330,52 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     expect(step.isPersistent).toBe(true)
     expect(step.oneTimeKeyboard).toBe(false)
     expect(step.keyboardParseMode).toBeNull()
+  })
+
+  it('Normal mode emits both Telegram booleans false', async () => {
+    const wrapper = await mountForm()
+    await $('[data-test="step-keyboard-text"]').setValue('Menu')
+    await $('[data-test="step-keyboard-button-0-0"]').setValue('Bonus')
+    await $('[data-test="step-keyboard-mode-normal"]').setValue()
+    await submitForm()
+    const step = wrapper.emitted('submit')![0][0] as FunnelStep
+    expect(step.isPersistent).toBe(false)
+    expect(step.oneTimeKeyboard).toBe(false)
+  })
+
+  it('selecting One-time mode emits is_persistent=false, one_time=true', async () => {
+    const wrapper = await mountForm()
+    await $('[data-test="step-keyboard-text"]').setValue('Menu')
+    await $('[data-test="step-keyboard-button-0-0"]').setValue('Bonus')
+    await $('[data-test="step-keyboard-mode-oneTime"]').setValue()
+    await submitForm()
+    const step = wrapper.emitted('submit')![0][0] as FunnelStep
+    expect(step.isPersistent).toBe(false)
+    expect(step.oneTimeKeyboard).toBe(true)
+  })
+
+  it('edit-seed with both booleans false derives the Normal mode', async () => {
+    await mountForm({
+      stepType: 'SET_KEYBOARD',
+      keyboardText: 'Menu',
+      keyboardRows: [{ buttons: [{ text: 'Bonus' }] }],
+      isPersistent: false,
+      oneTimeKeyboard: false,
+    })
+    expect(checked('[data-test="step-keyboard-mode-normal"]')).toBe(true)
+    expect(checked('[data-test="step-keyboard-mode-persistent"]')).toBe(false)
+    expect(checked('[data-test="step-keyboard-mode-oneTime"]')).toBe(false)
+  })
+
+  it('contradictory is_persistent=true + one_time=true seed resolves to Persistent (persistent wins)', async () => {
+    await mountForm({
+      stepType: 'SET_KEYBOARD',
+      keyboardText: 'Menu',
+      keyboardRows: [{ buttons: [{ text: 'Bonus' }] }],
+      isPersistent: true,
+      oneTimeKeyboard: true,
+    })
+    expect(checked('[data-test="step-keyboard-mode-persistent"]')).toBe(true)
+    expect(checked('[data-test="step-keyboard-mode-oneTime"]')).toBe(false)
   })
 })

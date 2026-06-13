@@ -908,7 +908,8 @@ public class FunnelService {
     // no on_start element or its edge is absent. Scans triggers[] by TRIGGER_ON_START (mirrors
     // syncOnStartTriggerValue). Used by testRun to enter the same step a live /start would; a null/dangling
     // id degrades to step 0 in FunnelExecutionFactory.resolveStartCursor (defence-in-depth).
-    private static String onStartEntryStepId(Funnel funnel) {
+    // Package-private (canonical): FunnelTriggerServiceImpl delegates here rather than keeping its own copy.
+    static String onStartEntryStepId(Funnel funnel) {
         if (funnel.getTriggers() == null) {
             return null;
         }

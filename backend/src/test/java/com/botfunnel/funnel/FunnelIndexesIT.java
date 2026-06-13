@@ -197,6 +197,38 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
     }
 
     /**
+     * Cross-element exclusion: the {@code $elemMatch} fan-out query must NOT return a funnel whose
+     * {@code triggerType} and {@code triggerValue} match in DIFFERENT array elements. A funnel
+     * {@code [{keyword,purchase},{event,other}]} would be a FALSE POSITIVE under Spring Data's flat
+     * two-field derived predicate ({@code type='event'} matches element 1, {@code value='purchase'} matches
+     * element 0). The {@code @Query} {@code $elemMatch} pins both conditions to the SAME element, so this
+     * funnel is correctly excluded by a {@code (event, purchase)} query.
+     */
+    @Test
+    void findByTriggersTriggerTypeAndValueExcludesCrossElementMatch() {
+        String projectId = "proj-" + UUID.randomUUID();
+        try {
+            // No SINGLE element matches (event, purchase): purchase lives on the keyword element, event on the
+            // 'other' element. Flat derived predicates would falsely match; $elemMatch must not.
+            Funnel crossElement = activeFunnel(projectId);
+            crossElement.setTriggers(List.of(
+                    trigger("keyword", "purchase", List.of("purchase")),
+                    trigger("event", "other", null)));
+            mongoTemplate.insert(crossElement);
+
+            List<Funnel> found = funnelRepository
+                    .findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
+                            projectId, "event", "purchase", FunnelStatus.active);
+
+            assertThat(found)
+                    .as("$elemMatch must NOT return a funnel whose type and value match in different elements")
+                    .isEmpty();
+        } finally {
+            mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
+        }
+    }
+
+    /**
      * {@code findByProjectIdAndOnStartTriggerValueAndStatus} resolves the on_start funnel by the
      * denormalized scalar (the Task-4 conflict pre-check / Task-5 fire lookup).
      */

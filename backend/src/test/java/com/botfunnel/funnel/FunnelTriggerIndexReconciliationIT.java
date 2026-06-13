@@ -1,10 +1,17 @@
 package com.botfunnel.funnel;
 
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.core.read.ListAppender;
 import com.mongodb.client.model.IndexOptions;
 import com.botfunnel.AbstractIntegrationTest;
 import org.bson.Document;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.dao.DuplicateKeyException;
@@ -58,6 +65,37 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
     @Autowired
     MongoDatabaseFactory mongoDatabaseFactory;
 
+    // Captures the reconciliation's startup markers so the greppable APPLIED/NO-OP strings (which Task 12
+    // post-deploy verification pins) are asserted, not just inferred from the index side effect. Pattern
+    // mirrors ProcessTelegramUpdateJobTest / WebhookSecretVerifierTest.
+    private ListAppender<ILoggingEvent> logAppender;
+    private Logger reconciliationLogger;
+
+    @BeforeEach
+    void attachLogAppender() {
+        reconciliationLogger = (Logger) LoggerFactory.getLogger(FunnelTriggerIndexReconciliation.class);
+        logAppender = new ListAppender<>();
+        logAppender.start();
+        reconciliationLogger.addAppender(logAppender);
+    }
+
+    @AfterEach
+    void detachLogAppender() {
+        if (reconciliationLogger != null && logAppender != null) {
+            reconciliationLogger.detachAppender(logAppender);
+            logAppender.stop();
+        }
+    }
+
+    // Counts INFO log events whose formatted message equals the given marker (exact-match, so a reword of
+    // MARKER_APPLIED / MARKER_NOOP breaks the assertion — the whole point of pinning the greppable string).
+    private long markerCount(String marker) {
+        return logAppender.list.stream()
+                .filter(e -> e.getLevel() == Level.INFO)
+                .filter(e -> marker.equals(e.getFormattedMessage()))
+                .count();
+    }
+
     // A fresh runner per call: the Spring-managed singleton's once-per-boot guard tripped at startup.
     private void runReconciliation() {
         new FunnelTriggerIndexReconciliation()
@@ -109,7 +147,7 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
     }
 
     @Test
-    void migrationDropsOldBroadFilterIndex() {
+    void migrationDropsOldFlatTrioTriggerIndex() {
         installOldTrioIndex();
         assertThat(indexByName(OLD_INDEX_NAME))
                 .as("old flat-trio index present precondition")
@@ -122,6 +160,15 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
         assertThat(indexByName(OLD_INDEX_NAME))
                 .as("old flat-trio index must be gone after the reconciliation drops it")
                 .isNull();
+
+        // The greppable APPLIED marker (Task 12 post-deploy grep) must fire exactly once on the migration
+        // case — a reword of MARKER_APPLIED breaks this. NO-OP must NOT fire on the drop path.
+        assertThat(markerCount(FunnelTriggerIndexReconciliation.MARKER_APPLIED))
+                .as("APPLIED marker must be logged once when the old index was present and dropped")
+                .isEqualTo(1L);
+        assertThat(markerCount(FunnelTriggerIndexReconciliation.MARKER_NOOP))
+                .as("NO-OP marker must NOT fire on the migration (drop) path")
+                .isZero();
 
         // Simulate auto-index-creation laying the annotation shape; assert its key + partial filter.
         installNewShapeIndex();
@@ -155,6 +202,15 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
         assertThat(after.get("key", Document.class)).isEqualTo(before.get("key", Document.class));
         assertThat(after.get("partialFilterExpression", Document.class))
                 .isEqualTo(before.get("partialFilterExpression", Document.class));
+
+        // The greppable NO-OP marker (Task 12 post-deploy grep) must fire exactly once on the idempotent
+        // re-boot case — a reword of MARKER_NOOP breaks this. APPLIED must NOT fire when nothing was dropped.
+        assertThat(markerCount(FunnelTriggerIndexReconciliation.MARKER_NOOP))
+                .as("NO-OP marker must be logged once when the old index is already absent")
+                .isEqualTo(1L);
+        assertThat(markerCount(FunnelTriggerIndexReconciliation.MARKER_APPLIED))
+                .as("APPLIED marker must NOT fire on the idempotent re-boot (nothing dropped)")
+                .isZero();
     }
 
     @Test
@@ -182,9 +238,17 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
                             client, "botfunnel-broken");
             FunnelTriggerIndexReconciliation faulting = new FunnelTriggerIndexReconciliation();
 
-            assertThatCode(() -> faulting.postProcessAfterInitialization(broken, "mongoDatabaseFactory"))
+            Object[] returned = new Object[1];
+            assertThatCode(() ->
+                    returned[0] = faulting.postProcessAfterInitialization(broken, "mongoDatabaseFactory"))
                     .as("a transient Mongo fault must be swallowed — the app must boot")
                     .doesNotThrowAnyException();
+
+            // BeanPostProcessor contract: must return the SAME bean instance — returning null would drop the
+            // MongoDatabaseFactory from the context. A swallowed fault must not break this invariant.
+            assertThat(returned[0])
+                    .as("postProcessAfterInitialization must return the unmodified original bean")
+                    .isSameAs(broken);
         }
     }
 

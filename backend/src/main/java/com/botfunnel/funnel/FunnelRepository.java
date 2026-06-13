@@ -1,6 +1,7 @@
 package com.botfunnel.funnel;
 
 import org.springframework.data.mongodb.repository.MongoRepository;
+import org.springframework.data.mongodb.repository.Query;
 
 import java.util.List;
 import java.util.Optional;
@@ -28,18 +29,38 @@ public interface FunnelRepository extends MongoRepository<Funnel, String> {
 
     List<Funnel> findByProjectIdAndStatus(String projectId, FunnelStatus status);
 
-    // on_start conflict pre-check (Decision 6): at most one active funnel per (projectId, on_start payload).
-    // Keys on the DENORMALIZED onStartTriggerValue scalar — the same field the partial-unique index guards —
-    // so a service-level pre-check and the DB constraint agree. Used by FunnelService.checkTriggerConflict
-    // (Task 4) and FunnelTriggerServiceImpl.fire's on_start lookup (Task 5).
+    /**
+     * on_start conflict pre-check (Decision 6): at most one active funnel per (projectId, on_start payload).
+     * Keys on the DENORMALIZED {@code onStartTriggerValue} scalar — the same field the partial-unique index
+     * guards — so a service-level pre-check and the DB constraint agree. Used by
+     * {@code FunnelService.checkTriggerConflict} (Task 4) and {@code FunnelTriggerServiceImpl.fire}'s on_start
+     * lookup (Task 5).
+     *
+     * <p><b>Callers MUST NOT pass {@code null} for {@code onStartTriggerValue}.</b> A {@code null} argument
+     * derives a {@code {onStartTriggerValue: null}} predicate that matches every event-only funnel (whose
+     * denormalized scalar is null) — a cross-type false positive. The bare {@code /start} payload is the
+     * empty string {@code ""}, never null; pass {@code ""} for it.
+     */
     Optional<Funnel> findByProjectIdAndOnStartTriggerValueAndStatus(
             String projectId, String onStartTriggerValue, FunnelStatus status);
 
-    // Fan-out trigger lookup (Decision 1) — all active funnels whose triggers[] contains an element matching
-    // (triggerType, triggerValue), for `event` / `tag_added` / `custom_field_set`. Multikey nested-property
-    // derivation over the triggers array: the predicate matches per element, returning the funnel if any
-    // element matches. The caller (Task 5) re-scans triggers[] to locate the matched element + its
-    // entryStepId. Used by FunnelEventService fan-out (Task 5).
+    /**
+     * Fan-out trigger lookup (Decision 1) — all active funnels whose {@code triggers[]} contains a SINGLE
+     * element matching BOTH {@code triggerType} and {@code triggerValue}, for {@code event} / {@code tag_added}
+     * / {@code custom_field_set}.
+     *
+     * <p><b>Element-scoped semantics ({@code $elemMatch}).</b> This uses an explicit {@code $elemMatch} query,
+     * NOT Spring Data's derived two-field array predicate. The derived form
+     * ({@code {'triggers.triggerType':?, 'triggers.triggerValue':?}}) evaluates each clause independently
+     * across array elements, so a funnel with {@code [{keyword,purchase},{event,other}]} would falsely match
+     * {@code (event, purchase)} (type from one element, value from another). {@code $elemMatch} pins both
+     * conditions to the SAME element, eliminating that cross-element false positive at the DB.
+     *
+     * <p>The query still returns the FUNNEL, not the matched element. The caller (Task 5) re-scans the
+     * returned funnel's {@code triggers[]} to locate the matched element and read its {@code entryStepId}
+     * (start vs redirect routing). Used by {@code FunnelEventService} fan-out (Task 5).
+     */
+    @Query("{ 'projectId': ?0, 'triggers': { '$elemMatch': { 'triggerType': ?1, 'triggerValue': ?2 } }, 'status': ?3 }")
     List<Funnel> findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
             String projectId, String triggerType, String triggerValue, FunnelStatus status);
 

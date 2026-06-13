@@ -67,7 +67,7 @@ public class FunnelTriggerIndexReconciliation implements BeanPostProcessor {
 
     // Guards against running more than once per boot: a single MongoDatabaseFactory bean exists, but the
     // flag keeps the drop a strict no-op if the BPP is ever invoked again for any reason.
-    private boolean reconciled = false;
+    private volatile boolean reconciled = false;
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) {

@@ -75,6 +75,28 @@ class TriggerTest {
         assertThat(new Trigger()).isEqualTo(new Trigger());
     }
 
+    /**
+     * canvasPosition is rendering-only metadata and is EXCLUDED from equals/hashCode (18-funnel-canvas /
+     * Task 1, Decision 7). Two triggers identical in all four routing fields but differing only in
+     * canvasPosition must still be equal and share a hashCode — otherwise the 17-funnel-multi-entry redirect
+     * re-scan / dedupe over triggers[] would break when a node is dragged on the canvas.
+     */
+    @Test
+    void equalsAndHashCodeIgnoreCanvasPosition() {
+        Trigger a = trigger("event", "purchase_done", List.of("buy"), "step-2");
+        a.setCanvasPosition(new CanvasPosition(10.0, 20.0));
+        Trigger b = trigger("event", "purchase_done", List.of("buy"), "step-2");
+        b.setCanvasPosition(new CanvasPosition(999.0, -999.0));
+
+        assertThat(a).isEqualTo(b);
+        assertThat(a).hasSameHashCodeAs(b);
+
+        // A null canvasPosition vs a present one also stays equal (exclusion is total, not null-coalescing).
+        Trigger c = trigger("event", "purchase_done", List.of("buy"), "step-2");
+        assertThat(a).isEqualTo(c);
+        assertThat(a).hasSameHashCodeAs(c);
+    }
+
     private static Trigger trigger(String type, String value, List<String> keywords, String entryStepId) {
         Trigger t = new Trigger();
         t.setTriggerType(type);

@@ -23,6 +23,7 @@ import com.botfunnel.project.ProjectService;
 import com.botfunnel.subscriber.Subscriber;
 import com.botfunnel.subscriber.SubscriberService;
 import com.botfunnel.subscriber.SubscriberStatus;
+import org.bson.types.ObjectId;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
@@ -81,6 +82,10 @@ public class FunnelService {
     // event_name slug (Decision 4): shared by the EMIT_EVENT step and the `event` trigger value. 1..64,
     // case-preserving (the external API event_name is case-sensitive in the same way).
     private static final Pattern EVENT_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
+    // Server-controlled note-id shape (Decision 7): a 24-char lowercase ObjectId hex. An echoed note id
+    // must match this — the body's id is never trusted for shape, mirroring how toSteps rejects malformed
+    // step ids rather than silently accepting an arbitrary client string.
+    private static final Pattern NOTE_ID_PATTERN = Pattern.compile("^[0-9a-f]{24}$");
 
     // keyword list caps (Decision 3): bound the per-funnel keyword scan + each entry's length so a
     // hostile/huge list cannot bloat the document or the runtime contains-match.
@@ -334,6 +339,8 @@ public class FunnelService {
                 ? new ArrayList<>()
                 : original.getSteps().stream().map(FunnelStep::copyOf).collect(Collectors.toCollection(ArrayList::new));
         copy.setSteps(steps);
+        // notes[] is intentionally NOT copied: the duplicate path accepts no body, and notes are
+        // rendering-only canvas metadata — a clone starts with no notes (left null, additive-nullable).
         copy.setCreatedAt(now);
         copy.setUpdatedAt(now);
         return toResponse(funnelRepository.save(copy));
@@ -776,9 +783,12 @@ public class FunnelService {
     //   - null/empty request notes → funnel.notes = null (additive-nullable; a funnel may carry no notes);
     //   - array size re-checked against MAX_NOTES (defense-in-depth behind the DTO @Size) → 422;
     //   - each note's text length re-checked against NOTE_TEXT_MAX → 422;
-    //   - id is SERVER-MINTED: an incoming null id gets a fresh ObjectId hex (same convention as toSteps'
-    //     step-id minting); a non-null incoming id is preserved verbatim (echoed from a prior read). The
-    //     body's id is never trusted for shape.
+    //   - id is SERVER-CONTROLLED (Decision 7): an incoming null id gets a fresh ObjectId hex (same
+    //     convention as toSteps' step-id minting); a non-null incoming id is preserved ONLY if it matches
+    //     the ObjectId hex shape (NOTE_ID_PATTERN) — an arbitrary client string is rejected as 422, never
+    //     persisted (the body's id is never trusted for shape). Mirrors toSteps' strict-reject stance.
+    //   - duplicate ids within one funnel are rejected (seenIds guard, mirroring toSteps): two notes
+    //     sharing an id would make a note unaddressable on the canvas.
     private void applyNotes(Funnel funnel, List<NoteDto> requested) {
         if (requested == null || requested.isEmpty()) {
             funnel.setNotes(null);
@@ -789,6 +799,7 @@ public class FunnelService {
                     "Funnel exceeds the maximum of " + MAX_NOTES + " notes");
         }
         List<Note> notes = new ArrayList<>(requested.size());
+        Set<String> seenIds = new HashSet<>();
         for (NoteDto dto : requested) {
             if (dto == null) {
                 throw AppException.unprocessableEntity(CODE_NOTE_INVALID, "Note must not be null");
@@ -799,7 +810,15 @@ public class FunnelService {
                         "Note text exceeds the maximum of " + NOTE_TEXT_MAX + " characters");
             }
             String incomingId = blankToNull(dto.id());
-            String id = incomingId != null ? incomingId : new org.bson.types.ObjectId().toHexString();
+            if (incomingId != null && !NOTE_ID_PATTERN.matcher(incomingId).matches()) {
+                throw AppException.unprocessableEntity(CODE_NOTE_INVALID,
+                        "Note id must be a server-minted ObjectId hex");
+            }
+            if (incomingId != null && !seenIds.add(incomingId)) {
+                throw AppException.unprocessableEntity(CODE_NOTE_INVALID,
+                        "Duplicate note id within funnel");
+            }
+            String id = incomingId != null ? incomingId : new ObjectId().toHexString();
             notes.add(new Note(id, text, toCanvasPosition(dto.canvasPosition())));
         }
         funnel.setNotes(notes);
@@ -988,7 +1007,7 @@ public class FunnelService {
             if (incomingId != null && !seenIds.add(incomingId)) {
                 throw invalidStep("Duplicate step id within funnel: " + incomingId);
             }
-            step.setId(incomingId != null ? incomingId : new org.bson.types.ObjectId().toHexString());
+            step.setId(incomingId != null ? incomingId : new ObjectId().toHexString());
             step.setNext(blankToNull(dto.next()));
             step.setButtons(toButtons(dto.buttons()));
             step.setTimeoutValue(dto.timeoutValue());

@@ -275,6 +275,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.notes[0].canvasPosition.x").value(5.0))
                 .andExpect(jsonPath("$.notes[0].canvasPosition.y").value(7.0))
                 .andExpect(jsonPath("$.notes[0].id").isNotEmpty())
+                // Sibling field that must NOT change while notes round-trip (matches the canvasPosition IT
+                // precedent of asserting an unaffected neighbour value, not just the new field).
+                .andExpect(jsonPath("$.steps[0].stepType").value("MESSAGE"))
                 .andReturn().getResponse().getContentAsString();
 
         @SuppressWarnings("unchecked")
@@ -289,7 +292,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         mockMvc.perform(get(url() + "/" + f.getId()))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.notes[0].id").value(mintedId))
-                .andExpect(jsonPath("$.notes[0].text").value("hi"));
+                .andExpect(jsonPath("$.notes[0].text").value("hi"))
+                .andExpect(jsonPath("$.steps[0].stepType").value("MESSAGE"));
 
         // Second PATCH echoing the minted id → id is preserved (NOT re-minted).
         Map<String, Object> echoed = noteMap(mintedId, "hi", canvasPositionMap(5.0, 7.0));
@@ -328,7 +332,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                         .content(json(overCap)))
                 .andExpect(status().isBadRequest());
 
-        // Oversized text (> NOTE_TEXT_MAX = 2000) → 400/422.
+        // Oversized text (> NOTE_TEXT_MAX = 2000): the DTO @Size on NoteDto.text fires via the @Valid
+        // cascade → bean-validation 400 (same layer as the trigger over-cap @Size above), before the
+        // service-side re-check (which is asserted directly in FunnelServiceNotesTest).
         Map<String, Object> bigText = noteMap(null, "x".repeat(2001), null);
         Map<String, Object> overText = Map.of(
                 "name", "Draft",
@@ -339,7 +345,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(overText)))
-                .andExpect(status().is4xxClientError());
+                .andExpect(status().isBadRequest());
 
         // The funnel was not mutated by the rejected requests.
         Funnel reloaded = funnelRepository.findById(f.getId()).orElseThrow();

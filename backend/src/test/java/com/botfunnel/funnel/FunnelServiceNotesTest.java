@@ -137,6 +137,24 @@ class FunnelServiceNotesTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void notes_echoedIdMustMatchObjectIdHexShape() {
+        // Decision 7: note id is server-controlled. An echoed id that is NOT a 24-char ObjectId hex (an
+        // arbitrary client string) is rejected — never persisted verbatim. Mirrors toSteps' strict reject.
+        assert422(List.of(new NoteDto("not-an-object-id", "x", null)), FunnelService.CODE_NOTE_INVALID);
+        // A wrong-length / uppercase hex is equally rejected (shape is exact).
+        assert422(List.of(new NoteDto("ABCDEF", "x", null)), FunnelService.CODE_NOTE_INVALID);
+    }
+
+    @Test
+    void notes_duplicateIdWithinFunnelRejected() {
+        // Two notes sharing an id within one funnel would make a note unaddressable on the canvas — reject
+        // (seenIds guard, mirroring toSteps). Use a valid ObjectId hex so the shape check passes first.
+        String dup = new org.bson.types.ObjectId().toHexString();
+        assert422(List.of(new NoteDto(dup, "a", null), new NoteDto(dup, "b", null)),
+                FunnelService.CODE_NOTE_INVALID);
+    }
+
+    @Test
     void notes_nullRequest_clearsNotes() {
         String id = createDraft();
         // First set a note.

@@ -183,6 +183,7 @@ onMounted(() => {
 // Per-element trigger sanitizer: send ONLY the fields the element's type owns — never leak a stale value
 // from a previously-selected type (Edge cases). keyword owns `keywords` and clears triggerValue; the other
 // types own `triggerValue` and clear `keywords`. entryStepId is carried as-is (null for non-event types).
+// canvasPosition rides through unchanged so a trigger-node drag-stop persists its xy (null until first laid out).
 function sanitizeTrigger(tr: FunnelTrigger): FunnelTrigger {
   const isKeyword = tr.triggerType === 'keyword'
   return {
@@ -190,6 +191,7 @@ function sanitizeTrigger(tr: FunnelTrigger): FunnelTrigger {
     triggerValue: isKeyword ? null : (tr.triggerValue ?? ''),
     keywords: isKeyword ? (tr.keywords ?? []) : [],
     entryStepId: tr.entryStepId ?? null,
+    canvasPosition: tr.canvasPosition ?? null,
   }
 }
 
@@ -223,7 +225,9 @@ async function persist(): Promise<boolean> {
 // The canvas is the SINGLE live structural-editing surface (Decision 2). It is props-in/emits-out: it
 // receives steps/triggers/notes and emits the whole updated array when the author draws an edge, adds/deletes
 // a node or edits a node in the side panel. We relay each emitted array into the local model and reuse the
-// SAME debounced full-replace persist() — never a second save path.
+// SAME full-replace persist() — never a second save path. These canvas emits are discrete (a finished drag,
+// a committed edge/edit) so they call persist() DIRECTLY (no debounce); only the deep trigger-edit watch
+// below debounces (600ms) because it fires on every keystroke inside a trigger field.
 function onCanvasSteps(next: FunnelStep[]) {
   steps.value = next
   void persist()
@@ -239,8 +243,9 @@ function onCanvasNotes(next: FunnelNote[]) {
 
 // A finished node drag re-emits { nodeId, position }. Resolve the node id back to the matching model object
 // (start → the on_start trigger; trigger:<i> / note:<i> → that array element; otherwise a step matched by id)
-// and write its canvasPosition, then persist via the existing debounced full-replace path. An unsaved step
-// node (synthetic `unsaved-step:<n>` id, no real id yet) has nothing to match → no-op until it is persisted.
+// and write its canvasPosition, then persist DIRECTLY via the full-replace persist() (drag-stop is discrete,
+// no debounce). An unsaved step node (synthetic `unsaved-step:<n>` id, no real id yet) has nothing to match →
+// no-op until it is persisted.
 function onNodeDragStop(payload: { nodeId: string; position: CanvasPosition }) {
   const { nodeId, position } = payload
   if (nodeId === 'start') {
@@ -248,12 +253,14 @@ function onNodeDragStop(payload: { nodeId: string; position: CanvasPosition }) {
     if (idx < 0) return
     triggers.value = triggers.value.map((tr, i) => (i === idx ? { ...tr, canvasPosition: position } : tr))
   } else if (nodeId.startsWith('trigger:')) {
+    // Parse + integer-guard the index: a malformed id (`trigger:x` → NaN) must be a safe no-op, never an
+    // array[NaN] write. Resolve the target first; bail if it is missing.
     const idx = Number(nodeId.slice('trigger:'.length))
-    if (!triggers.value[idx]) return
+    if (!Number.isInteger(idx) || !triggers.value[idx]) return
     triggers.value = triggers.value.map((tr, i) => (i === idx ? { ...tr, canvasPosition: position } : tr))
   } else if (nodeId.startsWith('note:')) {
     const idx = Number(nodeId.slice('note:'.length))
-    if (!notes.value[idx]) return
+    if (!Number.isInteger(idx) || !notes.value[idx]) return
     notes.value = notes.value.map((n, i) => (i === idx ? { ...n, canvasPosition: position } : n))
   } else {
     const idx = steps.value.findIndex((s) => s.id != null && s.id === nodeId)

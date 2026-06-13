@@ -7,7 +7,7 @@ import { settle } from '../helpers/settle'
 import FunnelEditorPage from '../../pages/projects/[projectId]/funnels/[funnelId].vue'
 import FunnelStepForm from '../../components/funnels/FunnelStepForm.vue'
 import FunnelCanvas from '../../components/funnels/FunnelCanvas.client.vue'
-import type { FunnelResponse, FunnelStep, FunnelSummaryResponse } from '../../types/funnel'
+import type { FunnelResponse, FunnelStep, FunnelTrigger, FunnelSummaryResponse } from '../../types/funnel'
 
 // The editor page owns the headline Task-10 behaviour: 422-code → inline errors.funnels.* (NOT a global
 // toast) and the anti-IDOR 404 → graceful list redirect. The E2E covers it only against a live backend
@@ -716,6 +716,42 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
     expect(persisted?.next).toBe('s2')
   })
 
+  it('drag-stop writes canvasPosition into the matching trigger and the trigger PATCHes (value-based)', async () => {
+    // Only step nodes were exercised above. Trigger entry nodes carry their own canvasPosition too: the canvas
+    // emits `trigger:<i>` for non-on_start entries (on_start emits `start`). Seed [on_start, event] so index 1 is
+    // a real trigger node (`trigger:1`); the drag must write {x,y} onto triggers[1] and survive sanitizeTrigger
+    // into the PATCH body (a regression guard — the sanitizer must not strip canvasPosition).
+    const eventTrigger: FunnelTrigger = {
+      triggerType: 'event',
+      triggerValue: 'signup',
+      keywords: null,
+      entryStepId: 's1',
+    }
+    const seed = draft({
+      steps: [step({ id: 's1' })],
+      triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }, eventTrigger],
+    })
+    storeMock.fetchOne.mockResolvedValue(seed)
+    storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+      Promise.resolve(draft({ ...body })),
+    )
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+    storeMock.update.mockClear()
+
+    wrapper.findComponent(FunnelCanvas).vm.$emit('node-drag-stop', { nodeId: 'trigger:1', position: { x: 80, y: 160 } })
+    await settle()
+
+    expect(storeMock.update).toHaveBeenCalledTimes(1)
+    const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+    expect(body.triggers?.[1]?.canvasPosition).toEqual({ x: 80, y: 160 })
+    // The sibling on_start entry must be untouched (still no coordinate).
+    expect(body.triggers?.[0]?.canvasPosition ?? null).toBeNull()
+    // The dragged trigger's own fields are preserved through the sanitizer.
+    expect(body.triggers?.[1]?.triggerType).toBe('event')
+    expect(body.triggers?.[1]?.triggerValue).toBe('signup')
+  })
+
   it('drag-stop on an unknown node id is a no-op (no PATCH)', async () => {
     storeMock.fetchOne.mockResolvedValue(draft({ steps: [step({ id: 's1' })] }))
     storeMock.update.mockResolvedValue(draft())
@@ -769,8 +805,13 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
 
   it('renders the steps list read-only (no structural mutators) and shows the notice', async () => {
     storeMock.fetchOne.mockResolvedValue(draft({ steps: [step({ id: 's1' })] }))
+    storeMock.update.mockResolvedValue(draft({ steps: [step({ id: 's1' })] }))
     const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    // Drain the known on-mount autosave (a ready on_start trigger persists once — see the trigger-watch suite)
+    // past the 600ms debounce, THEN clear the spy so the silence assertion below counts only the list's effect.
+    await new Promise((r) => setTimeout(r, 700))
     await settle()
+    storeMock.update.mockClear()
 
     // The list is still mounted as a view…
     expect(wrapper.find('[data-test="funnel-steps"]').exists()).toBe(true)
@@ -782,6 +823,14 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
     expect(wrapper.find('[data-test="funnel-step-edit-0"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="funnel-step-delete-0"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="funnel-add-step"]').exists()).toBe(false)
+
+    // Behavioral silence (complements the DOM-absence check): exercising the list — including its one kept
+    // non-structural affordance, row `select` — drives ZERO further saves. A view-only list wires no structural
+    // emit to persist(); only the canvas does. Past the trigger debounce window to catch any deferred PATCH.
+    await wrapper.get('[data-test="funnel-step-select-0"]').trigger('click')
+    await new Promise((r) => setTimeout(r, 700))
+    await settle()
+    expect(storeMock.update).not.toHaveBeenCalled()
   })
 
   it('renders a note containing an injection payload ESCAPED (no v-html, no img element)', async () => {
@@ -797,6 +846,9 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
     // The literal markup is visible as TEXT (escaped via {{ }}), and no real <img> was created from it.
     expect(noteNode.text()).toContain(payload)
     expect(noteNode.find('img').exists()).toBe(false)
+    // Stronger than text(): assert the RAW innerHTML never carries an `<img` tag. text() alone would still
+    // pass under an accidental v-html (which would inject a live <img>), so guard the serialized markup too.
+    expect(noteNode.element.innerHTML).not.toContain('<img')
     // Defensive: the payload-derived element must not exist anywhere in the canvas DOM.
     expect(wrapper.findAll('img').some((i) => i.attributes('onerror'))).toBe(false)
   })

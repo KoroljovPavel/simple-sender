@@ -59,7 +59,7 @@ async function login(page: import('@playwright/test').Page) {
 async function openDraftEditor(page: import('@playwright/test').Page): Promise<string> {
   if (SEED_FUNNEL_ID) {
     await page.goto(`/projects/${PROJECT_ID}/funnels/${SEED_FUNNEL_ID}`)
-    await expect(page.locator('[data-test="funnel-add-step"]')).toBeVisible()
+    await expect(page.locator('[data-test="funnel-canvas-host"]')).toBeVisible()
     return SEED_FUNNEL_ID
   }
   await page.goto(`/projects/${PROJECT_ID}/funnels`)
@@ -69,12 +69,14 @@ async function openDraftEditor(page: import('@playwright/test').Page): Promise<s
   // CreateFunnelDialog navigates into the editor of the freshly-created draft.
   await page.waitForURL(new RegExp(`/projects/${PROJECT_ID}/funnels/[^/]+$`))
   const id = page.url().split('/').pop() as string
-  await expect(page.locator('[data-test="funnel-add-step"]')).toBeVisible()
+  await expect(page.locator('[data-test="funnel-canvas-host"]')).toBeVisible()
   return id
 }
 
 async function addSendMessage(page: import('@playwright/test').Page, text: string) {
-  await page.locator('[data-test="funnel-add-step"]').click()
+  // STALE (18-funnel-canvas): the page-level "Add Step" button was removed — authoring is now canvas-driven
+  // (palette → node → side panel). This helper still drives the old dialog flow and is only reached from
+  // SKIPPED tests below; it must be migrated to the canvas palette before any test re-enabling it.
   // Dialog defaults to SEND_MESSAGE.
   await page.locator('[data-test="step-text-input"]').fill(text)
   await Promise.all([
@@ -84,7 +86,8 @@ async function addSendMessage(page: import('@playwright/test').Page, text: strin
 }
 
 async function addDelay(page: import('@playwright/test').Page, value: number) {
-  await page.locator('[data-test="funnel-add-step"]').click()
+  // STALE (18-funnel-canvas): "Add Step" button removed — canvas-driven authoring now. Reached only from
+  // SKIPPED tests; migrate to the canvas palette before re-enabling.
   await page.locator('[data-test="step-type-select"]').selectOption('DELAY')
   await page.locator('[data-test="step-delay-value-input"]').fill(String(value))
   await Promise.all([
@@ -154,7 +157,7 @@ test.skip('funnels_menuGoldenPath_buildAndActivate', async ({ page }) => {
   await addSendMessage(page, 'Welcome!')
 
   // Add a MENU with two callback buttons: one → the SEND_MESSAGE step, one → End.
-  await page.locator('[data-test="funnel-add-step"]').click()
+  // STALE (18-funnel-canvas): "Add Step" button removed — canvas-driven authoring now (skipped test anchor).
   await page.locator('[data-test="step-type-select"]').selectOption('MENU')
   await page.locator('[data-test="step-menu-text-input"]').fill('Pick one:')
 

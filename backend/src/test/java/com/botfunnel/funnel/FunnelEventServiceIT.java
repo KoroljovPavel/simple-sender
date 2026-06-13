@@ -232,16 +232,26 @@ class FunnelEventServiceIT extends AbstractIntegrationTest {
 
     @Test
     void event_noInFlight_allowReEnterTrue_cancelThenInsertAtEntry() {
-        // allowReEnter=true start-at-entry: cancelExistingForPair then insert a fresh row at the entry step.
-        // (No in-flight here, but the cancel-then-insert branch still runs and produces a fresh entry row.)
+        // allowReEnter=true start-at-entry with a PRE-EXISTING terminal predecessor: the cancel-then-insert
+        // branch runs against a real prior row. The in-flight probe misses the terminal row (so the start
+        // branch is taken, not redirect), cancelExistingForPair is invoked (a no-op on the already-terminal
+        // row — it only touches running|waiting), then a FRESH execution is inserted at the entry step. We
+        // assert the old terminal row is left untouched AND a distinct fresh entry row was created.
         Funnel f = seedEventFunnelAllowReEnter("purchase", "entry", "s1", "entry");
+        String oldId = seedTerminalExecution(f.getId(), ExecutionStatus.cancelled, "s1");
 
         funnelEventService.dispatchForSubscriber(projectId, subscriberId, "event", "purchase", 0);
 
         List<FunnelExecution> rows = executionsFor(f.getId());
-        assertThat(rows).hasSize(1);
-        assertThat(rows.get(0).getCurrentStepId()).isEqualTo("entry");
-        assertThat(rows.get(0).getStatus()).isEqualTo(ExecutionStatus.running);
+        // Exactly one fresh in-flight row at the entry step, distinct from the untouched terminal predecessor.
+        List<FunnelExecution> fresh = rows.stream()
+                .filter(r -> r.getStatus() == ExecutionStatus.running).toList();
+        assertThat(fresh).hasSize(1);
+        assertThat(fresh.get(0).getId()).isNotEqualTo(oldId);
+        assertThat(fresh.get(0).getCurrentStepId()).isEqualTo("entry");
+        // The pre-existing terminal row is left exactly as it was (cancel is a no-op on a terminal status).
+        FunnelExecution oldRow = mongoTemplate.findById(oldId, FunnelExecution.class);
+        assertThat(oldRow.getStatus()).isEqualTo(ExecutionStatus.cancelled);
     }
 
     @Test

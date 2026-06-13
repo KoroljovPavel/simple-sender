@@ -239,6 +239,31 @@ class FunnelEventServiceTest {
     }
 
     @Test
+    void eventMatchedFunnel_inMemoryTriggerDrift_warnsAndFallsBackToStepZero() {
+        // TR-3 drift guard: the array-aware $elemMatch query returned this funnel for an `event` dispatch,
+        // but the loaded triggers[] carries only a NON-event element (here tag_added) — so the in-memory
+        // re-scan finds no matching event element. matchedEntryStepId must surface the greppable drift WARN
+        // (LOG_DISPATCH_NO_MATCHED_TRIGGER_ELEMENT) and fall back to start-from-step-0 (insertExecution once,
+        // entryStepId == null). Locks the defensive .equals branch against a silent type-check regression.
+        stubBotAndSubscriber();
+        Funnel drifted = funnel("drift");
+        Trigger mismatched = new Trigger();
+        mismatched.setTriggerType("tag_added"); // not `event` → the event re-scan finds nothing
+        mismatched.setTriggerValue("purchase");
+        drifted.setTriggers(new ArrayList<>(List.of(mismatched)));
+        stubEventFunnels(drifted);
+
+        service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "event", "purchase", 0);
+
+        assertThat(warn(FunnelEventService.LOG_DISPATCH_NO_MATCHED_ELEMENT)).isTrue();
+        // Fell back to start-from-beginning (no entryStepId → step-0 insert), NOT the entry-step path.
+        verify(executionFactory, times(1))
+                .insertExecution(eq(PROJECT_ID), eq(drifted), eq(SUBSCRIBER_ID), eq(TELEGRAM_BOT_ID), eq(0));
+        verify(executionFactory, never())
+                .insertExecutionAt(any(), any(), any(), any(), anyInt(), anyString());
+    }
+
+    @Test
     void reEnter_allowReEnterFunnel_cancelsExistingThenInserts() {
         stubBotAndSubscriber();
         Funnel restart = funnel("restart");

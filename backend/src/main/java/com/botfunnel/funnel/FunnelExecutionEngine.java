@@ -228,6 +228,14 @@ public class FunnelExecutionEngine {
     public void redirectExecution(String executionId, String subscriberId, String funnelId,
                                   String entryStepId) {
         Instant now = Instant.now(clock);
+        // Precondition (Decision 3): redirect is only ever called with a resolved entryStepId (the dispatcher
+        // routes a null entryStepId to start-from-beginning, never here). Guard it explicitly so a logical
+        // dispatch error fails fast as a no-op WARN rather than silently drifting into the broken-cursor
+        // terminal-fail branch below, which would emit misleading LOG_REDIRECT_BROKEN_CURSOR telemetry.
+        if (entryStepId == null || entryStepId.isBlank()) {
+            log.warn("{} executionId={} funnelId={}", LOG_REDIRECT_CLAIM_LOST, executionId, funnelId);
+            return;
+        }
         FunnelExecution exec = claimForRedirect(executionId, subscriberId, funnelId, entryStepId, now);
         if (exec == null) {
             // Lost the CAS: the sweep (or a concurrent redirect/callback) already owns this row

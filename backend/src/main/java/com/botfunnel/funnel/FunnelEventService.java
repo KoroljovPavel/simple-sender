@@ -257,7 +257,10 @@ public class FunnelEventService {
             // CAS re-checks (subscriberId, funnelId) as a second anti-IDOR layer (Decision 3).
             String inFlightId = inFlightExecutionId(projectId, funnel.getId(), subscriberId);
             if (inFlightId != null) {
-                log.info("{} projectId={} funnelId={}", LOG_DISPATCH_REDIRECT, projectId, funnel.getId());
+                // The engine's LOG_REDIRECT (info) is the single authoritative record of a WON redirect claim;
+                // this dispatch-side line fires BEFORE the CAS even runs (so it cannot assert success) — keep it
+                // at debug for cross-class correlation only, not as a second info-level success log (Decision 16).
+                log.debug("{} projectId={} funnelId={}", LOG_DISPATCH_REDIRECT, projectId, funnel.getId());
                 executionEngine.redirectExecution(inFlightId, subscriberId, funnel.getId(), entryStepId);
                 return true;
             }
@@ -305,6 +308,10 @@ public class FunnelEventService {
         // The multikey/$elemMatch query said this funnel matched, but no in-memory element re-scanned —
         // an unexpected drift between the DB query and the loaded triggers[]. Surface it (ids/codes only,
         // never the matchKey) and fall back to start-from-beginning.
+        // SECURITY (Decision 16, SEC-T5-001): triggerType is a fixed taxonomy CODE (on_start/event/keyword/
+        // tag_added/custom_field_set), safe to log. matchKey/triggerValue/event_name MUST NOT be added to this
+        // line — they are business-defined slugs (PII-adjacent) that would leak the internal event taxonomy to
+        // log aggregators. Keep this WARN ids/codes only.
         log.warn("{} funnelId={} triggerType={}", LOG_DISPATCH_NO_MATCHED_ELEMENT,
                 funnel.getId(), triggerType);
         return null;

@@ -150,6 +150,9 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
             // $elemMatch query over triggers[] on (on_start, payload) — exact old semantics for both bare ""
             // and a deep-link payload. fan-out is irrelevant here: at most one active on_start funnel per
             // (project, payload) is the invariant; .findFirst() keeps the single-result contract.
+            // .findFirst() is safe (no silent drop of a second match): on_start uniqueness is enforced by the
+            // onStartTriggerValue unique partial index (Decision 6 / FunnelTriggerIndexReconciliation), so at
+            // most one active on_start funnel exists per (projectId, payload) — the list never carries >1 row.
             String triggerValue = payload == null ? "" : payload;
             Funnel funnel = funnelRepository
                     .findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(

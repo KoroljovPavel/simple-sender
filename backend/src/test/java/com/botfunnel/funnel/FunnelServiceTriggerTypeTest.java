@@ -205,6 +205,18 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
     }
 
     @Test
+    void triggers_arraySizeCapBoundaryAccepted() {
+        // Exactly MAX_TRIGGERS=50 (1 on_start + 49 distinct events) is the inclusive-valid boundary — accepted.
+        String id = createDraft();
+        FunnelStepDto s = messageStep("step-1", "hi");
+        List<TriggerDto> triggers = new ArrayList<>();
+        triggers.add(onStart(""));
+        IntStream.range(0, 49).forEach(i -> triggers.add(event("e" + i, "step-1")));
+        assertThatCode(() -> update(id, triggers, List.of(s))).doesNotThrowAnyException();
+        assertThat(funnelRepository.findById(id).orElseThrow().getTriggers()).hasSize(50);
+    }
+
+    @Test
     void triggers_perTriggerKeywordCapsEnforced() {
         String id = createDraft();
         // 51 keywords exceeds MAX_KEYWORDS=50.

@@ -376,6 +376,10 @@ public class FunnelService {
     // event-only funnel). Excludes self so re-activating / editing the same funnel is fine.
     private void checkTriggerConflict(Funnel funnel) {
         String onStartValue = funnel.getOnStartTriggerValue();
+        // Skip-on-null is correct ONLY because syncOnStartTriggerValue maps a bare on_start ("" / blank) and
+        // the absence of an on_start element to null — keeping those funnels out of the partial-unique index,
+        // so they genuinely cannot collide. If that mapping ever changed (bare → "" instead of null), this
+        // early return would silently bypass the conflict check.
         if (onStartValue == null) {
             return;
         }
@@ -388,9 +392,10 @@ public class FunnelService {
     }
 
     // Second line of the Decision 8 defense: the partial-unique (projectId, onStartTriggerValue)
-    // filtered active index closes the race the pre-check can lose. The ONLY unique index on `funnels`
-    // is the on_start one, so a DuplicateKeyException here can only mean a trigger collision → map to the
-    // SAME 422 as the pre-check, never a 500.
+    // filtered active index closes the race the pre-check can lose. The ONLY unique index on the `funnels`
+    // collection is that on_start (projectId, onStartTriggerValue) partial-unique index, so a
+    // DuplicateKeyException here can only mean an on_start trigger collision → map to the SAME 422 as the
+    // pre-check, never a 500. (Unique indexes on OTHER collections, e.g. funnel_executions, never surface here.)
     private Funnel saveHandlingTriggerConflict(Funnel funnel) {
         try {
             return funnelRepository.save(funnel);
@@ -670,9 +675,15 @@ public class FunnelService {
     // A null/empty request triggers array normalizes to a single bare on_start (a funnel always has a main
     // entry — the old default of (on_start, "")).
     private void applyTriggers(Funnel funnel, List<TriggerDto> requested, Set<String> stepIds) {
-        List<TriggerDto> source = (requested == null || requested.isEmpty())
-                ? List.of(new TriggerDto(TRIGGER_ON_START, "", null, null))
-                : requested;
+        // Null/empty request triggers → the funnel's default single bare on_start (the old (on_start, "")
+        // default). Built straight from bareOnStartTrigger() to skip the DTO round-trip and share the one
+        // canonical definition of "bare on_start" with create()/duplicate().
+        if (requested == null || requested.isEmpty()) {
+            funnel.setTriggers(new ArrayList<>(List.of(bareOnStartTrigger())));
+            syncOnStartTriggerValue(funnel);
+            return;
+        }
+        List<TriggerDto> source = requested;
 
         if (source.size() > MAX_TRIGGERS) {
             throw AppException.unprocessableEntity(CODE_TRIGGER_LIMIT,
@@ -702,23 +713,23 @@ public class FunnelService {
                     // on_start keeps the existing slug rule ("" = bare /start); keywords not allowed.
                     trigger.setTriggerValue(normalizeOnStartValue(dto.triggerValue()));
                     trigger.setKeywords(requireNoKeywords(dto.keywords()));
-                    requireNoEntryStep(type, dto.entryStepId());
+                    requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_KEYWORD -> {
                     // keyword ignores triggerValue (the words live in `keywords`); store "" for consistency.
                     trigger.setTriggerValue("");
                     trigger.setKeywords(requireKeywords(dto.keywords()));
-                    requireNoEntryStep(type, dto.entryStepId());
+                    requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_TAG_ADDED -> {
                     trigger.setTriggerValue(requireTagSlugValue(dto.triggerValue()));
                     trigger.setKeywords(requireNoKeywords(dto.keywords()));
-                    requireNoEntryStep(type, dto.entryStepId());
+                    requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_CUSTOM_FIELD_SET -> {
                     trigger.setTriggerValue(requireFieldKeyValue(dto.triggerValue()));
                     trigger.setKeywords(requireNoKeywords(dto.keywords()));
-                    requireNoEntryStep(type, dto.entryStepId());
+                    requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_EVENT -> {
                     String eventName = requireEventSlugValue(dto.triggerValue());
@@ -743,10 +754,12 @@ public class FunnelService {
 
     // A non-event trigger must NOT carry an entryStepId — mid-entry routing is event-only (Decision 10).
     // Strict reject (in the style of requireNoKeywords), never a silent drop.
-    private static void requireNoEntryStep(String type, String entryStepId) {
+    // The message echoes NO user-supplied value (keeping the id/code-only convention of the other
+    // validators); CODE_INVALID_ENTRY_STEP is sufficient for the client to localize the feedback.
+    private static void requireNoEntryStep(String entryStepId) {
         if (entryStepId != null) {
             throw AppException.unprocessableEntity(CODE_INVALID_ENTRY_STEP,
-                    "entryStepId is only allowed for the event trigger type (got " + type + ")");
+                    "entryStepId is only allowed for the event trigger type");
         }
     }
 

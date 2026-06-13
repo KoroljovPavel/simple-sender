@@ -125,7 +125,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
         Map<String, Object> body = Map.of(
                 "name", "Draft",
-                "triggerValue", "",
+                "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(
                         messageStepMap(textBlock("first")),
                         stepMap("DELAY", Map.of("delayValue", 2, "delayUnit", "HOUR")),
@@ -157,7 +157,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
         Map<String, Object> body = Map.of(
                 "name", "Draft",
-                "triggerValue", "",
+                "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(
                         setKeyboardStepMap("Меню {user.first_name}", true, false,
                                 keyboardRow("Згенерувати бонус", "Профіль"),
@@ -199,7 +199,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         // Duplicate button texts in one keyboard → 422 funnel_step_invalid.
         Map<String, Object> body = Map.of(
                 "name", "Draft",
-                "triggerValue", "",
+                "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(setKeyboardStepMap("Меню", true, false,
                         keyboardRow("Бонус"), keyboardRow("Бонус"))));
 
@@ -1264,6 +1264,26 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
+    void patch_multipleOnStartReturns422() throws Exception {
+        // Intra-funnel "at most one on_start" enforced over the HTTP stack (distinct from the cross-funnel
+        // duplicate on_start VALUE conflict). Two on_start elements in one PATCH body → 422 + the
+        // funnel_multiple_on_start business code.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap(""), onStartTriggerMap("x")),
+                "steps", List.of(messageStepMap(textBlock("hi"))));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value(FunnelService.CODE_MULTIPLE_ON_START));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
     void malformedFunnelIdReturns404() throws Exception {
         mockMvc.perform(get(url() + "/not-a-valid-objectid"))
                 .andExpect(status().isNotFound());
@@ -1335,7 +1355,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void emptyTextInTextBlockReturns422() throws Exception {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         Map<String, Object> body = Map.of(
-                "name", "Draft", "triggerValue", "",
+                "name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(messageStepMap(textBlock("  "))));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1349,7 +1369,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void invalidTriggerValueWithSpaceReturns422() throws Exception {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         Map<String, Object> body = Map.of(
-                "name", "Draft", "triggerValue", "has space",
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("has space")),
                 "steps", List.of(messageStepMap(textBlock("ok"))));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1368,7 +1389,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         }
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "", "steps", steps))))
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")), "steps", steps))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_limit_reached"));
     }
@@ -1377,7 +1398,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @WithMockAppUser(userId = USER_ID)
     void invalidTagSlugReturns422() throws Exception {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
-        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+        Map<String, Object> body = Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(stepMap("ADD_TAG", Map.of("tagSlug", "Has Space!"))));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1396,7 +1417,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Map<String, Object> step = new LinkedHashMap<>();
         step.put("stepType", "MESSAGE");
         step.put("blocks", List.of());
-        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+        Map<String, Object> body = Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(step));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
@@ -1415,7 +1436,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         }
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMapBlocks(blocks))))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1428,7 +1449,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Map<String, Object> album = albumBlock(mediaItem("https://example.com/1.jpg", "only one"));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(album))))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1444,7 +1465,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         }
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(albumBlock(items)))))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1460,7 +1481,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 mediaItem("https://example.com/2.jpg", "second-not-allowed"));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(album))))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1477,7 +1498,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 mediaItem("AUDIO", "https://example.com/2.mp3", null));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(album))))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1493,7 +1514,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 mediaItem("FILE", "https://example.com/2.pdf", null));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(album))))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1509,7 +1530,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 mediaItem(null, "https://example.com/2.jpg", null));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(album))))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1525,7 +1546,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 mediaItem("AUDIO", "https://example.com/2.mp3", null));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(album))))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.steps[0].blocks[0].items[0].type").value("AUDIO"));
@@ -1541,7 +1562,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 mediaItem("VIDEO", "https://example.com/2.mp4", null));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(album))))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.steps[0].blocks[0].items[0].type").value("IMAGE"))
@@ -1561,7 +1582,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         step.put("buttons", List.of(Map.of("type", "callback", "label", "Go")));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(step)))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1579,7 +1600,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         step.put("buttons", List.of(Map.of("type", "callback", "label", "Go")));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(step)))))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
@@ -1596,7 +1617,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         step.put("buttons", List.of(Map.of("type", "callback", "label", "Go")));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(step)))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.steps[0].buttons.length()").value(1));
@@ -1609,7 +1630,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(
                                         imageBlockMap("file:///etc/passwd", null)))))))
                 .andExpect(status().isUnprocessableEntity())
@@ -1622,7 +1643,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(
                                         imageBlockMap("javascript:alert(1)", null)))))))
                 .andExpect(status().isUnprocessableEntity())
@@ -1636,7 +1657,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMap(
                                         imageBlockMap("AgACAgIAAxkBAAE_file_id_token-123", "cap")))))))
                 .andExpect(status().isOk())
@@ -1656,7 +1677,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 textBlock(longText));
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(messageStepMapBlocks(blocks))))))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.steps[0].blocks.length()").value(2));
@@ -1685,7 +1706,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggerValue", "",
+                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                                 "steps", List.of(step)))))
                 .andExpect(status().isOk());
 
@@ -1727,7 +1748,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 Map.of("type", "callback", "label", "Go", "targetStepId", "target-1"),
                 Map.of("type", "callback", "label", "Quit"))); // no target = End
 
-        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+        Map<String, Object> body = Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(menuStep, sendStep));
 
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
@@ -1758,7 +1779,7 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         a.put("id", "dup");
         Map<String, Object> b = messageStepMap(textBlock("b"));
         b.put("id", "dup");
-        Map<String, Object> body = Map.of("name", "Draft", "triggerValue", "",
+        Map<String, Object> body = Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(a, b));
 
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())

@@ -89,8 +89,13 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
                 null, null, null, null, null);
     }
 
+    // Phase 8 (17-funnel-multi-entry): a single on_start trigger element replaces the former flat trio.
+    private static com.botfunnel.funnel.dto.TriggerDto onStart(String value) {
+        return new com.botfunnel.funnel.dto.TriggerDto("on_start", value, null, null);
+    }
+
     private UpdateFunnelRequest reqWithStep(FunnelStepDto step) {
-        return new UpdateFunnelRequest("f", null, "on_start", "", false, null, List.of(step));
+        return new UpdateFunnelRequest("f", null, false, List.of(onStart("")), List.of(step));
     }
 
     // A minimal valid one-step message funnel used as a SUBSCRIBE target (so it can be activated). Returns
@@ -232,7 +237,7 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
         String target = seedTarget(projectId);
         String parent = createDraft();
         UpdateFunnelRequest parentReq = new UpdateFunnelRequest(
-                "f", null, "on_start", "parent", false, null, List.of(subscribeStep(target, null, false)));
+                "f", null, false, List.of(onStart("parent")), List.of(subscribeStep(target, null, false)));
         funnelService.update(USER_ID, projectId, parent, parentReq);
 
         assertThatThrownBy(() -> funnelService.activate(USER_ID, projectId, parent))
@@ -259,7 +264,7 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
 
         String parent = createDraft();
         UpdateFunnelRequest parentReq = new UpdateFunnelRequest(
-                "f", null, "on_start", "parent2", false, null,
+                "f", null, false, List.of(onStart("parent2")),
                 List.of(subscribeStep(activeTarget, null, false), subscribeStep(draftTarget, null, false)));
         funnelService.update(USER_ID, projectId, parent, parentReq);
 

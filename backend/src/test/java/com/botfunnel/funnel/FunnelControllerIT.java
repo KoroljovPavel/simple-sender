@@ -254,8 +254,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("draft"))
-                .andExpect(jsonPath("$.triggerType").value("on_start"))
-                .andExpect(jsonPath("$.triggerValue").value(""))
+                .andExpect(jsonPath("$.triggers.length()").value(1))
+                .andExpect(jsonPath("$.triggers[0].triggerType").value("on_start"))
+                .andExpect(jsonPath("$.triggers[0].triggerValue").value(""))
                 .andExpect(jsonPath("$.name").value("Promo (копія)"));
     }
 
@@ -264,7 +265,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void duplicateCopiesGraphVerbatim() throws Exception {
         // Build a two-step graph with explicit ids + edges: a composer MESSAGE (with a callback
         // targetStepId on its last-block keyboard + a timeout edge) and its MESSAGE target. The copy must
-        // preserve step ids and every edge verbatim, copy keywords/allowReEnter/description, leave original.
+        // preserve step ids and every edge verbatim, copy allowReEnter/description, leave the original.
+        // Phase 8: keywords now live per-trigger, and duplicate RESETS triggers to a single bare on_start
+        // (Decision 6), so an original keyword/event trigger is intentionally NOT carried into the clone
+        // (asserted separately in duplicateResetsTriggersToSingleOnStart).
         FunnelStep target = textStep("target-1", "branch");
 
         FunnelStep menu = composerWithButtons("menu-1", "menu", callbackButton("Go", "target-1"));
@@ -277,7 +281,6 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 new ArrayList<>(List.of(menu, target)));
         f.setDescription("the original description");
         f.setAllowReEnter(true);
-        f.setKeywords(List.of("alpha", "beta"));
         funnelRepository.save(f);
 
         String body = mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
@@ -291,7 +294,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         Funnel copy = funnelRepository.findById(copyId).orElseThrow();
         assertThat(copy.getDescription()).isEqualTo("the original description");
         assertThat(copy.isAllowReEnter()).isTrue();
-        assertThat(copy.getKeywords()).containsExactly("alpha", "beta");
+        // The clone's triggers are reset to a single bare on_start (Decision 6 duplicate-reset).
+        assertThat(copy.getTriggers()).hasSize(1);
+        assertThat(copy.getTriggers().get(0).getTriggerType()).isEqualTo("on_start");
+        assertThat(copy.getOnStartTriggerValue()).isNull();
 
         List<FunnelStep> steps = copy.getSteps();
         assertThat(steps).hasSize(2);
@@ -350,8 +356,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         mockMvc.perform(post(url() + "/" + f.getId() + "/duplicate").with(csrf()))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.status").value("draft"))
-                .andExpect(jsonPath("$.triggerType").value("on_start"))
-                .andExpect(jsonPath("$.triggerValue").value(""))
+                .andExpect(jsonPath("$.triggers.length()").value(1))
+                .andExpect(jsonPath("$.triggers[0].triggerType").value("on_start"))
+                .andExpect(jsonPath("$.triggers[0].triggerValue").value(""))
                 .andExpect(jsonPath("$.steps.length()").value(0));
     }
 
@@ -364,8 +371,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         foreign.setProjectId(foreignProject);
         foreign.setName("Foreign");
         foreign.setStatus(FunnelStatus.draft);
-        foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
-        foreign.setTriggerValue("");
+        // Phase 8: a single bare on_start trigger; bare /start ("") leaves the onStartTriggerValue scalar
+        // null (Variant A), so the foreign draft is well-formed without being indexed.
+        foreign.setTriggers(new ArrayList<>(List.of(onStartTrigger(""))));
         foreign.setSteps(new ArrayList<>());
         foreign.setCreatedAt(Instant.now());
         foreign.setUpdatedAt(Instant.now());
@@ -446,8 +454,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         foreign.setProjectId(foreignProject);
         foreign.setName("Foreign");
         foreign.setStatus(FunnelStatus.draft);
-        foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
-        foreign.setTriggerValue("");
+        // Phase 8: a single bare on_start trigger; bare /start ("") leaves the onStartTriggerValue scalar
+        // null (Variant A), so the foreign draft is well-formed without being indexed.
+        foreign.setTriggers(new ArrayList<>(List.of(onStartTrigger(""))));
         foreign.setSteps(new ArrayList<>());
         foreign.setCreatedAt(Instant.now());
         foreign.setUpdatedAt(Instant.now());
@@ -537,8 +546,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         assertThat(activated).as("exactly one funnel becomes active").isEqualTo(1L);
         assertThat(conflicts).as("the loser is mapped to 422 funnel_trigger_conflict, not 500")
                 .isEqualTo(1L);
-        assertThat(funnelRepository.findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
-                projectId, FunnelService.TRIGGER_ON_START, "race", FunnelStatus.active)).isPresent();
+        assertThat(funnelRepository.findByProjectIdAndOnStartTriggerValueAndStatus(
+                projectId, "race", FunnelStatus.active)).isPresent();
     }
 
     // ─── test-run ──────────────────────────────────────────────────────────────
@@ -1159,13 +1168,98 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         seedFunnel("First", FunnelStatus.active, "taken", List.of(messageStep("a")));
         Funnel second = seedFunnel("Second", FunnelStatus.active, "free", List.of(messageStep("b")));
 
-        Map<String, Object> body = Map.of("name", "Second", "triggerValue", "taken",
+        Map<String, Object> body = Map.of("name", "Second",
+                "triggers", List.of(onStartTriggerMap("taken")),
                 "steps", List.of(messageStepMap(textBlock("b"))));
         mockMvc.perform(put(url() + "/" + second.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(body)))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_trigger_conflict"));
+    }
+
+    // ─── Phase 8 trigger-array round-trip + validation (Task 4) ─────────────────
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patchGet_roundTripsTriggerArray() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        // One MESSAGE step with a STABLE id so an event trigger's entryStepId can resolve to it.
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "MESSAGE");
+        step.put("id", "entry-1");
+        step.put("blocks", List.of(textBlock("hi")));
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("promo"), eventTriggerMap("purchase", "entry-1")),
+                "steps", List.of(step));
+
+        // PATCH echoes the trigger array verbatim.
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.triggers.length()").value(2))
+                .andExpect(jsonPath("$.triggers[0].triggerType").value("on_start"))
+                .andExpect(jsonPath("$.triggers[0].triggerValue").value("promo"))
+                .andExpect(jsonPath("$.triggers[1].triggerType").value("event"))
+                .andExpect(jsonPath("$.triggers[1].triggerValue").value("purchase"))
+                .andExpect(jsonPath("$.triggers[1].entryStepId").value("entry-1"));
+
+        // GET round-trips the same array (toResponse mapping, both directions).
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.triggers.length()").value(2))
+                .andExpect(jsonPath("$.triggers[1].entryStepId").value("entry-1"));
+
+        // Denormalized scalar synced from the non-empty on_start element.
+        assertThat(funnelRepository.findById(f.getId()).orElseThrow().getOnStartTriggerValue())
+                .isEqualTo("promo");
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patch_duplicateEventNameReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "MESSAGE");
+        step.put("id", "entry-1");
+        step.put("blocks", List.of(textBlock("hi")));
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap(""),
+                        eventTriggerMap("purchase", "entry-1"), eventTriggerMap("purchase", "entry-1")),
+                "steps", List.of(step));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value(FunnelService.CODE_DUPLICATE_EVENT_NAME));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patch_danglingEntryStepIdReturns422() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "MESSAGE");
+        step.put("id", "entry-1");
+        step.put("blocks", List.of(textBlock("hi")));
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap(""), eventTriggerMap("purchase", "no-such-step")),
+                "steps", List.of(step));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value(FunnelService.CODE_INVALID_ENTRY_STEP));
     }
 
     @Test
@@ -1184,8 +1278,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         foreign.setProjectId(foreignProject);
         foreign.setName("Foreign");
         foreign.setStatus(FunnelStatus.draft);
-        foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
-        foreign.setTriggerValue("");
+        // Phase 8: a single bare on_start trigger; bare /start ("") leaves the onStartTriggerValue scalar
+        // null (Variant A), so the foreign draft is well-formed without being indexed.
+        foreign.setTriggers(new ArrayList<>(List.of(onStartTrigger(""))));
         foreign.setSteps(new ArrayList<>());
         foreign.setCreatedAt(Instant.now());
         foreign.setUpdatedAt(Instant.now());
@@ -2002,6 +2097,25 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         return m;
     }
 
+    // ─── trigger JSON-map helpers (request bodies, Phase 8) ─────────────────────
+
+    private static Map<String, Object> onStartTriggerMap(String value) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("triggerType", "on_start");
+        t.put("triggerValue", value);
+        return t;
+    }
+
+    private static Map<String, Object> eventTriggerMap(String value, String entryStepId) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("triggerType", "event");
+        t.put("triggerValue", value);
+        if (entryStepId != null) {
+            t.put("entryStepId", entryStepId);
+        }
+        return t;
+    }
+
     private static Map<String, Object> messageStep(String text) {
         return messageStepMap(textBlock(text));
     }
@@ -2124,8 +2238,11 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         f.setProjectId(projectId);
         f.setName(name);
         f.setStatus(status);
-        f.setTriggerType(FunnelService.TRIGGER_ON_START);
-        f.setTriggerValue(triggerValue);
+        // Phase 8 (17-funnel-multi-entry): a directly-seeded funnel carries a single on_start trigger plus
+        // the denormalized onStartTriggerValue scalar the partial-unique index keys on. A bare /start ("")
+        // syncs to a null scalar (Variant A) so it stays out of the index; a non-empty value is indexed.
+        f.setTriggers(new ArrayList<>(List.of(onStartTrigger(triggerValue))));
+        f.setOnStartTriggerValue(scalarOf(triggerValue));
         f.setAllowReEnter(false);
         List<FunnelStep> steps = new ArrayList<>();
         int i = 0;
@@ -2138,6 +2255,20 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         f.setCreatedAt(Instant.now());
         f.setUpdatedAt(Instant.now());
         return funnelRepository.save(f);
+    }
+
+    // A single on_start Trigger for a directly-seeded funnel (Phase 8 / 17-funnel-multi-entry).
+    private static Trigger onStartTrigger(String triggerValue) {
+        Trigger t = new Trigger();
+        t.setTriggerType(FunnelService.TRIGGER_ON_START);
+        t.setTriggerValue(triggerValue);
+        return t;
+    }
+
+    // The onStartTriggerValue scalar projection used by the seed helpers (mirrors FunnelService Variant A):
+    // a bare /start ("" or blank) maps to null so it stays out of the partial-unique index.
+    private static String scalarOf(String triggerValue) {
+        return (triggerValue == null || triggerValue.isBlank()) ? null : triggerValue;
     }
 
     // Builds a directly-seeded domain step from a request-shaped map (used only by seedFunnel for the
@@ -2243,8 +2374,9 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         foreign.setProjectId(foreignProject);
         foreign.setName("Foreign");
         foreign.setStatus(FunnelStatus.draft);
-        foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
-        foreign.setTriggerValue("");
+        // Phase 8: a single bare on_start trigger; bare /start ("") leaves the onStartTriggerValue scalar
+        // null (Variant A), so the foreign draft is well-formed without being indexed.
+        foreign.setTriggers(new ArrayList<>(List.of(onStartTrigger(""))));
         foreign.setSteps(new ArrayList<>());
         foreign.setCreatedAt(Instant.now());
         foreign.setUpdatedAt(Instant.now());

@@ -528,6 +528,30 @@ describe('funnels/[funnelId] editor page', () => {
       await settle()
       expect(storeMock.update).toHaveBeenCalled()
     })
+
+    it('after the edit dialog closes, clicking another row switches the preview (editIndex no longer pins it)', async () => {
+      // Regression: editIndex is not reset on dialog close, so the preview priority must gate the
+      // "edited step wins" branch on editOpen. Otherwise the preview stays pinned to the last-edited step
+      // forever and clicking other rows is a no-op.
+      const wrapper = await mountWithPreview()
+
+      // Open edit on row 1 → the dialog wins the preview while open (heading = step 2).
+      await wrapper.get('[data-test="funnel-step-edit-1"]').trigger('click')
+      await settle()
+      expect(wrapper.find('[data-test="step-form"]').exists()).toBe(true)
+      expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('2')
+
+      // Close the dialog (cancel) — editIndex stays 1, but editOpen is now false.
+      await wrapper.get('[data-test="step-form-cancel"]').trigger('click')
+      await settle()
+
+      // Clicking a DIFFERENT row now drives the preview to THAT step instead of staying pinned to row 1.
+      await wrapper.get('[data-test="funnel-step-select-2"]').trigger('click')
+      await settle()
+      expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('3')
+      expect(wrapper.get('[data-test="funnel-step-row-2"]').classes().join(' ')).toContain('ring-2')
+      expect(wrapper.get('[data-test="funnel-step-row-1"]').classes().join(' ')).not.toContain('ring-2')
+    })
   })
 })
 

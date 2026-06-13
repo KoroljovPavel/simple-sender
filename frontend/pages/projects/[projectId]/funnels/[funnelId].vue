@@ -67,7 +67,10 @@ function onSelectStep(index: number) {
 // Selection priority: edited step (edit dialog open) > clicked step > first message step.
 const firstMessageIndex = computed(() => steps.value.findIndex((s) => MESSAGE_STEP_TYPES.includes(s.stepType)))
 const previewIndex = computed(() => {
-  if (editStep.value) return editIndex.value
+  // Edited step wins ONLY while the edit dialog is open. editIndex is not reset on close, so gating on
+  // editOpen is what keeps the preview from being permanently pinned to the last-edited step (which would
+  // make clicking other rows a no-op).
+  if (editOpen.value && editStep.value) return editIndex.value
   if (steps.value[previewSelectedIndex.value]) return previewSelectedIndex.value
   return firstMessageIndex.value
 })

@@ -48,9 +48,11 @@ class FunnelIndexAssertionsTest {
                                 + Arrays.stream(indexes).map(CompoundIndex::name).toList()));
 
         assertThat(onStartIndex.unique()).as("onStartTriggerValue index must be unique").isTrue();
+        // EXACT def match — a reversed field order ({'onStartTriggerValue': 1, 'projectId': 1}) declares a
+        // different physical index and must fail this assertion (a contains-check would pass on either order).
         assertThat(onStartIndex.def())
-                .contains("projectId")
-                .contains("onStartTriggerValue");
+                .as("index def must pin both fields in projectId-first order")
+                .isEqualTo("{'projectId': 1, 'onStartTriggerValue': 1}");
         assertThat(onStartIndex.partialFilter())
                 .as("partialFilter must restrict to active funnels that actually have an on_start value")
                 .contains("onStartTriggerValue")

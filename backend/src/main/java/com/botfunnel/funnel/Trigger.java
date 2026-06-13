@@ -1,6 +1,7 @@
 package com.botfunnel.funnel;
 
 import java.util.List;
+import java.util.Objects;
 
 /**
  * Flat embedded persistence POJO for a single funnel entry trigger (Phase 8 / 17-funnel-multi-entry).
@@ -47,4 +48,23 @@ public class Trigger {
 
     public String getEntryStepId() { return entryStepId; }
     public void setEntryStepId(String entryStepId) { this.entryStepId = entryStepId; }
+
+    // Value equality over all four fields. Mongo re-hydrates triggers as fresh instances (so reference
+    // identity is useless across a round-trip), and Task 5's redirect re-scans triggers[] to locate the
+    // matched element — both rely on structural equality. keywords is compared as a List (order- and
+    // content-sensitive), which matches its persisted shape.
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof Trigger trigger)) return false;
+        return Objects.equals(triggerType, trigger.triggerType)
+                && Objects.equals(triggerValue, trigger.triggerValue)
+                && Objects.equals(keywords, trigger.keywords)
+                && Objects.equals(entryStepId, trigger.entryStepId);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(triggerType, triggerValue, keywords, entryStepId);
+    }
 }

@@ -51,4 +51,36 @@ class TriggerTest {
         assertThat(trigger.getTriggerValue()).isEmpty();
         assertThat(trigger.getEntryStepId()).isNull();
     }
+
+    /**
+     * Value equality over all four fields (Mongo re-hydrates triggers as fresh instances; Task 5's
+     * redirect re-scans {@code triggers[]} to find the matched element — both depend on structural
+     * equality, not reference identity).
+     */
+    @Test
+    void equalsAndHashCodeOverAllFourFields() {
+        Trigger a = trigger("event", "purchase_done", List.of("buy"), "step-2");
+        Trigger b = trigger("event", "purchase_done", List.of("buy"), "step-2");
+
+        assertThat(a).isEqualTo(b);
+        assertThat(a).hasSameHashCodeAs(b);
+
+        // A difference in any single field breaks equality.
+        assertThat(a).isNotEqualTo(trigger("keyword", "purchase_done", List.of("buy"), "step-2"));
+        assertThat(a).isNotEqualTo(trigger("event", "other", List.of("buy"), "step-2"));
+        assertThat(a).isNotEqualTo(trigger("event", "purchase_done", List.of("sell"), "step-2"));
+        assertThat(a).isNotEqualTo(trigger("event", "purchase_done", List.of("buy"), "step-9"));
+
+        // Two all-null triggers are equal (reflexive null handling).
+        assertThat(new Trigger()).isEqualTo(new Trigger());
+    }
+
+    private static Trigger trigger(String type, String value, List<String> keywords, String entryStepId) {
+        Trigger t = new Trigger();
+        t.setTriggerType(type);
+        t.setTriggerValue(value);
+        t.setKeywords(keywords);
+        t.setEntryStepId(entryStepId);
+        return t;
+    }
 }

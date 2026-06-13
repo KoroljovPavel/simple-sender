@@ -46,7 +46,10 @@ export default defineNuxtConfig({
     '@nuxtjs/tailwindcss',
     '@nuxtjs/i18n',
   ],
-  css: ['~/assets/css/tailwind.css'],
+  // Vue Flow ships its base stylesheet separately; register it globally so the canvas surface (Task 5,
+  // 18-funnel-canvas) renders with correct node/edge/handle layout. The library's *.client.vue wrapper
+  // (Task 5) keeps the SSR-unsafe runtime client-only — the CSS itself is inert on the server.
+  css: ['~/assets/css/tailwind.css', '@vue-flow/core/dist/style.css'],
   runtimeConfig: {
     // Server-side base URL: SSR fetch hits the backend directly. Browser-side
     // calls go through the dev proxy (see nitro.devProxy below), so the public

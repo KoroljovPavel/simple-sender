@@ -30,6 +30,26 @@ export type StepType =
 // as the match key (tag slug / field key / event name).
 export type FunnelTriggerType = 'on_start' | 'keyword' | 'tag_added' | 'custom_field_set' | 'event'
 
+// Canvas coordinate pair (Phase 2 — 18-funnel-canvas) — mirrors backend CanvasPositionDto
+// (com.botfunnel.funnel.dto.CanvasPositionDto {Double x, Double y}). Plain `number` on the front (norm of
+// mirroring a backend Double); the backend validates the values are finite (separate task). DISTINCT from
+// the step's array index / `order` — this is the free-form xy on the editor canvas (Decision 6), hence the
+// name `canvasPosition`, never `position`.
+export interface CanvasPosition {
+  x: number
+  y: number
+}
+
+// A free-floating annotation pinned on the funnel canvas (Phase 2 — 18-funnel-canvas) — mirrors backend
+// NoteDto (com.botfunnel.funnel.dto.NoteDto {id, text, canvasPosition}). `id` is server-minted: the editor
+// sends `id: null` for a new note and the server mints an ObjectId hex on save (Decision 7); `canvasPosition`
+// is nullable for the same reason a step's is (old funnels predate canvas coords, no migration — Decision 8).
+export interface FunnelNote {
+  id?: string | null
+  text: string
+  canvasPosition?: CanvasPosition | null
+}
+
 // One funnel entry trigger — mirrors backend TriggerDto (com.botfunnel.funnel.dto.TriggerDto, Task 3)
 // one-to-one. Phase 8 (17-funnel-multi-entry): a funnel carries a LIST of triggers, each with its own
 // entry step, replacing the former flat triggerType/triggerValue/keywords trio. Field semantics:
@@ -46,6 +66,10 @@ export interface FunnelTrigger {
   triggerValue?: string | null
   keywords?: string[] | null
   entryStepId?: string | null
+  // Canvas xy of this trigger's node on the editor canvas (Phase 2 — 18-funnel-canvas). Nullable: old
+  // funnels predate canvas coords (no migration — Decision 8), so the backend returns null until the editor
+  // first persists a layout.
+  canvasPosition?: CanvasPosition | null
 }
 
 // Inline-keyboard button on a MESSAGE composer step — mirrors backend Button record
@@ -163,6 +187,10 @@ export interface FunnelStep {
   // minutes/hours/days from the tech-spec Data Models text. The engine only parses MIN/HOUR/DAY.
   timeoutUnit?: DelayUnit | null
   timeoutTargetStepId?: string | null
+  // Canvas xy of this step's node on the editor canvas (Phase 2 — 18-funnel-canvas). Nullable: old funnels
+  // predate canvas coords (no migration — Decision 8), so the backend returns null until the editor first
+  // persists a layout. NOT the array index / `order` (Decision 6).
+  canvasPosition?: CanvasPosition | null
 }
 
 // GET .../funnels?status= → FunnelSummaryResponse[] (metadata without steps; stepCount is a cheap hint).
@@ -195,6 +223,9 @@ export interface FunnelResponse {
   triggers: FunnelTrigger[]
   allowReEnter: boolean
   steps: FunnelStep[]
+  // Free-floating canvas annotations (Phase 2 — 18-funnel-canvas). Nullable: old funnels have no notes (no
+  // migration — Decision 8). Each note's `id` is server-minted on save (Decision 7 — see FunnelNote).
+  notes?: FunnelNote[] | null
   deepLink: string | null
   createdAt: string
   updatedAt: string
@@ -216,6 +247,9 @@ export interface UpdateFunnelRequest {
   triggers?: FunnelTrigger[]
   allowReEnter?: boolean
   steps?: FunnelStep[]
+  // Canvas annotations (Phase 2 — 18-funnel-canvas), full-replace like triggers/steps. A new note carries
+  // `id: null`; the server mints its ObjectId hex on save (Decision 7 — see FunnelNote).
+  notes?: FunnelNote[] | null
 }
 
 // POST .../funnels/{id}/steps/{stepId}/preview body — mirrors backend PreviewStepRequest

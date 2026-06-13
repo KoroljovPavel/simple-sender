@@ -26,7 +26,7 @@ stack notes are illustrative; actual engine = **JobRunr + MongoDB**, see `archit
 | 5 | **Funnel composition** | `14-funnels-composition` | `SUBSCRIBE_TO_FUNNEL` step ("Почати потік"); cross-funnel jump + return (from deferred list below). | Phase 3 | done   |
 | 6 | **Message composer** | `15-message-composer` | Multi-block `MESSAGE` node (text/image/video/audio/file/album — location/invoice/carousel deferred, Decision 7); per-item album type + type-mixing (Decision 5); new `TelegramSender` methods (sendVideo/sendAudio/sendDocument/sendMediaGroup); replaces `SEND_MESSAGE`/`SEND_IMAGE`/`MENU`. | Phase 2 | done¹  |
 | 7 | **Persistent keyboard** | `16-persistent-keyboard` | Persistent bottom **reply keyboard** (ReplyKeyboardMarkup, NOT inline); set/clear steps; tap-routing via Phase-3 keyword funnels (user-spec approved — no new branching mechanism). | Phase 3 (text-match) | done   |
-| 8 | **Multi-entry graph** | `17-funnel-multi-entry` | Trigger **nodes** inside the graph + independent/disconnected subflows (drafts); **many triggers per funnel**; `List<Trigger>` per funnel; mid-graph entry. Prerequisite for the canvas editor. | Phase 3 | todo   |
+| 8 | **Multi-entry graph** | `17-funnel-multi-entry` | Trigger **nodes** inside the graph + independent/disconnected subflows (drafts); **many triggers per funnel**; `List<Trigger>` per funnel; mid-graph entry (`event`-fired redirect-or-start of an in-flight execution). Prerequisite for the canvas editor. | Phase 3 | done²  |
 | 9 | **Variable picker** | `18-variable-picker` | Insert-variable affordance on text fields (frontend; enumerate `user.*` + custom fields). Backend: template `Button.url`/`label` (currently NOT rendered — only message text + caption are). | Phase 2 | todo   |
 
 > **Triggers are global (many-to-many).** A fired event name can be heard by **any** funnel, and one
@@ -51,6 +51,7 @@ stack notes are illustrative; actual engine = **JobRunr + MongoDB**, see `archit
 - Each completed phase: move `work/{folder}` → `work/completed/`, flip status to `done` here,
   and update the integration notes in `architecture.md` (`funnel` module).
 - ¹ Phase 6 (`15-message-composer`): implementation + audit + pre-deploy QA complete (backend 1108/slow-lane engine ITs 57/57, frontend 487 green; 16 commits on `main`, unpushed). Deploy + post-deploy "Test for me" deferred — no target environment yet. Manual `funnels`/`funnel_executions` wipe required on first deploy (`deployment.md`).
+- ² Phase 8 (`17-funnel-multi-entry`): implementation + audit (security CLEAN) + pre-deploy QA complete (backend 1284 tests — all 17 feature classes green incl. `FunnelExecutionEngineIT` 67 slow-lane; frontend 532 green, i18n parity; 13 commits on `dev`). 18/18 acceptance criteria PASS; 4 live checks (curl API-event, in-flight-redirect bash, Telegram loop, manual wipe + clean start) DEFERRED to post-deploy (Task 12) — no target environment yet. Manual `funnels`/`funnel_executions` wipe required on first deploy (`deployment.md`).
 
 ## Deferred beyond the 4 phases (future — surfaced during Phase 2 planning)
 

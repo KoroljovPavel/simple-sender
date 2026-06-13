@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import dagre from '@dagrejs/dagre'
 import type { FunnelResponse, FunnelStep, FunnelTrigger, Button } from '../../types/funnel'
 import {
   buildNodes,
@@ -122,7 +123,9 @@ describe('useFunnelCanvas — forward mapping', () => {
     expect(entryEdges).toHaveLength(2)
     const startEntry = findEdge(entryEdges, (e) => e.source === 'start')
     expect(startEntry.target).toBe('s1')
+    // event trigger is triggers[1] -> its node id is the exact `trigger:1` namespace value.
     const evtEntry = findEdge(entryEdges, (e) => e.source !== 'start')
+    expect(evtEntry.source).toBe('trigger:1')
     expect(evtEntry.target).toBe('s2')
   })
 })
@@ -221,14 +224,31 @@ describe('useFunnelCanvas — reverse connect', () => {
     const afterTimeout = disconnectEdge(f, { fieldKind: 'timeout', sourceStepId: 's1', triggerIndex: null, buttonIndex: null })
     expect(afterTimeout.steps[0].timeoutTargetStepId).toBeNull()
     expect(afterTimeout.steps[0].timeoutTargetStepId).not.toBe('')
+    // siblings unchanged
+    expect(afterTimeout.steps[0].next).toBe('s2')
+    expect(afterTimeout.steps[0].buttons![0].targetStepId).toBe('s2')
 
     const afterBtn = disconnectEdge(f, { fieldKind: 'button', sourceStepId: 's1', triggerIndex: null, buttonIndex: 0 })
     expect(afterBtn.steps[0].buttons![0].targetStepId).toBeNull()
     expect(afterBtn.steps[0].buttons![0].targetStepId).not.toBe('')
+    // siblings unchanged
+    expect(afterBtn.steps[0].next).toBe('s2')
+    expect(afterBtn.steps[0].timeoutTargetStepId).toBe('s2')
 
     const afterEntry = disconnectEdge(f, { fieldKind: 'entry', sourceStepId: null, triggerIndex: 0, buttonIndex: null })
     expect(afterEntry.triggers[0].entryStepId).toBeNull()
     expect(afterEntry.triggers[0].entryStepId).not.toBe('')
+  })
+
+  it('connectEdge rejects a non-null but non-saved/unknown target id', () => {
+    const f = funnel({ steps: [step('s1', { next: null }), step('s2')] })
+    const ref: EdgeRef = { fieldKind: 'next', sourceStepId: 's1', triggerIndex: null, buttonIndex: null }
+    // 'ghost' is non-null but is not a saved node in the funnel -> refused.
+    expect(() => connectEdge(f, ref, 'ghost')).toThrow()
+    // and the empty-string id is refused too (never written as an edge).
+    expect(() => connectEdge(f, ref, '')).toThrow()
+    // original untouched.
+    expect(f.steps[0].next).toBeNull()
   })
 
   it('add node/edge produces correct PATCH payload', () => {
@@ -260,6 +280,10 @@ describe('useFunnelCanvas — reverse connect', () => {
 // ---------------------------------------------------------------------------
 
 describe('useFunnelCanvas — layout', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('dagre lays out nodes when canvasPosition absent', () => {
     const f = funnel({
       triggers: [trigger('on_start', { entryStepId: 's1' })],
@@ -310,9 +334,9 @@ describe('useFunnelCanvas — layout', () => {
     expect(Number.isFinite(s2.position.y)).toBe(true)
   })
 
-  it('degenerate graph falls back to grid placement', () => {
-    // A note step text that forces a non-finite scenario is hard to trigger directly; instead
-    // exercise the fallback by using many disconnected nodes (still must yield finite coords).
+  it('orphan forest (disconnected nodes) still yields finite coords', () => {
+    // dagre handles disconnected nodes fine — this proves the orphan-forest layout path, not the
+    // try/catch fallback (the real fallback is covered by the next test).
     const steps: FunnelStep[] = []
     for (let i = 0; i < 10; i++) steps.push(step(`s${i}`))
     const f = funnel({ steps })
@@ -322,6 +346,32 @@ describe('useFunnelCanvas — layout', () => {
       expect(Number.isFinite(n.position.x)).toBe(true)
       expect(Number.isFinite(n.position.y)).toBe(true)
     }
+  })
+
+  it('dagre failure falls back to deterministic grid placement', () => {
+    // Force the layout call to throw so the try/catch -> gridLayout branch is actually exercised.
+    const spy = vi.spyOn(dagre, 'layout').mockImplementation(() => {
+      throw new Error('forced dagre failure')
+    })
+
+    const steps: FunnelStep[] = []
+    for (let i = 0; i < 5; i++) steps.push(step(`s${i}`))
+    const f = funnel({ steps })
+    const nodes = buildNodes(f)
+    const laid = layoutNodes(f, nodes, [])
+
+    expect(spy).toHaveBeenCalled()
+    // All coords finite (no NaN leaked from the failed dagre run).
+    for (const n of laid) {
+      expect(Number.isFinite(n.position.x)).toBe(true)
+      expect(Number.isFinite(n.position.y)).toBe(true)
+    }
+    // Grid layout is deterministic: GRID_COLUMNS=4, GRID_GAP_X=280, GRID_GAP_Y=160.
+    // node 0 -> (0,0); node 4 -> col 0, row 1 -> (0,160).
+    const s0 = laid.find((n) => n.id === 's0')!
+    const s4 = laid.find((n) => n.id === 's4')!
+    expect(s0.position).toEqual({ x: 0, y: 0 })
+    expect(s4.position).toEqual({ x: 0, y: 160 })
   })
 })
 
@@ -393,6 +443,18 @@ describe('useFunnelCanvas — cycle, notes, delete, broken, subscribe', () => {
     expect(broken.find((b) => b.fieldKind === 'timeout')).toBeUndefined()
   })
 
+  it('broken edge detection flags empty-string target (only null means no edge)', () => {
+    // next === "" is a non-null value that resolves to no node -> broken (not silently dropped).
+    const f = funnel({
+      steps: [step('s1', { next: '' }), step('s2')],
+    })
+    const broken = detectBrokenEdges(f)
+    const nextBroken = broken.find((b) => b.fieldKind === 'next' && b.sourceStepId === 's1')
+    expect(nextBroken).toBeDefined()
+    expect(nextBroken!.targetStepId).toBe('')
+    expect(nextBroken!.reason).toBe('missing_target')
+  })
+
   it('broken edge detection flags on_start entry null', () => {
     const f = funnel({
       triggers: [trigger('on_start', { entryStepId: null })],
@@ -416,9 +478,9 @@ describe('useFunnelCanvas — cycle, notes, delete, broken, subscribe', () => {
     expect(payload.notes).toHaveLength(2)
     expect(payload.notes![0].text).toBe('note A')
     expect(payload.notes![1].id).toBeNull() // fresh note keeps server-minted-null id
-    // a note never appears as a step
+    // a note never appears as a step — steps[] holds exactly the funnel's step ids, no note id leaked in
     expect(payload.steps).toHaveLength(1)
-    expect(payload.steps!.every((s) => s.stepType !== undefined)).toBe(true)
+    expect(payload.steps!.map((s) => s.id)).toEqual(['s1'])
     expect((payload.steps as unknown as Array<{ text?: string }>).some((s) => s.text === 'note A')).toBe(false)
     // and a note node is NOT a step node
     const nodes = buildNodes(f)

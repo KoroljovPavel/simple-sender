@@ -391,7 +391,9 @@ export function detectBrokenEdges(funnel: FunnelResponse): BrokenEdge[] {
     buttonIndex: number | null,
     targetId: string | null | undefined,
   ): void => {
-    if (targetId == null || targetId === '') return
+    // Only `null`/`undefined` means "no edge". A non-null value that does NOT resolve to a saved
+    // step — INCLUDING "" — is a broken edge (canvas highlights it; it 422s on activate).
+    if (targetId == null) return
     if (savedStepIds.has(targetId)) return
     broken.push({ edgeId, fieldKind, sourceStepId, triggerIndex, buttonIndex, targetStepId: targetId, reason: 'missing_target' })
   }
@@ -410,7 +412,8 @@ export function detectBrokenEdges(funnel: FunnelResponse): BrokenEdge[] {
   triggers.forEach((trig, index) => {
     flagMissing(`e:entry:${index}`, 'entry', null, index, null, trig.entryStepId)
     // on_start with a null entry while its start node is present == deleted entry edge -> broken.
-    if (trig.triggerType === 'on_start' && onStartPresent && (trig.entryStepId == null || trig.entryStepId === '')) {
+    // ("" is handled by flagMissing above as a missing_target broken edge, not this null case.)
+    if (trig.triggerType === 'on_start' && onStartPresent && trig.entryStepId == null) {
       broken.push({
         edgeId: `e:entry:${index}`,
         fieldKind: 'entry',

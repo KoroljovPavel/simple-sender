@@ -262,8 +262,9 @@ function clearSelection(): void {
   selectedNode.value = null
 }
 
-// Relay the side panel's step edit back into the steps array (matched by id; an unsaved node is matched by
-// its array index via the selected node's stepIndex). Persistence is the page's job (Task 7).
+// Relay the side panel's step edit back into the steps array, matched by id. A node is wirable/editable only
+// after it has been persisted and minted an id (Decision 9 / 10), so the selected step always has an id here;
+// an unsaved step has no stable key to match on. Persistence is the page's job (Task 7).
 function onPanelStepSubmit(step: FunnelStep): void {
   const sel = selectedNode.value
   if (!sel || sel.kind !== 'step') return

@@ -1290,11 +1290,13 @@ const onSubmit = handleSubmit((values) => {
                 {{ menuButtonLabelError(row) }}
               </p>
 
-              <!-- Callback: target = another step or End, via the shared SearchableSelect. On the canvas the
-                   edge owns the target (hideTargetPickers) so this picker is hidden; row.targetStepId is
-                   preserved unchanged and still flows through on submit. -->
-              <template v-if="row.type === 'callback' && !hideTargetPickers">
+              <!-- The branch selector keys ONLY on row.type so a callback button always stays in the callback
+                   branch. The canvas-edge owner (hideTargetPickers) hides JUST the inner target picker — it
+                   must NOT push a callback button into the v-else URL branch (that would corrupt the form).
+                   When hidden, row.targetStepId is preserved unchanged and still flows through on submit. -->
+              <template v-if="row.type === 'callback'">
                 <SearchableSelect
+                  v-if="!hideTargetPickers"
                   v-model="row.targetStepId"
                   :options="menuTargetOptions"
                   :show-value="false"

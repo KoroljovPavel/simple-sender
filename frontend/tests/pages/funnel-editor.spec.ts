@@ -325,6 +325,66 @@ describe('funnels/[funnelId] editor page', () => {
       await tick(700)
       expect(storeMock.update).not.toHaveBeenCalled()
     })
+
+    // Main regression case (task TDD anchor): mutating ONE existing trigger while its required value stays
+    // empty/incomplete must NOT fire a premature PATCH — the per-element triggerReady gate holds. The seed
+    // funnel carries an event trigger with an empty value (incomplete from the start); editing that trigger
+    // (its type/value editor) toward a still-not-ready value keeps the array off every(triggerReady), so the
+    // debounce never arms. If the gate were array-wide instead of per-element, the on_start being valid would
+    // wrongly release a PATCH and the server would 422 the empty event trigger.
+    it('mutating one trigger while its value stays empty fires no premature PATCH (per-element gate)', async () => {
+      const wrapper = await mountLoaded({
+        steps: [{ stepType: 'MESSAGE', id: 'step1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
+        triggers: [
+          { triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null },
+          // An existing-but-incomplete event trigger (empty value → not ready).
+          { triggerType: 'event', triggerValue: '', keywords: null, entryStepId: 'step1' },
+        ],
+      })
+      // The seeded event row is rendered by the REAL panel and its type select is pinned (panel-owned).
+      const eventInput = wrapper.findAll('[data-test="funnel-trigger-event-input"]')
+      expect(eventInput.length).toBe(1)
+
+      // Mutate ONLY that trigger toward a value that is still NOT ready (fails EVENT_NAME_RE). The array is
+      // not every(triggerReady) → the debounce stays disarmed → no PATCH (no spurious 422).
+      await eventInput[0].setValue('not ready!')
+      await tick(700)
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+
+    // PATCH-storm cancellation ([funnelId].vue: clearTimeout BEFORE the every-gate recheck). Arm the debounce
+    // with a complete/ready array (a PATCH is scheduled), then — before the 600ms elapses — make the array
+    // incomplete again (add a second, empty event trigger). The previously-armed timer MUST be cancelled, so
+    // advancing past the debounce fires NOTHING. Completing the second trigger later releases the gate for a
+    // single clean PATCH. Without the clearTimeout safeguard the stale armed timer would flush a not-ready
+    // array and 422.
+    it('cancels a previously-armed PATCH when a later edit makes the array incomplete', async () => {
+      const wrapper = await mountLoaded()
+      // Add + fill one event trigger → the array is now fully ready → a PATCH is scheduled (timer armed).
+      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+      await tick(50)
+      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[0].setValue('first_event')
+      // Let the watch run (microtask) WITHOUT advancing past the 600ms debounce — the PATCH is armed, not fired.
+      await Promise.resolve()
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      // Before the armed timer fires, add a second empty event trigger → array no longer every(ready). The
+      // armed PATCH must be cancelled (clearTimeout), so advancing past the debounce fires NOTHING.
+      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+      await tick(700)
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      // Completing the second trigger releases the gate again → exactly one clean PATCH with both events.
+      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[1].setValue('second_event')
+      await tick(700)
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1]
+      const events = body.triggers.filter((tr: { triggerType: string }) => tr.triggerType === 'event')
+      expect(events.map((e: { triggerValue: string }) => e.triggerValue).sort()).toEqual([
+        'first_event',
+        'second_event',
+      ])
+    })
   })
 
   it('maps a funnel_broken_edge 422 to an inline error and keeps status draft', async () => {

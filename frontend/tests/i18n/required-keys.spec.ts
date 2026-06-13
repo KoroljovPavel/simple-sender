@@ -10,6 +10,27 @@ function loadKeys(file: string): Record<string, true> {
   return collectKeySet(JSON.parse(raw))
 }
 
+// collectKeySet flattens to `{ path: true }` and drops the value, so an empty
+// string `""` registers as "present". For AC keys that must render visible text
+// ("без порожніх ключів") we need the real leaf value to assert it is non-empty.
+function loadValues(file: string): Record<string, unknown> {
+  const raw = readFileSync(resolve(localesDir, file), 'utf8')
+  const acc: Record<string, unknown> = Object.create(null)
+  const walk = (obj: unknown, prefix: string) => {
+    if (obj === null || typeof obj !== 'object' || Array.isArray(obj)) return
+    for (const [key, value] of Object.entries(obj as Record<string, unknown>)) {
+      const path = prefix ? `${prefix}.${key}` : key
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        walk(value, path)
+      } else {
+        acc[path] = value
+      }
+    }
+  }
+  walk(JSON.parse(raw), '')
+  return acc
+}
+
 const REQUIRED_KEYS = [
   'errors.projects.delete.confirmTypeName',
   'errors.projects.unavailable',
@@ -67,6 +88,13 @@ const REQUIRED_KEYS = [
   'funnels.triggersPanel.empty.body',
 ] as const
 
+// AC (17-funnel-multi-entry): Triggers-panel labels must show non-empty text
+// ("без порожніх ключів") — presence alone is insufficient, so these keys get
+// an extra value (trimmed length > 0) assertion in both locales.
+const NON_EMPTY_REQUIRED_KEYS = REQUIRED_KEYS.filter((k) =>
+  k.startsWith('funnels.triggersPanel.'),
+)
+
 describe('i18n AC-25 required keys', () => {
   it('AC-25 keys present in uk.json', () => {
     const keys = loadKeys('uk.json')
@@ -79,6 +107,30 @@ describe('i18n AC-25 required keys', () => {
     const keys = loadKeys('en.json')
     for (const key of REQUIRED_KEYS) {
       expect(keys, `missing ${key} in en.json`).toHaveProperty(key)
+    }
+  })
+
+  it('triggersPanel keys have non-empty values in uk.json', () => {
+    const values = loadValues('uk.json')
+    for (const key of NON_EMPTY_REQUIRED_KEYS) {
+      const value = values[key]
+      expect(typeof value, `${key} in uk.json must be a string`).toBe('string')
+      expect(
+        (value as string).trim().length,
+        `empty value for ${key} in uk.json`,
+      ).toBeGreaterThan(0)
+    }
+  })
+
+  it('triggersPanel keys have non-empty values in en.json', () => {
+    const values = loadValues('en.json')
+    for (const key of NON_EMPTY_REQUIRED_KEYS) {
+      const value = values[key]
+      expect(typeof value, `${key} in en.json must be a string`).toBe('string')
+      expect(
+        (value as string).trim().length,
+        `empty value for ${key} in en.json`,
+      ).toBeGreaterThan(0)
     }
   })
 })

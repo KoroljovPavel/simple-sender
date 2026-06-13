@@ -50,10 +50,12 @@ import java.util.stream.Collectors;
  * 404, patterns.md), then enforces that the funnel belongs to the path project — a foreign /
  * soft-deleted / missing project or a cross-project funnel id all collapse to the same 404.
  *
- * <p>Trigger-conflict defense-in-depth (Decision 8): a service pre-check rejects a second active funnel
- * with the same {@code (triggerType, triggerValue)} BEFORE the write, and the partial-unique index on
- * {@code funnels} closes the residual race — its {@link DuplicateKeyException} on activate is mapped to
- * the SAME 422 {@code funnel_trigger_conflict} (never a 500).
+ * <p>Trigger-conflict defense-in-depth (Decision 8): a funnel now carries a {@code List<Trigger>}, and
+ * the on_start entry value is denormalised onto {@code onStartTriggerValue} for uniqueness enforcement.
+ * A service pre-check rejects a second active funnel sharing the same {@code onStartTriggerValue} BEFORE
+ * the write, and the partial-unique index on {@code onStartTriggerValue} closes the residual race — its
+ * {@link DuplicateKeyException} on activate is mapped to the SAME 422 {@code funnel_trigger_conflict}
+ * (never a 500).
  */
 @Service
 public class FunnelService {

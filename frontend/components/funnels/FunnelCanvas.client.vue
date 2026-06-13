@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { VueFlow, useVueFlow } from '@vue-flow/core'
 import type { Connection } from '@vue-flow/core'
+// Base Vue Flow stylesheet (Decision 12 / AC). Also registered globally in nuxt.config (Task 2); Vite dedups,
+// so importing it here too is harmless and satisfies the strict "component imports it" acceptance criterion.
+import '@vue-flow/core/dist/style.css'
 import FunnelCanvasNode from './FunnelCanvasNode.vue'
 import type { FunnelNote, FunnelResponse, FunnelStep, FunnelTrigger } from '~/types/funnel'
 import {
@@ -10,6 +13,7 @@ import {
   detectBrokenEdges,
   layoutNodes,
   type BrokenEdge,
+  type CanvasEdge,
   type CanvasNode,
   type EdgeFieldKind,
   type EdgeRef,
@@ -17,7 +21,7 @@ import {
 
 // Client-only Vue Flow canvas surface (18-funnel-canvas, Task 5). The `*.client.vue` filename (Decision 12)
 // keeps Vue Flow's setup-time window/DOM access off the SSR path (`window is not defined`); the base stylesheet
-// is registered globally in nuxt.config (Task 2).
+// is imported here (AC) and also registered globally in nuxt.config (Task 2) — Vite dedups.
 //
 // PROPS-IN / EMITS-OUT — this component does NOT read useFunnelsStore. It takes the funnel model parts as props,
 // feeds them through the Task 4 `useFunnelCanvas` mapping layer to obtain nodes/edges + broken-edge flags, and
@@ -57,10 +61,13 @@ const model = computed<FunnelResponse>(() => ({
 }))
 
 // Forward mapping: nodes (laid out) + edges, sourced from the mapping layer — never re-implemented here.
+// `buildEdges` is computed ONCE here and reused by both the layout (rawNodes) and flowEdges — a single
+// shared source so the edge set is not recomputed twice per update.
+const rawEdges = computed<CanvasEdge[]>(() => buildEdges(model.value))
+
 const rawNodes = computed<CanvasNode[]>(() => {
   const nodes = buildNodes(model.value)
-  const edges = buildEdges(model.value)
-  return layoutNodes(model.value, nodes, edges)
+  return layoutNodes(model.value, nodes, rawEdges.value)
 })
 
 const brokenEdges = computed<BrokenEdge[]>(() => detectBrokenEdges(model.value))
@@ -102,7 +109,7 @@ const flowNodes = computed(() =>
 // Edges to SAVED nodes only (the mapping layer enforces this); a dangling field is omitted here and surfaced
 // via the broken-source-node highlight above.
 const flowEdges = computed(() =>
-  buildEdges(model.value).map((e) => ({
+  rawEdges.value.map((e) => ({
     id: e.id,
     source: e.source,
     target: e.target,
@@ -202,7 +209,6 @@ defineExpose({ handleConnect })
       :only-render-visible-elements="true"
       :min-zoom="0.2"
       :max-zoom="2"
-      fit-view-on-init
     >
       <!-- Custom node renderers per mapping-layer node type. The slot props (id, data, …) are bound through. -->
       <template #node-step="nodeProps">

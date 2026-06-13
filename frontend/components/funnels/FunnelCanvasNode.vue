@@ -69,10 +69,10 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
     :data-node-id="id"
     :class="['funnel-canvas-node', { 'funnel-canvas-node--broken': broken }]"
   >
-    <!-- INPUT (target) handle: receives incoming edges. Start/trigger entry nodes have no inbound edge,
-         but keeping a target handle off them is fine — they are pure sources. -->
+    <!-- INPUT (target) handle: receives incoming edges. Start/trigger entry nodes are pure sources (no
+         inbound edge), and a note has no edges at all — so neither gets a target handle. -->
     <Handle
-      v-if="!isEntry"
+      v-if="!isEntry && !isNote"
       data-test="funnel-canvas-handle-target"
       type="target"
       :position="Position.Top"

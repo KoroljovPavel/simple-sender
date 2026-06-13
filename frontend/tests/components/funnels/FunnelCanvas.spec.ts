@@ -52,10 +52,46 @@ describe('FunnelCanvas', () => {
     const wrapper = await mountWith({ steps, triggers })
 
     expect(wrapper.find('[data-test="funnel-canvas-exit-badge"]').exists()).toBe(true)
-    // The exit-badge text is localized (not the raw key).
-    expect(wrapper.find('[data-test="funnel-canvas-exit-badge"]').text()).not.toContain('funnels.canvas')
+    // The exit-badge text is localized (not the raw key) AND resolves to the expected translated label.
+    const exitBadgeText = wrapper.find('[data-test="funnel-canvas-exit-badge"]').text()
+    expect(exitBadgeText).not.toContain('funnels.canvas')
+    expect(exitBadgeText.trim().length).toBeGreaterThan(0)
+    // Default locale is uk (i18n defaultLocale) — assert the resolved translated label, not the key.
+    expect(exitBadgeText).toBe('Перехід у воронку')
     // No edge to the cross-funnel target — the target funnel is not a node on this canvas.
     expect(wrapper.find('[data-node-id="other-funnel"]').exists()).toBe(false)
+  })
+
+  it('renders the start node broken when on_start entryStepId is null (entry edge deleted)', async () => {
+    // on_start trigger present (start node rendered) but its entry edge is deleted (entryStepId == null).
+    // The mapping layer flags the entry as broken → the start node gets the broken highlight class and a
+    // broken-edge marker for the entry field is surfaced.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: null }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // The start node is present and carries the broken highlight class (entry edge dangling).
+    const startNode = wrapper.find('[data-node-id="start"]')
+    expect(startNode.exists()).toBe(true)
+    expect(startNode.classes()).toContain('funnel-canvas-node--broken')
+
+    // A broken-edge marker is surfaced for the entry field (a mis-flagged kind would fail).
+    const broken = wrapper.findAll('[data-test="funnel-canvas-broken-edge"]')
+    expect(broken.length).toBeGreaterThan(0)
+    expect(broken.some((b) => b.attributes('data-edge-field') === 'entry')).toBe(true)
+  })
+
+  it('does NOT render a start node for an event-only funnel (start node optional)', async () => {
+    // No on_start trigger → no start node (start-node-optional negative case). The event trigger node and
+    // the step node are present, but [data-node-id="start"] is absent.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'event', triggerValue: 'evt', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    expect(wrapper.find('[data-node-id="start"]').exists()).toBe(false)
+    // The funnel still renders (canvas root + the saved step node present).
+    expect(wrapper.find('[data-test="funnel-canvas"]').exists()).toBe(true)
+    expect(wrapper.find('[data-node-id="s1"]').exists()).toBe(true)
   })
 
   it('renders typed output handles per node type', async () => {

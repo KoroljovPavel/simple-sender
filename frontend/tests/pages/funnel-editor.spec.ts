@@ -65,8 +65,9 @@ function draft(over: Partial<FunnelResponse> = {}): FunnelResponse {
     name: 'My funnel',
     description: null,
     status: 'draft',
-    triggerType: 'on_start',
-    triggerValue: '',
+    // Phase 8 (17-funnel-multi-entry): a funnel carries a LIST of triggers (the flat trio is gone). Always
+    // at least the on_start main entry; tests add event triggers via the panel.
+    triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
     allowReEnter: false,
     steps: [],
     deepLink: null,
@@ -173,15 +174,20 @@ describe('funnels/[funnelId] editor page', () => {
     expect(wrapper.find('[data-test="funnel-status-paused"]').exists()).toBe(true)
   })
 
-  // ─── Trigger auto-save readiness (Task 15 finding) ────────────────────────────
-  // Switching the trigger type must NOT fire a PATCH while the new type's required value is still empty
-  // (backend returns 422). The debounced auto-save only schedules once the active type is "ready".
-  describe('trigger auto-save readiness', () => {
+  // ─── Trigger array auto-save readiness (Phase 8 — 17-funnel-multi-entry) ───────
+  // The page holds triggers as a FunnelTrigger[] edited through the REAL FunnelTriggersPanel (mounted, not
+  // stubbed — a stub would hollow out every assertion below). The debounced PATCH is per-element-gated:
+  // it only fires once triggers.every(triggerReady), so adding/switching one trigger whose required value
+  // is still empty must NOT fire a premature 422. The on_start main entry is pinned by the panel; event
+  // triggers are added via the panel's Add button.
+  describe('trigger array auto-save readiness', () => {
     beforeEach(() => {
       vi.useFakeTimers()
     })
     afterEach(() => {
-      vi.runOnlyPendingTimers()
+      // Discard (do NOT fire) any pending debounce timer from the mounted-but-not-unmounted wrapper —
+      // firing it would call the shared update spy during the NEXT test's mount, after its mockClear().
+      vi.clearAllTimers()
       vi.useRealTimers()
     })
 
@@ -199,71 +205,122 @@ describe('funnels/[funnelId] editor page', () => {
         Promise.resolve(draft({ ...over, ...body })),
       )
       const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
-      // load() runs on a microtask; advance enough to settle the initial mount with fake timers.
+      // load() runs on a microtask; advance enough to settle the initial mount with fake timers, then clear
+      // any on-mount autosave (a ready on_start value persists once) so each test counts only its own edits.
       await tick(700)
       storeMock.update.mockClear()
       return wrapper
     }
 
-    it('does NOT PATCH when the type switches to keyword with no keywords yet', async () => {
+    it('loads the trigger array from the funnel response and renders the Triggers panel', async () => {
       const wrapper = await mountLoaded()
-      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('keyword')
-      await tick(700)
-      expect(storeMock.update).not.toHaveBeenCalled()
+      // The real panel is mounted (not stubbed) and shows the on_start main entry slot.
+      expect(wrapper.find('[data-test="funnel-triggers"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-trigger-on-start"]').exists()).toBe(true)
+      // No event rows yet (the seed funnel only carries the on_start entry).
+      expect(wrapper.find('[data-test="funnel-triggers-empty"]').exists()).toBe(true)
     })
 
-    it('does NOT PATCH when the type switches to tag_added / custom_field_set / event with an empty value', async () => {
-      for (const ty of ['tag_added', 'custom_field_set', 'event']) {
-        const wrapper = await mountLoaded()
-        await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue(ty)
-        await tick(700)
-        expect(storeMock.update, `type ${ty} must not auto-save while empty`).not.toHaveBeenCalled()
-      }
-    })
-
-    it('PATCHes keyword with keywords set and triggerValue null once a keyword is added', async () => {
+    it('persists the trigger array (not the flat trio) on save once an event trigger is completed', async () => {
       const wrapper = await mountLoaded()
-      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('keyword')
+      // Add an event trigger (starts empty → incomplete → no PATCH yet).
+      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
       await tick(700)
       expect(storeMock.update).not.toHaveBeenCalled()
 
-      await wrapper.get('[data-test="funnel-trigger-keyword-input"]').setValue('hello')
-      await wrapper.get('[data-test="funnel-trigger-keyword-add"]').trigger('click')
+      // Fill the new event row's slug → the array is now fully ready → one PATCH.
+      const eventInput = wrapper.findAll('[data-test="funnel-trigger-event-input"]')
+      expect(eventInput.length).toBe(1)
+      await eventInput[0].setValue('order_paid')
       await tick(700)
 
       expect(storeMock.update).toHaveBeenCalledTimes(1)
       const body = storeMock.update.mock.calls[0][1]
-      expect(body.triggerType).toBe('keyword')
-      expect(body.keywords).toEqual(['hello'])
-      expect(body.triggerValue).toBeNull()
+      // The payload carries the ARRAY, never the flat trio.
+      expect(Array.isArray(body.triggers)).toBe(true)
+      expect(body.triggerType).toBeUndefined()
+      expect(body.triggerValue).toBeUndefined()
+      expect(body.keywords).toBeUndefined()
+      // on_start main entry + the completed event trigger.
+      expect(body.triggers).toHaveLength(2)
+      const ev = body.triggers.find((tr: { triggerType: string }) => tr.triggerType === 'event')
+      expect(ev.triggerValue).toBe('order_paid')
+      // event owns triggerValue and clears keywords (per-element sanitizer).
+      expect(ev.keywords).toEqual([])
     })
 
-    it('PATCHes event with triggerValue set and keywords [] once a valid slug is typed', async () => {
+    it('does NOT PATCH while any trigger is incomplete (event added, value empty)', async () => {
       const wrapper = await mountLoaded()
-      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('event')
+      // Add an event trigger but leave its slug empty → the array is NOT every(ready) → no premature 422.
+      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+      await tick(700)
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+
+    it('PATCHes once every trigger is ready (valid event slug + entry step)', async () => {
+      // Seed a saved step so the panel can resolve a mid-entry: a new event defaults its entryStepId to the
+      // FIRST step id (event is mid-entry — Decision 10), proving the entry step is carried in the payload.
+      const wrapper = await mountLoaded({
+        steps: [{ stepType: 'MESSAGE', id: 'step1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
+      })
+      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
       await tick(700)
       expect(storeMock.update).not.toHaveBeenCalled()
 
-      await wrapper.get('[data-test="funnel-trigger-event-input"]').setValue('order_paid')
+      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[0].setValue('signup')
       await tick(700)
 
       expect(storeMock.update).toHaveBeenCalledTimes(1)
       const body = storeMock.update.mock.calls[0][1]
-      expect(body.triggerType).toBe('event')
-      expect(body.triggerValue).toBe('order_paid')
-      expect(body.keywords).toEqual([])
+      const ev = body.triggers.find((tr: { triggerType: string }) => tr.triggerType === 'event')
+      expect(ev.triggerValue).toBe('signup')
+      // event is mid-entry: the panel defaulted entryStepId to the funnel's first step (not null).
+      expect(ev.entryStepId).toBe('step1')
     })
 
-    it('on_start still persists an empty value but not an invalid one', async () => {
-      const wrapper = await mountLoaded({ triggerType: 'on_start', triggerValue: 'promo' })
-      // Empty is valid for on_start (bare /start) → persists.
+    it('a ready trigger waits while a second trigger is still being edited (triggers.every gate)', async () => {
+      const wrapper = await mountLoaded()
+      // Two event triggers: fill the first, leave the second empty → every(ready) is false → no PATCH.
+      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+      await tick(50)
+      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+      await tick(50)
+
+      const inputs = wrapper.findAll('[data-test="funnel-trigger-event-input"]')
+      expect(inputs.length).toBe(2)
+      await inputs[0].setValue('first_event')
+      await tick(700)
+
+      // The second event is still empty → the whole array is not ready → no autosave.
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      // Completing the second one releases the gate → exactly one PATCH with both events ready.
+      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[1].setValue('second_event')
+      await tick(700)
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1]
+      const events = body.triggers.filter((tr: { triggerType: string }) => tr.triggerType === 'event')
+      expect(events.map((e: { triggerValue: string }) => e.triggerValue).sort()).toEqual([
+        'first_event',
+        'second_event',
+      ])
+    })
+
+    it('on_start main entry persists an empty value but not an invalid one', async () => {
+      const wrapper = await mountLoaded({
+        triggers: [{ triggerType: 'on_start', triggerValue: 'promo', keywords: null, entryStepId: null }],
+      })
+      // Empty is valid for on_start (bare /start) → persists. The on_start slot's value input is the only one.
       await wrapper.get('[data-test="funnel-trigger-value-input"]').setValue('')
       await tick(700)
       expect(storeMock.update).toHaveBeenCalledTimes(1)
-      expect(storeMock.update.mock.calls[0][1].triggerValue).toBe('')
+      const onStart = storeMock.update.mock.calls[0][1].triggers.find(
+        (tr: { triggerType: string }) => tr.triggerType === 'on_start',
+      )
+      expect(onStart.triggerValue).toBe('')
 
       storeMock.update.mockClear()
-      // A value with spaces/specials fails TRIGGER_VALUE_RE → no PATCH.
+      // A value with spaces/specials fails TRIGGER_VALUE_RE → no PATCH (per-element gate).
       await wrapper.get('[data-test="funnel-trigger-value-input"]').setValue('bad value!')
       await tick(700)
       expect(storeMock.update).not.toHaveBeenCalled()
@@ -873,9 +930,7 @@ function summary(over: Partial<FunnelSummaryResponse> = {}): FunnelSummaryRespon
     name: 'Sub funnel',
     description: null,
     status: 'active',
-    triggerType: 'on_start',
-    triggerValue: '',
-    keywords: null,
+    triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
     allowReEnter: false,
     stepCount: 2,
     createdAt: '2026-01-01T00:00:00Z',

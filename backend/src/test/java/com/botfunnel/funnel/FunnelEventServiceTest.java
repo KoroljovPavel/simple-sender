@@ -61,6 +61,8 @@ class FunnelEventServiceTest {
     @Mock SubscriberService subscriberService;
     @Mock FunnelRepository funnelRepository;
     @Mock FunnelExecutionFactory executionFactory;
+    @Mock FunnelExecutionEngine executionEngine;
+    @Mock org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
     @Mock StringRedisTemplate redisTemplate;
 
     private FunnelEventService service;
@@ -70,7 +72,8 @@ class FunnelEventServiceTest {
     @BeforeEach
     void setUp() {
         service = new FunnelEventService(botRepository, subscriberService, funnelRepository,
-                executionFactory, redisTemplate, MAX_FANOUT, RATE_PER_MIN, MAX_DEPTH);
+                executionFactory, executionEngine, mongoTemplate, redisTemplate,
+                MAX_FANOUT, RATE_PER_MIN, MAX_DEPTH);
         serviceLogger = (Logger) LoggerFactory.getLogger(FunnelEventService.class);
         appender = new ListAppender<>();
         appender.start();
@@ -149,7 +152,11 @@ class FunnelEventServiceTest {
     }
 
     @Test
-    void dispatch_swallowsThrowable() {
+    void dispatch_perFunnelFault_isIsolated_andSwallowed() {
+        // Phase 8 (Task 5): the redirect-or-start branch is error-isolated PER FUNNEL — a single funnel's
+        // insert fault is caught inside the fan-out loop (greppable LOG_DISPATCH_FUNNEL_ERROR) and never
+        // aborts the rest of the dispatch nor escapes outward (Decision 12). A funnel with no triggers[]
+        // re-scans to a null entryStepId → start path (insertExecution), which throws here.
         stubBotAndSubscriber();
         stubEventFunnels(funnel("f1"));
         doThrow(new RuntimeException("boom")).when(executionFactory)
@@ -158,7 +165,7 @@ class FunnelEventServiceTest {
         assertThatCode(() -> service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "event", "x", 0))
                 .doesNotThrowAnyException();
 
-        assertThat(warn(FunnelEventService.LOG_DISPATCH_ERROR)).isTrue();
+        assertThat(warn(FunnelEventService.LOG_DISPATCH_FUNNEL_ERROR)).isTrue();
     }
 
     // ─── keyword matching ───────────────────────────────────────────────────
@@ -166,11 +173,9 @@ class FunnelEventServiceTest {
     @Test
     void keyword_matches_containsCaseInsensitiveAnyOfMany() {
         stubBotAndSubscriber();
-        Funnel hit = funnel("hit");
-        hit.setKeywords(List.of("bonus", "sale"));
-        Funnel miss = funnel("miss");
-        miss.setKeywords(List.of("discount"));
-        when(funnelRepository.findByProjectIdAndTriggerTypeAndStatus(PROJECT_ID, "keyword", FunnelStatus.active))
+        Funnel hit = keywordFunnel("hit", List.of("bonus", "sale"));
+        Funnel miss = keywordFunnel("miss", List.of("discount"));
+        when(funnelRepository.findByProjectIdAndTriggersTriggerTypeAndStatus(PROJECT_ID, "keyword", FunnelStatus.active))
                 .thenReturn(new ArrayList<>(List.of(hit, miss)));
 
         // "Get your SALE now" contains "sale" (case-insensitive) → matches `hit` only.
@@ -185,9 +190,8 @@ class FunnelEventServiceTest {
     @Test
     void keyword_noKeywordInText_isNoOp() {
         stubBotAndSubscriber();
-        Funnel f = funnel("f");
-        f.setKeywords(List.of("bonus"));
-        when(funnelRepository.findByProjectIdAndTriggerTypeAndStatus(PROJECT_ID, "keyword", FunnelStatus.active))
+        Funnel f = keywordFunnel("f", List.of("bonus"));
+        when(funnelRepository.findByProjectIdAndTriggersTriggerTypeAndStatus(PROJECT_ID, "keyword", FunnelStatus.active))
                 .thenReturn(new ArrayList<>(List.of(f)));
 
         service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "keyword", "nothing here", 0);
@@ -212,6 +216,51 @@ class FunnelEventServiceTest {
         verify(executionFactory, times(1))
                 .insertExecution(eq(PROJECT_ID), eq(ok), eq(SUBSCRIBER_ID), eq(TELEGRAM_BOT_ID), eq(0));
         assertThat(warnOrInfo(FunnelEventService.LOG_DISPATCH_REENTER_IGNORED)).isTrue();
+    }
+
+    @Test
+    void eventEntryStep_insertAtEntryDuplicate_isSwallowedPerFunnel() {
+        // The entry-step start branch (insertAtEntryStep): an event funnel with a mid-entry entryStepId, no
+        // in-flight execution (the probe returns null), allowReEnter=false. A concurrent insert racing the
+        // unique re-enter index surfaces as DuplicateKeyException on insertExecutionAt — it must be swallowed
+        // as a benign no-op (greppable LOG_DISPATCH_REENTER_IGNORED), not thrown. Locks the entry-step swallow
+        // branch (distinct from the step-0 insertExecution swallow above), which is otherwise race-only.
+        stubBotAndSubscriber();
+        Funnel ev = eventFunnel("ev", "purchase", "entry");
+        stubEventFunnels(ev);
+        // No in-flight execution → mongoTemplate.findOne returns null (default mock) → start-at-entry path.
+        doThrow(new DuplicateKeyException("re-enter")).when(executionFactory)
+                .insertExecutionAt(eq(PROJECT_ID), eq(ev), any(), any(), anyInt(), eq("entry"));
+
+        assertThatCode(() -> service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "event", "purchase", 0))
+                .doesNotThrowAnyException();
+
+        assertThat(warnOrInfo(FunnelEventService.LOG_DISPATCH_REENTER_IGNORED)).isTrue();
+    }
+
+    @Test
+    void eventMatchedFunnel_inMemoryTriggerDrift_warnsAndFallsBackToStepZero() {
+        // TR-3 drift guard: the array-aware $elemMatch query returned this funnel for an `event` dispatch,
+        // but the loaded triggers[] carries only a NON-event element (here tag_added) — so the in-memory
+        // re-scan finds no matching event element. matchedEntryStepId must surface the greppable drift WARN
+        // (LOG_DISPATCH_NO_MATCHED_TRIGGER_ELEMENT) and fall back to start-from-step-0 (insertExecution once,
+        // entryStepId == null). Locks the defensive .equals branch against a silent type-check regression.
+        stubBotAndSubscriber();
+        Funnel drifted = funnel("drift");
+        Trigger mismatched = new Trigger();
+        mismatched.setTriggerType("tag_added"); // not `event` → the event re-scan finds nothing
+        mismatched.setTriggerValue("purchase");
+        drifted.setTriggers(new ArrayList<>(List.of(mismatched)));
+        stubEventFunnels(drifted);
+
+        service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "event", "purchase", 0);
+
+        assertThat(warn(FunnelEventService.LOG_DISPATCH_NO_MATCHED_ELEMENT)).isTrue();
+        // Fell back to start-from-beginning (no entryStepId → step-0 insert), NOT the entry-step path.
+        verify(executionFactory, times(1))
+                .insertExecution(eq(PROJECT_ID), eq(drifted), eq(SUBSCRIBER_ID), eq(TELEGRAM_BOT_ID), eq(0));
+        verify(executionFactory, never())
+                .insertExecutionAt(any(), any(), any(), any(), anyInt(), anyString());
     }
 
     @Test
@@ -301,7 +350,8 @@ class FunnelEventServiceTest {
     @Test
     void fanoutCeiling_insertsAtMostN_evenWhenRedisDown() {
         FunnelEventService capped = new FunnelEventService(botRepository, subscriberService,
-                funnelRepository, executionFactory, redisTemplate, 2, RATE_PER_MIN, MAX_DEPTH);
+                funnelRepository, executionFactory, executionEngine, mongoTemplate, redisTemplate,
+                2, RATE_PER_MIN, MAX_DEPTH);
         stubBotAndSubscriber();
         stubEventFunnels(funnel("f1"), funnel("f2"), funnel("f3"), funnel("f4"));
 
@@ -321,6 +371,31 @@ class FunnelEventServiceTest {
         f.setProjectId(PROJECT_ID);
         f.setStatus(FunnelStatus.active);
         f.setAllowReEnter(false);
+        return f;
+    }
+
+    // A keyword funnel carrying a single keyword Trigger (keywords now live per-Trigger — Phase 8). Used by
+    // the keyword-match tests; the dispatcher re-scans triggers[] for the keyword element + its (null)
+    // entryStepId → start-from-step-0 path.
+    private Funnel keywordFunnel(String id, List<String> keywords) {
+        Funnel f = funnel(id);
+        Trigger t = new Trigger();
+        t.setTriggerType("keyword");
+        t.setTriggerValue("");
+        t.setKeywords(new ArrayList<>(keywords));
+        f.setTriggers(new ArrayList<>(List.of(t)));
+        return f;
+    }
+
+    // An event funnel carrying a single event Trigger (triggerValue=eventName, entryStepId set) — the
+    // mid-entry shape that routes through the redirect-or-start (entry-step) branch.
+    private Funnel eventFunnel(String id, String eventName, String entryStepId) {
+        Funnel f = funnel(id);
+        Trigger t = new Trigger();
+        t.setTriggerType("event");
+        t.setTriggerValue(eventName);
+        t.setEntryStepId(entryStepId);
+        f.setTriggers(new ArrayList<>(List.of(t)));
         return f;
     }
 
@@ -346,7 +421,7 @@ class FunnelEventServiceTest {
     }
 
     private void stubEventFunnels(Funnel... funnels) {
-        when(funnelRepository.findAllByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
+        when(funnelRepository.findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
                 eq(PROJECT_ID), eq("event"), anyString(), eq(FunnelStatus.active)))
                 .thenReturn(new ArrayList<>(List.of(funnels)));
     }

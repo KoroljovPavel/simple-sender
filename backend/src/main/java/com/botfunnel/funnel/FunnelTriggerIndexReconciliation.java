@@ -12,36 +12,32 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Phase 3 (Decision 9): idempotent startup migration that drops the OLD trigger-conflict index so
- * Spring Data's {@code auto-index-creation=true} recreates it from the {@link Funnel} annotation's new
- * {@code on_start}-only partial filter.
+ * Phase 8 (17-funnel-multi-entry / Decision 7): idempotent startup migration that DROPS the OLD trigger
+ * index {@code projectId_triggerType_triggerValue_unique_active} (key {@code {projectId,triggerType,
+ * triggerValue}}) so Spring Data's {@code auto-index-creation=true} can lay down the NEW
+ * {@code {projectId, onStartTriggerValue}} partial-unique shape (the {@link Funnel} annotation) without an
+ * {@code IndexKeySpecsConflict}.
  *
  * <p><b>Why a runner is needed.</b> {@code auto-index-creation} only <i>creates</i> indexes — it never
- * drops or alters an index whose definition changed. Task 1 relaxed the {@code @CompoundIndex}
- * partialFilter from {@code {status:'active'}} to {@code {status:'active', triggerType:'on_start'}}, but
- * on an already-migrated DB the old broad-filter index physically survives.
+ * drops or alters one. Task 1 swapped the {@code @CompoundIndex} from the flat trigger trio
+ * {@code {projectId,triggerType,triggerValue}} to {@code {projectId,onStartTriggerValue}} (Decision 6,
+ * Variant A), but on an already-populated DB the old index physically survives, indexing the now-removed
+ * {@code triggerType}/{@code triggerValue} top-level fields — it is dead and must be retired.
  *
- * <p><b>Why a {@link BeanPostProcessor}, not an {@code ApplicationRunner}.</b> The original plan
- * (Decision 9, {@code FunnelStepIdBackfill} pattern) was an {@code ApplicationRunner} — but a live boot
- * smoke (Task 2) proved that ordering fails: with {@code auto-index-creation=true}, Spring Data creates
- * the annotation-driven indexes <i>eagerly during {@code MongoTemplate} bean instantiation</i>, long
- * before any {@code ApplicationRunner} (or even {@code ContextRefreshedEvent}) runs. Because the OLD and
- * NEW indexes share the name {@code projectId_triggerType_triggerValue_unique_active} but differ in their
- * partial filter, auto-creation hits MongoDB error 86 (IndexKeySpecsConflict) and the context
- * <b>fails to start</b> — the runner's drop never gets a chance. So the drop MUST happen before
- * {@code MongoTemplate} initializes. This {@code BeanPostProcessor} hooks the {@link MongoDatabaseFactory}
- * bean (created and connected before {@code MongoTemplate}, which depends on it): at
- * {@code postProcessAfterInitialization} of the factory the DB connection is live but no Spring Data
- * index creation has run yet, so dropping here clears the conflict before auto-creation lays down the new
- * shape. (Deviation from Decision 9's mechanism, recorded in decisions.md; the intent — idempotent
- * startup drop, log-but-never-throw — is preserved.)
+ * <p><b>Why a {@link BeanPostProcessor}, not an {@code ApplicationRunner}.</b> A live boot smoke (Phase 3)
+ * proved that ordering fails: with {@code auto-index-creation=true}, Spring Data creates the
+ * annotation-driven indexes <i>eagerly during {@code MongoTemplate} bean instantiation</i>, long before any
+ * {@code ApplicationRunner} runs. So the stale index must be retired before {@code MongoTemplate}
+ * initializes. This {@code BeanPostProcessor} hooks the {@link MongoDatabaseFactory} bean (created and
+ * connected before {@code MongoTemplate}, which depends on it): at {@code postProcessAfterInitialization}
+ * of the factory the DB connection is live but no Spring Data index creation has run yet, so dropping here
+ * clears the conflict before auto-creation lays down the new shape.
  *
- * <p><b>Idempotency.</b> The decision is driven by the actual {@code partialFilterExpression}, NOT by the
- * index name. The OLD shape has only a {@code status} key; the NEW shape additionally carries
- * {@code triggerType}. A blind unconditional drop is avoided — it would drop+recreate the correct index
- * on every boot, churning the index and racing auto-index-creation. So: drop only when the filter lacks
- * {@code triggerType}; no-op (with a distinct greppable marker) when the index is absent (fresh DB) or
- * already in the new shape.
+ * <p><b>Idempotency.</b> The decision is driven by the PRESENCE of the OLD index by name, not by inspecting
+ * a partial filter. The old and new indexes have DIFFERENT keys AND different names, so the new shape can
+ * never be mistaken for the old one. If the OLD-named index is present → drop it (APPLIED); if it is absent
+ * (fresh/wiped DB, or already migrated so only the new {@code onStartTriggerValue} index exists) → NO-OP.
+ * The new index is never touched.
  *
  * <p><b>Never throws.</b> The whole body is {@code try/catch(Exception)} and logs-and-swallows so a
  * transient Mongo fault never blocks app boot (mirrors {@code FunnelStepIdBackfill}). The returned bean
@@ -52,20 +48,26 @@ public class FunnelTriggerIndexReconciliation implements BeanPostProcessor {
 
     private static final Logger log = LoggerFactory.getLogger(FunnelTriggerIndexReconciliation.class);
 
-    // Stable, greppable startup markers (the Verify-smoke step greps these). Do not reword casually —
-    // the post-deploy verification task pins these strings.
+    // Stable, greppable startup markers (the post-deploy verification task greps these — PII-free, index/
+    // collection names only). Do not reword casually.
     static final String MARKER_APPLIED =
-            "Funnel trigger-index reconciliation: APPLIED — dropped old broad-filter index "
-                    + "projectId_triggerType_triggerValue_unique_active (auto-index-creation will recreate the on_start-only shape)";
+            "Funnel trigger-index reconciliation: APPLIED — dropped old trigger index "
+                    + "projectId_triggerType_triggerValue_unique_active (auto-index-creation will lay down the "
+                    + "projectId_onStartTriggerValue_unique_active shape)";
     static final String MARKER_NOOP =
-            "Funnel trigger-index reconciliation: NO-OP — trigger index already in the on_start-only shape (or absent on a fresh DB)";
+            "Funnel trigger-index reconciliation: NO-OP — old trigger index "
+                    + "projectId_triggerType_triggerValue_unique_active absent (fresh DB or already migrated to "
+                    + "the projectId_onStartTriggerValue_unique_active shape)";
 
+    // The index being DROPPED — the OLD flat-trio trigger index keyed {projectId,triggerType,triggerValue}.
+    // INDEX_NAME intentionally points at the OLD index, NOT the new onStartTriggerValue index (pointing it
+    // at the new index would delete the very index auto-creation just laid down).
     static final String INDEX_NAME = "projectId_triggerType_triggerValue_unique_active";
     static final String COLLECTION = "funnels";
 
     // Guards against running more than once per boot: a single MongoDatabaseFactory bean exists, but the
     // flag keeps the drop a strict no-op if the BPP is ever invoked again for any reason.
-    private boolean reconciled = false;
+    private volatile boolean reconciled = false;
 
     @Override
     public Object postProcessAfterInitialization(Object bean, String beanName) {
@@ -85,27 +87,18 @@ public class FunnelTriggerIndexReconciliation implements BeanPostProcessor {
             List<Document> indexes = new ArrayList<>();
             collection.listIndexes().into(indexes);
 
-            Document target = indexes.stream()
-                    .filter(ix -> INDEX_NAME.equals(ix.getString("name")))
-                    .findFirst()
-                    .orElse(null);
+            boolean oldIndexPresent = indexes.stream()
+                    .anyMatch(ix -> INDEX_NAME.equals(ix.getString("name")));
 
-            // Fresh DB / index absent → auto-index-creation will lay down the new shape directly.
-            if (target == null) {
+            // Fresh/wiped DB, or already migrated (only the new {projectId,onStartTriggerValue} index
+            // exists) → nothing to retire; auto-index-creation owns laying down the new shape.
+            if (!oldIndexPresent) {
                 log.info(MARKER_NOOP);
                 return;
             }
 
-            Document partialFilter = target.get("partialFilterExpression", Document.class);
-
-            // Already in the new shape (partial filter carries triggerType) → nothing to do.
-            if (partialFilter != null && partialFilter.containsKey("triggerType")) {
-                log.info(MARKER_NOOP);
-                return;
-            }
-
-            // Old broad shape ({status:'active'} only, no triggerType clause) → drop it; auto-index-
-            // creation recreates the on_start-only shape from the Funnel annotation on this same boot.
+            // Old flat-trio index present → drop it; auto-index-creation lays down the new
+            // onStartTriggerValue shape from the Funnel annotation on this same boot.
             collection.dropIndex(INDEX_NAME);
             log.info(MARKER_APPLIED);
         } catch (Exception ex) {

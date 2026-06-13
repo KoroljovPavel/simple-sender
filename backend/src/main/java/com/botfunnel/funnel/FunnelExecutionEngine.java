@@ -63,6 +63,12 @@ public class FunnelExecutionEngine {
     static final String LOG_MENU_PARKED = "FUNNEL_MENU_PARKED";
     static final String LOG_RESUME_CALLBACK = "FUNNEL_RESUME_CALLBACK";
     static final String LOG_BROKEN_CURSOR = "FUNNEL_BROKEN_CURSOR_FAILED";
+    // Phase 8 (17-funnel-multi-entry / Task 5) redirect markers — id/code only (Decision 16): never the
+    // event_name/triggerValue. One for a won redirect (mirrors LOG_RESUME_CALLBACK), one for a lost
+    // claim-CAS no-op (sweep owns the row), one for a broken redirect cursor (entryStepId absent from snapshot).
+    static final String LOG_REDIRECT = "FUNNEL_REDIRECT";
+    static final String LOG_REDIRECT_CLAIM_LOST = "FUNNEL_REDIRECT_CLAIM_LOST";
+    static final String LOG_REDIRECT_BROKEN_CURSOR = "FUNNEL_REDIRECT_BROKEN_CURSOR_FAILED";
 
     private final MongoTemplate mongoTemplate;
     private final SubscriberRepository subscriberRepository;
@@ -199,6 +205,67 @@ public class FunnelExecutionEngine {
         return true;
     }
 
+    /**
+     * Multi-entry redirect entry point (Phase 8 / 17-funnel-multi-entry — Decision 2 + 3). A named
+     * {@code event} matched a funnel the subscriber is ALREADY in-flight on: instead of starting a second
+     * execution (the "one execution per funnel per subscriber" invariant, Decision 2), move the existing
+     * execution's cursor onto the trigger's {@code entryStepId} and resume it now.
+     *
+     * <p><strong>Anti-IDOR (Decision 3).</strong> The claim-CAS is scoped by BOTH {@code subscriberId}
+     * AND {@code funnelId} — wider in status than {@code claimForCallback} ({@code running} /
+     * {@code waiting} / {@code waiting_for_reply}) but just as tight on ownership. The {@code executionId}
+     * is supplied by the dispatcher's trusted in-flight probe, NEVER from request input; the CAS re-checks
+     * the pair so a mismatched-subscriber redirect is a guaranteed no-op.
+     *
+     * <p><strong>Snapshot isolation.</strong> {@code entryStepId} is resolved against the execution's own
+     * {@code stepsSnapshot} (no funnel-versioning). If it is absent from the snapshot (broken cursor — a
+     * snapshot frozen before the entry step existed), ONLY this execution is terminal-failed (Decision 5,
+     * Phase-6 tolerant-read precedent); the sweep and every other execution continue.
+     *
+     * <p><strong>CAS loss</strong> (sweep already owns the row, {@code stepRunStatus=in_progress}) →
+     * best-effort no-op + greppable WARN (ids/codes only), no artificial retry (Decision 4).
+     */
+    public void redirectExecution(String executionId, String subscriberId, String funnelId,
+                                  String entryStepId) {
+        Instant now = Instant.now(clock);
+        // Precondition (Decision 3): redirect is only ever called with a resolved entryStepId (the dispatcher
+        // routes a null entryStepId to start-from-beginning, never here). Guard it explicitly so a logical
+        // dispatch error fails fast as a no-op WARN rather than silently drifting into the broken-cursor
+        // terminal-fail branch below, which would emit misleading LOG_REDIRECT_BROKEN_CURSOR telemetry.
+        if (entryStepId == null || entryStepId.isBlank()) {
+            log.warn("{} executionId={} funnelId={}", LOG_REDIRECT_CLAIM_LOST, executionId, funnelId);
+            return;
+        }
+        FunnelExecution exec = claimForRedirect(executionId, subscriberId, funnelId, entryStepId, now);
+        if (exec == null) {
+            // Lost the CAS: the sweep (or a concurrent redirect/callback) already owns this row
+            // (stepRunStatus != pending), the status is no longer in-flight, or the (subscriber, funnel)
+            // pair did not match (anti-IDOR). Best-effort no-op + greppable WARN, no retry (Decision 4).
+            log.warn("{} executionId={} funnelId={}", LOG_REDIRECT_CLAIM_LOST, executionId, funnelId);
+            return;
+        }
+        // Broken-cursor pre-check (Decision 5): the CAS already set currentStepId=entryStepId in the DB and
+        // on the returned doc, so resolve it against THIS execution's snapshot. An absent entry step would
+        // otherwise drive() into its generic broken-cursor branch — fail just this execution explicitly here
+        // with a distinct redirect marker so an operator can tell a stale redirect cursor apart from a
+        // backfill-anomaly dangling edge. The sweep and all other executions are untouched.
+        if (stepById(exec.getStepsSnapshot(), entryStepId) == null) {
+            log.error("{} executionId={} funnelId={}", LOG_REDIRECT_BROKEN_CURSOR,
+                    exec.getId(), exec.getFunnelId());
+            terminate(exec, ExecutionStatus.failed, now, LOG_REDIRECT_BROKEN_CURSOR, "broken_redirect_cursor");
+            return;
+        }
+        log.info("{} executionId={} funnelId={}", LOG_REDIRECT, exec.getId(), exec.getFunnelId());
+        // The CAS already set status=running, currentStepId=entryStepId, stepRunStatus=in_progress in the
+        // DB (mirrored on the returned doc). Apply the pre-step gates exactly as resumeOnCallback, then
+        // drive the chosen branch linearly under the held claim.
+        StepContext ctx = preStepGates(exec, now);
+        if (ctx == null) {
+            return;
+        }
+        drive(exec, now, ctx);
+    }
+
     // Resolved (subscriber, bot) pair for one drive call. Passed by value so the singleton engine holds
     // NO per-execution mutable state — runExecution (sweep thread) and resumeOnCallback (webhook worker
     // thread) can run concurrently without cross-talk.
@@ -329,6 +396,31 @@ public class FunnelExecutionEngine {
         Update update = new Update()
                 .set("status", ExecutionStatus.running.name())
                 .set("currentStepId", targetStepId)
+                .set("stepRunStatus", StepRunStatus.in_progress.name())
+                .set("updatedAt", now);
+        return mongoTemplate.findAndModify(query, update,
+                new FindAndModifyOptions().returnNew(true), FunnelExecution.class);
+    }
+
+    // Multi-entry redirect claim (Phase 8 / Task 5, anti-IDOR Decision 3): atomically claim iff the row is
+    // the SUBSCRIBER's OWN execution of THIS funnel (subscriberId AND funnelId scope), currently in-flight
+    // (status in running|waiting|waiting_for_reply — WIDER than claimForCallback, which only catches
+    // waiting_for_reply) and not already being processed (stepRunStatus=pending). Flips status→running,
+    // stepRunStatus→in_progress, and sets currentStepId=entryStepId directly. A mismatched subscriber OR a
+    // foreign funnel fails the predicate → null → no-op (the dispatcher's executionId came from a trusted
+    // probe, but the CAS re-checks the pair as a second, atomic anti-IDOR layer). A row the sweep already
+    // owns (in_progress) loses the CAS → null → best-effort no-op + WARN, no retry (Decision 4).
+    private FunnelExecution claimForRedirect(String executionId, String subscriberId, String funnelId,
+                                             String entryStepId, Instant now) {
+        Query query = Query.query(Criteria.where("_id").is(executionId)
+                .and("subscriberId").is(subscriberId)
+                .and("funnelId").is(funnelId)
+                .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
+                        ExecutionStatus.waiting_for_reply.name())
+                .and("stepRunStatus").is(StepRunStatus.pending.name()));
+        Update update = new Update()
+                .set("status", ExecutionStatus.running.name())
+                .set("currentStepId", entryStepId)
                 .set("stepRunStatus", StepRunStatus.in_progress.name())
                 .set("updatedAt", now);
         return mongoTemplate.findAndModify(query, update,

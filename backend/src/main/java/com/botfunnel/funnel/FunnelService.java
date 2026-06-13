@@ -15,6 +15,7 @@ import com.botfunnel.funnel.dto.KeyboardButtonDto;
 import com.botfunnel.funnel.dto.KeyboardRowDto;
 import com.botfunnel.funnel.dto.PreviewStepRequest;
 import com.botfunnel.funnel.dto.PreviewStepResponse;
+import com.botfunnel.funnel.dto.TriggerDto;
 import com.botfunnel.funnel.dto.UpdateFunnelRequest;
 import com.botfunnel.project.ProjectService;
 import com.botfunnel.subscriber.Subscriber;
@@ -49,10 +50,12 @@ import java.util.stream.Collectors;
  * 404, patterns.md), then enforces that the funnel belongs to the path project — a foreign /
  * soft-deleted / missing project or a cross-project funnel id all collapse to the same 404.
  *
- * <p>Trigger-conflict defense-in-depth (Decision 8): a service pre-check rejects a second active funnel
- * with the same {@code (triggerType, triggerValue)} BEFORE the write, and the partial-unique index on
- * {@code funnels} closes the residual race — its {@link DuplicateKeyException} on activate is mapped to
- * the SAME 422 {@code funnel_trigger_conflict} (never a 500).
+ * <p>Trigger-conflict defense-in-depth (Decision 8): a funnel now carries a {@code List<Trigger>}, and
+ * the on_start entry value is denormalised onto {@code onStartTriggerValue} for uniqueness enforcement.
+ * A service pre-check rejects a second active funnel sharing the same {@code onStartTriggerValue} BEFORE
+ * the write, and the partial-unique index on {@code onStartTriggerValue} closes the residual race — its
+ * {@link DuplicateKeyException} on activate is mapped to the SAME 422 {@code funnel_trigger_conflict}
+ * (never a 500).
  */
 @Service
 public class FunnelService {
@@ -82,6 +85,11 @@ public class FunnelService {
     private static final int MAX_KEYWORDS = 50;
     private static final int MAX_KEYWORD_LENGTH = 64;
 
+    // Phase 8 (17-funnel-multi-entry / Decision 14): the triggers-array ceiling. Same order of magnitude as
+    // max-steps / max-fanout-per-event (50), so a now-repeatable triggers array cannot open a DoS surface.
+    // Mirrors UpdateFunnelRequest.MAX_TRIGGERS (the DTO @Size first line); this is the service re-check.
+    private static final int MAX_TRIGGERS = 50;
+
     private static final String MESSAGE_NOT_FOUND = "Funnel not found";
 
     static final String CODE_TRIGGER_CONFLICT = "funnel_trigger_conflict";
@@ -91,6 +99,18 @@ public class FunnelService {
     // Phase 3 (Decision 1 / 3): unknown triggerType (outside the five-value set) and bad keyword list.
     static final String CODE_INVALID_TRIGGER_TYPE = "funnel_invalid_trigger_type";
     static final String CODE_INVALID_KEYWORDS = "funnel_invalid_keywords";
+    // Phase 8 (17-funnel-multi-entry / Decision 1, 10, 14) — cross-trigger array validation. Each is a
+    // 422 with a machine-readable business code (user-spec AC: "422 + бізнес-код" per validation failure):
+    //   - more than one on_start element in the triggers array (at most one main entry per funnel).
+    static final String CODE_MULTIPLE_ON_START = "funnel_multiple_on_start";
+    //   - the same event_name (`event` triggerValue) appears on two trigger elements of one funnel.
+    static final String CODE_DUPLICATE_EVENT_NAME = "funnel_duplicate_event_name";
+    //   - entryStepId rule violation: a non-`event` trigger carrying an entryStepId (mid-entry is event-only,
+    //     Decision 10); an `event` trigger with a null entryStepId; or an entryStepId that does not resolve
+    //     to a step of THIS funnel (dangling).
+    static final String CODE_INVALID_ENTRY_STEP = "funnel_invalid_entry_step";
+    //   - the triggers array exceeds the Decision 14 size cap.
+    static final String CODE_TRIGGER_LIMIT = "funnel_trigger_limit_reached";
     static final String CODE_NO_STEPS = "funnel_no_steps";
     static final String CODE_INVALID_STATE = "funnel_invalid_state";
     // Phase 2 (Decision 2 / Decision 10): a graph edge (next / button targetStepId / timeoutTargetStepId)
@@ -174,8 +194,11 @@ public class FunnelService {
         funnel.setName(request.name());
         funnel.setDescription(blankToNull(request.description()));
         funnel.setStatus(FunnelStatus.draft);
-        funnel.setTriggerType(TRIGGER_ON_START);
-        funnel.setTriggerValue("");
+        // A new funnel is born with a single bare on_start entry (triggerValue ""). syncOnStartTriggerValue
+        // keeps the denormalized scalar consistent with that single writer (here it resolves to null — "" is
+        // bare /start, which stays OUT of the partial-unique index, Variant A).
+        funnel.setTriggers(new ArrayList<>(List.of(bareOnStartTrigger())));
+        syncOnStartTriggerValue(funnel);
         funnel.setAllowReEnter(false);
         funnel.setSteps(new ArrayList<>());
         funnel.setCreatedAt(now);
@@ -205,14 +228,20 @@ public class FunnelService {
         if (request.description() != null) {
             funnel.setDescription(blankToNull(request.description()));
         }
-        applyTrigger(funnel, request.triggerType(), request.triggerValue(), request.keywords());
         if (request.allowReEnter() != null) {
             funnel.setAllowReEnter(request.allowReEnter());
         }
 
+        // Steps are built/validated FIRST so the trigger pass can resolve each event entryStepId against the
+        // funnel's NEW step-id set (the full-replace steps array, not the stale persisted one). entryStepId is
+        // validated only in applyTriggers — it is deliberately kept OUT of validateSteps' generic edge-pass
+        // (it leads into THIS funnel's graph but is not a step `next`/timeout edge — same carve-out as
+        // SUBSCRIBE_TO_FUNNEL's targetEntryStepId).
         List<FunnelStep> steps = toSteps(request.steps());
         validateSteps(steps, projectId);
         funnel.setSteps(steps);
+
+        applyTriggers(funnel, request.triggers(), stepIdsOf(steps));
         funnel.setUpdatedAt(Instant.now(clock));
         // Editing an ACTIVE funnel's trigger can collide with another active funnel (Decision 3 allows
         // editing while active). Only an active row participates in the partial-unique index, so the
@@ -279,10 +308,15 @@ public class FunnelService {
         copy.setName(duplicateName(original.getName()));
         copy.setDescription(original.getDescription());
         copy.setStatus(FunnelStatus.draft);
-        copy.setTriggerType(TRIGGER_ON_START);
-        copy.setTriggerValue("");
+        // duplicate-resets-trigger (Phase 4 precedent, Decision 6): the clone is born with a SINGLE bare
+        // on_start trigger and a null onStartTriggerValue regardless of the original's triggers — so the clone
+        // never inherits a conflicting on_start payload and a draft clone never enters the partial-unique
+        // index. Mid-entry event triggers are intentionally NOT copied (they would point at this clone's own
+        // step ids and re-introduce conflicts/dangling-entry risk on activate). keywords now live per-trigger,
+        // so the old top-level keywords copy is dropped with the flat trio.
+        copy.setTriggers(new ArrayList<>(List.of(bareOnStartTrigger())));
+        syncOnStartTriggerValue(copy);
         copy.setAllowReEnter(original.isAllowReEnter());
-        copy.setKeywords(original.getKeywords());
         List<FunnelStep> steps = original.getSteps() == null
                 ? new ArrayList<>()
                 : original.getSteps().stream().map(FunnelStep::copyOf).collect(Collectors.toCollection(ArrayList::new));
@@ -323,6 +357,10 @@ public class FunnelService {
         // linked funnels). Re-resolves the target fail-closed by projectId, then requires status=active.
         requireSubscribeTargetsActive(steps, projectId);
 
+        // Re-sync the denormalized scalar before the conflict pre-check (single-writer discipline): the
+        // persisted triggers[] is the source of truth, the scalar is derived from its on_start element.
+        syncOnStartTriggerValue(funnel);
+
         // Service pre-check (first line of the Decision 8 defense): another ACTIVE funnel already owns
         // this trigger → 422. The partial-unique index is the second line for the parallel-activate race.
         checkTriggerConflict(funnel);
@@ -332,21 +370,34 @@ public class FunnelService {
         return toResponse(saveHandlingTriggerConflict(funnel));
     }
 
-    // Service-side pre-check: reject if a DIFFERENT active funnel already owns this funnel's
-    // (triggerType, triggerValue). Excludes self so re-activating / editing the same funnel is fine.
+    // Service-side pre-check (Decision 6): reject if a DIFFERENT active funnel already owns this funnel's
+    // on_start payload. Keyed on the denormalized onStartTriggerValue scalar — the same field the
+    // partial-unique index guards — so the pre-check and the DB constraint agree. A null scalar (no on_start
+    // entry, or a bare /start "" which syncs to null — Variant A) is OUT of the unique index and therefore
+    // cannot collide, so the lookup is skipped (and never passes null to the repo, which would match every
+    // event-only funnel). Excludes self so re-activating / editing the same funnel is fine.
     private void checkTriggerConflict(Funnel funnel) {
-        Optional<Funnel> conflict = funnelRepository.findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
-                funnel.getProjectId(), funnel.getTriggerType(), funnel.getTriggerValue(), FunnelStatus.active);
+        String onStartValue = funnel.getOnStartTriggerValue();
+        // Skip-on-null is correct ONLY because syncOnStartTriggerValue maps a bare on_start ("" / blank) and
+        // the absence of an on_start element to null — keeping those funnels out of the partial-unique index,
+        // so they genuinely cannot collide. If that mapping ever changed (bare → "" instead of null), this
+        // early return would silently bypass the conflict check.
+        if (onStartValue == null) {
+            return;
+        }
+        Optional<Funnel> conflict = funnelRepository.findByProjectIdAndOnStartTriggerValueAndStatus(
+                funnel.getProjectId(), onStartValue, FunnelStatus.active);
         if (conflict.isPresent() && !conflict.get().getId().equals(funnel.getId())) {
             throw AppException.unprocessableEntity(CODE_TRIGGER_CONFLICT,
                     "Another active funnel already uses this trigger");
         }
     }
 
-    // Second line of the Decision 8 defense: the partial-unique (projectId, triggerType, triggerValue)
-    // filtered active index closes the race the pre-check can lose. The ONLY unique index on `funnels`
-    // is the trigger one, so a DuplicateKeyException here can only mean a trigger collision → map to the
-    // SAME 422 as the pre-check, never a 500.
+    // Second line of the Decision 8 defense: the partial-unique (projectId, onStartTriggerValue)
+    // filtered active index closes the race the pre-check can lose. The ONLY unique index on the `funnels`
+    // collection is that on_start (projectId, onStartTriggerValue) partial-unique index, so a
+    // DuplicateKeyException here can only mean an on_start trigger collision → map to the SAME 422 as the
+    // pre-check, never a 500. (Unique indexes on OTHER collections, e.g. funnel_executions, never surface here.)
     private Funnel saveHandlingTriggerConflict(Funnel funnel) {
         try {
             return funnelRepository.save(funnel);
@@ -605,38 +656,168 @@ public class FunnelService {
                 .orElseThrow(() -> AppException.notFound(MESSAGE_NOT_FOUND));
     }
 
-    // Applies + validates the trigger triplet (type, value, keywords) together — they are coupled
-    // (Decision 1/3): the value rules and the keywords requirement both depend on the type, so they must
-    // be validated as one unit. Sets all three fields on the funnel; throws 422 on any violation.
-    private void applyTrigger(Funnel funnel, String rawType, String rawValue, List<String> rawKeywords) {
-        String type = normalizeTriggerType(rawType);
-        funnel.setTriggerType(type);
-
-        switch (type) {
-            case TRIGGER_ON_START -> {
-                // on_start keeps the existing slug rule ("" = bare /start); keywords are not allowed.
-                funnel.setTriggerValue(normalizeOnStartValue(rawValue));
-                funnel.setKeywords(requireNoKeywords(rawKeywords));
-            }
-            case TRIGGER_KEYWORD -> {
-                // keyword ignores triggerValue (the words live in `keywords`); store "" for consistency.
-                funnel.setTriggerValue("");
-                funnel.setKeywords(requireKeywords(rawKeywords));
-            }
-            case TRIGGER_TAG_ADDED -> {
-                funnel.setTriggerValue(requireTagSlugValue(rawValue));
-                funnel.setKeywords(requireNoKeywords(rawKeywords));
-            }
-            case TRIGGER_CUSTOM_FIELD_SET -> {
-                funnel.setTriggerValue(requireFieldKeyValue(rawValue));
-                funnel.setKeywords(requireNoKeywords(rawKeywords));
-            }
-            case TRIGGER_EVENT -> {
-                funnel.setTriggerValue(requireEventSlugValue(rawValue));
-                funnel.setKeywords(requireNoKeywords(rawKeywords));
-            }
-            default -> throw invalidTriggerType(type);
+    // Phase 8 (17-funnel-multi-entry / Decision 1, 6, 10, 14): per-element validation over the request's
+    // List<TriggerDto>, with cross-trigger rules, replacing the former single flat trigger triplet. Builds a
+    // validated, normalized List<Trigger>, sets it on the funnel, then syncs the denormalized
+    // onStartTriggerValue scalar in ONE place (single-writer discipline so the array and scalar never drift).
+    //
+    // stepIds is the funnel's NEW step-id set (built from the full-replace steps array, before this call) —
+    // used to resolve each event entryStepId. entryStepId is validated HERE, not in validateSteps' generic
+    // edge-pass (mirrors SUBSCRIBE_TO_FUNNEL's targetEntryStepId carve-out).
+    //
+    // Rules (each violation → 422 with a machine-readable business code, user-spec AC):
+    //   - array size ≤ MAX_TRIGGERS (Decision 14);                              → funnel_trigger_limit_reached
+    //   - per-element type in the five-value set + per-type value/keyword rules (reuse existing helpers);
+    //   - at most one on_start element;                                          → funnel_multiple_on_start
+    //   - no two `event` elements share the same triggerValue (event_name);      → funnel_duplicate_event_name
+    //   - entryStepId: null for every non-event type (mid-entry is event-only,
+    //     Decision 10); non-null for an `event` type AND resolving to a step id
+    //     of THIS funnel.                                                        → funnel_invalid_entry_step
+    //
+    // A null/empty request triggers array normalizes to a single bare on_start (a funnel always has a main
+    // entry — the old default of (on_start, "")).
+    private void applyTriggers(Funnel funnel, List<TriggerDto> requested, Set<String> stepIds) {
+        // Null/empty request triggers → the funnel's default single bare on_start (the old (on_start, "")
+        // default). Built straight from bareOnStartTrigger() to skip the DTO round-trip and share the one
+        // canonical definition of "bare on_start" with create()/duplicate().
+        if (requested == null || requested.isEmpty()) {
+            funnel.setTriggers(new ArrayList<>(List.of(bareOnStartTrigger())));
+            syncOnStartTriggerValue(funnel);
+            return;
         }
+        List<TriggerDto> source = requested;
+
+        if (source.size() > MAX_TRIGGERS) {
+            throw AppException.unprocessableEntity(CODE_TRIGGER_LIMIT,
+                    "Funnel exceeds the maximum of " + MAX_TRIGGERS + " triggers");
+        }
+
+        List<Trigger> validated = new ArrayList<>(source.size());
+        int onStartCount = 0;
+        // event_name dedupe is case-PRESERVING (event slug is case-sensitive, same as EVENT_NAME_PATTERN).
+        Set<String> seenEventNames = new HashSet<>();
+
+        for (TriggerDto dto : source) {
+            if (dto == null) {
+                throw invalidTriggerType("null");
+            }
+            String type = normalizeTriggerType(dto.triggerType());
+            Trigger trigger = new Trigger();
+            trigger.setTriggerType(type);
+
+            switch (type) {
+                case TRIGGER_ON_START -> {
+                    onStartCount++;
+                    if (onStartCount > 1) {
+                        throw AppException.unprocessableEntity(CODE_MULTIPLE_ON_START,
+                                "A funnel can have at most one on_start trigger");
+                    }
+                    // on_start keeps the existing slug rule ("" = bare /start); keywords not allowed.
+                    trigger.setTriggerValue(normalizeOnStartValue(dto.triggerValue()));
+                    trigger.setKeywords(requireNoKeywords(dto.keywords()));
+                    requireNoEntryStep(dto.entryStepId());
+                }
+                case TRIGGER_KEYWORD -> {
+                    // keyword ignores triggerValue (the words live in `keywords`); store "" for consistency.
+                    trigger.setTriggerValue("");
+                    trigger.setKeywords(requireKeywords(dto.keywords()));
+                    requireNoEntryStep(dto.entryStepId());
+                }
+                case TRIGGER_TAG_ADDED -> {
+                    trigger.setTriggerValue(requireTagSlugValue(dto.triggerValue()));
+                    trigger.setKeywords(requireNoKeywords(dto.keywords()));
+                    requireNoEntryStep(dto.entryStepId());
+                }
+                case TRIGGER_CUSTOM_FIELD_SET -> {
+                    trigger.setTriggerValue(requireFieldKeyValue(dto.triggerValue()));
+                    trigger.setKeywords(requireNoKeywords(dto.keywords()));
+                    requireNoEntryStep(dto.entryStepId());
+                }
+                case TRIGGER_EVENT -> {
+                    String eventName = requireEventSlugValue(dto.triggerValue());
+                    if (!seenEventNames.add(eventName)) {
+                        throw AppException.unprocessableEntity(CODE_DUPLICATE_EVENT_NAME,
+                                "Duplicate event_name within the funnel's triggers");
+                    }
+                    trigger.setTriggerValue(eventName);
+                    trigger.setKeywords(requireNoKeywords(dto.keywords()));
+                    // Decision 10: mid-entry is event-only and REQUIRES a non-null entryStepId that resolves
+                    // to a step of THIS funnel.
+                    trigger.setEntryStepId(requireEventEntryStep(dto.entryStepId(), stepIds));
+                }
+                default -> throw invalidTriggerType(type);
+            }
+            validated.add(trigger);
+        }
+
+        funnel.setTriggers(validated);
+        syncOnStartTriggerValue(funnel);
+    }
+
+    // A non-event trigger must NOT carry an entryStepId — mid-entry routing is event-only (Decision 10).
+    // Strict reject (in the style of requireNoKeywords), never a silent drop.
+    // The message echoes NO user-supplied value (keeping the id/code-only convention of the other
+    // validators); CODE_INVALID_ENTRY_STEP is sufficient for the client to localize the feedback.
+    private static void requireNoEntryStep(String entryStepId) {
+        if (entryStepId != null) {
+            throw AppException.unprocessableEntity(CODE_INVALID_ENTRY_STEP,
+                    "entryStepId is only allowed for the event trigger type");
+        }
+    }
+
+    // An event trigger's entryStepId is REQUIRED (Decision 10) and must resolve to a step id of THIS funnel.
+    // Returns the validated id. A null id or one not in the funnel's step-id set (dangling) → 422.
+    private static String requireEventEntryStep(String entryStepId, Set<String> stepIds) {
+        if (entryStepId == null) {
+            throw AppException.unprocessableEntity(CODE_INVALID_ENTRY_STEP,
+                    "An event trigger requires an entryStepId");
+        }
+        if (!stepIds.contains(entryStepId)) {
+            throw AppException.unprocessableEntity(CODE_INVALID_ENTRY_STEP,
+                    "entryStepId does not resolve to a step of this funnel");
+        }
+        return entryStepId;
+    }
+
+    // Single bare on_start element (triggerValue "", no entryStepId) — the funnel's default main entry, used
+    // by create (born state) and duplicate (reset). Mirrors the old (on_start, "") default.
+    private static Trigger bareOnStartTrigger() {
+        Trigger t = new Trigger();
+        t.setTriggerType(TRIGGER_ON_START);
+        t.setTriggerValue("");
+        return t;
+    }
+
+    // Single-writer for the denormalized onStartTriggerValue scalar (Decision 6 / Variant A): projects the
+    // on_start element's triggerValue into the scalar the partial-unique index keys on. A bare /start ("" or
+    // blank) or the absence of an on_start element maps to null, so such funnels stay OUT of the
+    // { onStartTriggerValue:{$exists:true} } partial filter and never collide on a shared null. Called from
+    // EVERY save path (create, update via applyTriggers, activate, duplicate) so the scalar and array agree.
+    private static void syncOnStartTriggerValue(Funnel funnel) {
+        String onStartValue = null;
+        if (funnel.getTriggers() != null) {
+            for (Trigger t : funnel.getTriggers()) {
+                if (t != null && TRIGGER_ON_START.equals(t.getTriggerType())) {
+                    String value = t.getTriggerValue();
+                    onStartValue = (value == null || value.isBlank()) ? null : value;
+                    break;
+                }
+            }
+        }
+        funnel.setOnStartTriggerValue(onStartValue);
+    }
+
+    // The funnel's step-id set (mirrors validateSteps' stepIds build) — used to resolve event entryStepIds.
+    private static Set<String> stepIdsOf(List<FunnelStep> steps) {
+        Set<String> ids = new HashSet<>();
+        if (steps != null) {
+            for (FunnelStep step : steps) {
+                if (step.getId() != null) {
+                    ids.add(step.getId());
+                }
+            }
+        }
+        return ids;
     }
 
     private static String normalizeTriggerType(String triggerType) {
@@ -1367,10 +1548,8 @@ public class FunnelService {
                 funnel.getName(),
                 funnel.getDescription(),
                 funnel.getStatus(),
-                funnel.getTriggerType(),
-                funnel.getTriggerValue(),
                 funnel.isAllowReEnter(),
-                funnel.getKeywords(),
+                toTriggerDtos(funnel.getTriggers()),
                 steps,
                 resolveDeepLink(funnel),
                 funnel.getCreatedAt(),
@@ -1385,13 +1564,25 @@ public class FunnelService {
                 funnel.getName(),
                 funnel.getDescription(),
                 funnel.getStatus(),
-                funnel.getTriggerType(),
-                funnel.getTriggerValue(),
                 funnel.isAllowReEnter(),
-                funnel.getKeywords(),
+                toTriggerDtos(funnel.getTriggers()),
                 stepCount,
                 funnel.getCreatedAt(),
                 funnel.getUpdatedAt());
+    }
+
+    // domain → DTO mapper for the entry-trigger array (Phase 8 / 17-funnel-multi-entry; the request-apply
+    // inverse of applyTriggers). A null/empty triggers list maps to an empty list (every persisted funnel
+    // has ≥1 trigger post-Task-1 backfill; the empty fallback keeps the response total for a legacy doc).
+    // Each Trigger round-trips field-for-field into a flat TriggerDto (keywords now per-trigger, Decision 12).
+    private static List<TriggerDto> toTriggerDtos(List<Trigger> triggers) {
+        if (triggers == null) {
+            return List.of();
+        }
+        return triggers.stream()
+                .map(t -> new TriggerDto(t.getTriggerType(), t.getTriggerValue(),
+                        t.getKeywords(), t.getEntryStepId()))
+                .toList();
     }
 
     private static FunnelStepDto toStepDto(FunnelStep step) {
@@ -1491,7 +1682,23 @@ public class FunnelService {
         if (bot.isEmpty() || bot.get().getTelegramUsername() == null) {
             return null;
         }
-        return "t.me/" + bot.get().getTelegramUsername() + "?start=" + funnel.getTriggerValue();
+        // The deep link carries the on_start trigger's payload (bare /start ⇒ empty ?start=). Read it from
+        // the on_start element of triggers[]; a funnel with no on_start entry has an empty start payload.
+        return "t.me/" + bot.get().getTelegramUsername() + "?start=" + onStartPayload(funnel);
+    }
+
+    // The on_start trigger's triggerValue (or "" when there is no on_start element / it is bare /start) —
+    // the ?start= payload for the deep link. Distinct from onStartTriggerValue (which is null for bare
+    // /start, by Variant A); the deep link wants "" there, not "null".
+    private static String onStartPayload(Funnel funnel) {
+        if (funnel.getTriggers() != null) {
+            for (Trigger t : funnel.getTriggers()) {
+                if (t != null && TRIGGER_ON_START.equals(t.getTriggerType())) {
+                    return t.getTriggerValue() == null ? "" : t.getTriggerValue();
+                }
+            }
+        }
+        return "";
     }
 
     private static String blankToNull(String value) {

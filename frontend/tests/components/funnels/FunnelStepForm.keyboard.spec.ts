@@ -35,21 +35,28 @@ function checked(sel: string): boolean {
 
 // Seed a funnel summary into the (real Pinia) store so the keyword-hint mirror has data. keywords arrive
 // already lowercase-normalized (FunnelTriggerSettings.addKeyword), matching the production contract.
-function funnelSummary(over: Partial<FunnelSummaryResponse>): FunnelSummaryResponse {
+// Phase 8 (17-funnel-multi-entry): the summary carries a `triggers` array, not the flat trio. The factory
+// keeps the convenience `triggerType`/`keywords` overrides and maps them into a single trigger element so
+// the existing call sites read unchanged.
+function funnelSummary(
+  over: Partial<Omit<FunnelSummaryResponse, 'triggers'>> & {
+    triggerType?: string
+    keywords?: string[] | null
+  } = {},
+): FunnelSummaryResponse {
+  const { triggerType = 'keyword', keywords = ['бонус'], ...rest } = over
   return {
     id: 'f1',
     projectId: 'p1',
     name: 'Game',
     description: null,
     status: 'active',
-    triggerType: 'keyword',
-    triggerValue: null,
-    keywords: ['бонус'],
+    triggers: [{ triggerType, triggerValue: null, keywords, entryStepId: null }],
     allowReEnter: false,
     stepCount: 1,
     createdAt: '',
     updatedAt: '',
-    ...over,
+    ...rest,
   }
 }
 

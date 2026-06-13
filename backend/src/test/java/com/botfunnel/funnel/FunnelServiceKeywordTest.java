@@ -67,8 +67,11 @@ class FunnelServiceKeywordTest extends AbstractIntegrationTest {
                 new com.botfunnel.funnel.dto.CreateFunnelRequest("f", null)).id();
     }
 
+    // Phase 8 (17-funnel-multi-entry): keywords now live per-trigger inside a TriggerDto element, not at the
+    // top level. A keyword funnel is a single keyword trigger element.
     private UpdateFunnelRequest keywordReq(List<String> keywords, List<com.botfunnel.funnel.dto.FunnelStepDto> steps) {
-        return new UpdateFunnelRequest("f", null, "keyword", null, false, keywords, steps);
+        return new UpdateFunnelRequest("f", null, false,
+                List.of(new com.botfunnel.funnel.dto.TriggerDto("keyword", null, keywords, null)), steps);
     }
 
     @Test
@@ -78,8 +81,9 @@ class FunnelServiceKeywordTest extends AbstractIntegrationTest {
                 keywordReq(List.of("Bonus", " SALE ", "bonus"), List.of()));
 
         // "Bonus" + " SALE " + "bonus" → ["bonus", "sale"] (lowercase, trimmed, deduped, order kept).
-        assertThat(resp.keywords()).containsExactly("bonus", "sale");
-        assertThat(funnelRepository.findById(id).orElseThrow().getKeywords())
+        assertThat(resp.triggers()).hasSize(1);
+        assertThat(resp.triggers().get(0).keywords()).containsExactly("bonus", "sale");
+        assertThat(funnelRepository.findById(id).orElseThrow().getTriggers().get(0).getKeywords())
                 .containsExactly("bonus", "sale");
     }
 
@@ -109,7 +113,8 @@ class FunnelServiceKeywordTest extends AbstractIntegrationTest {
     void keywords_rejectedForNonKeywordTrigger() {
         String id = createDraft();
         // Sending keywords on an on_start trigger → 422 (tight contract; Decision 3 reject-vs-ignore).
-        assertInvalidKeywords(id, new UpdateFunnelRequest("f", null, "on_start", "", false,
-                List.of("bonus"), List.of()));
+        assertInvalidKeywords(id, new UpdateFunnelRequest("f", null, false,
+                List.of(new com.botfunnel.funnel.dto.TriggerDto("on_start", "", List.of("bonus"), null)),
+                List.of()));
     }
 }

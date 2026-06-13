@@ -683,11 +683,16 @@ const keyboardValid = computed<boolean>(() => {
 function keyboardButtonHint(button: KeyboardButtonRow): boolean {
   const text = button.text.trim().toLowerCase()
   if (!text) return false
+  // Phase 8 (17-funnel-multi-entry): a funnel now carries a LIST of triggers; scan each keyword trigger's
+  // keywords (the flat f.triggerType/f.keywords trio is gone).
   const matched = storeFunnels.value.some(
     (f) =>
       f.status === 'active' &&
-      f.triggerType === 'keyword' &&
-      (f.keywords ?? []).some((kw) => kw && text.includes(kw)),
+      (f.triggers ?? []).some(
+        (tr) =>
+          tr.triggerType === 'keyword' &&
+          (tr.keywords ?? []).some((kw) => kw && text.includes(kw)),
+      ),
   )
   return !matched
 }

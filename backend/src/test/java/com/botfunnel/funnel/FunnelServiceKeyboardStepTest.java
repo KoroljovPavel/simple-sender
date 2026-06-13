@@ -104,7 +104,9 @@ class FunnelServiceKeyboardStepTest extends AbstractIntegrationTest {
     }
 
     private UpdateFunnelRequest reqWithStep(FunnelStepDto step) {
-        return new UpdateFunnelRequest("f", null, "on_start", "", false, null, List.of(step));
+        // Phase 8 (17-funnel-multi-entry): a single bare on_start trigger replaces the former flat trio.
+        return new UpdateFunnelRequest("f", null, false,
+                List.of(new com.botfunnel.funnel.dto.TriggerDto("on_start", "", null, null)), List.of(step));
     }
 
     private void assert422(FunnelStepDto step) {

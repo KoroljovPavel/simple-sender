@@ -12,9 +12,9 @@ import {
 import FunnelStepsList from '~/components/funnels/FunnelStepsList.vue'
 import AddStepDialog from '~/components/funnels/AddStepDialog.vue'
 import EditStepDialog from '~/components/funnels/EditStepDialog.vue'
-import FunnelTriggerSettings from '~/components/funnels/FunnelTriggerSettings.vue'
+import FunnelTriggersPanel from '~/components/funnels/FunnelTriggersPanel.vue'
 import FunnelMessagePreview from '~/components/funnels/FunnelMessagePreview.vue'
-import type { FunnelResponse, FunnelStatus, FunnelStep, FunnelTriggerType, StepType } from '~/types/funnel'
+import type { FunnelResponse, FunnelStatus, FunnelStep, FunnelTrigger, StepType } from '~/types/funnel'
 
 definePageMeta({ layout: 'default' })
 
@@ -31,9 +31,10 @@ const funnelId = computed(() => String(route.params.funnelId))
 
 const funnel = ref<FunnelResponse | null>(null)
 const steps = ref<FunnelStep[]>([])
-const triggerType = ref<FunnelTriggerType>('on_start')
-const triggerValue = ref('')
-const keywords = ref<string[]>([])
+// Phase 8 (17-funnel-multi-entry): the funnel carries a LIST of triggers (Decision 1), each with its own
+// triggerType/triggerValue/keywords + entryStepId. The panel (FunnelTriggersPanel) edits them via
+// v-model:triggers; the page owns the array, the autosave gate and the PATCH payload.
+const triggers = ref<FunnelTrigger[]>([])
 const loaded = ref(false)
 const loadError = ref<string | null>(null)
 const saving = ref(false)
@@ -90,24 +91,31 @@ const STATUS_VARIANT: Record<FunnelStatus, 'secondary' | 'default' | 'outline'> 
 const TRIGGER_VALUE_RE = /^[A-Za-z0-9_-]{0,64}$/
 const EVENT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/
 
-// Is the CURRENT trigger draft complete enough to PATCH? The backend rejects an incomplete trigger with a
-// 422 (keyword needs ≥1 keyword; tag_added/custom_field_set/event need a non-empty triggerValue), so
-// switching the type alone — before the required value is filled — must NOT auto-save. activate() reuses
-// this so a genuine activate of an incomplete funnel still round-trips and surfaces the inline 422.
-function triggerReady(): boolean {
-  switch (triggerType.value) {
+// Is a SINGLE trigger draft complete enough to PATCH? Per-element (Phase 8): the backend rejects an
+// incomplete trigger with a 422 (keyword needs ≥1 keyword; tag_added/custom_field_set/event need a
+// non-empty triggerValue), so switching ONE trigger's type — before its required value is filled — must
+// NOT auto-save. The debounced autosave only fires once EVERY trigger is ready (triggers.every(...)), and
+// activate() reuses the same gate so a genuine activate of an incomplete funnel still surfaces the 422.
+function triggerReady(trigger: FunnelTrigger): boolean {
+  switch (trigger.triggerType) {
     case 'on_start':
-      return TRIGGER_VALUE_RE.test(triggerValue.value ?? '')
+      return TRIGGER_VALUE_RE.test(trigger.triggerValue ?? '')
     case 'keyword':
-      return (keywords.value ?? []).length >= 1
+      return (trigger.keywords ?? []).length >= 1
     case 'tag_added':
     case 'custom_field_set':
-      return (triggerValue.value ?? '').trim().length > 0
+      return (trigger.triggerValue ?? '').trim().length > 0
     case 'event':
-      return EVENT_NAME_RE.test(triggerValue.value ?? '')
+      return EVENT_NAME_RE.test(trigger.triggerValue ?? '')
     default:
       return false
   }
+}
+
+// A funnel always needs at least the on_start main entry, so the panel always has a row to render even
+// when the backend returns an empty/absent triggers array (edge case).
+function defaultTriggers(): FunnelTrigger[] {
+  return [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }]
 }
 
 function statusOf(err: unknown): number | null {
@@ -128,9 +136,17 @@ function resolveFunnelError(err: unknown, contextKey: string): string {
   return resolveError(err, contextKey)
 }
 
+// Re-entrancy guard: applyResponse() re-assigns `triggers` from the server, which the deep watch would
+// otherwise treat as a fresh edit and re-schedule a PATCH — an infinite persist→applyResponse→watch loop
+// (the server-echoed array always has a new identity). Suppress exactly one watch cycle when we apply a
+// server response.
+let applyingResponse = false
 function applyResponse(res: FunnelResponse) {
   funnel.value = res
   steps.value = [...res.steps]
+  applyingResponse = true
+  // Fall back to a lone on_start trigger so the panel always has the main entry (edge case: empty/absent).
+  triggers.value = res.triggers?.length ? res.triggers.map((tr) => ({ ...tr })) : defaultTriggers()
 }
 
 async function load() {
@@ -138,9 +154,6 @@ async function load() {
   try {
     const res = await funnelsStore.fetchOne(funnelId.value)
     applyResponse(res)
-    triggerType.value = (res.triggerType as FunnelTriggerType) ?? 'on_start'
-    triggerValue.value = res.triggerValue ?? ''
-    keywords.value = res.keywords ?? []
     loaded.value = true
   } catch (err) {
     // Anti-IDOR uniform 404 for missing/cross-owner funnel → graceful redirect to the list.
@@ -161,23 +174,30 @@ onMounted(() => {
   }
 })
 
-// PATCH the FULL funnel (metadata + trigger + entire ordered steps array). Position = order, so the
+// Per-element trigger sanitizer: send ONLY the fields the element's type owns — never leak a stale value
+// from a previously-selected type (Edge cases). keyword owns `keywords` and clears triggerValue; the other
+// types own `triggerValue` and clear `keywords`. entryStepId is carried as-is (null for non-event types).
+function sanitizeTrigger(tr: FunnelTrigger): FunnelTrigger {
+  const isKeyword = tr.triggerType === 'keyword'
+  return {
+    triggerType: tr.triggerType,
+    triggerValue: isKeyword ? null : (tr.triggerValue ?? ''),
+    keywords: isKeyword ? (tr.keywords ?? []) : [],
+    entryStepId: tr.entryStepId ?? null,
+  }
+}
+
+// PATCH the FULL funnel (metadata + trigger array + entire ordered steps array). Position = order, so the
 // server rewrites FunnelStep.order from the array index — the client never sends `order`.
 async function persist(): Promise<boolean> {
   if (!funnel.value) return false
   saving.value = true
   saveError.value = null
   try {
-    // Send only the value the active type owns — never leak a stale value from a previously-selected type
-    // (Edge cases). keyword owns `keywords` and clears triggerValue; on_start/tag_added/custom_field_set/
-    // event own `triggerValue` and clear `keywords`.
-    const isKeyword = triggerType.value === 'keyword'
     const res = await funnelsStore.update(funnelId.value, {
       name: funnel.value.name,
       description: funnel.value.description,
-      triggerType: triggerType.value,
-      triggerValue: isKeyword ? null : triggerValue.value,
-      keywords: isKeyword ? keywords.value : [],
+      triggers: triggers.value.map(sanitizeTrigger),
       allowReEnter: funnel.value.allowReEnter,
       steps: steps.value,
     })
@@ -216,18 +236,30 @@ function openEdit(index: number) {
   editOpen.value = true
 }
 
-// Persist trigger edits (debounced) so the activated funnel uses the value the user sees. Only schedule a
-// PATCH once the active type's required value is present (triggerReady) — switching the type alone, or
-// editing toward a still-empty value, must NOT auto-save (the backend 422s an incomplete trigger). A
-// genuine activate of an incomplete funnel still surfaces that 422 via activate()→persist().
+// Persist trigger edits (debounced) so the activated funnel uses the values the user sees. Only schedule a
+// PATCH once EVERY trigger's required value is present (triggers.every(triggerReady)) — switching one
+// trigger's type alone, or editing toward a still-empty value, must NOT auto-save (the backend 422s an
+// incomplete trigger). A genuine activate of an incomplete funnel still surfaces that 422 via
+// activate()→persist().
 let triggerTimer: ReturnType<typeof setTimeout> | null = null
 function scheduleTriggerPersist() {
   if (!loaded.value) return
-  if (!triggerReady()) return
+  // Skip the watch cycle caused by applyResponse() re-assigning `triggers` from the server (not a user
+  // edit) — otherwise persist→applyResponse→watch→persist loops forever.
+  if (applyingResponse) {
+    applyingResponse = false
+    return
+  }
+  // ALWAYS cancel a pending flush first: if a later edit makes the array incomplete (e.g. an empty event
+  // trigger was just added), an earlier scheduled PATCH must NOT fire — otherwise it would flush a
+  // not-ready array and 422. Only (re)arm the timer when EVERY trigger is ready.
   if (triggerTimer) clearTimeout(triggerTimer)
+  triggerTimer = null
+  if (!triggers.value.every(triggerReady)) return
   triggerTimer = setTimeout(() => void persist(), 600)
 }
-watch([triggerType, triggerValue, keywords], scheduleTriggerPersist, { deep: true })
+// Deep watch: trigger edits mutate fields INSIDE the array elements, not just the array reference.
+watch(triggers, scheduleTriggerPersist, { deep: true })
 onBeforeUnmount(() => {
   if (triggerTimer) clearTimeout(triggerTimer)
 })
@@ -442,10 +474,9 @@ async function confirmStopAll() {
           @select="onSelectStep"
         />
 
-        <FunnelTriggerSettings
-          v-model:trigger-type="triggerType"
-          v-model:trigger-value="triggerValue"
-          v-model:keywords="keywords"
+        <FunnelTriggersPanel
+          v-model:triggers="triggers"
+          :steps="steps"
           :bot-username="botUsername"
           :deep-link="funnel.deepLink"
         />

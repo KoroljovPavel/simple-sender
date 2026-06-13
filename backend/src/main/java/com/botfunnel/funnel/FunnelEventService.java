@@ -8,7 +8,11 @@ import com.botfunnel.subscriber.SubscriberService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.data.mongodb.core.MongoTemplate;
+import org.springframework.data.mongodb.core.query.Criteria;
+import org.springframework.data.mongodb.core.query.Query;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
 
@@ -81,6 +85,14 @@ public class FunnelEventService {
     static final String LOG_AUTO_ENROLL_RATE_REDIS_FAIL_OPEN =
             "FUNNEL_DISPATCH_AUTO_ENROLL_RATE_REDIS_FAIL_OPEN";
 
+    // Phase 8 (17-funnel-multi-entry / Task 5) redirect-vs-start markers — ids/codes only (Decision 16),
+    // never the event_name/triggerValue. One per redirect decision, one when the matched element cannot be
+    // re-scanned (defensive — the multikey query matched but the in-memory triggers[] does not), and one
+    // when a single funnel's redirect/start branch faults inside the otherwise error-isolated fan-out.
+    static final String LOG_DISPATCH_REDIRECT = "FUNNEL_DISPATCH_REDIRECT";
+    static final String LOG_DISPATCH_NO_MATCHED_ELEMENT = "FUNNEL_DISPATCH_NO_MATCHED_TRIGGER_ELEMENT";
+    static final String LOG_DISPATCH_FUNNEL_ERROR = "FUNNEL_DISPATCH_FUNNEL_ERROR";
+
     // Phase 5 (composition) — SUBSCRIBE_TO_FUNNEL enroll markers. One distinct, greppable id per skip
     // reason so an operator can tell apart a missing/foreign/inactive target, a re-enter no-op, an
     // entry-step fallback, the two reused backstops (depth-cap / rate-limit), and a swallowed fault.
@@ -101,6 +113,8 @@ public class FunnelEventService {
     private final SubscriberService subscriberService;
     private final FunnelRepository funnelRepository;
     private final FunnelExecutionFactory executionFactory;
+    private final FunnelExecutionEngine executionEngine;
+    private final MongoTemplate mongoTemplate;
     private final StringRedisTemplate redisTemplate;
     private final int maxFanoutPerEvent;
     private final int autoEnrollRatePerMin;
@@ -110,6 +124,14 @@ public class FunnelEventService {
                               SubscriberService subscriberService,
                               FunnelRepository funnelRepository,
                               FunnelExecutionFactory executionFactory,
+                              // @Lazy breaks the REAL bean cycle this Task-5 edge closes:
+                              // FunnelEventService → FunnelExecutionEngine → StepExecutor → FunnelEventService.
+                              // Spring injects a deferred proxy and resolves the engine on first use, so no
+                              // BeanCurrentlyInCreationException at context startup. (The execution-creation
+                              // path stays on FunnelExecutionFactory, which has no edge into the engine — see
+                              // its class-doc — so START never needs the engine; only REDIRECT does.)
+                              @Lazy FunnelExecutionEngine executionEngine,
+                              MongoTemplate mongoTemplate,
                               StringRedisTemplate redisTemplate,
                               @Value("${app.funnel.max-fanout-per-event}") int maxFanoutPerEvent,
                               @Value("${app.funnel.auto-enroll-rate-per-min}") int autoEnrollRatePerMin,
@@ -118,6 +140,8 @@ public class FunnelEventService {
         this.subscriberService = subscriberService;
         this.funnelRepository = funnelRepository;
         this.executionFactory = executionFactory;
+        this.executionEngine = executionEngine;
+        this.mongoTemplate = mongoTemplate;
         this.redisTemplate = redisTemplate;
         this.maxFanoutPerEvent = maxFanoutPerEvent;
         this.autoEnrollRatePerMin = autoEnrollRatePerMin;
@@ -181,22 +205,158 @@ public class FunnelEventService {
             // Fan-out loop, bounded by backstop (c) the per-dispatch fan-out ceiling. A per-funnel
             // DuplicateKeyException (re-enter guard) is swallowed so one duplicate cannot abort the
             // other matched funnels (Decision 8 / re-enter interplay).
-            int inserted = 0;
+            int handled = 0;
             for (Funnel funnel : matches) {
-                if (inserted >= maxFanoutPerEvent) {
-                    int dropped = matches.size() - inserted;
+                if (handled >= maxFanoutPerEvent) {
+                    int dropped = matches.size() - handled;
                     log.warn("{} projectId={} ceiling={} dropped={}", LOG_DROP_FANOUT,
                             projectId, maxFanoutPerEvent, dropped);
                     break;
                 }
-                if (insertOneFunnel(projectId, funnel, subscriber.getId(), telegramBotId, originDepth)) {
-                    inserted++;
+                // The fan-out ceiling counts every funnel we ACT on (redirect OR start), not only fresh
+                // inserts — a redirect is still per-dispatch work that must be bounded (Decision 6c). The
+                // decision is made INDEPENDENTLY per matched funnel (one event, two funnels → one may
+                // redirect, the other start). Each branch is error-isolated so a single funnel's fault
+                // never aborts the rest of the fan-out (Decision 12).
+                if (redirectOrStart(projectId, funnel, triggerType, matchKey,
+                        subscriber.getId(), telegramBotId, originDepth)) {
+                    handled++;
                 }
             }
         } catch (Throwable t) {
             // Decision 12: dispatchForSubscriber never throws outward — a dispatch fault must not poison
             // the webhook pipeline or surface a 5xx to an external caller.
             log.warn("{} projectId={} error={}", LOG_DISPATCH_ERROR, projectId, t.getClass().getSimpleName());
+        }
+    }
+
+    // Redirect-or-start decision for ONE matched funnel (Phase 8 / Task 5, Decision 2 + 11). Returns true
+    // iff this funnel was ACTED on (redirected or a fresh execution started) so the caller's fan-out ceiling
+    // counts it. The whole body is error-isolated (Decision 12) — a fault for one funnel logs a greppable
+    // WARN and returns false (do not act / do not abort the rest of the fan-out), it NEVER throws outward.
+    //
+    // Routing:
+    //   - re-scan the funnel's triggers[] for the element that matched (type + value/keyword) to read its
+    //     entryStepId (the multikey/$elemMatch query returned the funnel, not the element — Decision 12);
+    //   - entryStepId == null (every non-event trigger — keyword/tag/field is start-from-beginning,
+    //     Decision 10) → start at step 0 exactly as before (insertOneFunnel);
+    //   - entryStepId != null (an event mid-entry trigger) → if the subscriber has an in-flight execution
+    //     of THIS funnel (running|waiting|waiting_for_reply) → REDIRECT it onto entryStepId; otherwise →
+    //     start a FRESH execution AT entryStepId honouring allowReEnter (insertAtEntryStep).
+    private boolean redirectOrStart(String projectId, Funnel funnel, String triggerType, String matchKey,
+                                    String subscriberId, Long telegramBotId, int originDepth) {
+        try {
+            String entryStepId = matchedEntryStepId(funnel, triggerType, matchKey);
+            if (entryStepId == null) {
+                // Non-event trigger (or an on_start element, which carries no entryStepId): start from step 0.
+                // A missing matched element also lands here (entryStepId null) — logged inside the re-scan.
+                return insertOneFunnel(projectId, funnel, subscriberId, telegramBotId, originDepth);
+            }
+            // Event mid-entry: redirect an in-flight execution, else start fresh at the entry step. The
+            // executionId comes ONLY from this trusted in-flight probe (never request input); the engine's
+            // CAS re-checks (subscriberId, funnelId) as a second anti-IDOR layer (Decision 3).
+            String inFlightId = inFlightExecutionId(projectId, funnel.getId(), subscriberId);
+            if (inFlightId != null) {
+                // The engine's LOG_REDIRECT (info) is the single authoritative record of a WON redirect claim;
+                // this dispatch-side line fires BEFORE the CAS even runs (so it cannot assert success) — keep it
+                // at debug for cross-class correlation only, not as a second info-level success log (Decision 16).
+                log.debug("{} projectId={} funnelId={}", LOG_DISPATCH_REDIRECT, projectId, funnel.getId());
+                executionEngine.redirectExecution(inFlightId, subscriberId, funnel.getId(), entryStepId);
+                return true;
+            }
+            return insertAtEntryStep(projectId, funnel, subscriberId, telegramBotId, originDepth, entryStepId);
+        } catch (Throwable t) {
+            // Per-funnel error isolation (Decision 12): one funnel's redirect/start fault must not abort the
+            // rest of the fan-out, nor escape dispatchForSubscriber. ids/codes only.
+            log.warn("{} projectId={} funnelId={} error={}", LOG_DISPATCH_FUNNEL_ERROR,
+                    projectId, funnel.getId(), t.getClass().getSimpleName());
+            return false;
+        }
+    }
+
+    // Matched-element re-scan (Decision 12 keyword-re-scan idiom): the array-aware fan-out query narrows to
+    // funnels whose triggers[] contains a matching element but does NOT say WHICH element matched. Re-scan
+    // the funnel's triggers[] in-memory to find that element and return its entryStepId. For an exact
+    // trigger (event/tag_added/custom_field_set) the match is triggerType + triggerValue == matchKey; for a
+    // keyword trigger it is triggerType + any keyword contained in the (lowercased) matchKey (case-
+    // insensitive, any-of-many — same contains-match the query candidates were filtered by). A null/absent
+    // element returns null (treated as start-from-step-0) with a greppable WARN — the multikey query said the
+    // funnel matched, so a missing in-memory element is an unexpected drift worth surfacing.
+    private String matchedEntryStepId(Funnel funnel, String triggerType, String matchKey) {
+        // Decision 10: only an `event` trigger carries a mid-entry entryStepId; keyword/tag_added/
+        // custom_field_set/on_start are start-from-beginning. Short-circuit so the redirect path is
+        // reachable ONLY for event triggers, independent of any persisted-data assumption.
+        if (!FunnelService.TRIGGER_EVENT.equals(triggerType)) {
+            return null;
+        }
+        List<Trigger> triggers = funnel.getTriggers();
+        if (triggers == null || triggers.isEmpty()) {
+            // No triggers to re-scan → start-from-beginning (entryStepId null). Not WARN-worthy on its own.
+            return null;
+        }
+        // event is an EXACT trigger: the matched element is the one whose triggerValue == matchKey
+        // (event_name). null matchKey coerced to "" to mirror the query's coercion.
+        String exactValue = matchKey == null ? "" : matchKey;
+        for (Trigger trigger : triggers) {
+            if (trigger == null || !FunnelService.TRIGGER_EVENT.equals(trigger.getTriggerType())) {
+                continue;
+            }
+            if (exactValue.equals(trigger.getTriggerValue() == null ? "" : trigger.getTriggerValue())) {
+                return trigger.getEntryStepId();
+            }
+        }
+        // The multikey/$elemMatch query said this funnel matched, but no in-memory element re-scanned —
+        // an unexpected drift between the DB query and the loaded triggers[]. Surface it (ids/codes only,
+        // never the matchKey) and fall back to start-from-beginning.
+        // SECURITY (Decision 16, SEC-T5-001): triggerType is a fixed taxonomy CODE (on_start/event/keyword/
+        // tag_added/custom_field_set), safe to log. matchKey/triggerValue/event_name MUST NOT be added to this
+        // line — they are business-defined slugs (PII-adjacent) that would leak the internal event taxonomy to
+        // log aggregators. Keep this WARN ids/codes only.
+        log.warn("{} funnelId={} triggerType={}", LOG_DISPATCH_NO_MATCHED_ELEMENT,
+                funnel.getId(), triggerType);
+        return null;
+    }
+
+    // Trusted in-flight probe (Phase 8 / Task 5) — the executionId for a redirect comes ONLY from here,
+    // NEVER from request input. Modeled on ProcessTelegramUpdateJob.hasWaitingForReplyExecution (a DIFFERENT
+    // class/package — its idiom is COPIED, not extended), but: (a) a find/findOne (we need the id itself, not
+    // a boolean exists), (b) a WIDER status predicate (running|waiting|waiting_for_reply, not just
+    // waiting_for_reply), (c) scoped by funnelId, (d) fail-closed by projectId. At most one such row exists
+    // for the (funnelId, subscriberId) pair (the unique partial re-enter index, Decision 8). Statuses are
+    // lowercase .name() literals (Decision 14). Returns the id, or null when the subscriber is not in-flight
+    // on this funnel (absent / completed / cancelled / failed).
+    private String inFlightExecutionId(String projectId, String funnelId, String subscriberId) {
+        Query query = Query.query(Criteria.where("projectId").is(projectId)
+                .and("funnelId").is(funnelId)
+                .and("subscriberId").is(subscriberId)
+                .and("status").in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name(),
+                        ExecutionStatus.waiting_for_reply.name()));
+        FunnelExecution exec = mongoTemplate.findOne(query, FunnelExecution.class);
+        return exec == null ? null : exec.getId();
+    }
+
+    // Start a FRESH execution AT entryStepId (event mid-entry, no in-flight execution), honouring the
+    // funnel's re-enter policy — the entry-step analogue of insertOneFunnel. allowReEnter=true →
+    // cancel-then-insert-at-entry (restart from the entry step); allowReEnter=false → insert-at-entry in a
+    // try and swallow a DuplicateKeyException as a benign re-enter no-op. Returns true iff a fresh execution
+    // was actually inserted (a swallowed duplicate → false). (No in-flight row exists here — the probe
+    // returned null — but a concurrent insert can still race the unique index, so the swallow is kept.)
+    private boolean insertAtEntryStep(String projectId, Funnel funnel, String subscriberId,
+                                      Long telegramBotId, int originDepth, String entryStepId) {
+        if (funnel.isAllowReEnter()) {
+            executionFactory.cancelExistingForPair(projectId, funnel.getId(), subscriberId);
+            executionFactory.insertExecutionAt(projectId, funnel, subscriberId, telegramBotId,
+                    originDepth, entryStepId);
+            return true;
+        }
+        try {
+            executionFactory.insertExecutionAt(projectId, funnel, subscriberId, telegramBotId,
+                    originDepth, entryStepId);
+            return true;
+        } catch (DuplicateKeyException dup) {
+            log.info("{} funnelId={} subscriberId={}", LOG_DISPATCH_REENTER_IGNORED,
+                    funnel.getId(), subscriberId);
+            return false;
         }
     }
 
@@ -352,22 +512,45 @@ public class FunnelEventService {
         if (FunnelService.TRIGGER_KEYWORD.equals(triggerType)) {
             return matchingKeywordFunnels(projectId, matchKey);
         }
+        // Array-aware $elemMatch over triggers[] (Task 2): both triggerType AND triggerValue must match the
+        // SAME embedded element (no cross-element false positive). Returns the funnel; the caller re-scans
+        // the matched element for entryStepId (Decision 12).
         String triggerValue = matchKey == null ? "" : matchKey;
-        return funnelRepository.findAllByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
+        return funnelRepository.findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
                 projectId, triggerType, triggerValue, FunnelStatus.active);
     }
 
     private List<Funnel> matchingKeywordFunnels(String projectId, String matchKey) {
         String text = matchKey == null ? "" : matchKey.toLowerCase();
-        List<Funnel> keywordFunnels = funnelRepository.findByProjectIdAndTriggerTypeAndStatus(
+        // Array-aware candidate scan (Task 2): all active funnels whose triggers[] carries a keyword
+        // element. The exact-match index cannot express "contains, multiple keywords", so the
+        // contains-match runs in code over each candidate's keyword trigger elements.
+        List<Funnel> keywordFunnels = funnelRepository.findByProjectIdAndTriggersTriggerTypeAndStatus(
                 projectId, FunnelService.TRIGGER_KEYWORD, FunnelStatus.active);
         List<Funnel> matches = new ArrayList<>();
         for (Funnel funnel : keywordFunnels) {
-            if (containsAnyKeyword(text, funnel.getKeywords())) {
+            if (funnelHasMatchingKeyword(funnel, text)) {
                 matches.add(funnel);
             }
         }
         return matches;
+    }
+
+    // A funnel matches the keyword text iff ANY of its keyword trigger elements contains-matches it
+    // (keywords now live per-Trigger, not on the funnel). Scans triggers[] for keyword-type elements and
+    // reuses the case-insensitive any-of-many contains-match.
+    private static boolean funnelHasMatchingKeyword(Funnel funnel, String lowercasedText) {
+        List<Trigger> triggers = funnel.getTriggers();
+        if (triggers == null) {
+            return false;
+        }
+        for (Trigger trigger : triggers) {
+            if (trigger != null && FunnelService.TRIGGER_KEYWORD.equals(trigger.getTriggerType())
+                    && containsAnyKeyword(lowercasedText, trigger.getKeywords())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     // case-insensitive contains, any-of-many. keywords are stored lowercase (FunnelService normalizes

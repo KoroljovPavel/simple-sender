@@ -482,10 +482,14 @@ public class FunnelExecutionEngine {
         return exec.getCurrentStepIndex() >= size;
     }
 
-    // Advance the cursor along a non-MENU step's default edge: currentStepId = step.next, or — when next
-    // is null — the NEXT step in the snapshot list (default-next). null next at the last list position
-    // means end-of-graph (currentStepId stays null → completes next loop turn). currentStepIndex is kept
-    // approximately in sync as a secondary field for logs/drain (source of truth is currentStepId).
+    // Advance the cursor along a non-MENU step's drawn `next` edge (18-funnel-canvas / Decision 4: the drawn
+    // graph is the single source of truth). When step.next != null → follow it (currentStepId = next, index
+    // synced). When step.next == null in a GRAPH run (steps carry ids) the step has NO outgoing edge → its
+    // branch ENDS: the cursor goes to the End marker (currentStepId = null) and the run completes on the next
+    // loop turn. There is NO fall-through to the neighbouring array element — array ORDER no longer drives a
+    // graph run. The legacy index-drain mode (Phase-1 snapshots with no step ids) is unaffected: with no ids
+    // there are no edges, so it still advances by index +1 until end-of-list (endOfGraph by index). currentStepIndex
+    // is kept approximately in sync as a secondary field for logs/drain (source of truth is currentStepId).
     private static void advanceToNext(FunnelExecution exec, FunnelStep step) {
         List<FunnelStep> snapshot = exec.getStepsSnapshot();
         if (step.getNext() != null) {
@@ -493,18 +497,15 @@ public class FunnelExecutionEngine {
             exec.setCurrentStepIndex(indexOfId(snapshot, step.getNext()));
             return;
         }
-        // Default-next = the step after this one in the list.
-        int here = indexOfStep(snapshot, step);
-        int nextIdx = here + 1;
-        if (snapshot != null && nextIdx >= 0 && nextIdx < snapshot.size()) {
-            FunnelStep nextStep = snapshot.get(nextIdx);
-            exec.setCurrentStepId(nextStep.getId());
-            exec.setCurrentStepIndex(nextIdx);
-        } else {
-            // End of the list with no explicit next → end of graph.
-            exec.setCurrentStepId(null);
-            exec.setCurrentStepIndex(snapshot == null ? 0 : snapshot.size());
+        // Legacy index-drain run (no step ids → no graph edges): keep the Phase-1 index +1 advance so the
+        // linear list still drains. currentStepId stays null (it is the index cursor that drives this mode).
+        if (snapshot != null && !graphMode(snapshot)) {
+            exec.setCurrentStepIndex(exec.getCurrentStepIndex() + 1);
+            return;
         }
+        // Graph run with no drawn next edge → end of this branch (no array fall-through). Mirror the End state.
+        exec.setCurrentStepId(null);
+        exec.setCurrentStepIndex(snapshot == null ? 0 : snapshot.size());
     }
 
     // Delay-resume advance (Phase 1 seam): move past the parked step along its default edge. Reuses
@@ -526,18 +527,6 @@ public class FunnelExecutionEngine {
         }
         for (int i = 0; i < snapshot.size(); i++) {
             if (id.equals(snapshot.get(i).getId())) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
-    private static int indexOfStep(List<FunnelStep> snapshot, FunnelStep step) {
-        if (snapshot == null) {
-            return -1;
-        }
-        for (int i = 0; i < snapshot.size(); i++) {
-            if (snapshot.get(i) == step) {
                 return i;
             }
         }

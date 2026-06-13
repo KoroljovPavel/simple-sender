@@ -668,6 +668,44 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         }
     }
 
+    // ─── 18-funnel-canvas / Task 3: drawn graph is the single source of truth ───
+
+    @Test
+    void next_null_ends_branch_no_fallthrough() {
+        // Decision 4: a step with next == null TERMINATES its branch — the cursor goes to null (End) and the
+        // run completes WITHOUT falling through to the neighbouring array element. Step a (next=null) is NOT
+        // the last array element; its array neighbour b must never send.
+        String subId = seedActiveSubscriber();
+        FunnelStep a = sendMessageStep("a", "branch-end", null);
+        FunnelStep b = sendMessageStep("b", "must-not-fire", null);
+        String execId = seedGraphExecution(subId, BASE, a, b);
+        enqueueOk(2); // generous; only a's send is expected
+
+        engine.sweep();
+
+        FunnelExecution done = reload(execId);
+        assertThat(done.getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(done.getCurrentStepId()).isNull(); // cursor parked at End, no array fall-through to b
+        assertThat(sentCount()).isEqualTo(1); // ONLY a sent; b (array neighbour) was skipped
+    }
+
+    @Test
+    void on_start_enters_entryStepId_regardless_of_order() {
+        // Decision 5: an on_start funnel whose entryStepId points at a step that is NOT array[0] enrolls
+        // (fire()) onto that entry step's id — array order no longer drives the start cursor.
+        Subscriber sub = seedActiveSubscriberDoc();
+        // Array order: [first, entry]; the on_start edge targets "entry" (the SECOND element).
+        FunnelStep first = sendMessageStep("first", "array-zero", null);
+        FunnelStep entry = sendMessageStep("entry", "real-entry", null);
+        Funnel funnel = seedActiveOnStartFunnel("", "entry", first, entry);
+
+        triggerService.fire(projectId, sub.getTelegramChatId(), FunnelService.TRIGGER_ON_START, "");
+
+        FunnelExecution created = onlyExecutionFor(funnel.getId(), sub.getId());
+        assertThat(created).isNotNull();
+        assertThat(created.getCurrentStepId()).isEqualTo("entry"); // entered the edge target, not array[0]
+    }
+
     @Test
     void fan_in_multiple_buttons_one_target() {
         String subId = seedActiveSubscriber();
@@ -1704,6 +1742,34 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         f.setCreatedAt(BASE);
         f.setUpdatedAt(BASE);
         return funnelRepository.save(f);
+    }
+
+    // Seed an ACTIVE on_start funnel carrying a single on_start trigger with the given triggerValue and a
+    // drawn-edge entryStepId (18-funnel-canvas / Task 3). repository.save bypasses FunnelService validation,
+    // so the caller passes already-normalized values.
+    private Funnel seedActiveOnStartFunnel(String triggerValue, String entryStepId, FunnelStep... steps) {
+        Funnel f = new Funnel();
+        f.setProjectId(projectId);
+        f.setName("on-start-" + seq.incrementAndGet());
+        f.setStatus(FunnelStatus.active);
+        Trigger t = new Trigger();
+        t.setTriggerType(FunnelService.TRIGGER_ON_START);
+        t.setTriggerValue(triggerValue);
+        t.setEntryStepId(entryStepId);
+        f.setTriggers(new ArrayList<>(List.of(t)));
+        // "" maps to a null scalar (Variant A) so a bare-start funnel stays out of the partial-unique index.
+        f.setOnStartTriggerValue(triggerValue == null || triggerValue.isBlank() ? null : triggerValue);
+        f.setSteps(new ArrayList<>(List.of(steps)));
+        f.setCreatedAt(BASE);
+        f.setUpdatedAt(BASE);
+        return funnelRepository.save(f);
+    }
+
+    // The single execution for the (funnelId, subscriberId) pair (fire()/testRun enroll inspection), or null.
+    private FunnelExecution onlyExecutionFor(String funnelId, String subscriberId) {
+        return mongoTemplate.find(
+                Query.query(Criteria.where("funnelId").is(funnelId).and("subscriberId").is(subscriberId)),
+                FunnelExecution.class).stream().findFirst().orElse(null);
     }
 
     private FunnelExecution reload(String id) {

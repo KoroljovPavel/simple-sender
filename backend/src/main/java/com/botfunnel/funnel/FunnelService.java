@@ -465,7 +465,12 @@ public class FunnelService {
         validateSteps(steps, projectId);
 
         funnelExecutionFactory.cancelExistingForPair(projectId, funnelId, owner.getId());
-        funnelExecutionFactory.insertExecution(projectId, funnel, owner.getId(), bot.getTelegramBotId(), 0);
+        // 18-funnel-canvas / Task 3 (APPROVED deviation): enter the SAME step a live /start would — the
+        // on_start trigger's drawn-edge entryStepId — not array[0]. After Decision 4 (null next ends the
+        // branch) a run from array[0] would execute the wrong/empty branch. A null/dangling id degrades to
+        // step 0 in resolveStartCursor (defence-in-depth).
+        funnelExecutionFactory.insertExecutionAt(projectId, funnel, owner.getId(), bot.getTelegramBotId(), 0,
+                onStartEntryStepId(funnel));
     }
 
     // Step preview (Decision 8): render a message step's CURRENT (possibly unsaved) content from the
@@ -735,7 +740,12 @@ public class FunnelService {
                     // on_start keeps the existing slug rule ("" = bare /start); keywords not allowed.
                     trigger.setTriggerValue(normalizeOnStartValue(dto.triggerValue()));
                     trigger.setKeywords(requireNoKeywords(dto.keywords()));
-                    requireNoEntryStep(dto.entryStepId());
+                    // 18-funnel-canvas / Decision 5: the start node's drawn `next` edge is persisted on the
+                    // on_start trigger's entryStepId (reusing the field, no new column). Accept it ONLY when
+                    // it resolves to a step of THIS funnel (funnel-scoped check, same as event) — but, unlike
+                    // event, a null id is allowed (an absent/deleted start edge is a broken-edge state
+                    // surfaced like any other, not a hard 422 here).
+                    trigger.setEntryStepId(requireOnStartEntryStep(dto.entryStepId(), stepIds));
                 }
                 case TRIGGER_KEYWORD -> {
                     // keyword ignores triggerValue (the words live in `keywords`); store "" for consistency.
@@ -849,6 +859,23 @@ public class FunnelService {
         return entryStepId;
     }
 
+    // An on_start trigger's entryStepId is the start node's drawn `next` edge (18-funnel-canvas / Decision 5).
+    // Unlike event (which REQUIRES a non-null id), a null id is ACCEPTED here — an absent/deleted start edge
+    // is a broken-edge state surfaced elsewhere (canvas), not a hard 422. A NON-null id is validated through
+    // the SAME funnel-scoped stepIds.contains rule as event and rejected (422, the same CODE_INVALID_ENTRY_STEP
+    // so the frontend localizes one message) when it does not resolve to a step of THIS funnel. Returns the
+    // (possibly null) validated id. A04 input-validation: a dedicated helper, never an inlined loose check.
+    private static String requireOnStartEntryStep(String entryStepId, Set<String> stepIds) {
+        if (entryStepId == null) {
+            return null;
+        }
+        if (!stepIds.contains(entryStepId)) {
+            throw AppException.unprocessableEntity(CODE_INVALID_ENTRY_STEP,
+                    "entryStepId does not resolve to a step of this funnel");
+        }
+        return entryStepId;
+    }
+
     // Single bare on_start element (triggerValue "", no entryStepId) — the funnel's default main entry, used
     // by create (born state) and duplicate (reset). Mirrors the old (on_start, "") default.
     private static Trigger bareOnStartTrigger() {
@@ -875,6 +902,22 @@ public class FunnelService {
             }
         }
         funnel.setOnStartTriggerValue(onStartValue);
+    }
+
+    // The on_start trigger's drawn-edge entryStepId (18-funnel-canvas / Decision 5), or null when there is
+    // no on_start element or its edge is absent. Scans triggers[] by TRIGGER_ON_START (mirrors
+    // syncOnStartTriggerValue). Used by testRun to enter the same step a live /start would; a null/dangling
+    // id degrades to step 0 in FunnelExecutionFactory.resolveStartCursor (defence-in-depth).
+    private static String onStartEntryStepId(Funnel funnel) {
+        if (funnel.getTriggers() == null) {
+            return null;
+        }
+        for (Trigger t : funnel.getTriggers()) {
+            if (t != null && TRIGGER_ON_START.equals(t.getTriggerType())) {
+                return t.getEntryStepId();
+            }
+        }
+        return null;
     }
 
     // The funnel's step-id set (mirrors validateSteps' stepIds build) — used to resolve event entryStepIds.

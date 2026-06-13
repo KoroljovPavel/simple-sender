@@ -37,10 +37,18 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
 
     private static final String USER_ID = "ftt-user";
 
+    private static final Long TELEGRAM_BOT_ID = 990011L;
+    private static final Long OWNER_CHAT_ID = 555111L;
+    private static final String TEST_TOKEN = "1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789xyz";
+
     @Autowired UserRepository userRepository;
     @Autowired ProjectRepository projectRepository;
     @Autowired FunnelRepository funnelRepository;
     @Autowired FunnelService funnelService;
+    @Autowired com.botfunnel.bot.BotRepository botRepository;
+    @Autowired com.botfunnel.subscriber.SubscriberRepository subscriberRepository;
+    @Autowired org.springframework.data.mongodb.core.MongoTemplate mongoTemplate;
+    @Autowired com.botfunnel.common.crypto.TokenEncryptor tokenEncryptor;
 
     private String projectId;
 
@@ -49,6 +57,9 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
         userRepository.deleteAll();
         projectRepository.deleteAll();
         funnelRepository.deleteAll();
+        botRepository.deleteAll();
+        subscriberRepository.deleteAll();
+        mongoTemplate.remove(new org.springframework.data.mongodb.core.query.Query(), FunnelExecution.class);
 
         User u = new User();
         u.setId(USER_ID);
@@ -171,12 +182,59 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void triggers_nonEventEntryStepIdRejected() {
-        // Decision 10: mid-entry is event-only; an on_start carrying an entryStepId → 422.
+    void triggers_nonEventNonOnStartEntryStepIdRejected() {
+        // 18-funnel-canvas / Decision 5: mid-entry entryStepId is allowed for event AND on_start (the start
+        // node's drawn edge). A NON-event NON-on_start type (keyword) carrying an entryStepId is still → 422.
         String id = createDraft();
         FunnelStepDto s = messageStep("step-1", "hi");
-        assert422(id, List.of(new TriggerDto("on_start", "", null, "step-1", null)), List.of(s),
+        assert422(id,
+                List.of(onStart(""), new TriggerDto("keyword", null, List.of("hello"), "step-1", null)),
+                List.of(s),
                 FunnelService.CODE_INVALID_ENTRY_STEP);
+    }
+
+    @Test
+    void triggers_onStartEntryStepIdAcceptedWhenResolves() {
+        // 18-funnel-canvas / Decision 5: the start node's drawn `next` edge is persisted on the on_start
+        // trigger's entryStepId — accepted (and persisted) when it resolves to a step of THIS funnel.
+        String id = createDraft();
+        FunnelStepDto s = messageStep("step-1", "hi");
+        assertThatCode(() -> update(id,
+                List.of(new TriggerDto("on_start", "", null, "step-1", null)),
+                List.of(s)))
+                .doesNotThrowAnyException();
+        Funnel reloaded = funnelRepository.findById(id).orElseThrow();
+        Trigger onStart = reloaded.getTriggers().stream()
+                .filter(t -> "on_start".equals(t.getTriggerType())).findFirst().orElseThrow();
+        assertThat(onStart.getEntryStepId()).isEqualTo("step-1");
+    }
+
+    @Test
+    void triggers_onStartDanglingEntryStepIdRejected() {
+        // 18-funnel-canvas / Decision 5: an on_start entryStepId that does NOT resolve to a step of this
+        // funnel (deleted target) → 422 (same funnel-scoped check as event).
+        String id = createDraft();
+        FunnelStepDto s = messageStep("step-1", "hi");
+        assert422(id,
+                List.of(new TriggerDto("on_start", "", null, "no-such-step", null)),
+                List.of(s),
+                FunnelService.CODE_INVALID_ENTRY_STEP);
+    }
+
+    @Test
+    void triggers_onStartNullEntryStepIdAccepted() {
+        // 18-funnel-canvas / Decision 5: a null on_start entryStepId is a broken/absent-edge state (start
+        // node with no drawn next), surfaced elsewhere — NOT a hard 422 here (unlike event).
+        String id = createDraft();
+        FunnelStepDto s = messageStep("step-1", "hi");
+        assertThatCode(() -> update(id,
+                List.of(new TriggerDto("on_start", "", null, null, null)),
+                List.of(s)))
+                .doesNotThrowAnyException();
+        Funnel reloaded = funnelRepository.findById(id).orElseThrow();
+        Trigger onStart = reloaded.getTriggers().stream()
+                .filter(t -> "on_start".equals(t.getTriggerType())).findFirst().orElseThrow();
+        assertThat(onStart.getEntryStepId()).isNull();
     }
 
     @Test
@@ -267,5 +325,56 @@ class FunnelServiceTriggerTypeTest extends AbstractIntegrationTest {
         assertThat(copy.getTriggers().get(0).getTriggerType()).isEqualTo("on_start");
         assertThat(copy.getTriggers().get(0).getTriggerValue()).isEqualTo("");
         assertThat(copy.getOnStartTriggerValue()).isNull();
+    }
+
+    // ─── 18-funnel-canvas / Task 3: testRun enters the on_start entryStepId ──────
+
+    @Test
+    void test_run_enters_on_start_entryStepId() {
+        // APPROVED deviation (Task 3): a test-run enters the SAME step a live /start would — the on_start
+        // trigger's drawn-edge entryStepId — not array[0]. Array order: [first, entry]; the edge targets
+        // "entry" (the SECOND element).
+        seedConnectedBotAndOwner();
+        String id = createDraft();
+        FunnelStepDto first = messageStep("first", "array-zero");
+        FunnelStepDto entry = messageStep("entry", "real-entry");
+        update(id, List.of(new TriggerDto("on_start", "", null, "entry", null)),
+                List.of(first, entry));
+
+        funnelService.testRun(USER_ID, projectId, id);
+
+        FunnelExecution created = mongoTemplate.find(
+                org.springframework.data.mongodb.core.query.Query.query(
+                        org.springframework.data.mongodb.core.query.Criteria
+                                .where("funnelId").is(id)),
+                FunnelExecution.class).stream().findFirst().orElse(null);
+        assertThat(created).isNotNull();
+        assertThat(created.getCurrentStepId()).isEqualTo("entry"); // entered the edge target, not array[0]
+    }
+
+    // Seed a CONNECTED bot (with ownerChatId) + the matching ACTIVE owner subscriber so testRun's
+    // resolveOwnerSubscriber resolves and insertExecution can enroll the author.
+    private void seedConnectedBotAndOwner() {
+        com.botfunnel.common.crypto.EncryptedValue ev = tokenEncryptor.encrypt(TEST_TOKEN);
+        com.botfunnel.bot.Bot bot = new com.botfunnel.bot.Bot();
+        bot.setProjectId(projectId);
+        bot.setTelegramBotId(TELEGRAM_BOT_ID);
+        bot.setTelegramUsername("ftt_bot");
+        bot.setOwnerChatId(OWNER_CHAT_ID);
+        bot.setStatus(com.botfunnel.bot.BotStatus.CONNECTED);
+        bot.setEncryptedTokenIv(java.util.Base64.getEncoder().encodeToString(ev.iv()));
+        bot.setEncryptedTokenCiphertext(java.util.Base64.getEncoder().encodeToString(ev.ciphertext()));
+        bot.setConnectedAt(Instant.now());
+        botRepository.save(bot);
+
+        com.botfunnel.subscriber.Subscriber owner = new com.botfunnel.subscriber.Subscriber();
+        owner.setProjectId(projectId);
+        owner.setTelegramUserId(OWNER_CHAT_ID);
+        owner.setTelegramChatId(OWNER_CHAT_ID);
+        owner.setTelegramBotId(TELEGRAM_BOT_ID);
+        owner.setStatus(com.botfunnel.subscriber.SubscriberStatus.ACTIVE);
+        owner.setSubscribedAt(Instant.now());
+        owner.setLastSeenAt(Instant.now());
+        subscriberRepository.save(owner);
     }
 }

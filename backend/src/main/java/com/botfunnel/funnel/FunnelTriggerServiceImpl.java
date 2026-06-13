@@ -139,8 +139,10 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
 
             // Step 3: exact-match the active funnel whose triggers[] contains an on_start element with this
             // payload. An empty payload matches an on_start element with an empty triggerValue (bare /start).
-            // No match → no-op. on_start enrolls always START at step 0 (entryStepId is null for on_start,
-            // Decision 10) — never a redirect.
+            // No match → no-op. The enrolment enters the on_start node's DRAWN edge (entryStepId, reused
+            // field — 18-funnel-canvas / Decision 5) instead of the hard step 0; a null/dangling entryStepId
+            // degrades to step 0 in FunnelExecutionFactory.resolveStartCursor (defence-in-depth). Never a
+            // redirect.
             //
             // Phase 8 deviation from the literal task wording: the task says "move to onStartTriggerValue
             // (findByProjectIdAndOnStartTriggerValueAndStatus)", but that denormalized scalar is NULL for a
@@ -165,16 +167,20 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
 
             // Step 4: re-enter guard (Decision 8). on_start roots are depth 0 (Phase 3 / Decision 6) —
             // the depth-aware insert lives behind FunnelExecutionFactory (Task 4: no forked writer, no
-            // FunnelEventService → FunnelTriggerServiceImpl bean edge).
+            // FunnelEventService → FunnelTriggerServiceImpl bean edge). The execution starts at the on_start
+            // node's drawn entryStepId (18-funnel-canvas / Decision 5), not the hard step 0.
+            String entryStepId = onStartEntryStepId(funnel);
             if (funnel.isAllowReEnter()) {
                 executionFactory.cancelExistingForPair(projectId, funnel.getId(), subscriber.getId());
-                executionFactory.insertExecution(projectId, funnel, subscriber.getId(), telegramBotId, 0);
+                executionFactory.insertExecutionAt(projectId, funnel, subscriber.getId(), telegramBotId, 0,
+                        entryStepId);
                 log.info("{} funnelId={} subscriberId={}", LOG_FIRE_REENTER_RESTARTED,
                         funnel.getId(), subscriber.getId());
                 return;
             }
             try {
-                executionFactory.insertExecution(projectId, funnel, subscriber.getId(), telegramBotId, 0);
+                executionFactory.insertExecutionAt(projectId, funnel, subscriber.getId(), telegramBotId, 0,
+                        entryStepId);
             } catch (DuplicateKeyException dup) {
                 // Re-enter disabled: the unique partial index already has a running|waiting execution for
                 // this (funnelId, subscriberId). Repeated /start is an atomic no-op — swallow.
@@ -391,6 +397,22 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
     // Linear lookup by stable step id over the (small, <=50) snapshot. Mirrors FunnelExecutionEngine's
     // private stepById — duplicated here rather than exposed because the engine keeps it package-private
     // static and the two modules navigate independently. null id or no match → null.
+    // The matched funnel's on_start node drawn-edge entryStepId (18-funnel-canvas / Decision 5), or null when
+    // there is no on_start element or its edge is absent/deleted. Scans triggers[] by TRIGGER_ON_START
+    // (mirrors FunnelService.syncOnStartTriggerValue). A null/dangling id degrades to step 0 in
+    // FunnelExecutionFactory.resolveStartCursor (defence-in-depth) — never strands the cursor.
+    private static String onStartEntryStepId(Funnel funnel) {
+        if (funnel.getTriggers() == null) {
+            return null;
+        }
+        for (Trigger t : funnel.getTriggers()) {
+            if (t != null && FunnelService.TRIGGER_ON_START.equals(t.getTriggerType())) {
+                return t.getEntryStepId();
+            }
+        }
+        return null;
+    }
+
     private static FunnelStep stepById(List<FunnelStep> snapshot, String id) {
         if (snapshot == null || id == null) {
             return null;

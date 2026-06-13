@@ -284,10 +284,12 @@ class FunnelTriggerServiceIT extends AbstractIntegrationTest {
         seedActiveSubscriber();
         seedActiveFunnel("ref_x", false, message("x"));
 
-        // Force a fault deep inside fire() by making the funnel lookup throw.
+        // Force a fault deep inside fire() by making the funnel lookup throw. Phase 8: fire()'s on_start
+        // lookup now goes through the array-aware $elemMatch query over triggers[] (Task 5 — the flat
+        // findByProjectIdAndTriggerTypeAndTriggerValueAndStatus was removed in Task 2).
         Mockito.doThrow(new RuntimeException("boom inside fire"))
                 .when(funnelRepositorySpy)
-                .findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
+                .findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
                         Mockito.anyString(), Mockito.anyString(), Mockito.anyString(),
                         Mockito.any(FunnelStatus.class));
 
@@ -561,8 +563,13 @@ class FunnelTriggerServiceIT extends AbstractIntegrationTest {
         f.setProjectId(projectId);
         f.setName("funnel-" + seq.incrementAndGet());
         f.setStatus(FunnelStatus.active);
-        f.setTriggerType("on_start");
-        f.setTriggerValue(triggerValue);
+        // Phase 8: a funnel carries List<Trigger> + a denormalized onStartTriggerValue scalar. Build a
+        // single on_start element with the given value; the scalar syncs to null for a bare "" (Variant A).
+        Trigger t = new Trigger();
+        t.setTriggerType("on_start");
+        t.setTriggerValue(triggerValue);
+        f.setTriggers(new ArrayList<>(List.of(t)));
+        f.setOnStartTriggerValue(triggerValue == null || triggerValue.isBlank() ? null : triggerValue);
         f.setAllowReEnter(allowReEnter);
         List<FunnelStep> list = new ArrayList<>(List.of(steps));
         f.setSteps(list);

@@ -709,8 +709,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         live.setProjectId(projectId);
         live.setName("edited-mid-wait");
         live.setStatus(FunnelStatus.active);
-        live.setTriggerType(FunnelService.TRIGGER_ON_START);
-        live.setTriggerValue("");
+        setBareOnStart(live);
         live.setSteps(new ArrayList<>(List.of(liveMenu)));
         live.setCreatedAt(BASE);
         live.setUpdatedAt(BASE);
@@ -750,8 +749,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         live.setProjectId(projectId);
         live.setName("edited-blocks");
         live.setStatus(FunnelStatus.active);
-        live.setTriggerType(FunnelService.TRIGGER_ON_START);
-        live.setTriggerValue("");
+        setBareOnStart(live);
         live.setSteps(new ArrayList<>(List.of(liveMenu, liveS2)));
         live.setCreatedAt(BASE);
         live.setUpdatedAt(BASE);
@@ -1259,8 +1257,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
             foreign.setProjectId("other-project-" + seq.incrementAndGet());
             foreign.setName("foreign");
             foreign.setStatus(FunnelStatus.active);
-            foreign.setTriggerType(FunnelService.TRIGGER_ON_START);
-            foreign.setTriggerValue("");
+            setBareOnStart(foreign);
             foreign.setSteps(new ArrayList<>(List.of(sendMessageStep("t1", "x", null))));
             foreign.setCreatedAt(BASE);
             foreign.setUpdatedAt(BASE);
@@ -1477,10 +1474,261 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         assertThat(exec.getEnrollDepth()).isZero();
     }
 
+    // ─── Phase 8 (17-funnel-multi-entry / Task 5): redirectExecution ────────────
+    // Slow-lane engine ITs for the multi-entry redirect: claim-CAS bound by subscriberId+funnelId,
+    // cursor → entryStepId against the execution's own snapshot, unpark + drive now. CAS-loss / broken
+    // cursor / mismatched-subscriber are no-ops or single-execution terminal-fails (Decisions 2/3/4/5).
+
+    @Test
+    void redirect_movesCursorToEntryStep_andUnparksWaitingForReply() {
+        String subId = seedActiveSubscriber();
+        // entry-A (the redirect target) --next--> End. The execution is parked waiting_for_reply on a menu.
+        FunnelStep menu = menu("m1", "Pick", null, null, null, callbackButton("Yes", "s2"));
+        FunnelStep s2 = sendMessageStep("s2", "branch", null);
+        FunnelStep entryA = sendMessageStep("entry-A", "redirected!", null);
+        String funnelId = "funnel-redirect-" + seq.incrementAndGet();
+        String execId = seedRedirectableExecution(funnelId, subId, ExecutionStatus.waiting_for_reply,
+                "m1", menu, s2, entryA);
+        enqueueOk(1); // the entry-A send after redirect
+
+        engine.redirectExecution(execId, subId, funnelId, "entry-A");
+
+        FunnelExecution after = reload(execId);
+        // Cursor moved onto entry-A, the branch ran (entry-A had no next → completed), park is gone.
+        assertThat(after.getStatus()).isEqualTo(ExecutionStatus.completed);
+        assertThat(sentCount()).isEqualTo(1);
+    }
+
+    @Test
+    void redirect_ofRunningAndWaiting_movesCursor() {
+        // redirect accepts running and waiting (wider than callback's waiting_for_reply-only). The graph is
+        // shaped so the cursor move is PROVABLE by send count: the ORIGINAL cursor s1 --next--> tail (two
+        // sends if not redirected), while the redirect target "entry" --> End (exactly ONE send). If the
+        // CAS failed to move currentStepId to entry, drive would run s1+tail = 2 sends and the assertion
+        // would fail.
+        for (ExecutionStatus status : List.of(ExecutionStatus.running, ExecutionStatus.waiting)) {
+            String subId = seedActiveSubscriber();
+            FunnelStep s1 = sendMessageStep("s1", "orig", "tail");
+            FunnelStep tail = sendMessageStep("tail", "orig-tail", null);
+            FunnelStep entry = sendMessageStep("entry", "redirected", null);
+            String funnelId = "funnel-rw-" + seq.incrementAndGet();
+            String execId = seedRedirectableExecution(funnelId, subId, status, "s1", s1, tail, entry);
+            enqueueOk(2); // buffer; only ONE send must actually fire (entry → End)
+
+            int before = sentCount();
+            engine.redirectExecution(execId, subId, funnelId, "entry");
+
+            assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed);
+            assertThat(reload(execId).getCurrentStepId()).isNull(); // entry had no next → End
+            assertThat(sentCount() - before).isEqualTo(1); // entry only — NOT s1 + tail
+        }
+    }
+
+    @Test
+    void redirect_mutatesExistingRow_noSecondExecutionInserted() {
+        String subId = seedActiveSubscriber();
+        FunnelStep s1 = sendMessageStep("s1", "orig", null);
+        FunnelStep entry = sendMessageStep("entry", "redirected", null);
+        String funnelId = "funnel-one-" + seq.incrementAndGet();
+        String execId = seedRedirectableExecution(funnelId, subId, ExecutionStatus.waiting, "s1", s1, entry);
+        enqueueOk(1);
+
+        engine.redirectExecution(execId, subId, funnelId, "entry");
+
+        // Core "one execution per funnel per subscriber" invariant (Decision 2): still exactly ONE row.
+        List<FunnelExecution> all = mongoTemplate.find(
+                Query.query(Criteria.where("funnelId").is(funnelId).and("subscriberId").is(subId)),
+                FunnelExecution.class);
+        assertThat(all).hasSize(1);
+        assertThat(all.get(0).getId()).isEqualTo(execId);
+    }
+
+    @Test
+    void redirect_casLost_isNoOp_andEmitsWarn() {
+        Logger engineLogger = (Logger) LoggerFactory.getLogger(FunnelExecutionEngine.class);
+        ListAppender<ILoggingEvent> appender = attach(engineLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            FunnelStep s1 = sendMessageStep("s1", "orig", null);
+            FunnelStep entry = sendMessageStep("entry", "redirected", null);
+            String funnelId = "funnel-cas-" + seq.incrementAndGet();
+            String execId = seedRedirectableExecution(funnelId, subId, ExecutionStatus.running, "s1", s1, entry);
+            // Sweep owns the row: stepRunStatus=in_progress → the redirect claim-CAS (predicate pending) loses.
+            FunnelExecution e = reload(execId);
+            e.setStepRunStatus(StepRunStatus.in_progress);
+            mongoTemplate.save(e);
+
+            engine.redirectExecution(execId, subId, funnelId, "entry");
+
+            // No-op: the row is untouched (cursor still s1, still in_progress) and a greppable WARN fired.
+            FunnelExecution after = reload(execId);
+            assertThat(after.getCurrentStepId()).isEqualTo("s1");
+            assertThat(after.getStepRunStatus()).isEqualTo(StepRunStatus.in_progress);
+            assertThat(sentCount()).isZero();
+            assertThat(warn(appender)).anyMatch(m ->
+                    m.contains(FunnelExecutionEngine.LOG_REDIRECT_CLAIM_LOST));
+        } finally {
+            detach(engineLogger, appender);
+        }
+    }
+
+    @Test
+    void redirect_mismatchedSubscriber_isNoOp() {
+        String owner = seedActiveSubscriber();
+        String foreign = seedActiveSubscriber();
+        FunnelStep s1 = sendMessageStep("s1", "orig", null);
+        FunnelStep entry = sendMessageStep("entry", "redirected", null);
+        String funnelId = "funnel-idor-" + seq.incrementAndGet();
+        String execId = seedRedirectableExecution(funnelId, owner, ExecutionStatus.waiting, "s1", s1, entry);
+
+        // Anti-IDOR (Decision 3): a foreign subscriberId fails the claim predicate → no-op.
+        engine.redirectExecution(execId, foreign, funnelId, "entry");
+
+        FunnelExecution after = reload(execId);
+        assertThat(after.getCurrentStepId()).isEqualTo("s1");
+        assertThat(after.getStatus()).isEqualTo(ExecutionStatus.waiting);
+        assertThat(sentCount()).isZero();
+    }
+
+    @Test
+    void redirect_brokenCursor_terminalFailsOnlyThatExecution() {
+        Logger engineLogger = (Logger) LoggerFactory.getLogger(FunnelExecutionEngine.class);
+        ListAppender<ILoggingEvent> appender = attach(engineLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            // The redirect target "ghost" is NOT in this execution's snapshot (snapshot frozen before it
+            // existed) → broken cursor → terminal-fail ONLY this execution (Decision 5).
+            FunnelStep s1 = sendMessageStep("s1", "orig", null);
+            String funnelId = "funnel-broken-" + seq.incrementAndGet();
+            String brokenId = seedRedirectableExecution(funnelId, subId, ExecutionStatus.waiting, "s1", s1);
+            // A second, independent execution that must keep working (the sweep is unaffected).
+            String otherId = seedExecution(subId, BASE, sendMessage("other"));
+            enqueueOk(1); // only the other execution sends
+
+            engine.redirectExecution(brokenId, subId, funnelId, "ghost");
+
+            assertThat(reload(brokenId).getStatus()).isEqualTo(ExecutionStatus.failed);
+            assertThat(reload(brokenId).getStepRunStatus()).isEqualTo(StepRunStatus.done);
+            // The broken-cursor marker is logged at ERROR (mirroring LOG_BROKEN_CURSOR) — match any level.
+            assertThat(appender.list).anyMatch(e ->
+                    e.getFormattedMessage().contains(FunnelExecutionEngine.LOG_REDIRECT_BROKEN_CURSOR));
+            // The sweep still processes the other execution end-to-end.
+            engine.sweep();
+            assertThat(reload(otherId).getStatus()).isEqualTo(ExecutionStatus.completed);
+            assertThat(sentCount()).isEqualTo(1);
+        } finally {
+            detach(engineLogger, appender);
+        }
+    }
+
+    @Test
+    void emitEventTriggerSelfLoop_terminatesAtBudgetOrMenuPark() {
+        // US Risk 4 regression gate: an EMIT_EVENT step whose event matches THIS funnel's own event trigger
+        // (entryStepId = the EMIT_EVENT step) redirects the execution back onto itself. Without a park between
+        // turns the per-tick budget trips FUNNEL_STEP_BUDGET_EXCEEDED → terminate(failed) — it does NOT loop
+        // forever. The matched funnel is seeded active with an event trigger so the dispatcher redirects.
+        Logger engineLogger = (Logger) LoggerFactory.getLogger(FunnelExecutionEngine.class);
+        ListAppender<ILoggingEvent> appender = attach(engineLogger);
+        try {
+            String subId = seedActiveSubscriber();
+            // Funnel with one event trigger (entryStepId = the emit step) and a single EMIT_EVENT step that
+            // re-fires the same event. The execution is the in-flight row for the pair, so each dispatch
+            // redirects it back onto the emit step → no park → budget trips.
+            FunnelStep emit = emitEventStep("emit", "loopev", "emit");
+            Funnel self = seedActiveEventFunnel("loopev", "emit", emit);
+            String execId = seedRedirectableExecution(self.getId(), subId, ExecutionStatus.running,
+                    "emit", emit);
+
+            engine.sweep();
+
+            assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.failed);
+            assertThat(warn(appender).stream().anyMatch(m ->
+                    m.contains(FunnelExecutionEngine.LOG_STEP_BUDGET_EXCEEDED))
+                    || appender.list.stream().anyMatch(e ->
+                    e.getFormattedMessage().contains(FunnelExecutionEngine.LOG_STEP_BUDGET_EXCEEDED)))
+                    .isTrue();
+        } finally {
+            detach(engineLogger, appender);
+        }
+    }
+
     // ─── helpers ───────────────────────────────────────────────────────────────
+
+    // Seed a redirectable graph execution with an explicit funnelId + status (running|waiting|
+    // waiting_for_reply), cursor on currentStepId, due now, stepRunStatus=pending. The funnelId is explicit
+    // so the redirect (scoped by funnelId) targets it deterministically.
+    private String seedRedirectableExecution(String funnelId, String subscriberId, ExecutionStatus status,
+                                             String currentStepId, FunnelStep... steps) {
+        FunnelExecution e = new FunnelExecution();
+        e.setProjectId(projectId);
+        e.setFunnelId(funnelId);
+        e.setSubscriberId(subscriberId);
+        e.setTelegramBotId(TELEGRAM_BOT_ID);
+        e.setStatus(status);
+        e.setStepRunStatus(StepRunStatus.pending);
+        // waiting_for_reply with no timeout parks indefinitely (nextRunAt null); running/waiting due now.
+        e.setNextRunAt(status == ExecutionStatus.waiting_for_reply ? null : BASE);
+        List<FunnelStep> snapshot = new ArrayList<>(List.of(steps));
+        e.setCurrentStepId(currentStepId);
+        e.setCurrentStepIndex(0);
+        e.setStepsSnapshot(snapshot);
+        e.setCreatedAt(BASE);
+        e.setUpdatedAt(BASE);
+        return mongoTemplate.save(e).getId();
+    }
+
+    // EMIT_EVENT step builder (Phase 3) — graph-shaped (carries an id) so redirect can target it.
+    private FunnelStep emitEventStep(String id, String eventName, String next) {
+        FunnelStep s = new FunnelStep();
+        s.setId(id);
+        s.setNext(next);
+        s.setStepType(StepType.EMIT_EVENT);
+        s.setEventName(eventName);
+        return s;
+    }
+
+    // Seed an ACTIVE funnel carrying a single event trigger (eventName → entryStepId) in this project, so
+    // the dispatcher's $elemMatch query finds it and the re-scan reads entryStepId for redirect routing.
+    private Funnel seedActiveEventFunnel(String eventName, String entryStepId, FunnelStep... steps) {
+        Funnel f = new Funnel();
+        f.setProjectId(projectId);
+        f.setName("event-" + seq.incrementAndGet());
+        f.setStatus(FunnelStatus.active);
+        Trigger t = new Trigger();
+        t.setTriggerType(FunnelService.TRIGGER_EVENT);
+        t.setTriggerValue(eventName);
+        t.setEntryStepId(entryStepId);
+        f.setTriggers(new ArrayList<>(List.of(t)));
+        f.setOnStartTriggerValue(null);
+        f.setSteps(new ArrayList<>(List.of(steps)));
+        f.setCreatedAt(BASE);
+        f.setUpdatedAt(BASE);
+        return funnelRepository.save(f);
+    }
 
     private FunnelExecution reload(String id) {
         return mongoTemplate.findById(id, FunnelExecution.class);
+    }
+
+    // Phase 8 (17-funnel-multi-entry): a funnel now carries List<Trigger> + a denormalized
+    // onStartTriggerValue scalar instead of the flat trio. Build a single bare on_start trigger
+    // (triggerValue "" → scalar null, Variant A) and apply it to a seed funnel.
+    private static void setBareOnStart(Funnel f) {
+        Trigger t = new Trigger();
+        t.setTriggerType(FunnelService.TRIGGER_ON_START);
+        t.setTriggerValue("");
+        f.setTriggers(new ArrayList<>(List.of(t)));
+        f.setOnStartTriggerValue(null);
+    }
+
+    // Apply a keyword trigger (keywords now live per-Trigger) to a seed funnel.
+    private static void setKeywordTrigger(Funnel f, List<String> lowercaseKeywords) {
+        Trigger t = new Trigger();
+        t.setTriggerType(FunnelService.TRIGGER_KEYWORD);
+        t.setTriggerValue("");
+        t.setKeywords(new ArrayList<>(lowercaseKeywords));
+        f.setTriggers(new ArrayList<>(List.of(t)));
+        f.setOnStartTriggerValue(null);
     }
 
     private void enqueueOk(int count) {
@@ -1682,8 +1930,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         f.setProjectId(projectId);
         f.setName("target-" + seq.incrementAndGet());
         f.setStatus(status);
-        f.setTriggerType(FunnelService.TRIGGER_ON_START);
-        f.setTriggerValue("t-" + seq.incrementAndGet());
+        setBareOnStart(f);
         f.setAllowReEnter(allowReEnter);
         f.setSteps(new ArrayList<>(List.of(steps)));
         f.setCreatedAt(BASE);
@@ -1699,8 +1946,7 @@ class FunnelExecutionEngineIT extends AbstractIntegrationTest {
         f.setProjectId(projectId);
         f.setName("keyword-" + seq.incrementAndGet());
         f.setStatus(FunnelStatus.active);
-        f.setTriggerType(FunnelService.TRIGGER_KEYWORD);
-        f.setKeywords(new ArrayList<>(lowercaseKeywords));
+        setKeywordTrigger(f, lowercaseKeywords);
         f.setSteps(new ArrayList<>(List.of(sendMessageStep("k1", "keyword hit", null))));
         f.setCreatedAt(BASE);
         f.setUpdatedAt(BASE);

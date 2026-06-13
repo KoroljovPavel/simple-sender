@@ -137,13 +137,24 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
                 return;
             }
 
-            // Step 3: exact-match the active funnel on (triggerType, triggerValue == payload). An empty
-            // payload matches a funnel with an empty triggerValue. No match → no-op.
+            // Step 3: exact-match the active funnel whose triggers[] contains an on_start element with this
+            // payload. An empty payload matches an on_start element with an empty triggerValue (bare /start).
+            // No match → no-op. on_start enrolls always START at step 0 (entryStepId is null for on_start,
+            // Decision 10) — never a redirect.
+            //
+            // Phase 8 deviation from the literal task wording: the task says "move to onStartTriggerValue
+            // (findByProjectIdAndOnStartTriggerValueAndStatus)", but that denormalized scalar is NULL for a
+            // bare /start ("" syncs to null so bare-start funnels stay out of the partial-unique index —
+            // Variant A), and its repository method forbids a null argument (it would match every event-only
+            // funnel). A bare /start MUST still resolve its funnel, so the lookup uses the array-aware
+            // $elemMatch query over triggers[] on (on_start, payload) — exact old semantics for both bare ""
+            // and a deep-link payload. fan-out is irrelevant here: at most one active on_start funnel per
+            // (project, payload) is the invariant; .findFirst() keeps the single-result contract.
             String triggerValue = payload == null ? "" : payload;
             Funnel funnel = funnelRepository
-                    .findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
+                    .findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
                             projectId, triggerType, triggerValue, FunnelStatus.active)
-                    .orElse(null);
+                    .stream().findFirst().orElse(null);
             if (funnel == null) {
                 log.info("{} projectId={} triggerType={}", LOG_FIRE_NO_MATCH, projectId, triggerType);
                 return;

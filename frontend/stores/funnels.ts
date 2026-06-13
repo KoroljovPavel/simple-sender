@@ -76,8 +76,10 @@ export const useFunnelsStore = defineStore('funnels', () => {
               name: updated.name,
               description: updated.description,
               status: updated.status,
-              triggerType: updated.triggerType,
-              triggerValue: updated.triggerValue,
+              // Phase 8 (17-funnel-multi-entry): the summary row carries the whole trigger array (the flat
+              // triggerType/triggerValue trio is gone). The store stays a thin pass-through — it projects
+              // the array verbatim, never reasons about its shape.
+              triggers: updated.triggers,
               allowReEnter: updated.allowReEnter,
               stepCount: updated.steps.length,
               updatedAt: updated.updatedAt,
@@ -113,8 +115,8 @@ export const useFunnelsStore = defineStore('funnels', () => {
             name: updated.name,
             description: updated.description,
             status: updated.status,
-            triggerType: updated.triggerType,
-            triggerValue: updated.triggerValue,
+            // Phase 8 (17-funnel-multi-entry): project the whole trigger array (flat trio removed).
+            triggers: updated.triggers,
             allowReEnter: updated.allowReEnter,
             stepCount: updated.steps.length,
             updatedAt: updated.updatedAt,

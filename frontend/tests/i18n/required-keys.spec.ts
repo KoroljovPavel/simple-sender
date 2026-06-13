@@ -47,6 +47,24 @@ const REQUIRED_KEYS = [
   'funnels.editor.previewMediaType.VIDEO',
   'funnels.editor.previewMediaType.AUDIO',
   'funnels.editor.previewMediaType.FILE',
+  // Task 6 (17-funnel-multi-entry) — FunnelTriggersPanel.vue labels. uk/en parity, no empty values.
+  'funnels.triggersPanel.mainEntry',
+  'funnels.triggersPanel.mainEntryHint',
+  'funnels.triggersPanel.eventTriggers',
+  'funnels.triggersPanel.add',
+  'funnels.triggersPanel.delete',
+  'funnels.triggersPanel.confirmDelete',
+  'funnels.triggersPanel.unnamedEvent',
+  'funnels.triggersPanel.entryLabel',
+  'funnels.triggersPanel.entryStart',
+  'funnels.triggersPanel.entryPlaceholder',
+  'funnels.triggersPanel.entryLoading',
+  'funnels.triggersPanel.entryEmpty',
+  'funnels.triggersPanel.entryNoMatches',
+  'funnels.triggersPanel.entryHint',
+  'funnels.triggersPanel.duplicateEventName',
+  'funnels.triggersPanel.empty.title',
+  'funnels.triggersPanel.empty.body',
 ] as const
 
 describe('i18n AC-25 required keys', () => {

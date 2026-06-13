@@ -13,7 +13,13 @@ import type { FunnelTriggerType } from '~/types/funnel'
 import type { CustomFieldDefinition, Tag } from '~/types/subscriber'
 import SearchableSelect from '~/components/funnels/SearchableSelect.vue'
 
-const props = defineProps<{ botUsername?: string | null; deepLink?: string | null }>()
+// lockType pins the trigger-TYPE selector (disabled, no change emitted). Used by FunnelTriggersPanel for
+// the on_start "main entry" slot and each event row, where the panel — not this form — owns the type.
+const props = defineProps<{
+  botUsername?: string | null
+  deepLink?: string | null
+  lockType?: boolean
+}>()
 const triggerType = defineModel<FunnelTriggerType>('triggerType', { default: 'on_start' })
 const triggerValue = defineModel<string>('triggerValue', { default: '' })
 const keywords = defineModel<string[]>('keywords', { default: () => [] })
@@ -150,7 +156,8 @@ onBeforeUnmount(() => {
         id="funnel-trigger-type"
         v-model="triggerType"
         data-test="funnel-trigger-type-select"
-        class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+        :disabled="props.lockType"
+        class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100"
       >
         <option v-for="ty in TRIGGER_TYPES" :key="ty" :value="ty">{{ t(`funnels.trigger.type.${ty}`) }}</option>
       </select>

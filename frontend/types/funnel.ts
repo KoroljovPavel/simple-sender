@@ -30,6 +30,24 @@ export type StepType =
 // as the match key (tag slug / field key / event name).
 export type FunnelTriggerType = 'on_start' | 'keyword' | 'tag_added' | 'custom_field_set' | 'event'
 
+// One funnel entry trigger — mirrors backend TriggerDto (com.botfunnel.funnel.dto.TriggerDto, Task 3)
+// one-to-one. Phase 8 (17-funnel-multi-entry): a funnel carries a LIST of triggers, each with its own
+// entry step, replacing the former flat triggerType/triggerValue/keywords trio. Field semantics:
+//   - triggerType  → the discriminator (FunnelTriggerType byte-for-byte).
+//   - triggerValue → match key for tag_added (tag slug) / custom_field_set (field key) / event (event
+//                    name); the deep-link parameter for on_start; null/unused for keyword.
+//   - keywords     → only populated for triggerType=keyword (the scanned word list); null otherwise.
+//   - entryStepId  → the step this trigger enters at. Mid-entry is EVENT-ONLY (Decision 10): the backend
+//                    REQUIRES a non-null entryStepId resolving to a step for `event`, and REJECTS a
+//                    non-null entryStepId for every other type (on_start/keyword/tag_added/custom_field_set
+//                    always enter at step 1, so their entryStepId is null).
+export interface FunnelTrigger {
+  triggerType: string
+  triggerValue?: string | null
+  keywords?: string[] | null
+  entryStepId?: string | null
+}
+
 // Inline-keyboard button on a MESSAGE composer step — mirrors backend Button record
 // (com.botfunnel.funnel.Button). type is 'callback' (advances the funnel to targetStepId, or End when
 // null) or 'url' (opens an http(s) link, does not advance). targetStepId and url are mutually exclusive
@@ -154,10 +172,9 @@ export interface FunnelSummaryResponse {
   name: string
   description: string | null
   status: FunnelStatus
-  triggerType: string | null
-  triggerValue: string | null
-  // Only populated for triggerType=keyword; null/empty for every other trigger type (Decision 3).
-  keywords?: string[] | null
+  // The funnel's entry triggers (Phase 8 — 17-funnel-multi-entry). Replaces the former flat trigger trio;
+  // a funnel always carries at least the on_start element, plus zero or more event/keyword/tag/field ones.
+  triggers: FunnelTrigger[]
   allowReEnter: boolean
   stepCount: number
   createdAt: string
@@ -172,10 +189,10 @@ export interface FunnelResponse {
   name: string
   description: string | null
   status: FunnelStatus
-  triggerType: string | null
-  triggerValue: string | null
-  // Only populated for triggerType=keyword; null/empty for every other trigger type (Decision 3).
-  keywords?: string[] | null
+  // The funnel's entry triggers (Phase 8 — 17-funnel-multi-entry). Replaces the former flat trigger trio;
+  // each carries its own entry step (mid-entry is event-only — see FunnelTrigger). deepLink is built from
+  // the on_start element server-side.
+  triggers: FunnelTrigger[]
   allowReEnter: boolean
   steps: FunnelStep[]
   deepLink: string | null
@@ -189,15 +206,14 @@ export interface CreateFunnelRequest {
   description?: string | null
 }
 
-// PATCH/PUT .../funnels/{id} body — full-replace metadata + trigger + steps (all nullable server-side).
-// Task 9 includes update() in the store per contract but has no UI for it (Task 10 reuses it).
+// PATCH/PUT .../funnels/{id} body — full-replace metadata + triggers + steps (all nullable server-side).
+// Phase 8 (17-funnel-multi-entry): the trigger array is sent whole (full-replace, NOT a delta); per-trigger
+// and cross-trigger validation (≤1 on_start, duplicate event_name, event-only mid-entry) lives server-side
+// → 422. Task 10 reuses update() to persist editor changes.
 export interface UpdateFunnelRequest {
   name?: string
   description?: string | null
-  triggerType?: string | null
-  triggerValue?: string | null
-  // Only sent for triggerType=keyword (the active type owns its value — Edge cases); omit otherwise.
-  keywords?: string[] | null
+  triggers?: FunnelTrigger[]
   allowReEnter?: boolean
   steps?: FunnelStep[]
 }

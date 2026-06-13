@@ -81,6 +81,13 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
     <!-- Lightweight body: localized type + short title. NO FunnelMessagePreview here (perf, §8.4). -->
     <div class="funnel-canvas-node__body" data-test="funnel-canvas-node-body">
       <span class="funnel-canvas-node__title">{{ title }}</span>
+      <!-- Note body — author free text. Rendered text-only via {{ }}, NEVER v-html (Decision 7 stored-XSS
+           guard, mirrors FunnelMessagePreview/FunnelStepForm). An injection payload shows as escaped text. -->
+      <span
+        v-if="isNote && noteText"
+        data-test="funnel-canvas-note-text"
+        class="funnel-canvas-node__note-text"
+      >{{ noteText }}</span>
     </div>
 
     <!-- Cross-funnel SUBSCRIBE exit badge (Decision 11) — surfaced on the node, NOT as an outgoing edge. -->

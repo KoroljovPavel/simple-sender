@@ -7,7 +7,10 @@ import type { FunnelStep } from '~/types/funnel'
 // selectedIndex highlights the row currently driving the preview panel; clicking a row's title/summary
 // block emits `select` so the parent can preview THAT step (the action buttons @click.stop so they edit/
 // move/delete without also hijacking selection).
-const props = defineProps<{ steps: FunnelStep[]; selectedIndex?: number }>()
+// readonly (Task 7 / Decision 2 — 18-funnel-canvas): on the canvas-driven editor the canvas is the SOLE
+// structural-editing surface, so the vertical list stays mounted as a VIEW only — no move/edit/delete/add
+// affordances. `select` (preview driving) is preserved as a non-structural view affordance.
+const props = defineProps<{ steps: FunnelStep[]; selectedIndex?: number; readonly?: boolean }>()
 const emit = defineEmits<{
   move: [from: number, to: number]
   edit: [index: number]
@@ -61,6 +64,14 @@ function confirmDelete(index: number) {
 
 <template>
   <div data-test="funnel-steps">
+    <p
+      v-if="props.readonly"
+      data-test="funnel-steps-readonly-notice"
+      class="mb-2 rounded-md border border-dashed bg-gray-50 px-3 py-2 text-xs text-gray-500"
+    >
+      {{ t('funnels.canvas.listReadOnly') }}
+    </p>
+
     <div
       v-if="props.steps.length === 0"
       data-test="funnel-steps-empty"
@@ -69,6 +80,7 @@ function confirmDelete(index: number) {
       <span class="block font-medium">{{ t('funnels.steps.empty.title') }}</span>
       <span class="mt-1 block">{{ t('funnels.steps.empty.body') }}</span>
       <button
+        v-if="!props.readonly"
         type="button"
         data-test="funnel-steps-empty-add"
         class="mt-4 rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
@@ -97,7 +109,11 @@ function confirmDelete(index: number) {
           <span v-if="summary(step)" class="block truncate text-sm text-gray-500">{{ summary(step) }}</span>
         </button>
 
-        <template v-if="confirmIndex === index">
+        <template v-if="props.readonly">
+          <!-- View-only: the canvas owns structural edits (move/edit/delete/add). No row actions here. -->
+        </template>
+
+        <template v-else-if="confirmIndex === index">
           <span class="text-sm text-gray-600">{{ t('funnels.steps.confirmDelete') }}</span>
           <button
             type="button"

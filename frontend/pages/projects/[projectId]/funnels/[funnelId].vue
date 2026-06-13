@@ -10,11 +10,18 @@ import {
   DialogFooter,
 } from '~/components/ui/dialog'
 import FunnelStepsList from '~/components/funnels/FunnelStepsList.vue'
-import AddStepDialog from '~/components/funnels/AddStepDialog.vue'
-import EditStepDialog from '~/components/funnels/EditStepDialog.vue'
 import FunnelTriggersPanel from '~/components/funnels/FunnelTriggersPanel.vue'
 import FunnelMessagePreview from '~/components/funnels/FunnelMessagePreview.vue'
-import type { FunnelResponse, FunnelStatus, FunnelStep, FunnelTrigger, StepType } from '~/types/funnel'
+import FunnelCanvas from '~/components/funnels/FunnelCanvas.client.vue'
+import type {
+  CanvasPosition,
+  FunnelNote,
+  FunnelResponse,
+  FunnelStatus,
+  FunnelStep,
+  FunnelTrigger,
+  StepType,
+} from '~/types/funnel'
 
 definePageMeta({ layout: 'default' })
 
@@ -35,6 +42,9 @@ const steps = ref<FunnelStep[]>([])
 // triggerType/triggerValue/keywords + entryStepId. The panel (FunnelTriggersPanel) edits them via
 // v-model:triggers; the page owns the array, the autosave gate and the PATCH payload.
 const triggers = ref<FunnelTrigger[]>([])
+// Phase 2 (18-funnel-canvas): free-floating canvas annotations. The page owns the array and rides it inside
+// the full-replace PATCH alongside steps/triggers. Null from the backend (old funnels) → empty array.
+const notes = ref<FunnelNote[]>([])
 const loaded = ref(false)
 const loadError = ref<string | null>(null)
 const saving = ref(false)
@@ -48,15 +58,12 @@ const testing = ref(false)
 const stopOpen = ref(false)
 const stopping = ref(false)
 
-const addOpen = ref(false)
-const editOpen = ref(false)
-const editIndex = ref(-1)
-const editStep = computed<FunnelStep | null>(() => steps.value[editIndex.value] ?? null)
-
 // ─── Task 6: message-preview panel ────────────────────────────────────────────
 // Header toggle mounts <FunnelMessagePreview> to the right (desktop-first ≥1024px). The panel previews
-// the step in focus: the one being edited (edit dialog open) wins; otherwise the first message step, so
-// turning Preview on without an open dialog still shows something. No message step → neutral empty state.
+// the step in focus: the row clicked in the (read-only) list, else the first message step, so turning
+// Preview on without a clicked row still shows something. No message step → neutral empty state.
+// Task 7 (Decision 2): the canvas owns step editing (its own side panel), so the former page-level Edit
+// dialog and its "edited step wins" preview-pin branch are gone — preview is now purely selection-driven.
 const previewOpen = ref(false)
 const MESSAGE_STEP_TYPES: StepType[] = ['MESSAGE']
 // A step row click drives the preview to THAT step. -1 = nothing clicked → fall back to the first
@@ -65,13 +72,9 @@ const previewSelectedIndex = ref(-1)
 function onSelectStep(index: number) {
   previewSelectedIndex.value = index
 }
-// Selection priority: edited step (edit dialog open) > clicked step > first message step.
+// Selection priority: clicked step > first message step.
 const firstMessageIndex = computed(() => steps.value.findIndex((s) => MESSAGE_STEP_TYPES.includes(s.stepType)))
 const previewIndex = computed(() => {
-  // Edited step wins ONLY while the edit dialog is open. editIndex is not reset on close, so gating on
-  // editOpen is what keeps the preview from being permanently pinned to the last-edited step (which would
-  // make clicking other rows a no-op).
-  if (editOpen.value && editStep.value) return editIndex.value
   if (steps.value[previewSelectedIndex.value]) return previewSelectedIndex.value
   return firstMessageIndex.value
 })
@@ -144,6 +147,9 @@ let applyingResponse = false
 function applyResponse(res: FunnelResponse) {
   funnel.value = res
   steps.value = [...res.steps]
+  // Notes ride the same full-replace round-trip; the server mints each note's id (so re-read here picks up the
+  // minted ids without dropping them). Null/absent (old funnels) → empty array.
+  notes.value = (res.notes ?? []).map((n) => ({ ...n }))
   applyingResponse = true
   // Fall back to a lone on_start trigger so the panel always has the main entry (edge case: empty/absent).
   triggers.value = res.triggers?.length ? res.triggers.map((tr) => ({ ...tr })) : defaultTriggers()
@@ -200,6 +206,8 @@ async function persist(): Promise<boolean> {
       triggers: triggers.value.map(sanitizeTrigger),
       allowReEnter: funnel.value.allowReEnter,
       steps: steps.value,
+      // Full-replace like steps/triggers: a fresh note carries id:null and the server mints it (Decision 7).
+      notes: notes.value,
     })
     applyResponse(res)
     return true
@@ -211,29 +219,48 @@ async function persist(): Promise<boolean> {
   }
 }
 
-function onAddStep(step: FunnelStep) {
-  steps.value = [...steps.value, step]
+// ─── Task 7 (18-funnel-canvas): canvas wiring ─────────────────────────────────
+// The canvas is the SINGLE live structural-editing surface (Decision 2). It is props-in/emits-out: it
+// receives steps/triggers/notes and emits the whole updated array when the author draws an edge, adds/deletes
+// a node or edits a node in the side panel. We relay each emitted array into the local model and reuse the
+// SAME debounced full-replace persist() — never a second save path.
+function onCanvasSteps(next: FunnelStep[]) {
+  steps.value = next
   void persist()
 }
-function onSaveStep(index: number, step: FunnelStep) {
-  steps.value = steps.value.map((s, i) => (i === index ? step : s))
+function onCanvasTriggers(next: FunnelTrigger[]) {
+  triggers.value = next
   void persist()
 }
-function onDeleteStep(index: number) {
-  steps.value = steps.value.filter((_, i) => i !== index)
+function onCanvasNotes(next: FunnelNote[]) {
+  notes.value = next
   void persist()
 }
-function onMove(from: number, to: number) {
-  if (to < 0 || to >= steps.value.length) return
-  const arr = [...steps.value]
-  const [moved] = arr.splice(from, 1)
-  arr.splice(to, 0, moved)
-  steps.value = arr
+
+// A finished node drag re-emits { nodeId, position }. Resolve the node id back to the matching model object
+// (start → the on_start trigger; trigger:<i> / note:<i> → that array element; otherwise a step matched by id)
+// and write its canvasPosition, then persist via the existing debounced full-replace path. An unsaved step
+// node (synthetic `unsaved-step:<n>` id, no real id yet) has nothing to match → no-op until it is persisted.
+function onNodeDragStop(payload: { nodeId: string; position: CanvasPosition }) {
+  const { nodeId, position } = payload
+  if (nodeId === 'start') {
+    const idx = triggers.value.findIndex((tr) => tr.triggerType === 'on_start')
+    if (idx < 0) return
+    triggers.value = triggers.value.map((tr, i) => (i === idx ? { ...tr, canvasPosition: position } : tr))
+  } else if (nodeId.startsWith('trigger:')) {
+    const idx = Number(nodeId.slice('trigger:'.length))
+    if (!triggers.value[idx]) return
+    triggers.value = triggers.value.map((tr, i) => (i === idx ? { ...tr, canvasPosition: position } : tr))
+  } else if (nodeId.startsWith('note:')) {
+    const idx = Number(nodeId.slice('note:'.length))
+    if (!notes.value[idx]) return
+    notes.value = notes.value.map((n, i) => (i === idx ? { ...n, canvasPosition: position } : n))
+  } else {
+    const idx = steps.value.findIndex((s) => s.id != null && s.id === nodeId)
+    if (idx < 0) return
+    steps.value = steps.value.map((s, i) => (i === idx ? { ...s, canvasPosition: position } : s))
+  }
   void persist()
-}
-function openEdit(index: number) {
-  editIndex.value = index
-  editOpen.value = true
 }
 
 // Persist trigger edits (debounced) so the activated funnel uses the values the user sees. Only schedule a
@@ -452,25 +479,37 @@ async function confirmStopAll() {
          per ux-guidelines). Below lg the panel stacks under the editor — no complex narrow layout. -->
     <div :class="previewOpen ? 'lg:grid lg:grid-cols-[minmax(0,1fr)_360px] lg:gap-6' : ''">
       <div class="min-w-0 space-y-6">
-        <div class="flex items-center justify-between gap-4">
-          <h2 class="text-lg font-semibold">{{ t('funnels.editor.stepsTitle') }}</h2>
-          <button
-            type="button"
-            data-test="funnel-add-step"
-            class="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700"
-            @click="addOpen = true"
-          >
-            {{ t('funnels.steps.add') }}
-          </button>
+        <!-- Canvas (Task 7): the single live structural-editing surface. *.client.vue + <ClientOnly> keep Vue
+             Flow's window/DOM access off the SSR path (Decision 12 — `window is not defined`). -->
+        <div>
+          <h2 class="mb-3 text-lg font-semibold">{{ t('funnels.canvas.title') }}</h2>
+          <ClientOnly>
+            <div data-test="funnel-canvas-host" class="h-[560px] rounded-md border">
+              <FunnelCanvas
+                :steps="steps"
+                :triggers="triggers"
+                :notes="notes"
+                :bot-username="botUsername"
+                :deep-link="funnel.deepLink"
+                @update:steps="onCanvasSteps"
+                @update:triggers="onCanvasTriggers"
+                @update:notes="onCanvasNotes"
+                @node-drag-stop="onNodeDragStop"
+              />
+            </div>
+          </ClientOnly>
         </div>
 
+        <div class="flex items-center justify-between gap-4">
+          <h2 class="text-lg font-semibold">{{ t('funnels.editor.stepsTitle') }}</h2>
+        </div>
+
+        <!-- Read-only view (Decision 2): the canvas owns structural edits; the list stays mounted as a view.
+             Only the non-structural `select` (preview driving) emit is wired. -->
         <FunnelStepsList
           :steps="steps"
+          :readonly="true"
           :selected-index="previewOpen ? previewIndex : undefined"
-          @move="onMove"
-          @edit="openEdit"
-          @delete="onDeleteStep"
-          @add="addOpen = true"
           @select="onSelectStep"
         />
 
@@ -484,15 +523,6 @@ async function confirmStopAll() {
 
       <FunnelMessagePreview v-if="previewOpen" :step="previewStep" :step-number="previewStepNumber" class="mt-6 lg:mt-0" />
     </div>
-
-    <AddStepDialog v-model:open="addOpen" :sibling-steps="steps" @add="onAddStep" />
-    <EditStepDialog
-      v-model:open="editOpen"
-      :step="editStep"
-      :index="editIndex"
-      :sibling-steps="steps"
-      @save="onSaveStep"
-    />
 
     <Dialog :open="stopOpen" @update:open="(v: boolean) => { if (!v) stopOpen = false }">
       <DialogContent>

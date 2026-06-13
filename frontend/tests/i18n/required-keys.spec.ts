@@ -86,13 +86,39 @@ const REQUIRED_KEYS = [
   'funnels.triggersPanel.duplicateEventName',
   'funnels.triggersPanel.empty.title',
   'funnels.triggersPanel.empty.body',
+  // 18-funnel-canvas (Tasks 5-7) — FunnelCanvas / palette / side-panel / read-only-list visible text.
+  // uk/en parity + non-empty (the canvas surfaces these as labels, warnings and ARIA strings).
+  'funnels.canvas.aria',
+  'funnels.canvas.title',
+  'funnels.canvas.listReadOnly',
+  'funnels.canvas.startNode',
+  'funnels.canvas.note',
+  'funnels.canvas.handle.next',
+  'funnels.canvas.handle.button',
+  'funnels.canvas.handle.timeout',
+  'funnels.canvas.handle.entry',
+  'funnels.canvas.exitBadge',
+  'funnels.canvas.brokenEdge',
+  'funnels.canvas.palette.title',
+  'funnels.canvas.palette.steps',
+  'funnels.canvas.palette.other',
+  'funnels.canvas.palette.trigger',
+  'funnels.canvas.palette.note',
+  'funnels.canvas.palette.startNode',
+  'funnels.canvas.palette.startNodeExists',
+  'funnels.canvas.sidePanel.title',
+  'funnels.canvas.sidePanel.close',
+  'funnels.canvas.sidePanel.empty',
+  'funnels.canvas.delete.button',
+  'funnels.canvas.delete.warning',
 ] as const
 
-// AC (17-funnel-multi-entry): Triggers-panel labels must show non-empty text
-// ("без порожніх ключів") — presence alone is insufficient, so these keys get
-// an extra value (trimmed length > 0) assertion in both locales.
-const NON_EMPTY_REQUIRED_KEYS = REQUIRED_KEYS.filter((k) =>
-  k.startsWith('funnels.triggersPanel.'),
+// AC (17-funnel-multi-entry / 18-funnel-canvas): Triggers-panel AND canvas labels must show non-empty text
+// ("без порожніх ключів") — presence alone is insufficient, so these keys get an extra value
+// (trimmed length > 0) assertion in both locales. The OR keeps the existing triggersPanel coverage while
+// adding the new funnels.canvas.* namespace.
+const NON_EMPTY_REQUIRED_KEYS = REQUIRED_KEYS.filter(
+  (k) => k.startsWith('funnels.triggersPanel.') || k.startsWith('funnels.canvas.'),
 )
 
 describe('i18n AC-25 required keys', () => {
@@ -110,7 +136,7 @@ describe('i18n AC-25 required keys', () => {
     }
   })
 
-  it('triggersPanel keys have non-empty values in uk.json', () => {
+  it('triggersPanel + canvas keys have non-empty values in uk.json', () => {
     const values = loadValues('uk.json')
     for (const key of NON_EMPTY_REQUIRED_KEYS) {
       const value = values[key]
@@ -122,7 +148,7 @@ describe('i18n AC-25 required keys', () => {
     }
   })
 
-  it('triggersPanel keys have non-empty values in en.json', () => {
+  it('triggersPanel + canvas keys have non-empty values in en.json', () => {
     const values = loadValues('en.json')
     for (const key of NON_EMPTY_REQUIRED_KEYS) {
       const value = values[key]

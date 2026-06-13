@@ -6,6 +6,7 @@ import { DOMWrapper } from '@vue/test-utils'
 import { settle } from '../helpers/settle'
 import FunnelEditorPage from '../../pages/projects/[projectId]/funnels/[funnelId].vue'
 import FunnelStepForm from '../../components/funnels/FunnelStepForm.vue'
+import FunnelCanvas from '../../components/funnels/FunnelCanvas.client.vue'
 import type { FunnelResponse, FunnelStep, FunnelSummaryResponse } from '../../types/funnel'
 
 // The editor page owns the headline Task-10 behaviour: 422-code → inline errors.funnels.* (NOT a global
@@ -628,47 +629,176 @@ describe('funnels/[funnelId] editor page', () => {
       expect(wrapper.get('[data-test="funnel-step-row-0"]').classes().join(' ')).toContain('ring-2')
     })
 
-    it('the action buttons (edit / move / delete) still work and do not hijack selection', async () => {
+    it('the read-only list exposes no structural action buttons but row selection still drives preview', async () => {
+      // Task 7 (Decision 2): the canvas is the sole structural-editing surface, so the vertical list is now
+      // VIEW-ONLY — its move/edit/delete affordances are gone. The non-structural `select` (preview driving)
+      // affordance is preserved, so clicking a row still moves the preview + highlight.
       const wrapper = await mountWithPreview()
-      // Select m2 (row 2) first so we can prove the action buttons leave the selection where it is.
       await wrapper.get('[data-test="funnel-step-select-2"]').trigger('click')
       await settle()
 
-      // Edit opens the dialog (edit dialog now wins the preview — that's the documented priority).
-      await wrapper.get('[data-test="funnel-step-edit-1"]').trigger('click')
-      await settle()
-      expect(wrapper.find('[data-test="step-form"]').exists()).toBe(true)
+      // No structural mutators rendered for any row.
+      expect(wrapper.find('[data-test="funnel-step-edit-1"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="funnel-step-move-down-1"]').exists()).toBe(false)
+      expect(wrapper.find('[data-test="funnel-step-delete-1"]').exists()).toBe(false)
 
-      // Move emits to the store-backed reorder (full PATCH) — the click did not throw / hijack into select.
-      storeMock.update.mockResolvedValue(draft({ steps: MIXED_STEPS }))
-      await wrapper.get('[data-test="funnel-step-move-down-1"]').trigger('click')
-      await settle()
-      expect(storeMock.update).toHaveBeenCalled()
+      // Selection (a view affordance) still works: row 2 drives the preview + carries the highlight.
+      expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('3')
+      expect(wrapper.get('[data-test="funnel-step-row-2"]').classes().join(' ')).toContain('ring-2')
     })
 
-    it('after the edit dialog closes, clicking another row switches the preview (editIndex no longer pins it)', async () => {
-      // Regression: editIndex is not reset on dialog close, so the preview priority must gate the
-      // "edited step wins" branch on editOpen. Otherwise the preview stays pinned to the last-edited step
-      // forever and clicking other rows is a no-op.
+    it('clicking another row switches the preview (selection-driven, no list-opened edit dialog)', async () => {
+      // With the list read-only, the preview is driven purely by row selection (the former list→edit-dialog
+      // pin path is gone). Clicking a different row re-targets the preview + moves the highlight.
       const wrapper = await mountWithPreview()
 
-      // Open edit on row 1 → the dialog wins the preview while open (heading = step 2).
-      await wrapper.get('[data-test="funnel-step-edit-1"]').trigger('click')
+      await wrapper.get('[data-test="funnel-step-select-1"]').trigger('click')
       await settle()
-      expect(wrapper.find('[data-test="step-form"]').exists()).toBe(true)
       expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('2')
 
-      // Close the dialog (cancel) — editIndex stays 1, but editOpen is now false.
-      await wrapper.get('[data-test="step-form-cancel"]').trigger('click')
-      await settle()
-
-      // Clicking a DIFFERENT row now drives the preview to THAT step instead of staying pinned to row 1.
       await wrapper.get('[data-test="funnel-step-select-2"]').trigger('click')
       await settle()
       expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('3')
       expect(wrapper.get('[data-test="funnel-step-row-2"]').classes().join(' ')).toContain('ring-2')
       expect(wrapper.get('[data-test="funnel-step-row-1"]').classes().join(' ')).not.toContain('ring-2')
     })
+  })
+})
+
+// ─── Task 7 (18-funnel-canvas): canvas wiring + read-only list + escaped notes ──────────────────────────
+// The canvas is the single live structural-editing surface. The page mounts FunnelCanvas (client-only),
+// relays its emits into the local model and persists via the existing debounced full-replace persist().
+// These specs assert the WIRING (drag-stop → canvasPosition → update PATCH), the read-only list, and the
+// stored-XSS guard (note text rendered escaped via {{ }}, never v-html). Live Vue Flow drag is user-verified;
+// the drag-stop event is driven through the child component's emit (the same event onNodeDragStop re-emits).
+describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
+  beforeEach(() => {
+    storeMock.fetchOne.mockReset()
+    storeMock.update.mockReset()
+    botStoreMock.fetch.mockReset().mockResolvedValue(null)
+    botStoreMock.current = null
+    navMock.mockReset()
+  })
+
+  function step(over: Partial<FunnelStep> = {}): FunnelStep {
+    return { stepType: 'MESSAGE', id: 's1', blocks: [{ type: 'TEXT', text: 'Hi' }], next: 's2', ...over }
+  }
+
+  it('mounts the canvas client-only on the editor page', async () => {
+    storeMock.fetchOne.mockResolvedValue(draft({ steps: [step()] }))
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+
+    expect(wrapper.find('[data-test="funnel-canvas-host"]').exists()).toBe(true)
+    expect(wrapper.findComponent(FunnelCanvas).exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-canvas"]').exists()).toBe(true)
+  })
+
+  it('drag-stop writes canvasPosition into the matching step and PATCHes (sibling field unchanged)', async () => {
+    const seed = draft({ steps: [step({ id: 's1', next: 's2' })] })
+    storeMock.fetchOne.mockResolvedValue(seed)
+    storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+      Promise.resolve(draft({ ...body })),
+    )
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+    storeMock.update.mockClear()
+
+    // Drive the canvas's drag-stop event for the saved step node (its id IS the node id).
+    wrapper.findComponent(FunnelCanvas).vm.$emit('node-drag-stop', { nodeId: 's1', position: { x: 120, y: 240 } })
+    await settle()
+
+    expect(storeMock.update).toHaveBeenCalledTimes(1)
+    const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+    const persisted = body.steps?.find((s) => s.id === 's1')
+    expect(persisted?.canvasPosition).toEqual({ x: 120, y: 240 })
+    // The drag must only touch canvasPosition — the step's `next` edge is left intact.
+    expect(persisted?.next).toBe('s2')
+  })
+
+  it('drag-stop on an unknown node id is a no-op (no PATCH)', async () => {
+    storeMock.fetchOne.mockResolvedValue(draft({ steps: [step({ id: 's1' })] }))
+    storeMock.update.mockResolvedValue(draft())
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+    storeMock.update.mockClear()
+
+    // An unsaved node carries a synthetic id with no model match → nothing to write, no save.
+    wrapper.findComponent(FunnelCanvas).vm.$emit('node-drag-stop', { nodeId: 'unsaved-step:9', position: { x: 1, y: 2 } })
+    await settle()
+    expect(storeMock.update).not.toHaveBeenCalled()
+  })
+
+  it('persists notes through the same PATCH when the canvas emits update:notes', async () => {
+    storeMock.fetchOne.mockResolvedValue(draft({ steps: [step()] }))
+    storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+      Promise.resolve(draft({ ...body })),
+    )
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+    storeMock.update.mockClear()
+
+    wrapper
+      .findComponent(FunnelCanvas)
+      .vm.$emit('update:notes', [{ id: null, text: 'a note', canvasPosition: { x: 10, y: 20 } }])
+    await settle()
+
+    expect(storeMock.update).toHaveBeenCalledTimes(1)
+    const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+    expect(body.notes).toEqual([{ id: null, text: 'a note', canvasPosition: { x: 10, y: 20 } }])
+  })
+
+  it('round-trips notes from the response without dropping them (applyResponse reads notes)', async () => {
+    // The server echoes a minted note id; a subsequent save must carry that note (not lose it).
+    storeMock.fetchOne.mockResolvedValue(
+      draft({ steps: [step()], notes: [{ id: 'n1', text: 'kept', canvasPosition: { x: 5, y: 5 } }] }),
+    )
+    storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+      Promise.resolve(draft({ ...body })),
+    )
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+    storeMock.update.mockClear()
+
+    // Trigger a save via a drag-stop; the persisted body must still include the loaded note.
+    wrapper.findComponent(FunnelCanvas).vm.$emit('node-drag-stop', { nodeId: 's1', position: { x: 1, y: 1 } })
+    await settle()
+    const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+    expect(body.notes).toEqual([{ id: 'n1', text: 'kept', canvasPosition: { x: 5, y: 5 } }])
+  })
+
+  it('renders the steps list read-only (no structural mutators) and shows the notice', async () => {
+    storeMock.fetchOne.mockResolvedValue(draft({ steps: [step({ id: 's1' })] }))
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+
+    // The list is still mounted as a view…
+    expect(wrapper.find('[data-test="funnel-steps"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-step-row-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-steps-readonly-notice"]').exists()).toBe(true)
+    // …but exposes NO structural mutators (move / edit / delete / add).
+    expect(wrapper.find('[data-test="funnel-step-move-up-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-step-move-down-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-step-edit-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-step-delete-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-add-step"]').exists()).toBe(false)
+  })
+
+  it('renders a note containing an injection payload ESCAPED (no v-html, no img element)', async () => {
+    const payload = '<img src=x onerror=alert(1)>'
+    storeMock.fetchOne.mockResolvedValue(
+      draft({ steps: [step()], notes: [{ id: 'n1', text: payload, canvasPosition: { x: 0, y: 0 } }] }),
+    )
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+
+    const noteNode = wrapper.find('[data-node-id="note:0"]')
+    expect(noteNode.exists()).toBe(true)
+    // The literal markup is visible as TEXT (escaped via {{ }}), and no real <img> was created from it.
+    expect(noteNode.text()).toContain(payload)
+    expect(noteNode.find('img').exists()).toBe(false)
+    // Defensive: the payload-derived element must not exist anywhere in the canvas DOM.
+    expect(wrapper.findAll('img').some((i) => i.attributes('onerror'))).toBe(false)
   })
 })
 

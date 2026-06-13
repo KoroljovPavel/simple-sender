@@ -8,7 +8,7 @@ import FunnelCanvasNode from './FunnelCanvasNode.vue'
 import FunnelCanvasPalette from './FunnelCanvasPalette.vue'
 import FunnelCanvasSidePanel from './FunnelCanvasSidePanel.vue'
 import type { SelectedNode } from './FunnelCanvasSidePanel.vue'
-import type { FunnelNote, FunnelResponse, FunnelStep, FunnelTrigger, StepType } from '~/types/funnel'
+import type { CanvasPosition, FunnelNote, FunnelResponse, FunnelStep, FunnelTrigger, StepType } from '~/types/funnel'
 import {
   buildEdges,
   buildNodes,
@@ -46,6 +46,10 @@ const emit = defineEmits<{
   'update:steps': [steps: FunnelStep[]]
   'update:triggers': [triggers: FunnelTrigger[]]
   'update:notes': [notes: FunnelNote[]]
+  // Task 7: a finished node drag re-emits the dragged node id + its final canvas {x,y}. The PAGE owns the
+  // model match (nodeId → step/trigger/note) and persistence — the canvas only relays Vue Flow's event so it
+  // stays the SOLE owner of the single useVueFlow() instance (no second instance on the page).
+  'node-drag-stop': [payload: { nodeId: string; position: CanvasPosition }]
 }>()
 
 const { t } = useI18n()
@@ -126,7 +130,7 @@ const flowEdges = computed(() =>
 
 // THE single useVueFlow instance for the editor page (Shared resources). fitView runs once nodes have real
 // measured dimensions (onNodesInitialized — NOT onMounted). onConnect handles draw-to-connect.
-const { onConnect, onNodesInitialized, fitView } = useVueFlow()
+const { onConnect, onNodesInitialized, onNodeDragStop, fitView } = useVueFlow()
 
 onNodesInitialized(() => {
   // Guard: fitView can throw on an empty graph in some environments — never let layout blank the canvas.
@@ -201,6 +205,17 @@ function handleFieldKind(handle: string | null | undefined): EdgeFieldKind | nul
 }
 
 onConnect(handleConnect)
+
+// Task 7: relay a finished node drag upward. Vue Flow hands us the dragged node + its final position; we
+// pass the node id + {x,y} to the page, which writes it into the matching model object's canvasPosition and
+// persists. We do NOT mutate the model here (props-in/emits-out) — the page is the single save path.
+function handleNodeDragStop(payload: { node: { id: string; position: { x: number; y: number } } }): void {
+  const node = payload?.node
+  if (!node?.id || !node.position) return
+  emit('node-drag-stop', { nodeId: node.id, position: { x: node.position.x, y: node.position.y } })
+}
+
+onNodeDragStop(handleNodeDragStop)
 
 // ── Task 6: authoring interactions (palette / start-node lifecycle / delete / side panel) ─────────────
 
@@ -352,7 +367,7 @@ function confirmDelete(): void {
 // emit) without simulating a real Vue Flow drag — live drag is user-verified, not unit-tested (Testing
 // Strategy / no E2E). requestDelete/confirmDelete are likewise exposed so the delete flow (warning → apply)
 // is unit-testable without a live node click. Production wiring goes through the onConnect callback above.
-defineExpose({ handleConnect, selectNode, requestDelete, confirmDelete })
+defineExpose({ handleConnect, handleNodeDragStop, selectNode, requestDelete, confirmDelete })
 </script>
 
 <template>

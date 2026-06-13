@@ -9,51 +9,50 @@ import java.time.Instant;
 import java.util.List;
 
 // Indexes auto-created via spring.data.mongodb.auto-index-creation=true.
-// (projectId, status) backs project lookup/list. The partial-unique (projectId, triggerType,
-// triggerValue) index is the defense-in-depth guard against two active funnels claiming the same
-// trigger (the service check is the first line).
+// (projectId, status) backs project lookup/list. The partial-unique (projectId, onStartTriggerValue)
+// index is the defense-in-depth guard against two active funnels claiming the same bare-/start payload
+// (the service check is the first line).
 //
-// Phase 3 (Decision 1): uniqueness now applies to `on_start` ONLY — the partialFilter is
-// { status:'active', triggerType:'on_start' }. Fan-out (one event/word/tag/field → N funnels) is
-// achieved by N active funnels sharing the same triggerValue, which the old { status:'active' } filter
-// forbade. Two active `on_start` funnels with the same payload still collide; two active `event`
-// (etc.) funnels with the same triggerValue now coexist.
+// Phase 8 (17-funnel-multi-entry / Decision 6, Variant A): a funnel now carries a List<Trigger> instead
+// of a flat trigger trio. Uniqueness applies to the ON_START entry ONLY, and is enforced via a
+// DENORMALIZED nullable scalar `onStartTriggerValue` (synced from the on_start Trigger by FunnelService —
+// Task 4): the partialFilter is { status:'active', onStartTriggerValue:{$exists:true} }. The $exists guard
+// keeps funnels WITHOUT an on_start entry (onStartTriggerValue == null) out of the index, so they never
+// collide on a shared null. Fan-out (one event/word/tag/field → N funnels) is unaffected — only the
+// on_start scalar is indexed. Two active funnels with the same on_start payload still collide.
 //
 // NOTE: auto-index-creation only CREATES indexes — it never drops/alters an existing one. So changing
-// this annotation does NOT relax the live index on an existing DB; the actual drop/recreate is owned by
-// the Task-2 startup migration (FunnelTriggerIndexReconciliation), and the runtime proof of the new
-// shape lives in Task 2's FunnelIndexesIT. This annotation only fixes the shape auto-creation builds on
-// a fresh DB.
+// this annotation does NOT relax the live index on an existing DB; the actual drop/recreate of the old
+// trio index and creation of this shape on an existing DB is owned by the startup migration, and the
+// runtime proof of the new shape lives in FunnelIndexesIT. This annotation only fixes the shape
+// auto-creation builds on a fresh DB.
 //
 // Decision 14: status is persisted as the LOWERCASE name() ('active'), which is exactly what the
-// partialFilter literal matches; triggerType is a plain String ('on_start') — the service constant
-// TRIGGER_ON_START holds the same literal (asserted in the static block as defense-in-depth).
+// partialFilter literal matches (asserted in the static block as defense-in-depth). The partialFilter no
+// longer carries a triggerType literal — uniqueness is keyed on the onStartTriggerValue scalar's
+// existence, not on a 'on_start' string match.
 @Document(collection = "funnels")
 @CompoundIndexes({
         @CompoundIndex(name = "projectId_status",
                 def = "{'projectId': 1, 'status': 1}"),
-        @CompoundIndex(name = "projectId_triggerType_triggerValue_unique_active",
-                def = "{'projectId': 1, 'triggerType': 1, 'triggerValue': 1}",
+        @CompoundIndex(name = "projectId_onStartTriggerValue_unique_active",
+                def = "{'projectId': 1, 'onStartTriggerValue': 1}",
                 unique = true,
-                partialFilter = "{ 'status': 'active', 'triggerType': 'on_start' }")
+                partialFilter = "{ 'status': 'active', 'onStartTriggerValue': { '$exists': true } }")
 })
 public class Funnel {
 
-    // Defensive class-load assertion: the partialFilter literals must stay byte-identical with the
-    // values they match. 'active' must equal FunnelStatus.active.name() (Spring Data persists the enum
-    // as name()); 'on_start' (Phase 3 / Decision 1) must equal the service's TRIGGER_ON_START constant
-    // (triggerType is a plain persisted String). A silent rename of either would make the partial-unique
-    // index match zero rows, voiding the on_start trigger-conflict guard.
+    // Defensive class-load assertion: the partialFilter 'active' literal must stay byte-identical with
+    // the value it matches. 'active' must equal FunnelStatus.active.name() (Spring Data persists the enum
+    // as name()) — a silent rename would make the partial-unique index match zero rows, voiding the
+    // on_start trigger-conflict guard. (Phase 8: the old 'on_start' assertion was dropped — the new
+    // partialFilter keys on onStartTriggerValue's $exists, not on a 'on_start' triggerType literal, so an
+    // assertion against TRIGGER_ON_START would be dead and misleading here.)
     static {
         if (!"active".equals(FunnelStatus.active.name())) {
             throw new IllegalStateException(
                     "Partial-filter literal 'active' diverged from FunnelStatus.active.name() = "
                             + FunnelStatus.active.name());
-        }
-        if (!"on_start".equals(FunnelService.TRIGGER_ON_START)) {
-            throw new IllegalStateException(
-                    "Partial-filter literal 'on_start' diverged from FunnelService.TRIGGER_ON_START = "
-                            + FunnelService.TRIGGER_ON_START);
         }
     }
 
@@ -69,14 +68,19 @@ public class Funnel {
     private String description;
     private FunnelStatus status;
 
-    private String triggerType;   // "on_start" | "keyword" | "tag_added" | "custom_field_set" | "event"
-    private String triggerValue;  // exact-match key; "" = bare /start. Unused by "keyword".
-    private boolean allowReEnter = false;
+    // Phase 8 (17-funnel-multi-entry / Decision 6): a funnel has a list of entry triggers (on_start +
+    // mid-entry event/keyword/tag/field redirects) instead of a single flat trigger. Each Trigger is a
+    // flat embedded POJO; per-trigger validation lives in the DTO/service layer.
+    private List<Trigger> triggers;
 
-    // Phase 3 (Decision 3): keyword trigger only. Lowercase, trimmed, de-duplicated list — contains-match
-    // (case-insensitive, any-of-many) runs in code, because the exact-match triggerValue index cannot
-    // express "contains, multiple keywords". Null/empty for every non-keyword trigger type.
-    private List<String> keywords;
+    // Denormalized projection of the on_start Trigger's triggerValue (or null when the funnel has no
+    // on_start entry). Synced from `triggers` by FunnelService (Task 4). Exists solely so the
+    // partial-unique index { status:'active', onStartTriggerValue:{$exists:true} } can enforce one active
+    // funnel per (projectId, on_start payload) — it is nullable so non-on_start funnels stay out of that
+    // index (Variant A).
+    private String onStartTriggerValue;
+
+    private boolean allowReEnter = false;
 
     private List<FunnelStep> steps;
 
@@ -98,17 +102,14 @@ public class Funnel {
     public FunnelStatus getStatus() { return status; }
     public void setStatus(FunnelStatus status) { this.status = status; }
 
-    public String getTriggerType() { return triggerType; }
-    public void setTriggerType(String triggerType) { this.triggerType = triggerType; }
+    public List<Trigger> getTriggers() { return triggers; }
+    public void setTriggers(List<Trigger> triggers) { this.triggers = triggers; }
 
-    public String getTriggerValue() { return triggerValue; }
-    public void setTriggerValue(String triggerValue) { this.triggerValue = triggerValue; }
+    public String getOnStartTriggerValue() { return onStartTriggerValue; }
+    public void setOnStartTriggerValue(String onStartTriggerValue) { this.onStartTriggerValue = onStartTriggerValue; }
 
     public boolean isAllowReEnter() { return allowReEnter; }
     public void setAllowReEnter(boolean allowReEnter) { this.allowReEnter = allowReEnter; }
-
-    public List<String> getKeywords() { return keywords; }
-    public void setKeywords(List<String> keywords) { this.keywords = keywords; }
 
     // Decision 3 (snapshot isolation): the returned list is the live backing reference, NOT a copy.
     // Callers must not mutate it in place. The execution snapshot is produced separately via

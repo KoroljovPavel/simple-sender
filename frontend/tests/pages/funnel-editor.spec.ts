@@ -872,6 +872,44 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
       await settle()
       expect(storeMock.update).not.toHaveBeenCalled()
     })
+
+    // ─── Round-1 follow-up: the trigger canvas path is gated by step readiness too ──────────────────────
+    // The full-replace PATCH always carries steps.value, so a canvas-committed TRIGGER edit must ALSO be
+    // withheld while any step is incomplete — otherwise it 422s funnel_step_invalid on the unfinished node
+    // (the same bug the step gate was meant to prevent, just reached via the trigger path). This is
+    // value-based + load-bearing: it FAILS against the pre-fix onCanvasTriggers→void persist() (which
+    // bypassed the gate), passes once onCanvasTriggers routes through persistSteps().
+    function emitTriggers(wrapper: Awaited<ReturnType<typeof mountLoaded>>, triggers: FunnelTrigger[]): void {
+      wrapper.findComponent(FunnelCanvas).vm.$emit('update:triggers', triggers)
+    }
+
+    it('does NOT PATCH a canvas trigger commit while a step is incomplete, then DOES once the step is filled', async () => {
+      // An incomplete MESSAGE node coexists with the triggers; committing a trigger via the canvas must not
+      // flush the (incomplete) full-replace array.
+      const wrapper = await mountLoaded()
+      emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }])
+      await settle()
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      // Commit a (complete) trigger array via the canvas while the step is STILL incomplete → withheld.
+      emitTriggers(wrapper, [{ triggerType: 'on_start', triggerValue: 'promo', keywords: null, entryStepId: null }])
+      await settle()
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      // Fill the step → now every step is ready, so a subsequent trigger commit DOES persist (one PATCH),
+      // carrying both the completed step and the sanitized trigger array.
+      emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Welcome' }] }])
+      await settle()
+      storeMock.update.mockClear()
+
+      emitTriggers(wrapper, [{ triggerType: 'on_start', triggerValue: 'promo2', keywords: null, entryStepId: null }])
+      await settle()
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+      expect(Array.isArray(body.triggers)).toBe(true)
+      const onStart = body.triggers?.find((tr) => tr.triggerType === 'on_start')
+      expect(onStart?.triggerValue).toBe('promo2')
+    })
   })
 
   it('renders a note containing an injection payload ESCAPED (no v-html, no img element)', async () => {

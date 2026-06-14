@@ -296,7 +296,11 @@ function onCanvasSteps(next: FunnelStep[]) {
 }
 function onCanvasTriggers(next: FunnelTrigger[]) {
   triggers.value = next
-  void persist()
+  // The full-replace PATCH always carries steps.value, so committing a trigger via the canvas while an
+  // in-progress incomplete step exists would 422 funnel_step_invalid on the unfinished node — gate this
+  // save through the same step-readiness check as every other canvas save path (no canvas path may PATCH an
+  // incomplete step). Trigger-specific shape is still validated server-side; the canvas only commits ready arrays.
+  persistSteps()
 }
 function onCanvasNotes(next: FunnelNote[]) {
   notes.value = next
@@ -373,8 +377,18 @@ async function activate() {
     clearTimeout(triggerTimer)
     triggerTimer = null
   }
-  // persist() surfaces its own failure via saveError — don't duplicate it into activateError.
-  if (!(await persist())) return
+  // Activate deliberately flushes via persist() (bypassing the canvas readiness gate) so a genuine activate of
+  // an incomplete funnel still reaches the server and surfaces its real 422. persist() writes that failure to
+  // saveError — but during an activate the user clicked Activate, so the error belongs in the activate banner.
+  // Promote it: if the flush failed, move the message into activateError (and clear saveError) so it lands
+  // beside the action the user took, not in a confusing separate save-error banner.
+  if (!(await persist())) {
+    if (saveError.value) {
+      activateError.value = saveError.value
+      saveError.value = null
+    }
+    return
+  }
   try {
     applyResponse(await funnelsStore.activate(funnelId.value))
   } catch (err) {

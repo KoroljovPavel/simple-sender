@@ -248,6 +248,80 @@ describe('funnels/[funnelId] editor page', () => {
       // event owns triggerValue and clears keywords (per-element sanitizer).
       expect(ev.keywords).toEqual([])
     })
+
+    // ─── Deep-watch debounce persist (regression guard for the audit-fix orphan) ──────────
+    // The canvas-committed array test above rides onCanvasTriggers → persist() DIRECTLY (no debounce). It does
+    // NOT cover the page's OTHER live trigger-persist path: the deep `watch(triggers, scheduleTriggerPersist,
+    // {deep:true})` that fires on an IN-PLACE field edit of an existing element, gated by triggerReady + a 600ms
+    // debounce. The audit-fix removed the 7 panel-level tests that used to exercise this. These two cases restore
+    // it by mutating a field through the live `triggers` array the page binds into the canvas prop (the same
+    // reference the deep watch observes — exactly how a live in-place edit reaches the page model).
+    //
+    // Drive an in-place field edit on an existing trigger element (NOT a new-array commit). props('triggers')
+    // is the live array the page owns and the deep watch observes; mutating an element field is the in-place
+    // edit the debounce path guards.
+    function liveTriggers(wrapper: Awaited<ReturnType<typeof mountLoaded>>): FunnelTrigger[] {
+      return wrapper.findComponent(FunnelCanvas).props('triggers') as FunnelTrigger[]
+    }
+    // Real-timer wait past the 600ms debounce (mirrors the read-only-list suite's 700ms drain). Fake timers
+    // would not interleave with the mount's promise microtasks the same way the existing suite expects.
+    const PAST_DEBOUNCE = 700
+
+    it('debounce-persists an in-place trigger field edit exactly once after 600ms (sanitized value)', async () => {
+      const wrapper = await mountLoaded({
+        steps: [{ stepType: 'MESSAGE', id: 'step1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
+        // Seed a COMPLETE event trigger so every element starts ready (the gate is satisfied); the edit below
+        // changes its value in place — the deep watch must schedule one debounced PATCH.
+        triggers: [onStart(), event({ triggerValue: 'order_paid', entryStepId: 'step1' })],
+      })
+      // Drain the known on-mount autosave (a ready trigger array debounce-persists once on mount) past the
+      // window, THEN clear the spy so the count below reflects ONLY this test's in-place edit.
+      await new Promise((r) => setTimeout(r, PAST_DEBOUNCE))
+      await settle()
+      storeMock.update.mockClear()
+
+      // Two in-place keystroke-style edits inside the 600ms window — the debounce must coalesce them into a
+      // SINGLE persist (not one PATCH per keystroke).
+      const live = liveTriggers(wrapper)
+      live[1].triggerValue = 'order_pai'
+      await settle()
+      live[1].triggerValue = 'order_shipped'
+      await settle()
+      // Not yet — still inside the debounce window (settle only advances ~50ms).
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      await new Promise((r) => setTimeout(r, PAST_DEBOUNCE))
+      await settle()
+
+      // Exactly one PATCH after the debounce, carrying the final sanitized value (the array, never the trio).
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1]
+      expect(Array.isArray(body.triggers)).toBe(true)
+      const ev = body.triggers.find((tr: { triggerType: string }) => tr.triggerType === 'event')
+      expect(ev.triggerValue).toBe('order_shipped')
+      expect(ev.entryStepId).toBe('step1')
+      expect(ev.keywords).toEqual([])
+    })
+
+    it('does NOT debounce-persist while a trigger is incomplete (triggerReady gate)', async () => {
+      const wrapper = await mountLoaded({
+        steps: [{ stepType: 'MESSAGE', id: 'step1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
+        triggers: [onStart(), event({ triggerValue: 'order_paid', entryStepId: 'step1' })],
+      })
+      // Drain the on-mount autosave + clear, so the silence below counts only the incomplete in-place edit.
+      await new Promise((r) => setTimeout(r, PAST_DEBOUNCE))
+      await settle()
+      storeMock.update.mockClear()
+
+      // Clear the event trigger's required value in place → the array is now NOT every(triggerReady), so the
+      // gate must cancel/withhold the scheduled PATCH even after the full debounce window elapses.
+      liveTriggers(wrapper)[1].triggerValue = ''
+      await settle()
+      await new Promise((r) => setTimeout(r, PAST_DEBOUNCE))
+      await settle()
+
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
   })
 
   it('maps a funnel_broken_edge 422 to an inline error and keeps status draft', async () => {

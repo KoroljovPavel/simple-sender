@@ -81,6 +81,48 @@ describe('FunnelCanvas', () => {
     expect(broken.some((b) => b.attributes('data-edge-field') === 'entry')).toBe(true)
   })
 
+  it('shows the start-not-connected message (NOT "target deleted") for an unwired on_start entry', async () => {
+    // on_start start node present but never wired (entryStepId null) → reason on_start_entry_null.
+    // Nothing was deleted: the banner must read the actionable "start not connected" wording,
+    // not the misleading "target deleted" wording. Load-bearing: fails against the generic message.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: null }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const entryBroken = wrapper
+      .findAll('[data-test="funnel-canvas-broken-edge"]')
+      .find((b) => b.attributes('data-edge-reason') === 'on_start_entry_null')
+    expect(entryBroken).toBeDefined()
+    const text = entryBroken!.text()
+    // Default locale is uk — the resolved on_start-not-connected label, not the raw key.
+    expect(text).toBe("Старт не з'єднано — проведіть ребро до кроку")
+    // Must NOT show the "target deleted" wording (nothing was deleted here).
+    expect(text).not.toContain('видалено')
+  })
+
+  it('shows the "target deleted" message for a missing_target broken edge', async () => {
+    // A non-null edge field points at a step that no longer exists → reason missing_target.
+    // "target deleted" wording is accurate here and must be kept.
+    const steps: FunnelStep[] = [messageStep({ id: 's1', next: 'gone' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const missing = wrapper
+      .findAll('[data-test="funnel-canvas-broken-edge"]')
+      .find((b) => b.attributes('data-edge-reason') === 'missing_target')
+    expect(missing).toBeDefined()
+    expect(missing!.text()).toBe("Зламане з'єднання — ціль видалено")
+  })
+
+  it('clears the broken-edge banner once the on_start entry is wired to a step', async () => {
+    // Wiring a valid entryStepId resolves the on_start_entry_null broken edge → banner gone.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    expect(wrapper.find('[data-test="funnel-canvas-broken-edges"]').exists()).toBe(false)
+  })
+
   it('does NOT render a start node for an event-only funnel (start node optional)', async () => {
     // No on_start trigger → no start node (start-node-optional negative case). The event trigger node and
     // the step node are present, but [data-node-id="start"] is absent.

@@ -102,6 +102,8 @@ const REQUIRED_KEYS = [
   'funnels.canvas.handle.entry',
   'funnels.canvas.exitBadge',
   'funnels.canvas.brokenEdge',
+  'funnels.canvas.brokenEdgeMissingTarget',
+  'funnels.canvas.brokenEdgeStartNotConnected',
   'funnels.canvas.palette.title',
   'funnels.canvas.palette.steps',
   'funnels.canvas.palette.other',

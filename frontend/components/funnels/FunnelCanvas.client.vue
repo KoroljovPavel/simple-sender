@@ -87,6 +87,17 @@ const rawNodes = computed<CanvasNode[]>(() => {
 
 const brokenEdges = computed<BrokenEdge[]>(() => detectBrokenEdges(model.value))
 
+// Reason → i18n key. Each broken-edge reason gets an accurate, actionable message:
+// missing_target = a non-null edge points at a deleted step ("target deleted" is accurate);
+// on_start_entry_null = the start node was never wired (nothing deleted — "draw an edge").
+// Unknown reasons fall back to the generic brokenEdge message.
+const BROKEN_EDGE_MESSAGE_KEYS: Record<BrokenEdge['reason'], string> = {
+  missing_target: 'funnels.canvas.brokenEdgeMissingTarget',
+  on_start_entry_null: 'funnels.canvas.brokenEdgeStartNotConnected',
+}
+const brokenEdgeMessageKey = (reason: BrokenEdge['reason']): string =>
+  BROKEN_EDGE_MESSAGE_KEYS[reason] ?? 'funnels.canvas.brokenEdge'
+
 // A node OWNS a broken outbound field when a broken edge's source resolves to it. step → its id; start/trigger
 // entry → the start/trigger node id. This drives the per-node broken highlight (a dangling target has no node
 // to point an edge at, so the broken state is surfaced on the SOURCE node — the only renderable surface).
@@ -465,7 +476,7 @@ defineExpose({ handleConnect, handleNodeDragStop, selectNode, onPanelStepSubmit,
         :data-edge-field="b.fieldKind"
         :data-edge-reason="b.reason"
         class="funnel-canvas__broken-edge"
-      >{{ t('funnels.canvas.brokenEdge') }}</li>
+      >{{ t(brokenEdgeMessageKey(b.reason)) }}</li>
     </ul>
 
     <!-- Delete confirmation: shows the EXACT inbound-edge disconnect count (mapping-layer disconnectedCount)

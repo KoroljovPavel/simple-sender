@@ -98,6 +98,12 @@ describe('FunnelCanvas', () => {
     expect(text).toBe("Старт не з'єднано — проведіть ребро до кроку")
     // Must NOT show the "target deleted" wording (nothing was deleted here).
     expect(text).not.toContain('видалено')
+
+    // The container is a generic group: its aria-label is the NEUTRAL group label, not the
+    // per-reason "target deleted" message — misleading when the list has only this on_start item.
+    const container = wrapper.find('[data-test="funnel-canvas-broken-edges"]')
+    expect(container.attributes('aria-label')).toBe("Зламані з'єднання")
+    expect(container.attributes('aria-label')).not.toContain('видалено')
   })
 
   it('shows the "target deleted" message for a missing_target broken edge', async () => {

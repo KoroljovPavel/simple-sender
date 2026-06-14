@@ -90,7 +90,10 @@ const brokenEdges = computed<BrokenEdge[]>(() => detectBrokenEdges(model.value))
 // Reason → i18n key. Each broken-edge reason gets an accurate, actionable message:
 // missing_target = a non-null edge points at a deleted step ("target deleted" is accurate);
 // on_start_entry_null = the start node was never wired (nothing deleted — "draw an edge").
-// Unknown reasons fall back to the generic brokenEdge message.
+// This Record over the BrokenEdge['reason'] union is exhaustive today, so the lookup below
+// always resolves. The `?? generic` fallback is intentional future-proofing: if a new reason
+// is added to the union, an unknown reason degrades to the generic brokenEdge message instead
+// of rendering an empty/undefined key.
 const BROKEN_EDGE_MESSAGE_KEYS: Record<BrokenEdge['reason'], string> = {
   missing_target: 'funnels.canvas.brokenEdgeMissingTarget',
   on_start_entry_null: 'funnels.canvas.brokenEdgeStartNotConnected',
@@ -467,7 +470,7 @@ defineExpose({ handleConnect, handleNodeDragStop, selectNode, onPanelStepSubmit,
       v-if="brokenEdges.length > 0"
       data-test="funnel-canvas-broken-edges"
       class="funnel-canvas__broken-edges"
-      :aria-label="t('funnels.canvas.brokenEdge')"
+      :aria-label="t('funnels.canvas.brokenEdgesLabel')"
     >
       <li
         v-for="b in brokenEdges"

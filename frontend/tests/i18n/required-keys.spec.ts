@@ -100,6 +100,7 @@ const REQUIRED_KEYS = [
   'funnels.canvas.handle.button',
   'funnels.canvas.handle.timeout',
   'funnels.canvas.handle.entry',
+  'funnels.canvas.handle.input',
   'funnels.canvas.exitBadge',
   'funnels.canvas.brokenEdgesLabel',
   'funnels.canvas.brokenEdge',

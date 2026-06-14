@@ -179,6 +179,41 @@ describe('FunnelCanvas', () => {
     expect(startNode.find('[data-test="funnel-canvas-handle-next"]').exists()).toBe(false)
   })
 
+  it('renders handles with the visible styling class + per-kind output classes (handles-visibility-fix)', async () => {
+    // The handles were invisible (no explicit handle CSS) — confirm each rendered handle now carries the
+    // shared visible class plus a kind-specific class so the author can SEE + grab + tell them apart.
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        buttons: [{ type: 'callback', label: 'A', targetStepId: null }],
+        timeoutValue: 5,
+        timeoutUnit: 'MIN',
+        timeoutTargetStepId: null,
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const stepNode = wrapper.find('[data-node-id="s1"]')
+    // Shared visible class on every handle (sized + colored + grabbable — not the collapsed default dot).
+    const nextHandle = stepNode.find('[data-test="funnel-canvas-handle-next"]')
+    expect(nextHandle.classes()).toContain('funnel-handle')
+    expect(nextHandle.classes()).toContain('funnel-handle--next')
+    // The localized title (native tooltip) tells the author which output this is.
+    expect(nextHandle.attributes('title')).toBe('Наступний крок')
+
+    expect(stepNode.find('[data-test="funnel-canvas-handle-button-0"]').classes()).toContain('funnel-handle--button')
+    expect(stepNode.find('[data-test="funnel-canvas-handle-timeout"]').classes()).toContain('funnel-handle--timeout')
+    expect(stepNode.find('[data-test="funnel-canvas-handle-target"]').classes()).toContain('funnel-handle--target')
+
+    // The start node's entry source handle is present + visibly styled (Start→step can be drawn).
+    const startNode = wrapper.find('[data-node-id="start"]')
+    const entryHandle = startNode.find('[data-test="funnel-canvas-handle-entry"]')
+    expect(entryHandle.classes()).toContain('funnel-handle')
+    expect(entryHandle.classes()).toContain('funnel-handle--entry')
+    expect(entryHandle.attributes('title')).toBe('Вхід')
+  })
+
   it('a drawn connection emits the updated model', async () => {
     // Draw next:s1 -> s2 (both saved) → emits update:steps with s1.next = 's2'.
     const steps: FunnelStep[] = [messageStep({ id: 's1', next: null }), messageStep({ id: 's2' })]

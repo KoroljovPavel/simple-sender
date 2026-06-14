@@ -73,9 +73,11 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
          inbound edge), and a note has no edges at all — so neither gets a target handle. -->
     <Handle
       v-if="!isEntry && !isNote"
+      class="funnel-handle funnel-handle--target"
       data-test="funnel-canvas-handle-target"
       type="target"
       :position="Position.Top"
+      :title="t('funnels.canvas.handle.input')"
     />
 
     <!-- Lightweight body: localized type + short title. NO FunnelMessagePreview here (perf, §8.4). -->
@@ -102,6 +104,7 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
       <!-- default `next` edge -->
       <Handle
         id="next"
+        class="funnel-handle funnel-handle--next"
         data-test="funnel-canvas-handle-next"
         type="source"
         :position="Position.Bottom"
@@ -112,6 +115,7 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
         v-for="(btn, btnIndex) in callbackButtons"
         :id="`btn:${btnIndex}`"
         :key="`btn:${btnIndex}`"
+        class="funnel-handle funnel-handle--button"
         :data-test="`funnel-canvas-handle-button-${btnIndex}`"
         type="source"
         :position="Position.Bottom"
@@ -121,6 +125,7 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
       <Handle
         v-if="hasTimeoutHandle"
         id="timeout"
+        class="funnel-handle funnel-handle--timeout"
         data-test="funnel-canvas-handle-timeout"
         type="source"
         :position="Position.Bottom"
@@ -132,6 +137,7 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
     <Handle
       v-else-if="isEntry"
       id="entry"
+      class="funnel-handle funnel-handle--entry"
       data-test="funnel-canvas-handle-entry"
       type="source"
       :position="Position.Bottom"
@@ -171,5 +177,51 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
   padding: 0.05rem 0.4rem;
   font-size: 0.75rem;
   color: #92400e;
+}
+
+/* Connection handles (handles-visibility-fix).
+   Vue Flow's default handle is a tiny (~6px), low-contrast dot — effectively invisible, so the author can't
+   see where to start a drag. We give every handle an explicit visible size + a distinct background + border,
+   sitting ON the node border (the node box has NO overflow:hidden, so nothing clips them), with a hover/active
+   grow affordance. :deep() is required: <Handle> renders its own .vue-flow__handle child element, outside this
+   component's scoped-style hash, so the class we pass through is only reachable via :deep().
+   Output kinds are color-coded so the author can tell next / button / timeout / entry apart at a glance; each
+   handle also carries a localized native title (tooltip) for an explicit label on hover. */
+.funnel-canvas-node :deep(.funnel-handle) {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #ffffff;
+  border-radius: 9999px;
+  background: #6366f1;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.25);
+  cursor: crosshair;
+  transition:
+    transform 0.1s ease,
+    box-shadow 0.1s ease;
+}
+
+/* Visible grab affordance: enlarge + highlight on hover and while connecting. */
+.funnel-canvas-node :deep(.funnel-handle:hover),
+.funnel-canvas-node :deep(.funnel-handle.connectionindicator:hover),
+.funnel-canvas-node :deep(.funnel-handle.vue-flow__handle-connecting) {
+  transform: scale(1.4);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
+}
+
+/* Per-kind colors so the author understands which output is which (alongside the native title tooltip). */
+.funnel-canvas-node :deep(.funnel-handle--target) {
+  background: #94a3b8; /* slate — input/target */
+}
+.funnel-canvas-node :deep(.funnel-handle--next) {
+  background: #2563eb; /* blue — default next */
+}
+.funnel-canvas-node :deep(.funnel-handle--button) {
+  background: #16a34a; /* green — callback button */
+}
+.funnel-canvas-node :deep(.funnel-handle--timeout) {
+  background: #f59e0b; /* amber — timeout */
+}
+.funnel-canvas-node :deep(.funnel-handle--entry) {
+  background: #9333ea; /* purple — start/trigger entry */
 }
 </style>

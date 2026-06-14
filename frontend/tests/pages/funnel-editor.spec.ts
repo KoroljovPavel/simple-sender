@@ -769,6 +769,111 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
     expect(storeMock.update).not.toHaveBeenCalled()
   })
 
+  // ─── Step-readiness gate on canvas-driven step persist (addnode-fix regression) ──────────────────────
+  // Adding a node from the palette appends a fresh, INCOMPLETE step (e.g. MESSAGE → blocks:[{TEXT, text:''}])
+  // and emits update:steps. The backend validates per-step content on every save (MESSAGE needs non-empty
+  // TEXT, DELAY needs delayValue, ADD_TAG needs a tagSlug, …), so an immediate full-replace PATCH 422s
+  // (funnel_step_invalid). The page must MIRROR the existing triggerReady gate: withhold the save while any
+  // step is incomplete, then persist once every step is valid. These tests are value-based + load-bearing —
+  // they fail against the pre-fix unconditional onCanvasSteps→persist().
+  describe('step-readiness gate (do not persist an incomplete new node)', () => {
+    async function mountLoaded(over: Partial<FunnelResponse> = {}) {
+      storeMock.fetchOne.mockResolvedValue(draft(over))
+      // Mirror the backend: on save the server MINTS an ObjectId for any step that arrives with id:null, so the
+      // echoed response carries a stable id (applyResponse re-reads it → the node becomes a wireable target).
+      storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+        Promise.resolve(
+          draft({
+            ...over,
+            ...body,
+            steps: (body.steps ?? []).map((s, i) => ({ ...s, id: s.id ?? `minted-${i}` })),
+          }),
+        ),
+      )
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      // Drain the known on-mount autosave (a ready on_start trigger debounce-persists once), THEN clear the
+      // spy so the assertions below count only the canvas-driven step emit.
+      await new Promise((r) => setTimeout(r, 700))
+      await settle()
+      storeMock.update.mockClear()
+      return wrapper
+    }
+    function emitSteps(wrapper: Awaited<ReturnType<typeof mountLoaded>>, next: FunnelStep[]): void {
+      wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', next)
+    }
+
+    it('does NOT PATCH when a freshly-added MESSAGE node has empty TEXT (would 422)', async () => {
+      const wrapper = await mountLoaded()
+      // Exactly the shape FunnelCanvas.newStep('MESSAGE') appends from the palette: id null, empty TEXT.
+      emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }])
+      await settle()
+      // The empty-text step is withheld — no full-replace PATCH that the backend would reject.
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+
+    it('does NOT PATCH when a freshly-added DELAY node has no delayValue (generality, not MESSAGE-only)', async () => {
+      const wrapper = await mountLoaded()
+      // FunnelCanvas.newStep('DELAY') appends a bare { stepType:'DELAY', id:null } — no delayValue/unit yet.
+      emitSteps(wrapper, [{ stepType: 'DELAY', id: null }])
+      await settle()
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+
+    it('does NOT PATCH when a freshly-added ADD_TAG node has no tagSlug', async () => {
+      const wrapper = await mountLoaded()
+      emitSteps(wrapper, [{ stepType: 'ADD_TAG', id: null }])
+      await settle()
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+
+    it('PATCHes once the new MESSAGE step is filled in (gate opens) and the step becomes wireable', async () => {
+      const wrapper = await mountLoaded()
+      // 1) Add an incomplete MESSAGE node → withheld.
+      emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }])
+      await settle()
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      // 2) The side-panel edit fills the text → every step is now ready → the save proceeds.
+      emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Welcome' }] }])
+      await settle()
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+      expect(body.steps).toEqual([{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Welcome' }] }])
+
+      // 3) The server mints the id on the round-trip; applyResponse re-reads it so the node is now a saved,
+      // wireable edge target (its id is present in the persisted steps the canvas binds).
+      const live = wrapper.findComponent(FunnelCanvas).props('steps') as FunnelStep[]
+      expect(live.some((s) => s.stepType === 'MESSAGE' && !!s.id)).toBe(true)
+    })
+
+    it('PATCHes a valid DELAY step once filled (gate is per-type, not MESSAGE-only)', async () => {
+      const wrapper = await mountLoaded()
+      emitSteps(wrapper, [{ stepType: 'DELAY', id: null }])
+      await settle()
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      emitSteps(wrapper, [{ stepType: 'DELAY', id: null, delayValue: 5, delayUnit: 'MIN' }])
+      await settle()
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+      expect(body.steps).toEqual([{ stepType: 'DELAY', id: null, delayValue: 5, delayUnit: 'MIN' }])
+    })
+
+    it('withholds the save when ANY step is incomplete, even if others are valid', async () => {
+      // A saved, valid MESSAGE step already exists; adding a second incomplete node must NOT flush a PATCH
+      // that would 422 on the incomplete one (the whole full-replace array is validated server-side).
+      const wrapper = await mountLoaded({
+        steps: [{ stepType: 'MESSAGE', id: 's1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
+      })
+      emitSteps(wrapper, [
+        { stepType: 'MESSAGE', id: 's1', blocks: [{ type: 'TEXT', text: 'Hi' }] },
+        { stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] },
+      ])
+      await settle()
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+  })
+
   it('renders a note containing an injection payload ESCAPED (no v-html, no img element)', async () => {
     const payload = '<img src=x onerror=alert(1)>'
     storeMock.fetchOne.mockResolvedValue(

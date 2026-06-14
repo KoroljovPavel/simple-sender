@@ -340,6 +340,39 @@ describe('FunnelCanvas', () => {
     expect(updated[0].blocks?.[0]?.text).toBe('new')
   })
 
+  it('a side-panel submit does NOT overwrite the wrong step when the array shifted (staleness guard)', async () => {
+    // Open the panel on step sA at index 0, THEN simulate the array shifting (a different node deleted →
+    // reindex) so index 0 now holds a DIFFERENT saved step sB. Submitting must NOT overwrite sB at index 0 —
+    // the selected step's id (sA) and the id now at index 0 (sB) differ, so the guard bails (no write).
+    const steps: FunnelStep[] = [messageStep({ id: 'sA', blocks: [{ type: 'TEXT', text: 'A' }] }), messageStep({ id: 'sB', blocks: [{ type: 'TEXT', text: 'B' }] })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 'sA' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // Select sA at its index 0 (the panel captures sel.step = sA).
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 'sA',
+      data: { kind: 'step', stepIndex: 0 },
+    })
+    await settle()
+
+    // The array shifts WHILE the panel is open: sA is gone, sB slid to index 0 (now stepIndex 0 ≠ sel.step).
+    await wrapper.setProps({ steps: [messageStep({ id: 'sB', blocks: [{ type: 'TEXT', text: 'B' }] })] })
+    await settle()
+
+    // Submit the (stale) edit for sA. The guard must refuse: index 0 now holds sB, not sA.
+    ;(wrapper.vm as unknown as { onPanelStepSubmit: (s: FunnelStep) => void }).onPanelStepSubmit({
+      stepType: 'MESSAGE',
+      id: 'sA',
+      blocks: [{ type: 'TEXT', text: 'A-edited' }],
+    })
+    await settle()
+
+    // No write: sB at index 0 was NOT overwritten with the stale sA edit. (Pre-guard this emitted update:steps
+    // with sB replaced by 'A-edited' at index 0.)
+    expect(wrapper.emitted('update:steps')).toBeFalsy()
+    expect(wrapper.emitted('step-save')).toBeFalsy()
+  })
+
   it('the palette offers exactly the 9 existing step types (no new executable types)', async () => {
     const steps: FunnelStep[] = [messageStep({ id: 's1' })]
     const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]

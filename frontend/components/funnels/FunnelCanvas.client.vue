@@ -296,6 +296,18 @@ function onPanelStepSubmit(step: FunnelStep): void {
   if (!sel || sel.kind !== 'step' || sel.stepIndex == null) return
   const idx = sel.stepIndex
   if (!Number.isInteger(idx) || !(props.steps ?? [])[idx]) return
+  // Staleness guard: routing by array index is correct ONLY while the index still points at the SAME step the
+  // panel was opened on. If the array shifted while the panel was open (e.g. a different node was deleted →
+  // reindex), index `idx` may now hold a DIFFERENT saved step — writing here would overwrite the wrong node.
+  // Bail when BOTH the selected step's id and the id currently at `idx` are non-null AND differ. The fresh-node
+  // path is unaffected: an unsaved seed carries id:null, so one side is null and the guard never trips — it
+  // still writes by index (the original save-noop-fix). Only a saved→saved index mismatch is caught.
+  const selId = sel.step?.id ?? null
+  const atIdxId = (props.steps ?? [])[idx]?.id ?? null
+  if (selId != null && atIdxId != null && selId !== atIdxId) return
+  // Emit ordering is LOAD-BEARING: update:steps must fire BEFORE step-save. The page commits the new content to
+  // steps.value on update:steps; onCanvasStepSave (step-save handler) then reads that committed array for its
+  // readiness check. Reversing the order would let the save-feedback check run against the stale pre-edit array.
   const next = (props.steps ?? []).map((s, i) => (i === idx ? step : s))
   emit('update:steps', next)
   emit('step-save', step)

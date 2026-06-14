@@ -389,6 +389,42 @@ describe('funnels/[funnelId] editor page', () => {
       expect(feedback.text()).not.toContain('funnels.canvas')
     })
 
+    it('an explicit save on a COMPLETED step clears stale feedback AND fires the PATCH', async () => {
+      // Exercises the onCanvasStepSave → feedback-null branch on the explicit-save path. Start with a fresh
+      // empty MESSAGE seed, drive an explicit save on the still-empty step to RAISE the feedback banner, then
+      // commit the completed step (update:steps) + an explicit save on the completed step. The completed save
+      // must (a) fire exactly one PATCH carrying the new text and (b) clear the previously-shown feedback.
+      const wrapper = await mountLoaded({
+        triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+        steps: [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }],
+      })
+
+      // 1) Explicit save on the incomplete step → feedback banner appears (the established no-op-feedback path).
+      wrapper.findComponent(FunnelCanvas).vm.$emit('step-save', {
+        stepType: 'MESSAGE',
+        id: null,
+        blocks: [{ type: 'TEXT', text: '' }],
+      })
+      await settle()
+      expect(wrapper.find('[data-test="funnel-step-save-feedback"]').exists()).toBe(true)
+      expect(storeMock.update).not.toHaveBeenCalled()
+
+      // 2) The author fills the text: the canvas commits the completed array (update:steps) BEFORE the explicit
+      // step-save, matching the load-bearing emit order. The completed array fires the implicit PATCH.
+      const completed = { stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Привіт' }] }
+      wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', [completed])
+      wrapper.findComponent(FunnelCanvas).vm.$emit('step-save', completed)
+      await settle()
+
+      // The PATCH fired once with the new text (the completed step persisted).
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1]
+      expect(body.steps).toHaveLength(1)
+      expect(body.steps[0].blocks[0].text).toBe('Привіт')
+      // The explicit save on the now-completed step cleared the stale "incomplete" feedback.
+      expect(wrapper.find('[data-test="funnel-step-save-feedback"]').exists()).toBe(false)
+    })
+
     it('an on_start trigger with null entryStepId does NOT block saving an otherwise-valid step', async () => {
       // Broken edges are allowed (only activation 422s) — a completed step must still persist even while the
       // on_start trigger dangles (triggerValue "" + entryStepId null).

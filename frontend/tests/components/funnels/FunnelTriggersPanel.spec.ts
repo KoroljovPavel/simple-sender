@@ -169,4 +169,47 @@ describe('FunnelTriggersPanel', () => {
     expect(maybe('[data-test="funnel-trigger-on-start"]')).not.toBeNull()
     expect(maybe('[data-test="funnel-triggers-empty"]')).not.toBeNull()
   })
+
+  // Decision A / MAJOR-2 — read-only mode (canvas side panel is the SOLE trigger-editing surface). The panel
+  // stays mounted as a view but hides every editing affordance and emits NO trigger mutation.
+  describe('readonly', () => {
+    async function mountReadonly(triggers: FunnelTrigger[]) {
+      const wrapper = await mountSuspended(FunnelTriggersPanel, {
+        props: { triggers, steps: STEPS, readonly: true },
+        attachTo: document.body,
+      })
+      await settle()
+      return wrapper
+    }
+
+    it('hides add/delete/entry editing controls and shows the read-only notice', async () => {
+      const wrapper = await mountReadonly([onStart(), event('purchase')])
+      // The read-only notice is shown; the editing affordances are gone.
+      expect(maybe('[data-test="funnel-triggers-readonly-notice"]')).not.toBeNull()
+      expect(maybe('[data-test="funnel-trigger-add"]')).toBeNull() // no Add
+      expect(maybe('[data-test="funnel-trigger-delete-1"]')).toBeNull() // no Delete
+      expect(maybe('[data-test="funnel-trigger-entry-1-input"]')).toBeNull() // no entry-step picker
+      // The triggers are still surfaced as a view (the row + the on_start summary render).
+      expect(maybe('[data-test="funnel-trigger-row-readonly-1"]')).not.toBeNull()
+      expect(maybe('[data-test="funnel-trigger-on-start-readonly"]')).not.toBeNull()
+      // Nothing was emitted on idle render.
+      expect(wrapper.emitted('update:triggers')).toBeFalsy()
+    })
+
+    it('does not emit a trigger mutation even if a mutation handler is invoked', async () => {
+      // Belt-and-suspenders: the controls are hidden, but the mutation functions are also gated on !readonly
+      // so a view-only mount can NEVER persist a trigger change. Drive the exposed handlers directly.
+      const wrapper = await mountReadonly([onStart(), event('purchase')])
+      const vm = wrapper.vm as unknown as {
+        addEvent: () => void
+        confirmDelete: (i: number) => void
+        replaceAt: (i: number, t: FunnelTrigger) => void
+      }
+      vm.addEvent()
+      vm.confirmDelete(1)
+      vm.replaceAt(1, event('changed'))
+      await settle()
+      expect(wrapper.emitted('update:triggers')).toBeFalsy()
+    })
+  })
 })

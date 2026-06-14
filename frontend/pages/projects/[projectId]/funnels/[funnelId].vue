@@ -39,8 +39,9 @@ const funnelId = computed(() => String(route.params.funnelId))
 const funnel = ref<FunnelResponse | null>(null)
 const steps = ref<FunnelStep[]>([])
 // Phase 8 (17-funnel-multi-entry): the funnel carries a LIST of triggers (Decision 1), each with its own
-// triggerType/triggerValue/keywords + entryStepId. The panel (FunnelTriggersPanel) edits them via
-// v-model:triggers; the page owns the array, the autosave gate and the PATCH payload.
+// triggerType/triggerValue/keywords + entryStepId. Trigger EDITING now happens ONLY via the canvas side
+// panel (Decision 2 / Decision A — single editing surface); FunnelTriggersPanel is mounted read-only as a
+// view. The canvas's update:triggers emit drives the array; the page owns the autosave gate + PATCH payload.
 const triggers = ref<FunnelTrigger[]>([])
 // Phase 2 (18-funnel-canvas): free-floating canvas annotations. The page owns the array and rides it inside
 // the full-replace PATCH alongside steps/triggers. Null from the backend (old funnels) → empty array.
@@ -520,11 +521,14 @@ async function confirmStopAll() {
           @select="onSelectStep"
         />
 
+        <!-- Read-only view (Decision A / Decision 2): the canvas side panel owns trigger editing; this panel
+             stays mounted as a view. No v-model:triggers — it emits no mutation in read-only mode. -->
         <FunnelTriggersPanel
-          v-model:triggers="triggers"
+          :triggers="triggers"
           :steps="steps"
           :bot-username="botUsername"
           :deep-link="funnel.deepLink"
+          :readonly="true"
         />
       </div>
 

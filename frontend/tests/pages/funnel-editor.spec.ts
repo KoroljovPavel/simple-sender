@@ -175,65 +175,63 @@ describe('funnels/[funnelId] editor page', () => {
     expect(wrapper.find('[data-test="funnel-status-paused"]').exists()).toBe(true)
   })
 
-  // ─── Trigger array auto-save readiness (Phase 8 — 17-funnel-multi-entry) ───────
-  // The page holds triggers as a FunnelTrigger[] edited through the REAL FunnelTriggersPanel (mounted, not
-  // stubbed — a stub would hollow out every assertion below). The debounced PATCH is per-element-gated:
-  // it only fires once triggers.every(triggerReady), so adding/switching one trigger whose required value
-  // is still empty must NOT fire a premature 422. The on_start main entry is pinned by the panel; event
-  // triggers are added via the panel's Add button.
-  describe('trigger array auto-save readiness', () => {
-    beforeEach(() => {
-      vi.useFakeTimers()
-    })
-    afterEach(() => {
-      // Discard (do NOT fire) any pending debounce timer from the mounted-but-not-unmounted wrapper —
-      // firing it would call the shared update spy during the NEXT test's mount, after its mockClear().
-      vi.clearAllTimers()
-      vi.useRealTimers()
-    })
-
-    // Drive the watch+debounce deterministically: flush microtasks (watch callbacks run on a microtask),
-    // advance past the 600ms debounce, then flush the resulting persist() promise.
-    async function tick(ms: number): Promise<void> {
-      await Promise.resolve()
-      await vi.advanceTimersByTimeAsync(ms)
-      await Promise.resolve()
-    }
-
+  // ─── Trigger array persistence via the canvas (Decision A / MAJOR-2 — 18-funnel-canvas) ───────
+  // On the editor page the FunnelTriggersPanel is now READ-ONLY (the canvas side panel is the SOLE
+  // trigger-editing surface). A committed trigger edit therefore arrives via the canvas's `update:triggers`
+  // emit (→ onCanvasTriggers → triggers ref → the EXISTING full-replace persist(), one save path). The page's
+  // per-element triggerReady gate + 600ms debounce still guards the deep-watch (in-place field edits), but a
+  // committed canvas array is a discrete edit that persists directly. These tests assert: the panel renders
+  // read-only (no Add/edit controls), and a canvas-committed array persists as a SANITIZED array (never the
+  // flat trio).
+  describe('trigger array persistence (read-only panel + canvas-committed edits)', () => {
     async function mountLoaded(over: Partial<FunnelResponse> = {}) {
       storeMock.fetchOne.mockResolvedValue(draft(over))
       storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
         Promise.resolve(draft({ ...over, ...body })),
       )
       const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
-      // load() runs on a microtask; advance enough to settle the initial mount with fake timers, then clear
-      // any on-mount autosave (a ready on_start value persists once) so each test counts only its own edits.
-      await tick(700)
+      await settle()
       storeMock.update.mockClear()
       return wrapper
     }
 
-    it('loads the trigger array from the funnel response and renders the Triggers panel', async () => {
-      const wrapper = await mountLoaded()
-      // The real panel is mounted (not stubbed) and shows the on_start main entry slot.
-      expect(wrapper.find('[data-test="funnel-triggers"]').exists()).toBe(true)
-      expect(wrapper.find('[data-test="funnel-trigger-on-start"]').exists()).toBe(true)
-      // No event rows yet (the seed funnel only carries the on_start entry).
-      expect(wrapper.find('[data-test="funnel-triggers-empty"]').exists()).toBe(true)
+    // Relay a new triggers array through the canvas (the single trigger-editing surface, Decision A).
+    function emitTriggers(wrapper: Awaited<ReturnType<typeof mountLoaded>>, triggers: FunnelTrigger[]): void {
+      wrapper.findComponent(FunnelCanvas).vm.$emit('update:triggers', triggers)
+    }
+
+    const onStart = (over: Partial<FunnelTrigger> = {}): FunnelTrigger => ({
+      triggerType: 'on_start',
+      triggerValue: '',
+      keywords: null,
+      entryStepId: null,
+      ...over,
+    })
+    const event = (over: Partial<FunnelTrigger> = {}): FunnelTrigger => ({
+      triggerType: 'event',
+      triggerValue: 'order_paid',
+      keywords: null,
+      entryStepId: 'step1',
+      ...over,
     })
 
-    it('persists the trigger array (not the flat trio) on save once an event trigger is completed', async () => {
+    it('renders the Triggers panel read-only (no Add/edit/delete controls) but still shows the triggers', async () => {
       const wrapper = await mountLoaded()
-      // Add an event trigger (starts empty → incomplete → no PATCH yet).
-      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
-      await tick(700)
-      expect(storeMock.update).not.toHaveBeenCalled()
+      // The real panel is mounted (not stubbed) as a VIEW: on_start slot shown, read-only notice present, but
+      // no Add control (the canvas side panel owns trigger editing — Decision A).
+      expect(wrapper.find('[data-test="funnel-triggers"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-trigger-on-start"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-triggers-readonly-notice"]').exists()).toBe(true)
+      expect(wrapper.find('[data-test="funnel-trigger-add"]').exists()).toBe(false)
+    })
 
-      // Fill the new event row's slug → the array is now fully ready → one PATCH.
-      const eventInput = wrapper.findAll('[data-test="funnel-trigger-event-input"]')
-      expect(eventInput.length).toBe(1)
-      await eventInput[0].setValue('order_paid')
-      await tick(700)
+    it('persists a canvas-committed trigger array as a SANITIZED array (never the flat trio)', async () => {
+      const wrapper = await mountLoaded({
+        steps: [{ stepType: 'MESSAGE', id: 'step1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
+      })
+      // The canvas commits a completed array (Decision A — the sole trigger-editing surface).
+      emitTriggers(wrapper, [onStart(), event({ triggerValue: 'order_paid' })])
+      await settle()
 
       expect(storeMock.update).toHaveBeenCalledTimes(1)
       const body = storeMock.update.mock.calls[0][1]
@@ -242,149 +240,13 @@ describe('funnels/[funnelId] editor page', () => {
       expect(body.triggerType).toBeUndefined()
       expect(body.triggerValue).toBeUndefined()
       expect(body.keywords).toBeUndefined()
-      // on_start main entry + the completed event trigger.
+      // on_start main entry + the committed event trigger.
       expect(body.triggers).toHaveLength(2)
       const ev = body.triggers.find((tr: { triggerType: string }) => tr.triggerType === 'event')
       expect(ev.triggerValue).toBe('order_paid')
+      expect(ev.entryStepId).toBe('step1')
       // event owns triggerValue and clears keywords (per-element sanitizer).
       expect(ev.keywords).toEqual([])
-    })
-
-    it('does NOT PATCH while any trigger is incomplete (event added, value empty)', async () => {
-      const wrapper = await mountLoaded()
-      // Add an event trigger but leave its slug empty → the array is NOT every(ready) → no premature 422.
-      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
-      await tick(700)
-      expect(storeMock.update).not.toHaveBeenCalled()
-    })
-
-    it('PATCHes once every trigger is ready (valid event slug + entry step)', async () => {
-      // Seed a saved step so the panel can resolve a mid-entry: a new event defaults its entryStepId to the
-      // FIRST step id (event is mid-entry — Decision 10), proving the entry step is carried in the payload.
-      const wrapper = await mountLoaded({
-        steps: [{ stepType: 'MESSAGE', id: 'step1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
-      })
-      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
-      await tick(700)
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[0].setValue('signup')
-      await tick(700)
-
-      expect(storeMock.update).toHaveBeenCalledTimes(1)
-      const body = storeMock.update.mock.calls[0][1]
-      const ev = body.triggers.find((tr: { triggerType: string }) => tr.triggerType === 'event')
-      expect(ev.triggerValue).toBe('signup')
-      // event is mid-entry: the panel defaulted entryStepId to the funnel's first step (not null).
-      expect(ev.entryStepId).toBe('step1')
-    })
-
-    it('a ready trigger waits while a second trigger is still being edited (triggers.every gate)', async () => {
-      const wrapper = await mountLoaded()
-      // Two event triggers: fill the first, leave the second empty → every(ready) is false → no PATCH.
-      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
-      await tick(50)
-      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
-      await tick(50)
-
-      const inputs = wrapper.findAll('[data-test="funnel-trigger-event-input"]')
-      expect(inputs.length).toBe(2)
-      await inputs[0].setValue('first_event')
-      await tick(700)
-
-      // The second event is still empty → the whole array is not ready → no autosave.
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      // Completing the second one releases the gate → exactly one PATCH with both events ready.
-      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[1].setValue('second_event')
-      await tick(700)
-      expect(storeMock.update).toHaveBeenCalledTimes(1)
-      const body = storeMock.update.mock.calls[0][1]
-      const events = body.triggers.filter((tr: { triggerType: string }) => tr.triggerType === 'event')
-      expect(events.map((e: { triggerValue: string }) => e.triggerValue).sort()).toEqual([
-        'first_event',
-        'second_event',
-      ])
-    })
-
-    it('on_start main entry persists an empty value but not an invalid one', async () => {
-      const wrapper = await mountLoaded({
-        triggers: [{ triggerType: 'on_start', triggerValue: 'promo', keywords: null, entryStepId: null }],
-      })
-      // Empty is valid for on_start (bare /start) → persists. The on_start slot's value input is the only one.
-      await wrapper.get('[data-test="funnel-trigger-value-input"]').setValue('')
-      await tick(700)
-      expect(storeMock.update).toHaveBeenCalledTimes(1)
-      const onStart = storeMock.update.mock.calls[0][1].triggers.find(
-        (tr: { triggerType: string }) => tr.triggerType === 'on_start',
-      )
-      expect(onStart.triggerValue).toBe('')
-
-      storeMock.update.mockClear()
-      // A value with spaces/specials fails TRIGGER_VALUE_RE → no PATCH (per-element gate).
-      await wrapper.get('[data-test="funnel-trigger-value-input"]').setValue('bad value!')
-      await tick(700)
-      expect(storeMock.update).not.toHaveBeenCalled()
-    })
-
-    // Main regression case (task TDD anchor): mutating ONE existing trigger while its required value stays
-    // empty/incomplete must NOT fire a premature PATCH — the per-element triggerReady gate holds. The seed
-    // funnel carries an event trigger with an empty value (incomplete from the start); editing that trigger
-    // (its type/value editor) toward a still-not-ready value keeps the array off every(triggerReady), so the
-    // debounce never arms. If the gate were array-wide instead of per-element, the on_start being valid would
-    // wrongly release a PATCH and the server would 422 the empty event trigger.
-    it('mutating one trigger while its value stays empty fires no premature PATCH (per-element gate)', async () => {
-      const wrapper = await mountLoaded({
-        steps: [{ stepType: 'MESSAGE', id: 'step1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
-        triggers: [
-          { triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null },
-          // An existing-but-incomplete event trigger (empty value → not ready).
-          { triggerType: 'event', triggerValue: '', keywords: null, entryStepId: 'step1' },
-        ],
-      })
-      // The seeded event row is rendered by the REAL panel and its type select is pinned (panel-owned).
-      const eventInput = wrapper.findAll('[data-test="funnel-trigger-event-input"]')
-      expect(eventInput.length).toBe(1)
-
-      // Mutate ONLY that trigger toward a value that is still NOT ready (fails EVENT_NAME_RE). The array is
-      // not every(triggerReady) → the debounce stays disarmed → no PATCH (no spurious 422).
-      await eventInput[0].setValue('not ready!')
-      await tick(700)
-      expect(storeMock.update).not.toHaveBeenCalled()
-    })
-
-    // PATCH-storm cancellation ([funnelId].vue: clearTimeout BEFORE the every-gate recheck). Arm the debounce
-    // with a complete/ready array (a PATCH is scheduled), then — before the 600ms elapses — make the array
-    // incomplete again (add a second, empty event trigger). The previously-armed timer MUST be cancelled, so
-    // advancing past the debounce fires NOTHING. Completing the second trigger later releases the gate for a
-    // single clean PATCH. Without the clearTimeout safeguard the stale armed timer would flush a not-ready
-    // array and 422.
-    it('cancels a previously-armed PATCH when a later edit makes the array incomplete', async () => {
-      const wrapper = await mountLoaded()
-      // Add + fill one event trigger → the array is now fully ready → a PATCH is scheduled (timer armed).
-      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
-      await tick(50)
-      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[0].setValue('first_event')
-      // Let the watch run (microtask) WITHOUT advancing past the 600ms debounce — the PATCH is armed, not fired.
-      await Promise.resolve()
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      // Before the armed timer fires, add a second empty event trigger → array no longer every(ready). The
-      // armed PATCH must be cancelled (clearTimeout), so advancing past the debounce fires NOTHING.
-      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
-      await tick(700)
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      // Completing the second trigger releases the gate again → exactly one clean PATCH with both events.
-      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[1].setValue('second_event')
-      await tick(700)
-      expect(storeMock.update).toHaveBeenCalledTimes(1)
-      const body = storeMock.update.mock.calls[0][1]
-      const events = body.triggers.filter((tr: { triggerType: string }) => tr.triggerType === 'event')
-      expect(events.map((e: { triggerValue: string }) => e.triggerValue).sort()).toEqual([
-        'first_event',
-        'second_event',
-      ])
     })
   })
 

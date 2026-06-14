@@ -158,4 +158,48 @@ describe('FunnelCanvasSidePanel', () => {
     expect(document.querySelector('[data-test="funnel-trigger"]')).toBeNull()
     wrapper.unmount()
   })
+
+  // Decision B / MINOR-2 — minimal note-text editor for a NOTE node.
+  it('mounts a bounded note-text editor for a note node and emits the edited text', async () => {
+    const wrapper = await mountPanel({ kind: 'note', noteIndex: 0, noteText: 'before' })
+
+    const textarea = document.querySelector('[data-test="funnel-canvas-note-textarea"]') as HTMLTextAreaElement | null
+    expect(textarea).not.toBeNull()
+    // Seeded from the note's text.
+    expect(textarea!.value).toBe('before')
+    // Bounded to the backend NOTE_TEXT_MAX (@Size) so the server never 422s on length.
+    expect(textarea!.getAttribute('maxlength')).toBe('2000')
+    // No step form / trigger form for a note node.
+    expect(document.querySelector('[data-test="step-form"]')).toBeNull()
+    expect(document.querySelector('[data-test="funnel-trigger"]')).toBeNull()
+
+    // Editing emits update:note-text with the note index + new text (parent persists via update:notes).
+    textarea!.value = 'after'
+    textarea!.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+
+    const emitted = wrapper.emitted('update:note-text')
+    expect(emitted).toBeTruthy()
+    expect(emitted!.at(-1)![0]).toEqual({ noteIndex: 0, text: 'after' })
+
+    wrapper.unmount()
+  })
+
+  it('renders an injection-payload note ESCAPED in the editor (no v-html)', async () => {
+    // Stored-XSS guard (Decision 7): a note whose text is an injection payload must be held as inert DATA in
+    // the <textarea> value (the browser never parses an attribute value as markup), never injected as live
+    // markup. The node-PREVIEW escaping ({{ }} → innerHTML has no `<img`) is covered in funnel-editor.spec.ts.
+    const payload = '<img src=x onerror="alert(1)">'
+    const wrapper = await mountPanel({ kind: 'note', noteIndex: 0, noteText: payload })
+
+    const textarea = document.querySelector('[data-test="funnel-canvas-note-textarea"]') as HTMLTextAreaElement
+    // The payload is the textarea's value (inert data), not parsed markup.
+    expect(textarea.value).toBe(payload)
+    // No live <img> element was created anywhere in the editor (would catch an accidental v-html).
+    const editor = document.querySelector('[data-test="funnel-canvas-note-editor"]') as HTMLElement
+    expect(editor.querySelector('img')).toBeNull()
+    expect(document.querySelectorAll('img')).toHaveLength(0)
+
+    wrapper.unmount()
+  })
 })

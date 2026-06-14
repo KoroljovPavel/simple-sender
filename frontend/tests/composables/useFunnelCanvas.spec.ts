@@ -4,13 +4,10 @@ import type { FunnelResponse, FunnelStep, FunnelTrigger, Button } from '../../ty
 import {
   buildNodes,
   buildEdges,
-  modelToGraph,
   layoutNodes,
   detectBrokenEdges,
   connectEdge,
-  disconnectEdge,
   deleteStepNode,
-  buildPatchPayload,
   type EdgeRef,
   type CanvasEdge,
 } from '../../composables/useFunnelCanvas'
@@ -203,43 +200,6 @@ describe('useFunnelCanvas — reverse connect', () => {
     expect(out.triggers[1].entryStepId).toBe('keep')
   })
 
-  it('no edge serializes to null not empty string', () => {
-    const f = funnel({
-      triggers: [trigger('event', { triggerValue: 'e', entryStepId: 's1' })],
-      steps: [
-        step('s1', {
-          next: 's2',
-          timeoutTargetStepId: 's2',
-          buttons: [callbackBtn('b', 's2')],
-        }),
-        step('s2'),
-      ],
-    })
-
-    const afterNext = disconnectEdge(f, { fieldKind: 'next', sourceStepId: 's1', triggerIndex: null, buttonIndex: null })
-    expect(afterNext.steps[0].next).toBeNull()
-    expect(afterNext.steps[0].next).not.toBe('')
-    expect(afterNext.steps[0].timeoutTargetStepId).toBe('s2') // sibling unchanged
-
-    const afterTimeout = disconnectEdge(f, { fieldKind: 'timeout', sourceStepId: 's1', triggerIndex: null, buttonIndex: null })
-    expect(afterTimeout.steps[0].timeoutTargetStepId).toBeNull()
-    expect(afterTimeout.steps[0].timeoutTargetStepId).not.toBe('')
-    // siblings unchanged
-    expect(afterTimeout.steps[0].next).toBe('s2')
-    expect(afterTimeout.steps[0].buttons![0].targetStepId).toBe('s2')
-
-    const afterBtn = disconnectEdge(f, { fieldKind: 'button', sourceStepId: 's1', triggerIndex: null, buttonIndex: 0 })
-    expect(afterBtn.steps[0].buttons![0].targetStepId).toBeNull()
-    expect(afterBtn.steps[0].buttons![0].targetStepId).not.toBe('')
-    // siblings unchanged
-    expect(afterBtn.steps[0].next).toBe('s2')
-    expect(afterBtn.steps[0].timeoutTargetStepId).toBe('s2')
-
-    const afterEntry = disconnectEdge(f, { fieldKind: 'entry', sourceStepId: null, triggerIndex: 0, buttonIndex: null })
-    expect(afterEntry.triggers[0].entryStepId).toBeNull()
-    expect(afterEntry.triggers[0].entryStepId).not.toBe('')
-  })
-
   it('connectEdge rejects a non-null but non-saved/unknown target id', () => {
     const f = funnel({ steps: [step('s1', { next: null }), step('s2')] })
     const ref: EdgeRef = { fieldKind: 'next', sourceStepId: 's1', triggerIndex: null, buttonIndex: null }
@@ -265,13 +225,12 @@ describe('useFunnelCanvas — reverse connect', () => {
     const edges = buildEdges(funnel({ steps: [step('s1', { next: 'no-such-or-unsaved' }), step(null)] }))
     expect(edges.filter((e) => e.data.fieldKind === 'next')).toHaveLength(0)
 
-    // Wire s1.next -> s2 (saved) and build the payload.
+    // Wire s1.next -> s2 (saved): the reverse mapper writes the field on the cloned model.
     const wired = connectEdge(f, { fieldKind: 'next', sourceStepId: 's1', triggerIndex: null, buttonIndex: null }, 's2')
-    const payload = buildPatchPayload(wired)
-    expect(payload.steps).toHaveLength(3)
-    expect(payload.steps![0].next).toBe('s2')
+    expect(wired.steps).toHaveLength(3)
+    expect(wired.steps[0].next).toBe('s2')
     // the unsaved node is preserved as a step with id null (it just can't be an edge target yet)
-    expect(payload.steps![2].id).toBeNull()
+    expect(wired.steps[2].id).toBeNull()
   })
 })
 
@@ -327,11 +286,16 @@ describe('useFunnelCanvas — layout', () => {
     const laid = layoutNodes(f, nodes, edges)
 
     // positioned node kept exactly
-    expect(laid.find((n) => n.id === 's1')!.position).toEqual({ x: 999, y: 111 })
-    // unpositioned node got finite dagre coords (and not the stored one's)
+    const s1 = laid.find((n) => n.id === 's1')!
+    expect(s1.position).toEqual({ x: 999, y: 111 })
+    // unpositioned node got finite dagre coords...
     const s2 = laid.find((n) => n.id === 's2')!
     expect(Number.isFinite(s2.position.x)).toBe(true)
     expect(Number.isFinite(s2.position.y)).toBe(true)
+    // ...that were ACTUALLY computed: NOT equal to the stored coord (a silent dagre no-op → a finite
+    // {0,0}/default would pass a bare isFinite check) AND NOT collapsed onto its positioned sibling.
+    expect(s2.position).not.toEqual({ x: 999, y: 111 })
+    expect(s2.position).not.toEqual(s1.position)
   })
 
   it('orphan forest (disconnected nodes) still yields finite coords', () => {
@@ -380,22 +344,23 @@ describe('useFunnelCanvas — layout', () => {
 // ---------------------------------------------------------------------------
 
 describe('useFunnelCanvas — cycle, notes, delete, broken, subscribe', () => {
-  it('cycle maps and serializes without infinite recursion', () => {
-    // return-to-menu cycle: A.next -> B, B.button -> A
+  it('cycle maps to nodes+edges without infinite recursion', () => {
+    // return-to-menu cycle: A.next -> B, B.button -> A. The forward mapper is a flat field pass (no graph
+    // traversal), so a cycle produces a finite node/edge set and terminates.
     const f = funnel({
       steps: [
         step('A', { next: 'B' }),
         step('B', { buttons: [callbackBtn('back', 'A')] }),
       ],
     })
-    const graph = modelToGraph(f)
-    expect(graph.nodes.filter((n) => n.type === 'step')).toHaveLength(2)
-    expect(graph.edges.map((e) => e.data.fieldKind).sort()).toEqual(['button', 'next'])
-
-    // PATCH build must terminate (no infinite recursion).
-    const payload = buildPatchPayload(f)
-    expect(payload.steps![0].next).toBe('B')
-    expect(payload.steps![1].buttons![0].targetStepId).toBe('A')
+    const nodes = buildNodes(f)
+    const edges = buildEdges(f)
+    const laid = layoutNodes(f, nodes, edges)
+    expect(laid.filter((n) => n.type === 'step')).toHaveLength(2)
+    expect(edges.map((e) => e.data.fieldKind).sort()).toEqual(['button', 'next'])
+    // Both cycle edges resolve to saved nodes (the cycle round-trips, not silently dropped).
+    expect(edges.find((e) => e.data.fieldKind === 'next')!.target).toBe('B')
+    expect(edges.find((e) => e.data.fieldKind === 'button')!.target).toBe('A')
   })
 
   it('delete node auto-cleans all inbound edges with exact count', () => {
@@ -472,20 +437,20 @@ describe('useFunnelCanvas — cycle, notes, delete, broken, subscribe', () => {
       steps: [step('s1')],
       notes: [{ id: 'n1', text: 'note A', canvasPosition: { x: 1, y: 2 } }, { id: null, text: 'fresh', canvasPosition: null }],
     })
-    const payload = buildPatchPayload(f)
 
-    // notes round-trip through notes[] only
-    expect(payload.notes).toHaveLength(2)
-    expect(payload.notes![0].text).toBe('note A')
-    expect(payload.notes![1].id).toBeNull() // fresh note keeps server-minted-null id
-    // a note never appears as a step — steps[] holds exactly the funnel's step ids, no note id leaked in
-    expect(payload.steps).toHaveLength(1)
-    expect(payload.steps!.map((s) => s.id)).toEqual(['s1'])
-    expect((payload.steps as unknown as Array<{ text?: string }>).some((s) => s.text === 'note A')).toBe(false)
-    // and a note node is NOT a step node
+    // A note is NEVER a step node — the forward mapper reads notes from notes[] only (Decision 7).
     const nodes = buildNodes(f)
-    expect(nodes.filter((n) => n.type === 'note')).toHaveLength(2)
-    expect(nodes.filter((n) => n.type === 'step')).toHaveLength(1)
+    const noteNodes = nodes.filter((n) => n.type === 'note')
+    const stepNodes = nodes.filter((n) => n.type === 'step')
+    expect(noteNodes).toHaveLength(2)
+    expect(stepNodes).toHaveLength(1)
+    // step nodes carry exactly the funnel's step ids — no note id leaked into the step node set.
+    expect(stepNodes.map((n) => n.id)).toEqual(['s1'])
+    // note nodes carry no step index (they index into notes[], not steps[]).
+    expect(noteNodes.every((n) => n.data.stepIndex === null && n.data.noteIndex !== null)).toBe(true)
+    // notes produce NO edges (a note has no graph fields).
+    const edges = buildEdges(f)
+    expect(edges).toHaveLength(0)
   })
 
   it('cross-funnel SUBSCRIBE renders as exit badge not edge', () => {

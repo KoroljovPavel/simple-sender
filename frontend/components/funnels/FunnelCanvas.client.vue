@@ -262,12 +262,14 @@ function addNote(): void {
 const selectedNode = ref<SelectedNode | null>(null)
 
 function selectNode(node: CanvasNode): void {
-  const { kind, stepIndex, triggerIndex } = node.data
+  const { kind, stepIndex, triggerIndex, noteIndex } = node.data
   selectedNode.value = {
     kind,
     nodeId: node.id,
     step: stepIndex != null ? (props.steps ?? [])[stepIndex] ?? null : null,
     trigger: triggerIndex != null ? (props.triggers ?? [])[triggerIndex] ?? null : null,
+    noteIndex: noteIndex,
+    noteText: noteIndex != null ? (props.notes ?? [])[noteIndex]?.text ?? '' : null,
     botUsername: props.botUsername ?? null,
     deepLink: props.deepLink ?? null,
   }
@@ -285,6 +287,13 @@ function onPanelStepSubmit(step: FunnelStep): void {
   if (!sel || sel.kind !== 'step') return
   const next = (props.steps ?? []).map((s) => (s.id != null && s.id === sel.step?.id ? step : s))
   emit('update:steps', next)
+}
+
+// Relay the side panel's note-text edit back into the notes array by index, then emit update:notes so the
+// page persists it via the existing path. text is written verbatim; rendering escapes it ({{ }}, never v-html).
+function onPanelNoteText(payload: { noteIndex: number; text: string }): void {
+  const next = (props.notes ?? []).map((n, i) => (i === payload.noteIndex ? { ...n, text: payload.text } : n))
+  emit('update:notes', next)
 }
 
 function onPanelTriggerUpdate(trigger: FunnelTrigger): void {
@@ -470,6 +479,7 @@ defineExpose({ handleConnect, handleNodeDragStop, selectNode, requestDelete, con
       :node="selectedNode"
       @submit="onPanelStepSubmit"
       @update:trigger="onPanelTriggerUpdate"
+      @update:note-text="onPanelNoteText"
       @close="clearSelection"
     />
   </div>

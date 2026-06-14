@@ -195,13 +195,9 @@ describe('FunnelCanvas', () => {
 
   // ── Task 6: authoring interactions (palette / start-node lifecycle / delete-warning) ──────────────────
 
-  it('start node not rendered for an event-only funnel', async () => {
-    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
-    const triggers: FunnelTrigger[] = [{ triggerType: 'event', triggerValue: 'evt', entryStepId: 's1' }]
-    const wrapper = await mountWith({ steps, triggers })
-
-    expect(wrapper.find('[data-node-id="start"]').exists()).toBe(false)
-  })
+  // NOTE: the event-only "no start node" case is covered by the stronger test above
+  // ('does NOT render a start node for an event-only funnel (start node optional)', which also asserts the
+  // canvas root + step node render) — the near-duplicate here was removed (T10 audit minor).
 
   it('start node rendered when on_start exists', async () => {
     const steps: FunnelStep[] = [messageStep({ id: 's1' })]
@@ -255,18 +251,10 @@ describe('FunnelCanvas', () => {
     expect(updated.some((tr) => tr.triggerType === 'on_start')).toBe(false)
   })
 
-  it('deleting only the start edge leaves a highlighted broken edge', async () => {
-    // on_start present but entryStepId null (its edge deleted, node kept) → broken-edge highlight, no error.
-    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
-    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: null }]
-    const wrapper = await mountWith({ steps, triggers })
-
-    const startNode = wrapper.find('[data-node-id="start"]')
-    expect(startNode.exists()).toBe(true)
-    expect(startNode.classes()).toContain('funnel-canvas-node--broken')
-    const broken = wrapper.findAll('[data-test="funnel-canvas-broken-edge"]')
-    expect(broken.some((b) => b.attributes('data-edge-field') === 'entry')).toBe(true)
-  })
+  // NOTE: the on_start-with-null-entry broken-edge state is covered by the stronger test above
+  // ('renders the start node broken when on_start entryStepId is null (entry edge deleted)') — both asserted
+  // the same rendered state (start node --broken + an entry broken-edge marker), so the near-duplicate here
+  // was removed (T10 audit minor).
 
   it('deleting a node warns with the exact disconnect count', async () => {
     // s2 has THREE inbound edges: s1.next, s1 callback button, s3.timeout → deleting s2 warns "3".

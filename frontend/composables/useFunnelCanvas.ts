@@ -14,11 +14,9 @@
 import dagre from '@dagrejs/dagre'
 import type {
   Button,
-  FunnelNote,
   FunnelResponse,
   FunnelStep,
   FunnelTrigger,
-  UpdateFunnelRequest,
 } from '~/types/funnel'
 
 // ---------------------------------------------------------------------------
@@ -70,11 +68,6 @@ export interface CanvasEdge {
   source: string
   target: string
   data: CanvasEdgeData
-}
-
-export interface CanvasGraph {
-  nodes: CanvasNode[]
-  edges: CanvasEdge[]
 }
 
 // A broken edge: its target id does not resolve to a node, OR an on_start trigger lost its entry.
@@ -363,13 +356,6 @@ function gridLayout(nodes: CanvasNode[]): Map<string, { x: number; y: number }> 
   return out
 }
 
-// Convenience: full forward pass (nodes + edges, laid out).
-export function modelToGraph(funnel: FunnelResponse): CanvasGraph {
-  const nodes = buildNodes(funnel)
-  const edges = buildEdges(funnel)
-  return { nodes: layoutNodes(funnel, nodes, edges), edges }
-}
-
 // ---------------------------------------------------------------------------
 // Broken-edge detection
 // ---------------------------------------------------------------------------
@@ -457,9 +443,9 @@ export interface EdgeRef {
 }
 
 // Resolve the EdgeRef to the model object and write `value` (a target id, or null for "no edge") onto
-// exactly the owned field — touching no sibling. Returns a NEW funnel. `connectEdge` enforces the
-// saved-node-only constraint (a non-null value must resolve to a saved step).
-export function applyEdgeValue(funnel: FunnelResponse, ref: EdgeRef, value: string | null): FunnelResponse {
+// exactly the owned field — touching no sibling. Returns a NEW funnel. Internal helper of `connectEdge`
+// (the only edge-write the app uses); not exported (MINOR-1 — the standalone export was dead/parallel).
+function applyEdgeValue(funnel: FunnelResponse, ref: EdgeRef, value: string | null): FunnelResponse {
   const next = cloneFunnel(funnel)
 
   switch (ref.fieldKind) {
@@ -512,12 +498,6 @@ export function connectEdge(funnel: FunnelResponse, ref: EdgeRef, targetStepId: 
   return applyEdgeValue(funnel, ref, targetStepId)
 }
 
-// Disconnect an edge ("no edge"): set the owned field to null — NEVER "" (an empty-string id 422s as
-// funnel_broken_edge — code-research §2).
-export function disconnectEdge(funnel: FunnelResponse, ref: EdgeRef): FunnelResponse {
-  return applyEdgeValue(funnel, ref, null)
-}
-
 // Result of deleting a node: the new funnel + the exact count of inbound edges that were nulled.
 export interface DeleteNodeResult {
   funnel: FunnelResponse
@@ -561,23 +541,4 @@ export function deleteStepNode(funnel: FunnelResponse, stepId: string): DeleteNo
   next.steps = (next.steps ?? []).filter((s) => s.id !== stepId)
 
   return { funnel: next, disconnectedCount: disconnected }
-}
-
-// ---------------------------------------------------------------------------
-// PATCH payload builder
-// ---------------------------------------------------------------------------
-
-// Build the UpdateFunnelRequest body from a funnel model. Notes are written into `notes[]` ONLY — a
-// note never leaks into `steps[]` (Decision 7). The build is a flat field copy (no graph traversal),
-// so a cycle (A.next->B, B.button->A) serializes without infinite recursion. Edge-bearing fields keep
-// their null/value as the model holds them ("no edge" stays null, never "").
-export function buildPatchPayload(funnel: FunnelResponse): UpdateFunnelRequest {
-  return {
-    name: funnel.name,
-    description: funnel.description,
-    triggers: (funnel.triggers ?? []).map((t) => ({ ...t })),
-    allowReEnter: funnel.allowReEnter,
-    steps: (funnel.steps ?? []).map((s) => ({ ...s })),
-    notes: funnel.notes ? funnel.notes.map((n): FunnelNote => ({ id: n.id ?? null, text: n.text, canvasPosition: n.canvasPosition ?? null })) : (funnel.notes ?? null),
-  }
 }

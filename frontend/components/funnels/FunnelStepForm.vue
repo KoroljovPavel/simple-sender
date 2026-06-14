@@ -1013,6 +1013,11 @@ const onSubmit = handleSubmit((values) => {
       break
     }
   }
+  // Carry the server-minted graph/layout fields the form does NOT edit through unchanged so a side-panel
+  // field edit never drops them (MAJOR-1 — 18-funnel-canvas audit). canvasPosition is the node's manually
+  // placed coordinate; like id/next it is owned by the canvas, not this form, and must survive a re-emit.
+  // Omitted when absent so the emitted step stays byte-identical for the list/dialog callers (Decision 10).
+  if (props.initial?.canvasPosition != null) step.canvasPosition = props.initial.canvasPosition
   emit('submit', step)
 })
 </script>

@@ -17,12 +17,20 @@ import type { FunnelStep, FunnelTrigger, FunnelTriggerType } from '~/types/funne
 import FunnelTriggerSettings from '~/components/funnels/FunnelTriggerSettings.vue'
 import SearchableSelect from '~/components/funnels/SearchableSelect.vue'
 
-const props = defineProps<{
-  triggers: FunnelTrigger[]
-  steps: FunnelStep[]
-  botUsername?: string | null
-  deepLink?: string | null
-}>()
+// readonly (Decision A / MAJOR-2 — 18-funnel-canvas audit, mirrors FunnelStepsList Task 7): on the
+// canvas-driven editor the canvas side panel is the SOLE trigger-editing surface (Decision 2 — single
+// editing surface), so this panel stays mounted as a VIEW only — no add/edit/delete affordances and it
+// emits no trigger mutation. Default false so the standalone list-page caller is unaffected.
+const props = withDefaults(
+  defineProps<{
+    triggers: FunnelTrigger[]
+    steps: FunnelStep[]
+    botUsername?: string | null
+    deepLink?: string | null
+    readonly?: boolean
+  }>(),
+  { readonly: false },
+)
 
 const emit = defineEmits<{
   'update:triggers': [triggers: FunnelTrigger[]]
@@ -95,12 +103,16 @@ const duplicateIndices = computed(() => {
 })
 
 // All mutations rebuild the whole array and emit it (full-replace). Pinia/parent owns the source of truth.
+// Every mutation is also gated on !readonly so a view-only mount NEVER emits a trigger change (Decision A),
+// even if a control somehow fired — the editing controls themselves are hidden in the template.
 function replaceAt(index: number, next: FunnelTrigger): void {
+  if (props.readonly) return
   const copy = props.triggers.map((tr, i) => (i === index ? next : tr))
   emit('update:triggers', copy)
 }
 
 function addEvent(): void {
+  if (props.readonly) return
   const fresh: FunnelTrigger = {
     triggerType: 'event',
     triggerValue: '',
@@ -114,9 +126,11 @@ function addEvent(): void {
 }
 
 function askDelete(index: number): void {
+  if (props.readonly) return
   confirmIndex.value = index
 }
 function confirmDelete(index: number): void {
+  if (props.readonly) return
   confirmIndex.value = null
   if (selectedIndex.value === index) selectedIndex.value = null
   emit('update:triggers', props.triggers.filter((_, i) => i !== index))
@@ -144,14 +158,31 @@ function onEntryChange(index: number, model: string): void {
 
 <template>
   <div data-test="funnel-triggers" class="space-y-4">
+    <!-- Read-only notice (Decision A): the canvas side panel owns trigger editing; this panel is a view. -->
+    <p
+      v-if="props.readonly"
+      data-test="funnel-triggers-readonly-notice"
+      class="rounded-md border border-dashed bg-gray-50 px-3 py-2 text-xs text-gray-500"
+    >
+      {{ t('funnels.canvas.triggersReadOnly') }}
+    </p>
+
     <!-- on_start: the funnel's main entry (always step 1). Edited via the portable trigger form. -->
     <section data-test="funnel-trigger-on-start" class="rounded-md border border-blue-200 bg-blue-50/40 px-3 py-2">
       <div class="mb-2 flex items-center justify-between">
         <span class="text-sm font-semibold">{{ t('funnels.triggersPanel.mainEntry') }}</span>
         <span class="text-xs text-gray-500">{{ t('funnels.triggersPanel.mainEntryHint') }}</span>
       </div>
+      <!-- View-only mount: a static summary, NO interactive trigger form (emits nothing). -->
+      <p
+        v-if="props.readonly && onStartIndex >= 0"
+        data-test="funnel-trigger-on-start-readonly"
+        class="text-sm text-gray-700"
+      >
+        {{ props.triggers[onStartIndex].triggerValue || t('funnels.triggersPanel.mainEntry') }}
+      </p>
       <FunnelTriggerSettings
-        v-if="onStartIndex >= 0"
+        v-else-if="onStartIndex >= 0"
         lock-type
         :trigger-type="(props.triggers[onStartIndex].triggerType as FunnelTriggerType)"
         :trigger-value="props.triggers[onStartIndex].triggerValue ?? ''"
@@ -168,6 +199,7 @@ function onEntryChange(index: number, model: string): void {
       <div class="mb-2 flex items-center justify-between">
         <span class="text-sm font-semibold">{{ t('funnels.triggersPanel.eventTriggers') }}</span>
         <button
+          v-if="!props.readonly"
           type="button"
           data-test="funnel-trigger-add"
           class="rounded-md border px-3 py-1.5 text-sm hover:bg-gray-50"
@@ -204,7 +236,10 @@ function onEntryChange(index: number, model: string): void {
               {{ tr.triggerValue || t('funnels.triggersPanel.unnamedEvent') }}
             </button>
 
-            <template v-if="confirmIndex === index">
+            <!-- View-only: the canvas owns trigger edits. No delete controls here. -->
+            <template v-if="props.readonly" />
+
+            <template v-else-if="confirmIndex === index">
               <span class="text-sm text-gray-600">{{ t('funnels.triggersPanel.confirmDelete') }}</span>
               <button
                 type="button"
@@ -235,33 +270,44 @@ function onEntryChange(index: number, model: string): void {
             </template>
           </div>
 
-          <FunnelTriggerSettings
-            lock-type
-            :trigger-type="(tr.triggerType as FunnelTriggerType)"
-            :trigger-value="tr.triggerValue ?? ''"
-            :keywords="tr.keywords ?? []"
-            :bot-username="props.botUsername"
-            :deep-link="props.deepLink"
-            @update:trigger-value="onValueChange(index, $event)"
-            @update:keywords="onKeywordsChange(index, $event)"
-          />
+          <!-- View-only mount: a static summary line, NO interactive trigger form / entry picker. -->
+          <p
+            v-if="props.readonly"
+            :data-test="`funnel-trigger-row-readonly-${index}`"
+            class="text-sm text-gray-600"
+          >
+            {{ tr.triggerValue || t('funnels.triggersPanel.unnamedEvent') }}
+          </p>
 
-          <!-- per-trigger entry step (event-only mid-entry). -->
-          <div class="mt-3">
-            <label class="mb-1 block text-sm font-medium">{{ t('funnels.triggersPanel.entryLabel') }}</label>
-            <SearchableSelect
-              :model-value="entryToModel(tr.entryStepId)"
-              :options="entryOptions"
-              :test-prefix="`funnel-trigger-entry-${index}`"
-              :show-value="false"
-              :placeholder="t('funnels.triggersPanel.entryPlaceholder')"
-              :loading-text="t('funnels.triggersPanel.entryLoading')"
-              :empty-text="t('funnels.triggersPanel.entryEmpty')"
-              :no-matches-text="t('funnels.triggersPanel.entryNoMatches')"
-              @update:model-value="onEntryChange(index, $event)"
+          <template v-else>
+            <FunnelTriggerSettings
+              lock-type
+              :trigger-type="(tr.triggerType as FunnelTriggerType)"
+              :trigger-value="tr.triggerValue ?? ''"
+              :keywords="tr.keywords ?? []"
+              :bot-username="props.botUsername"
+              :deep-link="props.deepLink"
+              @update:trigger-value="onValueChange(index, $event)"
+              @update:keywords="onKeywordsChange(index, $event)"
             />
-            <p class="mt-1 text-xs text-gray-500">{{ t('funnels.triggersPanel.entryHint') }}</p>
-          </div>
+
+            <!-- per-trigger entry step (event-only mid-entry). -->
+            <div class="mt-3">
+              <label class="mb-1 block text-sm font-medium">{{ t('funnels.triggersPanel.entryLabel') }}</label>
+              <SearchableSelect
+                :model-value="entryToModel(tr.entryStepId)"
+                :options="entryOptions"
+                :test-prefix="`funnel-trigger-entry-${index}`"
+                :show-value="false"
+                :placeholder="t('funnels.triggersPanel.entryPlaceholder')"
+                :loading-text="t('funnels.triggersPanel.entryLoading')"
+                :empty-text="t('funnels.triggersPanel.entryEmpty')"
+                :no-matches-text="t('funnels.triggersPanel.entryNoMatches')"
+                @update:model-value="onEntryChange(index, $event)"
+              />
+              <p class="mt-1 text-xs text-gray-500">{{ t('funnels.triggersPanel.entryHint') }}</p>
+            </div>
+          </template>
 
           <!-- advisory duplicate-event-name guard (server 422 is the real backstop). -->
           <p

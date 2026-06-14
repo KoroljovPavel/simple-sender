@@ -305,6 +305,32 @@ describe('FunnelStepForm — reply keyboard (SET_KEYBOARD / CLEAR_KEYBOARD)', ()
     expect(step.oneTimeKeyboard).toBe(true)
   })
 
+  it('preserves canvasPosition through a side-panel field edit (MAJOR-1 regression)', async () => {
+    // A step placed on the canvas carries a manually-set canvasPosition. Editing a FIELD via the side-panel
+    // form must NOT drop it (it is canvas-owned, carried through like id/next) — else the node jumps back to
+    // dagre auto-layout on the next read. Fails against the pre-fix onSubmit that re-attached only id+next.
+    const wrapper = await mountForm({
+      stepType: 'SET_KEYBOARD',
+      id: 'k1',
+      next: 'n1',
+      canvasPosition: { x: 321, y: 654 },
+      keyboardText: 'Меню',
+      keyboardParseMode: null,
+      keyboardRows: [{ buttons: [{ text: 'Кнопка' }] }],
+      isPersistent: true,
+      oneTimeKeyboard: false,
+    })
+    // Edit a field (text), then submit.
+    await $('[data-test="step-keyboard-text"]').setValue('Меню оновлено')
+    await submitForm()
+    const step = wrapper.emitted('submit')![0][0] as FunnelStep
+    // canvasPosition carried through unchanged (value-based) — alongside the other canvas-owned fields.
+    expect(step.canvasPosition).toEqual({ x: 321, y: 654 })
+    expect(step.id).toBe('k1')
+    expect(step.next).toBe('n1')
+    expect(step.keyboardText).toBe('Меню оновлено')
+  })
+
   it('emits a CLEAR_KEYBOARD step preserving id and next, without keyboard-only fields', async () => {
     const wrapper = await mountForm({
       stepType: 'CLEAR_KEYBOARD',

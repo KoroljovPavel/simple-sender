@@ -265,6 +265,8 @@ async function persist(): Promise<boolean> {
       notes: notes.value,
     })
     applyResponse(res)
+    // A successful save clears the explicit step-save "incomplete" feedback — the array reached the server.
+    stepSaveFeedback.value = null
     return true
   } catch (err) {
     saveError.value = resolveFunnelError(err, 'funnels.update')
@@ -293,6 +295,23 @@ function persistSteps() {
 function onCanvasSteps(next: FunnelStep[]) {
   steps.value = next
   persistSteps()
+}
+
+// Explicit side-panel Save (Зберегти). The model is already updated via the companion update:steps emit;
+// here we enforce requirement 2 — an EXPLICIT Save must never be a silent no-op. If the array is now ready
+// the implicit persistSteps() above already fired the PATCH, so clear any stale feedback. If it is still
+// withheld (this step or ANOTHER node is incomplete), surface WHAT is missing instead of doing nothing.
+// (Implicit autosave — drag/notes/triggers — keeps the silent withhold; only this explicit path speaks up.)
+const stepSaveFeedback = ref<string | null>(null)
+function onCanvasStepSave() {
+  if (steps.value.every(stepReady)) {
+    stepSaveFeedback.value = null
+    return
+  }
+  // Point the author at the offending step (1-based, matching the steps list) so an explicit Save tells them
+  // exactly which node still needs content rather than silently dropping the click.
+  const incompleteIndex = steps.value.findIndex((s) => !stepReady(s))
+  stepSaveFeedback.value = t('funnels.canvas.stepSaveIncomplete', { number: incompleteIndex + 1 })
 }
 function onCanvasTriggers(next: FunnelTrigger[]) {
   triggers.value = next
@@ -572,6 +591,13 @@ async function confirmStopAll() {
              Flow's window/DOM access off the SSR path (Decision 12 — `window is not defined`). -->
         <div>
           <h2 class="mb-3 text-lg font-semibold">{{ t('funnels.canvas.title') }}</h2>
+          <p
+            v-if="stepSaveFeedback"
+            data-test="funnel-step-save-feedback"
+            class="mb-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
+          >
+            {{ stepSaveFeedback }}
+          </p>
           <ClientOnly>
             <div data-test="funnel-canvas-host" class="h-[560px] rounded-md border">
               <FunnelCanvas
@@ -583,6 +609,7 @@ async function confirmStopAll() {
                 @update:steps="onCanvasSteps"
                 @update:triggers="onCanvasTriggers"
                 @update:notes="onCanvasNotes"
+                @step-save="onCanvasStepSave"
                 @node-drag-stop="onNodeDragStop"
               />
             </div>

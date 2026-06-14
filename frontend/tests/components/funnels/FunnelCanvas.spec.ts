@@ -280,6 +280,66 @@ describe('FunnelCanvas', () => {
     expect(warning.text()).toContain('3')
   })
 
+  // ── Side-panel step submit routing (save-noop-fix: the exact manual-test repro) ───────────────────────
+  // BUG (confirmed H1): onPanelStepSubmit matched the edited step back into the array BY ID. A freshly-added
+  // palette node carries id:null (no server id until the first PATCH), so `s.id != null && s.id === sel.id`
+  // matched NOTHING — the edited step (with its new text) was silently dropped, the array stayed the empty
+  // seed, stepReady() was false, and persistSteps() withheld the PATCH (no request, no error). Routing the
+  // submit by the node's stable stepINDEX fixes it for unsaved AND saved nodes.
+  it('a side-panel submit on a freshly-added (id:null) MESSAGE node emits update:steps with the new text', async () => {
+    // One on_start trigger pointing nowhere (null entry — the legit broken-edge state) + a fresh empty MESSAGE
+    // node with NO id, exactly like the palette seeds it (newStep → blocks:[{TEXT, text:''}], id:null).
+    const steps: FunnelStep[] = [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', triggerValue: '', entryStepId: null }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // Select the fresh step node (its synthetic id), then relay the form's submit with the filled text —
+    // the same path the side panel runs when the author types "Привіт" and clicks Зберегти.
+    const vm = wrapper.vm as unknown as {
+      selectNode: (n: { id: string; data: Record<string, unknown> }) => void
+      onPanelStepSubmit?: (s: FunnelStep) => void
+    }
+    vm.selectNode({ id: 'unsaved-step:0', data: { kind: 'step', stepIndex: 0 } })
+    await settle()
+    // Drive the panel's submit relay (the canvas exposes onPanelStepSubmit via defineExpose for this test).
+    ;(wrapper.vm as unknown as { onPanelStepSubmit: (s: FunnelStep) => void }).onPanelStepSubmit({
+      stepType: 'MESSAGE',
+      id: null,
+      blocks: [{ type: 'TEXT', text: 'Привіт' }],
+    })
+    await settle()
+
+    const emitted = wrapper.emitted('update:steps')
+    expect(emitted).toBeTruthy()
+    const updated = emitted![emitted!.length - 1][0] as FunnelStep[]
+    // The edited step replaced the empty seed AT INDEX 0 (matched by index, not by the null id).
+    expect(updated).toHaveLength(1)
+    expect(updated[0].blocks?.[0]?.text).toBe('Привіт')
+  })
+
+  it('a side-panel submit on a SAVED MESSAGE node still routes the edit (index match, no regression)', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1', blocks: [{ type: 'TEXT', text: 'old' }] })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 's1',
+      data: { kind: 'step', stepIndex: 0 },
+    })
+    await settle()
+    ;(wrapper.vm as unknown as { onPanelStepSubmit: (s: FunnelStep) => void }).onPanelStepSubmit({
+      stepType: 'MESSAGE',
+      id: 's1',
+      blocks: [{ type: 'TEXT', text: 'new' }],
+    })
+    await settle()
+
+    const emitted = wrapper.emitted('update:steps')
+    expect(emitted).toBeTruthy()
+    const updated = emitted![emitted!.length - 1][0] as FunnelStep[]
+    expect(updated[0].blocks?.[0]?.text).toBe('new')
+  })
+
   it('the palette offers exactly the 9 existing step types (no new executable types)', async () => {
     const steps: FunnelStep[] = [messageStep({ id: 's1' })]
     const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]

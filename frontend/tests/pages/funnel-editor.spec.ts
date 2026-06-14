@@ -324,6 +324,109 @@ describe('funnels/[funnelId] editor page', () => {
     })
   })
 
+  // ─── save-noop-fix: side-panel "Зберегти" must persist a completed step (no silent no-op) ──────────────
+  // Manual-test bug: fresh funnel → add a MESSAGE node → fill the TEXT block "Привіт" → click Зберегти →
+  // NOTHING happened (no PATCH, no error). Confirmed H1: the canvas matched the edited step back into the
+  // array by id, but a freshly-added node has id:null → the edit was dropped, the array stayed the empty
+  // seed, and persistSteps() withheld the PATCH. These guard the fix end-to-end on the PAGE (canvas → page →
+  // store.update) plus the explicit-Save feedback hole and the on_start-null-entry / autosave invariants.
+  describe('side-panel step save (no silent no-op)', () => {
+    async function mountLoaded(over: Partial<FunnelResponse> = {}) {
+      storeMock.fetchOne.mockResolvedValue(draft(over))
+      storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+        Promise.resolve(draft({ ...over, ...body })),
+      )
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+      storeMock.update.mockClear()
+      return wrapper
+    }
+
+    it('the exact repro: filling a fresh MESSAGE node and saving fires ONE PATCH carrying the new text', async () => {
+      // Fresh funnel: lone on_start trigger with a null entry (the legit broken-edge state the repro showed)
+      // and a single fresh MESSAGE node with empty text + id:null (the palette seed).
+      const wrapper = await mountLoaded({
+        triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+        steps: [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }],
+      })
+
+      // The canvas relays the side panel's submit as update:steps carrying the FILLED step. Pre-fix the page
+      // never saw the new text (the canvas dropped it); here we relay the corrected array the canvas emits.
+      wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', [
+        { stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Привіт' }] },
+      ])
+      await settle()
+
+      // A completed step → the full-replace PATCH fires exactly once with the new text (then the server mints
+      // the id). Pre-fix stepReady() was false on the empty seed → persistSteps() withheld → zero calls.
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1]
+      expect(body.steps).toHaveLength(1)
+      expect(body.steps[0].blocks[0].text).toBe('Привіт')
+    })
+
+    it('an explicit save on a still-incomplete step surfaces feedback (does not silently no-op)', async () => {
+      const wrapper = await mountLoaded({
+        triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+        steps: [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }],
+      })
+
+      // Explicit Save of a still-empty MESSAGE (text blank) — the form would block its OWN emit, but the page
+      // must still never react to an explicit save with total silence. Drive the explicit-save relay with an
+      // incomplete step and assert a feedback banner appears AND no PATCH is sent (incomplete must not save).
+      wrapper.findComponent(FunnelCanvas).vm.$emit('step-save', {
+        stepType: 'MESSAGE',
+        id: null,
+        blocks: [{ type: 'TEXT', text: '' }],
+      })
+      await settle()
+
+      expect(storeMock.update).not.toHaveBeenCalled()
+      const feedback = wrapper.find('[data-test="funnel-step-save-feedback"]')
+      expect(feedback.exists()).toBe(true)
+      expect(feedback.text().trim().length).toBeGreaterThan(0)
+      // Localized — not a raw i18n key.
+      expect(feedback.text()).not.toContain('funnels.canvas')
+    })
+
+    it('an on_start trigger with null entryStepId does NOT block saving an otherwise-valid step', async () => {
+      // Broken edges are allowed (only activation 422s) — a completed step must still persist even while the
+      // on_start trigger dangles (triggerValue "" + entryStepId null).
+      const wrapper = await mountLoaded({
+        triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+        steps: [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }],
+      })
+
+      wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', [
+        { stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Готово' }] },
+      ])
+      await settle()
+
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      // The dangling on_start trigger rode along unchanged (broken edge allowed; not stripped, not blocking).
+      const body = storeMock.update.mock.calls[0][1]
+      const onStart = body.triggers.find((tr: { triggerType: string }) => tr.triggerType === 'on_start')
+      expect(onStart).toBeTruthy()
+      expect(onStart.entryStepId).toBeNull()
+    })
+
+    it('regression: a truly empty new node is NOT PATCHed via implicit autosave', async () => {
+      const wrapper = await mountLoaded({
+        triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+        steps: [],
+      })
+
+      // Implicit autosave path (e.g. palette add / drag): an incomplete (empty-text) MESSAGE must NOT PATCH —
+      // it would 422 funnel_step_invalid. The add-node fix stays intact.
+      wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', [
+        { stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] },
+      ])
+      await settle()
+
+      expect(storeMock.update).not.toHaveBeenCalled()
+    })
+  })
+
   it('maps a funnel_broken_edge 422 to an inline error and keeps status draft', async () => {
     storeMock.fetchOne.mockResolvedValue(draft({ steps: [{ stepType: 'MESSAGE', blocks: [{ type: 'TEXT', text: 'Hi' }] }] }))
     storeMock.update.mockResolvedValue(draft({ steps: [{ stepType: 'MESSAGE', blocks: [{ type: 'TEXT', text: 'Hi' }] }] }))

@@ -46,6 +46,10 @@ const emit = defineEmits<{
   'update:steps': [steps: FunnelStep[]]
   'update:triggers': [triggers: FunnelTrigger[]]
   'update:notes': [notes: FunnelNote[]]
+  // An EXPLICIT side-panel Save (Зберегти) of a step. The page persists on update:steps as usual, but this
+  // companion event marks the save as user-initiated so the page can surface feedback when a completed array
+  // still cannot persist (another node incomplete) — an explicit Save must never be a silent no-op.
+  'step-save': [step: FunnelStep]
   // Task 7: a finished node drag re-emits the dragged node id + its final canvas {x,y}. The PAGE owns the
   // model match (nodeId → step/trigger/note) and persistence — the canvas only relays Vue Flow's event so it
   // stays the SOLE owner of the single useVueFlow() instance (no second instance on the page).
@@ -266,6 +270,7 @@ function selectNode(node: CanvasNode): void {
   selectedNode.value = {
     kind,
     nodeId: node.id,
+    stepIndex,
     step: stepIndex != null ? (props.steps ?? [])[stepIndex] ?? null : null,
     trigger: triggerIndex != null ? (props.triggers ?? [])[triggerIndex] ?? null : null,
     noteIndex: noteIndex,
@@ -279,14 +284,21 @@ function clearSelection(): void {
   selectedNode.value = null
 }
 
-// Relay the side panel's step edit back into the steps array, matched by id. A node is wirable/editable only
-// after it has been persisted and minted an id (Decision 9 / 10), so the selected step always has an id here;
-// an unsaved step has no stable key to match on. Persistence is the page's job (Task 7).
+// Relay the side panel's step edit back into the steps array, matched by the node's stable ARRAY INDEX (not by
+// id). A freshly-added palette node carries id:null until the first PATCH mints one (Decision 10) — matching
+// by id silently dropped that node's edit (save-noop-fix / H1: the empty seed stayed in the array, stepReady()
+// was false, persistSteps() withheld → no PATCH, no error). The index is present + stable for unsaved AND saved
+// nodes, so it always routes the edit. Persistence + id minting are the page's job (Task 7).
+// This is an EXPLICIT Save (the author clicked Зберегти), so we ALSO emit `step-save` — the page surfaces
+// feedback if the completed array still cannot persist (e.g. another node is incomplete), never a silent no-op.
 function onPanelStepSubmit(step: FunnelStep): void {
   const sel = selectedNode.value
-  if (!sel || sel.kind !== 'step') return
-  const next = (props.steps ?? []).map((s) => (s.id != null && s.id === sel.step?.id ? step : s))
+  if (!sel || sel.kind !== 'step' || sel.stepIndex == null) return
+  const idx = sel.stepIndex
+  if (!Number.isInteger(idx) || !(props.steps ?? [])[idx]) return
+  const next = (props.steps ?? []).map((s, i) => (i === idx ? step : s))
   emit('update:steps', next)
+  emit('step-save', step)
 }
 
 // Relay the side panel's note-text edit back into the notes array by index, then emit update:notes so the
@@ -376,7 +388,7 @@ function confirmDelete(): void {
 // emit) without simulating a real Vue Flow drag — live drag is user-verified, not unit-tested (Testing
 // Strategy / no E2E). requestDelete/confirmDelete are likewise exposed so the delete flow (warning → apply)
 // is unit-testable without a live node click. Production wiring goes through the onConnect callback above.
-defineExpose({ handleConnect, handleNodeDragStop, selectNode, requestDelete, confirmDelete })
+defineExpose({ handleConnect, handleNodeDragStop, selectNode, onPanelStepSubmit, requestDelete, confirmDelete })
 </script>
 
 <template>

@@ -25,6 +25,10 @@ export interface SelectedNode {
   // the edit back to the right note record).
   noteText?: string | null
   noteIndex?: number | null
+  // For a step node: its index in the steps[] array. The parent routes a step edit back to the right record
+  // by THIS index, not by id — a freshly-added palette node has id:null until the first PATCH mints one, so
+  // an id match would silently drop the edit (save-noop-fix / H1). The index is stable for unsaved nodes too.
+  stepIndex?: number | null
   // Optional node id (used by the parent to route edits back to the right model object).
   nodeId?: string
   botUsername?: string | null

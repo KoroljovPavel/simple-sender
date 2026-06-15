@@ -169,7 +169,8 @@ describe('FunnelCanvas', () => {
     expect(stepNode.find('[data-test="funnel-canvas-handle-button-1"]').exists()).toBe(true)
     expect(stepNode.find('[data-test="funnel-canvas-handle-button-2"]').exists()).toBe(false)
     expect(stepNode.find('[data-test="funnel-canvas-handle-timeout"]').exists()).toBe(true)
-    // The step has an input (target) handle for incoming edges.
+    // Whole-card drop target (handles-redesign): the step is connectable as a target via a single
+    // node-covering target handle — NO separate visible input dot element.
     expect(stepNode.find('[data-test="funnel-canvas-handle-target"]').exists()).toBe(true)
 
     // The start node renders the entry handle and NO step output handles.
@@ -179,13 +180,18 @@ describe('FunnelCanvas', () => {
     expect(startNode.find('[data-test="funnel-canvas-handle-next"]').exists()).toBe(false)
   })
 
-  it('renders handles with the visible styling class + per-kind output classes (handles-visibility-fix)', async () => {
-    // The handles were invisible (no explicit handle CSS) — confirm each rendered handle now carries the
-    // shared visible class plus a kind-specific class so the author can SEE + grab + tell them apart.
+  it('renders stacked, labeled, monochrome output handles + a whole-card drop target (handles-redesign)', async () => {
+    // handles-redesign: outputs are stacked monochrome circles, each carrying a text LABEL (not a per-kind
+    // color). next→"Далі", each callback button→its text, timeout→"Таймаут". The input is the WHOLE card
+    // (one node-covering target handle), so there is NO separate input dot.
     const steps: FunnelStep[] = [
       messageStep({
         id: 's1',
-        buttons: [{ type: 'callback', label: 'A', targetStepId: null }],
+        buttons: [
+          { type: 'callback', label: 'A', targetStepId: null },
+          { type: 'callback', label: 'B', targetStepId: null },
+          { type: 'url', label: 'Open', url: 'https://example.com' },
+        ],
         timeoutValue: 5,
         timeoutUnit: 'MIN',
         timeoutTargetStepId: null,
@@ -195,23 +201,56 @@ describe('FunnelCanvas', () => {
     const wrapper = await mountWith({ steps, triggers })
 
     const stepNode = wrapper.find('[data-node-id="s1"]')
-    // Shared visible class on every handle (sized + colored + grabbable — not the collapsed default dot).
-    const nextHandle = stepNode.find('[data-test="funnel-canvas-handle-next"]')
-    expect(nextHandle.classes()).toContain('funnel-handle')
-    expect(nextHandle.classes()).toContain('funnel-handle--next')
-    // The localized title (native tooltip) tells the author which output this is.
-    expect(nextHandle.attributes('title')).toBe('Наступний крок')
+    // Exactly 4 stacked output handles: next + btn:0 + btn:1 + timeout (URL button excluded).
+    const outputs = stepNode.findAll('[data-test^="funnel-canvas-handle-"]:not([data-test="funnel-canvas-handle-target"])')
+    const outputIds = outputs.map((h) => h.attributes('data-handle-id'))
+    expect(outputIds).toEqual(['next', 'btn:0', 'btn:1', 'timeout'])
 
-    expect(stepNode.find('[data-test="funnel-canvas-handle-button-0"]').classes()).toContain('funnel-handle--button')
-    expect(stepNode.find('[data-test="funnel-canvas-handle-timeout"]').classes()).toContain('funnel-handle--timeout')
-    expect(stepNode.find('[data-test="funnel-canvas-handle-target"]').classes()).toContain('funnel-handle--target')
+    // Monochrome: every output carries the shared class and NONE of the old per-kind color classes.
+    for (const h of outputs) {
+      expect(h.classes()).toContain('funnel-handle')
+      expect(h.classes()).not.toContain('funnel-handle--next')
+      expect(h.classes()).not.toContain('funnel-handle--button')
+      expect(h.classes()).not.toContain('funnel-handle--timeout')
+    }
 
-    // The start node's entry source handle is present + visibly styled (Start→step can be drawn).
+    // Each output is wrapped in a labeled row whose visible text is the output's label.
+    const labels = stepNode
+      .findAll('[data-test="funnel-canvas-output-label"]')
+      .map((l) => l.text())
+    expect(labels).toEqual(['Далі', 'A', 'B', 'Таймаут'])
+
+    // Whole-card drop target: a single node-covering target handle, NO separate input dot.
+    const targets = stepNode.findAll('[data-test="funnel-canvas-handle-target"]')
+    expect(targets).toHaveLength(1)
+    expect(targets[0].classes()).toContain('funnel-handle--card-target')
+
+    // The start node renders exactly ONE output (entry, labeled "Вхід") and NO input dot / target.
     const startNode = wrapper.find('[data-node-id="start"]')
-    const entryHandle = startNode.find('[data-test="funnel-canvas-handle-entry"]')
-    expect(entryHandle.classes()).toContain('funnel-handle')
-    expect(entryHandle.classes()).toContain('funnel-handle--entry')
-    expect(entryHandle.attributes('title')).toBe('Вхід')
+    const startOutputs = startNode.findAll('[data-test^="funnel-canvas-handle-"]:not([data-test="funnel-canvas-handle-target"])')
+    expect(startOutputs.map((h) => h.attributes('data-handle-id'))).toEqual(['entry'])
+    expect(startNode.find('[data-test="funnel-canvas-output-label"]').text()).toBe('Вхід')
+    expect(startNode.find('[data-test="funnel-canvas-handle-target"]').exists()).toBe(false)
+  })
+
+  it('truncates a long callback-button output label (handles-redesign)', async () => {
+    // A long button text is truncated to 16 chars + … so the stacked label stays compact.
+    const longLabel = 'This is a very long button caption that overflows'
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        buttons: [{ type: 'callback', label: longLabel, targetStepId: null }],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const btnLabel = wrapper
+      .find('[data-node-id="s1"]')
+      .findAll('[data-test="funnel-canvas-output-label"]')
+      .find((l) => l.text().endsWith('…'))
+    expect(btnLabel).toBeDefined()
+    expect(btnLabel!.text()).toBe(`${longLabel.slice(0, 16)}…`)
   })
 
   it('a drawn connection emits the updated model', async () => {

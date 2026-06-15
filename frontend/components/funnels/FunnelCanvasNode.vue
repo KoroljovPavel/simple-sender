@@ -1,19 +1,29 @@
 <script setup lang="ts">
-import { Handle, Position } from '@vue-flow/core'
+import { Handle, Position, useVueFlow } from '@vue-flow/core'
 import type { FunnelStep, FunnelTrigger } from '~/types/funnel'
 import type { CanvasNodeData } from '~/composables/useFunnelCanvas'
 
-// Custom Vue Flow node renderer for the funnel canvas (18-funnel-canvas, Task 5). Registered under the
-// node-type slots of FunnelCanvas.client.vue (`#node-step` / `#node-trigger` / `#node-start` / `#node-note`).
+// Custom Vue Flow node renderer for the funnel canvas (18-funnel-canvas, Task 5; redesigned in handles-redesign).
+// Registered under the node-type slots of FunnelCanvas.client.vue (`#node-step` / `#node-trigger` /
+// `#node-start` / `#node-note`).
 //
 // LIGHTWEIGHT body by design (§8.4 / Risk: performance): renders only the localized type + a short label.
 // The expensive FunnelMessagePreview (debounced backend call) is reserved for the FOCUSED state, surfaced by
 // the parent — NOT mounted here. Output is text-only via {{ }} — never v-html (matches FunnelMessagePreview /
 // FunnelStepForm strict no-v-html convention).
 //
-// Typed OUTPUT handles (Decision 9) carry a stable id so the canvas @connect handler can resolve which model
-// field a drawn edge writes (the mapping layer's EdgeRef): `next`, `btn:<index>` per CALLBACK button, `timeout`,
-// and `entry` for the start/trigger entry. An INPUT (target) handle receives incoming edges.
+// HANDLE DESIGN (handles-redesign — UX feedback):
+//  • INPUT: there is NO separate input dot. The WHOLE card is the drop zone — a SINGLE node-covering target
+//    Handle (`funnel-handle--card-target`) sits over the card. It is `pointer-events:none` at rest (so it
+//    never swallows a node click/move) and only becomes droppable + highlighted WHILE a connection drag is in
+//    progress (driven by Vue Flow's reactive `connectionStartHandle`). The covering handle carries Vue Flow's
+//    `nodrag` class, so it never blocks node-body dragging.
+//  • OUTPUTS: one small MONOCHROME circle PER output, stacked vertically + evenly spaced along the right edge
+//    (so next & timeout no longer share a pixel → no overlap/flicker), each with a short text label.
+//  • Hover affordance uses ONLY transform: scale() + box-shadow (no width/height/top/left change → no jitter).
+//
+// Typed OUTPUT handle IDS are UNCHANGED (the connect path depends on them): `next`, `btn:<index>` per CALLBACK
+// button, `timeout`, and `entry` for the start/trigger entry. Only their POSITION/STYLE/LABELS changed.
 
 const props = defineProps<{
   // Vue Flow passes the node id + data through the `#node-<type>` slot binding.
@@ -30,6 +40,13 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
+// A connection drag is in progress when Vue Flow has recorded a source start handle. This single shared store
+// field (the parent owns the one useVueFlow instance; this resolves to the SAME store inside the provider)
+// drives the whole-card droppable affordance: the card-covering target handle only captures the drop + lights
+// up while connecting, so at rest it never swallows a node click or a node-body drag.
+const { connectionStartHandle } = useVueFlow()
+const isConnecting = computed(() => connectionStartHandle.value != null)
+
 // CALLBACK buttons in declaration order — URL buttons carry no edge (no targetStepId), so they are excluded.
 // buttonIndex is the position WITHIN this filtered list, matching the mapping layer's forward+reverse keying.
 const callbackButtons = computed(() =>
@@ -45,6 +62,40 @@ const isStep = computed(() => props.data.kind === 'step')
 // Start / trigger nodes carry the single `entry` output handle.
 const isEntry = computed(() => props.data.kind === 'start' || props.data.kind === 'trigger')
 const isNote = computed(() => props.data.kind === 'note')
+
+// Truncate a long output label so the stacked row stays compact (16 chars + …).
+const LABEL_MAX = 16
+function truncate(label: string): string {
+  return label.length > LABEL_MAX ? `${label.slice(0, LABEL_MAX)}…` : label
+}
+
+// The ordered output descriptors for this node: stable handle id + localized label. The id is UNCHANGED from
+// the original scheme (next / btn:<i> / timeout / entry) — only the rendering (stacked + labeled) is new.
+interface OutputHandle {
+  id: string
+  label: string
+  testId: string
+}
+const outputs = computed<OutputHandle[]>(() => {
+  if (isEntry.value) {
+    return [{ id: 'entry', label: t('funnels.canvas.handle.entry'), testId: 'funnel-canvas-handle-entry' }]
+  }
+  if (!isStep.value) return []
+  const list: OutputHandle[] = [
+    { id: 'next', label: t('funnels.canvas.handle.outputNext'), testId: 'funnel-canvas-handle-next' },
+  ]
+  callbackButtons.value.forEach((btn, i) => {
+    list.push({
+      id: `btn:${i}`,
+      label: truncate(btn.label ?? ''),
+      testId: `funnel-canvas-handle-button-${i}`,
+    })
+  })
+  if (hasTimeoutHandle.value) {
+    list.push({ id: 'timeout', label: t('funnels.canvas.handle.outputTimeout'), testId: 'funnel-canvas-handle-timeout' })
+  }
+  return list
+})
 
 // Localized node title — type label (step / trigger) or the start / note label. Plain text via {{ }}.
 const title = computed<string>(() => {
@@ -67,16 +118,22 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
     data-test="funnel-canvas-node"
     :data-node-kind="data.kind"
     :data-node-id="id"
-    :class="['funnel-canvas-node', { 'funnel-canvas-node--broken': broken }]"
+    :class="[
+      'funnel-canvas-node',
+      { 'funnel-canvas-node--broken': broken, 'funnel-canvas-node--droppable': isConnecting && !isEntry && !isNote },
+    ]"
   >
-    <!-- INPUT (target) handle: receives incoming edges. Start/trigger entry nodes are pure sources (no
-         inbound edge), and a note has no edges at all — so neither gets a target handle. -->
+    <!-- INPUT = the WHOLE card. A single node-covering target Handle (NO separate input dot). At rest it is
+         pointer-events:none (never swallows a click / node-body drag); while a connection drag is in progress
+         it becomes droppable + the card lights up. Start/trigger entry nodes are pure sources, and a note has
+         no edges — so neither gets a target handle. The handle keeps NO id so `targetHandle` stays null and the
+         connect path resolves the destination by node id (conn.target), exactly as before. -->
     <Handle
       v-if="!isEntry && !isNote"
-      class="funnel-handle funnel-handle--target"
+      class="funnel-handle funnel-handle--card-target"
       data-test="funnel-canvas-handle-target"
       type="target"
-      :position="Position.Top"
+      :position="Position.Left"
       :title="t('funnels.canvas.handle.input')"
     />
 
@@ -99,58 +156,33 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
       class="funnel-canvas-node__exit-badge"
     >{{ t('funnels.canvas.exitBadge') }}</span>
 
-    <!-- Typed OUTPUT handles. Each id maps to a mapping-layer EdgeRef field via the @connect handler. -->
-    <template v-if="isStep">
-      <!-- default `next` edge -->
-      <Handle
-        id="next"
-        class="funnel-handle funnel-handle--next"
-        data-test="funnel-canvas-handle-next"
-        type="source"
-        :position="Position.Bottom"
-        :title="t('funnels.canvas.handle.next')"
-      />
-      <!-- one source handle per CALLBACK button (id-addressable: btn:<index>) -->
-      <Handle
-        v-for="(btn, btnIndex) in callbackButtons"
-        :id="`btn:${btnIndex}`"
-        :key="`btn:${btnIndex}`"
-        class="funnel-handle funnel-handle--button"
-        :data-test="`funnel-canvas-handle-button-${btnIndex}`"
-        type="source"
-        :position="Position.Bottom"
-        :title="t('funnels.canvas.handle.button', { label: btn.label })"
-      />
-      <!-- timeout edge (MESSAGE only) -->
-      <Handle
-        v-if="hasTimeoutHandle"
-        id="timeout"
-        class="funnel-handle funnel-handle--timeout"
-        data-test="funnel-canvas-handle-timeout"
-        type="source"
-        :position="Position.Bottom"
-        :title="t('funnels.canvas.handle.timeout')"
-      />
-    </template>
-
-    <!-- start / trigger entry handle -->
-    <Handle
-      v-else-if="isEntry"
-      id="entry"
-      class="funnel-handle funnel-handle--entry"
-      data-test="funnel-canvas-handle-entry"
-      type="source"
-      :position="Position.Bottom"
-      :title="t('funnels.canvas.handle.entry')"
-    />
-
-    <!-- a note node has no edges at all -->
-    <template v-else-if="isNote" />
+    <!-- OUTPUTS: one monochrome circle PER output, stacked + evenly spaced along the right edge, each with a
+         short label. Each id maps to a mapping-layer EdgeRef field via the @connect handler (ids UNCHANGED). -->
+    <div v-if="outputs.length > 0" class="funnel-canvas-node__outputs" data-test="funnel-canvas-node-outputs">
+      <div
+        v-for="(out, i) in outputs"
+        :key="out.id"
+        class="funnel-output-row"
+        :style="{ top: `${((i + 1) / (outputs.length + 1)) * 100}%` }"
+      >
+        <span class="funnel-output-row__label" data-test="funnel-canvas-output-label">{{ out.label }}</span>
+        <Handle
+          :id="out.id"
+          class="funnel-handle funnel-handle--output"
+          :data-test="out.testId"
+          :data-handle-id="out.id"
+          type="source"
+          :position="Position.Right"
+          :title="out.label"
+        />
+      </div>
+    </div>
   </div>
 </template>
 
 <style scoped>
 .funnel-canvas-node {
+  position: relative;
   min-width: 160px;
   border: 1px solid #cbd5e1;
   border-radius: 0.375rem;
@@ -162,6 +194,14 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
 .funnel-canvas-node--broken {
   border-color: #f87171;
   box-shadow: 0 0 0 2px rgba(248, 113, 113, 0.35);
+}
+
+/* Whole-card drop affordance: while a connection drag is in progress every connectable card lights up as a
+   droppable target. Box-shadow + background only — no geometry change (no reflow/jitter). */
+.funnel-canvas-node--droppable {
+  border-color: #6366f1;
+  background: #eef2ff;
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.45);
 }
 
 .funnel-canvas-node__title {
@@ -179,49 +219,85 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
   color: #92400e;
 }
 
-/* Connection handles (handles-visibility-fix).
-   Vue Flow's default handle is a tiny (~6px), low-contrast dot — effectively invisible, so the author can't
-   see where to start a drag. We give every handle an explicit visible size + a distinct background + border,
-   sitting ON the node border (the node box has NO overflow:hidden, so nothing clips them), with a hover/active
-   grow affordance. :deep() is required: <Handle> renders its own .vue-flow__handle child element, outside this
-   component's scoped-style hash, so the class we pass through is only reachable via :deep().
-   Output kinds are color-coded so the author can tell next / button / timeout / entry apart at a glance; each
-   handle also carries a localized native title (tooltip) for an explicit label on hover. */
-.funnel-canvas-node :deep(.funnel-handle) {
+/* ── Stacked output rows ──────────────────────────────────────────────────────────────────────────────────
+   Each output sits at a fixed `top` (computed inline by index) along the right edge, so next / button / timeout
+   never share a pixel — the old next/timeout overlap + color flicker is gone. The label sits to the LEFT of the
+   circle (inside the card), the circle straddles the right border. */
+.funnel-canvas-node__outputs {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 0;
+}
+
+.funnel-output-row {
+  position: absolute;
+  right: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  transform: translateY(-50%);
+  pointer-events: none; /* only the circle (re-enabled below) is interactive; the label never blocks the canvas */
+}
+
+.funnel-output-row__label {
+  white-space: nowrap;
+  border-radius: 0.25rem;
+  background: rgba(241, 245, 249, 0.95);
+  padding: 0 0.25rem;
+  font-size: 0.6875rem;
+  line-height: 1.3;
+  color: #475569;
+}
+
+/* ── Connection handles (handles-redesign) ───────────────────────────────────────────────────────────────
+   MONOCHROME: every handle uses one neutral/accent color (no per-kind color → no confusion, no next/timeout
+   color flicker). :deep() is required: <Handle> renders its own .vue-flow__handle child element outside this
+   component's scoped-style hash, so the class we pass through is only reachable via :deep(). */
+.funnel-canvas-node :deep(.funnel-handle--output) {
+  position: static; /* the row owns positioning; the circle just sits inside the flex row */
   width: 12px;
   height: 12px;
   border: 2px solid #ffffff;
   border-radius: 9999px;
-  background: #6366f1;
+  background: #6366f1; /* single monochrome accent for ALL outputs */
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.25);
   cursor: crosshair;
+  pointer-events: all; /* re-enable on the circle (the row is pointer-events:none) */
+  transform: none;
   transition:
     transform 0.1s ease,
     box-shadow 0.1s ease;
 }
 
-/* Visible grab affordance: enlarge + highlight on hover and while connecting. */
-.funnel-canvas-node :deep(.funnel-handle:hover),
-.funnel-canvas-node :deep(.funnel-handle.connectionindicator:hover),
-.funnel-canvas-node :deep(.funnel-handle.vue-flow__handle-connecting) {
+/* Grab affordance: scale + shadow ONLY — never width/height/top/left → no layout reflow, no jitter. */
+.funnel-canvas-node :deep(.funnel-handle--output:hover),
+.funnel-canvas-node :deep(.funnel-handle--output.vue-flow__handle-connecting) {
   transform: scale(1.4);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
 }
 
-/* Per-kind colors so the author understands which output is which (alongside the native title tooltip). */
-.funnel-canvas-node :deep(.funnel-handle--target) {
-  background: #94a3b8; /* slate — input/target */
+/* Whole-card target: a transparent handle covering the entire node. `nodrag` (Vue Flow default on handles)
+   keeps node-body dragging working; pointer-events:none at rest keeps node clicks working. It only captures
+   the drop WHILE a connection is in progress (the parent toggles the droppable card state via .--droppable). */
+.funnel-canvas-node :deep(.funnel-handle--card-target) {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  transform: none;
+  border: none;
+  border-radius: 0.375rem;
+  background: transparent;
+  pointer-events: none;
 }
-.funnel-canvas-node :deep(.funnel-handle--next) {
-  background: #2563eb; /* blue — default next */
-}
-.funnel-canvas-node :deep(.funnel-handle--button) {
-  background: #16a34a; /* green — callback button */
-}
-.funnel-canvas-node :deep(.funnel-handle--timeout) {
-  background: #f59e0b; /* amber — timeout */
-}
-.funnel-canvas-node :deep(.funnel-handle--entry) {
-  background: #9333ea; /* purple — start/trigger entry */
+.funnel-canvas-node--droppable :deep(.funnel-handle--card-target) {
+  pointer-events: all;
 }
 </style>

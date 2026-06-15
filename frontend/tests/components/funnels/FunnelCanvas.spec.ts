@@ -233,6 +233,55 @@ describe('FunnelCanvas', () => {
     expect(startNode.find('[data-test="funnel-canvas-handle-target"]').exists()).toBe(false)
   })
 
+  it('lays the node out as a header + stacked output rows (title never inside the outputs overlay)', async () => {
+    // node-layout-fix: the title lives in its OWN full-width header element, separate from the outputs
+    // section. Each output is its OWN row holding the label + the source Handle (data-handle-id) so the dot
+    // lines up on the right border at that row. The title must NOT be rendered inside the outputs container
+    // (the old overlap bug: outputs absolutely positioned over the title).
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        buttons: [{ type: 'callback', label: 'A', targetStepId: null }],
+        timeoutValue: 5,
+        timeoutUnit: 'MIN',
+        timeoutTargetStepId: null,
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const stepNode = wrapper.find('[data-node-id="s1"]')
+
+    // The header holds the localized title (MESSAGE → "Повідомлення") and is its own element.
+    const header = stepNode.find('[data-test="funnel-canvas-node-header"]')
+    expect(header.exists()).toBe(true)
+    const title = header.find('[data-test="funnel-canvas-node-title"]')
+    expect(title.exists()).toBe(true)
+    expect(title.text()).toBe('Повідомлення')
+
+    // The outputs container is separate and does NOT contain the title (no overlap/truncation).
+    const outputsBox = stepNode.find('[data-test="funnel-canvas-node-outputs"]')
+    expect(outputsBox.exists()).toBe(true)
+    expect(outputsBox.find('[data-test="funnel-canvas-node-title"]').exists()).toBe(false)
+
+    // The header is NOT nested inside the outputs box.
+    expect(outputsBox.find('[data-test="funnel-canvas-node-header"]').exists()).toBe(false)
+
+    // One row per output, each row carrying its OWN label + handle (label + dot live together in the row).
+    const rows = outputsBox.findAll('[data-test="funnel-canvas-output-row"]')
+    expect(rows).toHaveLength(3) // next + btn:0 + timeout
+    expect(rows.map((r) => r.find('[data-test="funnel-canvas-output-label"]').text())).toEqual([
+      'Далі',
+      'A',
+      'Таймаут',
+    ])
+    expect(
+      rows.map((r) =>
+        r.find('[data-test^="funnel-canvas-handle-"]').attributes('data-handle-id'),
+      ),
+    ).toEqual(['next', 'btn:0', 'timeout'])
+  })
+
   it('truncates a long callback-button output label (handles-redesign)', async () => {
     // A long button text is truncated to 16 chars + … so the stacked label stays compact.
     const longLabel = 'This is a very long button caption that overflows'

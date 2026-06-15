@@ -18,8 +18,10 @@ import type { CanvasNodeData } from '~/composables/useFunnelCanvas'
 //    never swallows a node click/move) and only becomes droppable + highlighted WHILE a connection drag is in
 //    progress (driven by Vue Flow's reactive `connectionStartHandle`). The covering handle carries Vue Flow's
 //    `nodrag` class, so it never blocks node-body dragging.
-//  • OUTPUTS: one small MONOCHROME circle PER output, stacked vertically + evenly spaced along the right edge
-//    (so next & timeout no longer share a pixel → no overlap/flicker), each with a short text label.
+//  • OUTPUTS: a dedicated SECTION below the header (separated by a thin divider). ONE ROW per output, each row
+//    holding the short label (left-aligned) + a small MONOCHROME connector dot anchored on the card's RIGHT
+//    BORDER, vertically centered to THAT row. The card GROWS IN HEIGHT with the output count — the outputs
+//    have their OWN space and never overlap the header title (node-layout-fix — UX feedback).
 //  • Hover affordance uses ONLY transform: scale() + box-shadow (no width/height/top/left change → no jitter).
 //
 // Typed OUTPUT handle IDS are UNCHANGED (the connect path depends on them): `next`, `btn:<index>` per CALLBACK
@@ -137,17 +139,20 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
       :title="t('funnels.canvas.handle.input')"
     />
 
-    <!-- Lightweight body: localized type + short title. NO FunnelMessagePreview here (perf, §8.4). -->
-    <div class="funnel-canvas-node__body" data-test="funnel-canvas-node-body">
-      <span class="funnel-canvas-node__title">{{ title }}</span>
-      <!-- Note body — author free text. Rendered text-only via {{ }}, NEVER v-html (Decision 7 stored-XSS
-           guard, mirrors FunnelMessagePreview/FunnelStepForm). An injection payload shows as escaped text. -->
-      <span
-        v-if="isNote && noteText"
-        data-test="funnel-canvas-note-text"
-        class="funnel-canvas-node__note-text"
-      >{{ noteText }}</span>
+    <!-- HEADER: the localized type / title on its OWN full-width line. Nothing is positioned over it, so the
+         title is never covered or truncated (node-layout-fix). Lightweight by design — NO FunnelMessagePreview
+         here (perf, §8.4). -->
+    <div class="funnel-canvas-node__header" data-test="funnel-canvas-node-header">
+      <span class="funnel-canvas-node__title" data-test="funnel-canvas-node-title">{{ title }}</span>
     </div>
+
+    <!-- Note body — author free text. Rendered text-only via {{ }}, NEVER v-html (Decision 7 stored-XSS
+         guard, mirrors FunnelMessagePreview/FunnelStepForm). An injection payload shows as escaped text. -->
+    <span
+      v-if="isNote && noteText"
+      data-test="funnel-canvas-note-text"
+      class="funnel-canvas-node__note-text"
+    >{{ noteText }}</span>
 
     <!-- Cross-funnel SUBSCRIBE exit badge (Decision 11) — surfaced on the node, NOT as an outgoing edge. -->
     <span
@@ -156,14 +161,17 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
       class="funnel-canvas-node__exit-badge"
     >{{ t('funnels.canvas.exitBadge') }}</span>
 
-    <!-- OUTPUTS: one monochrome circle PER output, stacked + evenly spaced along the right edge, each with a
-         short label. Each id maps to a mapping-layer EdgeRef field via the @connect handler (ids UNCHANGED). -->
+    <!-- OUTPUTS SECTION: separated from the header by a thin divider; ONE ROW per output. Each row reserves its
+         own vertical space (the card grows in height with the output count → no overlap with the header). The
+         label is left-aligned inside the card; the monochrome connector dot (the source Handle) is anchored on
+         the card's RIGHT BORDER, vertically centered to its row, so the edge renders from the dot. Each id maps
+         to a mapping-layer EdgeRef field via the @connect handler (ids UNCHANGED). -->
     <div v-if="outputs.length > 0" class="funnel-canvas-node__outputs" data-test="funnel-canvas-node-outputs">
       <div
-        v-for="(out, i) in outputs"
+        v-for="out in outputs"
         :key="out.id"
         class="funnel-output-row"
-        :style="{ top: `${((i + 1) / (outputs.length + 1)) * 100}%` }"
+        data-test="funnel-canvas-output-row"
       >
         <span class="funnel-output-row__label" data-test="funnel-canvas-output-label">{{ out.label }}</span>
         <Handle
@@ -183,11 +191,13 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
 <style scoped>
 .funnel-canvas-node {
   position: relative;
-  min-width: 160px;
+  min-width: 180px;
   border: 1px solid #cbd5e1;
   border-radius: 0.375rem;
   background: #ffffff;
-  padding: 0.5rem 0.75rem;
+  /* No card padding: each SECTION owns its own padding so the output dot can sit flush on the right border
+     (right:0 of a row == the card's border). The card grows in height with the number of output rows. */
+  padding: 0;
   font-size: 0.875rem;
 }
 
@@ -204,14 +214,27 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
   box-shadow: 0 0 0 2px rgba(99, 102, 241, 0.45);
 }
 
+/* ── Header ───────────────────────────────────────────────────────────────────────────────────────────────
+   The title on its own full-width line. Nothing overlaps it, so it is never covered or truncated. */
+.funnel-canvas-node__header {
+  padding: 0.5rem 0.75rem;
+}
+
 .funnel-canvas-node__title {
   font-weight: 600;
   color: #374151;
 }
 
+.funnel-canvas-node__note-text {
+  display: block;
+  padding: 0 0.75rem 0.5rem;
+  white-space: pre-wrap;
+  color: #475569;
+}
+
 .funnel-canvas-node__exit-badge {
   display: inline-block;
-  margin-top: 0.25rem;
+  margin: 0 0.75rem 0.5rem;
   border-radius: 0.25rem;
   background: #fef3c7;
   padding: 0.05rem 0.4rem;
@@ -219,34 +242,29 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
   color: #92400e;
 }
 
-/* ── Stacked output rows ──────────────────────────────────────────────────────────────────────────────────
-   Each output sits at a fixed `top` (computed inline by index) along the right edge, so next / button / timeout
-   never share a pixel — the old next/timeout overlap + color flicker is gone. The label sits to the LEFT of the
-   circle (inside the card), the circle straddles the right border. */
+/* ── Outputs section ──────────────────────────────────────────────────────────────────────────────────────
+   A dedicated block below the header, separated by a thin divider. ONE ROW per output, stacked in normal flow
+   so the card GROWS IN HEIGHT with the output count (the outputs have their OWN space — no overlap with the
+   header). The label is left-aligned inside the card; the connector dot is absolutely anchored on the card's
+   RIGHT BORDER (right:0 of the row) and vertically centered to its row, so the edge renders from the dot. */
 .funnel-canvas-node__outputs {
-  position: absolute;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  width: 0;
+  border-top: 1px solid #e2e8f0;
 }
 
 .funnel-output-row {
-  position: absolute;
-  right: 0;
+  position: relative; /* the dot anchors to THIS row → it lines up with this row's label on the right border */
   display: flex;
   align-items: center;
-  gap: 0.25rem;
-  transform: translateY(-50%);
-  pointer-events: none; /* only the circle (re-enabled below) is interactive; the label never blocks the canvas */
+  padding: 0.3125rem 0.75rem;
+}
+
+.funnel-output-row + .funnel-output-row {
+  border-top: 1px solid #f1f5f9; /* light separator between stacked rows */
 }
 
 .funnel-output-row__label {
   white-space: nowrap;
-  border-radius: 0.25rem;
-  background: rgba(241, 245, 249, 0.95);
-  padding: 0 0.25rem;
-  font-size: 0.6875rem;
+  font-size: 0.75rem;
   line-height: 1.3;
   color: #475569;
 }
@@ -256,7 +274,12 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
    color flicker). :deep() is required: <Handle> renders its own .vue-flow__handle child element outside this
    component's scoped-style hash, so the class we pass through is only reachable via :deep(). */
 .funnel-canvas-node :deep(.funnel-handle--output) {
-  position: static; /* the row owns positioning; the circle just sits inside the flex row */
+  /* Anchored to its OWN row on the card's RIGHT BORDER, vertically centered to the row → the dot lines up with
+     this row's label. translateX centers the circle ON the border (half straddles outside) so edges render
+     cleanly from the dot. */
+  position: absolute;
+  top: 50%;
+  right: 0;
   width: 12px;
   height: 12px;
   border: 2px solid #ffffff;
@@ -264,17 +287,18 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
   background: #6366f1; /* single monochrome accent for ALL outputs */
   box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.25);
   cursor: crosshair;
-  pointer-events: all; /* re-enable on the circle (the row is pointer-events:none) */
-  transform: none;
+  pointer-events: all;
+  transform: translate(50%, -50%);
   transition:
     transform 0.1s ease,
     box-shadow 0.1s ease;
 }
 
-/* Grab affordance: scale + shadow ONLY — never width/height/top/left → no layout reflow, no jitter. */
+/* Grab affordance: scale + shadow ONLY — never width/height/top/right → no layout reflow, no jitter. The base
+   border-anchoring translate is preserved so the dot scales in place on the right border (no jump). */
 .funnel-canvas-node :deep(.funnel-handle--output:hover),
 .funnel-canvas-node :deep(.funnel-handle--output.vue-flow__handle-connecting) {
-  transform: scale(1.4);
+  transform: translate(50%, -50%) scale(1.4);
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
 }
 

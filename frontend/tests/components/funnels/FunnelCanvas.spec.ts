@@ -143,8 +143,9 @@ describe('FunnelCanvas', () => {
   })
 
   it('renders typed output handles per node type', async () => {
-    // A MESSAGE step with 2 callback buttons + a timeout → default `next` handle + 2 button handles + 1
-    // timeout handle. The on_start trigger renders the entry handle. A mis-typed handle set must fail.
+    // card-preview semantics: a MESSAGE step WITH callback buttons WAITS — each callback button fires its own
+    // edge, OR the timeout elapses. `next` is dead (engine never fires it). So with 2 callback buttons + timeout
+    // and next=null → 2 button handles + 1 timeout handle, NO `next` handle. URL button carries NO handle.
     const steps: FunnelStep[] = [
       messageStep({
         id: 's1',
@@ -163,8 +164,8 @@ describe('FunnelCanvas', () => {
 
     const stepNode = wrapper.find('[data-node-id="s1"]')
     expect(stepNode.exists()).toBe(true)
-    // default next + 2 callback-button handles + 1 timeout. URL button carries NO handle.
-    expect(stepNode.find('[data-test="funnel-canvas-handle-next"]').exists()).toBe(true)
+    // WITH callback buttons → `next` is gated OFF (dead in the engine), timeout is ON.
+    expect(stepNode.find('[data-test="funnel-canvas-handle-next"]').exists()).toBe(false)
     expect(stepNode.find('[data-test="funnel-canvas-handle-button-0"]').exists()).toBe(true)
     expect(stepNode.find('[data-test="funnel-canvas-handle-button-1"]').exists()).toBe(true)
     expect(stepNode.find('[data-test="funnel-canvas-handle-button-2"]').exists()).toBe(false)
@@ -201,10 +202,11 @@ describe('FunnelCanvas', () => {
     const wrapper = await mountWith({ steps, triggers })
 
     const stepNode = wrapper.find('[data-node-id="s1"]')
-    // Exactly 4 stacked output handles: next + btn:0 + btn:1 + timeout (URL button excluded).
+    // card-preview semantics: WITH callback buttons + timeout, next=null → 3 stacked output handles
+    // (btn:0 + btn:1 + timeout). `next` is gated OFF (dead in the engine). URL button excluded from handles.
     const outputs = stepNode.findAll('[data-test^="funnel-canvas-handle-"]:not([data-test="funnel-canvas-handle-target"])')
     const outputIds = outputs.map((h) => h.attributes('data-handle-id'))
-    expect(outputIds).toEqual(['next', 'btn:0', 'btn:1', 'timeout'])
+    expect(outputIds).toEqual(['btn:0', 'btn:1', 'timeout'])
 
     // Monochrome: every output carries the shared class and NONE of the old per-kind color classes.
     for (const h of outputs) {
@@ -214,11 +216,12 @@ describe('FunnelCanvas', () => {
       expect(h.classes()).not.toContain('funnel-handle--timeout')
     }
 
-    // Each output is wrapped in a labeled row whose visible text is the output's label.
+    // Each output handle is wrapped in a labeled row whose visible text is the output's label. (The preview
+    // text block also lives in the card, so we read labels from the output ROWS, not all labels in the card.)
     const labels = stepNode
-      .findAll('[data-test="funnel-canvas-output-label"]')
+      .findAll('[data-test="funnel-canvas-output-row"] [data-test="funnel-canvas-output-label"]')
       .map((l) => l.text())
-    expect(labels).toEqual(['Далі', 'A', 'B', 'Таймаут'])
+    expect(labels).toEqual(['A', 'B', 'Таймаут'])
 
     // Whole-card drop target: a single node-covering target handle, NO separate input dot.
     const targets = stepNode.findAll('[data-test="funnel-canvas-handle-target"]')
@@ -268,10 +271,10 @@ describe('FunnelCanvas', () => {
     expect(outputsBox.find('[data-test="funnel-canvas-node-header"]').exists()).toBe(false)
 
     // One row per output, each row carrying its OWN label + handle (label + dot live together in the row).
+    // card-preview semantics: this step HAS a callback button → `next` is gated OFF; rows are btn:0 + timeout.
     const rows = outputsBox.findAll('[data-test="funnel-canvas-output-row"]')
-    expect(rows).toHaveLength(3) // next + btn:0 + timeout
+    expect(rows).toHaveLength(2) // btn:0 + timeout
     expect(rows.map((r) => r.find('[data-test="funnel-canvas-output-label"]').text())).toEqual([
-      'Далі',
       'A',
       'Таймаут',
     ])
@@ -279,7 +282,7 @@ describe('FunnelCanvas', () => {
       rows.map((r) =>
         r.find('[data-test^="funnel-canvas-handle-"]').attributes('data-handle-id'),
       ),
-    ).toEqual(['next', 'btn:0', 'timeout'])
+    ).toEqual(['btn:0', 'timeout'])
   })
 
   it('truncates a long callback-button output label (handles-redesign)', async () => {
@@ -542,6 +545,221 @@ describe('FunnelCanvas', () => {
     // with sB replaced by 'A-edited' at index 0.)
     expect(wrapper.emitted('update:steps')).toBeFalsy()
     expect(wrapper.emitted('step-save')).toBeFalsy()
+  })
+
+  // ── card-preview: semantics-aware outputs (gated next/timeout + keep-if-set safety) ───────────────────
+
+  it('MESSAGE with callback buttons + timeout (next null): button rows + Таймаут, NO Далі', async () => {
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        buttons: [
+          { type: 'callback', label: 'A', targetStepId: null },
+          { type: 'callback', label: 'B', targetStepId: null },
+        ],
+        timeoutValue: 5,
+        timeoutUnit: 'MIN',
+        timeoutTargetStepId: null,
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const stepNode = wrapper.find('[data-node-id="s1"]')
+    expect(stepNode.find('[data-test="funnel-canvas-handle-button-0"]').exists()).toBe(true)
+    expect(stepNode.find('[data-test="funnel-canvas-handle-button-1"]').exists()).toBe(true)
+    expect(stepNode.find('[data-test="funnel-canvas-handle-timeout"]').exists()).toBe(true)
+    // next is dead when callback buttons exist → no handle.
+    expect(stepNode.find('[data-test="funnel-canvas-handle-next"]').exists()).toBe(false)
+  })
+
+  it('MESSAGE with no buttons + next set: Далі handle shown, NO Таймаут', async () => {
+    // No callback buttons → only `next` fires; timeoutTargetStepId is inert → no timeout handle.
+    const steps: FunnelStep[] = [
+      messageStep({ id: 's1', next: 's2' }),
+      messageStep({ id: 's2' }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const stepNode = wrapper.find('[data-node-id="s1"]')
+    expect(stepNode.find('[data-test="funnel-canvas-handle-next"]').exists()).toBe(true)
+    expect(stepNode.find('[data-test="funnel-canvas-handle-timeout"]').exists()).toBe(false)
+  })
+
+  it('gating safety: WITH buttons but next!=null → Далі handle still shown (no orphaned edge)', async () => {
+    // next is "dead" semantically, BUT an existing next edge must keep its source handle or the drawn edge
+    // would dangle (buildEdges emits e:next:s1 because next!=null). The keep-if-set rule guarantees this.
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: 's2',
+        buttons: [{ type: 'callback', label: 'A', targetStepId: null }],
+      }),
+      messageStep({ id: 's2' }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const stepNode = wrapper.find('[data-node-id="s1"]')
+    expect(stepNode.find('[data-test="funnel-canvas-handle-next"]').exists()).toBe(true)
+    expect(stepNode.find('[data-test="funnel-canvas-handle-button-0"]').exists()).toBe(true)
+  })
+
+  it('gating safety: no buttons but timeoutTargetStepId!=null → Таймаут handle still shown', async () => {
+    // timeout is inert without buttons, BUT an existing timeout edge must keep its source handle (buildEdges
+    // emits e:timeout:s1 because timeoutTargetStepId!=null) → keep-if-set rule.
+    const steps: FunnelStep[] = [
+      messageStep({ id: 's1', next: null, timeoutTargetStepId: 's2' }),
+      messageStep({ id: 's2' }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const stepNode = wrapper.find('[data-node-id="s1"]')
+    expect(stepNode.find('[data-test="funnel-canvas-handle-timeout"]').exists()).toBe(true)
+  })
+
+  it('URL button appears in the preview but has NO btn handle; btn indexing matches callback order', async () => {
+    // buttons = [callback A, url Open, callback B]. callbackButtons() filters URL → A=btn:0, B=btn:1.
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        buttons: [
+          { type: 'callback', label: 'A', targetStepId: null },
+          { type: 'url', label: 'Open', url: 'https://example.com' },
+          { type: 'callback', label: 'B', targetStepId: null },
+        ],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const stepNode = wrapper.find('[data-node-id="s1"]')
+    // Exactly two btn handles, indexed by callback order (URL excluded, no shift).
+    expect(stepNode.find('[data-test="funnel-canvas-handle-button-0"]').exists()).toBe(true)
+    expect(stepNode.find('[data-test="funnel-canvas-handle-button-1"]').exists()).toBe(true)
+    expect(stepNode.find('[data-test="funnel-canvas-handle-button-2"]').exists()).toBe(false)
+    // The URL button is surfaced in the preview (its label is visible) but carries NO handle row.
+    expect(stepNode.find('[data-test="funnel-canvas-preview-url-button"]').exists()).toBe(true)
+    expect(stepNode.find('[data-test="funnel-canvas-preview-url-button"]').text()).toContain('Open')
+  })
+
+  // ── card-preview: in-card message preview ─────────────────────────────────────────────────────────────
+
+  it('renders a truncated text preview for a MESSAGE node (escaped, no v-html)', async () => {
+    const long = 'a'.repeat(200)
+    const steps: FunnelStep[] = [
+      messageStep({ id: 's1', next: null, blocks: [{ type: 'TEXT', text: long }] }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const preview = wrapper.find('[data-node-id="s1"]').find('[data-test="funnel-canvas-preview-text"]')
+    expect(preview.exists()).toBe(true)
+    const text = preview.text()
+    expect(text.endsWith('…')).toBe(true)
+    expect(text.length).toBeLessThan(long.length)
+  })
+
+  it('renders an http(s) media thumbnail as an <img :src>', async () => {
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        blocks: [{ type: 'IMAGE', mediaUrl: 'https://example.com/a.png', caption: 'cap' }],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const img = wrapper.find('[data-node-id="s1"]').find('[data-test="funnel-canvas-preview-thumb"]')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('https://example.com/a.png')
+  })
+
+  it('falls back to a media-type label when the block has no http(s) thumbnail', async () => {
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        blocks: [{ type: 'VIDEO', mediaUrl: 'tg-file-id-opaque' }],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    expect(node.find('[data-test="funnel-canvas-preview-thumb"]').exists()).toBe(false)
+    expect(node.find('[data-test="funnel-canvas-preview-media-fallback"]').exists()).toBe(true)
+  })
+
+  // ── card-preview: XSS / scheme safety ─────────────────────────────────────────────────────────────────
+
+  it('renders message text / button label / caption containing HTML as escaped (never an <img> sink)', async () => {
+    const payload = '<img src=x onerror=alert(1)>'
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        blocks: [
+          { type: 'TEXT', text: payload },
+          { type: 'IMAGE', mediaUrl: 'https://example.com/a.png', caption: payload },
+        ],
+        buttons: [{ type: 'callback', label: payload, targetStepId: null }],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    const html = node.html()
+    // The injected payload must NOT materialize as a REAL <img onerror> element — only the legitimate
+    // scheme-validated thumbnail is a real <img>, and it carries the data-test marker (no onerror). An
+    // un-escaped `<img` followed by onerror would be an executable sink; the escaped `&lt;img …&gt;` text is safe.
+    expect(/<img(?![^>]*data-test="funnel-canvas-preview-thumb")[^>]*onerror/i.test(html)).toBe(false)
+    // The payload is present only in ESCAPED form (entity-encoded), proving it was rendered as text via {{ }}.
+    expect(html).toContain('&lt;img')
+    // Exactly one real <img> (the validated thumbnail), no extra injected element.
+    expect(node.findAll('img')).toHaveLength(1)
+    expect(node.find('img').attributes('data-test')).toBe('funnel-canvas-preview-thumb')
+  })
+
+  it('a media block with a javascript:/data: url does NOT become an <img src> (icon fallback)', async () => {
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        blocks: [{ type: 'IMAGE', mediaUrl: 'javascript:alert(1)' }],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    expect(node.find('[data-test="funnel-canvas-preview-thumb"]').exists()).toBe(false)
+    expect(node.find('[data-test="funnel-canvas-preview-media-fallback"]').exists()).toBe(true)
+    expect(node.html()).not.toContain('javascript:alert(1)')
+  })
+
+  // ── card-preview: edge arrows ─────────────────────────────────────────────────────────────────────────
+
+  it('drawn edges carry a markerEnd arrow', async () => {
+    // The canvas sets a default-edge-options markerEnd (ArrowClosed) on VueFlow; the rendered edge path
+    // carries a marker-end attribute referencing the arrow marker.
+    const steps: FunnelStep[] = [messageStep({ id: 's1', next: 's2' }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const html = wrapper.html()
+    // Vue Flow always renders a `marker-end` attribute, but WITHOUT our default-edge-options it is the empty
+    // `url('#')` and no <marker> defs / arrowclosed marker are registered. With the ArrowClosed wiring the edge
+    // marker-end resolves to a real arrow marker (id contains "arrowclosed") — so assert the populated arrow,
+    // not the always-present empty attribute (which would make this test trivially pass).
+    expect(/marker-end="url\('#'\)"/i.test(html)).toBe(false)
+    expect(/arrowclosed/i.test(html)).toBe(true)
   })
 
   it('the palette offers exactly the 9 existing step types (no new executable types)', async () => {

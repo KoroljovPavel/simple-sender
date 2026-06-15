@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { VueFlow, useVueFlow } from '@vue-flow/core'
+import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core'
 import type { Connection } from '@vue-flow/core'
 // Base Vue Flow stylesheet (Decision 12 / AC). Also registered globally in nuxt.config (Task 2); Vite dedups,
 // so importing it here too is harmless and satisfies the strict "component imports it" acceptance criterion.
@@ -432,6 +432,7 @@ defineExpose({ handleConnect, handleNodeDragStop, selectNode, onPanelStepSubmit,
     <VueFlow
       :nodes="flowNodes"
       :edges="flowEdges"
+      :default-edge-options="{ markerEnd: { type: MarkerType.ArrowClosed } }"
       :only-render-visible-elements="true"
       :min-zoom="0.2"
       :max-zoom="2"

@@ -1,16 +1,27 @@
 <script setup lang="ts">
 import { Handle, Position, useVueFlow } from '@vue-flow/core'
-import type { FunnelStep, FunnelTrigger } from '~/types/funnel'
+import type { Button, ContentBlock, FunnelStep, FunnelTrigger } from '~/types/funnel'
 import type { CanvasNodeData } from '~/composables/useFunnelCanvas'
 
 // Custom Vue Flow node renderer for the funnel canvas (18-funnel-canvas, Task 5; redesigned in handles-redesign).
 // Registered under the node-type slots of FunnelCanvas.client.vue (`#node-step` / `#node-trigger` /
 // `#node-start` / `#node-note`).
 //
-// LIGHTWEIGHT body by design (§8.4 / Risk: performance): renders only the localized type + a short label.
-// The expensive FunnelMessagePreview (debounced backend call) is reserved for the FOCUSED state, surfaced by
-// the parent — NOT mounted here. Output is text-only via {{ }} — never v-html (matches FunnelMessagePreview /
-// FunnelStepForm strict no-v-html convention).
+// LIGHTWEIGHT body by design (§8.4 / Risk: performance): a PURE-FRONTEND in-card preview built from
+// `props.step` ONLY (card-preview) — NO backend call, NO store, NO watchers. The expensive route-coupled
+// FunnelMessagePreview (debounced backend call per step) is deliberately NOT used here. Output is text-only via
+// {{ }} — never v-html (matches FunnelMessagePreview / FunnelStepForm strict no-v-html convention). A media
+// thumbnail is bound via :src ONLY for a validated http(s) URL (anti-XSS — javascript:/data:/file_id fall back
+// to a type label), mirroring FunnelMessagePreview's scheme guard.
+//
+// OUTPUT SEMANTICS (card-preview — matches the engine): a MESSAGE step's ACTIVE outputs depend on whether it
+// has CALLBACK buttons:
+//   • NO callback buttons → only `next` ("Далі") fires; `timeoutTargetStepId` is inert → only the `next` row.
+//   • HAS callback buttons → the step WAITS: each callback button fires its own edge, OR the timeout elapses →
+//     button rows + the `timeout` ("Таймаут") row; `next` is dead → no `next` row.
+// SAFETY (no orphaned edges): the gating is overridden to KEEP a handle whenever its model field is already set
+// (next != null / timeoutTargetStepId != null). buildEdges emits an edge ONLY for a non-null field, so this
+// guarantees every drawn edge still has a visible source handle (a hidden source handle = a dangling edge).
 //
 // HANDLE DESIGN (handles-redesign — UX feedback):
 //  • INPUT: there is NO separate input dot. The WHOLE card is the drop zone — a SINGLE node-covering target
@@ -50,14 +61,27 @@ const { connectionStartHandle } = useVueFlow()
 const isConnecting = computed(() => connectionStartHandle.value != null)
 
 // CALLBACK buttons in declaration order — URL buttons carry no edge (no targetStepId), so they are excluded.
-// buttonIndex is the position WITHIN this filtered list, matching the mapping layer's forward+reverse keying.
-const callbackButtons = computed(() =>
+// buttonIndex is the position WITHIN this filtered list, matching useFunnelCanvas.callbackButtons() exactly
+// (forward+reverse keying). URL buttons are surfaced in the preview WITHOUT a handle, never given a btn handle.
+const callbackButtons = computed<Button[]>(() =>
   (props.step?.buttons ?? []).filter((b) => b.type === 'callback'),
 )
 
-// MESSAGE steps can carry a timeout target edge (timeout* fields). The handle is shown for MESSAGE steps so
-// the author can wire timeoutTargetStepId; other step types do not park, so no timeout handle.
-const hasTimeoutHandle = computed(() => props.step?.stepType === 'MESSAGE')
+const hasCallbackButtons = computed(() => callbackButtons.value.length > 0)
+const isMessageStep = computed(() => props.step?.stepType === 'MESSAGE')
+
+// `next` ("Далі") fires when the step has NO callback buttons (only a MESSAGE step can carry buttons, so every
+// non-MESSAGE step always has an active `next`). KEEP it if step.next is already set so an existing next edge
+// never loses its source handle (no orphaned edge — buildEdges emits e:next only for a non-null next).
+const hasNextHandle = computed(
+  () => !hasCallbackButtons.value || props.step?.next != null,
+)
+
+// `timeout` ("Таймаут") fires only when the step HAS callback buttons (the step parks). KEEP it if
+// timeoutTargetStepId is already set so an existing timeout edge never loses its source handle.
+const hasTimeoutHandle = computed(
+  () => isMessageStep.value && (hasCallbackButtons.value || props.step?.timeoutTargetStepId != null),
+)
 
 // A step node carries `next` + per-button + (MESSAGE) timeout output handles.
 const isStep = computed(() => props.data.kind === 'step')
@@ -83,9 +107,11 @@ const outputs = computed<OutputHandle[]>(() => {
     return [{ id: 'entry', label: t('funnels.canvas.handle.entry'), testId: 'funnel-canvas-handle-entry' }]
   }
   if (!isStep.value) return []
-  const list: OutputHandle[] = [
-    { id: 'next', label: t('funnels.canvas.handle.outputNext'), testId: 'funnel-canvas-handle-next' },
-  ]
+  const list: OutputHandle[] = []
+  // `next` ("Далі") only when active (no callback buttons) OR already wired (keep-if-set safety).
+  if (hasNextHandle.value) {
+    list.push({ id: 'next', label: t('funnels.canvas.handle.outputNext'), testId: 'funnel-canvas-handle-next' })
+  }
   callbackButtons.value.forEach((btn, i) => {
     list.push({
       id: `btn:${i}`,
@@ -113,6 +139,60 @@ const title = computed<string>(() => {
 })
 
 const exitBadge = computed(() => props.data.exitBadge ?? null)
+
+// ── In-card MESSAGE preview (PURE FRONTEND — card-preview) ───────────────────────────────────────────────
+// http(s)-only scheme guard for the media thumbnail. Mirrors FunnelMessagePreview.isHttpUrl: rejects
+// file:// / data: / javascript: AND opaque Telegram file_id tokens (no scheme). A URL that fails this guard is
+// NOT bound to <img :src> (anti-XSS) — it falls back to a media-type label.
+const HTTP_URL_RE = /^https?:\/\//i
+function isHttpUrl(url: string | null | undefined): boolean {
+  return typeof url === 'string' && HTTP_URL_RE.test(url.trim())
+}
+
+// Truncate the preview text to ~90 chars + … so the card body stays compact. Rendered via {{ }} (escaped).
+const TEXT_PREVIEW_MAX = 90
+const previewText = computed<string | null>(() => {
+  if (!isMessageStep.value) return null
+  const block = (props.step?.blocks ?? []).find((b) => b.type === 'TEXT' && (b.text ?? '').trim() !== '')
+  const text = block?.text ?? ''
+  if (text === '') return null
+  return text.length > TEXT_PREVIEW_MAX ? `${text.slice(0, TEXT_PREVIEW_MAX)}…` : text
+})
+
+// The first MEDIA block (image/video/audio/file/album) of a MESSAGE step, for the thumbnail/icon preview.
+const MEDIA_TYPES = new Set(['IMAGE', 'VIDEO', 'AUDIO', 'FILE', 'ALBUM'])
+const previewMediaBlock = computed<ContentBlock | null>(() => {
+  if (!isMessageStep.value) return null
+  return (props.step?.blocks ?? []).find((b) => MEDIA_TYPES.has(b.type)) ?? null
+})
+
+// The thumbnail src — ONLY a validated http(s) URL (IMAGE block, or the first ALBUM item). null → icon fallback.
+const previewThumbUrl = computed<string | null>(() => {
+  const block = previewMediaBlock.value
+  if (!block) return null
+  const url = block.type === 'ALBUM' ? block.items?.[0]?.mediaUrl ?? null : block.mediaUrl ?? null
+  return isHttpUrl(url) ? (url as string) : null
+})
+
+// The media block's caption (escaped via {{ }}). For ALBUM the caption lives on the first item (Decision 5).
+const previewCaption = computed<string | null>(() => {
+  const block = previewMediaBlock.value
+  if (!block) return null
+  const cap = block.type === 'ALBUM' ? block.items?.[0]?.caption ?? null : block.caption ?? null
+  return cap && cap.trim() !== '' ? cap : null
+})
+
+// Localized media-type label for the icon fallback (no http(s) thumbnail). Uses the canvas preview keys.
+const previewMediaLabel = computed<string | null>(() => {
+  const block = previewMediaBlock.value
+  if (!block) return null
+  return t(`funnels.canvas.preview.mediaType.${block.type}`)
+})
+
+// URL buttons — surfaced in the preview WITHOUT a handle (they carry no edge). Distinct from callback buttons.
+const urlButtons = computed<Button[]>(() =>
+  (props.step?.buttons ?? []).filter((b) => b.type === 'url'),
+)
 </script>
 
 <template>
@@ -144,6 +224,52 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
          here (perf, §8.4). -->
     <div class="funnel-canvas-node__header" data-test="funnel-canvas-node-header">
       <span class="funnel-canvas-node__title" data-test="funnel-canvas-node-title">{{ title }}</span>
+    </div>
+
+    <!-- IN-CARD MESSAGE PREVIEW (card-preview) — PURE FRONTEND, built from props.step ONLY (no backend/store).
+         ALL user content is rendered text-only via {{ }} (escaped) — NEVER v-html (stored-XSS guard, OWASP A03).
+         The media thumbnail uses :src ONLY for a validated http(s) URL; any other scheme falls back to a label.
+         URL buttons are shown here WITHOUT a handle (callback buttons get handle rows in the outputs section). -->
+    <div
+      v-if="isStep && (previewText || previewMediaBlock || urlButtons.length > 0)"
+      class="funnel-canvas-node__preview"
+      data-test="funnel-canvas-node-preview"
+    >
+      <p
+        v-if="previewText"
+        class="funnel-canvas-node__preview-text"
+        data-test="funnel-canvas-preview-text"
+      >{{ previewText }}</p>
+
+      <template v-if="previewMediaBlock">
+        <!-- http(s) thumbnail only (scheme-validated); else a neutral media-type label. -->
+        <img
+          v-if="previewThumbUrl"
+          :src="previewThumbUrl"
+          :alt="previewMediaLabel ?? ''"
+          referrerpolicy="no-referrer"
+          class="funnel-canvas-node__preview-thumb"
+          data-test="funnel-canvas-preview-thumb"
+        >
+        <span
+          v-else
+          class="funnel-canvas-node__preview-media-fallback"
+          data-test="funnel-canvas-preview-media-fallback"
+        >{{ previewMediaLabel }}</span>
+        <p
+          v-if="previewCaption"
+          class="funnel-canvas-node__preview-text"
+          data-test="funnel-canvas-preview-caption"
+        >{{ previewCaption }}</p>
+      </template>
+
+      <!-- URL buttons — display-only chips, NO output handle (they carry no edge). -->
+      <span
+        v-for="(btn, i) in urlButtons"
+        :key="`url:${i}`"
+        class="funnel-canvas-node__preview-url-button"
+        data-test="funnel-canvas-preview-url-button"
+      >{{ t('funnels.canvas.preview.urlButton') }} · {{ truncate(btn.label ?? '') }}</span>
     </div>
 
     <!-- Note body — author free text. Rendered text-only via {{ }}, NEVER v-html (Decision 7 stored-XSS
@@ -240,6 +366,54 @@ const exitBadge = computed(() => props.data.exitBadge ?? null)
   padding: 0.05rem 0.4rem;
   font-size: 0.75rem;
   color: #92400e;
+}
+
+/* ── In-card MESSAGE preview (card-preview) ───────────────────────────────────────────────────────────────
+   A compact, cheap body rendered from props.step ONLY. Text/captions/url-button labels are {{ }} (escaped);
+   the thumbnail is :src-bound only for a validated http(s) URL (else a neutral media-type label). */
+.funnel-canvas-node__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0 0.75rem 0.5rem;
+}
+
+.funnel-canvas-node__preview-text {
+  margin: 0;
+  overflow: hidden;
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: #475569;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.funnel-canvas-node__preview-thumb {
+  max-height: 64px;
+  width: auto;
+  max-width: 100%;
+  border-radius: 0.25rem;
+  object-fit: contain;
+}
+
+.funnel-canvas-node__preview-media-fallback {
+  display: inline-block;
+  align-self: flex-start;
+  border: 1px dashed #cbd5e1;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+  color: #64748b;
+}
+
+.funnel-canvas-node__preview-url-button {
+  align-self: flex-start;
+  border: 1px solid #bfdbfe;
+  border-radius: 0.25rem;
+  background: #eff6ff;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.7rem;
+  color: #1d4ed8;
 }
 
 /* ── Outputs section ──────────────────────────────────────────────────────────────────────────────────────

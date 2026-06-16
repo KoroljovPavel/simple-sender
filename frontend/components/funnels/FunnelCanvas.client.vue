@@ -54,6 +54,10 @@ const emit = defineEmits<{
   // model match (nodeId → step/trigger/note) and persistence — the canvas only relays Vue Flow's event so it
   // stays the SOLE owner of the single useVueFlow() instance (no second instance on the page).
   'node-drag-stop': [payload: { nodeId: string; position: CanvasPosition }]
+  // keyboard-preview-fix: the selected canvas node's STEP index (or null when a non-step node is selected /
+  // the selection is cleared). The page drives the "Превʼю" panel off the SAME canvas selection that opens the
+  // side panel — so previewing follows the node the author clicked (not a stale list selection / step 1).
+  'select-node': [stepIndex: number | null]
 }>()
 
 const { t } = useI18n()
@@ -311,10 +315,16 @@ function selectNode(node: CanvasNode): void {
     botUsername: props.botUsername ?? null,
     deepLink: props.deepLink ?? null,
   }
+  // keyboard-preview-fix: drive the page's preview panel off this SAME selection. A step node carries its
+  // stepIndex → the panel previews THAT step; a non-step node (start/trigger/note) emits null → the panel
+  // falls back to its default (first message step).
+  emit('select-node', kind === 'step' && stepIndex != null ? stepIndex : null)
 }
 
 function clearSelection(): void {
   selectedNode.value = null
+  // Deselecting also clears the preview-panel pin (back to the default step).
+  emit('select-node', null)
 }
 
 // Relay the side panel's step edit back into the steps array, matched by the node's stable ARRAY INDEX (not by

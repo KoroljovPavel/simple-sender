@@ -69,9 +69,16 @@ const previewOpen = ref(false)
 const MESSAGE_STEP_TYPES: StepType[] = ['MESSAGE']
 // A step row click drives the preview to THAT step. -1 = nothing clicked → fall back to the first
 // message step (the original default). Cleared when the clicked index no longer points at a real step.
+// keyboard-preview-fix: the CANVAS node selection drives the SAME ref (the canvas side panel and the preview
+// panel now follow one selection) — selecting the SET_KEYBOARD node previews THAT step, not a stale step 1.
 const previewSelectedIndex = ref(-1)
 function onSelectStep(index: number) {
   previewSelectedIndex.value = index
+}
+// Canvas node selection → preview panel (reuses previewSelectedIndex, the single selection state). A step node
+// emits its stepIndex (preview THAT step); a non-step node / deselect emits null → -1 → fall back to default.
+function onCanvasSelectNode(stepIndex: number | null) {
+  previewSelectedIndex.value = stepIndex ?? -1
 }
 // Selection priority: clicked step > first message step.
 const firstMessageIndex = computed(() => steps.value.findIndex((s) => MESSAGE_STEP_TYPES.includes(s.stepType)))
@@ -535,6 +542,7 @@ async function confirmStopAll() {
                 @update:notes="onCanvasNotes"
                 @step-save="onCanvasStepSave"
                 @node-drag-stop="onNodeDragStop"
+                @select-node="onCanvasSelectNode"
               />
             </div>
           </ClientOnly>

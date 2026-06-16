@@ -918,6 +918,74 @@ describe('FunnelCanvas', () => {
     expect(node.html()).not.toContain('data:image/png')
   })
 
+  // ── keyboard-preview-fix: in-card SET_KEYBOARD / CLEAR_KEYBOARD preview ────────────────────────────────
+
+  it('renders the in-card SET_KEYBOARD preview: the text + both button labels', async () => {
+    const steps: FunnelStep[] = [
+      {
+        stepType: 'SET_KEYBOARD',
+        id: 's1',
+        next: null,
+        keyboardText: 'Choose an option',
+        keyboardRows: [{ buttons: [{ text: 'Yes' }, { text: 'No' }] }],
+      },
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    expect(node.find('[data-test="funnel-canvas-node-keyboard-preview"]').exists()).toBe(true)
+    // The message text is shown.
+    expect(node.find('[data-test="funnel-canvas-preview-keyboard-text"]').text()).toBe('Choose an option')
+    // Both button labels are shown as chips.
+    const keys = node.findAll('[data-test="funnel-canvas-preview-keyboard-key"]')
+    expect(keys).toHaveLength(2)
+    const labels = keys.map((k) => k.text())
+    expect(labels).toContain('Yes')
+    expect(labels).toContain('No')
+  })
+
+  it('renders the in-card CLEAR_KEYBOARD indicator (localized, not a raw key)', async () => {
+    const steps: FunnelStep[] = [
+      { stepType: 'CLEAR_KEYBOARD', id: 's1', next: null, keyboardText: 'Bye' },
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    const cleared = node.find('[data-test="funnel-canvas-preview-keyboard-cleared"]')
+    expect(cleared.exists()).toBe(true)
+    // Default locale uk — resolved indicator, never the raw key.
+    expect(cleared.text().trim().length).toBeGreaterThan(0)
+    expect(cleared.text()).not.toContain('funnels.canvas')
+    expect(cleared.text()).toBe('Клавіатуру прибрано')
+    // No button-label chips for CLEAR_KEYBOARD.
+    expect(node.find('[data-test="funnel-canvas-preview-keyboard-key"]').exists()).toBe(false)
+  })
+
+  it('escapes a SET_KEYBOARD text / button label containing HTML (never an <img> sink)', async () => {
+    const payload = '<img src=x onerror=alert(1)>'
+    const steps: FunnelStep[] = [
+      {
+        stepType: 'SET_KEYBOARD',
+        id: 's1',
+        next: null,
+        keyboardText: payload,
+        keyboardRows: [{ buttons: [{ text: payload }] }],
+      },
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    const html = node.html()
+    // No executable <img onerror> sink — the payload is present only entity-encoded (rendered via {{ }}).
+    expect(/<img[^>]*onerror/i.test(html)).toBe(false)
+    expect(html).toContain('&lt;img')
+    // A SET_KEYBOARD node has no validated thumbnail → no real <img> at all.
+    expect(node.findAll('img')).toHaveLength(0)
+  })
+
   // ── card-preview: edge arrows ─────────────────────────────────────────────────────────────────────────
 
   it('drawn edges carry a markerEnd arrow', async () => {

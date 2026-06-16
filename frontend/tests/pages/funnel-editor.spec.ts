@@ -7,6 +7,7 @@ import { settle } from '../helpers/settle'
 import FunnelEditorPage from '../../pages/projects/[projectId]/funnels/[funnelId].vue'
 import FunnelStepForm from '../../components/funnels/FunnelStepForm.vue'
 import FunnelCanvas from '../../components/funnels/FunnelCanvas.client.vue'
+import FunnelMessagePreview from '../../components/funnels/FunnelMessagePreview.vue'
 import type { FunnelResponse, FunnelStep, FunnelTrigger, FunnelSummaryResponse } from '../../types/funnel'
 
 // The editor page owns the headline Task-10 behaviour: 422-code → inline errors.funnels.* (NOT a global
@@ -701,6 +702,86 @@ describe('funnels/[funnelId] editor page', () => {
       // Selection (a view affordance) still works: row 2 drives the preview + carries the highlight.
       expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('3')
       expect(wrapper.get('[data-test="funnel-step-row-2"]').classes().join(' ')).toContain('ring-2')
+    })
+
+    // ── keyboard-preview-fix: the preview panel follows the CANVAS-selected node ──────────────────────────
+    // Pre-fix the panel was driven ONLY by the steps-list `select`; clicking a canvas node opened the side panel
+    // but left the preview stuck on the default (first MESSAGE step → "Крок 1"). Now the canvas emits
+    // `select-node` with the selected step's index, and the page drives the SAME previewSelectedIndex from it —
+    // so selecting the SET_KEYBOARD node previews THAT step (its number + type), not step 1.
+    it('selecting the SET_KEYBOARD canvas node moves the preview panel to that step', async () => {
+      const STEPS: FunnelStep[] = [
+        { stepType: 'MESSAGE', id: 'm1', blocks: [{ type: 'TEXT', text: 'First message' }] },
+        {
+          stepType: 'SET_KEYBOARD',
+          id: 'kb',
+          keyboardText: 'Pick one',
+          keyboardRows: [{ buttons: [{ text: 'Yes' }, { text: 'No' }] }],
+        },
+      ]
+      storeMock.fetchOne.mockResolvedValue(draft({ steps: STEPS }))
+      // The panel renders SET_KEYBOARD via the backend (kind: 'keyboard' + the raw label rows).
+      storeMock.preview.mockReset().mockResolvedValue({
+        renderedBlocks: [{ type: 'TEXT', text: 'Pick one' }],
+        sampleData: false,
+        kind: 'keyboard',
+        keyboardRows: [['Yes', 'No']],
+      })
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+      await wrapper.get('[data-test="funnel-preview-toggle"]').trigger('click')
+      await settle()
+
+      // Default (no selection) = the first MESSAGE step → heading "Крок 1".
+      expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('1')
+
+      // The canvas selects the SET_KEYBOARD node (index 1) — the same signal that opens its side panel.
+      wrapper.findComponent(FunnelCanvas).vm.$emit('select-node', 1)
+      await settle()
+      // FunnelMessagePreview debounces a step change (600ms) → wait past the window for the backend call.
+      await new Promise((r) => setTimeout(r, 700))
+      await settle()
+
+      // The panel now follows the canvas selection: heading is step 2 + the SET_KEYBOARD type label, and the
+      // step passed down to FunnelMessagePreview is the keyboard step (the backend was previewed with its id).
+      const heading = wrapper.get('[data-test="funnel-preview-step-heading"]').text()
+      expect(heading).toContain('2')
+      expect(heading).toContain('Встановити клавіатуру')
+      const previewCmp = wrapper.findComponent(FunnelMessagePreview)
+      expect((previewCmp.props('step') as FunnelStep).stepType).toBe('SET_KEYBOARD')
+      expect((previewCmp.props('step') as FunnelStep).id).toBe('kb')
+      expect(previewCmp.props('stepNumber')).toBe(2)
+      // The SET_KEYBOARD step (id 'kb') was previewed via the backend (proving the panel followed the canvas
+      // selection, not the default first MESSAGE step).
+      expect(storeMock.preview).toHaveBeenCalledWith('f1', 'kb', expect.objectContaining({ stepType: 'SET_KEYBOARD' }))
+      // The keyboard branch rendered (text + mock rows), not the default message-step body.
+      expect(wrapper.find('[data-test="funnel-preview-keyboard"]').exists()).toBe(true)
+    })
+
+    it('deselecting the canvas node returns the preview to the default step', async () => {
+      const STEPS: FunnelStep[] = [
+        { stepType: 'MESSAGE', id: 'm1', blocks: [{ type: 'TEXT', text: 'First message' }] },
+        { stepType: 'SET_KEYBOARD', id: 'kb', keyboardText: 'Pick one', keyboardRows: [{ buttons: [{ text: 'Yes' }] }] },
+      ]
+      storeMock.fetchOne.mockResolvedValue(draft({ steps: STEPS }))
+      storeMock.preview.mockReset().mockResolvedValue({
+        renderedBlocks: [{ type: 'TEXT', text: 'x' }],
+        sampleData: false,
+        kind: 'message',
+      })
+      const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+      await settle()
+      await wrapper.get('[data-test="funnel-preview-toggle"]').trigger('click')
+      await settle()
+
+      wrapper.findComponent(FunnelCanvas).vm.$emit('select-node', 1)
+      await settle()
+      expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('2')
+
+      // Deselect (null) → back to the default first MESSAGE step (heading "Крок 1").
+      wrapper.findComponent(FunnelCanvas).vm.$emit('select-node', null)
+      await settle()
+      expect(wrapper.get('[data-test="funnel-preview-step-heading"]').text()).toContain('1')
     })
 
     it('clicking another row switches the preview (selection-driven, no list-opened edit dialog)', async () => {

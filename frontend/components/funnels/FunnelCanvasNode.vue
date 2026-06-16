@@ -193,6 +193,37 @@ const previewMediaLabel = computed<string | null>(() => {
 const urlButtons = computed<Button[]>(() =>
   (props.step?.buttons ?? []).filter((b) => b.type === 'url'),
 )
+
+// ── In-card SET_KEYBOARD / CLEAR_KEYBOARD preview (PURE FRONTEND — keyboard-preview-fix) ────────────────────
+// Mirrors FunnelMessagePreview's keyboard branch, but built from props.step ONLY (no backend call). SET_KEYBOARD
+// shows the mandatory text (escaped, truncated) + the reply-keyboard button labels as small chips/rows;
+// CLEAR_KEYBOARD shows a short "keyboard removed" indicator. ALL user content (text, labels) via {{ }} — never
+// v-html (stored-XSS guard, OWASP A03; the labels carry no browser-safe escaping).
+const isSetKeyboardStep = computed(() => props.step?.stepType === 'SET_KEYBOARD')
+const isClearKeyboardStep = computed(() => props.step?.stepType === 'CLEAR_KEYBOARD')
+const isKeyboardStep = computed(() => isSetKeyboardStep.value || isClearKeyboardStep.value)
+
+// The keyboard step's mandatory text, truncated + escaped via {{ }} (same cap as the MESSAGE preview text).
+const keyboardPreviewText = computed<string | null>(() => {
+  if (!isKeyboardStep.value) return null
+  const text = props.step?.keyboardText ?? ''
+  if (text.trim() === '') return null
+  return text.length > TEXT_PREVIEW_MAX ? `${text.slice(0, TEXT_PREVIEW_MAX)}…` : text
+})
+
+// SET_KEYBOARD button-label rows for the chip mock — each row's button texts, truncated + escaped via {{ }}.
+// Empty rows / empty labels are dropped so a half-built draft renders nothing rather than blank chips.
+const keyboardPreviewRows = computed<string[][]>(() => {
+  if (!isSetKeyboardStep.value) return []
+  return (props.step?.keyboardRows ?? [])
+    .map((row) =>
+      (row?.buttons ?? [])
+        .map((b) => (b?.text ?? '').trim())
+        .filter((label) => label !== '')
+        .map((label) => truncate(label)),
+    )
+    .filter((row) => row.length > 0)
+})
 </script>
 
 <template>
@@ -275,6 +306,55 @@ const urlButtons = computed<Button[]>(() =>
         class="funnel-canvas-node__preview-url-button"
         data-test="funnel-canvas-preview-url-button"
       >{{ t('funnels.canvas.preview.urlButton') }} · {{ truncate(btn.label ?? '') }}</span>
+    </div>
+
+    <!-- IN-CARD KEYBOARD PREVIEW (keyboard-preview-fix) — PURE FRONTEND, built from props.step ONLY.
+         SET_KEYBOARD: the mandatory text (escaped, truncated) + the reply-keyboard button labels as chip rows.
+         CLEAR_KEYBOARD: a short "keyboard removed" indicator. ALL user content via {{ }} (escaped) — NEVER
+         v-html (stored-XSS guard, OWASP A03; labels carry no browser-safe escaping). Matches the MESSAGE
+         in-card preview styling. -->
+    <div
+      v-if="isStep && isSetKeyboardStep && (keyboardPreviewText || keyboardPreviewRows.length > 0)"
+      class="funnel-canvas-node__preview"
+      data-test="funnel-canvas-node-keyboard-preview"
+    >
+      <p
+        v-if="keyboardPreviewText"
+        class="funnel-canvas-node__preview-text"
+        data-test="funnel-canvas-preview-keyboard-text"
+      >{{ keyboardPreviewText }}</p>
+
+      <div
+        v-if="keyboardPreviewRows.length > 0"
+        class="funnel-canvas-node__preview-keyboard"
+        data-test="funnel-canvas-preview-keyboard"
+      >
+        <div
+          v-for="(row, rowIndex) in keyboardPreviewRows"
+          :key="rowIndex"
+          class="funnel-canvas-node__preview-keyboard-row"
+          :data-test="`funnel-canvas-preview-keyboard-row-${rowIndex}`"
+        >
+          <span
+            v-for="(label, labelIndex) in row"
+            :key="labelIndex"
+            class="funnel-canvas-node__preview-keyboard-key"
+            data-test="funnel-canvas-preview-keyboard-key"
+          >{{ label }}</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- CLEAR_KEYBOARD — a compact "keyboard removed" indicator (no text/rows to show). -->
+    <div
+      v-if="isStep && isClearKeyboardStep"
+      class="funnel-canvas-node__preview"
+      data-test="funnel-canvas-node-keyboard-preview"
+    >
+      <span
+        class="funnel-canvas-node__preview-keyboard-cleared"
+        data-test="funnel-canvas-preview-keyboard-cleared"
+      >{{ t('funnels.canvas.preview.clearKeyboard') }}</span>
     </div>
 
     <!-- Note body — author free text. Rendered text-only via {{ }}, NEVER v-html (Decision 7 stored-XSS
@@ -419,6 +499,41 @@ const urlButtons = computed<Button[]>(() =>
   padding: 0.05rem 0.4rem;
   font-size: 0.7rem;
   color: #1d4ed8;
+}
+
+/* ── In-card keyboard preview (keyboard-preview-fix) ──────────────────────────────────────────────────────
+   SET_KEYBOARD reply-keyboard mock: neutral-gray chip rows under the text, mirroring the Telegram bottom
+   keyboard. CLEAR_KEYBOARD: a small neutral "keyboard removed" indicator. Labels are {{ }} (escaped). */
+.funnel-canvas-node__preview-keyboard {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.funnel-canvas-node__preview-keyboard-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+}
+
+.funnel-canvas-node__preview-keyboard-key {
+  flex: 1 1 auto;
+  border: 1px solid #d1d5db;
+  border-radius: 0.25rem;
+  background: #f3f4f6;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.7rem;
+  text-align: center;
+  color: #374151;
+}
+
+.funnel-canvas-node__preview-keyboard-cleared {
+  align-self: flex-start;
+  border: 1px dashed #cbd5e1;
+  border-radius: 0.25rem;
+  padding: 0.1rem 0.4rem;
+  font-size: 0.75rem;
+  color: #64748b;
 }
 
 /* ── Outputs section ──────────────────────────────────────────────────────────────────────────────────────

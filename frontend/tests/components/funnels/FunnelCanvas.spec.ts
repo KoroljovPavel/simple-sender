@@ -1047,9 +1047,10 @@ describe('FunnelCanvas', () => {
     expect(updated.some((tr) => tr.triggerType === 'event' && tr.triggerValue === 'evtB')).toBe(true)
   })
 
-  it('side-panel Delete on the START (on_start) node → confirm → removes the on_start entry', async () => {
-    // The start node is selected; side-panel Delete → confirm must emit update:triggers WITHOUT the on_start
-    // entry, leaving the other (event) trigger intact (Decision 11). Value-based on the surviving trigger set.
+  it('the START (on_start) node has NO side-panel Delete button (no-delete-start)', async () => {
+    // no-delete-start: the start node must have no delete affordance. Selecting it opens the side panel (the
+    // trigger settings editor), but the side-panel Delete button is gated on kind !== 'start' → absent.
+    // step/trigger/note still render the button (covered by the tests above).
     const steps: FunnelStep[] = [messageStep({ id: 's1' }), messageStep({ id: 's2' })]
     const triggers: FunnelTrigger[] = [
       { triggerType: 'on_start', entryStepId: 's1' },
@@ -1063,18 +1064,12 @@ describe('FunnelCanvas', () => {
       data: { kind: 'start' },
     })
     await settle()
-    await wrapper.find('[data-test="funnel-canvas-side-panel-delete"]').trigger('click')
-    await settle()
-    await wrapper.find('[data-test="funnel-canvas-delete-confirm"]').trigger('click')
-    await settle()
 
-    const emitted = wrapper.emitted('update:triggers')
-    expect(emitted).toBeTruthy()
-    const updated = emitted!.at(-1)![0] as FunnelTrigger[]
-    // on_start removed; the event trigger survives untouched.
-    expect(updated.some((tr) => tr.triggerType === 'on_start')).toBe(false)
-    expect(updated).toHaveLength(1)
-    expect(updated[0]).toMatchObject({ triggerType: 'event', triggerValue: 'evt', entryStepId: 's2' })
+    // The side panel is open (the trigger settings editor mounts) but exposes no delete button for the start node.
+    expect(wrapper.find('[data-test="funnel-canvas-side-panel"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-canvas-side-panel-delete"]').exists()).toBe(false)
+    // No warning was armed either — there is no delete path from the panel for the start node.
+    expect(wrapper.find('[data-test="funnel-canvas-delete-warning"]').exists()).toBe(false)
   })
 
   it('Delete key on a selected node triggers the delete flow', async () => {
@@ -1111,6 +1106,28 @@ describe('FunnelCanvas', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace' }))
     await settle()
     expect(wrapper.find('[data-test="funnel-canvas-delete-warning"]').exists()).toBe(true)
+  })
+
+  it('Delete/Backspace on a selected START node do NOT trigger the delete flow (no-delete-start)', async () => {
+    // no-delete-start: the start node has no delete path at all — neither the side-panel button (gated) nor the
+    // keyboard. The keydown handler skips when the selected node kind is 'start', so Delete/Backspace arm
+    // nothing. Load-bearing: dropping the kind guard would surface the warning here.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 'start',
+      data: { kind: 'start' },
+    })
+    await settle()
+
+    // Neither key (focus NOT in a text field) arms a deletion for the start node.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }))
+    await settle()
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace' }))
+    await settle()
+    expect(wrapper.find('[data-test="funnel-canvas-delete-warning"]').exists()).toBe(false)
   })
 
   it('Delete/Backspace do NOT fire while focus is in a [contenteditable] element', async () => {

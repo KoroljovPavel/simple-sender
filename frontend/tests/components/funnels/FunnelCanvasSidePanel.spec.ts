@@ -206,10 +206,9 @@ describe('FunnelCanvasSidePanel', () => {
     wrapper.unmount()
   })
 
-  it('renders a Delete button for trigger, start and note nodes (all kinds covered)', async () => {
+  it('renders a Delete button for trigger and note nodes (kept kinds covered)', async () => {
     for (const node of [
       { kind: 'trigger', nodeId: 'trigger:0', trigger: { triggerType: 'event', triggerValue: 'e', entryStepId: null } },
-      { kind: 'start', nodeId: 'start', trigger: { triggerType: 'on_start', triggerValue: '', entryStepId: null } },
       { kind: 'note', nodeId: 'note:0', noteIndex: 0, noteText: 'hi' },
     ]) {
       const wrapper = await mountPanel(node)
@@ -221,6 +220,22 @@ describe('FunnelCanvasSidePanel', () => {
       wrapper.unmount()
       document.body.innerHTML = ''
     }
+  })
+
+  it('does NOT render a Delete button for the START (on_start) node', async () => {
+    // no-delete-start: the start node must have NO delete affordance — its button is gated on kind !== 'start'
+    // (the start node carries kind 'start'). step/trigger/note keep theirs (asserted above). Load-bearing:
+    // a regression that drops the kind gate would surface the delete button here.
+    const wrapper = await mountPanel({
+      kind: 'start',
+      nodeId: 'start',
+      trigger: { triggerType: 'on_start', triggerValue: '', entryStepId: null },
+    })
+    // The panel itself IS rendered (the trigger settings editor mounts for a start node) ...
+    expect(document.querySelector('[data-test="funnel-trigger"]')).not.toBeNull()
+    // ... but the delete button is absent.
+    expect(document.querySelector('[data-test="funnel-canvas-side-panel-delete"]')).toBeNull()
+    wrapper.unmount()
   })
 
   it('does NOT render a Delete button when no node is selected', async () => {

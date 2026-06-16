@@ -443,6 +443,9 @@ function isEditableTarget(el: EventTarget | null): boolean {
 function onKeydown(event: KeyboardEvent): void {
   if (event.key !== 'Delete' && event.key !== 'Backspace') return
   if (!selectedNode.value?.nodeId) return
+  // no-delete-start: the START (on_start) node is not deletable via the keyboard either — the side-panel
+  // button is gated the same way, so the start node has NO delete path at all (button or key).
+  if (selectedNode.value.kind === 'start') return
   if (pendingDelete.value) return
   if (isEditableTarget(event.target)) return
   event.preventDefault()

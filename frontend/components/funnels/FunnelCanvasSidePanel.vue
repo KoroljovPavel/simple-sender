@@ -190,12 +190,14 @@ function onStepSubmit(step: FunnelStep) {
       ></textarea>
     </div>
 
-    <!-- node-delete-ui: the discoverable delete affordance. Available for EVERY node kind (step/trigger/
-         start/note). Clicking it emits `delete` with the node id; the canvas runs the EXISTING
-         requestDelete → "N connections will be disconnected" warning → confirmDelete flow. -->
+    <!-- node-delete-ui: the discoverable delete affordance. Available for step / trigger / note nodes.
+         Clicking it emits `delete` with the node id; the canvas runs the EXISTING requestDelete →
+         "N connections will be disconnected" warning → confirmDelete flow.
+         no-delete-start: the START (on_start) node is intentionally NOT deletable — its button is gated on
+         kind !== 'start', so the start node has no delete affordance (the canvas keydown handler is gated too). -->
     <footer class="funnel-canvas-side-panel__footer">
       <button
-        v-if="node.nodeId"
+        v-if="node.nodeId && node.kind !== 'start'"
         type="button"
         data-test="funnel-canvas-side-panel-delete"
         class="funnel-canvas-side-panel__delete"

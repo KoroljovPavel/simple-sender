@@ -50,6 +50,9 @@ const emit = defineEmits<{
   'update:trigger': [trigger: FunnelTrigger]
   // A note node's text changed — the parent updates notes[noteIndex].text and persists (Decision B / MINOR-2).
   'update:note-text': [payload: { noteIndex: number; text: string }]
+  // The author asked to delete the selected node (node-delete-ui). Carries the node id; the canvas relays it
+  // into the EXISTING requestDelete → "N connections" warning → confirmDelete flow (per-kind logic + emit).
+  delete: [nodeId: string]
   // The author closed/deselected the panel.
   close: []
 }>()
@@ -186,6 +189,21 @@ function onStepSubmit(step: FunnelStep) {
         @input="onNoteInput"
       ></textarea>
     </div>
+
+    <!-- node-delete-ui: the discoverable delete affordance. Available for EVERY node kind (step/trigger/
+         start/note). Clicking it emits `delete` with the node id; the canvas runs the EXISTING
+         requestDelete → "N connections will be disconnected" warning → confirmDelete flow. -->
+    <footer class="funnel-canvas-side-panel__footer">
+      <button
+        v-if="node.nodeId"
+        type="button"
+        data-test="funnel-canvas-side-panel-delete"
+        class="funnel-canvas-side-panel__delete"
+        @click="emit('delete', node.nodeId)"
+      >
+        {{ t('funnels.canvas.delete.button') }}
+      </button>
+    </footer>
   </aside>
   <aside
     v-else
@@ -226,6 +244,29 @@ function onStepSubmit(step: FunnelStep) {
   line-height: 1;
   color: #6b7280;
   cursor: pointer;
+}
+
+.funnel-canvas-side-panel__footer {
+  margin-top: auto;
+  padding-top: 0.5rem;
+  border-top: 1px solid #f3f4f6;
+}
+
+.funnel-canvas-side-panel__delete {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+  border: 1px solid #fca5a5;
+  border-radius: 0.25rem;
+  background: #fef2f2;
+  padding: 0.375rem 0.75rem;
+  font-size: 0.8125rem;
+  color: #b91c1c;
+  cursor: pointer;
+}
+
+.funnel-canvas-side-panel__delete:hover {
+  background: #fee2e2;
 }
 
 .funnel-canvas-side-panel--empty {

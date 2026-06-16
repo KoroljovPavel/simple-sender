@@ -185,6 +185,50 @@ describe('FunnelCanvasSidePanel', () => {
     wrapper.unmount()
   })
 
+  // node-delete-ui: the side panel is the discoverable delete affordance. Every node kind (step/trigger/
+  // start/note) must render a Delete control that emits `delete` with the selected node id — the canvas
+  // relays it into the EXISTING requestDelete → warning → confirmDelete flow.
+  it('renders a Delete button that emits delete with the node id for a step node', async () => {
+    const wrapper = await mountPanel({ kind: 'step', nodeId: 's1', step: messageStepWithTargets() })
+
+    const del = document.querySelector('[data-test="funnel-canvas-side-panel-delete"]') as HTMLButtonElement | null
+    expect(del).not.toBeNull()
+    // Localized label (default locale uk) — not the raw key.
+    expect(del!.textContent?.trim()).toBe('Видалити')
+
+    del!.click()
+    await settle()
+
+    const emitted = wrapper.emitted('delete')
+    expect(emitted).toBeTruthy()
+    expect(emitted!.at(-1)![0]).toBe('s1')
+
+    wrapper.unmount()
+  })
+
+  it('renders a Delete button for trigger, start and note nodes (all kinds covered)', async () => {
+    for (const node of [
+      { kind: 'trigger', nodeId: 'trigger:0', trigger: { triggerType: 'event', triggerValue: 'e', entryStepId: null } },
+      { kind: 'start', nodeId: 'start', trigger: { triggerType: 'on_start', triggerValue: '', entryStepId: null } },
+      { kind: 'note', nodeId: 'note:0', noteIndex: 0, noteText: 'hi' },
+    ]) {
+      const wrapper = await mountPanel(node)
+      const del = document.querySelector('[data-test="funnel-canvas-side-panel-delete"]') as HTMLButtonElement | null
+      expect(del, `delete button for ${node.kind}`).not.toBeNull()
+      del!.click()
+      await settle()
+      expect(wrapper.emitted('delete')!.at(-1)![0]).toBe(node.nodeId)
+      wrapper.unmount()
+      document.body.innerHTML = ''
+    }
+  })
+
+  it('does NOT render a Delete button when no node is selected', async () => {
+    const wrapper = await mountPanel(null)
+    expect(document.querySelector('[data-test="funnel-canvas-side-panel-delete"]')).toBeNull()
+    wrapper.unmount()
+  })
+
   it('renders an injection-payload note ESCAPED in the editor (no v-html)', async () => {
     // Stored-XSS guard (Decision 7): a note whose text is an injection payload must be held as inert DATA in
     // the <textarea> value (the browser never parses an attribute value as markup), never injected as live

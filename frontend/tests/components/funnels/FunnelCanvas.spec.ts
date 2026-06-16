@@ -859,6 +859,123 @@ describe('FunnelCanvas', () => {
     expect(/arrowclosed/i.test(html)).toBe(true)
   })
 
+  // ── node-delete-ui: discoverable delete affordance (side-panel button + keydown) ──────────────────────
+
+  it('side-panel Delete on a selected step node → confirm → emits cleaned steps + triggers (inbound edges nulled)', async () => {
+    // s2 is selected; s1.next + s1 callback button + s3.timeout + the on_start entry all point at s2.
+    // Side-panel Delete → confirm must emit update:steps WITHOUT s2 AND with every referencing field cleared,
+    // plus update:triggers (the entry edge to s2 nulled) so the page persists the cleanup.
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: 's2',
+        buttons: [{ type: 'callback', label: 'B', targetStepId: 's2' }],
+      }),
+      messageStep({ id: 's2' }),
+      messageStep({ id: 's3', timeoutValue: 5, timeoutUnit: 'MIN', timeoutTargetStepId: 's2' }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's2' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // Select s2, then click the side-panel Delete button (the discoverable affordance — no exposed call).
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 's2',
+      data: { kind: 'step', stepIndex: 1 },
+    })
+    await settle()
+    const delBtn = wrapper.find('[data-test="funnel-canvas-side-panel-delete"]')
+    expect(delBtn.exists()).toBe(true)
+    await delBtn.trigger('click')
+    await settle()
+
+    // The EXISTING warning surfaces the exact disconnect count (4: next + button + timeout + entry).
+    const warning = wrapper.find('[data-test="funnel-canvas-delete-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.attributes('data-disconnect-count')).toBe('4')
+    expect(warning.text()).toContain('4')
+
+    // Confirm via the EXISTING confirm button.
+    await wrapper.find('[data-test="funnel-canvas-delete-confirm"]').trigger('click')
+    await settle()
+
+    const steplog = wrapper.emitted('update:steps')
+    expect(steplog).toBeTruthy()
+    const updated = steplog!.at(-1)![0] as FunnelStep[]
+    // s2 is gone.
+    expect(updated.some((s) => s.id === 's2')).toBe(false)
+    // Inbound step edges cleaned.
+    expect(updated.find((s) => s.id === 's1')?.next).toBeNull()
+    expect(updated.find((s) => s.id === 's1')?.buttons?.[0]?.targetStepId).toBeNull()
+    expect(updated.find((s) => s.id === 's3')?.timeoutTargetStepId).toBeNull()
+    // The inbound entry edge was nulled → triggers emitted for the page to persist.
+    const trigLog = wrapper.emitted('update:triggers')
+    expect(trigLog).toBeTruthy()
+    expect((trigLog!.at(-1)![0] as FunnelTrigger[])[0].entryStepId).toBeNull()
+  })
+
+  it('side-panel Delete on a note node → confirm → removes it from notes[]', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const notes: FunnelNote[] = [{ id: null, text: 'keep', canvasPosition: null }, { id: null, text: 'drop', canvasPosition: null }]
+    const wrapper = await mountWith({ steps, triggers, notes })
+
+    // Select the second note node (note:1) and delete it via the side-panel button.
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 'note:1',
+      data: { kind: 'note', noteIndex: 1 },
+    })
+    await settle()
+    await wrapper.find('[data-test="funnel-canvas-side-panel-delete"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="funnel-canvas-delete-confirm"]').trigger('click')
+    await settle()
+
+    const emitted = wrapper.emitted('update:notes')
+    expect(emitted).toBeTruthy()
+    const updated = emitted!.at(-1)![0] as FunnelNote[]
+    expect(updated).toHaveLength(1)
+    expect(updated[0].text).toBe('keep')
+  })
+
+  it('Delete key on a selected node triggers the delete flow', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1', next: 's2' }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 's2',
+      data: { kind: 'step', stepIndex: 1 },
+    })
+    await settle()
+
+    // Press Delete with focus NOT in a text field → opens the warning (the same flow as the button).
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }))
+    await settle()
+    expect(wrapper.find('[data-test="funnel-canvas-delete-warning"]').exists()).toBe(true)
+  })
+
+  it('Delete key does NOT fire while focus is in a text input', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 's1',
+      data: { kind: 'step', stepIndex: 0 },
+    })
+    await settle()
+
+    // Focus a real input, then press Delete: the guard must suppress the delete (author is editing text).
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    await settle()
+
+    expect(wrapper.find('[data-test="funnel-canvas-delete-warning"]').exists()).toBe(false)
+    input.remove()
+  })
+
   it('the palette offers exactly the 9 existing step types (no new executable types)', async () => {
     const steps: FunnelStep[] = [messageStep({ id: 's1' })]
     const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]

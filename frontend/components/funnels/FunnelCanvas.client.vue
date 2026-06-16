@@ -410,6 +410,29 @@ function confirmDelete(): void {
   pendingDelete.value = null
 }
 
+// Secondary affordance (node-delete-ui): Delete/Backspace on a selected node opens the SAME warning →
+// confirm flow as the side-panel button. Guarded so it never fires while the author is typing in a form
+// field (input/textarea/select/contenteditable) — otherwise editing a step/note/trigger field would arm a
+// node deletion. No-op when nothing is selected or a delete is already pending.
+function isEditableTarget(el: EventTarget | null): boolean {
+  const node = el as HTMLElement | null
+  if (!node || typeof node.closest !== 'function') return false
+  if (node.isContentEditable) return true
+  return !!node.closest('input, textarea, select, [contenteditable="true"]')
+}
+
+function onKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Delete' && event.key !== 'Backspace') return
+  if (!selectedNode.value?.nodeId) return
+  if (pendingDelete.value) return
+  if (isEditableTarget(event.target)) return
+  event.preventDefault()
+  requestDelete(selectedNode.value.nodeId)
+}
+
+onMounted(() => window.addEventListener('keydown', onKeydown))
+onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
+
 // Exposed for the component test to drive a draw-to-connect deterministically (asserting the field write +
 // emit) without simulating a real Vue Flow drag — live drag is user-verified, not unit-tested (Testing
 // Strategy / no E2E). requestDelete/confirmDelete are likewise exposed so the delete flow (warning → apply)
@@ -519,6 +542,7 @@ defineExpose({ handleConnect, handleNodeDragStop, selectNode, onPanelStepSubmit,
       @submit="onPanelStepSubmit"
       @update:trigger="onPanelTriggerUpdate"
       @update:note-text="onPanelNoteText"
+      @delete="requestDelete"
       @close="clearSelection"
     />
   </div>

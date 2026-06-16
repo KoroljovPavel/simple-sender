@@ -937,6 +937,69 @@ describe('FunnelCanvas', () => {
     expect(updated[0].text).toBe('keep')
   })
 
+  it('side-panel Delete on a TRIGGER node → confirm → removes that trigger from triggers[]', async () => {
+    // An event trigger node (trigger:1) is selected; side-panel Delete → confirm must emit update:triggers with
+    // exactly that trigger removed, the others untouched (filter by triggerIndex). Value-based: asserts the
+    // surviving trigger set, not just an emit. Load-bearing: a mis-indexed delete drops the wrong trigger.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [
+      { triggerType: 'on_start', entryStepId: 's1' },
+      { triggerType: 'event', triggerValue: 'evtA', entryStepId: 's2' },
+      { triggerType: 'event', triggerValue: 'evtB', entryStepId: null },
+    ]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // Select the second trigger node (trigger:1 = the evtA event trigger) and delete via the side-panel button.
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 'trigger:1',
+      data: { kind: 'trigger', triggerIndex: 1 },
+    })
+    await settle()
+    await wrapper.find('[data-test="funnel-canvas-side-panel-delete"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="funnel-canvas-delete-confirm"]').trigger('click')
+    await settle()
+
+    const emitted = wrapper.emitted('update:triggers')
+    expect(emitted).toBeTruthy()
+    const updated = emitted!.at(-1)![0] as FunnelTrigger[]
+    // The evtA event trigger is gone; on_start + evtB survive (order preserved).
+    expect(updated).toHaveLength(2)
+    expect(updated.some((tr) => tr.triggerType === 'event' && tr.triggerValue === 'evtA')).toBe(false)
+    expect(updated.some((tr) => tr.triggerType === 'on_start')).toBe(true)
+    expect(updated.some((tr) => tr.triggerType === 'event' && tr.triggerValue === 'evtB')).toBe(true)
+  })
+
+  it('side-panel Delete on the START (on_start) node → confirm → removes the on_start entry', async () => {
+    // The start node is selected; side-panel Delete → confirm must emit update:triggers WITHOUT the on_start
+    // entry, leaving the other (event) trigger intact (Decision 11). Value-based on the surviving trigger set.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [
+      { triggerType: 'on_start', entryStepId: 's1' },
+      { triggerType: 'event', triggerValue: 'evt', entryStepId: 's2' },
+    ]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // The start node carries id 'start' / kind 'start' (triggerIndex omitted — start lifecycle is special-cased).
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 'start',
+      data: { kind: 'start' },
+    })
+    await settle()
+    await wrapper.find('[data-test="funnel-canvas-side-panel-delete"]').trigger('click')
+    await settle()
+    await wrapper.find('[data-test="funnel-canvas-delete-confirm"]').trigger('click')
+    await settle()
+
+    const emitted = wrapper.emitted('update:triggers')
+    expect(emitted).toBeTruthy()
+    const updated = emitted!.at(-1)![0] as FunnelTrigger[]
+    // on_start removed; the event trigger survives untouched.
+    expect(updated.some((tr) => tr.triggerType === 'on_start')).toBe(false)
+    expect(updated).toHaveLength(1)
+    expect(updated[0]).toMatchObject({ triggerType: 'event', triggerValue: 'evt', entryStepId: 's2' })
+  })
+
   it('Delete key on a selected node triggers the delete flow', async () => {
     const steps: FunnelStep[] = [messageStep({ id: 's1', next: 's2' }), messageStep({ id: 's2' })]
     const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
@@ -952,6 +1015,56 @@ describe('FunnelCanvas', () => {
     window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete' }))
     await settle()
     expect(wrapper.find('[data-test="funnel-canvas-delete-warning"]').exists()).toBe(true)
+  })
+
+  it('Backspace key on a selected node triggers the delete flow', async () => {
+    // Mirror of the Delete-key test: Backspace is the second accepted delete key (onKeydown accepts both).
+    // Load-bearing: if Backspace were dropped from the key guard this opens nothing and the assertion fails.
+    const steps: FunnelStep[] = [messageStep({ id: 's1', next: 's2' }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 's2',
+      data: { kind: 'step', stepIndex: 1 },
+    })
+    await settle()
+
+    // Press Backspace with focus NOT in a text field → opens the SAME warning as Delete / the button.
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace' }))
+    await settle()
+    expect(wrapper.find('[data-test="funnel-canvas-delete-warning"]').exists()).toBe(true)
+  })
+
+  it('Delete/Backspace do NOT fire while focus is in a [contenteditable] element', async () => {
+    // Complements the <input> guard test: isEditableTarget also suppresses delete when focus is inside a
+    // contenteditable region (a rich-text author is editing). Load-bearing: dropping the contenteditable
+    // branch from the guard would arm a node deletion mid-edit and this would surface the warning.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    ;(wrapper.vm as unknown as { selectNode: (n: { id: string; data: Record<string, unknown> }) => void }).selectNode({
+      id: 's1',
+      data: { kind: 'step', stepIndex: 0 },
+    })
+    await settle()
+
+    // A real contenteditable element with focus inside it. jsdom doesn't auto-set isContentEditable from the
+    // attribute, so the guard's `closest('[contenteditable="true"]')` branch is the one under test here.
+    const editable = document.createElement('div')
+    editable.setAttribute('contenteditable', 'true')
+    document.body.appendChild(editable)
+    editable.focus()
+
+    editable.dispatchEvent(new KeyboardEvent('keydown', { key: 'Delete', bubbles: true }))
+    await settle()
+    editable.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace', bubbles: true }))
+    await settle()
+
+    // Neither key armed a deletion — the author is editing text inside the contenteditable region.
+    expect(wrapper.find('[data-test="funnel-canvas-delete-warning"]').exists()).toBe(false)
+    editable.remove()
   })
 
   it('Delete key does NOT fire while focus is in a text input', async () => {

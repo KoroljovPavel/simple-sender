@@ -46,6 +46,50 @@ describe('FunnelStepsList', () => {
     expect(del![0]).toEqual([1])
   })
 
+  it('readonly=true hides all structural mutators and shows the read-only notice (Decision 2)', async () => {
+    // On the canvas-driven editor the list is a VIEW only — the canvas owns structural edits. readonly must
+    // remove every mutator (add / edit / delete / move) and surface the read-only notice. Load-bearing: if
+    // readonly stopped gating these the canvas would no longer be the sole structural-editing surface.
+    const wrapper = await mountSuspended(FunnelStepsList, { props: { steps: STEPS, readonly: true } })
+    await settle()
+
+    // The read-only notice is shown.
+    expect(wrapper.find('[data-test="funnel-steps-readonly-notice"]').exists()).toBe(true)
+
+    // No structural mutators on ANY row: move-up/down, edit, delete are all absent.
+    expect(wrapper.find('[data-test="funnel-step-move-up-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-step-move-down-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-step-edit-0"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-step-delete-0"]').exists()).toBe(false)
+
+    // The rows themselves still render (it's a view), and `select` (non-structural) is preserved.
+    expect(wrapper.find('[data-test="funnel-step-row-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-step-select-0"]').exists()).toBe(true)
+  })
+
+  it('readonly=true on an empty list shows the notice but NOT the add CTA', async () => {
+    // The empty-state add button is a structural mutator → also gated by readonly (only the notice remains).
+    const wrapper = await mountSuspended(FunnelStepsList, { props: { steps: [], readonly: true } })
+    await settle()
+
+    expect(wrapper.find('[data-test="funnel-steps-readonly-notice"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-steps-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-steps-empty-add"]').exists()).toBe(false)
+  })
+
+  it('default (readonly=false) still shows the structural mutators and no read-only notice', async () => {
+    // The editable default is the contrast case: mutators present, notice absent. Guards against a regression
+    // where the readonly gating accidentally hid controls in the normal (editable) mode.
+    const wrapper = await mountSuspended(FunnelStepsList, { props: { steps: STEPS } })
+    await settle()
+
+    expect(wrapper.find('[data-test="funnel-steps-readonly-notice"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="funnel-step-move-up-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-step-move-down-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-step-edit-0"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="funnel-step-delete-0"]').exists()).toBe(true)
+  })
+
   it('renders empty state with add CTA', async () => {
     const wrapper = await mountSuspended(FunnelStepsList, { props: { steps: [] } })
     await settle()

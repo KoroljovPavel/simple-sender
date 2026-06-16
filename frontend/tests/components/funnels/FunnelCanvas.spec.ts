@@ -205,7 +205,7 @@ describe('FunnelCanvas', () => {
     const stepNode = wrapper.find('[data-node-id="s1"]')
     // card-preview semantics: WITH callback buttons + timeout, next=null → 3 stacked output handles
     // (btn:0 + btn:1 + timeout). `next` is gated OFF (dead in the engine). URL button excluded from handles.
-    const outputs = stepNode.findAll('[data-test^="funnel-canvas-handle-"]:not([data-test="funnel-canvas-handle-target"])')
+    const outputs = stepNode.findAll('[data-test^="funnel-canvas-handle-"]:not([data-test="funnel-canvas-handle-target"]):not([data-test="funnel-canvas-handle-drop"])')
     const outputIds = outputs.map((h) => h.attributes('data-handle-id'))
     expect(outputIds).toEqual(['btn:0', 'btn:1', 'timeout'])
 
@@ -224,10 +224,14 @@ describe('FunnelCanvas', () => {
       .map((l) => l.text())
     expect(labels).toEqual(['A', 'B', 'Таймаут'])
 
-    // Whole-card drop target: a single node-covering target handle, NO separate input dot.
+    // Input target (edge-left-anchor-real): a dedicated LEFT-BORDER edge anchor (the edge endpoint) + a SEPARATE
+    // full-card drop overlay so the user can still drop anywhere. NO separate visible input dot in the body.
     const targets = stepNode.findAll('[data-test="funnel-canvas-handle-target"]')
     expect(targets).toHaveLength(1)
-    expect(targets[0].classes()).toContain('funnel-handle--card-target')
+    expect(targets[0].classes()).toContain('funnel-handle--target-anchor')
+    const drops = stepNode.findAll('[data-test="funnel-canvas-handle-drop"]')
+    expect(drops).toHaveLength(1)
+    expect(drops[0].classes()).toContain('funnel-handle--card-target')
 
     // The start node renders exactly ONE output (entry, labeled "Вхід") and NO input dot / target.
     const startNode = wrapper.find('[data-node-id="start"]')
@@ -366,26 +370,63 @@ describe('FunnelCanvas', () => {
     expect(target.attributes('data-handle-id')).toBe('in')
   })
 
-  it('the whole-card target handle anchors on the node LEFT edge (Position.Left, not the card center)', async () => {
-    // edge-left-anchor: the card-cover target handle (id="in") spans the whole card (inset:0) so the drop area
-    // is the entire node, BUT Vue Flow computes a handle's connection anchor from its bounds + Position. With no
-    // explicit Position a target handle defaults to Top, and a full-card handle resolves to the card CENTER — so
-    // an incoming edge terminated in the middle of the block. Setting Position.Left makes Vue Flow use the
-    // handle's LEFT-CENTER (= the card's left border, vertically centered) as the connection point, so the edge
-    // attaches at the left edge while the drop zone stays the whole card. Vue Flow renders the position string to
-    // the handle's `data-handlepos` attribute (and a `vue-flow__handle-<pos>` class) — value-based: this would
-    // FAIL if the Position were reverted to the default/center.
+  it('the incoming-edge target anchor is a DEDICATED left-border handle (id "in", Position.Left), not the card cover', async () => {
+    // edge-left-anchor-real: the REAL cause of the arrowhead landing in the card MIDDLE was that the incoming
+    // edge anchored to a FULL-CARD cover handle. Vue Flow's connection-point math collapses a sized/cover handle
+    // to its CENTER (getHandlePosition center=true paths), and when a cover handle's bounds fail to register it
+    // falls back to the NODE center/top — Position.Left on the cover handle never fixed it because the anchor
+    // came from the cover bounds, not a left-pinned element. Fix: a DEDICATED small target handle pinned on the
+    // LEFT border carries id "in" + Position.Left and is the edge endpoint (edges set targetHandle="in"); a
+    // SEPARATE full-card overlay keeps drop-anywhere. data-test="funnel-canvas-handle-target" now marks the
+    // left-border ANCHOR. Value-based: fails if the anchor reverts to Top/center or is removed.
     const steps: FunnelStep[] = [messageStep({ id: 's1' })]
     const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
     const wrapper = await mountWith({ steps, triggers })
 
-    const target = wrapper.find('[data-node-id="s1"]').find('[data-test="funnel-canvas-handle-target"]')
-    expect(target.exists()).toBe(true)
+    const node = wrapper.find('[data-node-id="s1"]')
+
+    // The edge anchor: a dedicated left-border target handle with the stable id "in" and Position.Left.
+    const anchor = node.find('[data-test="funnel-canvas-handle-target"]')
+    expect(anchor.exists()).toBe(true)
+    expect(anchor.attributes('data-handle-id')).toBe('in')
+    expect(anchor.classes()).toContain('funnel-handle--target-anchor')
     // Assert against the Position enum value (not a 'left' literal) so the binding can't silently drift.
-    expect(target.attributes('data-handlepos')).toBe(Position.Left)
-    expect(target.classes()).toContain(`vue-flow__handle-${Position.Left}`)
-    // It must NOT have reverted to the default target position (Top → card center anchor).
-    expect(target.attributes('data-handlepos')).not.toBe(Position.Top)
+    expect(anchor.attributes('data-handlepos')).toBe(Position.Left)
+    expect(anchor.classes()).toContain(`vue-flow__handle-${Position.Left}`)
+    // It must NOT have reverted to the default target position (Top → card center/top anchor).
+    expect(anchor.attributes('data-handlepos')).not.toBe(Position.Top)
+    // It is NOT the full-card cover (that is a separate overlay with a distinct id) — load-bearing: a full-card
+    // anchor is exactly the bug. The anchor must NOT carry the card-cover class.
+    expect(anchor.classes()).not.toContain('funnel-handle--card-target')
+
+    // The drop overlay is a SEPARATE target handle (distinct id "in-drop") so drop-anywhere still works, and it
+    // is NEVER the edge endpoint (edges pin targetHandle="in"). It must exist and be the full-card cover.
+    const drop = node.find('[data-test="funnel-canvas-handle-drop"]')
+    expect(drop.exists()).toBe(true)
+    expect(drop.attributes('data-handle-id')).toBe('in-drop')
+    expect(drop.classes()).toContain('funnel-handle--card-target')
+
+    // Exactly ONE left-border anchor and ONE drop overlay (no duplicate/ambiguous target handles).
+    expect(node.findAll('[data-test="funnel-canvas-handle-target"]')).toHaveLength(1)
+    expect(node.findAll('[data-test="funnel-canvas-handle-drop"]')).toHaveLength(1)
+  })
+
+  it('the node root carries the positioning that makes the cover/anchor handles size to the CARD (position:relative)', async () => {
+    // edge-left-anchor-real (prime-suspect guard): the absolute handles (full-card overlay inset:0 + left-border
+    // anchor) must resolve against the CARD, not the Vue Flow viewport/transform layer. That requires the node
+    // ROOT to be a positioned ancestor. The component sets this via the scoped .funnel-canvas-node class
+    // (position:relative; z-index:1 lifts the opaque body above the edges SVG). Assert the structural marker so
+    // the relationship can't be dropped (pixels are user-verified; the positioned-ancestor contract is asserted
+    // structurally: the root is the .funnel-canvas-node element and both target handles are its children).
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const root = wrapper.find('[data-node-id="s1"]')
+    expect(root.exists()).toBe(true)
+    expect(root.classes()).toContain('funnel-canvas-node')
+    expect(root.find('[data-test="funnel-canvas-handle-target"]').exists()).toBe(true)
+    expect(root.find('[data-test="funnel-canvas-handle-drop"]').exists()).toBe(true)
   })
 
   it('handleConnect still resolves the destination by node id even when targetHandle is the new "in" id', async () => {

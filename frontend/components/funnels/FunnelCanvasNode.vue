@@ -236,20 +236,39 @@ const keyboardPreviewRows = computed<string[][]>(() => {
       { 'funnel-canvas-node--broken': broken, 'funnel-canvas-node--droppable': isConnecting && !isEntry && !isNote },
     ]"
   >
-    <!-- INPUT = the WHOLE card. A single node-covering target Handle (NO separate input dot). At rest it is
-         pointer-events:none (never swallows a click / node-body drag); while a connection drag is in progress
-         it becomes droppable + the card lights up. Start/trigger entry nodes are pure sources, and a note has
-         no edges — so neither gets a target handle.
-         The handle carries a STABLE id "in" (connect-precision): with ConnectionMode.Strict an unnamed target
-         handle competed ambiguously with always-on source dots near a card edge; a real, named target handle is
-         the single unambiguous drop. The connect path still resolves the destination by NODE id (conn.target),
-         so targetHandle being "in" instead of null is inert — handleConnect/resolveEdgeRef never read it. -->
+    <!-- INPUT (edge-left-anchor-real). TWO target handles, by design:
+         1) The EDGE ANCHOR: a dedicated SMALL target handle pinned on the card's LEFT BORDER, vertically
+            centered. It carries the STABLE id "in" and Position.Left. Vue Flow computes a drawn edge's endpoint
+            from the resolved target handle's bounds + Position (getHandlePosition, center=false): a small
+            left-border handle ⇒ x at the left edge, y at the card middle ⇒ the arrowhead lands ON the left
+            border. (A full-card cover handle could NOT do this reliably: Vue Flow's connection-point math
+            collapses a sized/cover handle to its CENTER in several paths, and when a cover handle's bounds fail
+            to register it falls back to the NODE center/top — both put the arrowhead in the MIDDLE of the block.
+            That was the real cause; Position.Left alone never fixed it because the anchor came from the cover
+            handle's bounds, not from a left-pinned element.) It must come FIRST in DOM so it is bounds[0].
+         2) The DROP OVERLAY: a separate full-card transparent target handle so the user can still drop a
+            connection ANYWHERE on the card. It is pointer-events:none at rest (never swallows a click / node
+            drag) and only droppable WHILE a connection drag is in progress. It carries a DISTINCT id ("in-drop")
+            so it is never chosen as the edge endpoint — edges set targetHandle="in" (the left anchor).
+         The connect path resolves the destination by NODE id (conn.target), so which target handle catches the
+         drop is inert — handleConnect/resolveEdgeRef never read targetHandle. Start/trigger entry nodes are pure
+         sources, and a note has no edges — so neither gets a target handle. -->
     <Handle
       v-if="!isEntry && !isNote"
       id="in"
-      class="funnel-handle funnel-handle--card-target"
+      class="funnel-handle funnel-handle--target-anchor"
       data-test="funnel-canvas-handle-target"
       data-handle-id="in"
+      type="target"
+      :position="Position.Left"
+      :title="t('funnels.canvas.handle.input')"
+    />
+    <Handle
+      v-if="!isEntry && !isNote"
+      id="in-drop"
+      class="funnel-handle funnel-handle--card-target"
+      data-test="funnel-canvas-handle-drop"
+      data-handle-id="in-drop"
       type="target"
       :position="Position.Left"
       :title="t('funnels.canvas.handle.input')"
@@ -401,7 +420,12 @@ const keyboardPreviewRows = computed<string[][]>(() => {
 
 <style scoped>
 .funnel-canvas-node {
+  /* position:relative is load-bearing: the full-card drop overlay (.funnel-handle--card-target, inset:0) and
+     the left-border anchor (.funnel-handle--target-anchor) are absolutely positioned and must size/anchor to
+     THIS card, not the Vue Flow viewport. z-index:1 lifts the OPAQUE node body above the edges SVG so no edge
+     segment/arrowhead ever shows THROUGH the card middle (belt-and-suspenders for the anchor fix). */
   position: relative;
+  z-index: 1;
   min-width: 180px;
   border: 1px solid #cbd5e1;
   border-radius: 0.375rem;
@@ -596,9 +620,35 @@ const keyboardPreviewRows = computed<string[][]>(() => {
   box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
 }
 
+/* Dedicated LEFT-BORDER target anchor (edge-left-anchor-real). This small handle — NOT the full-card overlay —
+   is the incoming edge's endpoint: pinned on the card's left border, vertically centered, so Vue Flow's
+   getHandlePosition(Position.Left) lands the arrowhead ON the left edge. It is visually minimal (a thin marker
+   on the border) and pointer-events:none so it never competes for a click/drag — the whole-card overlay below
+   owns the actual drop affordance. translateX(-50%) straddles the marker on the border for a clean edge join. */
+.funnel-canvas-node :deep(.funnel-handle--target-anchor) {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  width: 8px;
+  height: 8px;
+  min-width: 0;
+  min-height: 0;
+  border: 2px solid #ffffff;
+  border-radius: 9999px;
+  background: #94a3b8; /* neutral/monochrome — not a colored input dot, just the anchor marker */
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.2);
+  transform: translate(-50%, -50%);
+  pointer-events: none; /* the full-card overlay owns the drop; this is only the visual + math anchor */
+}
+.funnel-canvas-node--droppable :deep(.funnel-handle--target-anchor) {
+  background: #6366f1; /* lights up with the card while connecting (matches the droppable accent) */
+}
+
 /* Whole-card target: a transparent handle covering the entire node. `nodrag` (Vue Flow default on handles)
    keeps node-body dragging working; pointer-events:none at rest keeps node clicks working. It only captures
-   the drop WHILE a connection is in progress (the parent toggles the droppable card state via .--droppable). */
+   the drop WHILE a connection is in progress (the parent toggles the droppable card state via .--droppable).
+   It carries a DISTINCT id ("in-drop") and is NEVER the edge endpoint (edges pin targetHandle="in", the
+   left-border anchor above) — it exists purely so the user can drop a connection anywhere on the card. */
 .funnel-canvas-node :deep(.funnel-handle--card-target) {
   position: absolute;
   top: 0;

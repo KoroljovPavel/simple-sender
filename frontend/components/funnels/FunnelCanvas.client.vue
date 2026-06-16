@@ -146,6 +146,12 @@ const flowEdges = computed(() =>
     id: e.id,
     source: e.source,
     target: e.target,
+    // Pin the incoming edge to the dedicated LEFT-border target handle (id "in") so Vue Flow anchors the
+    // arrowhead at the node's left edge (edge-left-anchor-real). Without an explicit targetHandle Vue Flow
+    // resolves to bounds[0] — fragile when a second (full-card drop overlay) target handle is also present;
+    // naming "in" makes the left handle the unambiguous edge endpoint. The connect path resolves by node id
+    // (conn.target), so this is inert for handleConnect.
+    targetHandle: 'in',
     data: e.data,
   })),
 )

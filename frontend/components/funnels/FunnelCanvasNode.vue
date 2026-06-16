@@ -208,12 +208,17 @@ const urlButtons = computed<Button[]>(() =>
     <!-- INPUT = the WHOLE card. A single node-covering target Handle (NO separate input dot). At rest it is
          pointer-events:none (never swallows a click / node-body drag); while a connection drag is in progress
          it becomes droppable + the card lights up. Start/trigger entry nodes are pure sources, and a note has
-         no edges — so neither gets a target handle. The handle keeps NO id so `targetHandle` stays null and the
-         connect path resolves the destination by node id (conn.target), exactly as before. -->
+         no edges — so neither gets a target handle.
+         The handle carries a STABLE id "in" (connect-precision): with ConnectionMode.Strict an unnamed target
+         handle competed ambiguously with always-on source dots near a card edge; a real, named target handle is
+         the single unambiguous drop. The connect path still resolves the destination by NODE id (conn.target),
+         so targetHandle being "in" instead of null is inert — handleConnect/resolveEdgeRef never read it. -->
     <Handle
       v-if="!isEntry && !isNote"
+      id="in"
       class="funnel-handle funnel-handle--card-target"
       data-test="funnel-canvas-handle-target"
+      data-handle-id="in"
       type="target"
       :position="Position.Left"
       :title="t('funnels.canvas.handle.input')"

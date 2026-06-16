@@ -321,6 +321,81 @@ describe('FunnelCanvas', () => {
     expect(updatedSteps.find((s) => s.id === 's1')?.next).toBe('s2')
   })
 
+  // ── connect-precision: robust connection config (Strict mode + card target id + radius + validity guard) ──
+
+  it('exposes a strict connection config (small radius) so an edge end cannot snap to a foreign output dot', async () => {
+    // Root cause of the snap bug: VueFlow had no connection config → default Loose mode + large radius let the
+    // edge end land on a neighbouring node's source dot. The fix wires Strict mode + a small radius. These are
+    // exposed for assertion (live pointer-drag is user-verified).
+    const steps: FunnelStep[] = [messageStep({ id: 's1', next: null }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const cfg = (wrapper.vm as unknown as { connectionConfig: { mode: string; radius: number } }).connectionConfig
+    // Strict forbids ending on a source handle → kills the cross-node output snap.
+    expect(cfg.mode).toBe('strict')
+    // Small radius so the end is not pulled toward distant dots (the whole-card target provides the drop area).
+    expect(cfg.radius).toBeLessThanOrEqual(12)
+    expect(cfg.radius).toBeGreaterThan(0)
+  })
+
+  it('isValidConnection rejects source-as-target / missing target and accepts a real destination', async () => {
+    // Defense-in-depth guard: a connection must have a target that is NOT the source node.
+    const steps: FunnelStep[] = [messageStep({ id: 's1', next: null }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const isValid = (wrapper.vm as unknown as { isValidConnection: (c: Connection) => boolean }).isValidConnection
+    // Valid: a real destination node, different from the source.
+    expect(isValid({ source: 's1', target: 's2', sourceHandle: 'next', targetHandle: 'in' })).toBe(true)
+    // Invalid: self-node (would land back on the same card).
+    expect(isValid({ source: 's1', target: 's1', sourceHandle: 'next', targetHandle: 'in' })).toBe(false)
+    // Invalid: no target at all.
+    expect(isValid({ source: 's1', target: null, sourceHandle: 'next', targetHandle: null } as unknown as Connection)).toBe(false)
+  })
+
+  it('the whole-card target handle carries the stable "in" id (kills the no-id cross-node competition)', async () => {
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const target = wrapper.find('[data-node-id="s1"]').find('[data-test="funnel-canvas-handle-target"]')
+    expect(target.exists()).toBe(true)
+    expect(target.attributes('data-handle-id')).toBe('in')
+  })
+
+  it('handleConnect still resolves the destination by node id even when targetHandle is the new "in" id', async () => {
+    // The card target now has id "in" → conn.targetHandle is "in" (was null). handleConnect resolves by
+    // conn.target (node id), so it must still write s1.next = 's2'. Load-bearing: a regression to targetHandle
+    // parsing would break this.
+    const steps: FunnelStep[] = [messageStep({ id: 's1', next: null }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const conn: Connection = { source: 's1', target: 's2', sourceHandle: 'next', targetHandle: 'in' }
+    ;(wrapper.vm as unknown as { handleConnect: (c: Connection) => void }).handleConnect(conn)
+    await settle()
+
+    const emitted = wrapper.emitted('update:steps')
+    expect(emitted).toBeTruthy()
+    expect((emitted![0][0] as FunnelStep[]).find((s) => s.id === 's1')?.next).toBe('s2')
+  })
+
+  it('an entry connection with targetHandle "in" still resolves to triggers', async () => {
+    // Same resolution check for the entry source (start → step), with the new card target id.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: null }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const conn: Connection = { source: 'start', target: 's1', sourceHandle: 'entry', targetHandle: 'in' }
+    ;(wrapper.vm as unknown as { handleConnect: (c: Connection) => void }).handleConnect(conn)
+    await settle()
+
+    const emitted = wrapper.emitted('update:triggers')
+    expect(emitted).toBeTruthy()
+    expect((emitted![0][0] as FunnelTrigger[])[0].entryStepId).toBe('s1')
+  })
+
   it('a connection to an unsaved target node emits nothing', async () => {
     // The second step has no id (unsaved) → its node id is synthetic; a connection to it is refused.
     const steps: FunnelStep[] = [messageStep({ id: 's1', next: null }), messageStep({ id: null })]

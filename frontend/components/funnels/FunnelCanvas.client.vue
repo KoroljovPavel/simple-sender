@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { VueFlow, useVueFlow, MarkerType } from '@vue-flow/core'
+import { VueFlow, useVueFlow, MarkerType, ConnectionMode } from '@vue-flow/core'
 import type { Connection } from '@vue-flow/core'
 // Base Vue Flow stylesheet (Decision 12 / AC). Also registered globally in nuxt.config (Task 2); Vite dedups,
 // so importing it here too is harmless and satisfies the strict "component imports it" acceptance criterion.
@@ -224,6 +224,23 @@ function handleFieldKind(handle: string | null | undefined): EdgeFieldKind | nul
 
 onConnect(handleConnect)
 
+// ── connect-precision: robust connection wiring (Strict mode + small radius + validity guard) ────────────
+// Root cause of the "snaps to a neighbouring node's OUTPUT dot" bug: <VueFlow> had NO connection config, so the
+// default Loose connectionMode + large connectionRadius let the connection END land on ANY nearby handle —
+// including another node's always-on source dot. Strict mode forbids ending on a SOURCE handle (only the
+// card's target handle is a valid drop), and a small radius stops the end from being pulled toward distant dots
+// (the whole-card target handle already provides a large, deliberate drop area). Exposed for the component test
+// (live pointer-drag is user-verified, not unit-tested).
+const CONNECTION_RADIUS = 12
+const connectionConfig = { mode: 'strict', radius: CONNECTION_RADIUS }
+
+// Validity guard (defense-in-depth + better snap feedback): a connection must have a target node that is not
+// the source node itself. Strict mode already blocks ending on a source dot; this also rejects self-loops and
+// a missing target so Vue Flow shows the invalid affordance during the drag.
+function isValidConnection(conn: Connection): boolean {
+  return !!conn.target && conn.target !== conn.source
+}
+
 // Task 7: relay a finished node drag upward. Vue Flow hands us the dragged node + its final position; we
 // pass the node id + {x,y} to the page, which writes it into the matching model object's canvasPosition and
 // persists. We do NOT mutate the model here (props-in/emits-out) — the page is the single save path.
@@ -437,7 +454,16 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onKeydown))
 // emit) without simulating a real Vue Flow drag — live drag is user-verified, not unit-tested (Testing
 // Strategy / no E2E). requestDelete/confirmDelete are likewise exposed so the delete flow (warning → apply)
 // is unit-testable without a live node click. Production wiring goes through the onConnect callback above.
-defineExpose({ handleConnect, handleNodeDragStop, selectNode, onPanelStepSubmit, requestDelete, confirmDelete })
+defineExpose({
+  handleConnect,
+  handleNodeDragStop,
+  selectNode,
+  onPanelStepSubmit,
+  requestDelete,
+  confirmDelete,
+  isValidConnection,
+  connectionConfig,
+})
 </script>
 
 <template>
@@ -456,6 +482,9 @@ defineExpose({ handleConnect, handleNodeDragStop, selectNode, onPanelStepSubmit,
       :nodes="flowNodes"
       :edges="flowEdges"
       :default-edge-options="{ markerEnd: { type: MarkerType.ArrowClosed } }"
+      :connection-mode="ConnectionMode.Strict"
+      :connection-radius="CONNECTION_RADIUS"
+      :is-valid-connection="isValidConnection"
       :only-render-visible-elements="true"
       :min-zoom="0.2"
       :max-zoom="2"

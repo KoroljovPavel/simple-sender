@@ -696,6 +696,83 @@ describe('FunnelCanvas', () => {
     expect(node.find('[data-test="funnel-canvas-preview-media-fallback"]').exists()).toBe(true)
   })
 
+  it('renders the media caption for an http(s) media block', async () => {
+    // previewCaption surfaces the media block's caption (escaped via {{ }}) below the thumbnail. Positive
+    // assertion: an http(s) IMAGE with a caption renders both the thumbnail and the caption text.
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        blocks: [{ type: 'IMAGE', mediaUrl: 'https://example.com/a.png', caption: 'Hello caption' }],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    const caption = node.find('[data-test="funnel-canvas-preview-caption"]')
+    expect(caption.exists()).toBe(true)
+    expect(caption.text()).toBe('Hello caption')
+  })
+
+  it('renders an ALBUM thumbnail + caption from items[0] (http(s))', async () => {
+    // previewThumbUrl/previewCaption ALBUM path (Decision 5): the thumbnail comes from items[0].mediaUrl and
+    // the caption from items[0].caption. An http(s) items[0] renders as an <img :src> + its caption text.
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        blocks: [
+          {
+            type: 'ALBUM',
+            items: [
+              { mediaUrl: 'https://example.com/album0.png', caption: 'Album caption' },
+              { mediaUrl: 'https://example.com/album1.png' },
+            ],
+          },
+        ],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    const img = node.find('[data-test="funnel-canvas-preview-thumb"]')
+    expect(img.exists()).toBe(true)
+    // The thumbnail is the FIRST album item (not the second), proving the items[0] path.
+    expect(img.attributes('src')).toBe('https://example.com/album0.png')
+    const caption = node.find('[data-test="funnel-canvas-preview-caption"]')
+    expect(caption.exists()).toBe(true)
+    expect(caption.text()).toBe('Album caption')
+  })
+
+  it('falls back to the media-type label for an ALBUM whose items[0] is non-http(s)', async () => {
+    // ALBUM items[0].mediaUrl is an opaque Telegram file_id (no http(s) scheme) → the scheme guard rejects it,
+    // so the album falls back to the icon/label, no <img :src>.
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        blocks: [
+          {
+            type: 'ALBUM',
+            items: [
+              { mediaUrl: 'tg-file-id-opaque', caption: 'cap' },
+              { mediaUrl: 'https://example.com/album1.png' },
+            ],
+          },
+        ],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    expect(node.find('[data-test="funnel-canvas-preview-thumb"]').exists()).toBe(false)
+    expect(node.find('[data-test="funnel-canvas-preview-media-fallback"]').exists()).toBe(true)
+    expect(node.html()).not.toContain('tg-file-id-opaque')
+  })
+
   // ── card-preview: XSS / scheme safety ─────────────────────────────────────────────────────────────────
 
   it('renders message text / button label / caption containing HTML as escaped (never an <img> sink)', async () => {
@@ -727,7 +804,7 @@ describe('FunnelCanvas', () => {
     expect(node.find('img').attributes('data-test')).toBe('funnel-canvas-preview-thumb')
   })
 
-  it('a media block with a javascript:/data: url does NOT become an <img src> (icon fallback)', async () => {
+  it('a media block with a javascript: url does NOT become an <img src> (icon fallback)', async () => {
     const steps: FunnelStep[] = [
       messageStep({
         id: 's1',
@@ -742,6 +819,26 @@ describe('FunnelCanvas', () => {
     expect(node.find('[data-test="funnel-canvas-preview-thumb"]').exists()).toBe(false)
     expect(node.find('[data-test="funnel-canvas-preview-media-fallback"]').exists()).toBe(true)
     expect(node.html()).not.toContain('javascript:alert(1)')
+  })
+
+  it('a media block with a data: url does NOT become an <img src> (icon fallback)', async () => {
+    // data: is a non-http(s) scheme → the scheme guard rejects it (anti-XSS, no inline-payload <img>). It must
+    // fall back to the media-type label exactly like javascript:, and the data: URL must NOT reach the DOM.
+    const dataUrl = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M8AAAMBAQAY3Y2wAAAAAElFTkSuQmCC'
+    const steps: FunnelStep[] = [
+      messageStep({
+        id: 's1',
+        next: null,
+        blocks: [{ type: 'IMAGE', mediaUrl: dataUrl }],
+      }),
+    ]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const node = wrapper.find('[data-node-id="s1"]')
+    expect(node.find('[data-test="funnel-canvas-preview-thumb"]').exists()).toBe(false)
+    expect(node.find('[data-test="funnel-canvas-preview-media-fallback"]').exists()).toBe(true)
+    expect(node.html()).not.toContain('data:image/png')
   })
 
   // ── card-preview: edge arrows ─────────────────────────────────────────────────────────────────────────

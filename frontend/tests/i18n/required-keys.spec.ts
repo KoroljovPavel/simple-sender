@@ -103,7 +103,6 @@ const REQUIRED_KEYS = [
   // card-preview — in-card MESSAGE preview labels (media type fallback + URL-button marker). uk/en parity,
   // non-empty (the node surfaces these when a media block has no http(s) thumbnail / for URL buttons).
   'funnels.canvas.preview.urlButton',
-  'funnels.canvas.preview.imageUnavailable',
   'funnels.canvas.preview.mediaType.IMAGE',
   'funnels.canvas.preview.mediaType.VIDEO',
   'funnels.canvas.preview.mediaType.AUDIO',

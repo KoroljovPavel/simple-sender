@@ -125,6 +125,35 @@ describe('useFunnelCanvas — forward mapping', () => {
     expect(evtEntry.source).toBe('trigger:1')
     expect(evtEntry.target).toBe('s2')
   })
+
+  it('emits NO timeout edge for a non-MESSAGE step (symmetry with the MESSAGE-only timeout handle)', () => {
+    // Only a MESSAGE step has a timeout output handle (hasTimeoutHandle requires stepType === 'MESSAGE').
+    // A non-MESSAGE step carrying timeoutTargetStepId would yield a timeout edge with no source handle to
+    // hang off (an orphan). buildEdges must guard the timeout branch with stepType === 'MESSAGE' so the two
+    // layers stay symmetric. (Server validation blocks this today; the layers must agree regardless.)
+    const f = funnel({
+      steps: [
+        step('s1', { stepType: 'DELAY', timeoutTargetStepId: 's2' }),
+        step('s2'),
+      ],
+    })
+    const edges = buildEdges(f)
+    expect(edges.some((e) => e.data.fieldKind === 'timeout')).toBe(false)
+  })
+
+  it('emits a timeout edge for a MESSAGE step with timeoutTargetStepId set', () => {
+    // The positive counterpart of the non-MESSAGE guard: a MESSAGE step with a timeout target still wires up.
+    const f = funnel({
+      steps: [
+        step('s1', { stepType: 'MESSAGE', timeoutTargetStepId: 's2' }),
+        step('s2'),
+      ],
+    })
+    const edges = buildEdges(f)
+    const timeoutEdge = findEdge(edges, (e) => e.data.fieldKind === 'timeout')
+    expect(timeoutEdge.source).toBe('s1')
+    expect(timeoutEdge.target).toBe('s2')
+  })
 })
 
 // ---------------------------------------------------------------------------

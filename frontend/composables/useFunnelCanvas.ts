@@ -244,8 +244,11 @@ export function buildEdges(funnel: FunnelResponse): CanvasEdge[] {
       }
     })
 
-    // timeout edge
-    if (step.timeoutTargetStepId != null && step.timeoutTargetStepId !== '') {
+    // timeout edge — MESSAGE-only, symmetric with FunnelCanvasNode.hasTimeoutHandle (which requires
+    // stepType === 'MESSAGE'). A non-MESSAGE step with timeoutTargetStepId set would otherwise produce an
+    // edge with no visible source handle (an orphan). Server validation already blocks this, but the two
+    // layers must agree independently.
+    if (step.stepType === 'MESSAGE' && step.timeoutTargetStepId != null && step.timeoutTargetStepId !== '') {
       push(
         sid,
         step.timeoutTargetStepId,

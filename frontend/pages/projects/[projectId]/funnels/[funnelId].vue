@@ -208,23 +208,56 @@ function sanitizeTrigger(tr: FunnelTrigger): FunnelTrigger {
   }
 }
 
+// Defense-in-depth id remap (18-funnel-canvas data-loss fix). The PATCH sends steps in array order and the
+// server preserves that order, so position i in the response is the same step we sent at position i. If the
+// server re-minted a step's id (e.g. a step was sent with no id), every inbound reference to the OLD id would
+// dangle. Build an old→new map by position, then rewrite all inbound references across the returned funnel:
+// each step.next, every Button.targetStepId, each step.timeoutTargetStepId, and every trigger.entryStepId.
+// Primary defense is FunnelStepForm preserving id on edit (Fix 1); this is the safety net so a re-mint can
+// never silently break an edge. No-op when the lengths differ (a real add/remove changed the shape — the
+// positional assumption no longer holds) or when no id actually changed.
+function remapResponseIds(sent: FunnelStep[], res: FunnelResponse): FunnelResponse {
+  if (!res.steps || res.steps.length !== sent.length) return res
+  const idMap = new Map<string, string>()
+  for (let i = 0; i < sent.length; i++) {
+    const oldId = sent[i]?.id
+    const newId = res.steps[i]?.id
+    if (oldId && newId && oldId !== newId) idMap.set(oldId, newId)
+  }
+  if (idMap.size === 0) return res
+  const remap = (id: string | null | undefined): string | null | undefined =>
+    id != null && idMap.has(id) ? idMap.get(id)! : id
+  return {
+    ...res,
+    steps: res.steps.map((s) => ({
+      ...s,
+      next: remap(s.next),
+      timeoutTargetStepId: remap(s.timeoutTargetStepId),
+      buttons: s.buttons?.map((b) => ({ ...b, targetStepId: remap(b.targetStepId) })) ?? s.buttons,
+    })),
+    triggers: res.triggers?.map((tr) => ({ ...tr, entryStepId: remap(tr.entryStepId) })) ?? res.triggers,
+  }
+}
+
 // PATCH the FULL funnel (metadata + trigger array + entire ordered steps array). Position = order, so the
 // server rewrites FunnelStep.order from the array index — the client never sends `order`.
 async function persist(): Promise<boolean> {
   if (!funnel.value) return false
   saving.value = true
   saveError.value = null
+  // Snapshot what we send so remapResponseIds can detect a positional id change in the response (safety net).
+  const sentSteps = steps.value
   try {
     const res = await funnelsStore.update(funnelId.value, {
       name: funnel.value.name,
       description: funnel.value.description,
       triggers: triggers.value.map(sanitizeTrigger),
       allowReEnter: funnel.value.allowReEnter,
-      steps: steps.value,
+      steps: sentSteps,
       // Full-replace like steps/triggers: a fresh note carries id:null and the server mints it (Decision 7).
       notes: notes.value,
     })
-    applyResponse(res)
+    applyResponse(remapResponseIds(sentSteps, res))
     return true
   } catch (err) {
     saveError.value = resolveFunnelError(err, 'funnels.update')

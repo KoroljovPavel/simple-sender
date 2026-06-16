@@ -1120,6 +1120,123 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
   })
 })
 
+// ─── Data-loss regression: inbound-edge preservation on a step edit (18-funnel-canvas) ───────────────
+// Repro: a SET_KEYBOARD whose next points at a DELAY step. Editing the DELAY's param and saving must keep
+// SET_KEYBOARD.next === DELAY.id (the edge stays valid) and the persisted DELAY must still carry its id.
+// Fix 1 (FunnelStepForm) preserves id/next on edit so the canvas emits the DELAY with its id intact; the
+// page just relays that array into the PATCH. Fix 2 (positional id remap in persist) is the safety net: if
+// the server still re-mints an id by position, the page rewrites every inbound reference so no edge dangles.
+describe('funnels/[funnelId] inbound-edge preservation on step edit', () => {
+  beforeEach(() => {
+    storeMock.fetchOne.mockReset()
+    storeMock.update.mockReset()
+    botStoreMock.fetch.mockReset().mockResolvedValue(null)
+    botStoreMock.current = null
+    navMock.mockReset()
+  })
+
+  it('page-level repro: editing a DELAY keeps its id so the inbound SET_KEYBOARD.next stays valid in the PATCH', async () => {
+    // SET_KEYBOARD (kb-1) → DELAY (delay-1) via .next. The canvas emits the edited array; the page PATCHes it.
+    const kb: FunnelStep = {
+      stepType: 'SET_KEYBOARD',
+      id: 'kb-1',
+      next: 'delay-1',
+      keyboardText: 'Pick',
+      keyboardRows: [{ buttons: [{ text: 'A' }] }],
+      isPersistent: true,
+      oneTimeKeyboard: false,
+    }
+    const delay: FunnelStep = { stepType: 'DELAY', id: 'delay-1', delayValue: 5, delayUnit: 'MIN' }
+    storeMock.fetchOne.mockResolvedValue(draft({ steps: [kb, delay] }))
+    storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+      Promise.resolve(draft({ ...body })),
+    )
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+    storeMock.update.mockClear()
+
+    // The DELAY param was edited in the side panel; FunnelStepForm (Fix 1) re-emits the DELAY WITH its id +
+    // next preserved. The canvas relays the full array via update:steps.
+    wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', [
+      kb,
+      { stepType: 'DELAY', id: 'delay-1', delayValue: 9, delayUnit: 'MIN' },
+    ])
+    await settle()
+
+    expect(storeMock.update).toHaveBeenCalled()
+    // Read the PATCH that carried the edited DELAY (the canvas update:steps relay).
+    const body = storeMock.update.mock.calls
+      .map((c) => c[1] as Partial<FunnelResponse>)
+      .find((b) => b.steps?.some((s) => s.stepType === 'DELAY' && s.delayValue === 9))!
+    expect(body).toBeTruthy()
+    const persistedDelay = body.steps?.find((s) => s.stepType === 'DELAY')
+    // The DELAY still carries its id (so the inbound edge cannot dangle) and the new value.
+    expect(persistedDelay?.id).toBe('delay-1')
+    expect(persistedDelay?.delayValue).toBe(9)
+    // The SET_KEYBOARD's outgoing edge still points at the live DELAY id.
+    const persistedKb = body.steps?.find((s) => s.stepType === 'SET_KEYBOARD')
+    expect(persistedKb?.next).toBe('delay-1')
+  })
+
+  it('Fix 2: a positional id re-mint in the server response remaps every inbound next/targetStepId/entryStepId', async () => {
+    // Send a SET_KEYBOARD (kb-1) → DELAY (delay-1); a MESSAGE button + a trigger entry also target delay-1.
+    // The server echoes the same ORDER but re-mints the DELAY id (position 1) to delay-NEW. The page must
+    // rewrite all inbound references to the new id so the local model has no dangling edge.
+    const kb: FunnelStep = {
+      stepType: 'SET_KEYBOARD',
+      id: 'kb-1',
+      next: 'delay-1',
+      keyboardText: 'Pick',
+      keyboardRows: [{ buttons: [{ text: 'A' }] }],
+      isPersistent: true,
+      oneTimeKeyboard: false,
+    }
+    const delay: FunnelStep = { stepType: 'DELAY', id: 'delay-1', delayValue: 5, delayUnit: 'MIN' }
+    const msg: FunnelStep = {
+      stepType: 'MESSAGE',
+      id: 'msg-1',
+      blocks: [{ type: 'TEXT', text: 'Hi' }],
+      buttons: [{ type: 'callback', label: 'Go', targetStepId: 'delay-1', url: null }],
+    }
+    const trigger: FunnelTrigger = {
+      triggerType: 'event',
+      triggerValue: 'signup',
+      keywords: null,
+      entryStepId: 'delay-1',
+    }
+    const onStart: FunnelTrigger = { triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }
+
+    storeMock.fetchOne.mockResolvedValue(draft({ steps: [kb, delay, msg], triggers: [onStart, trigger] }))
+    // The server preserves ORDER but re-mints the DELAY id at position 1 → delay-NEW. Inbound refs in the
+    // echoed body still hold the OLD id (the page must remap them).
+    storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
+      Promise.resolve(
+        draft({
+          ...body,
+          steps: (body.steps ?? []).map((s, i) => (i === 1 ? { ...s, id: 'delay-NEW' } : s)),
+        }),
+      ),
+    )
+    const wrapper = await mountSuspended(FunnelEditorPage, editorMountOptions)
+    await settle()
+    storeMock.update.mockClear()
+
+    // Trigger a save (drag-stop on the kb node is the simplest discrete persist path).
+    wrapper.findComponent(FunnelCanvas).vm.$emit('node-drag-stop', { nodeId: 'kb-1', position: { x: 5, y: 6 } })
+    await settle()
+
+    expect(storeMock.update).toHaveBeenCalled()
+    // After applyResponse, the canvas receives the remapped local model — every inbound edge points at delay-NEW.
+    const steps = wrapper.findComponent(FunnelCanvas).props('steps') as FunnelStep[]
+    const remappedKb = steps.find((s) => s.stepType === 'SET_KEYBOARD')
+    expect(remappedKb?.next).toBe('delay-NEW')
+    const remappedMsg = steps.find((s) => s.stepType === 'MESSAGE')
+    expect(remappedMsg?.buttons?.[0]?.targetStepId).toBe('delay-NEW')
+    const remappedTriggers = wrapper.findComponent(FunnelCanvas).props('triggers') as FunnelTrigger[]
+    expect(remappedTriggers.find((tr) => tr.triggerType === 'event')?.entryStepId).toBe('delay-NEW')
+  })
+})
+
 // ─── MESSAGE composer keyboard (Decision 2) ──────────────────────────────────
 // The inline keyboard now attaches to the LAST non-album block of a MESSAGE composer step (it replaces the
 // former MENU step-kind). ≥1 callback button (label + target = another step or "End"), URL buttons (label +

@@ -919,6 +919,18 @@ function customFieldValueForSubmit(raw: unknown): unknown {
 // sending a clean step keeps the array readable and avoids leaking a stale value from a switched branch.
 const onSubmit = handleSubmit((values) => {
   const type = selectedType.value
+  // Carry the server-minted graph fields the form does NOT edit (id, next) through EVERY emitted step,
+  // regardless of type. The canvas owns these; the side-panel form only edits the type-specific content.
+  // Dropping them on a re-save (as the DELAY / ADD_TAG / REMOVE_TAG / SET_CUSTOM_FIELD / EMIT_EVENT /
+  // SUBSCRIBE_TO_FUNNEL branches previously did) makes the backend mint a NEW id → every inbound edge to
+  // this step (next / Button.targetStepId / timeoutTargetStepId / trigger.entryStepId) dangles ("broken
+  // connection — target deleted"). MESSAGE / SET_KEYBOARD / CLEAR_KEYBOARD already preserved id/next; this
+  // base makes that uniform across all types. canvasPosition is overlaid below for all types (omitted when
+  // absent so the emitted step stays byte-identical for the list/dialog callers — Decision 10).
+  const idBase: Pick<FunnelStep, 'id' | 'next'> = {
+    id: props.initial?.id ?? undefined,
+    next: props.initial?.next ?? undefined,
+  }
   let step: FunnelStep
   switch (type) {
     case 'MESSAGE': {
@@ -928,11 +940,9 @@ const onSubmit = handleSubmit((values) => {
       menuTouched.value = true
       if (!composerValid.value) return
       step = {
+        ...idBase,
         stepType: type,
         blocks: blocks.value.map((b) => buildBlock(b)),
-        // Preserve the server-minted graph fields so a re-save / reorder keeps stable ids + edges.
-        id: props.initial?.id ?? undefined,
-        next: props.initial?.next ?? undefined,
       }
       // Buttons + timeout attach ONLY when the last block is non-album (Decision 2) AND the author added a
       // keyboard. Otherwise they are omitted entirely (no keyboard → the step ends/continues normally).
@@ -957,17 +967,18 @@ const onSubmit = handleSubmit((values) => {
       break
     }
     case 'DELAY':
-      step = { stepType: type, delayValue: Number(values.delayValue), delayUnit: values.delayUnit as DelayUnit }
+      step = { ...idBase, stepType: type, delayValue: Number(values.delayValue), delayUnit: values.delayUnit as DelayUnit }
       break
     case 'ADD_TAG':
     case 'REMOVE_TAG':
-      step = { stepType: type, tagSlug: (values.tagSlug as string).trim() }
+      step = { ...idBase, stepType: type, tagSlug: (values.tagSlug as string).trim() }
       break
     case 'EMIT_EVENT':
-      step = { stepType: type, eventName: (values.eventName as string).trim() }
+      step = { ...idBase, stepType: type, eventName: (values.eventName as string).trim() }
       break
     case 'SET_CUSTOM_FIELD':
       step = {
+        ...idBase,
         stepType: type,
         customFieldKey: (values.customFieldKey as string).trim(),
         customFieldValue: customFieldValueForSubmit(values.customFieldValue),
@@ -978,6 +989,7 @@ const onSubmit = handleSubmit((values) => {
       // No client-side block here — the backend owns target_required/_not_found/_inactive validation and
       // returns the funnel_subscribe_* 422 codes, mapped inline by the editor page.
       step = {
+        ...idBase,
         stepType: type,
         targetFunnelId: blankToNull(subscribeTargetFunnelId.value),
         targetEntryStepId:
@@ -991,6 +1003,7 @@ const onSubmit = handleSubmit((values) => {
       keyboardTouched.value = true
       if (!keyboardValid.value) return
       step = {
+        ...idBase,
         stepType: type,
         keyboardText: keyboardText.value.trim(),
         keyboardParseMode: blankToNull(keyboardParseMode.value),
@@ -1001,8 +1014,6 @@ const onSubmit = handleSubmit((values) => {
         // Map the 3-way mode back to Telegram's two independent booleans.
         isPersistent: keyboardMode.value === 'persistent',
         oneTimeKeyboard: keyboardMode.value === 'oneTime',
-        id: props.initial?.id ?? undefined,
-        next: props.initial?.next ?? undefined,
       }
       break
     }
@@ -1013,11 +1024,10 @@ const onSubmit = handleSubmit((values) => {
       // The backend strictly rejects those on this type (Decision 6 symmetric rejection) → a sloppy emit
       // would 422 on save.
       step = {
+        ...idBase,
         stepType: type,
         keyboardText: keyboardText.value.trim(),
         keyboardParseMode: blankToNull(keyboardParseMode.value),
-        id: props.initial?.id ?? undefined,
-        next: props.initial?.next ?? undefined,
       }
       break
     }

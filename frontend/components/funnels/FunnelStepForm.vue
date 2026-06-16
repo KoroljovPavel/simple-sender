@@ -44,6 +44,11 @@ const emit = defineEmits<{ submit: [step: FunnelStep]; cancel: [] }>()
 const { t } = useI18n()
 const route = useRoute()
 const projectId = computed(() => String(route.params.projectId))
+// The funnel currently being edited (editor route /projects/[projectId]/funnels/[funnelId]). A funnel must
+// not be able to subscribe to ITSELF, so this id is excluded from the SUBSCRIBE_TO_FUNNEL target options.
+// Resolved the same way as projectId (route param); '' on a route without the param (dialog/canvas mount
+// inside the editor route both carry it), which matches no funnel id → nothing is excluded there.
+const currentFunnelId = computed(() => String(route.params.funnelId ?? ''))
 
 const STEP_TYPES: StepType[] = [
   'MESSAGE',
@@ -519,10 +524,14 @@ const subscribeEndParent = ref<boolean>(
   props.initial?.stepType === 'SUBSCRIBE_TO_FUNNEL' ? Boolean(props.initial.endParentAfter) : false,
 )
 
-// Target funnel options carry the status so the hint below can read it. Self-target is allowed (cycles are
-// a feature) — the currently-edited funnel may appear here, which is fine.
+// Target funnel options carry the status so the hint below can read it. The funnel being edited is excluded
+// — a funnel cannot subscribe to itself (would loop into its own entry). A legacy step whose stored
+// targetFunnelId already equals the current funnel is NOT crashed on: it is simply absent from the options
+// (the SearchableSelect then shows the raw stored value as its closed-input label), never re-selectable.
 const subscribeTargetOptions = computed(() =>
-  storeFunnels.value.map((f) => ({ value: f.id, label: f.name })),
+  storeFunnels.value
+    .filter((f) => f.id !== currentFunnelId.value)
+    .map((f) => ({ value: f.id, label: f.name })),
 )
 // The chosen target's status drives the inactive hint (shown when it is not `active`).
 const subscribeTargetStatus = computed(

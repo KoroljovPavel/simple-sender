@@ -254,8 +254,13 @@ public class FunnelService {
         // validated only in applyTriggers — it is deliberately kept OUT of validateSteps' generic edge-pass
         // (it leads into THIS funnel's graph but is not a step `next`/timeout edge — same carve-out as
         // SUBSCRIBE_TO_FUNNEL's targetEntryStepId).
+        // 18-funnel-canvas / draft-validation: a draft PATCH runs ONLY the structural / security / DoS
+        // checks (content=false) — step id minting + uniqueness, the step-count cap, format-if-present of any
+        // injection-vector value (tagSlug / eventName regex). Content COMPLETENESS (required-field presence,
+        // MESSAGE block content, broken-edge) is DEFERRED to activate() so an in-progress draft saves freely
+        // and round-trips. Format-if-present STILL rejects a present-but-malformed value (stored-XSS guard).
         List<FunnelStep> steps = toSteps(request.steps());
-        validateSteps(steps, projectId);
+        validateSteps(steps, projectId, false);
         funnel.setSteps(steps);
 
         applyTriggers(funnel, request.triggers(), stepIdsOf(steps));
@@ -370,7 +375,14 @@ public class FunnelService {
             throw AppException.unprocessableEntity(CODE_NO_STEPS,
                     "Funnel must have at least one step to activate");
         }
-        validateSteps(steps, projectId);
+        // Activation runs the FULL validation (content=true): structural + every content-completeness check
+        // (required-field presence, MESSAGE block content, DELAY value/unit, keyboard text/rows, SUBSCRIBE
+        // target, broken-edge) that the draft PATCH path defers.
+        validateSteps(steps, projectId, true);
+        // Trigger content-completeness (deferred from the save path): each non-on_start trigger's required
+        // value must be PRESENT, not just well-formed-if-present. Run over the persisted (already
+        // format-validated) triggers array.
+        validateTriggersContent(funnel.getTriggers());
 
         // Activation-only gate (Decision 6): every SUBSCRIBE_TO_FUNNEL target must itself be active before
         // the parent can go live. Not enforced at save (a draft target may be referenced while building two
@@ -462,7 +474,11 @@ public class FunnelService {
             throw AppException.unprocessableEntity(CODE_NO_STEPS,
                     "Funnel must have at least one step to test-run");
         }
-        validateSteps(steps, projectId);
+        // Test-run actually EXECUTES the funnel, so it needs the FULL content validation (content=true) —
+        // the same complete gate as activate (Decision 4: an empty/invalid funnel fails fast with the same
+        // 422 codes instead of silently instant-completing). Trigger content is irrelevant to a test-run
+        // (it enrolls the author directly, bypassing trigger matching), so it is NOT re-validated here.
+        validateSteps(steps, projectId, true);
 
         funnelExecutionFactory.cancelExistingForPair(projectId, funnelId, owner.getId());
         // 18-funnel-canvas / Task 3 (APPROVED deviation): enter the SAME step a live /start would — the
@@ -750,22 +766,33 @@ public class FunnelService {
                 case TRIGGER_KEYWORD -> {
                     // keyword ignores triggerValue (the words live in `keywords`); store "" for consistency.
                     trigger.setTriggerValue("");
-                    trigger.setKeywords(requireKeywords(dto.keywords()));
+                    // draft-validation: keyword FORMAT + caps (per-entry length, MAX_KEYWORDS, normalization)
+                    // run on every save (DoS / well-formedness). The non-empty PRESENCE requirement is
+                    // deferred to activate so a draft keyword trigger with no words yet still saves.
+                    trigger.setKeywords(normalizeKeywordsCapped(dto.keywords()));
                     requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_TAG_ADDED -> {
-                    trigger.setTriggerValue(requireTagSlugValue(dto.triggerValue()));
+                    // draft-validation: on save, the slug is FORMAT-validated only IF PRESENT (a present
+                    // value is a stored-XSS / injection vector → must be well-formed). PRESENCE is deferred
+                    // to activate (validateTriggersContent) so an incomplete draft trigger saves freely.
+                    trigger.setTriggerValue(formatTagSlugIfPresent(dto.triggerValue()));
                     trigger.setKeywords(requireNoKeywords(dto.keywords()));
                     requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_CUSTOM_FIELD_SET -> {
-                    trigger.setTriggerValue(requireFieldKeyValue(dto.triggerValue()));
+                    // field key has no slug regex (only non-blank) → no injection-vector format check; the
+                    // presence requirement is deferred to activate. Stored verbatim on the draft.
+                    trigger.setTriggerValue(dto.triggerValue());
                     trigger.setKeywords(requireNoKeywords(dto.keywords()));
                     requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_EVENT -> {
-                    String eventName = requireEventSlugValue(dto.triggerValue());
-                    if (!seenEventNames.add(eventName)) {
+                    // FORMAT-if-present on save (event_name is a stored slug → injection vector); PRESENCE
+                    // deferred to activate. The dedupe still runs over whatever value is present (blank
+                    // values collapse to one "" key, surfaced as a presence failure on activate).
+                    String eventName = formatEventSlugIfPresent(dto.triggerValue());
+                    if (!seenEventNames.add(eventName == null ? "" : eventName)) {
                         throw AppException.unprocessableEntity(CODE_DUPLICATE_EVENT_NAME,
                                 "Duplicate event_name within the funnel's triggers");
                     }
@@ -962,12 +989,52 @@ public class FunnelService {
         return triggerValue;
     }
 
+    // draft-validation: tag slug FORMAT-if-present. A null/blank value (the incomplete-draft case) passes
+    // through untouched — its PRESENCE is required only at activate (validateTriggersContent). A PRESENT
+    // value must still match the slug regex (stored-XSS / injection guard, enforced on every save).
+    private static String formatTagSlugIfPresent(String triggerValue) {
+        if (triggerValue == null || triggerValue.isBlank()) {
+            return triggerValue;
+        }
+        return requireTagSlugValue(triggerValue);
+    }
+
+    // draft-validation: event_name slug FORMAT-if-present (same save-time injection guard as the tag slug).
+    private static String formatEventSlugIfPresent(String triggerValue) {
+        if (triggerValue == null || triggerValue.isBlank()) {
+            return triggerValue;
+        }
+        return requireEventSlugValue(triggerValue);
+    }
+
     private static String requireFieldKeyValue(String triggerValue) {
         if (triggerValue == null || triggerValue.isBlank()) {
             throw AppException.unprocessableEntity(CODE_INVALID_TRIGGER_VALUE,
                     "custom_field_set trigger value must be a non-blank field key");
         }
         return triggerValue;
+    }
+
+    // draft-validation: content-completeness pass over the persisted (already format-validated) triggers
+    // array — run ONLY at activate(). Each non-on_start trigger's required value must now be PRESENT
+    // (the save path defers presence so an incomplete draft trigger can persist). Reuses the strict
+    // requireX helpers, so a present value is re-format-checked too (idempotent — it already passed on save).
+    private static void validateTriggersContent(List<Trigger> triggers) {
+        if (triggers == null) {
+            return;
+        }
+        for (Trigger t : triggers) {
+            if (t == null) {
+                continue;
+            }
+            switch (t.getTriggerType()) {
+                case TRIGGER_KEYWORD -> requireKeywords(t.getKeywords());
+                case TRIGGER_TAG_ADDED -> requireTagSlugValue(t.getTriggerValue());
+                case TRIGGER_CUSTOM_FIELD_SET -> requireFieldKeyValue(t.getTriggerValue());
+                case TRIGGER_EVENT -> requireEventSlugValue(t.getTriggerValue());
+                default -> { /* on_start has no required content value */ }
+            }
+        }
     }
 
     private static String requireEventSlugValue(String triggerValue) {
@@ -987,6 +1054,19 @@ public class FunnelService {
             throw AppException.unprocessableEntity(CODE_INVALID_KEYWORDS,
                     "keyword trigger requires at least one non-blank keyword");
         }
+        if (normalized.size() > MAX_KEYWORDS) {
+            throw AppException.unprocessableEntity(CODE_INVALID_KEYWORDS,
+                    "keyword trigger exceeds the maximum of " + MAX_KEYWORDS + " keywords");
+        }
+        return normalized;
+    }
+
+    // draft-validation: keyword FORMAT + caps WITHOUT the non-empty presence requirement. Normalizes
+    // (lowercase/trim/dedupe), enforces per-entry length (inside normalizeKeywords) and the MAX_KEYWORDS
+    // cap, but accepts an empty result — the non-empty PRESENCE check is deferred to activate
+    // (validateTriggersContent → requireKeywords). Runs on every save (DoS / well-formedness guard).
+    private static List<String> normalizeKeywordsCapped(List<String> rawKeywords) {
+        List<String> normalized = normalizeKeywords(rawKeywords);
         if (normalized.size() > MAX_KEYWORDS) {
             throw AppException.unprocessableEntity(CODE_INVALID_KEYWORDS,
                     "keyword trigger exceeds the maximum of " + MAX_KEYWORDS + " keywords");
@@ -1180,7 +1260,10 @@ public class FunnelService {
     // projectId scopes the SUBSCRIBE_TO_FUNNEL target lookup fail-closed (Task 2): the first validation
     // branch that touches the DB (every other check is in-memory). The lookup stays confined to the
     // SUBSCRIBE_TO_FUNNEL case — no other step type incurs a DB read.
-    void validateSteps(List<FunnelStep> steps, String projectId) {
+    void validateSteps(List<FunnelStep> steps, String projectId, boolean content) {
+        // ALWAYS-ON (every save — structural / security / DoS): the step-count cap. Step id minting +
+        // duplicate-id rejection already ran in toSteps; finite canvas coordinates were enforced at the DTO
+        // @Valid boundary. These are NOT content-completeness, so they gate even an incomplete draft.
         if (steps.size() > maxSteps) {
             throw AppException.unprocessableEntity(CODE_STEP_LIMIT,
                     "Funnel exceeds the maximum of " + maxSteps + " steps");
@@ -1195,6 +1278,28 @@ public class FunnelService {
             }
         }
         for (FunnelStep step : steps) {
+            // ALWAYS-ON format-if-present (stored-XSS / injection guard): a PRESENT tagSlug / eventName must
+            // be well-formed on every save. The PRESENCE of these (and all other required-field / content
+            // completeness) is gated only when content=true (activate / test-run). This is the keep-vs-defer
+            // split: "if present, must be valid" stays on save; "must be present" defers to activation.
+            switch (step.getStepType()) {
+                case ADD_TAG, REMOVE_TAG -> requireTagSlugFormatIfPresent(step.getTagSlug());
+                case EMIT_EVENT -> requireEventNameFormatIfPresent(step.getEventName());
+                // Tolerant-read sentinel (MAJ-1): UNKNOWN can only originate from a removed/legacy persisted
+                // stepType (StepTypeReadConverter); author input is rejected at the Jackson DTO boundary
+                // before this point. Defensive reject so an UNKNOWN can never be re-saved as a valid step —
+                // a structural integrity guard, enforced on every save.
+                case UNKNOWN -> throw invalidStep("unknown step type");
+                default -> { /* no always-on format-if-present check for this type */ }
+            }
+
+            if (!content) {
+                continue; // draft save: skip all content-completeness checks below
+            }
+
+            // CONTENT-COMPLETENESS (activate / test-run only): required-field presence + full per-type
+            // content validation. These throw funnel_step_invalid on an incomplete step today — deferring
+            // them lets a draft persist.
             switch (step.getStepType()) {
                 case MESSAGE -> validateMessage(step, stepIds);
                 case DELAY -> requireDelay(step.getDelayValue(), step.getDelayUnit());
@@ -1214,15 +1319,13 @@ public class FunnelService {
                 // (null = next-in-list — handled by the generic edge pass below).
                 case SET_KEYBOARD -> validateSetKeyboard(step);
                 case CLEAR_KEYBOARD -> validateClearKeyboard(step);
-                // Tolerant-read sentinel (MAJ-1): UNKNOWN can only originate from a removed/legacy persisted
-                // stepType (StepTypeReadConverter); author input is rejected at the Jackson DTO boundary
-                // before this point. Defensive reject so the exhaustive switch stays complete and an UNKNOWN
-                // can never be re-saved as a valid step.
                 case UNKNOWN -> throw invalidStep("unknown step type");
             }
-            // Graph-edge pass (every step type): the default outgoing edge and the optional timeout edge
-            // must point at an existing step id, or be null (null next = next-in-list; null timeout
-            // target = completed). A non-null target that is not in stepIds is a broken edge → 422.
+            // Graph-edge pass (CONTENT / activate-only — funnel_broken_edge): the default outgoing edge and
+            // the optional timeout edge must point at an existing step id, or be null (null next =
+            // next-in-list; null timeout target = completed). A non-null target that is not in stepIds is a
+            // broken edge → 422. Deferred to activation so a draft mid-rewire (a target step not yet
+            // re-added) still saves.
             requireExistingTarget(step.getNext(), stepIds);
             requireExistingTarget(step.getTimeoutTargetStepId(), stepIds);
         }
@@ -1565,6 +1668,26 @@ public class FunnelService {
         if (tagSlug == null || !TAG_SLUG_PATTERN.matcher(tagSlug).matches()) {
             throw invalidStep("tagSlug must match ^[a-z0-9_-]{1,32}$");
         }
+    }
+
+    // draft-validation: ADD_TAG/REMOVE_TAG tagSlug FORMAT-if-present (stored-XSS / injection guard on every
+    // save). A null/blank tagSlug (incomplete draft) passes — its PRESENCE is required only at activate
+    // (requireTagSlug under content=true). A PRESENT value must still match the slug regex.
+    private static void requireTagSlugFormatIfPresent(String tagSlug) {
+        if (tagSlug == null || tagSlug.isBlank()) {
+            return;
+        }
+        requireTagSlug(tagSlug);
+    }
+
+    // draft-validation: EMIT_EVENT eventName FORMAT-if-present (same save-time injection guard). Note: a
+    // blank eventName was already mapped to null by toSteps (blankToNull), so the present branch only ever
+    // sees a non-blank value; the explicit blank check keeps this helper safe if that ever changes.
+    private static void requireEventNameFormatIfPresent(String eventName) {
+        if (eventName == null || eventName.isBlank()) {
+            return;
+        }
+        requireEventName(eventName);
     }
 
     private static void requireCustomFieldKey(String key) {

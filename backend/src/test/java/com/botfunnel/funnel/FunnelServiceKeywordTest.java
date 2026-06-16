@@ -97,16 +97,42 @@ class FunnelServiceKeywordTest extends AbstractIntegrationTest {
                 });
     }
 
-    @Test
-    void keyword_requiresNonEmptyKeywords() {
-        String id = createDraft();
+    // A keyword trigger with a single valid MESSAGE step, used to exercise the activate-only presence gate.
+    private com.botfunnel.funnel.dto.FunnelStepDto messageStep() {
+        return new com.botfunnel.funnel.dto.FunnelStepDto(
+                StepType.MESSAGE, null, null, null, null, null, null,
+                List.of(new com.botfunnel.funnel.dto.ContentBlockDto("TEXT", "hi", null, null, null, null)),
+                null, null, null, null, null, null, null, null, false,
+                null, null, null, null, null, null);
+    }
 
-        // Absent keywords → 422 funnel_invalid_keywords.
-        assertInvalidKeywords(id, keywordReq(null, List.of()));
-        // Empty list → 422.
-        assertInvalidKeywords(id, keywordReq(List.of(), List.of()));
-        // List of only blanks normalizes to empty → 422.
-        assertInvalidKeywords(id, keywordReq(List.of("  ", ""), List.of()));
+    // draft-validation: the non-empty keyword PRESENCE requirement is now deferred to activate. A draft save
+    // with absent/empty/blank keywords succeeds (200, round-trips); activation surfaces the SAME
+    // funnel_invalid_keywords 422.
+    @Test
+    void keyword_emptyKeywords_savesAsDraft_butRejectedOnActivate() {
+        // Absent / empty / blank-only keyword lists all save freely as a draft.
+        for (List<String> keywords : List.<List<String>>of(List.of(), List.of("  ", ""))) {
+            String id = createDraft();
+            FunnelResponse resp = funnelService.update(USER_ID, projectId, id,
+                    keywordReq(keywords, List.of(messageStep())));
+            assertThat(resp.triggers()).hasSize(1);
+            assertThat(resp.triggers().get(0).keywords()).isEmpty();
+
+            // Activation now enforces the presence gate → 422 funnel_invalid_keywords.
+            assertThatThrownBy(() -> funnelService.activate(USER_ID, projectId, id))
+                    .isInstanceOf(AppException.class)
+                    .satisfies(ex -> assertThat(((AppException) ex).getCode())
+                            .isEqualTo(FunnelService.CODE_INVALID_KEYWORDS));
+        }
+
+        // null keywords also save as a draft and fail on activate.
+        String id = createDraft();
+        funnelService.update(USER_ID, projectId, id, keywordReq(null, List.of(messageStep())));
+        assertThatThrownBy(() -> funnelService.activate(USER_ID, projectId, id))
+                .isInstanceOf(AppException.class)
+                .satisfies(ex -> assertThat(((AppException) ex).getCode())
+                        .isEqualTo(FunnelService.CODE_INVALID_KEYWORDS));
     }
 
     @Test

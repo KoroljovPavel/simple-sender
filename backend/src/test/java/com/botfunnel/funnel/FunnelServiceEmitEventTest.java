@@ -128,13 +128,35 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void emitEvent_requiresValidEventNameSlug() {
-        // Malformed / blank eventName → 422.
-        assert422(emitStep(null));
-        assert422(emitStep(""));
+    void emitEvent_malformedEventName_rejectedEvenOnDraftSave() {
+        // draft-validation: a PRESENT-but-malformed eventName is a stored-injection vector → STILL 422 on a
+        // plain draft save (format-if-present is always-on, never deferred).
         assert422(emitStep("bad event!"));
         assert422(emitStep("x".repeat(65)));
+    }
 
+    @Test
+    void emitEvent_missingEventName_savesAsDraft_butRejectedOnActivate() {
+        // draft-validation: a null/blank eventName is a PRESENCE failure → now saves freely (200), then
+        // surfaces funnel_step_invalid only at activate.
+        for (String name : new String[]{null, ""}) {
+            String id = createDraft();
+            FunnelResponse resp = funnelService.update(USER_ID, projectId, id, reqWithStep(emitStep(name)));
+            assertThat(resp.steps()).hasSize(1);
+            assertThat(resp.steps().get(0).stepType()).isEqualTo(StepType.EMIT_EVENT);
+
+            assertThatThrownBy(() -> funnelService.activate(USER_ID, projectId, id))
+                    .isInstanceOf(AppException.class)
+                    .satisfies(ex -> {
+                        AppException ae = (AppException) ex;
+                        assertThat(ae.getStatus().value()).isEqualTo(422);
+                        assertThat(ae.getCode()).isEqualTo(FunnelService.CODE_INVALID_STEP);
+                    });
+        }
+    }
+
+    @Test
+    void emitEvent_validSlug_savesAndRoundTrips() {
         // A valid slug passes and round-trips through toStepDto.
         String id = createDraft();
         FunnelResponse resp = funnelService.update(USER_ID, projectId, id,
@@ -151,8 +173,16 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
 
     // ---- SUBSCRIBE_TO_FUNNEL save/activation validation (Task 2) ----
 
-    private void assertUpdate422(String funnelId, FunnelStepDto step, String expectedCode) {
-        assertThatThrownBy(() -> funnelService.update(USER_ID, projectId, funnelId, reqWithStep(step)))
+    // draft-validation: SUBSCRIBE target validation (required / not_found / step_not_found) is content
+    // completeness — now DEFERRED to activate. The draft save succeeds; the SAME 422 code surfaces only on
+    // activation. The funnel uses a DISTINCT on_start value per call so two activations never collide on the
+    // single-active-per-trigger conflict guard.
+    private void assertActivate422(FunnelStepDto step, String onStartValue, String expectedCode) {
+        String funnelId = createDraft();
+        // Draft save accepts the incomplete SUBSCRIBE step (200, no throw).
+        funnelService.update(USER_ID, projectId, funnelId, new UpdateFunnelRequest(
+                "f", null, false, List.of(onStart(onStartValue)), List.of(step), null));
+        assertThatThrownBy(() -> funnelService.activate(USER_ID, projectId, funnelId))
                 .isInstanceOf(AppException.class)
                 .satisfies(ex -> {
                     AppException ae = (AppException) ex;
@@ -162,22 +192,22 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
     }
 
     @Test
-    void subscribe_save_requiresTargetFunnelId() {
-        // null and blank targetFunnelId both → funnel_subscribe_target_required.
-        assertUpdate422(createDraft(), subscribeStep(null, null, false),
+    void subscribe_activate_requiresTargetFunnelId() {
+        // null and blank targetFunnelId both → funnel_subscribe_target_required (deferred to activate).
+        assertActivate422(subscribeStep(null, null, false), "req1",
                 FunnelService.CODE_SUBSCRIBE_TARGET_REQUIRED);
-        assertUpdate422(createDraft(), subscribeStep("   ", null, false),
+        assertActivate422(subscribeStep("   ", null, false), "req2",
                 FunnelService.CODE_SUBSCRIBE_TARGET_REQUIRED);
     }
 
     @Test
-    void subscribe_save_targetNotFound_missingOrMalformedOrForeignProject() {
+    void subscribe_activate_targetNotFound_missingOrMalformedOrForeignProject() {
         // (a) Non-existent (well-formed) id → not_found.
-        assertUpdate422(createDraft(), subscribeStep("000000000000000000000000", null, false),
+        assertActivate422(subscribeStep("000000000000000000000000", null, false), "nf1",
                 FunnelService.CODE_SUBSCRIBE_TARGET_NOT_FOUND);
 
         // (b) Malformed ObjectId hex → not_found (422), NOT a 500.
-        assertUpdate422(createDraft(), subscribeStep("not-a-valid-objectid", null, false),
+        assertActivate422(subscribeStep("not-a-valid-objectid", null, false), "nf2",
                 FunnelService.CODE_SUBSCRIBE_TARGET_NOT_FOUND);
 
         // (c) Target in a DIFFERENT project (cross-tenant fail-closed) → same not_found code (no leak).
@@ -189,14 +219,16 @@ class FunnelServiceEmitEventTest extends AbstractIntegrationTest {
         other.setUpdatedAt(Instant.now());
         String otherProjectId = projectRepository.save(other).getId();
         String foreignTarget = seedTarget(otherProjectId);
-        assertUpdate422(createDraft(), subscribeStep(foreignTarget, null, false),
+        assertActivate422(subscribeStep(foreignTarget, null, false), "nf3",
                 FunnelService.CODE_SUBSCRIBE_TARGET_NOT_FOUND);
     }
 
     @Test
-    void subscribe_save_targetEntryStepNotInTarget() {
+    void subscribe_activate_targetEntryStepNotInTarget() {
         String target = seedTarget(projectId);
-        assertUpdate422(createDraft(), subscribeStep(target, "deadbeefdeadbeefdeadbeef", false),
+        // The target must be ACTIVE so activation reaches the entry-step check (not the inactive-target gate).
+        funnelService.activate(USER_ID, projectId, target);
+        assertActivate422(subscribeStep(target, "deadbeefdeadbeefdeadbeef", false), "stepnf",
                 FunnelService.CODE_SUBSCRIBE_TARGET_STEP_NOT_FOUND);
     }
 

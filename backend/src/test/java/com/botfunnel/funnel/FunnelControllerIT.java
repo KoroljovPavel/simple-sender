@@ -196,7 +196,8 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     void invalidKeyboardStepReturns422() throws Exception {
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
 
-        // Duplicate button texts in one keyboard → 422 funnel_step_invalid.
+        // draft-validation: keyboard content validation (here: duplicate button texts) is now DEFERRED to
+        // activate. The draft PUT saves freely (200); the funnel_step_invalid 422 surfaces only on activate.
         Map<String, Object> body = Map.of(
                 "name", "Draft",
                 "triggers", List.of(onStartTriggerMap("")),
@@ -206,6 +207,10 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(body)))
+                .andExpect(status().isOk());
+
+        // Activation runs the full content validation → 422 funnel_step_invalid.
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
                 .andExpect(status().isUnprocessableEntity())
                 .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
     }
@@ -1516,11 +1521,65 @@ class FunnelControllerIT extends AbstractIntegrationTest {
 
     @Test
     @WithMockAppUser(userId = USER_ID)
-    void emptyTextInTextBlockReturns422() throws Exception {
+    void emptyTextInTextBlockSavesAsDraftButRejectedOnActivate() throws Exception {
+        // draft-validation: an empty MESSAGE TEXT block is content-completeness — now saves freely on a draft
+        // PUT (200) and round-trips; the funnel_step_invalid 422 surfaces only on activate.
         Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         Map<String, Object> body = Map.of(
                 "name", "Draft", "triggers", List.of(onStartTriggerMap("")),
                 "steps", List.of(messageStepMap(textBlock("  "))));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk());
+
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    // ─── draft-validation: drafts save freely; completeness enforced at activate ──
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void draftWithIncompleteAddTag_savesAndRoundTrips_butRejectedOnActivate() throws Exception {
+        // An ADD_TAG step with NO tagSlug (incomplete) is the original "add empty step → 422" bug. It must
+        // now save freely on a draft PUT (200) and round-trip through GET; activation surfaces the 422.
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("")),
+                "steps", List.of(stepMap("ADD_TAG", Map.of()))); // tagSlug absent
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps.length()").value(1))
+                .andExpect(jsonPath("$.steps[0].stepType").value("ADD_TAG"));
+
+        // Round-trips through GET (persisted, no tagSlug).
+        mockMvc.perform(get(url() + "/" + f.getId()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.steps[0].stepType").value("ADD_TAG"));
+
+        // Activation runs the full content validation → 422 funnel_step_invalid.
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void draftWithMalformedTagSlug_rejectedEvenOnDraftSave() throws Exception {
+        // SECURITY regression: a PRESENT-but-malformed tagSlug (illegal chars) is a stored-injection vector
+        // → STILL 422 funnel_step_invalid on a plain draft PUT (format-if-present is always-on, NOT deferred).
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("")),
+                "steps", List.of(stepMap("ADD_TAG", Map.of("tagSlug", "Bad Slug!"))));
+
         mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json(body)))
@@ -1576,128 +1635,79 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateEmptyComposerReturns422() throws Exception {
-        // MESSAGE step with blocks: [] → 422 (empty composer).
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        // MESSAGE step with blocks: [] → draft saves (200); 422 (empty composer) only on activate.
         Map<String, Object> step = new LinkedHashMap<>();
         step.put("stepType", "MESSAGE");
         step.put("blocks", List.of());
-        Map<String, Object> body = Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                "steps", List.of(step));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(body)))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(step);
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateOverTenBlocksReturns422() throws Exception {
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         List<Map<String, Object>> blocks = new ArrayList<>();
         for (int i = 0; i < 11; i++) {
             blocks.add(textBlock("b" + i));
         }
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMapBlocks(blocks))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMapBlocks(blocks));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateAlbumUnderTwoReturns422() throws Exception {
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         Map<String, Object> album = albumBlock(mediaItem("https://example.com/1.jpg", "only one"));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMap(album))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMap(album));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateAlbumOverTenReturns422() throws Exception {
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
         Map<String, Object>[] items = new Map[11];
         for (int i = 0; i < 11; i++) {
             items[i] = mediaItem("https://example.com/" + i + ".jpg", i == 0 ? "first" : null);
         }
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMap(albumBlock(items)))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMap(albumBlock(items)));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateAlbumCaptionOnNonFirstReturns422() throws Exception {
-        // Decision 5: a caption on a non-first album element is rejected (not silently dropped).
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        // Decision 5: a caption on a non-first album element is rejected (not silently dropped) — at activate.
         Map<String, Object> album = albumBlock(
                 mediaItem("https://example.com/1.jpg", "first"),
                 mediaItem("https://example.com/2.jpg", "second-not-allowed"));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMap(album))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMap(album));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateAlbumInvalidTypeMixReturns422() throws Exception {
         // Decision 5: audio/document never mix with another kind in the same group. An IMAGE + AUDIO album
-        // is an invalid mix → 422 with the funnel_step_invalid business code.
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        // is an invalid mix → 422 funnel_step_invalid at activate (saves freely as a draft).
         Map<String, Object> album = albumBlock(
                 mediaItem("IMAGE", "https://example.com/1.jpg", "first"),
                 mediaItem("AUDIO", "https://example.com/2.mp3", null));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMap(album))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMap(album));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateAlbumImageFileMixReturns422() throws Exception {
-        // Decision 5: document (FILE) never mixes with a visual kind → 422.
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        // Decision 5: document (FILE) never mixes with a visual kind → 422 at activate (saves as a draft).
         Map<String, Object> album = albumBlock(
                 mediaItem("IMAGE", "https://example.com/1.jpg", "first"),
                 mediaItem("FILE", "https://example.com/2.pdf", null));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMap(album))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMap(album));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateAlbumMissingItemTypeReturns422() throws Exception {
-        // Decision 5: an album item without a media kind is rejected (null discriminator → 422).
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        // Decision 5: an album item without a media kind is rejected (null discriminator → 422 at activate).
         Map<String, Object> album = albumBlock(
                 mediaItem(null, "https://example.com/1.jpg", "first"),
                 mediaItem(null, "https://example.com/2.jpg", null));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMap(album))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMap(album));
     }
 
     @Test
@@ -1736,38 +1746,26 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateButtonsOnNonLastBlockReturns422() throws Exception {
-        // Buttons attach only to the LAST non-album block. Here the last block is an album → 422 even
-        // though a text block precedes it (the keyboard cannot land on the album).
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        // Buttons attach only to the LAST non-album block. Here the last block is an album → 422 (at activate)
+        // even though a text block precedes it (the keyboard cannot land on the album).
         Map<String, Object> album = albumBlock(
                 mediaItem("https://example.com/1.jpg", "first"),
                 mediaItem("https://example.com/2.jpg", null));
         Map<String, Object> step = messageStepMapBlocks(List.of(textBlock("hi"), album));
         step.put("buttons", List.of(Map.of("type", "callback", "label", "Go")));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(step)))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(step);
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateButtonsOnAlbumBlockReturns422() throws Exception {
-        // A single-block composer whose only (= last) block is an album, with buttons → 422.
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        // A single-block composer whose only (= last) block is an album, with buttons → 422 at activate.
         Map<String, Object> album = albumBlock(
                 mediaItem("https://example.com/1.jpg", "first"),
                 mediaItem("https://example.com/2.jpg", null));
         Map<String, Object> step = messageStepMap(album);
         step.put("buttons", List.of(Map.of("type", "callback", "label", "Go")));
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(step)))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        assertStepSavesAsDraftButRejectedOnActivate(step);
     }
 
     @Test
@@ -1790,28 +1788,16 @@ class FunnelControllerIT extends AbstractIntegrationTest {
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateNonHttpMediaUrlReturns422() throws Exception {
-        // A media URL with the file:// scheme (looks like a URL via scheme separator) → 422.
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMap(
-                                        imageBlockMap("file:///etc/passwd", null)))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        // A media URL with the file:// scheme (looks like a URL via scheme separator) → 422 at activate.
+        // (Anti-SSRF: the URL is never dereferenced at save; activation runs the strict scheme check.)
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMap(imageBlockMap("file:///etc/passwd", null)));
     }
 
     @Test
     @WithMockAppUser(userId = USER_ID)
     void updateJavascriptMediaUrlReturns422() throws Exception {
-        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
-        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content(json(Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
-                                "steps", List.of(messageStepMap(
-                                        imageBlockMap("javascript:alert(1)", null)))))))
-                .andExpect(status().isUnprocessableEntity())
-                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+        // javascript: scheme → 422 at activate (saves as a draft; URL never dereferenced at save).
+        assertStepSavesAsDraftButRejectedOnActivate(messageStepMap(imageBlockMap("javascript:alert(1)", null)));
     }
 
     @Test
@@ -2435,6 +2421,22 @@ class FunnelControllerIT extends AbstractIntegrationTest {
         step.put("stepType", stepType);
         step.putAll(fields);
         return step;
+    }
+
+    // draft-validation: MESSAGE-content validation is now DEFERRED to activate. This helper asserts the new
+    // contract for a given step body — the draft PUT saves freely (200), then activation rejects it with the
+    // SAME 422 funnel_step_invalid. Replaces the former "PUT → 422" assertions for composer-content rules.
+    private void assertStepSavesAsDraftButRejectedOnActivate(Map<String, Object> step) throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> body = Map.of("name", "Draft", "triggers", List.of(onStartTriggerMap("")),
+                "steps", List.of(step));
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk());
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
     }
 
     private Funnel seedFunnel(String name, FunnelStatus status, String triggerValue,

@@ -109,9 +109,14 @@ class FunnelServiceKeyboardStepTest extends AbstractIntegrationTest {
                 List.of(new com.botfunnel.funnel.dto.TriggerDto("on_start", "", null, null, null)), List.of(step), null);
     }
 
+    // draft-validation: keyboard step content validation (text / rows presence, button shape, CLEAR_KEYBOARD
+    // strict-field rejection) is content-completeness — now DEFERRED to activate. So an invalid keyboard
+    // step SAVES freely as a draft (200) and the SAME funnel_step_invalid 422 surfaces only on activate.
+    // This helper asserts that new contract: the draft PATCH succeeds, then activation rejects.
     private void assert422(FunnelStepDto step) {
         String id = createDraft();
-        assertThatThrownBy(() -> funnelService.update(USER_ID, projectId, id, reqWithStep(step)))
+        funnelService.update(USER_ID, projectId, id, reqWithStep(step)); // draft save accepts it (no throw)
+        assertThatThrownBy(() -> funnelService.activate(USER_ID, projectId, id))
                 .isInstanceOf(AppException.class)
                 .satisfies(ex -> {
                     AppException ae = (AppException) ex;

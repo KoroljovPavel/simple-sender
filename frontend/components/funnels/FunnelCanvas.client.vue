@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { VueFlow, useVueFlow, MarkerType, ConnectionMode } from '@vue-flow/core'
+import { VueFlow, useVueFlow, MarkerType, ConnectionMode, getBezierPath, Position } from '@vue-flow/core'
 import type { Connection } from '@vue-flow/core'
 // Base Vue Flow stylesheet (Decision 12 / AC). Also registered globally in nuxt.config (Task 2); Vite dedups,
 // so importing it here too is harmless and satisfies the strict "component imports it" acceptance criterion.
@@ -241,10 +241,40 @@ onConnect(handleConnect)
 // card's target handle is a valid drop), and a small radius stops the end from being pulled toward distant dots
 // (the whole-card target handle already provides a large, deliberate drop area). Exposed for the component test
 // (live pointer-drag is user-verified, not unit-tested).
-const CONNECTION_RADIUS = 12
+// edge-preview-dropzone: raised 12 → 28. The original small radius made a release slightly PAST the destination
+// card's left border miss the target handle → no edge created. A larger radius lets a near-miss snap to the
+// card's left target handle. Strict mode still forbids ending on a SOURCE dot, so a bigger radius can NOT
+// reintroduce the cross-node output snap — it only widens the pull toward the (valid) target handle.
+const CONNECTION_RADIUS = 28
 // Use the ConnectionMode enum (not the 'strict' literal) so the exposed config can't drift from the
 // `:connection-mode="ConnectionMode.Strict"` template binding (round-1 review test minor).
 const connectionConfig = { mode: ConnectionMode.Strict, radius: CONNECTION_RADIUS }
+
+// edge-preview-dropzone (Fix 1): custom live drag-preview path. Vue Flow's BUILT-IN connection-line preview
+// computes the target endpoint with getHandlePosition(..., center=true), which IGNORES Position.Left and
+// returns the node/handle CENTER — so the live line glued to the middle of the destination card even though the
+// FINAL edge anchors to the left ("in" handle). This builder draws the preview from the source point to the
+// slot's target point (the CURSOR / nearest-handle point Vue Flow hands the #connection-line slot), so the
+// preview follows the pointer instead of snapping to center. getBezierPath returns [path, labelX, labelY, …] —
+// we only need the SVG path "d". Exposed for the component test (live pixel routing is user-verified).
+function connectionLinePath(p: {
+  sourceX: number
+  sourceY: number
+  targetX: number
+  targetY: number
+  sourcePosition?: Position
+  targetPosition?: Position
+}): string {
+  const [path] = getBezierPath({
+    sourceX: p.sourceX,
+    sourceY: p.sourceY,
+    sourcePosition: p.sourcePosition ?? Position.Right,
+    targetX: p.targetX,
+    targetY: p.targetY,
+    targetPosition: p.targetPosition ?? Position.Left,
+  })
+  return path
+}
 
 // Validity guard (defense-in-depth + better snap feedback): a connection must have a target node that is not
 // the source node itself. Strict mode already blocks ending on a source dot; this also rejects self-loops and
@@ -484,6 +514,7 @@ defineExpose({
   confirmDelete,
   isValidConnection,
   connectionConfig,
+  connectionLinePath,
 })
 </script>
 
@@ -535,6 +566,22 @@ defineExpose({
       </template>
       <template #node-note="nodeProps">
         <FunnelCanvasNode v-bind="nodeProps" :note-text="nodeProps.data.noteText" />
+      </template>
+
+      <!-- edge-preview-dropzone (Fix 1): custom live drag-preview line. The built-in preview snaps the endpoint
+           to the destination card CENTER (getHandlePosition center=true ignores Position.Left); this slot draws a
+           bezier from the source point to the slot's target point (the cursor / nearest-handle point), so the
+           preview follows the pointer. Styled like a real edge + the same ArrowClosed marker (markerEnd slot
+           prop). connectionStatus drives a subtle invalid affordance. -->
+      <template #connection-line="cl">
+        <path
+          data-test="funnel-canvas-connection-line"
+          class="funnel-canvas__connection-line"
+          :class="{ 'funnel-canvas__connection-line--invalid': cl.connectionStatus === 'invalid' }"
+          fill="none"
+          :d="connectionLinePath(cl)"
+          :marker-end="cl.markerEnd"
+        />
       </template>
     </VueFlow>
 
@@ -673,5 +720,18 @@ defineExpose({
   padding: 0.1rem 0.5rem;
   font-size: 0.75rem;
   color: #b91c1c;
+}
+
+/* edge-preview-dropzone (Fix 1): the custom live connection-line preview, styled like a real edge (matches the
+   default Vue Flow edge stroke / the monochrome accent of the handles). It follows the cursor instead of
+   snapping to the destination card center. */
+.funnel-canvas__connection-line {
+  stroke: #6366f1;
+  stroke-width: 2;
+}
+
+.funnel-canvas__connection-line--invalid {
+  stroke: #ef4444;
+  stroke-dasharray: 4 3;
 }
 </style>

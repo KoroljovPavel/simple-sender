@@ -60,6 +60,14 @@ const { t } = useI18n()
 const { connectionStartHandle } = useVueFlow()
 const isConnecting = computed(() => connectionStartHandle.value != null)
 
+// edge-preview-dropzone (Fix 2): how far the in-drop overlay's HIT AREA extends PAST the card's left border (px).
+// Dropping a bit left of the card (>~12px past the border) used to miss the overlay (inset:0 = card only) → no
+// edge created. Extending the overlay's catch box left of the border catches a release just left of the card.
+// Only the INVISIBLE overlay grows; the visual "in" anchor stays pinned on the left border. The overlay is still
+// pointer-events:none at rest (the .--droppable card state gates pointer-events on the active connection), so the
+// larger box never swallows a click / node drag when not connecting. Must be > 12 (the old radius miss window).
+const DROP_LEFT_EXTEND = 28
+
 // CALLBACK buttons in declaration order — URL buttons carry no edge (no targetStepId), so they are excluded.
 // buttonIndex is the position WITHIN this filtered list, matching useFunnelCanvas.callbackButtons() exactly
 // (forward+reverse keying). URL buttons are surfaced in the preview WITHOUT a handle, never given a btn handle.
@@ -269,6 +277,8 @@ const keyboardPreviewRows = computed<string[][]>(() => {
       class="funnel-handle funnel-handle--card-target"
       data-test="funnel-canvas-handle-drop"
       data-handle-id="in-drop"
+      :data-left-extend="DROP_LEFT_EXTEND"
+      :style="{ left: `-${DROP_LEFT_EXTEND}px`, width: `calc(100% + ${DROP_LEFT_EXTEND}px)` }"
       type="target"
       :position="Position.Left"
       :title="t('funnels.canvas.handle.input')"
@@ -626,11 +636,14 @@ const keyboardPreviewRows = computed<string[][]>(() => {
    on the border) and pointer-events:none so it never competes for a click/drag — the whole-card overlay below
    owns the actual drop affordance. translateX(-50%) straddles the marker on the border for a clean edge join. */
 .funnel-canvas-node :deep(.funnel-handle--target-anchor) {
+  /* edge-preview-dropzone: bumped 8px → 10px so the small left anchor reliably registers measurable bounds. If
+     its bounds fail to register Vue Flow falls back to the node top/center for the FINAL edge endpoint (the
+     center-snap bug, but on the rendered edge). A slightly larger handle keeps the left-border anchor stable. */
   position: absolute;
   top: 50%;
   left: 0;
-  width: 8px;
-  height: 8px;
+  width: 10px;
+  height: 10px;
   min-width: 0;
   min-height: 0;
   border: 2px solid #ffffff;
@@ -650,12 +663,12 @@ const keyboardPreviewRows = computed<string[][]>(() => {
    It carries a DISTINCT id ("in-drop") and is NEVER the edge endpoint (edges pin targetHandle="in", the
    left-border anchor above) — it exists purely so the user can drop a connection anywhere on the card. */
 .funnel-canvas-node :deep(.funnel-handle--card-target) {
+  /* edge-preview-dropzone (Fix 2): top/bottom span the card; left + width are set INLINE (left:-Npx,
+     width:calc(100% + Npx)) so the hit box extends PAST the card's left border — `right` is intentionally NOT set
+     so the inline left+width fully define the (widened) box. Still pointer-events:none at rest. */
   position: absolute;
   top: 0;
-  right: 0;
   bottom: 0;
-  left: 0;
-  width: 100%;
   height: 100%;
   min-width: 0;
   min-height: 0;

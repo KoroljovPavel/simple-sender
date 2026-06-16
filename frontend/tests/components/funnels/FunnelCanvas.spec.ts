@@ -328,10 +328,12 @@ describe('FunnelCanvas', () => {
 
   // ── connect-precision: robust connection config (Strict mode + card target id + radius + validity guard) ──
 
-  it('exposes a strict connection config (small radius) so an edge end cannot snap to a foreign output dot', async () => {
-    // Root cause of the snap bug: VueFlow had no connection config → default Loose mode + large radius let the
-    // edge end land on a neighbouring node's source dot. The fix wires Strict mode + a small radius. These are
-    // exposed for assertion (live pointer-drag is user-verified).
+  it('exposes a strict connection config (forgiving radius) so a near-miss snaps to the card target, not a foreign output dot', async () => {
+    // Root cause of the original snap bug: VueFlow had no connection config → default Loose mode + large radius
+    // let the edge end land on a neighbouring node's source dot. Strict mode kills the cross-node OUTPUT snap
+    // (a source handle can never be a drop target). The radius is then raised (edge-preview-dropzone) so a
+    // release slightly PAST the destination card's left border still snaps to the card's left target handle
+    // instead of landing on empty canvas (no edge created). Exposed for assertion (live drag is user-verified).
     const steps: FunnelStep[] = [messageStep({ id: 's1', next: null }), messageStep({ id: 's2' })]
     const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
     const wrapper = await mountWith({ steps, triggers })
@@ -340,9 +342,85 @@ describe('FunnelCanvas', () => {
     // Strict forbids ending on a source handle → kills the cross-node output snap. Assert against the
     // ConnectionMode enum (not a 'strict' literal) so the config can't drift from the template binding.
     expect(cfg.mode).toBe(ConnectionMode.Strict)
-    // Small radius so the end is not pulled toward distant dots (the whole-card target provides the drop area).
-    expect(cfg.radius).toBeLessThanOrEqual(12)
-    expect(cfg.radius).toBeGreaterThan(0)
+    // Forgiving radius (raised from 12): a near-miss release left of the card still snaps to the card target.
+    // Strict mode keeps it from grabbing a foreign source dot, so a larger radius is safe here.
+    expect(cfg.radius).toBe(28)
+  })
+
+  // ── edge-preview-dropzone: custom connection-line preview (no center snap) + forgiving left drop zone ─────
+
+  it('uses a CUSTOM connection-line preview (a rendered path) so the live drag no longer snaps to the card center', async () => {
+    // Fix 1: Vue Flow's BUILT-IN drag preview computes the target endpoint with getHandlePosition(center=true),
+    // which IGNORES Position.Left and returns the node/handle CENTER — so the live line glued to the middle of
+    // the destination card. The fix supplies a custom #connection-line slot that draws a path to the cursor /
+    // slot-provided target point instead. The slot renders a marked <path>; assert that marker exists so the
+    // custom preview cannot be silently dropped (live pixel routing is user-verified).
+    const steps: FunnelStep[] = [messageStep({ id: 's1', next: null }), messageStep({ id: 's2' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // The custom preview path builder is exposed so its output (an SVG path "d") can be asserted without a live
+    // pointer drag. It must draw from the source point to the slot's target (cursor) point — NOT a fixed center.
+    const buildPath = (
+      wrapper.vm as unknown as {
+        connectionLinePath: (p: {
+          sourceX: number
+          sourceY: number
+          targetX: number
+          targetY: number
+          sourcePosition: Position
+          targetPosition: Position
+        }) => string
+      }
+    ).connectionLinePath
+    expect(typeof buildPath).toBe('function')
+
+    // Same source, two DIFFERENT cursor target points → two DIFFERENT paths. A center-snapping preview would
+    // ignore the cursor and yield identical paths; the custom cursor-following preview must differ.
+    const common = { sourceX: 0, sourceY: 0, sourcePosition: Position.Right, targetPosition: Position.Left }
+    const pathA = buildPath({ ...common, targetX: 100, targetY: 40 })
+    const pathB = buildPath({ ...common, targetX: 300, targetY: 200 })
+    expect(pathA).toBeTruthy()
+    expect(pathA.startsWith('M')).toBe(true)
+    expect(pathA).not.toBe(pathB)
+    // The endpoint of path A follows the given cursor target (100,40) — proving it is cursor-driven, not center.
+    expect(pathA).toContain('100')
+    expect(pathA).toContain('40')
+  })
+
+  it('extends the in-drop overlay hit area PAST the destination card left edge (forgiving left drop zone)', async () => {
+    // Fix 2: dropping a bit LEFT of the card (>~12px past the left border) used to miss the in-drop overlay
+    // (inset:0, card only) → no edge. The overlay's hit area is widened beyond the left border via a NEGATIVE
+    // left offset so a release just left of the card still lands on the drop zone. The visual `in` anchor stays
+    // on the left border (unchanged) — only the invisible overlay's catch area grows. Assert the structural
+    // marker (a negative-left inline style on the drop overlay) so the widening cannot be silently dropped.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const drop = wrapper.find('[data-node-id="s1"]').find('[data-test="funnel-canvas-handle-drop"]')
+    expect(drop.exists()).toBe(true)
+    // The overlay carries a data marker for the extra left hit area (px past the card border).
+    const extra = Number(drop.attributes('data-left-extend'))
+    expect(extra).toBeGreaterThan(12)
+    // And the widening is applied as a negative left inline style so the catch box really extends left.
+    const style = drop.attributes('style') ?? ''
+    expect(style).toContain('left:')
+    expect(/left:\s*-/.test(style)).toBe(true)
+  })
+
+  it('keeps the in-drop overlay non-interactive at rest (pointer-events gated on the active connection)', async () => {
+    // The widened overlay must NOT intercept clicks / node drags at rest — it only becomes droppable WHILE a
+    // connection drag is in progress (the .--droppable card state toggles pointer-events). At rest (no drag)
+    // the card is not droppable, so the overlay stays inert despite its larger hit box. Load-bearing: a static
+    // pointer-events:all overlay extending left would swallow clicks on neighbouring canvas / the card itself.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    // No connection in progress → the node is not in the droppable state, so the overlay is gated off.
+    const node = wrapper.find('[data-node-id="s1"]')
+    expect(node.classes()).not.toContain('funnel-canvas-node--droppable')
   })
 
   it('isValidConnection rejects source-as-target / missing target and accepts a real destination', async () => {

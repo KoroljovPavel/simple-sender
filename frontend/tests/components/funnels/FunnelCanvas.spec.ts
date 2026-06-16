@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../../helpers/settle'
 import FunnelCanvas from '../../../components/funnels/FunnelCanvas.client.vue'
-import { ConnectionMode } from '@vue-flow/core'
+import { ConnectionMode, Position } from '@vue-flow/core'
 import type { Connection } from '@vue-flow/core'
 import type { FunnelNote, FunnelStep, FunnelTrigger } from '../../../types/funnel'
 
@@ -364,6 +364,28 @@ describe('FunnelCanvas', () => {
     const target = wrapper.find('[data-node-id="s1"]').find('[data-test="funnel-canvas-handle-target"]')
     expect(target.exists()).toBe(true)
     expect(target.attributes('data-handle-id')).toBe('in')
+  })
+
+  it('the whole-card target handle anchors on the node LEFT edge (Position.Left, not the card center)', async () => {
+    // edge-left-anchor: the card-cover target handle (id="in") spans the whole card (inset:0) so the drop area
+    // is the entire node, BUT Vue Flow computes a handle's connection anchor from its bounds + Position. With no
+    // explicit Position a target handle defaults to Top, and a full-card handle resolves to the card CENTER — so
+    // an incoming edge terminated in the middle of the block. Setting Position.Left makes Vue Flow use the
+    // handle's LEFT-CENTER (= the card's left border, vertically centered) as the connection point, so the edge
+    // attaches at the left edge while the drop zone stays the whole card. Vue Flow renders the position string to
+    // the handle's `data-handlepos` attribute (and a `vue-flow__handle-<pos>` class) — value-based: this would
+    // FAIL if the Position were reverted to the default/center.
+    const steps: FunnelStep[] = [messageStep({ id: 's1' })]
+    const triggers: FunnelTrigger[] = [{ triggerType: 'on_start', entryStepId: 's1' }]
+    const wrapper = await mountWith({ steps, triggers })
+
+    const target = wrapper.find('[data-node-id="s1"]').find('[data-test="funnel-canvas-handle-target"]')
+    expect(target.exists()).toBe(true)
+    // Assert against the Position enum value (not a 'left' literal) so the binding can't silently drift.
+    expect(target.attributes('data-handlepos')).toBe(Position.Left)
+    expect(target.classes()).toContain(`vue-flow__handle-${Position.Left}`)
+    // It must NOT have reverted to the default target position (Top → card center anchor).
+    expect(target.attributes('data-handlepos')).not.toBe(Position.Top)
   })
 
   it('handleConnect still resolves the destination by node id even when targetHandle is the new "in" id', async () => {

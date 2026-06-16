@@ -232,7 +232,9 @@ onConnect(handleConnect)
 // (the whole-card target handle already provides a large, deliberate drop area). Exposed for the component test
 // (live pointer-drag is user-verified, not unit-tested).
 const CONNECTION_RADIUS = 12
-const connectionConfig = { mode: 'strict', radius: CONNECTION_RADIUS }
+// Use the ConnectionMode enum (not the 'strict' literal) so the exposed config can't drift from the
+// `:connection-mode="ConnectionMode.Strict"` template binding (round-1 review test minor).
+const connectionConfig = { mode: ConnectionMode.Strict, radius: CONNECTION_RADIUS }
 
 // Validity guard (defense-in-depth + better snap feedback): a connection must have a target node that is not
 // the source node itself. Strict mode already blocks ending on a source dot; this also rejects self-loops and

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { mountSuspended } from '@nuxt/test-utils/runtime'
 import { settle } from '../../helpers/settle'
 import FunnelCanvas from '../../../components/funnels/FunnelCanvas.client.vue'
+import { ConnectionMode } from '@vue-flow/core'
 import type { Connection } from '@vue-flow/core'
 import type { FunnelNote, FunnelStep, FunnelTrigger } from '../../../types/funnel'
 
@@ -332,8 +333,9 @@ describe('FunnelCanvas', () => {
     const wrapper = await mountWith({ steps, triggers })
 
     const cfg = (wrapper.vm as unknown as { connectionConfig: { mode: string; radius: number } }).connectionConfig
-    // Strict forbids ending on a source handle → kills the cross-node output snap.
-    expect(cfg.mode).toBe('strict')
+    // Strict forbids ending on a source handle → kills the cross-node output snap. Assert against the
+    // ConnectionMode enum (not a 'strict' literal) so the config can't drift from the template binding.
+    expect(cfg.mode).toBe(ConnectionMode.Strict)
     // Small radius so the end is not pulled toward distant dots (the whole-card target provides the drop area).
     expect(cfg.radius).toBeLessThanOrEqual(12)
     expect(cfg.radius).toBeGreaterThan(0)

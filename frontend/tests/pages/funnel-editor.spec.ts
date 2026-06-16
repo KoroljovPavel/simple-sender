@@ -937,6 +937,10 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
       emitSteps(wrapper, [{ stepType: 'DELAY', id: null }])
       await settle()
       expect(storeMock.update).toHaveBeenCalledTimes(1)
+      // Load-bearing body assertion (round-1 review test minor): the incomplete DELAY step persists
+      // VERBATIM (no delayValue/delayUnit), proving the draft body — not just the call count.
+      const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+      expect(body.steps).toEqual([{ stepType: 'DELAY', id: null }])
     })
 
     it('PATCHes a freshly-added ADD_TAG node with no tagSlug (the original "add empty step → 422" bug)', async () => {

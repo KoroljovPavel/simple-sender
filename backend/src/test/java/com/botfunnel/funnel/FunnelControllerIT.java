@@ -1410,6 +1410,108 @@ class FunnelControllerIT extends AbstractIntegrationTest {
                 .andExpect(jsonPath("$.code").value(FunnelService.CODE_DUPLICATE_EVENT_NAME));
     }
 
+    // ─── 18-funnel-canvas round-1 review: custom-field KEY is a Mongo field-path injection vector ──────
+    // The key flows verbatim into `customFields.<key>` at runtime. A malformed key (dot / Mongo operator)
+    // is a latent dotted-path / operator injection, so FORMAT-if-present must be enforced on EVERY save
+    // (draft PUT), NOT deferred to activate. Absence (null) is still deferred (presence == completeness).
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patch_customFieldSetTrigger_malformedKey_returns422_onDraftSave() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap(""), customFieldTriggerMap("x.$where")),
+                "steps", List.of(messageStepMap(textBlock("hi"))));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value(FunnelService.CODE_INVALID_TRIGGER_VALUE));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patch_setCustomFieldStep_malformedKey_returns422_onDraftSave() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap("")),
+                "steps", List.of(setCustomFieldStepMap("a.b")));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.code").value("funnel_step_invalid"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patch_customFieldKey_validSlug_savesAsDraft() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap(""), customFieldTriggerMap("my_field-1")),
+                "steps", List.of(setCustomFieldStepMap("my_field-1")));
+
+        // A well-formed key is accepted on draft save (200) — format-if-present must not reject valid input.
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.triggers[1].triggerValue").value("my_field-1"))
+                .andExpect(jsonPath("$.steps[0].customFieldKey").value("my_field-1"));
+    }
+
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patch_customFieldKey_absent_savesAsDraft_but422sOnActivate() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+
+        // Absence (null key) is the incomplete-draft case: presence is deferred to activate.
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap(""), customFieldTriggerMap(null)),
+                "steps", List.of(setCustomFieldStepMap(null)));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk());
+
+        // Activation runs the full content-completeness pass → the missing key is a 422.
+        mockMvc.perform(post(url() + "/" + f.getId() + "/activate").with(csrf()))
+                .andExpect(status().isUnprocessableEntity());
+    }
+
+    // Round-1 review MINOR: two incomplete event triggers with null names must NOT false-collapse to the
+    // same "" dedupe key on a draft save. Presence stays deferred to activate.
+    @Test
+    @WithMockAppUser(userId = USER_ID)
+    void patch_twoNullEventNames_noFalseDuplicate_onDraftSave() throws Exception {
+        Funnel f = seedFunnel("Draft", FunnelStatus.draft, "", List.of());
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "MESSAGE");
+        step.put("id", "entry-1");
+        step.put("blocks", List.of(textBlock("hi")));
+
+        Map<String, Object> body = Map.of(
+                "name", "Draft",
+                "triggers", List.of(onStartTriggerMap(""),
+                        eventTriggerMap(null, "entry-1"), eventTriggerMap(null, "entry-1")),
+                "steps", List.of(step));
+
+        mockMvc.perform(put(url() + "/" + f.getId()).with(csrf())
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(json(body)))
+                .andExpect(status().isOk());
+    }
+
     @Test
     @WithMockAppUser(userId = USER_ID)
     void patch_danglingEntryStepIdReturns422() throws Exception {
@@ -2285,6 +2387,28 @@ class FunnelControllerIT extends AbstractIntegrationTest {
             t.put("entryStepId", entryStepId);
         }
         return t;
+    }
+
+    // custom_field_set entry trigger; triggerValue = the custom-field KEY (a slug ^[a-z0-9_-]{1,32}$).
+    // A null value expresses the incomplete-draft case (presence deferred to activate).
+    private static Map<String, Object> customFieldTriggerMap(String value) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("triggerType", "custom_field_set");
+        if (value != null) {
+            t.put("triggerValue", value);
+        }
+        return t;
+    }
+
+    // SET_CUSTOM_FIELD step; customFieldKey = the custom-field KEY (slug). A null key expresses the
+    // incomplete-draft case (presence deferred to activate; format-if-present still enforced on save).
+    private static Map<String, Object> setCustomFieldStepMap(String key) {
+        Map<String, Object> step = new LinkedHashMap<>();
+        step.put("stepType", "SET_CUSTOM_FIELD");
+        if (key != null) {
+            step.put("customFieldKey", key);
+        }
+        return step;
     }
 
     // ─── 18-funnel-canvas request maps (Task 1) ──────────────────────────────────

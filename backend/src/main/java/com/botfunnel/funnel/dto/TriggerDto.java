@@ -30,7 +30,11 @@ import java.util.List;
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record TriggerDto(
         String triggerType,
-        String triggerValue,
+        // 18-funnel-canvas round-1 review (security/DoS): bound the free-form trigger value at the contract
+        // boundary (→ 400). The longest valid content is a 64-char event slug; 128 gives headroom while
+        // capping a hostile oversized string (consistent with the name/description @Size caps). Per-type
+        // FORMAT validation (tag/event/custom-field-key slug shapes) stays in FunnelService (→ 422).
+        @Size(max = 128) String triggerValue,
         @Size(max = MAX_KEYWORDS) List<String> keywords,
         String entryStepId,
         // Canvas node coordinate (18-funnel-canvas / Task 1): the start/entry node's {x,y} on the editor

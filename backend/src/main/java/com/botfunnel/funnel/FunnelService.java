@@ -79,6 +79,12 @@ public class FunnelService {
     // specials would break the t.me deep-link, so they are rejected as 422 (not silently passed).
     private static final Pattern TRIGGER_VALUE_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{0,64}$");
     private static final Pattern TAG_SLUG_PATTERN = Pattern.compile("^[a-z0-9_-]{1,32}$");
+    // 18-funnel-canvas round-1 review (MAJOR / security): the custom-field KEY allowlist. MUST mirror the
+    // SubscriberCustomFieldsService precondition (its javadoc: ^[a-z0-9_-]{1,32}$) because the key flows at
+    // runtime into the Mongo field path `customFields.<key>` — a dot / Mongo-operator char would be a
+    // dotted-path / operator injection. Enforced FORMAT-if-present on EVERY save (draft included), for both
+    // the TRIGGER_CUSTOM_FIELD_SET triggerValue and the SET_CUSTOM_FIELD step key.
+    private static final Pattern CUSTOM_FIELD_KEY_PATTERN = Pattern.compile("^[a-z0-9_-]{1,32}$");
     // event_name slug (Decision 4): shared by the EMIT_EVENT step and the `event` trigger value. 1..64,
     // case-preserving (the external API event_name is case-sensitive in the same way).
     private static final Pattern EVENT_NAME_PATTERN = Pattern.compile("^[A-Za-z0-9_-]{1,64}$");
@@ -781,18 +787,22 @@ public class FunnelService {
                     requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_CUSTOM_FIELD_SET -> {
-                    // field key has no slug regex (only non-blank) → no injection-vector format check; the
-                    // presence requirement is deferred to activate. Stored verbatim on the draft.
-                    trigger.setTriggerValue(dto.triggerValue());
+                    // 18-funnel-canvas round-1 review (MAJOR / security): the field KEY is a Mongo
+                    // field-path injection vector (flows into `customFields.<key>`). FORMAT-if-present on
+                    // EVERY save (a present key MUST match the allowlist — block `x.$where` / `x.y`);
+                    // PRESENCE is still deferred to activate (validateTriggersContent).
+                    trigger.setTriggerValue(formatFieldKeyIfPresent(dto.triggerValue()));
                     trigger.setKeywords(requireNoKeywords(dto.keywords()));
                     requireNoEntryStep(dto.entryStepId());
                 }
                 case TRIGGER_EVENT -> {
                     // FORMAT-if-present on save (event_name is a stored slug → injection vector); PRESENCE
-                    // deferred to activate. The dedupe still runs over whatever value is present (blank
-                    // values collapse to one "" key, surfaced as a presence failure on activate).
+                    // deferred to activate. Round-1 review MINOR: the dedupe runs ONLY over PRESENT names —
+                    // two incomplete drafts with null/blank names must not false-collapse to one "" key and
+                    // be rejected as duplicates. Presence (and thus inter-draft uniqueness) is gated on
+                    // activate (validateTriggersContent).
                     String eventName = formatEventSlugIfPresent(dto.triggerValue());
-                    if (!seenEventNames.add(eventName == null ? "" : eventName)) {
+                    if (eventName != null && !eventName.isBlank() && !seenEventNames.add(eventName)) {
                         throw AppException.unprocessableEntity(CODE_DUPLICATE_EVENT_NAME,
                                 "Duplicate event_name within the funnel's triggers");
                     }
@@ -1007,10 +1017,24 @@ public class FunnelService {
         return requireEventSlugValue(triggerValue);
     }
 
-    private static String requireFieldKeyValue(String triggerValue) {
+    // 18-funnel-canvas round-1 review (MAJOR / security): custom-field KEY FORMAT-if-present. A null/blank
+    // value (incomplete draft) passes untouched — its PRESENCE is required only at activate
+    // (validateTriggersContent). A PRESENT key MUST match the allowlist (Mongo field-path injection guard,
+    // enforced on every save).
+    private static String formatFieldKeyIfPresent(String triggerValue) {
         if (triggerValue == null || triggerValue.isBlank()) {
+            return triggerValue;
+        }
+        return requireFieldKeyValue(triggerValue);
+    }
+
+    private static String requireFieldKeyValue(String triggerValue) {
+        // Round-1 review (MAJOR / security): the key is no longer "non-blank only" — it MUST match the
+        // custom-field allowlist (^[a-z0-9_-]{1,32}$), mirroring the SubscriberCustomFieldsService
+        // precondition. A dot / Mongo-operator char would inject into the `customFields.<key>` path.
+        if (triggerValue == null || !CUSTOM_FIELD_KEY_PATTERN.matcher(triggerValue).matches()) {
             throw AppException.unprocessableEntity(CODE_INVALID_TRIGGER_VALUE,
-                    "custom_field_set trigger value must be a non-blank field key");
+                    "custom_field_set trigger value must be a field key ^[a-z0-9_-]{1,32}$");
         }
         return triggerValue;
     }
@@ -1285,6 +1309,11 @@ public class FunnelService {
             switch (step.getStepType()) {
                 case ADD_TAG, REMOVE_TAG -> requireTagSlugFormatIfPresent(step.getTagSlug());
                 case EMIT_EVENT -> requireEventNameFormatIfPresent(step.getEventName());
+                // Round-1 review (MAJOR / security): the SET_CUSTOM_FIELD key flows into the Mongo field
+                // path `customFields.<key>`, so a PRESENT key MUST be allowlist-validated on EVERY save
+                // (block `a.b` / operator chars). PRESENCE stays deferred to activate (requireCustomFieldKey
+                // under content=true).
+                case SET_CUSTOM_FIELD -> requireCustomFieldKeyFormatIfPresent(step.getCustomFieldKey());
                 // Tolerant-read sentinel (MAJ-1): UNKNOWN can only originate from a removed/legacy persisted
                 // stepType (StepTypeReadConverter); author input is rejected at the Jackson DTO boundary
                 // before this point. Defensive reject so an UNKNOWN can never be re-saved as a valid step —
@@ -1690,9 +1719,22 @@ public class FunnelService {
         requireEventName(eventName);
     }
 
-    private static void requireCustomFieldKey(String key) {
+    // Round-1 review (MAJOR / security): SET_CUSTOM_FIELD key FORMAT-if-present. A null/blank key
+    // (incomplete draft) passes — its PRESENCE is required only at activate (requireCustomFieldKey under
+    // content=true). A PRESENT key MUST match the allowlist (Mongo field-path injection guard, on every save).
+    private static void requireCustomFieldKeyFormatIfPresent(String key) {
         if (key == null || key.isBlank()) {
-            throw invalidStep("SET_CUSTOM_FIELD step requires a customFieldKey");
+            return;
+        }
+        requireCustomFieldKey(key);
+    }
+
+    private static void requireCustomFieldKey(String key) {
+        // Round-1 review (MAJOR / security): the key is no longer "non-blank only" — it MUST match the
+        // custom-field allowlist (^[a-z0-9_-]{1,32}$), mirroring the SubscriberCustomFieldsService
+        // precondition, so it can never inject into the `customFields.<key>` Mongo field path.
+        if (key == null || !CUSTOM_FIELD_KEY_PATTERN.matcher(key).matches()) {
+            throw invalidStep("SET_CUSTOM_FIELD step requires a customFieldKey ^[a-z0-9_-]{1,32}$");
         }
     }
 

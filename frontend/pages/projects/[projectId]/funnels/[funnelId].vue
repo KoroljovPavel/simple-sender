@@ -116,57 +116,10 @@ function triggerReady(trigger: FunnelTrigger): boolean {
   }
 }
 
-// Is a SINGLE step complete enough to PATCH? Mirrors FunnelService.validateSteps' per-type required-content
-// rules (→ 422 funnel_step_invalid). The canvas palette appends a brand-new node with empty/absent required
-// content to mint its server id (Decision 10), but the backend rejects an incomplete step on EVERY save —
-// so a full-replace PATCH must be WITHHELD while any step is incomplete (the steps analogue of triggerReady).
-// Once every step is ready the debounced/direct save runs, the backend mints the id, and the node becomes a
-// wireable edge target. This gate only mirrors the required-FIELD presence the server validates per type; it
-// is intentionally NOT the full server validation (the server stays the validator — graph/url/album shape).
-const TAG_SLUG_RE = /^[a-z0-9_-]{1,32}$/
-function stepReady(step: FunnelStep): boolean {
-  switch (step.stepType) {
-    case 'MESSAGE': {
-      // ≥1 block; mirror the per-block required source (TEXT → non-blank text; media → mediaUrl; album → ≥2
-      // items each with a media source). The server owns the exact shape rules — this only gates the empty
-      // freshly-seeded composer (text:'') that the palette adds, plus the obvious per-type required source.
-      const blocks = step.blocks ?? []
-      if (blocks.length === 0) return false
-      return blocks.every((b) => {
-        switch (b.type) {
-          case 'TEXT':
-            return (b.text ?? '').trim().length > 0
-          case 'IMAGE':
-          case 'VIDEO':
-          case 'AUDIO':
-          case 'FILE':
-            return (b.mediaUrl ?? '').trim().length > 0
-          case 'ALBUM':
-            return (b.items ?? []).length >= 2 && (b.items ?? []).every((it) => (it.mediaUrl ?? '').trim().length > 0)
-          default:
-            return false
-        }
-      })
-    }
-    case 'DELAY':
-      return step.delayValue != null && step.delayValue >= 1 && !!step.delayUnit
-    case 'ADD_TAG':
-    case 'REMOVE_TAG':
-      return !!step.tagSlug && TAG_SLUG_RE.test(step.tagSlug)
-    case 'SET_CUSTOM_FIELD':
-      return (step.customFieldKey ?? '').trim().length > 0
-    case 'EMIT_EVENT':
-      return EVENT_NAME_RE.test(step.eventName ?? '')
-    case 'SUBSCRIBE_TO_FUNNEL':
-      return (step.targetFunnelId ?? '').trim().length > 0
-    case 'SET_KEYBOARD':
-      return (step.keyboardText ?? '').trim().length > 0 && (step.keyboardRows ?? []).length >= 1
-    case 'CLEAR_KEYBOARD':
-      return (step.keyboardText ?? '').trim().length > 0
-    default:
-      return false
-  }
-}
+// draft-validation: the former per-step "stepReady" gate is GONE. Drafts now save freely — the backend
+// accepts an incomplete step (deferring content-completeness to activation), so every canvas save path
+// persists unconditionally. Full content-completeness (and the 422 funnel_step_invalid) surfaces only on
+// activate(). triggerReady stays only as the trigger-edit autosave debounce condition (below).
 
 // A funnel always needs at least the on_start main entry, so the panel always has a row to render even
 // when the backend returns an empty/absent triggers array (edge case).
@@ -265,8 +218,6 @@ async function persist(): Promise<boolean> {
       notes: notes.value,
     })
     applyResponse(res)
-    // A successful save clears the explicit step-save "incomplete" feedback — the array reached the server.
-    stepSaveFeedback.value = null
     return true
   } catch (err) {
     saveError.value = resolveFunnelError(err, 'funnels.update')
@@ -283,49 +234,28 @@ async function persist(): Promise<boolean> {
 // SAME full-replace persist() — never a second save path. These canvas emits are discrete (a finished drag,
 // a committed edge/edit) so they call persist() DIRECTLY (no debounce); only the deep trigger-edit watch
 // below debounces (600ms) because it fires on every keystroke inside a trigger field.
-// Withhold the full-replace PATCH while ANY step is incomplete (the steps analogue of the trigger gate). A
-// freshly-added palette node carries empty required content to mint its id, and the backend validates every
-// step on each save — so persisting an incomplete array 422s (funnel_step_invalid). Once the author fills the
-// node (side panel) every step is ready and the same persist() runs, minting the id. An incomplete in-progress
-// node is a silent no-op here — never a hard error toast (the canvas already shows the unsaved/broken state).
-function persistSteps() {
-  if (!steps.value.every(stepReady)) return
-  void persist()
-}
+// draft-validation: there is NO step-readiness withhold — the backend accepts incomplete drafts (content
+// validation is deferred to activate). EVERY canvas save path persists unconditionally, so a structural edit
+// (delete/move a node, draw an edge) always reaches the server and survives F5, even while another node is
+// still incomplete. The original "add empty MESSAGE → 422" no longer happens (the draft saves; activate is
+// where completeness is enforced).
 function onCanvasSteps(next: FunnelStep[]) {
   steps.value = next
-  persistSteps()
+  void persist()
 }
 
 // Explicit side-panel Save (Зберегти). The model is already updated via the companion update:steps emit;
-// here we enforce requirement 2 — an EXPLICIT Save must never be a silent no-op. If the array is now ready
-// the implicit persistSteps() above already fired the PATCH, so clear any stale feedback. If it is still
-// withheld (this step or ANOTHER node is incomplete), surface WHAT is missing instead of doing nothing.
-// (Implicit autosave — drag/notes/triggers — keeps the silent withhold; only this explicit path speaks up.)
-const stepSaveFeedback = ref<string | null>(null)
+// this handler just persists — drafts save freely, so there is no readiness check and no withhold/feedback.
 function onCanvasStepSave() {
-  if (steps.value.every(stepReady)) {
-    stepSaveFeedback.value = null
-    return
-  }
-  // Point the author at the offending step (1-based, matching the steps list) so an explicit Save tells them
-  // exactly which node still needs content rather than silently dropping the click.
-  const incompleteIndex = steps.value.findIndex((s) => !stepReady(s))
-  stepSaveFeedback.value = t('funnels.canvas.stepSaveIncomplete', { number: incompleteIndex + 1 })
+  void persist()
 }
 function onCanvasTriggers(next: FunnelTrigger[]) {
   triggers.value = next
-  // The full-replace PATCH always carries steps.value, so committing a trigger via the canvas while an
-  // in-progress incomplete step exists would 422 funnel_step_invalid on the unfinished node — gate this
-  // save through the same step-readiness check as every other canvas save path (no canvas path may PATCH an
-  // incomplete step). Trigger-specific shape is still validated server-side; the canvas only commits ready arrays.
-  persistSteps()
+  void persist()
 }
 function onCanvasNotes(next: FunnelNote[]) {
   notes.value = next
-  // The full-replace PATCH always carries steps.value, so an in-progress incomplete step would 422 even a
-  // pure note edit — gate it through the same step-readiness check.
-  persistSteps()
+  void persist()
 }
 
 // A finished node drag re-emits { nodeId, position }. Resolve the node id back to the matching model object
@@ -354,9 +284,9 @@ function onNodeDragStop(payload: { nodeId: string; position: CanvasPosition }) {
     if (idx < 0) return
     steps.value = steps.value.map((s, i) => (i === idx ? { ...s, canvasPosition: position } : s))
   }
-  // Withhold the full-replace PATCH while any step is incomplete (an in-progress new node coexisting with the
-  // dragged one would otherwise 422 the whole array). The position is kept in the local model regardless.
-  persistSteps()
+  // draft-validation: persist the drag unconditionally — drafts save freely, so a node move sticks across F5
+  // even while another node is incomplete.
+  void persist()
 }
 
 // Persist trigger edits (debounced) so the activated funnel uses the values the user sees. Only schedule a
@@ -378,9 +308,10 @@ function scheduleTriggerPersist() {
   // not-ready array and 422. Only (re)arm the timer when EVERY trigger is ready.
   if (triggerTimer) clearTimeout(triggerTimer)
   triggerTimer = null
-  // The full-replace PATCH carries the steps array too, so an in-progress incomplete step must also withhold
-  // this trigger-edit autosave (it would 422 funnel_step_invalid on the unfinished node, not the trigger).
-  if (!triggers.value.every(triggerReady) || !steps.value.every(stepReady)) return
+  // draft-validation: only the trigger-readiness debounce condition remains (an in-progress incomplete
+  // trigger value still should not auto-flush on every keystroke). The step-readiness withhold is GONE —
+  // an incomplete step no longer blocks a trigger autosave (the backend accepts incomplete drafts).
+  if (!triggers.value.every(triggerReady)) return
   triggerTimer = setTimeout(() => void persist(), 600)
 }
 // Deep watch: trigger edits mutate fields INSIDE the array elements, not just the array reference.
@@ -396,8 +327,8 @@ async function activate() {
     clearTimeout(triggerTimer)
     triggerTimer = null
   }
-  // Activate deliberately flushes via persist() (bypassing the canvas readiness gate) so a genuine activate of
-  // an incomplete funnel still reaches the server and surfaces its real 422. persist() writes that failure to
+  // Activate flushes the on-screen state via persist() first; the server then runs the FULL content
+  // validation on activate and surfaces any real 422. persist() writes a save failure to
   // saveError — but during an activate the user clicked Activate, so the error belongs in the activate banner.
   // Promote it: if the flush failed, move the message into activateError (and clear saveError) so it lands
   // beside the action the user took, not in a confusing separate save-error banner.
@@ -591,13 +522,6 @@ async function confirmStopAll() {
              Flow's window/DOM access off the SSR path (Decision 12 — `window is not defined`). -->
         <div>
           <h2 class="mb-3 text-lg font-semibold">{{ t('funnels.canvas.title') }}</h2>
-          <p
-            v-if="stepSaveFeedback"
-            data-test="funnel-step-save-feedback"
-            class="mb-3 rounded-md border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800"
-          >
-            {{ stepSaveFeedback }}
-          </p>
           <ClientOnly>
             <div data-test="funnel-canvas-host" class="h-[560px] rounded-md border">
               <FunnelCanvas

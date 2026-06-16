@@ -324,13 +324,11 @@ describe('funnels/[funnelId] editor page', () => {
     })
   })
 
-  // ─── save-noop-fix: side-panel "Зберегти" must persist a completed step (no silent no-op) ──────────────
-  // Manual-test bug: fresh funnel → add a MESSAGE node → fill the TEXT block "Привіт" → click Зберегти →
-  // NOTHING happened (no PATCH, no error). Confirmed H1: the canvas matched the edited step back into the
-  // array by id, but a freshly-added node has id:null → the edit was dropped, the array stayed the empty
-  // seed, and persistSteps() withheld the PATCH. These guard the fix end-to-end on the PAGE (canvas → page →
-  // store.update) plus the explicit-Save feedback hole and the on_start-null-entry / autosave invariants.
-  describe('side-panel step save (no silent no-op)', () => {
+  // ─── side-panel "Зберегти": explicit save persists (drafts save freely) ───────────────────────────────
+  // draft-validation: the explicit side-panel Save just calls persist() — no readiness check, no withhold,
+  // no feedback banner. These guard the save end-to-end on the PAGE (canvas → page → store.update) for both
+  // incomplete and completed steps, plus the on_start-null-entry / autosave invariants.
+  describe('side-panel step save (persists freely)', () => {
     async function mountLoaded(over: Partial<FunnelResponse> = {}) {
       storeMock.fetchOne.mockResolvedValue(draft(over))
       storeMock.update.mockImplementation((_id: string, body: Partial<FunnelResponse>) =>
@@ -357,23 +355,21 @@ describe('funnels/[funnelId] editor page', () => {
       ])
       await settle()
 
-      // A completed step → the full-replace PATCH fires exactly once with the new text (then the server mints
-      // the id). Pre-fix stepReady() was false on the empty seed → persistSteps() withheld → zero calls.
+      // The full-replace PATCH fires exactly once with the new text (then the server mints the id).
       expect(storeMock.update).toHaveBeenCalledTimes(1)
       const body = storeMock.update.mock.calls[0][1]
       expect(body.steps).toHaveLength(1)
       expect(body.steps[0].blocks[0].text).toBe('Привіт')
     })
 
-    it('an explicit save on a still-incomplete step surfaces feedback (does not silently no-op)', async () => {
+    it('an explicit save on a still-incomplete step PATCHes (drafts save freely; no feedback banner)', async () => {
       const wrapper = await mountLoaded({
         triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
         steps: [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }],
       })
 
-      // Explicit Save of a still-empty MESSAGE (text blank) — the form would block its OWN emit, but the page
-      // must still never react to an explicit save with total silence. Drive the explicit-save relay with an
-      // incomplete step and assert a feedback banner appears AND no PATCH is sent (incomplete must not save).
+      // draft-validation: an explicit Save of a still-empty MESSAGE now just persists (the backend accepts the
+      // incomplete draft). No withhold, no feedback banner — the step-save event simply triggers a PATCH.
       wrapper.findComponent(FunnelCanvas).vm.$emit('step-save', {
         stepType: 'MESSAGE',
         id: null,
@@ -381,47 +377,32 @@ describe('funnels/[funnelId] editor page', () => {
       })
       await settle()
 
-      expect(storeMock.update).not.toHaveBeenCalled()
-      const feedback = wrapper.find('[data-test="funnel-step-save-feedback"]')
-      expect(feedback.exists()).toBe(true)
-      expect(feedback.text().trim().length).toBeGreaterThan(0)
-      // Localized — not a raw i18n key.
-      expect(feedback.text()).not.toContain('funnels.canvas')
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      // The dead feedback banner is gone entirely.
+      expect(wrapper.find('[data-test="funnel-step-save-feedback"]').exists()).toBe(false)
     })
 
-    it('an explicit save on a COMPLETED step clears stale feedback AND fires the PATCH', async () => {
-      // Exercises the onCanvasStepSave → feedback-null branch on the explicit-save path. Start with a fresh
-      // empty MESSAGE seed, drive an explicit save on the still-empty step to RAISE the feedback banner, then
-      // commit the completed step (update:steps) + an explicit save on the completed step. The completed save
-      // must (a) fire exactly one PATCH carrying the new text and (b) clear the previously-shown feedback.
+    it('an explicit save on a COMPLETED step fires the PATCH carrying the new text', async () => {
       const wrapper = await mountLoaded({
         triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
         steps: [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }],
       })
 
-      // 1) Explicit save on the incomplete step → feedback banner appears (the established no-op-feedback path).
-      wrapper.findComponent(FunnelCanvas).vm.$emit('step-save', {
-        stepType: 'MESSAGE',
-        id: null,
-        blocks: [{ type: 'TEXT', text: '' }],
-      })
-      await settle()
-      expect(wrapper.find('[data-test="funnel-step-save-feedback"]').exists()).toBe(true)
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      // 2) The author fills the text: the canvas commits the completed array (update:steps) BEFORE the explicit
-      // step-save, matching the load-bearing emit order. The completed array fires the implicit PATCH.
+      // The author fills the text: the canvas commits the completed array (update:steps) BEFORE the explicit
+      // step-save, matching the load-bearing emit order. Both paths persist (drafts save freely).
       const completed = { stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Привіт' }] }
       wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', [completed])
+      await settle()
+      storeMock.update.mockClear()
       wrapper.findComponent(FunnelCanvas).vm.$emit('step-save', completed)
       await settle()
 
-      // The PATCH fired once with the new text (the completed step persisted).
+      // The explicit save fired a PATCH carrying the new text.
       expect(storeMock.update).toHaveBeenCalledTimes(1)
       const body = storeMock.update.mock.calls[0][1]
       expect(body.steps).toHaveLength(1)
       expect(body.steps[0].blocks[0].text).toBe('Привіт')
-      // The explicit save on the now-completed step cleared the stale "incomplete" feedback.
+      // The feedback banner no longer exists.
       expect(wrapper.find('[data-test="funnel-step-save-feedback"]').exists()).toBe(false)
     })
 
@@ -446,20 +427,20 @@ describe('funnels/[funnelId] editor page', () => {
       expect(onStart.entryStepId).toBeNull()
     })
 
-    it('regression: a truly empty new node is NOT PATCHed via implicit autosave', async () => {
+    it('draft-validation: a truly empty new node IS PATCHed via implicit autosave (drafts save freely)', async () => {
       const wrapper = await mountLoaded({
         triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
         steps: [],
       })
 
-      // Implicit autosave path (e.g. palette add / drag): an incomplete (empty-text) MESSAGE must NOT PATCH —
-      // it would 422 funnel_step_invalid. The add-node fix stays intact.
+      // Implicit autosave path (e.g. palette add / drag): an incomplete (empty-text) MESSAGE now PATCHes — the
+      // backend accepts the draft (content-completeness is enforced only at activate).
       wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', [
         { stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] },
       ])
       await settle()
 
-      expect(storeMock.update).not.toHaveBeenCalled()
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
     })
   })
 
@@ -908,14 +889,13 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
     expect(storeMock.update).not.toHaveBeenCalled()
   })
 
-  // ─── Step-readiness gate on canvas-driven step persist (addnode-fix regression) ──────────────────────
-  // Adding a node from the palette appends a fresh, INCOMPLETE step (e.g. MESSAGE → blocks:[{TEXT, text:''}])
-  // and emits update:steps. The backend validates per-step content on every save (MESSAGE needs non-empty
-  // TEXT, DELAY needs delayValue, ADD_TAG needs a tagSlug, …), so an immediate full-replace PATCH 422s
-  // (funnel_step_invalid). The page must MIRROR the existing triggerReady gate: withhold the save while any
-  // step is incomplete, then persist once every step is valid. These tests are value-based + load-bearing —
-  // they fail against the pre-fix unconditional onCanvasSteps→persist().
-  describe('step-readiness gate (do not persist an incomplete new node)', () => {
+  // ─── draft-validation: drafts persist freely (the step-readiness gate is REMOVED) ────────────────────
+  // Backend now defers step content-completeness to ACTIVATION: a draft PATCH accepts an incomplete step
+  // (MESSAGE with empty TEXT, ADD_TAG with no tagSlug, …) and round-trips it. So the page must persist on
+  // EVERY canvas save path — no withhold. These tests assert the NEW contract: an incomplete step still
+  // PATCHes (it would have been withheld pre-fix), AND structural edits (delete/move) persist even while an
+  // incomplete node coexists. They FAIL against the old onCanvasSteps→persistSteps(stepReady) gate.
+  describe('drafts persist freely (no step-readiness withhold)', () => {
     async function mountLoaded(over: Partial<FunnelResponse> = {}) {
       storeMock.fetchOne.mockResolvedValue(draft(over))
       // Mirror the backend: on save the server MINTS an ObjectId for any step that arrives with id:null, so the
@@ -941,66 +921,36 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
       wrapper.findComponent(FunnelCanvas).vm.$emit('update:steps', next)
     }
 
-    it('does NOT PATCH when a freshly-added MESSAGE node has empty TEXT (would 422)', async () => {
+    it('PATCHes a freshly-added MESSAGE node with empty TEXT (draft saves freely)', async () => {
       const wrapper = await mountLoaded()
       // Exactly the shape FunnelCanvas.newStep('MESSAGE') appends from the palette: id null, empty TEXT.
       emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }])
       await settle()
-      // The empty-text step is withheld — no full-replace PATCH that the backend would reject.
-      expect(storeMock.update).not.toHaveBeenCalled()
+      // NEW contract: the incomplete step is PATCHed (the backend accepts the draft) — not withheld.
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+      expect(body.steps).toEqual([{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }])
     })
 
-    it('does NOT PATCH when a freshly-added DELAY node has no delayValue (generality, not MESSAGE-only)', async () => {
+    it('PATCHes a freshly-added DELAY node with no delayValue (draft saves freely; per-type)', async () => {
       const wrapper = await mountLoaded()
-      // FunnelCanvas.newStep('DELAY') appends a bare { stepType:'DELAY', id:null } — no delayValue/unit yet.
       emitSteps(wrapper, [{ stepType: 'DELAY', id: null }])
       await settle()
-      expect(storeMock.update).not.toHaveBeenCalled()
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
     })
 
-    it('does NOT PATCH when a freshly-added ADD_TAG node has no tagSlug', async () => {
+    it('PATCHes a freshly-added ADD_TAG node with no tagSlug (the original "add empty step → 422" bug)', async () => {
       const wrapper = await mountLoaded()
       emitSteps(wrapper, [{ stepType: 'ADD_TAG', id: null }])
       await settle()
-      expect(storeMock.update).not.toHaveBeenCalled()
-    })
-
-    it('PATCHes once the new MESSAGE step is filled in (gate opens) and the step becomes wireable', async () => {
-      const wrapper = await mountLoaded()
-      // 1) Add an incomplete MESSAGE node → withheld.
-      emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }])
-      await settle()
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      // 2) The side-panel edit fills the text → every step is now ready → the save proceeds.
-      emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Welcome' }] }])
-      await settle()
       expect(storeMock.update).toHaveBeenCalledTimes(1)
       const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
-      expect(body.steps).toEqual([{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Welcome' }] }])
-
-      // 3) The server mints the id on the round-trip; applyResponse re-reads it so the node is now a saved,
-      // wireable edge target (its id is present in the persisted steps the canvas binds).
-      const live = wrapper.findComponent(FunnelCanvas).props('steps') as FunnelStep[]
-      expect(live.some((s) => s.stepType === 'MESSAGE' && !!s.id)).toBe(true)
+      expect(body.steps).toEqual([{ stepType: 'ADD_TAG', id: null }])
     })
 
-    it('PATCHes a valid DELAY step once filled (gate is per-type, not MESSAGE-only)', async () => {
-      const wrapper = await mountLoaded()
-      emitSteps(wrapper, [{ stepType: 'DELAY', id: null }])
-      await settle()
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      emitSteps(wrapper, [{ stepType: 'DELAY', id: null, delayValue: 5, delayUnit: 'MIN' }])
-      await settle()
-      expect(storeMock.update).toHaveBeenCalledTimes(1)
-      const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
-      expect(body.steps).toEqual([{ stepType: 'DELAY', id: null, delayValue: 5, delayUnit: 'MIN' }])
-    })
-
-    it('withholds the save when ANY step is incomplete, even if others are valid', async () => {
-      // A saved, valid MESSAGE step already exists; adding a second incomplete node must NOT flush a PATCH
-      // that would 422 on the incomplete one (the whole full-replace array is validated server-side).
+    it('PATCHes when ANY step is incomplete, even alongside valid ones (whole array persists)', async () => {
+      // A saved, valid MESSAGE step already exists; adding a second incomplete node STILL flushes a PATCH —
+      // the backend accepts the incomplete draft (completeness is enforced only at activate).
       const wrapper = await mountLoaded({
         steps: [{ stepType: 'MESSAGE', id: 's1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
       })
@@ -1009,45 +959,58 @@ describe('funnels/[funnelId] canvas wiring (Task 7)', () => {
         { stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] },
       ])
       await settle()
-      expect(storeMock.update).not.toHaveBeenCalled()
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+      expect(body.steps).toHaveLength(2)
     })
 
-    // ─── Round-1 follow-up: the trigger canvas path is gated by step readiness too ──────────────────────
-    // The full-replace PATCH always carries steps.value, so a canvas-committed TRIGGER edit must ALSO be
-    // withheld while any step is incomplete — otherwise it 422s funnel_step_invalid on the unfinished node
-    // (the same bug the step gate was meant to prevent, just reached via the trigger path). This is
-    // value-based + load-bearing: it FAILS against the pre-fix onCanvasTriggers→void persist() (which
-    // bypassed the gate), passes once onCanvasTriggers routes through persistSteps().
+    // ─── The user's exact regression: deleting the start node while an incomplete ADD_TAG node exists ─────
+    // Pre-fix this delete was SILENTLY WITHHELD (the incomplete ADD_TAG failed stepReady → persistSteps did
+    // nothing), so the deletion "reappeared after F5". The fix persists the structural change regardless of
+    // incomplete nodes. This is the canonical regression for the reported bug — it FAILS against the old gate.
+    it('deleting the start node while an incomplete ADD_TAG node exists STILL persists the delete', async () => {
+      // Seed: a step graph that includes an incomplete ADD_TAG node (no tagSlug). The "start node" lives on the
+      // on_start trigger; the canvas emits the structural delete as a fresh steps/triggers array.
+      const wrapper = await mountLoaded({
+        triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: 's-msg' }],
+        steps: [
+          { stepType: 'MESSAGE', id: 's-msg', blocks: [{ type: 'TEXT', text: 'Hi' }] },
+          { stepType: 'ADD_TAG', id: 's-tag' }, // incomplete: no tagSlug
+        ],
+      })
+
+      // The canvas deletes the start node: the on_start trigger's drawn edge (entryStepId) is cleared to null.
+      // The incomplete ADD_TAG node remains in the array. The delete MUST persist (not be withheld).
+      emitTriggers(wrapper, [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }])
+      await settle()
+
+      expect(storeMock.update).toHaveBeenCalledTimes(1)
+      const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
+      const onStart = body.triggers?.find((tr) => tr.triggerType === 'on_start')
+      expect(onStart?.entryStepId).toBeNull()
+      // The incomplete ADD_TAG node rode along unchanged — the draft persists as-is.
+      expect(body.steps).toHaveLength(2)
+    })
+
+    // The full-replace PATCH carries steps.value, but an in-progress incomplete step no longer withholds a
+    // canvas-committed TRIGGER edit (drafts save freely). A trigger commit persists immediately.
     function emitTriggers(wrapper: Awaited<ReturnType<typeof mountLoaded>>, triggers: FunnelTrigger[]): void {
       wrapper.findComponent(FunnelCanvas).vm.$emit('update:triggers', triggers)
     }
 
-    it('does NOT PATCH a canvas trigger commit while a step is incomplete, then DOES once the step is filled', async () => {
-      // An incomplete MESSAGE node coexists with the triggers; committing a trigger via the canvas must not
-      // flush the (incomplete) full-replace array.
+    it('PATCHes a canvas trigger commit even while a step is incomplete (no step-readiness withhold)', async () => {
       const wrapper = await mountLoaded()
       emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: '' }] }])
       await settle()
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      // Commit a (complete) trigger array via the canvas while the step is STILL incomplete → withheld.
-      emitTriggers(wrapper, [{ triggerType: 'on_start', triggerValue: 'promo', keywords: null, entryStepId: null }])
-      await settle()
-      expect(storeMock.update).not.toHaveBeenCalled()
-
-      // Fill the step → now every step is ready, so a subsequent trigger commit DOES persist (one PATCH),
-      // carrying both the completed step and the sanitized trigger array.
-      emitSteps(wrapper, [{ stepType: 'MESSAGE', id: null, blocks: [{ type: 'TEXT', text: 'Welcome' }] }])
-      await settle()
+      // The incomplete step already PATCHed once (drafts save freely). Clear to count only the trigger commit.
       storeMock.update.mockClear()
 
-      emitTriggers(wrapper, [{ triggerType: 'on_start', triggerValue: 'promo2', keywords: null, entryStepId: null }])
+      emitTriggers(wrapper, [{ triggerType: 'on_start', triggerValue: 'promo', keywords: null, entryStepId: null }])
       await settle()
       expect(storeMock.update).toHaveBeenCalledTimes(1)
       const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>
-      expect(Array.isArray(body.triggers)).toBe(true)
       const onStart = body.triggers?.find((tr) => tr.triggerType === 'on_start')
-      expect(onStart?.triggerValue).toBe('promo2')
+      expect(onStart?.triggerValue).toBe('promo')
     })
   })
 

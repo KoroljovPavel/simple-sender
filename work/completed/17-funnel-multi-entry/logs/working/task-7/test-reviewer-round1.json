@@ -1,0 +1,106 @@
+{
+  "status": "passed",
+  "round": 1,
+  "summary": "The five TDD anchor cases are all covered with meaningful assertions. The real FunnelTriggersPanel is mounted (not stubbed). The persist payload carries `triggers` array (flat trio absent). The per-element gate blocks PATCH on any incomplete trigger. The 'entryStepId === step1' case now uses a value assertion with a seeded step. The every-gate is verified by the two-event-trigger scenario. Two medium findings and one low finding remain, none blocking.",
+  "tddAnchorCoverage": {
+    "panelMountedNotStubbed": {
+      "covered": true,
+      "test": "loads the trigger array from the funnel response and renders the Triggers panel",
+      "notes": "Comment explicitly states panel is not stubbed; only teleport is stubbed. Assertions check data-test='funnel-triggers', 'funnel-trigger-on-start', 'funnel-triggers-empty'."
+    },
+    "persistSendsTriggersArray": {
+      "covered": true,
+      "test": "persists the trigger array (not the flat trio) on save once an event trigger is completed",
+      "notes": "Asserts body.triggers is array, body.triggerType/triggerValue/keywords are all undefined. Event trigger triggerValue='order_paid', keywords=[]."
+    },
+    "perElementTriggerReadyGate": {
+      "covered": true,
+      "test": "does NOT PATCH while any trigger is incomplete (event added, value empty)",
+      "notes": "Adds event trigger with empty slug, advances 700ms, asserts update not called."
+    },
+    "patchOnceReadyEntryStepAsserted": {
+      "covered": true,
+      "test": "PATCHes once every trigger is ready (valid event slug + entry step)",
+      "notes": "Seeds step with id='step1'. After trigger filled, asserts ev.entryStepId === 'step1'. The round-1 finding about a structural-only check (typeof/in) was addressed — the final file at line 278 uses expect(ev.entryStepId).toBe('step1')."
+    },
+    "everyGateWaitsForSecondIncomplete": {
+      "covered": true,
+      "test": "a ready trigger waits while a second trigger is still being edited (triggers.every gate)",
+      "notes": "Two event triggers: fills first, verifies no PATCH, fills second, asserts exactly one PATCH with both events sorted correctly."
+    },
+    "typeAloneNoPremature422": {
+      "covered": "partial",
+      "notes": "No dedicated test for switching a trigger TYPE (e.g., changing the on_start to event, or adding an event row then immediately switching its form type) while value is empty. The 'does NOT PATCH' test only covers adding a new event trigger with empty slug — it does not simulate the specific type-switch regression path (user edits type selector, value field resets/stays empty). The existing gate is correct in the implementation but the type-switch scenario is not regression-tested."
+    },
+    "premature422CancelBugSafeguard": {
+      "covered": "partial",
+      "notes": "The applyingResponse re-entrancy guard (PATCH-storm loop) is implemented in the page but has no test that explicitly verifies: (1) a server response does NOT re-arm the debounce, and (2) an already-armed timer IS cancelled when an incomplete trigger is subsequently added. The cancel logic (clearTimeout before the every-guard) is critical but its behavior is only implied by the 'does NOT PATCH' test which does not set up a scenario where a timer was already armed."
+    }
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "medium",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts — trigger array auto-save readiness describe block",
+      "issue": "The type-switch regression path is not tested. The task description calls this 'the main regression case' (Details, Edge cases): 'Перемикання типу тригера наодинці (значення порожнє) → no PATCH (per-element gate)'. No test switches a trigger's type field (e.g., changes an on_start to event, or changes an existing event trigger's type to tag_added while triggerValue is empty) and asserts no PATCH fires. The only 'incomplete trigger' test covers adding a fresh event row — an arguably different code path than a type mutation. Without this test, a regression where the watch fires on type-change before the value is populated would not be caught.",
+      "recommendation": {
+        "approach": "Add a test 'switching one trigger type alone (value still empty) does not fire PATCH' inside 'trigger array auto-save readiness'.",
+        "sketch": "mount with on_start only; click funnel-trigger-add (adds event row, triggerValue=''); then immediately change the event row's type-select to 'tag_added' (using wrapper.findAll('[data-test=\"funnel-trigger-type-select\"]')[0].setValue('tag_added')); tick(700); expect(storeMock.update).not.toHaveBeenCalled().",
+        "note": "If FunnelTriggersPanel locks event type (lock-type prop), adapt: test the on_start value-input changed to an invalid value instead, which exercises the same per-element gate branch for 'on_start'."
+      }
+    },
+    {
+      "id": "F2",
+      "severity": "medium",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts — trigger array auto-save readiness describe block",
+      "issue": "The PATCH-storm cancellation (re-entrancy guard) is not regression-tested. The implementation at [funnelId].vue:256-257 cancels any pending timer BEFORE the every-gate check, so an edit that makes the array incomplete must disarm a previously armed PATCH. No test validates this: e.g., fill one event trigger (timer armed), then immediately add a second incomplete event trigger (timer should be cancelled, no PATCH should fire after the 600ms). The current 'every gate' test adds both triggers first, then fills them — it never reaches the scenario where a timer is armed and then cancelled by a subsequent incomplete edit.",
+      "recommendation": {
+        "approach": "Add a test 'armed PATCH timer is cancelled when a new incomplete trigger is added'.",
+        "sketch": "mount; add event trigger, fill 'first_event' (timer arms); within < 600ms, add a second event trigger (timer should clear); tick(700); expect(storeMock.update).not.toHaveBeenCalled(). Then fill 'second_event'; tick(700); expect one PATCH.",
+        "note": "This directly tests the clearTimeout + null guard on line 256-257 and the re-arm on line 259."
+      }
+    },
+    {
+      "id": "F3",
+      "severity": "low",
+      "category": "assertion_strength",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:281-306",
+      "issue": "The 'every gate' test uses wrapper.findAll('[data-test=\"funnel-trigger-event-input\"]')[1] AFTER the initial tick(50) to fill the second event. Between tick(50) and setValue, the DOM may have rerendered the list. The inputs array captured at line 289 is re-queried at line 298 but only for index [1]. This is a minor fragility — if the DOM structure changes, a stale findAll result would be used. Not a current failure but a potential flakiness source.",
+      "recommendation": "Re-query the inputs before the second setValue: replace the captured `inputs[1]` at line 298 with a fresh `wrapper.findAll('[data-test=\"funnel-trigger-event-input\"]')[1]` — as already done at line 298 in the current file (confirmed). No code change needed — this is an observation that the re-query is correctly done at line 298."
+    }
+  ],
+  "bugSafeguardCoverage": {
+    "premature422Cancel": {
+      "implemented": true,
+      "implementationLocation": "[funnelId].vue — applyingResponse flag + early-return in scheduleTriggerPersist",
+      "tested": false,
+      "note": "No test verifies that a server persist response does not re-trigger the watch cycle. The applyingResponse flag is functional but unguarded by a regression test."
+    },
+    "patchStormReentrancy": {
+      "implemented": true,
+      "implementationLocation": "[funnelId].vue:256-257 — clearTimeout + null before every-gate",
+      "tested": false,
+      "note": "No test covers the scenario where an armed timer is cancelled by a subsequent incomplete edit. The implementation is correct per code review but the regression gate does not exist."
+    }
+  },
+  "passedLitmusChecks": [
+    "triggerReady removed → 'does NOT PATCH' test fails (update would be called)",
+    "sanitizeTrigger removed → 'flat trio absent' assertions fail (body.triggerType defined)",
+    "every() changed to some() → 'every gate' test fails (update called with incomplete second trigger)",
+    "entryStepId default removed → 'PATCHes once ready' test fails (ev.entryStepId is null not 'step1')",
+    "Real panel mount → if stubbed, funnel-trigger-add not found, all autosave tests fail"
+  ],
+  "metrics": {
+    "testsInScope": 6,
+    "tddAnchorsCovered": 5,
+    "tddAnchorsPartial": 2,
+    "litmusTestsPassed": 5,
+    "litmusTestsFailed": 0
+  },
+  "taskRequired": {
+    "needed": false,
+    "reason": "No critical or high issues. Two medium findings identify missing regression tests for type-switch and PATCH-storm scenarios. These are enhancements to test coverage, not blockers — the implementation logic itself is correct and the five primary TDD anchors are solidly covered."
+  }
+}

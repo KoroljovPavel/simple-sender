@@ -1,0 +1,59 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 2,
+  "status": "passed",
+  "verdict": "approved",
+  "summary": "All three round-1 findings are resolved with assertions that now genuinely prove behavior (litmus-clean). The FAILED-path email check no longer leans on the uncleared Mailpit singleton: cleanAndSeed clears the JVM-wide mailbox and the test awaits getMessageCount()==1, then asserts the failed-template marker 'Спробуйте ще раз' and .doesNotContain('download?token=') — removing sendExportFailedEmail makes the await time out, and the test also locks the FAILED-branch orphan-blob deletion (removing the gridFsOperations.delete call leaves the partial blob and fails the isNull() check). The happy-path await is now ==1 against a cleared mailbox, eliminating the stale-message early-return flake. The customFields case was renamed to its accurate not-prefixed semantics and a new direct neutralizeFormula contract test proves a trigger-first value IS prefixed while a '{'-leading JSON object is not. The new unauthenticatedDownload_rejectedBySecurity_returns403 correctly locks the session-guard decision (matches SecurityConfig /api/** authenticated + SecurityBlockTest 403 precedent). No new flakiness introduced; coverage remains complete.",
+  "findings": [],
+  "resolvedFindings": [
+    {
+      "round1Severity": "major",
+      "category": "empty_test",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/export/SubscriberExportIT.java:140-150",
+      "issue": "Round-1: FAILED-path email assertion was hollow (only getMessageCount() >= 1 against the uncleared shared Mailpit singleton — passed on leftover messages even if no failed-email was sent).",
+      "resolution": "FIXED. cleanAndSeed now calls MAILPIT.getClient().deleteAllMessages() (line 74). exportJob_internalError_writesFailedAndEmail awaits getMessageCount()==1 (line 140), fetches the HTML, and asserts .contains('Спробуйте ще раз') (failed-template marker, distinct from the ready template) and .doesNotContain('download?token=') (line 142). A new assertion (lines 147-150) verifies the partial GridFS blob is deleted on the FAILED branch.",
+      "litmusVerified": "Remove emailService.sendExportFailedEmail from handleFailure -> mailbox stays at 0 -> await times out -> test fails. Remove the gridFsOperations.delete(...) at ExportSubscribersJob:245-247 -> partial blob persists -> findOne non-null -> orphan-blob assertion fails. Both prove production behavior."
+    },
+    {
+      "round1Severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/export/SubscriberExportIT.java:108-109",
+      "issue": "Round-1: happy-path email await used getMessageCount() >= 1 against the uncleared singleton, allowing an early return on a stale newest message (flake window).",
+      "resolution": "FIXED. With the mailbox cleared in @BeforeEach, the await is now getMessageCount()==1 (exact), so it blocks until exactly the export-ready message lands before reading getAllMessages().get(0). Cross-test ordering dependency removed.",
+      "litmusVerified": "Remove emailService.sendExportReadyEmail from finishSuccess -> await times out -> test fails. No early-return on stale messages remains."
+    },
+    {
+      "round1Severity": "minor",
+      "category": "redundant_testing",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/export/SubscriberCsvWriterTest.java:110-128",
+      "issue": "Round-1: formulaInjection_customFieldsCell_prefixed was effectively a duplicate control case — the serialized JSON starts with '{' so no neutralization ran; it never exercised the prefix path it was named for.",
+      "resolution": "ADDRESSED. Renamed to formulaInjection_customFieldsObjectCell_notPrefixed with an accurate comment describing the whole-cell semantics. Added formulaInjection_wholeCellHelper_prefixesTriggerFirstChar that directly asserts SubscriberCsvWriter.neutralizeFormula('=DANGER()')=='\\'=DANGER()' (prefixed) and neutralizeFormula('{\"k\":\"v\"}') stays unprefixed. neutralizeFormula is package-private static, callable from the same-package test.",
+      "litmusVerified": "Remove the trigger-prefix logic in neutralizeFormula -> first assertion of the new helper test fails. The new test now catches a regression no other test catches; the renamed test documents the intentional whole-cell '{'-unprefixed behavior."
+    }
+  ],
+  "newFindings": [],
+  "verifiedNewTest": {
+    "location": "backend/src/test/java/com/botfunnel/subscriber/export/SubscriberExportSignedUrlIT.java:207-220",
+    "name": "unauthenticatedDownload_rejectedBySecurity_returns403",
+    "assessment": "Genuine. Locks the session-guarded download decision: no @WithMockAppUser, mints a VALID token, requests the download URL, expects 403. Verified against SecurityConfig (.requestMatchers('/api/**').authenticated()) and the SecurityBlockTest precedent (anonymous /api/** -> default ExceptionTranslationFilter/AccessDeniedHandler -> deterministic 403). Because the token is valid, the test isolates the security-filter rejection (not token verification).",
+    "litmusVerified": "Remove the /api/** authenticated rule -> anonymous request reaches the controller with a valid token -> 200 -> test fails. Deterministic security filter, no async/await -> no flake risk.",
+    "note": "The 403 (not 401) expectation is correct and intentional — pinned exactly so a future AuthenticationEntryPoint change reintroducing 401 becomes visible, consistent with SecurityBlockTest."
+  },
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0,
+      "note": "Re-checked: FAILED-email body marker + no-download-link, FAILED-branch orphan-blob deletion, happy-path exact-count email, neutralizeFormula trigger-prefix contract, customFields whole-cell not-prefixed, unauthenticated-download 403 security guard. All fail when the corresponding production code is removed."
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 14,
+      "integration": 19,
+      "e2e": 0,
+      "assessment": "healthy",
+      "note": "API/backend feature — unit (SubscriberCsvWriter) + integration (export job, signed-URL download, refresh-URL) is the correct distribution per the test pyramid; no E2E required."
+    }
+  }
+}

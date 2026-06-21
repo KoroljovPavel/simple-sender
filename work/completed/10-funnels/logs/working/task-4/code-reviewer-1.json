@@ -1,0 +1,44 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 4,
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "critical",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java",
+      "line": "72-85",
+      "finding": "PARTIAL-WRITE REGRESSION: atomicity of the original all-or-nothing PATCH is broken. The original controller built a single Update object inside the loop and applied ONE mongoTemplate.update() AFTER iterating all keys — meaning a 422 on any key prevented ALL writes. The refactored controller calls customFieldsService.setOne() per iteration; setOne() validates then immediately commits the mongoTemplate.update() for that key before the next iteration. For a PATCH with keys [\"valid_key\", \"invalid_key\"]: iteration 1 validates + writes valid_key to MongoDB, iteration 2 throws 422 — the write for valid_key has already landed. The endpoint returns 422 but the DB is partially mutated. This violates the task's CRITICAL invariant ('controller PATCH behavior must stay byte-identical') and the spec's explicit all-or-nothing requirement.",
+      "recommendation": "Restructure setOne() to separate the validate phase from the apply phase, OR perform a two-pass approach in the controller: (1) validate all keys first, collecting normalized values; (2) apply all writes only if all validations passed. Simplest fix: add a validateOnly(type, value) method to CustomFieldValueValidator (or SubscriberCustomFieldsService) that returns the normalized value without touching the DB, then do a second pass that calls setOne() only with pre-validated values (where setOne() skips validation). Alternatively, refactor setOne() to accept a pre-normalized value so the controller can validate all keys in a first pass (accumulating normalized values), then apply them all in a second pass — preserving the original all-or-nothing semantics."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java",
+      "line": "27-28",
+      "finding": "subscriberService field is declared but unused, suppressed with @SuppressWarnings(\"unused\"). The Javadoc states it is 'reserved for the map-taking overload / engine path'. An unused injected dependency with a suppression annotation is a code smell: it adds a required constructor argument, inflates the dependency footprint, and can confuse maintainers about whether the service is wired correctly. The engine path (Task 6) may have different audit semantics anyway — it is not yet defined.",
+      "recommendation": "Remove subscriberService from SubscriberCustomFieldsService for now. The engine (Task 6) can be responsible for calling recordCustomFieldsSet itself after invoking setOne(), the same way the controller does — that is actually cleaner and keeps the sole-writer path consistent. If a map-taking overload is genuinely needed for the engine, add it when Task 6 is implemented with a concrete design, not as dead code today."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsControllerTest.java",
+      "line": "94-108",
+      "finding": "patchCustomFields_invalidType_returns422 does NOT test the atomicity invariant. It PATCHes with a single invalid key ('age': 'abc') — there is no earlier valid key that could have been written before the 422. The critical regression (valid key written, then later key throws 422) is untested in both the controller test and the service test. If the partial-write fix is applied correctly, a dedicated test must verify: PATCH with {valid_key: valid_value, invalid_key: bad_value} results in 422 AND valid_key remains unchanged in the DB.",
+      "recommendation": "Add a test case — e.g., patchCustomFields_422OnLaterKey_preventsAllWrites() — that seeds a subscriber with no custom fields, sends a PATCH with two keys where the first is valid (e.g., city:Kyiv) and the second is invalid (age:notanumber), asserts status 422, then reads the subscriber from the DB and asserts that city was NOT written. This directly encodes the all-or-nothing contract as a regression guard."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java",
+      "line": "57",
+      "finding": "setOne() returns Object (raw type in the public API surface). While the original controller also worked with Object, the return type conflates three semantically distinct outcomes: (1) a non-null normalized value was applied, (2) null means the field was unset, (3) null also means the field was skipped (type == null). The caller (controller) currently ignores the distinction between cases 2 and 3 when building newValues, but the ambiguity becomes significant for the engine (Task 6) which needs to know whether to record oldValues/newValues at all.",
+      "recommendation": "Consider returning an Optional<Object> where Optional.empty() means 'skipped / no-op' and Optional.of(null) is not possible in Java — instead use a dedicated result wrapper or a sentinel. At minimum, document in the Javadoc (already partially done) the exact null-means-skip vs null-means-unset distinction for callers who need to distinguish them. For the engine path, the caller can check type == null before calling setOne() to determine skip vs apply, which avoids the ambiguity."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsServiceTest.java",
+      "line": "73-77",
+      "finding": "setOne_validValue_updatesAndReturnsNormalized uses deep-stub verification on the MongoTemplate fluent chain (verify(mongoTemplate.update(Subscriber.class).matching(any())).apply(captor.capture())). This is correct for verifying the Update was built with the right field path, but the verify() call itself only exercises the stub chain's return value, not an actual invocation. The test name says 'updatesAndReturnsNormalized' which implies DB write verification — but the verification is of the UpdateDefinition content, not that .first() was called. If the implementation were to call .apply() but forget .first(), the DB write would be silently dropped and this test would still pass.",
+      "recommendation": "Add a verify that .first() was called after .apply() — e.g., verify(mongoTemplate.update(Subscriber.class).matching(any(Query.class)).apply(any())).first(). This completes the chain verification and catches a missing .first() terminal call."
+    }
+  ],
+  "summary": "The refactor correctly achieves sole-writer audit preservation (recordCustomFieldsSet called once per PATCH with aggregated old/new maps), Decision 11 compliance (no event repo/EventService touched directly), mass-assignment defense (unknown keys skipped via the type==null guard in both controller and service), and lookup-by-chat exposure (clean delegation). However, there is a critical behavioral regression: the original all-or-nothing atomicity of the PATCH endpoint is broken because setOne() commits each key's DB write immediately inside the iteration loop — a 422 on key N leaves keys 0..N-1 already written. The existing tests do not cover this regression scenario. Two major issues accompany: an unused injected field with @SuppressWarnings, and a missing atomicity-regression test. Fix required before merge."
+}

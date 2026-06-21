@@ -1,0 +1,68 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 4,
+      "issue": "@vue-flow/core and @dagrejs/dagre are not installed in frontend/package.json or node_modules. Task 4 depends_on [2], which is supposed to add these packages. However if Task 2 is not yet complete when task 4 is executed, the dagre import will fail at runtime. The task correctly declares the dependency, but the packages are genuinely absent and the composable will fail to import @dagrejs/dagre until Task 2 runs.",
+      "fix": "No change to task 4 needed — the depends_on [2] chain is correct. Ensure Task 2 is merged (packages installed, package.json updated) before Task 4 begins. The task description already warns: 'If Task 2 types are not yet merged, coordinate.' The same applies to the runtime package."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 4,
+      "issue": "frontend/types/funnel.ts does NOT yet contain canvasPosition, FunnelNote, or notes[] fields. Task 4 depends_on [2] which adds these types, but they are currently absent. If Task 2 is not complete, any code in useFunnelCanvas.ts referencing canvasPosition or FunnelNote will produce TypeScript compile errors.",
+      "fix": "Same resolution as above — Task 2 must land first. No change to Task 4's description needed; the depends_on [2] is correctly declared."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "The dagre API hint in Implementation Hints says 'new dagre.graphlib.Graph()' and 'dagre.layout'. This is the classic CommonJS dagre API. @dagrejs/dagre (the actively maintained fork) ships the same API but the ESM import shape may differ. Task 4 correctly says to confirm via Context7 before coding, which is appropriate mitigation. The hint is therefore directionally correct but not fully verified against the installed version.",
+      "fix": "No blocking change needed. The task already mandates: 'Confirm the exact @dagrejs/dagre API/import via Context7 before coding'. Developer must follow that instruction."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 5,
+      "issue": "Implementation hints say: 'useVueFlow() exposes onConnect, onNodesInitialized, fitView; bind @connect for draw-to-connect and run fitView() from the nodes-initialized hook.' These are directionally correct for @vue-flow/core but: (1) the hook event for layout is typically 'onNodesInitialized' (composable callback) vs 'nodes-initialized' (template event) — the difference matters for client-only vs template binding; (2) fitView() behavior after layout requires waiting for the DOM tick. The task correctly points to Context7 for confirmation, but the hint conflates composable callbacks with template events without clarifying which form to use.",
+      "fix": "Add a clarification: 'Use the onNodesInitialized composable callback (not the template event) to trigger fitView() after the layout pass, and wrap it in nextTick() to ensure the DOM is settled. Confirm exact event name via Context7.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 TDD Anchor instructs to use mockNuxtImport('useFunnelsStore') in FunnelCanvas.spec.ts. FunnelCanvas.client.vue is described as a purely presentational canvas component that takes funnel model as input props and emits changes upward — it does not appear to call useFunnelsStore directly (persistence is Task 7). Mocking useFunnelsStore may be unnecessary for FunnelCanvas component tests and adds noise. The pattern is borrowed from the editor page tests but the canvas component has a different role.",
+      "fix": "Minor: the mock is harmless if included (just unused overhead), but developers should be aware FunnelCanvas.client.vue should not call useFunnelsStore directly. If it does not, the test setup can omit the mock. If the component ends up needing the store, the depends_on chain and description need updating."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 5,
+      "issue": "Context Files section in task 5 lists relative paths without the required '../../..' prefix: '[project.md](.claude/skills/project-knowledge/references/project.md)', '[architecture.md](.claude/skills/.../architecture.md)', '[patterns.md](.claude/skills/.../patterns.md)'. These paths resolve relative to the task file location (work/18-funnel-canvas/tasks/5.md), so .claude/... would look for work/18-funnel-canvas/tasks/.claude/... which does not exist. Task 4 uses the correct '../../../.claude/skills/...' prefix. Task 6 has the same issue.",
+      "fix": "Fix context file paths in tasks 5 and 6 to use '../../../.claude/skills/project-knowledge/references/project.md' (same pattern as task 4). Also fix the skill SKILL.md reference from '.claude/skills/code-writing/SKILL.md' to '../../../.claude/skills/code-writing/SKILL.md'."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 6,
+      "issue": "Same broken relative path issue as task 5: '[project.md](.claude/skills/.../project.md)', '[architecture.md](.claude/...)' and '[ux-guidelines.md](.claude/...)' use paths relative to the task file that do not resolve. The skill SKILL.md reference also uses '.claude/skills/code-writing/SKILL.md' instead of '../../../.claude/skills/code-writing/SKILL.md'.",
+      "fix": "Fix all context file paths in task 6 to use '../../../.claude/skills/...' prefix, matching the correct pattern in task 4."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 6,
+      "issue": "Task 6 TDD Anchor adds new test cases to frontend/tests/components/funnels/FunnelCanvas.spec.ts (start node lifecycle, disconnect-count warning). This file is CREATED by Task 5. Task 6 says 'tests to write BEFORE implementation' but the spec file it targets does not exist until Task 5 completes. This is expected given the wave dependency, but the TDD instruction 'write -> run -> confirm red -> implement' is only feasible in the context of Task 5 already having created the file. The instruction is technically correct (Task 5 must finish first via depends_on [5]) but could mislead a developer who tries to write tests before running task 5.",
+      "fix": "Minor clarification: add a note in the TDD Anchor section that FunnelCanvas.spec.ts is pre-created by Task 5 — this task ADDS tests to the existing file. Alternatively accept as-is since the depends_on [5] guards execution order."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 48,
+    "issues_found": 8
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "Task 6 (depends_on) has NOT yet been executed — frontend/types/funnel.ts still contains the old StepType ('SEND_MESSAGE'|'SEND_IMAGE'|'MENU'), has NO ContentBlock/BlockType/MediaItem types, and FunnelStep has NO blocks field. Task 7 builds entirely against these types. The dependency chain is broken: Task 7 cannot proceed correctly until Task 6 ships.",
+      "fix": "Ensure Task 6 is done (status: done in tasks/6.md, types present in frontend/types/funnel.ts) before starting Task 7. Do not stub or duplicate types in Task 7."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 8,
+      "issue": "Same as Task 7: Task 6 types (ContentBlock/BlockType/MediaItem, updated PreviewStepRequest with blocks[], updated PreviewStepResponse with renderedBlocks[]) are absent from frontend/types/funnel.ts. Task 8 also depends on Task 6 (depends_on: [6]) but the actual types it requires — especially PreviewStepRequest.blocks and PreviewStepResponse.renderedBlocks — do not exist yet. The store preview action still uses the old flat payload shape (stepType/text/parseMode).",
+      "fix": "Task 6 must be done first. After Task 6 ships, verify types/funnel.ts exports ContentBlock, BlockType, MediaItem, and updated PreviewStepRequest/PreviewStepResponse before starting Task 8."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "initialButtonRows() guard is currently 'MENU' (line 80) and menuTimeout* seed guards are also 'MENU' (lines 103, 108, 111). Task 7 correctly instructs updating these to 'MESSAGE'. However the task's Details section says lines 103/108/111 have '=== MENU' — verified correct. The actual code matches the task's description of the problem. This is confirmed-valid and the fix is correctly specified. However, the task's onSubmit switch (line 528-607) currently has a 'MENU' case and no 'MESSAGE' case — the task must add MESSAGE and remove MENU. Confirmed feasible but the task description omits an important detail: the existing EMIT_EVENT case (lines 593+) also needs to remain intact after the switch restructure. No issue with the task text itself; flagging as confirmation.",
+      "fix": "No action needed — task description covers this. Verify implementor reads the full switch at lines 528-607 before editing."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 7,
+      "issue": "Task 7 Details section states the MENU section in the template is at 'рядки 733–911'. The actual FunnelStepForm.vue is 1086 lines total; the MENU template section is referenced in the grep output but the exact range was not independently verified at those specific lines. More importantly: the task references 'schemaFor (рядки 371–421)' and 'useForm/defineField (рядки 425–454)' — schemaFor starts at line 371 (confirmed), but useForm/defineField range was not fully verified. The core feasibility issue here is actually the MediaItem subtype precondition (noted in round 1 and still present): FunnelStep.blocks does not exist yet (Task 6 not done), so the album type-mixing predicate discussion in Task 7 Details (which discusses whether MediaItem has a per-element media-subtype field) cannot be evaluated against real types.",
+      "fix": "This finding tracks the open MediaItem subtype issue. Once Task 6 ships, confirm whether MediaItem includes an explicit media subtype field (photo/video/audio/document) or not. If not present, the album type-mixing predicate in Task 7 client validation cannot be implemented as described and needs a design decision before Task 7 starts."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "FunnelMessagePreview.vue currently watches step.text, step.caption, step.parseMode (lines 108-125). Task 8 correctly instructs migrating this watch to step.blocks (deep watch). The component also contains SEND_IMAGE-specific logic (imageUrl computed, imageLoadFailed, showImage, showImagePlaceholder — lines 45-60) and a previewText() function (line 64) that both need removal/replacement. Task 8's 'What to do' step 2 addresses isMessageStep migration but does not explicitly call out removing the SEND_IMAGE-specific computed properties (imageUrl, imageLoadFailed, showImage, showImagePlaceholder). These will become dead code after the rewrite and could confuse the implementor.",
+      "fix": "Add explicit instruction to remove the SEND_IMAGE-specific computed refs (imageUrl, imageLoadFailed, showImage, showImagePlaceholder) and the previewText() function during the rewrite. Currently they are not mentioned in 'What to do'."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 8,
+      "issue": "The existing FunnelMessagePreview.spec.ts (which Task 8 must rewrite) tests 'SEND_MESSAGE'/'SEND_IMAGE'/'MENU' step types — stepType: 'SEND_MESSAGE' is passed directly in the spec's messageStep() helper (line 24) and multiple test cases use SEND_IMAGE-specific paths (lines 104-151). The store spec at lines 235-244 uses PreviewStepRequest with { stepType: 'SEND_MESSAGE', text, parseMode } and PreviewStepResponse with { rendered }. After Task 8 rewrites these specs to use 'MESSAGE' + blocks[], the old shape { rendered } in PreviewStepResponse will need to become { renderedBlocks[] }. However the current types/funnel.ts PreviewStepResponse still has 'rendered: string' (not renderedBlocks). Task 8's TDD Anchor correctly prescribes the new shapes, but if run before Task 6 ships the types, the spec will fail to typecheck. This is a sequencing dependency gap.",
+      "fix": "Task 8 must not start spec rewriting until Task 6 types are in place. The task depends_on: [6] which is correct, but the ordering enforcement needs to be observed strictly."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "funnels store preview action (lines 217-232) currently accepts a PreviewStepRequest typed as { stepType, text, parseMode } — the old flat shape. Task 8 says 'Signature й URL не змінюються; змінюється лише форма PreviewStepRequest/PreviewStepResponse'. The implementation change is just consuming the new types from Task 6 — the store function body itself does not change, only the type annotation. This is correctly described in the task but may surprise an implementor who expects to edit store logic. Confirms the task is accurate.",
+      "fix": "No action needed. Confirm implementor understands the store change is type-annotation-only (driven by Task 6 updated PreviewStepRequest/PreviewStepResponse), not logic change."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 depends_on: [1,2,3,4,5,6,7,8]. At validation time (iteration 2), tasks 1-8 have status 'planned' (decisions.md is empty — no completed task entries). Task 9 is an audit task that reads final code state. This is an expected dependency gate, not a defect in the task spec. The task correctly cannot run until all prior tasks are done. The decisions.md being empty is consistent with no tasks being complete yet.",
+      "fix": "No fix needed. Task 9 is correctly gated. Confirm before starting Task 9 that decisions.md has entries for Tasks 1-8 and all source files listed in the task Context Files exist."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 Context Files lists 'net-new: ContentBlock.java, BlockType.java, MediaItem.java (under com/botfunnel/funnel/ — уточнить фактический путь по decisions.md)'. These files do not yet exist in the codebase (Task 1 creates them). The note to 'уточнить фактический путь по decisions.md' is the correct mitigation — Task 9 should derive paths from decisions.md after Tasks 1-4 complete. No defect in the task spec.",
+      "fix": "No action needed. The task correctly defers path resolution to decisions.md. Confirm Task 1 agent records the actual paths in decisions.md."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 9
+  }
+}

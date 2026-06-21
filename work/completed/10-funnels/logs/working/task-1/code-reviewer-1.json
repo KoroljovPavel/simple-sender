@@ -1,0 +1,30 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 1,
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelStep.java",
+      "line": "33 / 57",
+      "finding": "customFieldValue is typed as Object and the deep-copy contract is broken for mutable values. The Javadoc at line 9 claims 'all fields are immutable value types (String / boxed primitives / enum)', but Object accepts anything. copyOf at line 57 does a reference copy: copy.customFieldValue = source.customFieldValue. If a caller stores a List or Map (both valid from CustomFieldValueValidator — e.g., future multi-value fields), the snapshot and the original share the same mutable object, violating Decision 3 (snapshot must be independent of future edits to Funnel.steps). The unit test deepCopyProducesIndependentStep does not exercise customFieldValue at all, so the gap is untested.",
+      "recommendation": "Either (a) narrow the type to the actual persisted union (String | Double | Boolean | Instant) and use a sealed interface or keep Object but document that only immutable JDK value types are valid and add a test asserting that a List-valued customFieldValue is independent after copyOf, OR (b) keep Object and add a defensive copy inside copyOf: if source.customFieldValue is a Collection or Map, clone it (e.g., via BSON round-trip or explicit instanceof branches). The simplest safe fix for Phase 1 where only scalar types are used: add a comment in copyOf and add a test with a String customFieldValue to lock the current contract; document explicitly that mutable types are not supported until a copy strategy is implemented."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/Funnel.java",
+      "line": "42-43",
+      "finding": "Redundant @Indexed on projectId field. The @CompoundIndex(projectId_status) definition already has projectId as the leading key, so MongoDB can satisfy projectId-only prefix queries (e.g. FunnelRepository.findByProjectId) using the compound index. The standalone @Indexed creates a second index on {projectId: 1} that writes to on every insert/update and consumes additional storage without providing query benefit that the compound index does not already cover. The equivalent pattern in Bot.java is justified because Bot's partial-unique compounds don't have projectId as a pure prefix for all query shapes, and findByProjectId is hot. For Funnel the compound covers it.",
+      "recommendation": "Remove @Indexed from Funnel.projectId. FunnelRepository.findByProjectId(String projectId) will still be served by the (projectId, status) compound index prefix. If an unfiltered projectId scan ever needs its own selective index in the future, add it with explicit justification."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepTest.java",
+      "line": "15-39",
+      "finding": "deepCopyProducesIndependentStep does not test the customFieldValue field, which is the only field in FunnelStep whose type (Object) permits mutable values. The existing test only mutates text and order (immutable String and int), which cannot demonstrate a reference-sharing bug. The gap means the broken copy contract for mutable customFieldValue (see major finding above) has no regression coverage.",
+      "recommendation": "Add a test case that sets customFieldValue to a String (current valid state) and asserts the copy is independent. If/when mutable types are supported, add a test with a List value that verifies mutating the copied list does not affect the source list."
+    }
+  ],
+  "summary": "The domain model, annotation-driven indexes, lowercase-enum/partialFilter byte-match, static class-load asserts, and repository surface are all correct and match the spec. The partial-filter literals ('active', 'running', 'waiting') are lowercase and the static assertions in Funnel and FunnelExecution correctly guard against silent renames. FunnelExecutionRepository is intentionally method-free with proper justification. The IT test fully exercises index keys, uniqueness, and the $in partialFilterExpression for the re-enter guard with exact ordered assertion. One major correctness gap exists: the deep-copy in FunnelStep.copyOf copies customFieldValue by reference, which violates the Decision-3 snapshot contract if a mutable value (List/Map) is ever stored there; the Object type and the test gap both contribute to this risk. One minor: redundant @Indexed on Funnel.projectId creates an unnecessary extra index alongside the (projectId, status) compound."
+}

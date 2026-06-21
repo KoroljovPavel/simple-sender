@@ -1,0 +1,69 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Task 10 line 168 describes `e2e/subscribers.spec.ts` as an exemplar of `page.route()`-stubs, `stubAuth`, and `makeX()` factories. In reality `subscribers.spec.ts` uses a REAL backend (health-probe on localhost:8080, `test.skip` when down) — it contains zero calls to `page.route()`, `stubAuth`, or any factory. The pattern cited does not exist in that file. A developer following this hint will find no such pattern and may apply an invented approach that breaks the E2E suite.",
+      "fix": "Replace the description of `e2e/subscribers.spec.ts` to accurately reflect the real-backend + `test.skip` pattern: real API calls, `E2E_*` env vars, `test.skip(!backendUp, ...)`. For the funnels E2E the task must decide on an approach (real backend like subscribers.spec.ts, or page.route stubs as a new pattern) and describe it correctly. If page.route stubs are the intended approach, point to a real exemplar (e.g., `e2e/projects.spec.ts`) or acknowledge this is a new pattern the implementor must establish."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Task 10 line 170 cites `vi.stubGlobal('useApi')` as the Vitest mocking pattern in `tests/components/AddCustomFieldDialog.spec.ts`. The actual file uses `mockNuxtImport('useApi', () => () => apiMock)` from `@nuxt/test-utils/runtime` — there is no `vi.stubGlobal` call in that file. An implementor who follows the hint will use the wrong mock API, which does not work for Nuxt auto-imports and will cause the specs to not intercept the composable correctly.",
+      "fix": "Correct the hint to: `mockNuxtImport('useApi', () => () => apiMock)` from `@nuxt/test-utils/runtime` (plus `vi.hoisted(() => ({ apiMock: vi.fn() }))` to hoist the mock ref). Remove the reference to `vi.stubGlobal('useApi')`."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "The i18n parity claim is ambiguous/misleading. Task 10 says the `tests/i18n/required-keys.spec.ts` parity gate 'лишається зеленим із новими ключами'. Inspection shows that `required-keys.spec.ts` is a FIXED-key list test (only specific subscribers/projects keys) — it does NOT do a full uk/en symmetric diff, so adding funnels keys neither breaks it nor validates their parity. The actual parity check is in `scripts/check-locales.mjs` (run via `node scripts/check-locales.mjs`). The task's Verification Steps do correctly list `node scripts/check-locales.mjs`, but the TDD Anchor and inline description point readers to the wrong tool for parity enforcement.",
+      "fix": "Update the TDD Anchor (line 99) and the inline description to say: 'i18n parity is validated by `scripts/check-locales.mjs` (run as `node scripts/check-locales.mjs`); `required-keys.spec.ts` tests only a fixed set of older keys and is unaffected by funnels additions.' Keep the `node scripts/check-locales.mjs` step in Verification Steps as the canonical parity check."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 10,
+      "issue": "Task 10 depends on Task 9's artifacts (`stores/funnels.ts`, `components/funnels/`, `pages/projects/[projectId]/funnels/`, i18n base block) which do not exist on disk yet (checkpoint shows `last_completed_wave: 0`, no tasks done). This is expected given `depends_on: [5, 9]` and `wave: 4`. However, the Context Files section references `stores/funnels.ts` (line 174-175) as a file to read at task-start, and says 'якщо потрібного екшну немає — додати'. The task must read decisions.md for the Task 9 summary before reading store code that may not yet exist. This is a feasibility concern: if Task 10 runs before Task 9 completes, the file-read in Context Files will fail silently.",
+      "fix": "Add a guard note: 'Read `stores/funnels.ts` only after confirming Task 9 is `done` in decisions.md. If not present, check decisions.md for the store API first and create any missing actions as part of this task.' This is already implicit from depends_on but should be explicit in Context Files to prevent confusion."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 12,
+      "issue": "Task 12 Context Files section (lines 105-107) uses broken relative paths for PK references: `.claude/skills/project-knowledge/references/project.md`, `.claude/skills/project-knowledge/references/architecture.md`, `.claude/skills/project-knowledge/references/patterns.md`. The file lives at `work/10-funnels/tasks/12-security-audit.md`, so these paths resolve to `work/10-funnels/tasks/.claude/...` which does not exist. Task 11 correctly uses `../../../.claude/skills/project-knowledge/references/...`. This was already flagged in batch3 (template-batch3-review.json) but the fix was NOT applied — the file still contains the broken paths.",
+      "fix": "Prefix all three paths with `../../../`: `../../../.claude/skills/project-knowledge/references/project.md`, `../../../.claude/skills/project-knowledge/references/architecture.md`, `../../../.claude/skills/project-knowledge/references/patterns.md`. (Same fix as batch3 recommendation — apply it.)"
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 12,
+      "issue": "Task 12 Required Skills section (line 16) links to `.claude/skills/security-auditor/SKILL.md` without the `../../../` prefix. Same root cause as the Context Files paths. This was flagged in batch3 (minor) but not fixed.",
+      "fix": "Change to `../../../.claude/skills/security-auditor/SKILL.md` in both the display text and href."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 'What to do' step 4 writes the audit report to `work/10-funnels/logs/code-audit.md` (not under `work/10-funnels/logs/tasks/`). The path is absolute-safe and the directory exists. However, `decisions.md` currently contains only a stub (986 bytes) with no per-task summaries yet (no tasks are done). Step 1 instructs the auditor to 'Build the file inventory from decisions.md per-task summaries' — when Task 11 runs (after all 1-10 are done), this should be populated. No action needed if execution order is respected; the dependency `depends_on: [1..10]` enforces it.",
+      "fix": "No change needed — the dependency chain is correct. Minor advisory only."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 10,
+      "issue": "The TDD Anchor for `FunnelTriggerSettings.spec.ts` (line 97-98) says the test should verify 'кнопка Copy кличе `navigator.clipboard.writeText` із повним лінком'. The implementation hint (line 243) correctly notes 'у Vitest замокати `navigator.clipboard`'. However, neither the TDD Anchor nor the hints specify HOW to mock `navigator.clipboard` in the nuxt test environment (e.g., `vi.stubGlobal('navigator', { clipboard: { writeText: vi.fn() } })`). This is not a blocker but the implementor will need to work this out, since the `mockNuxtImport` pattern does not apply here.",
+      "fix": "Add a hint: 'Mock clipboard via `vi.stubGlobal(\"navigator\", { clipboard: { writeText: vi.fn() } })` before the test (this is a global browser API, not a Nuxt composable, so `vi.stubGlobal` IS correct here unlike `useApi`).' This prevents confusion with the `vi.stubGlobal` vs `mockNuxtImport` distinction."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 28,
+    "issues_found": 8
+  }
+}

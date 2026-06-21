@@ -1,0 +1,107 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "batch_number": 99,
+  "iteration": 2,
+  "focus": "cross-task integration (section F only)",
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": "4 and 7",
+      "issue": "SubscriberService project-scoped findById ownership is ambiguous — both tasks unconditionally declare they will add it, without a clear single owner. Task 4 says 'ADD a minimal project-scoped Optional<Subscriber> findById(String projectId, String subscriberId) to SubscriberService / SubscriberServiceImpl … Coordinate with Task 7 so this boundary method is added exactly once'. Task 7 says 'Coordinate with Task 4 so this method is added EXACTLY ONCE'. Both tasks list SubscriberService.java and SubscriberServiceImpl.java under 'Code — modify'. The coordination guidance exists in both tasks, but neither task is designated as the unconditional owner with the other reusing it. If both agents run in parallel (Wave 2 vs Wave 4) or in sequence without reading decisions.md first, both will independently add the method, producing a duplicate method body or a merge conflict.",
+      "fix": "Designate Task 4 as the single owner (it is earlier in the wave order and is the first consumer). Revise Task 7 to say: 'SubscriberService.findById was added in Task 4 — read it and reuse it; DO NOT add a second implementation'. Remove SubscriberService.java and SubscriberServiceImpl.java from Task 7's 'Code — modify' list unless the project-scoped findById is genuinely absent after Task 4 runs (which it shouldn't be)."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": "4 and 5",
+      "issue": "Spring bean cycle is a startup-fatal cross-task integration risk spanning Tasks 4 and 5. Task 4 creates FunnelEventService and must break the cycle FunnelEventService → FunnelTriggerServiceImpl → FunnelExecutionEngine → StepExecutor → FunnelEventService (the last edge is added by Task 5). Task 4 documents the fix (extract FunnelExecutionFactory or use @Lazy), but the fix requires the agent executing Task 4 to anticipate the injection edge that Task 5 will add later. If Task 4 is implemented without the factory/lazy fix (e.g. by an agent that judges the cycle is not yet present at Task 4 time), Task 5 will cause a BeanCurrentlyInCreationException at application startup with no obvious fix path. The cycle does not exist until both tasks are merged, so automated tests at Task 4 time cannot catch it.",
+      "fix": "Task 4 already documents the preferred fix (FunnelExecutionFactory). Strengthen it by making the factory non-optional: change the task language from 'Preferred fix — extract a small package-private collaborator bean' to a hard requirement, and add an explicit acceptance criterion: 'The injection graph FunnelEventService → FunnelExecutionFactory has NO edge back into FunnelExecutionEngine or StepExecutor — verified by a Spring context-load test that stubs StepExecutor with a no-op bean to simulate the Task-5 wiring before Task 5 exists'."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": "1 and 4",
+      "issue": "FunnelRepository ownership boundary has an undeclared risk: Task 1 says 'this task OWNS every FunnelRepository change for the feature' and Task 4 says 'DO NOT MODIFY FunnelRepository.java — Task 1 owns those queries; Task 4 only calls the list/keyword/single-result queries Task 1 ships'. This is well-documented, BUT Task 4's depends_on is [1], meaning in a sequential team execution Task 1 must complete before Task 4 starts. If execution order is respected, there is no problem. However, there is no mechanism preventing Task 4 from accidentally modifying FunnelRepository (the prohibition is a text note, not a structural guard). If a coding agent modifies FunnelRepository in Task 4, it will create a merge conflict or overwrite Task 1's methods.",
+      "fix": "Add an explicit acceptance criterion to Task 4: 'git diff shows zero modifications to FunnelRepository.java — all repository calls were already present after Task 1'. This makes the constraint machine-verifiable. Minor: the existing cross-task ownership note in Task 1 step 5 and Task 4 step 2 is clear enough for a careful agent, so this is critical only if parallel execution is attempted without enforcing depends_on."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": "1 and 2",
+      "issue": "FunnelIndexesIT update ownership is split across Tasks 1 and 2 in a potentially contradictory way. Task 1 says its TDD Anchor includes 'funnel/FunnelIndexesIT::onStartUniqueRelaxedToOnStartOnly (IT) — two active event funnels with the same triggerValue coexist'. Task 2 says 'Update FunnelIndexesIT for the Phase 3 index shape (this task OWNS these changes)' and lists 'FunnelIndexesIT.java — UPDATE' under 'Code — modify'. Both tasks declare they will add new assertions to FunnelIndexesIT, with Task 2 claiming ownership. Task 1 says 'this IT depends on the Task-2 migration to drop the old index at boot; if Task 2 is not yet merged, scope this IT's assertion to the annotation shape via listIndexes() and leave the coexistence assertion for the Task-2 IT'. The scoping guidance partially resolves this, but if both agents write to FunnelIndexesIT without explicit merge coordination, they will produce a conflict in the same file.",
+      "fix": "Consolidate all FunnelIndexesIT changes into Task 2 exclusively. Remove the FunnelIndexesIT anchor from Task 1's TDD Anchor entirely and add a note: 'FunnelIndexesIT is OWNED by Task 2 — do not add assertions there; the annotation-shape check can live in a separate FunnelAnnotationTest if needed'. Task 2 already has the full set of required assertions."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": "7 and 5",
+      "issue": "Inconsistent rate-limit initialization approach between Task 5 and Tasks 4/7. Task 4 and Task 7 both add Redis rate-limit logic mirroring SubscriberServiceImpl.startRateLimitExceeded (INCR/EXPIRE fail-open idiom with greppable WARN). Task 5 adds the trigger dispatch hooks in SubscriberServiceImpl.addTag and recordCustomFieldsSet. The depth propagation via explicit parameter is consistent. However, Task 5's Details section says 'inject FunnelEventService' into SubscriberServiceImpl but does not address that SubscriberServiceImpl already owns the startRateLimitExceeded rate-limit idiom — if the agent for Task 5 also needs to touch the rate-limit logic (e.g. for the auto-enroll counter that belongs to FunnelEventService called from SubscriberServiceImpl), it could inadvertently duplicate or compete with the rate-limit in Task 4. The concern is minor given the clear single-owner design, but worth flagging.",
+      "fix": "Add a note to Task 5: 'Do NOT add any rate-limit logic in SubscriberServiceImpl — the auto-enroll rate-limit is owned entirely by FunnelEventService (Task 4). This task only calls FunnelEventService.dispatchForSubscriber; all backstop enforcement happens inside that call'."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": "4 and 5",
+      "issue": "Depth threading parameter signature consistency between Task 4 (dispatcher) and Task 5 (writers/StepExecutor) is correct in both tasks but relies on Task 5 reading the actual signature from Task 4 at execution time. Task 4 defines: dispatchForSubscriber(String projectId, String subscriberId, String triggerType, String matchKey, int originDepth). Task 5 says: 'call dispatchForSubscriber(projectId, subscriberId, triggerType, matchKey, originDepth)' and notes the Task 4 contract 'may not exist yet at task start'. Task 5's addTag and recordCustomFieldsSet signatures gain an explicit int originDepth parameter (correct). The risk is that Task 5's description uses informal parameter names (e.g. 'slug', 'originDepth') without repeating the full formal signature from Task 4. An agent for Task 5 that does not read Task 4's actual output could guess a wrong parameter order.",
+      "fix": "Task 5 already advises reading FunnelEventService.java from Task 4 before starting. Strengthen the TDD Anchor test name to include the exact expected parameter order: 'dispatch(projectId, subscriberId, \"tag_added\", slug, depth)' so a signature mismatch would cause a compile error visible in the test before the task is marked done."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": "9 and 10",
+      "issue": "i18n locale file (uk.json, en.json) is co-owned by Tasks 9 and 10 in different waves (Wave 5 and Wave 6 respectively). Task 10 is intentionally serialized after Task 9 (depends_on: [8, 9]) specifically to avoid this merge collision. This is correctly handled. However, Task 9 also says 'Do not touch locale areas reserved for Task 10' with no mechanism to enforce the boundary between funnels.* keys (Task 9) and projects.settings.apiKey.* keys (Task 10). If an agent for Task 9 accidentally adds keys under projects.settings or if Task 10 adds something under funnels.*, a silent double-add or missing-key would fail the locale parity gate only at build time.",
+      "fix": "Add to Task 9: 'Task 9 ONLY adds keys under funnels.trigger.* and funnels.steps.type.EMIT_EVENT + funnels.steps.form.* + funnels.steps.validation.*. Do NOT touch projects.settings.* — that namespace is reserved for Task 10'. Add to Task 10: 'Task 10 ONLY adds keys under projects.settings.apiKey.*. Do NOT touch funnels.* — that namespace was completed by Task 9'. This is a guardrail, not a fundamental design flaw."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": "7 and 8",
+      "issue": "Task 8 (ApiKeyController) runs in Wave 4 alongside Task 7, with depends_on: [3] only — not on Task 7. Task 8's Details section says 'Confirm after merging Task 7 that the @Order(2) session chain does not misdirect requests'. This cross-task dependency is advisory (a note, not a declared depends_on). If Task 8 is executed before Task 7 completes, the @Order annotations do not yet exist, and the controller may be incorrectly matched by the existing (un-reordered) session chain during development testing. This is not a production correctness issue (both tasks are in Wave 4), but it is a cross-task verification concern for agent teams running them in parallel.",
+      "fix": "Add depends_on: [3, 7] to Task 8, or at minimum add a note: 'If Task 7 is not yet merged, note that the session chain may not yet have @Order(2) — verify the ordering after Task 7 lands, not just at Task 8 execution time'."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": "4",
+      "issue": "FunnelEventService is correctly defined as a single @Service singleton in the tech-spec Shared Resources table. Task 4 creates it. All four consumers (Task 5/6/7 plus StepExecutor from Task 5) inject it via constructor. No task duplicates the @Service. However, the tech-spec shared-resources table lists FunnelEventService owner as 'Spring (@Service)' — it does not pin the creation to Task 4 explicitly. The Shared Resources section does not reference task numbers. If an agent misreads the table and decides to create a local dispatcher bean in e.g. EventsController (Task 7), the duplication would be invisible until the code audit (Task 11).",
+      "fix": "Minor: already covered by Task 7's 'read FunnelEventService.java from Task 4'. Task 11 (Code Audit) explicitly checks this. No immediate change needed — the existing note in Task 7 (read the file, call the service, do not re-implement) is sufficient."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": "4 and 7",
+      "issue": "Redis rate-limit key namespace consistency: Task 4 uses bf:rate:auto-enroll:{subscriberId} (per-subscriber auto-enroll) and Task 7 uses bf:rate:events (global /events limit). The tech-spec Decision 10 and the Shared Resources table document both keys with distinct prefixes. Both tasks reference SubscriberServiceImpl.startRateLimitExceeded as the idiom to mirror. The INCR/EXPIRE + fail-open shape is consistent. The only minor risk is that Task 7 must not accidentally reuse the bf:rate:auto-enroll prefix (which would collide with Task 4's per-subscriber key). Both tasks document the correct key names, so this is low-risk.",
+      "fix": "No change required — the key names are explicit in both task descriptions and the tech-spec. Task 11 (Code Audit) has an explicit checkpoint for Redis key collisions."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": "2 and 1",
+      "issue": "Task 2's depends_on is [] (Wave 1, same wave as Task 1). The note says 'Logically depends on Task 1 (the @CompoundIndex partial filter change) for the end-to-end relax to take effect, but depends_on: [] per the tech-spec (both are Wave 1, foundation, no file overlap)'. This is a correctly documented logical dependency with no code import — the runner inspects/drops a named index by string and does not import Task 1 code. The risk is that on a fresh DB, the runner runs before auto-index-creation applies Task 1's new annotation shape, producing a race. The task notes this: 'no-op when already migrated'. The race is benign (both paths are idempotent), but a developer running them in strict parallel could observe unexpected log output.",
+      "fix": "The task already handles this correctly. Add a note: 'On a fresh DB, if this runner executes before auto-index-creation recreates the new annotation shape, it will find no old broad-filter index (no-op path) — auto-index will then create the correct shape. This is the correct behavior; no dependency ordering change is needed'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 15,
+    "cross_task_claims_verified": 38,
+    "issues_found": 11,
+    "critical": 4,
+    "major": 4,
+    "minor": 3
+  },
+  "cross_task_specific_verifications": {
+    "FunnelRepository_single_owner": "PASS — Task 1 explicitly claims sole ownership; Task 4 explicitly says DO NOT MODIFY. Clear single-owner pattern.",
+    "FunnelIndexesIT_single_owner": "FAIL (critical) — Task 1 TDD Anchor and Task 2 both declare changes to FunnelIndexesIT. Task 2 claims ownership but Task 1 still lists the IT in its TDD Anchor without deferring fully.",
+    "SubscriberService_findById_single_owner": "FAIL (critical) — Both Task 4 and Task 7 list SubscriberService.java under 'Code — modify' and describe adding the project-scoped findById. Coordination guidance is present but ownership is not enforced structurally.",
+    "FunnelEventService_single_creation": "PASS — Only Task 4 creates FunnelEventService @Service. Tasks 5/6/7 are read-only consumers. No duplicate creation.",
+    "depth_threading_signature_consistency": "PASS with note — Task 4 defines the signature dispatchForSubscriber(..., int originDepth). Task 5 correctly threads originDepth as an explicit parameter through addTag/recordCustomFieldsSet. Task 6 uses originDepth=0 (keyword = human root). Task 7 uses originDepth=0 (external api-event = root). StepExecutor uses execution.getEnrollDepth()+1. All callers are consistent.",
+    "spring_bean_cycle_prevention": "FAIL (critical) — The cycle is real and documented in Task 4 but the fix (FunnelExecutionFactory) is marked 'preferred' not mandatory, and there is no acceptance criterion that forces verification of the StepExecutor→FunnelEventService edge before Task 5 is merged.",
+    "redis_key_namespace_collision": "PASS — bf:rate:auto-enroll:{subscriberId} (Task 4) and bf:rate:events (Task 7) are documented as distinct. No collision.",
+    "error_isolation_consistency": "PASS — All four dispatch paths (keyword Task 6, tag/field Task 5, EMIT_EVENT Task 5, api-event Task 7) route through FunnelEventService which owns the try/catch(Throwable). No second swallow in callers except the outer keyword block in ProcessTelegramUpdateJob (Task 6), which is correct per Decision 12.",
+    "SecurityFilterChain_ordering": "PASS — Task 7 adds @Order(1) to the integrations chain and demotes the session chain to @Order(2). Task 8 notes the dependency. No task re-declares the chain.",
+    "locale_file_co_ownership": "PASS with note (major) — Serialization via depends_on: [8, 9] on Task 10 is correct. Key namespaces are documented but boundaries are advisory, not structurally enforced."
+  }
+}

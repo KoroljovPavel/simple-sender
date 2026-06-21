@@ -1,0 +1,84 @@
+{
+  "verdict": "warn",
+  "issues": [
+    {
+      "category": "missing_coverage",
+      "finding": "Unit tests listed cover only TokenService, AuthService (partial), EmailService, HardDeleteJob, and frontend Zod schemas. UserService (status transitions: pending→active, active→blocked, blocked→active, active→deleted), ProfileService (change-password BCrypt verify branch, soft-delete logic), EventService (each event type written correctly), and SuperAdminSeeder (promote-existing branch vs create-new branch) have no corresponding unit tests described. For an L-size feature this is a significant gap — these are decision-heavy branches that are fast to unit-test in isolation.",
+      "severity": "warn"
+    },
+    {
+      "category": "missing_coverage",
+      "finding": "Integration test list does not include a test that asserts entries in the `events` collection after auth actions. The acceptance criteria explicitly lists 'Auth events logged in events collection: login_success, login_failed, password_changed, email_verified, account_deleted'. Without an integration test that queries the events collection after each relevant action, this AC cannot be agent-verified. The AVP table also omits this step.",
+      "severity": "warn"
+    },
+    {
+      "category": "missing_coverage",
+      "finding": "Brute-force counter RESET after successful login is an explicit acceptance criterion ('DEL brute:fail:{email}' on success) but is not listed as a distinct integration test scenario. The existing brute-force test only covers 'wrong password x5 → 429 on 6th'. A separate test should: trigger 3 failed logins, then login successfully, then verify the next failed login does NOT trigger 429 at attempt 4 (i.e., counter was reset). Without this, the counter-reset code path can be deleted without any test failing.",
+      "severity": "warn"
+    },
+    {
+      "category": "missing_coverage",
+      "finding": "No integration test or E2E test covers the EmailService fire-and-forget error isolation: when JavaMailSender throws, registration must still return 201 and the error must not propagate. This is an explicit user-spec requirement ('Якщо email-сервіс недоступний → 201 повертається, помилка логується, деталі не розкриваються'). It is also an acceptance criterion. The only EmailService unit test checks that JavaMailSender was called with correct args, not that a throw is swallowed. A negative unit test with a throwing mock is needed.",
+      "severity": "warn"
+    },
+    {
+      "category": "missing_coverage",
+      "finding": "No test scenario covers calling GET /api/auth/verify-email with a valid token for a user that is already in 'active' status (re-verification attempt). The spec says lookup requires 'status IN (pending, active)' — so an already-active user could theoretically re-verify. The expected behavior (idempotent 200 vs 400) is unspecified in the tech-spec and untested. This is a behavioral gap that could surface as a bug.",
+      "severity": "warn"
+    },
+    {
+      "category": "pyramid_violation",
+      "finding": "E2E coverage for L-size feature is thin: only 2 flows (registration golden path, forgot-password). Missing E2E flows: (1) unauthenticated access to /dashboard → redirect to /auth/login (tests the Nuxt auth middleware end-to-end, which cannot be tested by backend integration tests), (2) 'remember me' session persistence across browser restart, (3) profile page actions (change name, terminate-all-sessions confirmation). The auth middleware is frontend-only logic — if there are no E2E tests for it, the only verification is manual. For an L-size feature with auth middleware as a key deliverable, 2 E2E flows is insufficient.",
+      "severity": "warn"
+    },
+    {
+      "category": "missing_coverage",
+      "finding": "Agent Verification Plan step 'Session TTL (rememberMe=true vs false) → Different maxInactiveInterval values in session' does not specify the verification mechanism. The agent cannot inspect maxInactiveInterval from the HTTP response alone — it requires either a MongoDB query on the sessions collection or a dedicated endpoint. Without specifying HOW the agent reads the TTL value, this AVP step is unexecutable and may pass silently even if the rememberMe logic is broken.",
+      "severity": "warn"
+    },
+    {
+      "category": "missing_coverage",
+      "finding": "Integration test for login with 'pending' user is listed as '→ 200 (with warning in response)' but does not specify asserting the warning field value. The acceptance criterion is '200 + SESSION cookie + {warning: \"email_not_verified\"}'. The test description should explicitly state that the response body is asserted to contain the warning field — otherwise an implementation that returns 200 with an empty body would pass.",
+      "severity": "info"
+    },
+    {
+      "category": "missing_coverage",
+      "finding": "No test covers the 'soft-deleted email within 30d window' scenario for the login endpoint. The spec only blocks registration in this window, but the behavior of login with a soft-deleted account (status=deleted) is not explicitly tested. If a deleted user tries to log in, the expected response (403? 401? specific message?) is unspecified and untested.",
+      "severity": "info"
+    },
+    {
+      "category": "missing_coverage",
+      "finding": "AVP table does not include a step for verifying event logging in the events collection. The AC 'Auth events logged in events collection' is only verifiable by querying MongoDB after actions like login, registration, and account deletion. An agent running only ./gradlew test will pass this AC only if the integration tests assert on the events collection — but those assertions are not described in the testing strategy.",
+      "severity": "info"
+    }
+  ],
+  "missing_scenarios": [
+    "Unit test: UserService status transition methods (pending→active, active→blocked, soft-delete) with mocked repository",
+    "Unit test: ProfileService change-password with wrong current password (should return error) vs correct current password",
+    "Unit test: EventService — each event type written to repository with correct fields",
+    "Unit test: SuperAdminSeeder promote-existing branch (user exists, isSuperAdmin=false → promote) vs create-new branch",
+    "Unit test: EmailService throws → registration still completes (fire-and-forget negative test with throwing mock)",
+    "Integration test: brute-force counter reset — 3 failed logins, then 1 success, then verify counter is 0 (next fail doesn't 429 at attempt 4)",
+    "Integration test: events collection assertions after login_success, login_failed, email_verified, password_changed, account_deleted",
+    "Integration test: login with status=deleted user → explicit expected HTTP status and message",
+    "Integration test: GET /api/auth/verify-email with already-active user token → defined behavior (200 idempotent or 400)",
+    "Integration test: login pending user — assert response body contains {warning: 'email_not_verified'} field explicitly",
+    "E2E test (Playwright): unauthenticated GET /dashboard → redirect to /auth/login (validates Nuxt auth middleware)",
+    "E2E test (Playwright): 'remember me' — login with rememberMe=true, close browser, reopen → session still active",
+    "AVP step: after login integration test, query Testcontainer MongoDB sessions collection and assert maxInactiveInterval value directly"
+  ],
+  "positives": [
+    "Testcontainers singleton pattern (AbstractIntegrationTest) with all 3 containers (MongoDB 8.0, Redis 7.4, Mailpit) is the correct and production-representative approach for this stack",
+    "Mailpit token extraction from email body is explicitly described — this covers the full email flow including token parsing, not just SMTP delivery confirmation",
+    "Integration test coverage of the full auth lifecycle is comprehensive: registration, verify, resend, login (all statuses), logout, forgot-password, reset-password, profile CRUD, terminate-all-sessions, delete-account, hard-delete job, super-admin seed",
+    "Logout isolation test (create 2 sessions, logout one, verify other still valid) correctly tests the 'only current session invalidated' requirement",
+    "Reset password test includes all 4 token failure modes: expired, already-used, invalid, and valid-then-verify-old-password-rejected",
+    "Hard-delete job boundary test (31d user deleted, 29d user remains) correctly validates the 30d boundary condition",
+    "Super Admin seed idempotency test (run twice → exactly 1 record) is correctly specified",
+    "Decision 6 rationale for Testcontainers over flapdoodle is sound — MongoDB 8.0 compatibility is a real constraint",
+    "Agent Verification Plan is table-structured and references in-process test execution (no external services required) — this is executable",
+    "Frontend form validation unit tests with Vitest are specified for the right layer (Zod schema validation belongs in unit tests, not E2E)",
+    "80% coverage target is scoped to specific packages (auth, user, profile, email, events) rather than the whole codebase — this is realistic and measurable"
+  ],
+  "summary": "The testing strategy for 02-auth is structurally sound: Testcontainers setup is correct, integration test coverage is broad, and Mailpit token extraction is properly described. The main gaps are: (1) unit tests are thin for the volume of service-layer business logic being written — UserService, ProfileService, EventService, and SuperAdminSeeder branches are not covered at the unit level; (2) the events collection is an explicit AC but has no assertion in the integration test descriptions or AVP; (3) brute-force counter reset after successful login is an untested AC; (4) E2E coverage is thin (2 flows) for an L-size feature where the Nuxt auth middleware is a key deliverable that only E2E can verify; (5) the AVP session TTL step is unexecutable as written. None of these are blocking (no behavior is completely untested), but several ACs risk passing CI while the feature is broken. Verdict: warn — add the missing unit test descriptions and event-collection assertions before implementation begins."
+}

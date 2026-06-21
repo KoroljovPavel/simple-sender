@@ -1,0 +1,114 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-validation-defer",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "item": "validateSteps boolean split",
+      "result": "PASS — update() calls validateSteps(steps, projectId, false); activate() calls validateSteps(steps, projectId, true); testRun() calls validateSteps(steps, projectId, true). Three call sites, each with the correct content flag. No double-validation: activate() re-validates against the persisted (already format-validated) steps, which is the correct semantics (defence-in-depth, not a logical double-run). The ALWAYS-ON block (step count, UNKNOWN reject, FORMAT-IF-PRESENT injection guards) executes regardless of the flag; the content block is short-circuited with `if (!content) continue`. The split is clean."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "item": "funnel_broken_edge placement",
+      "result": "PASS — requireExistingTarget() calls live inside the `if (!content)` guard block at lines 1329-1330 and inside validateMessage → validateButtons. Both are under the content=true branch only. A draft PATCH with a dangling next/timeout/button target saves freely; activate 422s. Matches spec."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "item": "validateTriggersContent placement",
+      "result": "PASS — validateTriggersContent(funnel.getTriggers()) is called only in activate() (line 385), not in update() or testRun(). This is correct: trigger presence (non-empty keyword, tag slug, event name) is an activation gate. testRun bypasses trigger matching entirely (enrolls the author directly), so not re-validating trigger content there is deliberate and correct."
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "item": "FORMAT-IF-PRESENT injection guards on draft save",
+      "result": "PASS — requireTagSlugFormatIfPresent and requireEventNameFormatIfPresent run in the ALWAYS-ON switch block (before the `if (!content) continue` guard). A present-but-malformed tagSlug/eventName still 422s on draft save. The content-deferral is strictly presence-only; malformed stored values are rejected unconditionally. SSRF guard (media URLs) and scheme-injection (URL buttons, media sources) are both inside validateMessage → content=true only, which is correct because they cannot be stored at all in a draft (validateMessage requires at least one content block before those reach the URL check)."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "item": "No path that skips structural checks",
+      "result": "PASS — create() does not call validateSteps at all (new funnel born with empty steps[]). update() always passes through toSteps() then validateSteps(..., false). activate() reads the already-persisted steps and validates with content=true. testRun() reads the already-persisted steps and validates with content=true. duplicate() copies steps verbatim without re-validation — this is the established pattern (copies are always born draft; structural integrity was already enforced at the source funnel's last save). No path bypasses the structural / security checks."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "item": "stepReady / persistSteps removal",
+      "result": "PASS — neither symbol appears anywhere in the file. The comment at line 119 explicitly calls out the removal. All five canvas handlers (onCanvasSteps, onCanvasTriggers, onCanvasNotes, onNodeDragStop, onCanvasStepSave) call persist() directly without any readiness guard."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "item": "Bug regression: delete start node while incomplete ADD_TAG exists",
+      "result": "PASS — onCanvasTriggers(next) updates triggers.value and calls persist() unconditionally (line 252-255). The trigger-watch debounce is bypassed entirely for canvas emits (they call persist() directly, not scheduleTriggerPersist). Deleting the start node emits update:triggers with entryStepId:null; onCanvasTriggers is invoked and persist() fires with no step-readiness check. The incomplete ADD_TAG step rides along in the full-replace PATCH body unchanged. The user's bug is fixed."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "item": "Trigger-watch debounce (triggerReady gate kept)",
+      "result": "PASS — scheduleTriggerPersist still guards against incomplete triggers on the keyboard-driven autosave path (line 314: `if (!triggers.value.every(triggerReady)) return`). This is correct and deliberate: an in-progress trigger field edit (e.g. typing a partial event name) should not fire 50 PATCHes per second; the gate prevents flushing while the value is still mid-type AND not yet format-valid. This is NOT a step-readiness withhold — steps are not checked here. Matches the comment at line 296."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "item": "stepSaveFeedback banner removal",
+      "result": "PASS — no reference to stepSaveFeedback, funnel-step-save-feedback, or stepSaveIncomplete exists in the file. The banner template element is gone."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "frontend/i18n/locales/en.json + uk.json",
+      "item": "funnels.canvas.stepSaveIncomplete key removal",
+      "result": "PASS — the key is absent from both locale files (diff confirms -1 line each). check-locales.mjs parity gate: both files had the key in the same namespace section so removal from both is symmetric; parity is preserved."
+    },
+    {
+      "severity": "info",
+      "category": "cross-file-consistency",
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "item": "Residual references to stepReady / persistSteps in comments",
+      "result": "INFO (not a blocker) — lines 320-321 in FunnelCanvas.client.vue reference `stepReady()` and `persistSteps()` in a historical-context comment explaining a past bug fix. These are in-comment explanations of old behavior, not live symbol references. The symbols are not imported or called anywhere in the canvas component. The comment accurately describes the pre-fix state as background context. No dangling code path."
+    },
+    {
+      "severity": "info",
+      "category": "testing",
+      "file": "frontend/tests/pages/funnel-editor.spec.ts",
+      "item": "Test coverage for new contract",
+      "result": "PASS — the 'drafts persist freely (no step-readiness withhold)' describe block at line 898 covers: (1) incomplete MESSAGE node PATCHes; (2) incomplete DELAY node PATCHes; (3) original 'add empty step → 422' bug now PATCHes; (4) incomplete step alongside valid one PATCHes; (5) the exact user regression — delete start node while incomplete ADD_TAG exists still persists the delete (line 971). All five paths assert storeMock.update called exactly once and the body matches expectation."
+    },
+    {
+      "severity": "info",
+      "category": "testing",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "item": "Backend test coverage for draft-vs-activate split",
+      "result": "PASS (per diff) — new helper assertStepSavesAsDraftButRejectedOnActivate covers the draft→200+GET roundtrip and activate→422 path for incomplete step types. The 12 former update*Returns422 tests for MESSAGE content + keyboard duplication are migrated to the activate-422 shape. Malformed tagSlug still 422s on draft save (stays in the update path). FunnelServiceKeyboardStepTest migrated to activate."
+    },
+    {
+      "severity": "info",
+      "category": "readability",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "item": "Code style and comments",
+      "result": "PASS — the boolean parameter `content` follows the established project style (single-word descriptive param). The inline comments at lines 257-261 and 379-381 clearly document the split rationale for future maintainers. All new private helpers (requireTagSlugFormatIfPresent, requireEventNameFormatIfPresent, formatTagSlugIfPresent, formatEventSlugIfPresent, normalizeKeywordsCapped, validateTriggersContent) are ≤15 lines each, well within the 50-line function guideline."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "item": "SUBSCRIBE_TO_FUNNEL content validation call site",
+      "result": "PASS — validateSubscribeTarget (which does a DB read for the target funnel) is under the content=true branch (line 1315 inside the content switch). A draft PATCH with a SUBSCRIBE_TO_FUNNEL step that has a null targetFunnelId saves freely; the required-field check only fires on activate/test-run. The active-status check (requireSubscribeTargetsActive) also remains activate-only (line 390). No regression."
+    }
+  ],
+  "summary": "Both commits are clean. The backend validateSteps boolean split is correct: update()→content=false runs structural/security/DoS + FORMAT-IF-PRESENT injection guards only; activate() and testRun()→content=true add full content-completeness including broken-edge checks, which remain activate-only. No double-validation, no path that skips structural checks. The frontend stepReady/persistSteps gate is fully removed; all five canvas handlers (onCanvasSteps, onCanvasTriggers, onCanvasNotes, onNodeDragStop, onCanvasStepSave) call persist() unconditionally. The trigger-watch debounce gate (triggerReady) is kept but is step-agnostic — it guards only against mid-keystroke trigger flushes. The user's exact bug (delete start node while incomplete ADD_TAG exists silently withheld) is fixed: onCanvasTriggers calls persist() directly with no step-readiness check. stepSaveFeedback and its i18n key are removed cleanly from both locale files with no leftover usage in pages/components/tests. Residual mentions in a FunnelCanvas comment are historical-context prose, not live references. Test coverage at both layers covers the new contract including the exact regression scenario."
+}

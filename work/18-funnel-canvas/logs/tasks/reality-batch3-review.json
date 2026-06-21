@@ -1,0 +1,47 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "TDD Anchor names 'AC-25 keys present in uk.json' and 'AC-25 keys present in en.json' already exist in the test file (required-keys.spec.ts L99, L106). They are reused via adding canvas keys to REQUIRED_KEYS, not written fresh. The anchor's phrasing suggests writing them anew, which is misleading — the implementer must extend REQUIRED_KEYS and add two NEW 'canvas keys have non-empty values' tests (currently only triggersPanel variants exist, L113/L125). No code breakage, but the anchor wording may cause confusion.",
+      "fix": "Clarify in the TDD Anchor that the existing 'AC-25 keys present in ...' tests are re-used by adding canvas keys to REQUIRED_KEYS array (not rewritten), and that the two NEW test blocks to create are the 'canvas keys have non-empty values in uk.json / en.json' ones."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 'What to do' instructs extending NON_EMPTY_REQUIRED_KEYS 'so the filter also matches funnels.canvas.' (Details, last bullet). The current filter predicate is a single startsWith('funnels.triggersPanel.') (L95). The implementer must add a second predicate branch (e.g. k.startsWith('funnels.canvas.') || k.startsWith('funnels.triggersPanel.')). This is feasible but the task text omits the concrete change to the predicate, making the step less actionable than it could be.",
+      "fix": "Add a concrete hint: change the filter from k.startsWith('funnels.triggersPanel.') to k.startsWith('funnels.triggersPanel.') || k.startsWith('funnels.canvas.')."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 7,
+      "issue": "The Implementation Hints section says 'Capture drag end via the canvas component's emitted node-drag-stop (from useVueFlow()'s onNodeDragStop, code-research §8.3)'. However useVueFlow() is owned by the canvas surface component (FunnelCanvas.client.vue, Task 5), not the page. The page does not call useVueFlow() — it receives the drag-stop as a component event. The phrasing 'from useVueFlow()' is accurate for the canvas component's internals, not for the page wiring code the implementer is writing here. Minor risk of the implementer calling useVueFlow() on the page and creating a second Vue Flow instance (which would be a shared-resource violation per the Architecture table).",
+      "fix": "Clarify: the page receives drag-stop as a Vue emit from FunnelCanvas (e.g. @node-drag-stop='onNodeDragStop'); the canvas component calls useVueFlow() internally. The page must NOT call useVueFlow() itself."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 says 'If decisions.md is still empty at audit time — rely on tech-spec Files to modify as the source of truth'. decisions.md is currently empty (only template comments, no task entries). This scenario is highly likely at the time the audit runs, since no implementation tasks are completed yet. The fallback is explicitly documented and correct — this is noted for awareness only.",
+      "fix": "No code change needed. The fallback path is already documented in the task. The agent should default to tech-spec 'Files to modify' without requiring decisions.md to be populated."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Focus area 2 instructs the auditor to verify MAX_NOTES, NOTE_TEXT_MAX, NoteDto, and CanvasPositionDto — all introduced by Task 1 (depends_on is [1..7]). If Task 1 has not been implemented yet, these constants and types will not exist in the codebase. The depends_on chain (all 7 implementation tasks must complete first) makes this safe at runtime, but the auditor should be prepared to find these absent and report FAIL with a clear explanation if the audit is triggered prematurely.",
+      "fix": "No structural change needed; the depends_on declaration is correct. Add a note in the audit approach: if MAX_NOTES/NOTE_TEXT_MAX are absent entirely (Task 1 not completed), that is a FAIL on Focus Area 2 with a reference to the missing implementation."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 5
+  }
+}

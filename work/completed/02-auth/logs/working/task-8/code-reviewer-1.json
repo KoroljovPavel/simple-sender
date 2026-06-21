@@ -1,0 +1,68 @@
+{
+  "summary": "Frontend bootstrap is solid overall: SSR-safe Pinia setup-store via useState, correct global middleware filename (auth.global.ts), proper $fetch wrapper with credentials, Vue Query SSR plugin pattern, and clean Tailwind/layout setup. Two notable behavioral issues: (1) the middleware never calls fetchUser() on /auth/** routes, so a user landing directly on /auth/login with a valid session cookie will not be redirected to /dashboard as the spec requires; (2) fetchUser() re-throws non-401 errors and the middleware does not handle them, which can break navigation on backend 5xx. Minor improvements around logout error handling, Vue Query staleTime, requiresAuth helper redundancy, and weak `to` typing in the middleware.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "frontend/middleware/auth.global.ts",
+      "line": 14,
+      "issue": "On public auth routes (/auth/**) the middleware short-circuits the fetchUser() call (`if (authStore.user === null && !publicAuth)`). As a result, a user with a valid session cookie who navigates directly to /auth/login (e.g. external link, browser refresh, deep link) is never authenticated server-side, `authStore.user` stays null, and the redirect-to-/dashboard branch on lines 19–21 never fires. This violates the user-spec acceptance criterion 'If route is public auth route (/auth/**) and user is NOT null → redirect to /dashboard' for direct entry points and contradicts the SSR-hydration goal stated in the task description.",
+      "fix": "Always attempt the SSR hydration once (when user is null), regardless of route, e.g. drop the `&& !publicAuth` guard:  `if (authStore.user === null) { await authStore.fetchUser() }`. The subsequent `publicAuth && user !== null` branch then correctly redirects logged-in users away from /auth/**."
+    },
+    {
+      "severity": "major",
+      "file": "frontend/stores/auth.ts",
+      "line": 16,
+      "issue": "fetchUser() re-throws every non-401 error (network failure, 500, 502, CORS error, etc.). The middleware awaits fetchUser() without any try/catch, so any backend hiccup or network blip during navigation throws an unhandled error inside Nuxt's middleware pipeline and breaks the page render (Nuxt converts it into an error page rather than degrading to 'not authenticated' and routing to /auth/login).",
+      "fix": "Either swallow non-401 errors in fetchUser() (treat them as 'unknown auth state' and leave user null while logging once via console.warn / a logger), or wrap the fetchUser() call in the middleware with try/catch and route to /auth/login on failure. Given this is the SSR boot path, defensive handling in the store is preferable so callers don't have to remember to guard."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/middleware/auth.global.ts",
+      "line": 6,
+      "issue": "requiresAuth() is effectively dead code: it returns true unless `to.meta.requiresAuth === false`, and the only place it is consulted is already gated by `!publicAuth && authStore.user === null` — meaning every non-/auth route is treated as protected anyway. The helper, the Record<string, unknown> meta typing, and the third condition add cognitive load without changing behaviour.",
+      "fix": "Either (a) drop the helper and inline the simpler 'default-deny' guard:  `if (!publicAuth && authStore.user === null) return navigateTo('/auth/login')`, or (b) actually honour `requiresAuth` opt-out by accepting `meta.requiresAuth === false` from page-level `definePageMeta`, and document that contract. Pick one to match Decision 9 in tech-spec ('layout-based auth protection')."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/middleware/auth.global.ts",
+      "line": 6,
+      "issue": "The `to` parameter in `requiresAuth` is typed as `{ meta?: Record<string, unknown> }`, which discards the strong RouteLocationNormalized type that defineNuxtRouteMiddleware provides. Future readers lose IDE assistance on `to.name`, `to.params`, etc., and any typo in `meta` keys is silently allowed.",
+      "fix": "Import RouteLocationNormalized from 'vue-router' and type the helper as `(to: RouteLocationNormalized) => boolean`, or simply use `to: Parameters<Parameters<typeof defineNuxtRouteMiddleware>[0]>[0]`."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/stores/auth.ts",
+      "line": 22,
+      "issue": "logout() clears userState in `finally`, but if the POST /api/auth/logout request throws (network error, 500), the exception still propagates. In layouts/default.vue:7 the error therefore aborts `await navigateTo('/auth/login')`, leaving the user on a page that visually thinks it is logged out (user is null) but never navigates to the auth screen.",
+      "fix": "Either catch+log in the store (preferred — logout is best-effort client-side) or wrap the call in default.vue's onLogout(). Recommended: `try { await useApi()(...) } catch (e) { console.warn('logout request failed', e) } finally { userState.value = null }`."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/plugins/vue-query.ts",
+      "line": 8,
+      "issue": "`staleTime: 5_000` is very aggressive (queries become stale after 5 seconds). For SSR-hydrated state this means almost every navigation refetches, defeating the dehydrate/hydrate cycle right above. This is a magic number and likely a placeholder.",
+      "fix": "Promote to a named constant (e.g. `const DEFAULT_STALE_TIME_MS = 30_000`) and pick a value that matches the project's caching policy — 30–60 seconds is a common Vue Query default for SSR apps."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/stores/auth.ts",
+      "line": 11,
+      "issue": "The error-shape narrowing uses an inline triple-fallback union `(e as { statusCode?: number; status?: number; response?: { status?: number } })`. It works but is duplicated knowledge about how $fetch (FetchError) and ofetch surface status. If a non-FetchError throws (e.g. a TypeError), the cast still succeeds but `code` will be undefined, masking the actual problem.",
+      "fix": "Extract a tiny helper `function getErrorStatus(e: unknown): number | undefined` (or use ofetch's exported FetchError class with `import { FetchError } from 'ofetch'` and `if (e instanceof FetchError) ...`) so the narrowing is reusable and intentional. Bonus: it makes the test mocks (which throw `{ statusCode: 401 }`) more obviously aligned with production behaviour."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/package.json",
+      "line": 17,
+      "issue": "`vue` is listed as a top-level dependency alongside `nuxt`. Nuxt already pins its own Vue version transitively; declaring it again can drift on `pnpm update` and produce two Vue copies in the bundle (subtle reactivity bugs).",
+      "fix": "Remove the explicit `\"vue\": \"^3.5.13\"` line and let Nuxt control the version. If you need Vue type imports for tests, the transitive resolution is enough; otherwise pin via `peerDependencies` only."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/composables/useApi.ts",
+      "line": 1,
+      "issue": "useApi() creates a fresh $fetch instance on every call site. For an MVP this is negligible, but every component/store that calls `useApi()(...)` allocates a new wrapper. Idiomatic Nuxt would memoise (e.g. via `useNuxtApp().$api` provided once in a plugin) so all callers share one instance.",
+      "fix": "Optional: convert to a Nuxt plugin that injects `$api` once (`return { provide: { api: $fetch.create({...}) } }`) and have useApi() return `useNuxtApp().$api`. Skippable for the bootstrap task — flag for follow-up."
+    }
+  ]
+}

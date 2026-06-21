@@ -1,0 +1,61 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "stopAll i18n key structure conflict between Task 4 and Task 5. Task 4 (Details, line ~139) proposes TWO separate keys: `funnels.editor.stopAll` (the button label) and `funnels.editor.stopAllConfirm` = { title, body, confirm, cancel }. Task 5 (What to do, step 3) consumes ONE nested structure: `funnels.editor.stopAll.{button,title,message,confirm,cancel,result}` where the button label itself is at `stopAll.button`. Additionally Task 4 uses the sub-key name `body` while Task 5 uses `message` for the dialog body. If Task 4 emits `stopAllConfirm` and Task 5 reads `stopAll.*`, every dialog string reference will return undefined at runtime (no-op fallback, not a crash, but broken UI strings). The consuming task is the source of truth for how keys are actually referenced — Task 4 must align.",
+      "fix": "Task 4 must use the flat-nested shape `funnels.editor.stopAll` = { button, title, message, confirm, cancel, result } — i.e., the button label is at `stopAll.button`, dialog body at `stopAll.message`. Remove the `stopAllConfirm` sibling key. Both locales must use this shape."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 5,
+      "issue": "TDD Anchor references `frontend/tests/pages/funnels-list.spec.ts` (three tests: test_row_has_duplicate_and_stop_all, test_row_duplicate_updates_list, test_row_stop_all_confirm) but this file does not exist. The existing test file covering `index.vue` is absent — there is no `tests/pages/funnels-list.spec.ts` or `tests/pages/funnel-list.spec.ts` in the repo. Task 5 says 'якщо в репо немає funnels-list.spec.ts — створити', which acknowledges this, but the Verification Steps section (automated) runs `npx vitest run tests/pages/funnels-list.spec.ts` as a CI step — that path will error if the file is not created.",
+      "fix": "Task 5 already handles this with the conditional 'if missing — create'. The Verification Steps automated command is fine as long as Task 5 creates the file. No fix needed in the task text; this is a low-risk warning."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 (step 3, i18n) says to use key `funnels.editor.stopAll.result` with `{count}` interpolation for the success toast. Task 5 also says `funnels.editor.stopAll.{button,title,message,confirm,cancel,result}`. However Task 4 (Details) lists `funnels.editor.stoppedToast` (with `{count}`) as a separate top-level sibling of `stopAllConfirm`, not nested under `stopAll`. Whether the toast key is `funnels.editor.stopAll.result` or `funnels.editor.stoppedToast` must be consistent. Task 5 is the consumer and should be authoritative; Task 4's Suggested key names section is misleading.",
+      "fix": "Align Task 4 Suggested key names to place the stop-all result string at `funnels.editor.stopAll.result` (nested, matching Task 5). Remove the separate `stoppedToast` and `duplicatedToast` / `testSentToast` suggested names from Task 4 Details unless Task 5 actually uses those paths — verify Task 5 references and make Task 4 match."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 references `storeMock.duplicate`, `storeMock.stopAllExecutions`, `storeMock.testRun` in TDD anchor test stubs (e.g. `storeMock.duplicate` called in test_duplicate_calls_store_and_toasts). However the actual `stores/funnels.ts` does NOT yet expose these actions — they are added by Task 3. The TDD anchor mounts the real `[funnelId].vue` page with a mocked store (like funnel-editor.spec.ts pattern). If the store mock in tests is defined as `vi.hoisted(() => ({ fetchOne: vi.fn(), ... }))` without duplicate/stopAllExecutions/testRun, the mock will be incomplete. This is feasible only if the test author adds those mock methods — the task text says to mirror `funnel-editor.spec.ts` which currently has only `fetchOne, update, activate, pause` on storeMock.",
+      "fix": "The TDD anchor should explicitly list the additional mock methods needed: `duplicate: vi.fn(), stopAllExecutions: vi.fn(), testRun: vi.fn()`. Clarify that the existing storeMock in funnel-editor.spec.ts will need to be extended."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 4,
+      "issue": "Task 4 Details says `funnels.editor` is at '~line 707' in both uk.json and en.json. Verified: the `funnels.editor` key is at line 707 in uk.json and also line 707 in en.json — accurate. The `errors.funnels` section is at line 435 in uk.json — also accurate. The stated line numbers for `funnel_broken_edge` ending at '~line 461' is accurate (actual: line 461). No fix needed; line references are correct.",
+      "fix": "No action required."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 4,
+      "issue": "Task 4 Acceptance Criteria lists 'Preview non-message placeholder string present in both locales (\"Цей крок не надсилає повідомлення\")' and suggests key `funnels.editor.previewNonMessage`. Task 6 TDD anchor test `shows placeholder for a non-message step` will assert this string is visible. The key name is internally consistent but task 4 should note that Task 6 will import this key as `t('funnels.editor.previewNonMessage')` (or whatever exact name the implementer picks). Low risk since the tasks both say 'choose concise name / parity holds'.",
+      "fix": "Recommend explicitly fixing the key name in Task 4 Details to `funnels.editor.previewNonMessage` so Task 6 can import it deterministically without guessing."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 6,
+      "issue": "Task 6 TDD Anchor specifies the `no-v-html` test as: '`wrapper.find(\"img\").exists() === false` (or `document.querySelector` for teleported DOM, as in `CreateFunnelDialog.spec.ts`)'. The CreateFunnelDialog.spec.ts does NOT use teleported DOM — it uses `document.querySelector` for dialog content that IS teleported (the Dialog component teleports to body). FunnelMessagePreview.vue is NOT a dialog so it likely does not teleport. The hint is slightly misleading in suggesting teleport handling is needed for a non-dialog panel component.",
+      "fix": "Simplify the hint: `wrapper.find('img').exists() === false` should be sufficient for a non-teleporting panel component. Remove the 'or document.querySelector for teleported DOM' caveat unless the implementation uses Teleport."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 7
+  }
+}

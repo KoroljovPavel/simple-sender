@@ -1,0 +1,111 @@
+{
+  "status": "changes_required",
+  "summary": {
+    "totalFindings": 10,
+    "critical": 0,
+    "major": 6,
+    "minor": 4
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "A03: Injection",
+      "title": "Unescaped {TOKEN} injected into HTML href attribute",
+      "description": "In sendVerificationEmail and sendPasswordResetEmail the token is substituted AFTER buildBody() — which only HTML-escapes {NAME} — so the raw token value is placed directly into the href attribute without escaping. The current TokenService produces base64url tokens (URL-safe characters only), so the current callers are safe, but EmailService itself places no constraint on the format of the token argument. A caller that passes a token containing '\"', '<', '>', or a 'javascript:' prefix would inject unescaped content into the anchor href.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:37-43 (sendVerificationEmail, sendPasswordResetEmail)",
+      "impact": "If a malformed token is ever passed (by a bug in a caller, a test fixture, or a future code path), the attacker-controlled string is embedded verbatim in the email HTML, enabling stored XSS in email clients that render JavaScript href attributes, or link injection pointing to a phishing URL.",
+      "recommendation": "HTML-escape the token before substitution, or assert that the token matches the expected base64url pattern (^[A-Za-z0-9_-]+$) before sending. Preferred fix: apply htmlEscape to all dynamic values in buildBody, not only {NAME}. Example:\n\nprivate String buildBody(String templatePath, String name, Map<String,String> extraVars) {\n    String body = loadTemplate(templatePath).replace(\"{NAME}\", htmlEscape(name));\n    for (var entry : extraVars.entrySet()) {\n        body = body.replace(entry.getKey(), htmlEscape(entry.getValue()));\n    }\n    return body;\n}\n\nAlternatively, validate token format with Objects.requireNonNull + a regex check at service entry points.",
+      "cwe": "CWE-79"
+    },
+    {
+      "severity": "major",
+      "category": "A03: Injection",
+      "title": "htmlEscape does not escape single quote — incomplete XSS protection",
+      "description": "The htmlEscape method escapes '&', '<', '>', and '\"' but omits the single quote character (apostrophe, U+0027). OWASP recommends escaping both double and single quotes when embedding untrusted data in HTML attribute values, because a template author may use single-quoted attributes (href='...', onclick='...'). The current templates use double-quoted attributes, so this is not directly exploitable today, but it is a fragile invariant that will break silently if any template is changed to use single quotes.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:72-78 (htmlEscape method)",
+      "impact": "A user name containing a single quote (common in many cultures, e.g. \"O'Brien\") can break out of a single-quoted HTML attribute context in any future template, enabling XSS in email clients. Additionally, apostrophes in names are rendered as literal ' in emails rather than the correct &apos; or &#39;, which is a rendering defect for legitimate user names.",
+      "recommendation": "Add single-quote escaping:\n\nstatic String htmlEscape(String input) {\n    return input\n        .replace(\"&\", \"&amp;\")\n        .replace(\"<\", \"&lt;\")\n        .replace(\">\", \"&gt;\")\n        .replace(\"\\\"\", \"&quot;\")\n        .replace(\"'\", \"&#39;\");\n}",
+      "cwe": "CWE-79"
+    },
+    {
+      "severity": "major",
+      "category": "A03: Injection",
+      "title": "{SUPPORT_EMAIL} substituted into HTML without escaping",
+      "description": "In sendAccountBlockedEmail, the supportEmail parameter is passed directly to String.replace(\"{SUPPORT_EMAIL}\", supportEmail) without HTML-escaping. This value is substituted into both the mailto href attribute and the visible text content of account-blocked.html. If the support email value contains HTML special characters (e.g. because of a misconfiguration or config-injection attack), it would be embedded unescaped into the email body.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:49-52 (sendAccountBlockedEmail), backend/src/main/resources/templates/email/account-blocked.html:11",
+      "impact": "A malformed or attacker-influenced support email value (e.g. from a misconfigured environment variable or a future dynamic support-email-per-tenant feature) could inject arbitrary HTML/JavaScript into emails sent to blocked users. This is a low-probability but high-impact misconfiguration risk.",
+      "recommendation": "HTML-escape all dynamic values before substitution, including supportEmail:\n\npublic void sendAccountBlockedEmail(String to, String name, String supportEmail) {\n    String body = buildBody(\"/templates/email/account-blocked.html\", name)\n        .replace(\"{SUPPORT_EMAIL}\", htmlEscape(supportEmail));\n    sendAsync(to, \"Ваш акаунт заблоковано\", body);\n}",
+      "cwe": "CWE-79"
+    },
+    {
+      "severity": "major",
+      "category": "A05: Security Misconfiguration",
+      "title": "{APP_URL} injected into href without validation or escaping",
+      "description": "The appUrl value (from @Value(\"${app.url}\")) is substituted directly into href attributes in all three email templates via String.replace(\"{APP_URL}\", appUrl). There is no validation that appUrl is a safe http(s) URL, no HTML-escaping of the value, and no URL scheme check. A 'javascript:' URI or an attacker-controlled value injected via environment variable misconfiguration would be embedded verbatim into the href attribute of anchor tags in all outgoing emails.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:37-52 (all three send methods), backend/src/main/resources/templates/email/verify-email.html:12, reset-password.html:12",
+      "impact": "If the APP_URL environment variable is misconfigured or compromised (e.g., in a shared CI/CD environment or container orchestration platform), all outgoing verification and password-reset emails would contain links pointing to a malicious URL, enabling phishing attacks against all newly registered users. In email clients that render JavaScript hrefs, a 'javascript:' URI would execute code in the email client context.",
+      "recommendation": "Validate appUrl at service startup (constructor):\n\npublic EmailService(..., @Value(\"${app.url}\") String appUrl) {\n    if (!appUrl.startsWith(\"https://\") && !appUrl.startsWith(\"http://\")) {\n        throw new IllegalStateException(\"app.url must start with http:// or https://: \" + appUrl);\n    }\n    this.appUrl = appUrl;\n    ...\n}\n\nAlso HTML-escape appUrl in substitutions as an additional layer. Validate at application startup so misconfiguration is caught immediately rather than at send time.",
+      "cwe": "CWE-601"
+    },
+    {
+      "severity": "major",
+      "category": "A01: Broken Access Control",
+      "title": "No email address validation at EmailService level — trust boundary gap",
+      "description": "The to parameter in all three send methods is used directly with MimeMessageHelper.setTo() without any format validation. EmailService trusts that every caller has already validated the email address. While AuthService callers apply @Email Bean Validation on the DTO, the EmailService itself enforces no contract on the to parameter. A future caller (e.g., an admin endpoint, a job, a test fixture) that bypasses Bean Validation could trigger sending to an arbitrary address, including a malformed address that could cause SMTP header injection on some JavaMail implementations.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:35, 42, 49 (to parameter in all three public methods)",
+      "impact": "Email header injection via newline characters in the to value (CRLF injection) is possible on JavaMail implementations that do not fully sanitize the recipient field. SMTP injection could allow redirecting emails to unintended recipients. Additionally, sending emails to attacker-controlled addresses based on unvalidated input is a privacy/spam risk.",
+      "recommendation": "Add a minimal email format assertion at the EmailService level:\n\nimport jakarta.mail.internet.AddressException;\nimport jakarta.mail.internet.InternetAddress;\n\nprivate static void assertValidEmail(String email) {\n    try {\n        InternetAddress addr = new InternetAddress(email);\n        addr.validate();\n    } catch (AddressException e) {\n        throw new IllegalArgumentException(\"Invalid email address: \" + email, e);\n    }\n}\n\nCall assertValidEmail(to) at the start of each public method. InternetAddress.validate() rejects addresses containing unencoded newlines, preventing CRLF injection.",
+      "cwe": "CWE-93"
+    },
+    {
+      "severity": "major",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Template load failure is silent to the caller — emails sent with empty body",
+      "description": "When loadTemplate() encounters a missing or unreadable template (returns \"\"), buildBody() proceeds normally and sendAsync() is called with an empty HTML body. The error is logged at ERROR level but the fire-and-forget subscribe callback is not triggered (the exception happened before Mono.fromCallable, not inside it). The calling code (AuthService) receives no exception and no signal that the email was sent with an empty body. This means verification and password-reset emails can be silently sent with no content.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:61-70 (loadTemplate method)",
+      "impact": "A missing or misnamed template file (e.g., after a deployment artifact issue) would cause all verification emails to be delivered with empty bodies. Users would receive blank emails and be unable to verify their accounts. This is a critical operational failure that is completely invisible to the caller and to monitoring (unless someone reads the error logs).",
+      "recommendation": "Throw a RuntimeException when the template cannot be loaded, so the Mono.fromCallable wrapper catches it and the error callback logs it with the email address context:\n\nprivate String loadTemplate(String path) {\n    try (InputStream is = getClass().getResourceAsStream(path)) {\n        if (is == null) {\n            throw new IllegalStateException(\"Email template not found on classpath: \" + path);\n        }\n        return new String(is.readAllBytes(), StandardCharsets.UTF_8);\n    } catch (IOException e) {\n        throw new UncheckedIOException(\"Failed to load email template: \" + path, e);\n    }\n}\n\nThis ensures the error surfaces through the subscribe error handler with full context.",
+      "cwe": "CWE-390"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Email address logged in error messages — potential GDPR data minimization issue",
+      "description": "The error log line 'log.error(\"Email send failed to {}: {}\", to, err.getMessage())' records the recipient's email address in application logs. Email addresses are personal data under GDPR. Logging them at ERROR level means they appear in centralized log aggregation systems (ELK, CloudWatch, Datadog) where log retention, access control, and masking may not be configured for PII. Additionally, err.getMessage() from a MailException may reveal SMTP server details, connection strings, or error codes that disclose infrastructure information.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:82 (subscribe error callback)",
+      "impact": "Email addresses persisted in logs may violate GDPR data minimization (Article 5(1)(c)) and purpose limitation principles. If the log system is compromised or subject to a data breach, PII is exposed. Infrastructure information in err.getMessage() could assist an attacker in fingerprinting the mail infrastructure.",
+      "recommendation": "Hash or mask the email address in logs, and log only the exception class (not the full message) unless in debug mode:\n\n.subscribe(null, err -> log.error(\"Email send failed (masked recipient): {}\", err.getClass().getSimpleName()));\n\nAlternatively, log the first and last two characters with masking: 'us**@ex*****.com'. If the email address is needed for debugging, log it only at DEBUG level which is disabled in production.",
+      "cwe": "CWE-532"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "No rate-limit enforcement at EmailService level — defense-in-depth gap",
+      "description": "EmailService has no internal rate limiting or circuit breaker. It relies entirely on callers (AuthService) to enforce send-rate constraints. The resend-verification rate limit (60s Redis SET NX) is implemented in AuthService, but EmailService itself can be called an unbounded number of times. If a future endpoint, background job, or misconfigured caller bypasses AuthService rate limiting, EmailService would send emails without restriction, enabling spam/abuse of the SMTP account and potential account blocking by email providers.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java (class level — no rate limiting present)",
+      "impact": "Unintentional or malicious triggering of unbounded email sends could exhaust SMTP quota, cause the sending domain to be blacklisted, or enable user harassment (e.g., sending thousands of 'account blocked' emails to a victim).",
+      "recommendation": "Document explicitly in the class Javadoc that callers are responsible for rate limiting before calling EmailService methods. Consider adding a simple internal counter using a RateLimiter (Resilience4j or Guava) as a backstop, or at minimum a log warning if the same address receives more than N emails per minute. For now, the most important action is to add a Javadoc contract specifying the rate-limiting responsibility.",
+      "cwe": "CWE-770"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Email send failures produce no structured security event in the events collection",
+      "description": "When an email send fails (SMTP error, quota exceeded, invalid address), the only record is an unstructured ERROR log line. There is no structured event written to the 'events' MongoDB collection. A high rate of email send failures (e.g., due to a misconfigured SMTP server, an attacker probing the system, or a bug in token generation) is operationally significant but produces no alertable audit trail.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:80-83 (subscribe error callback)",
+      "impact": "Security incidents related to email delivery (e.g., a compromised SMTP credential causing all emails to fail, or an attacker exploiting a rate-limit bypass to flood the SMTP server) are invisible to the structured audit system. Incident response teams relying on the events collection for forensic analysis would have no data about email-layer failures.",
+      "recommendation": "Consider injecting EventService into EmailService (optional dependency to avoid circular wiring) and logging an 'email_send_failed' event on SMTP error. Alternatively, expose an application metric (e.g., Micrometer counter) that can be alerted on. At minimum, the structured logging should include enough context (template type, error class) to be parseable by a log-based alert.",
+      "cwe": "CWE-223"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "htmlEscape test only validates the static method, not the full substitution pipeline",
+      "description": "The test sendVerificationEmail_htmlEscapesNameWithSpecialChars calls EmailService.htmlEscape() directly as a static method, bypassing the full sendVerificationEmail() → buildBody() → loadTemplate() → String.replace() pipeline. It does not verify that the escaped value actually appears in the email body sent to the mail server. This means a refactoring that accidentally calls String.replace(\"{NAME}\", name) instead of String.replace(\"{NAME}\", htmlEscape(name)) would not be caught by the test — htmlEscape itself works, but the integration is not tested.",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:55-59 (sendVerificationEmail_htmlEscapesNameWithSpecialChars)",
+      "impact": "XSS regression risk: a developer could inadvertently bypass htmlEscape in buildBody without the existing test suite detecting it. The security guarantee provided by the test is weaker than it appears.",
+      "recommendation": "Capture the actual MimeMessage body in the test and assert the escaped string appears in the HTML content:\n\n@Test\nvoid sendVerificationEmail_htmlEscapesNameInEmailBody() throws Exception {\n    MimeMessage mimeMessage = newMimeMessage();\n    when(javaMailSender.createMimeMessage()).thenReturn(mimeMessage);\n\n    emailService.sendVerificationEmail(\"user@example.com\", \"<script>xss</script>\", \"tok123\");\n\n    await().atMost(2, SECONDS).untilAsserted(() ->\n        verify(javaMailSender).send(any(MimeMessage.class))\n    );\n    String body = (String) mimeMessage.getContent();\n    assertThat(body).contains(\"&lt;script&gt;\");\n    assertThat(body).doesNotContain(\"<script>\");\n}",
+      "cwe": "CWE-79"
+    }
+  ]
+}

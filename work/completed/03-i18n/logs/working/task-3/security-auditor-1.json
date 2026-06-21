@@ -1,0 +1,30 @@
+{
+  "task": "3",
+  "round": 1,
+  "reviewer": "security-auditor",
+  "verdict": "approved",
+  "summary": "Open-redirect and Referer-leak defenses (Decision 5/14) are correctly implemented: backslash reject runs pre-decode, leading-slash collapse runs both pre- and post-decode (defeating %2F%2F and %252F%252F payloads), single-pass decode is wrapped in try/catch (URIError -> 400), auth-zone matcher precisely covers /auth, /auth/*, /auth?* without false-positives like /authentic, and X-Robots-Tag + Referrer-Policy headers are set on the 302 itself before sendRedirect. No hardcoded secrets, no ReDoS, no information disclosure. Two minor defense-in-depth observations (control-character filtering, security logging) flagged below; neither blocks acceptance.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/server/utils/locale-strip.ts:34-43",
+      "issue": "Control characters (CR, LF, NULL, TAB) decoded from percent-encoding (e.g. /fr/%0Aevil.com -> '/\\nevil.com', /fr/%00 -> '/\\0') are not filtered out of the redirect target. While Node's http2/http1 implementation rejects CR/LF in Location header values at the runtime layer (CRLF injection mitigation since Node 14), and a NULL byte in Location is not directly exploitable in modern browsers, the middleware passes these characters through silently. Defense-in-depth: an explicit reject for non-printable / non-ASCII control bytes (0x00-0x1F, 0x7F) before sendRedirect would make the trust boundary explicit and protect against future runtime-layer regressions or downstream consumers that re-emit the value into a different sink (logs, analytics, error pages).",
+      "fix": "After the second '^/+' collapse (line 43), add: `if (/[\\x00-\\x1F\\x7F]/.test(target)) return { kind: 'reject', status: 400 }`. Add a unit test for /fr/%0Aevil.com -> reject 400 and /fr/%00x -> reject 400.",
+      "cwe": "CWE-93 (CRLF Injection — defense-in-depth, runtime mitigates primary vector)"
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/server/middleware/strip-invalid-locale.ts:11-14",
+      "issue": "OWASP A09 (Security Logging and Monitoring): 400-reject paths (raw backslash, malformed percent-encoding, decoded backslash) are returned silently with no log line. These rejections fire only on adversarial inputs (open-redirect / encoded-backslash probes), so each one is a useful signal for SIEM / abuse detection. The project does not appear to have a structured server logger wired in yet, and the tech-spec / Decision 5 do not require logging, so this is a forward-looking observation rather than a violation of the spec.",
+      "fix": "When a server logger is added in a later wave, emit a structured warn-level event from the middleware on 'reject' (event.path, source IP via getRequestIP(event), user-agent). No change needed in this task if logging infra is intentionally deferred.",
+      "cwe": "CWE-778 (Insufficient Logging)"
+    },
+    {
+      "severity": "info",
+      "file": "frontend/server/utils/locale-strip.ts:8-49",
+      "issue": "Verified attack-surface coverage (no fix needed — recording for traceability): (1) protocol-relative /fr//evil.com -> /evil.com via pre-decode '^/+' collapse; (2) raw backslash /fr/\\evil.com -> 400 via line 16 check before any transformation; (3) percent-encoded backslash /fr/%5Cevil.com -> 400 via post-decode line 39 check; (4) percent-encoded slash /fr/%2Fevil.com -> /evil.com via post-decode '^/+' collapse on line 43; (5) double-encoded /fr/%252F%252Fevil.com -> single-pass decode yields literal '/%2F%2Fevil.com' which has no literal '//' (test asserts both startsWith('//')===false and !contains('//')); (6) malformed sequence /fr/%E0%A4%A -> URIError caught -> 400; (7) regex anchored `^/([a-z]{2})(?=/|$)` rules out ReDoS (no nested quantifiers, fixed length); (8) auth-zone matcher === '/auth' || startsWith('/auth/') || startsWith('/auth?') correctly admits /auth, /auth/x, /auth?token=x and rejects /authentic; (9) X-Robots-Tag + Referrer-Policy applied via setResponseHeaders BEFORE sendRedirect on the 302 response itself, mitigating Referer leak of ?token=; (10) 400 body is the literal 'Bad Request' with no path echo or stack trace; (11) NON_DEFAULT_LOCALES imported from internal `frontend/shared/i18n-locales.ts` (typed `as const`) — no external taint into the allow-list.",
+      "fix": "No action — this finding is informational, documenting validated coverage for the security audit trail.",
+      "cwe": "CWE-601 / CWE-200 (verified mitigated)"
+    }
+  ]
+}

@@ -1,0 +1,52 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 1,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "line": 342,
+      "issue": "Loose status assertion `is4xxClientError()` for the oversized note text rejection. The existing codebase pattern (lines 634, 650, 684, etc.) uses precise `isUnprocessableEntity()` or `isBadRequest()`. A loose family check will not catch a regression that shifts the status code within 4xx.",
+      "fix": "The task spec says 400/422. Determine the actual status fired by the @Size constraint on note text (400 from @Valid) and pin it: `.andExpect(status().isBadRequest())`. If the service re-check fires 422 here, use `isUnprocessableEntity()`. Either is better than the family check."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "line": 273,
+      "issue": "`notes_round_trip_with_server_minted_id` asserts note text and coordinates survive the GET round-trip but does NOT assert a sibling field (step or trigger field) that must NOT change. The task TDD anchor for the canvasPosition IT explicitly requires a sibling assertion; the analogous discipline is absent from the notes IT. If a bug introduced a full-body replacement that stomped sibling state, only the canvasPosition test would catch it.",
+      "fix": "In `notes_round_trip_with_server_minted_id`, after the GET, add an assertion on a stable sibling: e.g. `jsonPath(\"$.steps[0].stepType\").value(\"MESSAGE\")` or `jsonPath(\"$.triggers[0].triggerType\").value(\"on_start\")`. This ensures notes processing does not accidentally reset unrelated fields."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/TriggerTest.java",
+      "line": 61,
+      "issue": "`TriggerTest::equalsAndHashCodeOverAllFourFields` confirms that differing routing fields break equality but does NOT assert that two `Trigger` instances differing ONLY in `canvasPosition` remain equal. The task AC explicitly requires that `canvasPosition` is excluded from `equals`/`hashCode`. The existing test passes for the wrong reason if `canvasPosition` were accidentally included — the test never constructs two triggers with identical routing fields but different `canvasPosition` values.",
+      "fix": "Add a case inside `equalsAndHashCodeOverAllFourFields` (or a new focused test): construct `a` and `b` with identical routing fields but different `canvasPosition` values, assert `a.equals(b)` is `true` and `a.hashCode() == b.hashCode()`. This is the only test that would fail if the exclusion were removed."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/dto/CanvasPositionDtoTest.java",
+      "line": 40,
+      "issue": "The task spec edge case says: \"{x:1, y:null} is a partial position that maps through harmlessly; only present values are required to be finite\". The test proves fully-null and fully-finite cases but does not cover the mixed case (one coord finite, one coord null). If a future constraint change mistakenly required both coords to be present and finite, a half-null input would break silently without a regression test.",
+      "fix": "Add two cases to `rejects_non_finite_coordinates`: `new CanvasPositionDto(1.0, null)` should pass (empty violations), and `new CanvasPositionDto(null, 1.0)` should pass. This pins the partial-position documented behaviour."
+    }
+  ],
+  "summary": "All seven TDD-anchor tests from the task spec are implemented and structurally sound. Round-trip coverage (canvasPosition step+trigger via PUT→GET, notes[] via PUT→GET including server-minted id, id-preservation on second PUT) is thorough. The `copyOf` seam is tested as its own unit (FunnelStepTest). Bean validation is exercised correctly via direct Java construction in CanvasPositionDtoTest. The service-side bounds re-checks are proven in FunnelServiceNotesTest by bypassing the DTO @Valid layer. The `starts_on_coordinate_less_funnel` test correctly asserts null fields on a legacy-shaped funnel. The optional NaN parse-layer IT is intentionally omitted with a clear documented rationale. Four minor gaps: (1) loose `is4xxClientError()` assertion for oversized text; (2) no sibling-unchanged assertion in the notes round-trip IT; (3) `TriggerTest` does not assert that differing-only-in-canvasPosition triggers remain equal, which is the specific regression the exclusion requirement protects against; (4) CanvasPositionDtoTest does not cover the partial-null case ({x:finite, y:null}). No critical or major findings. Verdict: pass.",
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 3,
+      "integration": 9,
+      "e2e": 0,
+      "assessment": "healthy — backend task; ITs correctly carry persistence and round-trip coverage; unit tests cover copyOf seam and bean-validation surface"
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "notes": [
+    "All iter-1 critical fixes confirmed: no ](.claude/ links; PK links use ../../../.claude/skills/project-knowledge/references/ prefix; reviewer paths are absolute; task 7 has ### Automated heading in Verification Steps; task 7 AC includes green-test item for ProcessTelegramUpdateJobTest; task 8 Context Files have references/ segment.",
+    "Wave DAG intentionally verified correct: t6=w2(dep[1,2,3,4]), t7=w3(dep[1,6]), t8=w3(dep[1,6]), t9=w3(dep[5]), t10=w4(dep[5,9]). t9 dep[5]@w2→w3 and t10 dep[5,9]→w4 are DAG-derived and correct. Not flagged.",
+    "{round} in reviewer path templates is the correct format matching the task.md.template — it is a runtime placeholder filled by the reviewer, not a creation-time placeholder error."
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Details",
+      "issue": "Details/Files entry for funnels.spec.ts (line 252) says 'стаб API через page.route()' which directly contradicts TDD Anchor (lines 117, 195-196, 291) that explicitly forbids page.route() and instructs to mirror real-backend + graceful-skip pattern from e2e/subscribers.spec.ts.",
+      "fix": "Remove the parenthetical 'стаб API через page.route() за взірцем e2e/subscribers.spec.ts' from the Details/Files entry for funnels.spec.ts. Replace with 'golden-path + 422-page-test за real-backend + graceful-skip патерном e2e/subscribers.spec.ts (без page.route()/stubAuth/makeX())' to match TDD Anchor."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "testing.md (references/testing.md) is absent from Context Files. Task 6 is an IT-heavy task (AbstractIntegrationTest, JobRunrInMemoryConfig, Testcontainers, Clock injection) — the testing PK file is directly relevant.",
+      "fix": "Add [testing.md](../../../.claude/skills/project-knowledge/references/testing.md) to Context Files, as task 7 (same complexity tier) already includes it."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "testing.md (references/testing.md) is absent from Context Files. Task 8 extends ProjectHardDeleteJobIT and requires adding new IT scenarios — the testing PK file is relevant.",
+      "fix": "Add [testing.md](../../../.claude/skills/project-knowledge/references/testing.md) to Context Files alongside the other PK files."
+    }
+  ],
+  "iter1_fixes_confirmed": {
+    "no_dot_claude_relative_links": true,
+    "pk_links_have_references_segment": {
+      "task6": true,
+      "task7": true,
+      "task8": true,
+      "task9": true,
+      "task10": true
+    },
+    "reviewer_paths_absolute": {
+      "task6": true,
+      "task7": true,
+      "task8": true,
+      "task9": true,
+      "task10": true
+    },
+    "task7_verification_has_automated_heading": true,
+    "task7_ac_has_green_test_item": true,
+    "task8_context_files_have_references_segment": true
+  },
+  "wave_dag_validation": {
+    "t6_wave2_dep_1234": "VALID — depends on w1 tasks, wave 2 > 1",
+    "t7_wave3_dep_16": "VALID — t6 is w2, wave 3 > 2",
+    "t8_wave3_dep_16": "VALID — t6 is w2, wave 3 > 2; parallel to t7",
+    "t9_wave3_dep_5": "VALID — t5 is w2, wave 3 > 2; intentional DAG-derived",
+    "t10_wave4_dep_59": "VALID — t9 is w3, wave 4 > 3; sequential locale edits preserved"
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 3
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "reviewer": "security-auditor",
+  "task": "1",
+  "round": 1,
+  "verdict": "approve",
+  "summary": "Task 1 is a domain + validation-layer change with no auth/network surface (the key-authed chain and /events endpoint are Task 7). All new user-controlled inputs (triggerType, triggerValue per type, keywords entries, eventName) are validated against anchored, linear regexes or explicit non-blank checks at the write boundary; list-size (50) and per-entry-length (64) caps bound the keyword list against document bloat / future scan-cost DoS. Mongo access is via parameterized Spring Data derived queries; partial-filter literals are static. No injection, ReDoS, mass-assignment, secret-logging, or PII issues found.",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "197-202",
+      "owasp": "A04 Insecure Design (positive)",
+      "finding": "EVENT_NAME_PATTERN / TAG_SLUG_PATTERN / TRIGGER_VALUE_PATTERN are all anchored, bounded character-class regexes ({0,64}/{1,64}/{1,32}) — linear matching, no catastrophic backtracking, so no ReDoS exposure from attacker-supplied trigger values.",
+      "suggested_fix": "None — noted as a positive.",
+      "action": "no-fix"
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "199-202,314-357",
+      "owasp": "A04 Insecure Design (positive)",
+      "finding": "Keyword list bounded by MAX_KEYWORDS=50 and MAX_KEYWORD_LENGTH=64 at the write boundary; this is the correct place to cap the input the future code-side contains-match (Task 4/6) will scan, pre-empting unbounded document growth / scan-cost DoS.",
+      "suggested_fix": "None — noted as a positive.",
+      "action": "no-fix"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "status": "approved",
+  "summary": "Round-2 fixes all land cleanly. LinkedHashMap consistency restored in logEventOther, /stop-in-group symmetry test added, three additional INFO/WARN log sites wired up (worker-start, worker-success, bot-lookup-missed). Cascade-ordering behavioural test and bot-lookup-hoist were correctly deferred — both round-1 suggestions were explicitly marked optional. The new no-cause-chain rethrow design preserves the original stack trace via setStackTrace, so the throw site is still visible in any logged trace; only the original exception's runtime type is lost (intentional cost of the cause-chain scrubbing). Test code uses the project's existing ListAppender/MockitoSpyBean conventions verbatim (mirror of WebhookSecretVerifierTest / BotServiceTest / TelegramSenderTest). No new findings.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 115,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "The fallback when t.getMessage() == null uses t.getClass().getName(), but no test exercises that branch (the round-2 failure test injects a RuntimeException with a non-null message). Add a one-line variant — throw `new NullPointerException()` (message-less) from the upsert stub — and assert reloaded.getProcessingError() equals the FQN. Tiny coverage hole; the fallback is the right behaviour, but the regression net is missing.",
+      "benefit": "Locks in the null-message branch — currently the only audit operators get for an NPE-style failure is the FQN, and a silent regression here would replace it with the bare string \"null\".",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 135,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "The rethrown RuntimeException loses the original exception's runtime type (always reported as java.lang.RuntimeException). This is the intentional cost of cutting the cause chain to block token re-leak via t.getCause().getMessage(); the comment on lines 131-134 already documents the trade-off. Optional micro-enhancement: include the original class simple name as a prefix in the rethrown message (e.g. \"NullPointerException: \" + truncated), already scrubber-safe since the class name cannot contain a token. Restores the most operationally useful piece of type info to JobRunr's `jobrunr_jobs` audit row without re-exposing the cause chain.",
+      "benefit": "Operators reading the jobrunr_jobs `exception` column can still distinguish NPE vs. timeout vs. mongo write failure without checking the worker's own ERROR log.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 2,
+    "testCoverageAssessment": "excellent"
+  }
+}

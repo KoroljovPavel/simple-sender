@@ -1,0 +1,60 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 3,
+  "round": 2,
+  "verdict": "OK",
+  "summary": "Round-1 MAJOR is resolved: a deterministic unit test now provably exercises the DuplicateKeyException catch block, and the race IT was hardened with post-state assertions. The minor LOW note on fail-open spurious events was also closed. Remaining deep-stub / LENIENT notes are acceptable to leave as-is. All affected classes re-run green (SubscriberStatusMachineTest 18/0, SubscriberServiceImplIT 7/0, SubscriberRateLimitIT 4/0).",
+  "findings": [],
+  "resolvedFromRound1": [
+    {
+      "severity": "major",
+      "round1": "duplicateKeyException_onInsertRace_recoversAndUpdates did not reliably enter the catch block; the lookup-then-refresh branch could win on most runs, so deleting the catch block left the test green.",
+      "resolution": "RESOLVED. New deterministic unit test SubscriberStatusMachineTest::upsertFromTelegramUpdate_onDuplicateKeyRace_reReadsAndRefreshes stubs findByProjectIdAndTelegramUserId empty-then-present and insert(any()) to throw DuplicateKeyException, forcing the catch path on every run. It asserts exactly one refresh findAndModify (any Query, any UpdateDefinition, eq(Subscriber.class)) and verify(subscriberEventRepository, never()).save(any()) — no spurious lifecycle event. Litmus confirmed against SubscriberServiceImpl lines 123-133: removing the catch(DuplicateKeyException) block lets the exception propagate and the test fails. Additionally the IT was hardened: it now filters to the single telegramUserId=300 row, asserts hasSize(1), status==ACTIVE, and registeredEventsFor(id).hasSize(1) — closing the 'AND updates' clause (one winner registered, loser wrote no second registration). Both green on re-run."
+    },
+    {
+      "severity": "low",
+      "round1": "redisDown_failsOpen_proceedsAndLogsWarn asserted persistence + WARN constant but not that the fail-open path emitted no spurious rate_limit_exceeded platform event.",
+      "resolution": "RESOLVED. The test now adds assertThat(rateLimitEvents()).isZero() with an explanatory .as(...) — explicit proof the fail-open path returns false without emitting a platform event. Class re-runs green."
+    },
+    {
+      "severity": "security-followup",
+      "round1": "(Cross-reviewer) unsubscribeManual was not project-scoped (IDOR).",
+      "resolution": "RESOLVED. Signature is now unsubscribeManual(projectId, subscriberId); production filters findById by projectId.equals(sub.getProjectId()) before the 404. New unit test unsubscribeManual_foreignProject_throws404 stubs findById to return an ACTIVE subscriber owned by PROJECT_ID, calls with 'other-project', asserts HttpStatus.NOT_FOUND and verify(subscriberEventRepository, never()).save(any()) — proving uniform 404 + no mutation. Litmus holds: dropping the projectId filter would let the mutation proceed and the never().save assertion would fail."
+    }
+  ],
+  "acceptedAsIs": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberStatusMachineTest.java",
+      "note": "Deep-stub brittleness on stubSubscriberUpdate() (mongoTemplate.update(Subscriber.class).matching(...).apply(...).first()). This was flagged round-1 as a robustness note, not a correctness defect. The authoritative atomicity invariant (Tag.subscriberCount $inc gated on modifiedCount>0 + exactly one event row) is covered by the load-bearing SubscriberServiceImplIT.addTag/removeTag against real Mongo, which re-ran green (7/0). The unit tests remain valid fast guards. ACCEPTABLE to leave as-is — no false-green risk while the IT is the source of truth for the atomic counter."
+    },
+    {
+      "severity": "low",
+      "category": "anti_pattern",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberStatusMachineTest.java",
+      "note": "Class-level @MockitoSettings(strictness = Strictness.LENIENT). The new round-2 tests (onDuplicateKeyRace, foreignProject_throws404) each drive the exact stubs they declare, so the blanket LENIENT does not currently mask any dead stub. The justification (shared mocks across many per-method scenarios, deep-stub fluent chain) is reasonable. ACCEPTABLE to leave as-is — future-proofing nicety only, no current correctness or coverage impact."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "verificationRun": {
+      "SubscriberStatusMachineTest": "18 tests, 0 failures, 0 errors (re-run with --rerun-tasks)",
+      "SubscriberServiceImplIT": "7 tests, 0 failures, 0 errors",
+      "SubscriberRateLimitIT": "4 tests, 0 failures, 0 errors"
+    },
+    "litmusTest": {
+      "checked": 30,
+      "passed": 30,
+      "failed": 0,
+      "note": "The two round-1 litmus failures are now resolved. The DuplicateKey catch block is deterministically exercised by the new unit test (delete the catch → exception propagates → test fails). The atomicity invariant for addTag/removeTag is litmus-protected by the IT (real Tag.subscriberCount assertion). The new foreignProject 404 test is litmus-protected (drop the projectId filter → never().save fails)."
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 18,
+      "integration": 14,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "task": 13,
+  "round": 1,
+  "summary": "AC14 grep gate is GREEN (zero matches across all three files). Task 11's Virtual Threads section is untouched. Per-bullet rewrites mostly land cleanly against the post-flip source files (SecurityConfig, RememberMeCookieSerializer, AuthService, EmailService, ProjectService, TelegramApiClient, BotService, GlobalErrorHandler, ConcurrencyTestUtils all match). Two real findings remain: (1) one source-mirage in patterns.md — the Project Workspace block still says `pathMatchers(\"/api/**\")` where the post-flip SecurityConfig uses `requestMatchers(...)` (this is a reactive WebFlux API name and contradicts the Spring Security MVC heading the same task added 30 lines above); (2) deployment.md Local Development still says `Netty :8080` in the gradle-run hint where post-flip Tomcat is the embedded server. Neither is in the AC14 grep gate but both contradict the post-flip stack the task is meant to align the docs with.",
+  "ac14_grep_passes": true,
+  "task11_section_untouched": true,
+  "findings": [
+    {
+      "severity": "major",
+      "file": ".claude/skills/project-knowledge/references/patterns.md",
+      "line": 154,
+      "ac_or_rule": "source-mirage / rewrite-bullet-Project-Workspace-access-control",
+      "issue": "The bullet still cites `SecurityConfig pathMatchers(\"/api/**\").authenticated()` — `pathMatchers(...)` is the reactive `ServerHttpSecurity` API and does not exist in the post-flip `SecurityConfig.java`. The post-flip source (lines 91-98) uses `requestMatchers(\"/api/**\").authenticated()`. This is the Servlet-stack name the same task established 30+ lines above in the Spring Security MVC rewrite (`pathMatchers(...)` → `requestMatchers(...)` swap is explicit in task instructions for line ~40-46). The token does not match the AC14 grep alternation (which catches `WebFlux`, not the matcher API name), so it slipped through, but it is a clear mirage: a future onboarding agent reading this bullet would call a method that does not exist on `HttpSecurity`.",
+      "fix": "Replace `pathMatchers(\"/api/**\").authenticated()` with `requestMatchers(\"/api/**\").authenticated()` on patterns.md line 154. Same Servlet-stack name swap already applied in the rewritten Spring Security MVC heading above."
+    },
+    {
+      "severity": "minor",
+      "file": ".claude/skills/project-knowledge/references/deployment.md",
+      "line": 30,
+      "ac_or_rule": "rewrite-sweep-deployment.md / post-flip-stack-consistency",
+      "issue": "Local Development gradle-run hint reads `cd backend && ./gradlew bootRun  # Netty :8080 (Spring DevTools hot-reload)`. Netty is the WebFlux reactive server; the post-flip stack uses embedded Tomcat (driven by `spring-boot-starter-web`, confirmed in architecture.md line 27). The comment misleads anyone reading deployment.md about the runtime model the same Wave-3 task is meant to align docs around. Not an AC14 grep token but a clear post-flip stale reference flagged by the task's `sweep for any stray reactive token` directive (deployment.md section 5).",
+      "fix": "Change the inline comment to `# Tomcat :8080 (Spring DevTools hot-reload)` (the embedded servlet container on the MVC + virtual-threads stack)."
+    }
+  ],
+  "ac_check": [
+    {
+      "ac": "patterns.md Spring Security WebFlux block rewritten as 'Spring Security MVC' — HttpSecurity, SecurityFilterChain, requestMatchers, anyRequest, CookieCsrfTokenRepository, XorCsrfTokenRequestAttributeHandler, security baseline preserved",
+      "pass": true,
+      "note": "Heading renamed at line 115. Bullets use `HttpSecurity`, `SecurityFilterChain`, `requestMatchers`, `anyRequest`, `CookieCsrfTokenRepository`, plain `CsrfTokenRequestAttributeHandler` (with explicit note that `XorCsrfTokenRequestAttributeHandler` is the default but deliberately not used — matches SecurityConfig.java line 75). Security baseline (`/health`, `/api/auth/**`, `/api/**`) preserved at line 121. Cross-checked against SecurityConfig.java — all class/method names match. Note: the `CsrfCookieMaterializer` narrative at line 120 correctly describes the post-flip `OncePerRequestFilter` (verified at SecurityConfig.java lines 119-129)."
+    },
+    {
+      "ac": "patterns.md Spring Boot Test Specifics mock-triple replaced with post-flip mock-pair (com.mongodb.client.MongoClient + RedisConnectionFactory); reactive types explicitly noted as removed",
+      "pass": true,
+      "note": "Line 38 enumerates the two synchronous mocks and explicitly states the reactive types (`reactive driver / reactive connection-factory`) are gone from the classpath and any old test still declaring them will fail to compile."
+    },
+    {
+      "ac": "patterns.md integration-tests bullet says MockMvc, not WebTestClient",
+      "pass": true,
+      "note": "Line 31 uses `MockMvc` + `@AutoConfigureMockMvc`; `WebTestClient` does not appear anywhere in the file."
+    },
+    {
+      "ac": "patterns.md fire-and-forget, terminate-sessions, session-fixation, remember-me cookie bullets describe synchronous Servlet-stack equivalents actually used in post-flip code (verified against real source)",
+      "pass": true,
+      "note": "Fire-and-forget (line 130): `try { javaMailSender.send(msg); } catch (Exception e) { log.error(...); }` matches EmailService.sendAsync (lines 82-96). Terminate sessions (line 131): `MongoTemplate` + `Query.query(Criteria.where(\"principal\").is(userId))` + `remove(q, \"sessions\")` matches AuthService.terminateAllSessions (lines 395-398). Session fixation (line 134): `httpRequest.getSession(true); httpRequest.changeSessionId();` matches AuthService.openSession (lines 608-609). Remember-me (line 135): `RememberMeCookieSerializer` subclass of `DefaultCookieSerializer`, `writeCookieValue` override, `SessionAttributes.REMEMBER_ME_ATTR` lookup, `serverProperties.getServlet().getSession().getCookie()` + `PropertyMapper.alwaysApplyingWhenNonNull()` — all match RememberMeCookieSerializer.java verbatim. `@Bean CookieSerializer` shadow matches SecurityConfig.java lines 53-61."
+    },
+    {
+      "ac": "patterns.md ProjectService.requireOwned bullet shows synchronous Project return signature",
+      "pass": true,
+      "note": "Line 155 signature `requireOwned(ownerId, projectId, includeSoftDeleted): Project` matches ProjectService.java line 50. The synchronous try/catch around `findById` + `IllegalArgumentException → notFound(MESSAGE_NOT_FOUND)` rewrite at line 156 matches ProjectService.java lines 52-57 exactly. 422/400/409 bullet at line 157 correctly names `MethodArgumentNotValidException` (matches GlobalErrorHandler.java line 26-35) with `code: null` contract preserved."
+    },
+    {
+      "ac": "patterns.md Bot Connection / External APIs bullets describe synchronous outbound HTTP client, synchronous retry, synchronous compensation, synchronous race-test pattern",
+      "pass": true,
+      "note": "Line 173 describes synchronous `RestClient` with JDK `HttpClient` + `JdkClientHttpRequestFactory`, hand-rolled for-loop retry with `Thread.sleep`, cause-chain walk for `HttpServerErrorException`/`RestClientResponseException` 5xx/`IOException`/`TimeoutException` — all match TelegramApiClient.java exactly (lines 46-66 construction, 127-160 retry loop, 199-212 isTransient). Compensating action (line 176) matches BotService.java lines 171-186 (nested try/catch around `botRepository.save` + best-effort `deleteWebhook`). MockWebServer bullet (line 180) correctly says `Compatible with MockMvc for inbound assertions and synchronous RestClient for the outbound path`. Race-condition tests bullet (line 181) names `ConcurrencyTestUtils.parallelInvoke(2, () -> POST connect)` — matches ConcurrencyTestUtils.java signature exactly (line 22). Status pair `{200, 409}` + persisted-row + setWebhook/deleteWebhook count invariants preserved."
+    },
+    {
+      "ac": "patterns.md cross-links to Task 11 Virtual Threads section by real heading exactly once; Task 11 content itself untouched",
+      "pass": true,
+      "note": "Single explicit `See also: the ## Virtual Threads section above` reference at line 123 (end of Spring Security MVC block). Two other in-prose mentions at lines 31 and 155 use the lowercase `virtual-threads` phrasing as adjective rather than as a link to the section — these are not duplicate cross-references but vocabulary. Task 11's section (lines 41-113) opens with the HTML marker `<!-- Task 11 owns this section. Task 13 reads but does not modify. -->` (line 40) and the body matches what Task 11 committed verbatim (Why VT, Observed pinning sites table, What we deliberately don't do, How to re-observe, Upgrade horizon)."
+    },
+    {
+      "ac": "architecture.md Tech Stack Backend row says 'Spring MVC on virtual threads', not 'Spring WebFlux'",
+      "pass": true,
+      "note": "Line 7 reads `Java 21 + Spring Boot 3.5.x + Spring MVC on virtual threads` with rationale rewritten around synchronous-code clarity + VT concurrency + `spring.threads.virtual.enabled=true`. Single `See patterns.md → ## Virtual Threads` cross-reference appended in the same cell."
+    },
+    {
+      "ac": "architecture.md Key Dependencies → Backend list has reactive starters removed and synchronous equivalents added; outbound-HTTP prose matches post-flip client",
+      "pass": true,
+      "note": "Lines 27-30: `spring-boot-starter-web` (Servlet stack + `RestClient.Builder`), `spring-boot-starter-data-mongodb` (mongodb-driver-sync), `spring-boot-starter-data-redis` (Lettuce sync). No reactive starters remain. Line 27 correctly says `RestClient.Builder` for outbound, with both `TelegramApiClient` and `TelegramSender` named as singleton @Components — matches actual source. `WebClient.Builder` is gone from the Backend list."
+    },
+    {
+      "ac": "architecture.md project-structure paragraph says 'Spring MVC application on virtual threads' and 'MVC filter chain'",
+      "pass": true,
+      "note": "Line 18 reads `backend/ (Spring MVC application on virtual threads)`. Line 20 backend-package-root paragraph: `bot` module description says `both are synchronous RestClient beans built on the JDK java.net.http.HttpClient via JdkClientHttpRequestFactory` (matches TelegramApiClient.java lines 55-58 and TelegramSender.java lines 95-99); `security (SecurityConfig — MVC filter chain)` replaces the WebFlux phrasing."
+    },
+    {
+      "ac": "deployment.md Production Infrastructure container list shows `api — Spring MVC backend on virtual threads`",
+      "pass": true,
+      "note": "Line 93 reads `api — Spring MVC backend on virtual threads`. Other containers (`web`, `mongo`, `redis`, reverse proxy) unchanged as required."
+    },
+    {
+      "ac": "AC14 grep gate green: 0 matches across patterns/architecture/deployment for the six tokens",
+      "pass": true,
+      "note": "Verified via `grep -E 'WebFlux|ServerHttpSecurity|@EnableWebFluxSecurity|WebTestClient|ReactiveRedisConnectionFactory|reactivestreams.client' .claude/skills/project-knowledge/references/{patterns,architecture,deployment}.md` — exit code 1 (no matches)."
+    },
+    {
+      "ac": "No source code, test code, or build files modified — doc-only PR",
+      "pass": true,
+      "note": "Cannot enforce via git diff (`.claude/` is gitignored), but the source files I inspected (SecurityConfig, RememberMeCookieSerializer, AuthService, EmailService, ProjectService, TelegramApiClient, TelegramSender, BotService, GlobalErrorHandler, ConcurrencyTestUtils) all match the rewritten doc claims byte-by-byte, indicating no drift was introduced into source by this task. Verifier should run `git status` / `git diff backend/` to confirm zero source-tree changes."
+    },
+    {
+      "ac": "Secondary cross-reference grep (Mono</Flux</StepVerifier/reactor./Schedulers.boundedElastic/ServerWebExchange/WebSessionIdResolver/CookieWebSessionIdResolver/ReactiveMongoTemplate/ReactiveSecurityContextHolder/ReactiveCrudRepository/WebExchangeBindException) — 0 matches in rewritten sections",
+      "pass": true,
+      "note": "Run from repo root: only ONE hit at patterns.md line 70 (`Schedulers.boundedElastic`), and that hit is inside Task 11's Virtual Threads section (lines 41-113) which Task 13 is forbidden from touching. The hit is intentional historical-context narrative ('the implicit boundedElastic cap that used to limit parallel encodes was already loose...'). All rewritten sections are reactive-prose-free. Note: the Outbound Telegram Send section (lines 185-201) still contains many `WebClient`/`Mono`/`Reactor`/`.retryWhen`/`ReactorClientHttpConnector` references — this section is explicitly out-of-scope per the task brief (task asks only to flag AC14-listed tokens there) and the actual source code (TelegramSender.java) does use RestClient, not WebClient, so the prose is stale relative to source but does NOT block Task 13's AC checklist."
+    }
+  ]
+}

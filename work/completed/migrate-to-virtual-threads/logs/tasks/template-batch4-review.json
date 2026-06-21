@@ -1,0 +1,67 @@
+{
+  "validator": "task-validator",
+  "batch": [16, 17],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "structure",
+      "task": 16,
+      "section": "Reviewers",
+      "issue": "The `## Reviewers` section is entirely missing from the task file. The template lists Reviewers as a required section, and the section must be present even when `reviewers: []` in the frontmatter (Task 17 in the same batch handles this correctly by including the `## Reviewers` heading followed by an HTML comment explaining why the list is empty).",
+      "fix": "Add a `## Reviewers` section between `## Details` and `## Post-completion`. Since the audit task has no reviewers (audit IS the review), insert the heading followed by an HTML comment, e.g.:\n\n## Reviewers\n\n<!-- No reviewers. Task 16 (Test Audit) is itself the test-quality verification gate; its output is consumed by Task 17 (Pre-deploy QA) rather than reviewed by other agents. -->"
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 16,
+      "section": "Required Skills",
+      "issue": "SKILL.md link uses project-root-relative path `.claude/skills/test-master/SKILL.md`, while Task 17 in the same batch uses a feature-anchored path `../../../.claude/skills/pre-deploy-qa/SKILL.md`. Within one batch the convention should be uniform; project-root-relative paths only resolve when the reader opens the file from the project root.",
+      "fix": "Replace `[skills/test-master/SKILL.md](.claude/skills/test-master/SKILL.md)` with `[SKILL.md](../../../.claude/skills/test-master/SKILL.md)` so the link resolves from the task file's own directory, matching Task 17's convention."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 16,
+      "section": "Context Files",
+      "issue": "Project-knowledge links use project-root-relative paths (`.claude/skills/project-knowledge/references/project.md`) that do not resolve from the task file's directory (`work/migrate-to-virtual-threads/tasks/`). Task 17 in the same batch uses the working `../../../.claude/skills/project-knowledge/references/...` form.",
+      "fix": "Prefix each PK link in Task 16's Context Files with `../../../`, e.g. `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, matching Task 17's path style. Feature-local links (`../user-spec.md`, `../tech-spec.md`, `../decisions.md`) already use the correct relative form and can stay as-is."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 16,
+      "section": "Verification Steps",
+      "issue": "Only the `### Automated` subsection is present. The audit task itself is the verification gate, so omitting Smoke/User subsections is acceptable, but the Automated subsection mixes test-run commands (`./gradlew jacocoTestReport`) with grep-style invariant checks (`grep -rE \"StepVerifier|reactor\\\\.test...\"`). A reader scanning for what the agent must actively run vs. what is a checklist invariant can be confused.",
+      "fix": "Split the Automated subsection into two bullet groups: (a) commands the agent runs (`./gradlew jacocoTestReport`, per-file coverage extraction), and (b) grep invariants the audit asserts (the two `grep -rE` lines for StepVerifier / WebTestClient zero-match). Either reorder the bullets or use a brief inline header. Optional improvement, not a structural fault."
+    },
+    {
+      "severity": "minor",
+      "category": "frontmatter",
+      "task": 16,
+      "section": "depends_on",
+      "issue": "`depends_on: [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]` enumerates eleven dependencies. Tech-spec describes the Audit Wave as running after Phase A (1-2) + Phase B (3-10) + Phase C (11-13). Including Task 1 and Task 2 (pre-flip wave 1) is omitted here, which is technically correct because they are transitively covered through Wave 2 file imports — but the omission is implicit. Worth a quick sanity confirmation that Task 1/2 outputs are exercised by the post-flip tests this audit reviews; otherwise the dependency closure is slightly under-declared.",
+      "fix": "Confirm that the test files audited cover the constant-relocation (Task 1) and stub-interface-flip (Task 2) outputs through the dependent Wave-2 / Wave-3 tests, OR add `1, 2` to `depends_on` for completeness. No behavioural impact since they run in earlier waves either way."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 17,
+      "section": "Description",
+      "issue": "The Description bullet list mentions verifying `user-spec AC1-AC6, AC14, AC15, AC16, AC17, AC18` from automated evidence, then separately calls out AC7 (boot probe) and AC11-AC13 (manual UI smoke) and AC8-AC10 (deferred). The verification coverage is complete when read end-to-end, but the segmentation makes it harder to confirm at a glance that every user-spec AC is addressed.",
+      "fix": "Either restate the Description to enumerate all eighteen ACs by group (automated greps, automated tests, boot probe, manual UI smoke, deferred), or add a short index sentence such as: 'Coverage: AC1-AC6 + AC14-AC18 automated; AC7 boot probe; AC11-AC13 manual UI smoke; AC8-AC10 deferred to operator post-deploy verification.' This is purely a readability nit, not a structural fault."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 17,
+      "section": "Acceptance Criteria",
+      "issue": "Acceptance Criteria checklist includes 'Each user-spec AC (AC1-AC18) appears in `acceptanceCriteria[]` with status' and 'Each tech-spec TC (TC1-TC12) appears in `acceptanceCriteria[]` with status'. These are blanket carry-forwards rather than per-AC checklist entries. If a downstream reviewer wants to confirm that, e.g., AC16 specifically is asserted, they have to read the JSON report rather than the task's AC list. This is acceptable because the JSON report itself is the canonical AC-by-AC record per the `pre-deploy-qa` skill, but the task's own AC list loses traceability granularity.",
+      "fix": "Either accept the blanket form as intentional (Task 17 produces a richer per-AC report than its own checklist could carry — defensible) and add a one-line note like 'See `qa-report.json` acceptanceCriteria[] for per-AC verdicts'; or expand the task's AC list to one bullet per user-spec/tech-spec criterion. Recommend the former since it preserves the single source of truth in the JSON report."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "issues_found": 7
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "summary": "All 9 mandated TDD anchors are covered by named tests in frontend/tests/composables/useApiError.spec.ts, plus 2 bonus tests for documented edge cases (string-typed status, NaN). Mocks are at the correct boundary (mockNuxtImport for useI18n with vi.hoisted t/te spies) and follow the auth.global.spec.ts reference pattern — no over-mocking of vue-i18n internals. The critical regression-protection test (handler_callsTOnlyAfterTeConfirms) is present and would catch exactly the silentTranslationWarn bug Decision 9/10 warns about. Litmus test passes for tests 2, 3, 8a, 9 (strong assertions on result and on t() not being called for unconfirmed keys). Tests 5–7 (status extraction) and test 4 (unknown context) have weaker assertions that miss specific regression classes — minor refinements suggested, none blocking. Test pyramid is healthy (pure unit, mocked at the right boundary).",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/composables/useApiError.spec.ts:45-51",
+      "issue": "handler_unknownContext_fallsBackToErrorsGeneric verifies that t() was called with 'errors.generic', but does NOT assert that t() was never called with 'errors.unknown.500' or 'errors.unknown.generic'. If the implementation regressed and called t() before te()-confirmation for the unknown-context keys (the exact bug Decision 10 warns about), this test would still pass because the final t('errors.generic') call would satisfy the assertion. The symmetric guard exists in test 3 (line 42) for the 403 case but is missing here.",
+      "recommendation": "Add two negative assertions mirroring line 42:\n  expect(tMock).not.toHaveBeenCalledWith('errors.unknown.500')\n  expect(tMock).not.toHaveBeenCalledWith('errors.unknown.generic')\nThis closes the te()-gating regression hole for the unknown-context branch."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/composables/useApiError.spec.ts:53-72",
+      "issue": "handler_extractsStatusFromStatusCodeField/StatusField/ResponseStatusField only assert teMock.toHaveBeenCalledWith('errors.login.401'). They do not assert handler return value, do not assert call order, and would pass even if te() were called for 'errors.login.401' AFTER unrelated calls. The fallback-chain ORDER (specific → context-generic → errors.generic) is not verified by these tests; if the implementation reversed the candidate array, te() would still eventually be called with 'errors.login.401' and the assertion would pass.",
+      "recommendation": "Strengthen to verify both extraction AND chain order. Either:\n  (a) Assert call ordering: expect(teMock.mock.calls[0][0]).toBe('errors.login.401')\n  (b) Assert handler return: expect(handler({ statusCode: 401 }, 'login')).toBe('MSG:errors.login.401')\nOption (b) is preferable — it ties extraction to observable handler output."
+    },
+    {
+      "severity": "minor",
+      "category": "empty_test",
+      "location": "frontend/tests/composables/useApiError.spec.ts:20-24",
+      "issue": "factory_returnsFunction asserts only typeof handler === 'function'. Litmus test fails: replace the entire return statement with `return () => {}` and the test still passes. The test is mandated by TDD-anchor 1 but on its own provides minimal regression value — it duplicates information you'd get for free from any other test that calls the handler.",
+      "recommendation": "Either accept this as a contract-shape smoke test (low value but cheap) or fold the typeof check into handler_401LoginContext_returnsSpecificKey via:\n  const handler = useApiError()\n  expect(typeof handler).toBe('function')\n  // ... then exercise handler\nNot blocking — keep as-is to satisfy the explicit TDD anchor name."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/composables/useApiError.spec.ts:97-103",
+      "issue": "handler_callsTOnlyAfterTeConfirms verifies t() is never called when te() always returns false, but does not assert what the handler RETURNS in that pathological case. The implementation (useApiError.ts:33) returns '' (empty string). If a future refactor changed this to throw or return undefined, no test would catch it.",
+      "recommendation": "Add: expect(handler({ statusCode: 401 }, 'login')).toBe(''). This locks in the empty-string fallback contract for the 'no key found anywhere' edge case (theoretically unreachable since errors.generic should always exist, but cheap to pin down)."
+    }
+  ],
+  "verdict": "OK"
+}

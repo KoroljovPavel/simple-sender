@@ -1,0 +1,91 @@
+{
+  "status": "changes_required",
+  "summary": "Task 10 is well-structured: cross-file contracts with the Task 8 backend (status lowercased, send-message body == {text}, custom-fields PATCH single key, tags POST {slug}, events ?limit=50) all match, and the SegmentFilter->export enum mapping (status uppercased, sort CREATED_DESC/LAST_SEEN_DESC) is correct against the Java SegmentFilter/SortKey enums. Two real bugs block approval: the shadcn Sonner toaster is never mounted in any layout or app.vue, so every toast.*() call in the task is a silent no-op at runtime, and the custom-field save success toast reuses the wrong i18n key ('Message sent' instead of a save-confirmation). Test coverage is strong on the security-sensitive paths.",
+  "criticalIssues": [
+    {
+      "file": "frontend/layouts/default.vue",
+      "line": 1,
+      "severity": "critical",
+      "category": "cross-file-consistency",
+      "issue": "The shadcn-vue Sonner toaster component (frontend/components/ui/sonner/Sonner.vue, scaffolded by Task 2 in commit d53bed3) is NEVER mounted anywhere in the render tree. Verified: no <Toaster>/<Sonner> in app.vue, layouts/default.vue, layouts/auth.vue, any page, any plugin, or nuxt.config.ts (grep across whole frontend excluding node_modules returns only the scaffold files and .nuxt generated types). Task 10 is the first and only consumer of vue-sonner in the codebase.",
+      "impact": "Every toast.success/warning/error call introduced by Task 10 — send-message success/blocked/deleted/rate-limited, export 202/409/422, custom-field save, tag add/remove errors, manual-unsubscribe error — silently does nothing at runtime. The user gets zero feedback on these flows. The Vitest specs pass because they mock vue-sonner directly, so they cannot catch the missing mount. The task's User verification steps ('toast says delivered', 'toast Export started', 'toast confirms') will all fail on a real dev render. AC for response-handling toasts and export toasts are effectively unmet end-to-end.",
+      "recommendation": "Mount the toaster once in the render tree — add `<Sonner />` (from `~/components/ui/sonner`) to frontend/layouts/default.vue (and auth.vue if toasts are needed there), or to app.vue. Ownership is ambiguous between Task 2 (scaffolded the component) and Task 10 (first consumer); regardless, the toasts this task ships do not work without the mount. If the team decides Task 2 owns the mount, surface it as a Task 2 follow-up before Task 10 can be verified — but do not leave the gap unaddressed."
+    },
+    {
+      "file": "frontend/components/subscribers/SubscriberCustomFieldsTab.vue",
+      "line": 58,
+      "severity": "critical",
+      "category": "correctness",
+      "issue": "On a successful custom-field PATCH, the success toast uses `t('subscribers.profile.sendMessage.success')` — a copy-paste leftover from SendPersonalMessageDialog. That key resolves to 'Message sent' / Ukrainian equivalent. There is NO seeded key for a custom-field save confirmation (verified: customFields.saved and subscribers.profile.customFields.saved are both MISSING in en.json and uk.json).",
+      "impact": "Saving a custom field shows the user 'Message sent', which is semantically wrong and confusing (the user edited a field, not sent a message). Because the wrong key happens to exist, there is no missing-key console fallback to flag it, and the Vitest spec only asserts toast.error on 422 (not the success text), so the bug ships silently. This is a user-facing correctness defect.",
+      "recommendation": "Use a save-confirmation key. Task 2 owns locale files and did not seed customFields.saved, so per the task's 'do not add keys' rule, either (a) surface the missing customFields.saved key as a Task 2 follow-up and gate the toast accordingly, or (b) reuse an existing generic save-confirmation key (e.g. common.save semantics) — but NOT subscribers.profile.sendMessage.success. At minimum stop showing 'Message sent' for a field save."
+    }
+  ],
+  "suggestions": [
+    {
+      "file": "frontend/components/subscribers/SubscriberCustomFieldsTab.vue",
+      "line": 18,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "editValues is typed `Record<string, any>`. `any` in internal code normally maps to major, but here it is a deliberate, documented choice (native input v-model binds heterogeneous string/number/boolean/date values, re-narrowed by typedValue() on save). Consider `Record<string, unknown>` with a cast at the v-model site, or per-type buffers, to keep the any-free invariant; acceptable as-is given the comment.",
+      "benefit": "Tighter typing reduces the chance a future edit silently sends an unintended shape.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/subscribers/SubscriberCustomFieldsTab.vue",
+      "line": 33,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "initialValue() reads props.customFields per definition on mount, but editValues is only populated inside onMounted after the definitions fetch. If the parent refreshes the subscriber (props.customFields changes) after a save, the edit buffer is not re-synced — the displayed value can drift from server truth until remount. Low impact because save() emits refresh and the tab typically reflects the value the user just typed.",
+      "suggestion": "Optionally watch props.customFields and reconcile editValues for fields the user is not actively editing, or re-seed on the relevant key after a successful save.",
+      "benefit": "Keeps the editor in sync with server state across refreshes.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/subscribers/SubscriberProfileCard.vue",
+      "line": 58,
+      "severity": "minor",
+      "category": "readability",
+      "issue": "Lifecycle date labels render the raw camelCase key ('subscribedAt', 'unsubscribedAt', ...) as the <dt> text instead of a t('...') label. The task requires all visible strings via i18n keys; this is a visible English-only literal.",
+      "suggestion": "Map each lifecycle key to a seeded i18n label (e.g. subscribers.profile.lifecycle.subscribedAt) if Task 2 seeded them; if not seeded, surface as a Task 2 follow-up rather than shipping raw keys as UI text.",
+      "benefit": "Consistent localization; avoids raw identifier strings leaking into the profile UI.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/subscribers/SubscribersTable.vue",
+      "line": 44,
+      "severity": "minor",
+      "category": "readability",
+      "issue": "The subscribedAt column header reuses `t('subscribers.filters.dateRange.from')` ('From') rather than a dedicated 'Subscribed at' column label. Functional but mislabels the column.",
+      "suggestion": "Use a column-specific key (e.g. subscribers.columns.subscribedAt) if seeded; otherwise note the missing key for Task 2.",
+      "benefit": "Clearer column semantics for the user.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/subscribers/SubscriberTagsTab.vue",
+      "line": 20,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Tag chips render `{{ slug }}` raw rather than the human label from availableTags. The filter bar shows `tag.label || tag.slug`; the profile tags tab shows only the slug. Minor inconsistency. Also addTag relies on backend find-or-create (TagService.findOrCreate) — confirmed correct against SubscriberController.addTag which calls tagService.findOrCreate then subscriberService.addTag, so no separate POST /tags is needed.",
+      "benefit": "UI consistency between the filter bar and the tags tab.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/subscribers/ExportCsvDialog.vue",
+      "line": 23,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "The filter summary uses props.filter.search directly (raw, possibly 1-char) for display, while toExportFilter()/effectiveSearch() drops <2-char search from the actual export body. Display vs sent value can diverge for a 1-char search. Cosmetic only.",
+      "suggestion": "Render the summary off the same effectiveSearch() the body uses, or accept the minor divergence.",
+      "benefit": "Summary always reflects what is actually exported.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 21,
+    "criticalIssuesCount": 2,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 6,
+    "testCoverageAssessment": "adequate"
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [11, 12, 13, 14, 15],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "What to do",
+      "issue": "Step 1 (line 30) still describes the existing `SecurityConfig` as `CookieServerCsrfTokenRepository + XorServerCsrfTokenRequestAttributeHandler, NOT csrf.disable()`. This contradicts the rest of the task (Description line 24, What to do step 4 line 47, AC line 85, Details line 126) which all assert the codebase uses the NON-Xor `ServerCsrfTokenRequestAttributeHandler`. Cross-checked against `backend/src/main/java/com/botfunnel/security/SecurityConfig.java` line 17 + line 64: the codebase indeed instantiates `ServerCsrfTokenRequestAttributeHandler` (non-Xor); the `Xor` mention is only an inline comment on line 59 noting it is the Spring 6.x default. Implementer reading the task top-down will see contradictory information about what they will find on disk.",
+      "fix": "On task 11 line 30, replace `XorServerCsrfTokenRequestAttributeHandler` with `ServerCsrfTokenRequestAttributeHandler` (drop the `Xor` prefix) so the precedent-file description is internally consistent with the rest of the task (and with the actual `SecurityConfig.java` source)."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 15,
+      "section": "Context Files",
+      "issue": "Context Files entry for user-spec.md (line 72) describes the criteria range as `Acceptance Criteria (AC1..AC19)` but the rest of the task (Description, What to do step 3, AC line 62, Verification Steps line 93 carried by T14) consistently states the full set is 20 ACs = AC1–AC19 + AC11a. Minor stylistic mismatch in the link annotation.",
+      "fix": "Append `+ AC11a` to the link annotation on line 72: `[user-spec.md](../user-spec.md) — Acceptance Criteria (AC1..AC19 plus AC11a), \"Пользователь проверяет\" section.`"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 2,
+    "iter1_findings": 13,
+    "iter1_resolved": 13,
+    "iter1_residual": 1,
+    "new_iter2_findings": 1
+  },
+  "fix_verification": {
+    "context_files_added": {
+      "T11": "verified (lines 99-101)",
+      "T12": "verified (lines 60-62)",
+      "T13": "verified (lines 95-97)",
+      "T14": "verified (lines 75-77)",
+      "T15": "verified (lines 75-77)"
+    },
+    "verification_steps_added": {
+      "T12": "verified — ### Smoke subsection lines 80-85",
+      "T13": "verified — ### Smoke subsection lines 103-108",
+      "T14": "verified — ### Smoke subsection lines 90-96",
+      "T15": "verified — ### Smoke subsection lines 87-91"
+    },
+    "T11_xor_replacement": "partial — 4 of 5 sites use non-Xor variant correctly (Description l.24, What to do l.47, AC l.85, Details l.126); ONE residual `Xor` reference on line 30 in the precedent-file description (filed as iter2 minor finding above)",
+    "T11_content_length_zero": "resolved — PASS THROUGH decided upfront (Edge cases line 136 + What to do step 3 line 42)",
+    "T13_agent_prefix": "resolved — /agent:security-auditor used (line 16), points to .claude/agents/security-auditor.md (file confirmed present)",
+    "T14_ac_count_20": "resolved — `20 user-spec ACs (AC1–AC19 plus AC11a)` (AC line 64, Smoke line 93). Tech-spec AC mapping AC also added (line 65) resolving iter1 minor #13.",
+    "T15_depends_on_8": "resolved — depends_on: [8, 12, 13, 14]; wave 6 > wave 1 (T8) and > wave 5 (T12-T14). No cycles.",
+    "T15_ac_count_20": "resolved — line 62",
+    "T15_gitleaks_command": "resolved — `gitleaks detect --staged --verbose --no-banner --redact` (line 43)",
+    "T15_csrf_403": "resolved — line 47 expects 403 for CSRF baseline (Spring Security correct behaviour)"
+  },
+  "cross_task_checks": {
+    "dependency_graph": "valid — no cycles. T11(w4)→T10(w3); T12-14(w5)→T11(w4); T15(w6)→T8(w1)+T12-14(w5).",
+    "shared_resources": "MeterRegistry / ReactiveMongoTemplate / JobRunr StorageProvider — none owned by batch 3 tasks (created in earlier waves). T11 filter consumes MeterRegistry; depends_on chain through T10→T1 covers ownership. No competing instances.",
+    "ac_carry_forward": "T14 covers all 20 user-spec ACs + tech-spec AC bullets; T15 verifies the same. No AC dropped.",
+    "audit_wave_parallelism": "T12, T13, T14 all wave 5, all depend on [11], all reviewers: [], skill matches role (T12 code-reviewing, T13 security-auditor agent, T14 test-master). Correctly parallel."
+  }
+}

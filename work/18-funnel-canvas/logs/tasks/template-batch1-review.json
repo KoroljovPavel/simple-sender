@@ -1,0 +1,35 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 1,
+      "section": "Context Files",
+      "issue": "Project-knowledge links use the wrong path. project.md/architecture.md/patterns.md are linked as `.claude/skills/project-knowledge/project.md` but the actual files live under `.claude/skills/project-knowledge/references/` (see Tasks 2/3/4 which use the correct `references/` path).",
+      "fix": "Point the PK links at `.claude/skills/project-knowledge/references/project.md` (and architecture.md, patterns.md) to match the real layout and the other tasks in this batch."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "Project-knowledge links use the wrong path. project.md/architecture.md/patterns.md are linked as `.claude/skills/project-knowledge/references/project.md` for some but `.claude/skills/project-knowledge/...` mixing styles; the `[project.md](.claude/skills/project-knowledge/references/project.md)` link drops the leading `../../../` used by other code links so the relative resolution differs from Tasks 2/3/4. Also the Required Skills SKILL.md link uses `.claude/...` while Task 3/4 use `../../../.claude/...`.",
+      "fix": "Make the PK and SKILL.md link prefixes consistent with Tasks 3/4 (`../../../.claude/skills/project-knowledge/references/...`) so links resolve from the task file location."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 1,
+      "section": "Required Skills / Context Files",
+      "issue": "The Required Skills SKILL.md link `[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)` uses a repo-root-relative path (no `../../../` prefix), inconsistent with Tasks 3 and 4 which use `../../../.claude/skills/code-writing/SKILL.md`. From the task file's location the bare `.claude/...` link does not resolve.",
+      "fix": "Use `../../../.claude/skills/code-writing/SKILL.md` to match the resolving links in Tasks 3/4 (cosmetic but inconsistent across the batch)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3
+  }
+}

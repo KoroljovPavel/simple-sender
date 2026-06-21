@@ -1,0 +1,42 @@
+{
+  "status": "needs_improvement",
+  "summary": "All six round-1 findings have been addressed: from-address assertion added, token/URL assertion added, htmlEscape wired through buildVerificationBody (not as static call), template-not-found guard tested, and password-reset/account-blocked tests now assert recipient and subject. Two new major issues remain: the body assertions in sendPasswordResetEmail and sendAccountBlockedEmail are made on separate, fresh builder calls rather than on the content of the actually-sent MimeMessage, so the integration path (does the public send method pass the correct body to the email?) is unverified. One minor issue: HTML-escaping of user-supplied name is only tested for sendVerificationEmail; sendPasswordResetEmail and sendAccountBlockedEmail also embed name via htmlEscape but have no corresponding test.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "mock_only",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:93",
+      "issue": "sendPasswordResetEmail_callsJavaMailSenderWithCorrectResetUrl asserts the reset URL by calling emailService.buildPasswordResetBody('Alice', 'resettoken') as a fresh, standalone invocation — not by reading the body from the MimeMessage that was actually passed to javaMailSender.send(). The mimeMessage object's content is never inspected. Litmus test fails: if sendPasswordResetEmail internally called buildVerificationBody instead of buildPasswordResetBody (wrong builder bug), or passed an empty string as body, the mimeMessage headers (recipient, subject) would still be asserted correctly and the standalone buildPasswordResetBody call would still return the correct URL — so this test would remain green despite the bug.",
+      "recommendation": "After the await, extract and assert the body from the MimeMessage directly: `Object content = mimeMessage.getContent(); assertThat(content.toString()).contains(\"http://localhost:3000/auth/reset-password?token=resettoken\");`. Remove the standalone `emailService.buildPasswordResetBody(...)` call — it tests the builder in isolation, which is already covered by the URL-check test pattern on sendVerificationEmail. If you want to keep the builder tested in isolation, rename that assertion to a dedicated test such as `buildPasswordResetBody_containsResetUrl` and keep it separate from the send-path test."
+    },
+    {
+      "severity": "major",
+      "category": "mock_only",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:110",
+      "issue": "sendAccountBlockedEmail_callsJavaMailSenderWithSupportEmail asserts the support email presence by calling emailService.buildAccountBlockedBody('Alice', 'support@test.com') as a fresh standalone invocation — not by reading the body from the MimeMessage sent via javaMailSender. Litmus test fails: if sendAccountBlockedEmail passed a body missing the SUPPORT_EMAIL substitution (e.g., forgot to call replace('{SUPPORT_EMAIL}', supportEmail)), the mimeMessage recipient and subject assertions would still pass, and the standalone buildAccountBlockedBody call would still return the correct string — the test stays green while the acceptance criterion 'Account blocked email contains SUPPORT_EMAIL placeholder' is silently unmet.",
+      "recommendation": "After the await, extract the body from the MimeMessage and assert it directly: `assertThat(mimeMessage.getContent().toString()).contains(\"support@test.com\");`. This verifies that sendAccountBlockedEmail wires the supportEmail argument all the way into the email body that is actually dispatched. The standalone builder call on line 110 should be removed from this test."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java",
+      "issue": "HTML-escaping of user-supplied name is verified only for sendVerificationEmail (via buildVerificationBody). sendPasswordResetEmail and sendAccountBlockedEmail also embed name through htmlEscape (EmailService.java lines 65 and 73) but have no XSS-escape test. The acceptance criterion 'User-supplied name is HTML-escaped before embedding in email body' is only partially demonstrated. A developer could remove htmlEscape from buildPasswordResetBody or buildAccountBlockedBody without any test failing.",
+      "recommendation": "Add two tests mirroring the existing pattern: `buildPasswordResetBody_htmlEscapesName` — call emailService.buildPasswordResetBody('<script>xss</script>', 'tok') and assert body contains '&lt;script&gt;' and does not contain '<script>'. `buildAccountBlockedBody_htmlEscapesName` — call emailService.buildAccountBlockedBody('<script>xss</script>', 'support@test.com') and assert the same escaping. These are fast builder-level tests with no async complexity."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 7,
+      "passed": 5,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 7,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 6,
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "F1 (critical) correctly resolved: the branch selector at line 1297 now keys solely on row.type === 'callback'; the SearchableSelect target picker is gated by a nested v-if='!hideTargetPickers' at line 1299 inside that branch; the v-else URL branch is therefore unreachable for callback rows regardless of hideTargetPickers. A callback button under hideTargetPickers shows the label input, hides the target picker, and does not render the URL input — confirmed by the new F1 regression test at line 101 of FunnelCanvasSidePanel.spec.ts. The timeout picker guard at line 1365 and the SUBSCRIBE entry picker guard at line 1571 remain independent standalone v-if conditions, unchanged and correct. F2 (minor) resolved: the misleading 'stepIndex' comment in FunnelCanvas.client.vue replaced with an accurate description tying the id-match contract to Decision 9/10. No new issues introduced. FunnelStepForm contract (Decision 10) intact: hideTargetPickers is a declared Boolean prop defaulting to false; seeded targetStepId, timeoutTargetStepId, and targetEntryStepId all flow through unchanged on submit when pickers are hidden, verified by two carry-through tests. New SUBSCRIBE-specific fixture (subscribeStepWithEntry) eliminates the vacuous-pass risk for the entry-picker absence assertion."
+}

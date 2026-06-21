@@ -1,0 +1,61 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-handles",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "category": "css-correctness",
+      "file": "frontend/components/funnels/FunnelCanvasNode.vue",
+      "line": 205,
+      "issue": "Redundant hover selector: `.funnel-handle.connectionindicator:hover` is a subset of `.funnel-handle:hover` which immediately precedes it on line 204. The `connectionindicator` class is applied by Vue Flow when a handle is connectable, so the combined `:hover` rule on line 205 is always covered by the plain `:hover` rule on 204.",
+      "impact": "Zero functional impact — the redundant selector still applies the same transform/box-shadow rules. Dead CSS only.",
+      "recommendation": "Remove line 205 (`.funnel-canvas-node :deep(.funnel-handle.connectionindicator:hover)`) to keep the affordance block to two meaningful rules: plain hover and `vue-flow__handle-connecting`.",
+      "blocking": false
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "category": "testing",
+      "file": "frontend/tests/components/funnels/FunnelCanvas.spec.ts",
+      "line": 207,
+      "issue": "Test asserts `funnel-handle--target` class on the target handle of a step node but does NOT assert the shared `funnel-handle` base class on that same element (contrast: `nextHandle` gets both assertions, `funnel-canvas-handle-target` only gets the kind-specific one). Inconsistent coverage across handle types.",
+      "impact": "If the base `funnel-handle` class is accidentally dropped from the target handle in a future refactor, the test suite would not catch it. Minor gap only.",
+      "recommendation": "Add `expect(stepNode.find('[data-test=\"funnel-canvas-handle-target\"]').classes()).toContain('funnel-handle')` alongside the existing `funnel-handle--target` assertion.",
+      "blocking": false
+    }
+  ],
+  "checks": {
+    "handle_ids_unchanged": {
+      "result": "pass",
+      "detail": "Handle ids in FunnelCanvasNode.vue are exactly: id='next' (line 106), id='btn:${btnIndex}' (line 116), id='timeout' (line 127), id='entry' (line 139). No id attribute on the target handle (target handles have no id in Vue Flow — they are selected by node id). These ids match the mapping layer in FunnelCanvas.client.vue (handleFieldKind / resolveEdgeRef). No id was added, removed, or renamed. The claimed 'input-target' id does not appear anywhere — it is not used. Connect path is unaffected."
+    },
+    "deep_css_correctness": {
+      "result": "pass",
+      "detail": ":deep() is correctly applied on all handle selectors. The host selector `.funnel-canvas-node` anchors each :deep rule to the component root, preventing bleed. 12px size and per-kind background colors are explicit and will override Vue Flow defaults. Vue Flow adds `vue-flow__handle-connecting` (confirmed in dist/vue-flow-core.mjs:5294) during an active drag — that class is targeted in the affordance block. No overflow:hidden is present in FunnelCanvasNode.vue or FunnelCanvas.client.vue that could clip the 12px handles."
+    },
+    "all_output_kinds_present": {
+      "result": "pass",
+      "detail": "Entry (start/trigger bottom source, id=entry, purple), next (step bottom source, id=next, blue), btn:<i> per callback button (step bottom source, green), timeout (MESSAGE step only, step bottom source, amber), and target (step/note-excluded input handle top, slate) are all present with both base class and kind-specific class. Start-node entry handle + step target handle together enable Start→step drawing."
+    },
+    "i18n_parity": {
+      "result": "pass",
+      "detail": "Key 'funnels.canvas.handle.input' present and non-empty in both en.json ('Input (connect here)') and uk.json ('Вхід (зʼєднати сюди)'). Added to required-keys.spec.ts at line 103. All pre-existing handle keys (next, button, timeout, entry) also present in both locales and in required-keys."
+    },
+    "ssr_safety": {
+      "result": "pass",
+      "detail": "FunnelCanvasNode.vue contains no browser-only globals. The parent canvas component already uses the Nuxt .client.vue convention (FunnelCanvas.client.vue) which excludes it from SSR. The node component is only ever mounted inside that client-only tree."
+    },
+    "connect_logic_unchanged": {
+      "result": "pass",
+      "detail": "handleConnect, resolveEdgeRef, handleFieldKind, and connectEdge in FunnelCanvas.client.vue are not touched by commit b2432dc. The diff is confined to FunnelCanvasNode.vue (class + title additions + CSS), i18n files, spec file, and required-keys spec."
+    },
+    "broken_edge_read_only_gates": {
+      "result": "pass",
+      "detail": "No changes to broken-edge display logic, add-node guards, or save gates. The commit is purely additive CSS/class/i18n."
+    }
+  },
+  "summary": "Fix is correct and complete. All five handle kinds are now visibly styled via :deep() CSS, handle ids are unchanged so the connect path is unaffected, i18n key 'funnels.canvas.handle.input' is present in both locales and in required-keys. Two minor findings: a redundant CSS selector (connectionindicator:hover is already covered by plain :hover) and a missing base-class assertion on the target handle in the test — neither is a blocker. Verdict: pass."
+}

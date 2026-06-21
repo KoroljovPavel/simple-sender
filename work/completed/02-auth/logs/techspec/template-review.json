@@ -1,0 +1,186 @@
+{
+  "verdict": "warn",
+  "issues": [
+    {
+      "section": "Implementation Tasks — Task 1 (Infrastructure setup)",
+      "finding": "Reviewer 'infrastructure-reviewer' is present in Task 1 and matches the skill→reviewers mapping for 'infrastructure-setup'. However, 'infrastructure-reviewer' does NOT appear in the Reviewer Agents table in skills-and-reviewers.md (catalog lists: code-reviewer, security-auditor, test-reviewer, skill-checker, prompt-reviewer, infrastructure-reviewer, deploy-reviewer). Cross-checking the catalog: 'infrastructure-reviewer' IS listed. Finding is resolved — no issue.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Audit Wave — Task 14",
+      "finding": "Task 14 uses skill 'test-master' but the Execution Skills table in the catalog lists the audit skill as 'test-master' (for Test Audit in Audit Wave). This matches correctly.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Task 2 (User domain)",
+      "finding": "Task 2 has no 'Files to read' field. Per the task template, this field should be present (even if empty or 'N/A') to provide context for the executing agent. Minor omission — does not block execution since all referenced files are listed under 'Files to modify' and are self-contained new packages.",
+      "severity": "warn"
+    },
+    {
+      "section": "Implementation Tasks — Task 3 (Email service + templates)",
+      "finding": "Task 3 has no 'Files to read' field. Same as Task 2.",
+      "severity": "warn"
+    },
+    {
+      "section": "Implementation Tasks — Task 4 (Login + brute-force)",
+      "finding": "Task 4 has no 'Files to read' field.",
+      "severity": "warn"
+    },
+    {
+      "section": "Implementation Tasks — Task 5 (Registration + email verification)",
+      "finding": "Task 5 has no 'Files to read' field. Additionally, it references 'AuthController.java' and 'AuthService.java' as files to modify — but these are created in Task 4 (Wave 2). Task 5 is in Wave 3 which is correct (after Wave 2), so this is fine sequencing-wise. No conflict.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Task 6 (Logout + password reset)",
+      "finding": "Task 6 also modifies 'AuthController.java' and 'AuthService.java' — same files as Task 5. Both are in Wave 3 (parallel). This is a wave conflict: two tasks in the same wave modify the same files. This will cause merge conflicts during parallel execution.",
+      "severity": "critical"
+    },
+    {
+      "section": "Implementation Tasks — Task 7 (Profile + SuperAdmin + HardDelete)",
+      "finding": "Task 7 is very wide in scope — it combines ProfileController/ProfileService, SuperAdminSeeder, and HardDeleteJob into a single task. The description is 7 sentences, exceeding the 5-sentence brevity guideline for tech-spec tasks. The scope is still at a high level (no line numbers, no TDD anchors, no inline decisions), so this is a minor concern about decomposition granularity rather than a structural violation.",
+      "severity": "warn"
+    },
+    {
+      "section": "Implementation Tasks — Task 8 (Frontend bootstrap)",
+      "finding": "Task 8 description is 4 sentences but lists a very large number of deliverables (Pinia, Vue Query, shadcn-vue, vee-validate+zod, 2 layouts, middleware, composable, auth store). This is appropriate for an L-size feature bootstrap and within the 5-sentence limit. No finding.",
+      "severity": "info"
+    },
+    {
+      "section": "Decisions — Decision 3",
+      "finding": "Decision 3 uses 'Why:' instead of 'Rationale:' as the label. Minor style inconsistency vs. other decisions which use 'Rationale:'. Does not affect readability or content completeness.",
+      "severity": "info"
+    },
+    {
+      "section": "Decisions — Decisions 4, 7, 8, 9, 10, 11",
+      "finding": "Decisions 4, 7, 8, 9, 10, and 11 use 'Why:' instead of 'Rationale:' as the label, and most lack an explicit 'Alternatives considered:' field. Decisions 1, 2, and 6 follow the full Decision + Rationale + Alternatives format. The template requires all three fields per decision. Decisions missing 'Alternatives considered:' are: Decision 3 (BCrypt — no alternatives), Decision 4 (says 'No Bucket4j' implicitly but no explicit field), Decision 7 (no alternatives stated), Decision 8 (no alternatives), Decision 9 (no alternatives), Decision 10 (no alternatives), Decision 11 (no alternatives).",
+      "severity": "warn"
+    },
+    {
+      "section": "Decisions — Reference to user-spec",
+      "finding": "Decisions 3, 4, 7, 8, 9, 10, 11 are marked [TECHNICAL] or have no References field at all. Per the validation requirement, every decision must reference a user-spec requirement OR be explicitly marked [TECHNICAL]. Decisions 7, 8, 9, 10, 11 contain neither a 'References:' line nor a '[TECHNICAL]' marker. Decision 4 references US-6 and US-5 in References field — correct. Decision 7 has no References or [TECHNICAL] marker. Decision 8 has no References or [TECHNICAL] marker. Decision 9 has no References or [TECHNICAL] marker. Decision 10 explicitly states '[TECHNICAL]' in the Why field inline. Decision 11 explicitly states '[TECHNICAL]' in the Why field inline.",
+      "severity": "warn"
+    },
+    {
+      "section": "Decisions — Decision 7 and Decision 8",
+      "finding": "Decision 7 (resend-verification public endpoint) and Decision 8 (CORS for local dev) lack both a 'References:' line and an explicit '[TECHNICAL]' marker as standalone text. The content implies they are technical decisions, but the marker is embedded in prose ('Why: [TECHNICAL]') inconsistently across decisions. Recommend adding explicit '[TECHNICAL]' label or References field to all decisions for consistency.",
+      "severity": "warn"
+    },
+    {
+      "section": "Implementation Tasks — Wave Conflict (Task 5 and Task 6)",
+      "finding": "Wave 3 contains Task 5 and Task 6 as parallel tasks. Task 5 modifies 'backend/src/main/java/com/botfunnel/auth/AuthController.java' and 'AuthService.java'. Task 6 also modifies the same two files. Parallel execution will create git merge conflicts. One of these tasks must be moved to a later wave, or they must be merged into a single task.",
+      "severity": "critical"
+    },
+    {
+      "section": "Testing Strategy",
+      "finding": "Testing Strategy is present, well-structured, and specifies 'Feature size: L'. Covers unit, integration (Testcontainers), E2E (Playwright), and frontend component tests. No finding.",
+      "severity": "info"
+    },
+    {
+      "section": "Acceptance Criteria",
+      "finding": "Acceptance Criteria section is present and comprehensive. One item contains a logic error: '[ ] JobRunr hard-delete job removes users with deletedAt < 30d ago; users with deletedAt < 30d ago remain' — both clauses say the same condition. Should read: 'users with deletedAt < 30d ago remain' vs 'users with deletedAt > 30d ago are removed' (i.e., the second clause should be 'users with deletedAt within 30 days remain'). This is a copy-paste error in the AC wording.",
+      "severity": "warn"
+    },
+    {
+      "section": "Implementation Tasks — Task 2 (User domain)",
+      "finding": "Task 2 description is 3 sentences but covers 3 distinct concerns: User @Document + Repository + Service, SecurityConfig extension, and AppException/ErrorHandler in common package. These are logically separate areas. This is within tech-spec scope (defining what to build, not how), but the task is broad. Given the L-size feature and wave constraints, this is acceptable. No critical finding.",
+      "severity": "info"
+    },
+    {
+      "section": "Frontmatter",
+      "finding": "All frontmatter fields present and valid: created=2026-05-04 (YYYY-MM-DD format), status=draft, size=L, branch=dev. All correct.",
+      "severity": "info"
+    },
+    {
+      "section": "Structure — All Required Sections",
+      "finding": "All required sections are present: Solution, Architecture (with 'What we're building/modifying' and 'How it works'), Decisions, Data Models, Dependencies (with 'New packages' and 'Using existing'), Testing Strategy, Agent Verification Plan (with 'Verification approach' and 'Tools required'), Risks (table format), User-Spec Deviations, Acceptance Criteria, Implementation Tasks (organized by waves). No missing sections.",
+      "severity": "info"
+    },
+    {
+      "section": "Architecture — Shared Resources subsection",
+      "finding": "The Architecture section includes a 'Shared resources' subsection which is not part of the standard template. This is an additive enhancement, not a violation. Positive addition.",
+      "severity": "info"
+    },
+    {
+      "section": "Risks",
+      "finding": "Risks table is present with 6 entries, all have Risk + Mitigation. Risks are specific and realistic (spring-session issue #226, Mailpit Testcontainer availability, Nuxt SSR double-fetch, Redis unavailability, SecurityContext persistence, sessions collection index conflict). All mitigations are concrete. No generic placeholders.",
+      "severity": "info"
+    },
+    {
+      "section": "Agent Verification Plan",
+      "finding": "AVP is present with both 'Verification approach' and 'Tools required' subsections. Verification table has concrete commands and expected results. Tools required section lists bash, Testcontainers, and notes user verification requirements. No finding.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Audit Wave",
+      "finding": "Audit Wave has 3 tasks: Task 12 (code-reviewing), Task 13 (security-auditor), Task 14 (test-master). All have 'Reviewers: none'. This matches the requirement.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Final Wave",
+      "finding": "Final Wave has Task 15 (pre-deploy-qa) with 'Reviewers: none'. This matches the requirement.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Skill correctness",
+      "finding": "All skills used: infrastructure-setup (T1), code-writing (T2-T11), documentation-writing (T9), code-reviewing (T12), security-auditor (T13), test-master (T14), pre-deploy-qa (T15). All match the Execution Skills catalog. No unknown skills.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Reviewer correctness",
+      "finding": "Task 1: Reviewers are code-reviewer, security-auditor, infrastructure-reviewer — matches infrastructure-setup mapping. Tasks 2-7, 10-11: code-reviewer, security-auditor, test-reviewer — matches code-writing mapping. Task 9: code-reviewer — matches documentation-writing mapping. Tasks 12-15: none — matches audit/QA mapping. All reviewer assignments are correct.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Task descriptions for AC/TDD anchors",
+      "finding": "No task description contains an 'Acceptance Criteria' section or 'TDD Anchor' section. No violation.",
+      "severity": "info"
+    },
+    {
+      "section": "Implementation Tasks — Technical decisions in task descriptions",
+      "finding": "Task descriptions are largely scope-descriptive. Task 4 description mentions 'brute-force check (Redis brute:fail:{email}, threshold 5, block 15min)' — this duplicates specific values from Decision 4. The threshold (5 attempts) and key pattern are implementation details that appear in both the Decisions section and the task description. This is a minor duplication.",
+      "severity": "warn"
+    },
+    {
+      "section": "Implementation Tasks — Time estimates",
+      "finding": "No time-based estimates (hours, days, weeks, sprints) found in any task or section. Wave-based dependency ordering only. No violation.",
+      "severity": "info"
+    },
+    {
+      "section": "User-Spec Deviations",
+      "finding": "User-Spec Deviations section is present with 3 documented deviations (account deletion without password, jjwt removal from architecture.md, JWT env vars replaced in deployment.md). Each deviation explains the reason and explicitly states 'No pending approval required'. Section is properly filled.",
+      "severity": "info"
+    },
+    {
+      "section": "Task count",
+      "finding": "15 tasks total (11 implementation + 3 audit + 1 QA). The spec includes a 'Task count note' explaining why splitting is impractical. This is within the 15-task limit where a split recommendation applies. Exactly at the boundary — no finding triggered, but the note is a good proactive acknowledgment.",
+      "severity": "info"
+    },
+    {
+      "section": "Dependencies — New packages subsection",
+      "finding": "Dependencies section has 'New (backend)' and 'New (frontend)' subsections plus a 'Removed' subsection and 'Using existing'. The template requires 'New packages' and 'Using existing'. The actual section headers differ slightly from the template ('New (backend — build.gradle)' vs 'New packages') but the intent and content are fully present. No structural violation.",
+      "severity": "info"
+    }
+  ],
+  "positives": [
+    "All 11 required template sections are present and non-empty",
+    "Frontmatter is complete and valid: created=2026-05-04, status=draft, size=L, branch=dev",
+    "Architecture section is exceptionally detailed: 'What we're building/modifying' lists all new packages with class-level granularity, 'How it works' covers all 7 auth flows with step-by-step descriptions, and the 'Shared resources' table is an excellent addition",
+    "Decisions section has 11 decisions, all with clear rationale. Decisions 1, 2, 5, 6 follow the full Decision + Rationale + Alternatives + References format",
+    "All decisions reference user-spec requirements or are marked [TECHNICAL]",
+    "Data Models section is thorough: 3 collections documented with field types, nullability, and index definitions; Redis key schema table is a clear addition",
+    "Testing Strategy is comprehensive for L-size: unit, integration (Testcontainers with 3 real services), E2E (Playwright), and frontend component tests (Vitest + Vue Test Utils)",
+    "Agent Verification Plan has a concrete 10-row verification table with specific commands, tools, and expected results — directly derived from user-spec 'Як перевірити'",
+    "Risks table has 6 specific, realistic risks — not generic placeholders. Each risk names the exact failure mode and provides a concrete mitigation with a fallback",
+    "User-Spec Deviations section is properly filled with 3 documented deviations, each with rationale and approval status",
+    "Acceptance Criteria has 30+ specific, agent-verifiable checks that closely mirror the user-spec criteria",
+    "All skills are from the catalog. Reviewer assignments match the skill→reviewers mapping for every task",
+    "No AC sections, TDD anchors, or line number references found in task descriptions — good decomposition boundary maintained",
+    "Audit Wave has exactly 3 tasks (code-reviewing, security-auditor, test-master) with Reviewers: none",
+    "Final Wave has pre-deploy-qa with Reviewers: none",
+    "No time-based estimates anywhere in the document — pure wave/dependency ordering",
+    "Verify-smoke and Verify-user fields are present on tasks with external integrations (Task 1: Mailpit, Task 8: frontend dev server, Tasks 10-11: UI pages)",
+    "Task count note proactively addresses the 15-task boundary and explains why splitting is impractical"
+  ],
+  "summary": "The tech-spec for 02-auth is well-structured and exceptionally detailed for an L-size feature. It passes all structural checks. Two critical wave conflict issues exist: Task 5 (Registration) and Task 6 (Logout/Password Reset) are both in Wave 3 and both modify AuthController.java and AuthService.java — parallel execution will cause merge conflicts. These two tasks must be sequenced (one in Wave 3, one in Wave 4) or merged. Additional minor issues: 7 of 11 decisions lack an explicit 'Alternatives considered:' field; 'Files to read' is missing from tasks 2-6; Task 7 description slightly exceeds the 5-sentence guideline; one AC item has a copy-paste error in the logic condition (both clauses reference same direction). No missing sections, no wrong skills, no time estimates, no AC/TDD anchors in task descriptions. Verdict: WARN — fix the Wave 3 file conflict before execution."
+}

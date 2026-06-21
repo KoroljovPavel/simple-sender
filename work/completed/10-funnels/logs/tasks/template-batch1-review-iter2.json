@@ -1,0 +1,65 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor bullets use class-only form `FunnelControllerIT::methodName` without the full file path prefix. The preamble paragraph mentions the file path, but individual entries should follow `\\`path/to/TestFile.java::test_name\\` — description` for unambiguous locating. Same pattern was flagged in task 2 (iter 1) and fixed there. Tasks 1 and 4 have a mixed pattern: first entry is a full path, subsequent entries use `...ClassName::method` abbreviated form.",
+      "fix": "Prefix each bullet with the full path: `` `backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java::createReturns201Draft` — description``. For tasks 1 and 4 the abbreviation with `...` is acceptable but ideally all entries use full paths."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Verification Steps",
+      "issue": "The Smoke subsection lists MockWebServer test-method scenarios (e.g. `TelegramSenderTest::sendPhoto_403_flipsBlockedAndThrows`) as documentation of what each scenario verifies. These are improvements over iter 1 (no longer the identical shell command as Automated). However the Smoke section still contains no new standalone executable CLI command — all scenarios are covered by the Automated `./gradlew test --tests '*TelegramSender*'` command already listed. Per task-creator spec, Smoke should be executable checks the agent runs (command, MCP tool, API call). The current content is informational test-method documentation.",
+      "fix": "Either accept as-is (content is meaningfully different from Automated, referencing specific scenarios) or add at minimum one concrete executable command to distinguish Smoke from Automated — e.g. a targeted test-method invocation: `cd backend && ./gradlew test --tests '*TelegramSenderTest*sendPhoto_403*' --tests '*TelegramSenderTest*sendPhoto_failure_doesNotLeakDecryptedToken*'`. Alternatively, remove the Smoke subsection if no distinct executable check exists beyond what Automated covers."
+    }
+  ],
+  "resolved_from_iter1": [
+    {
+      "task": 2,
+      "issue": "PK links missing ../../../ prefix — FIXED: all three PK links now use ../../../.claude/skills/project-knowledge/references/"
+    },
+    {
+      "task": 3,
+      "issue": "PK links missing ../../../ prefix — FIXED"
+    },
+    {
+      "task": 4,
+      "issue": "PK links missing ../../../ prefix and missing references/ segment — FIXED"
+    },
+    {
+      "task": 5,
+      "issue": "PK links missing ../../../ prefix and missing references/ segment — FIXED"
+    },
+    {
+      "task": 2,
+      "issue": "TDD Anchor entries had no full file path — FIXED: all 11 entries now include full path backend/src/test/java/com/botfunnel/funnel/VariableTemplateRendererTest.java::methodName"
+    },
+    {
+      "task": 3,
+      "issue": "Smoke and Automated were identical commands — PARTIALLY FIXED: Smoke now references specific test methods by scenario (403, 400, 5xx, token-no-leak) rather than repeating the exact same shell command. Not a CLI command but meaningfully distinct."
+    },
+    {
+      "task": 5,
+      "issue": "Reviewer paths were project-root-relative — FIXED: now use absolute paths anchored to feature_path"
+    }
+  ],
+  "link_audit": {
+    "bare_claude_links_found": false,
+    "note": "No link of the form ](.claude/ found in any of tasks 1-5. All .claude/ links are correctly prefixed with ../../../"
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 2,
+    "critical_issues": 0,
+    "major_issues": 0,
+    "minor_issues": 2
+  }
+}

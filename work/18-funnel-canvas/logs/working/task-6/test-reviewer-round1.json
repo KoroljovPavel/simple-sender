@@ -1,0 +1,53 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 6,
+  "round": 1,
+  "verdict": "fail",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "empty_test",
+      "location": "frontend/tests/components/funnels/FunnelCanvasSidePanel.spec.ts:53",
+      "issue": "The assertion `document.querySelector('[data-test=\"step-subscribe-entry-select\"]').toBeNull()` is vacuously true for a MESSAGE step. The SUBSCRIBE entry picker (v-if guarded by `!hideTargetPickers`) only renders for SUBSCRIBE_TO_FUNNEL steps. Using a MESSAGE fixture means this picker is always absent regardless of hideTargetPickers — removing the `v-if=\"!hideTargetPickers\"` guard from FunnelStepForm.vue's SUBSCRIBE block would not cause this assertion to fail. The litmus test fails: the guard can be deleted and the test still passes.",
+      "recommendation": "Add a second fixture case using stepType: 'SUBSCRIBE_TO_FUNNEL' with a populated subscribeEntryStepId (e.g. 's4'). Mount with that step, assert `[data-test=\"step-subscribe-entry-select\"]` is absent (hideTargetPickers=true hides it), then submit and assert the emitted step's subscribeEntryStepId equals 's4' (carried through unchanged). This tests the actual guard. The current MESSAGE-based case can remain for the callback and timeout pickers."
+    },
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:198",
+      "issue": "The test 'start node not rendered for an event-only funnel' (Task 6 addition at line 198) is near-identical to the existing Task 5 test 'does NOT render a start node for an event-only funnel' at line 84. Both mount the same props and assert `wrapper.find('[data-node-id=\"start\"]').exists() === false`. The Task 6 copy adds no new coverage.",
+      "recommendation": "Remove the duplicate Task 6 test at line 198 or clearly differentiate it by testing a distinct scenario (e.g. an event-only funnel after a palette add-start attempt that was rejected). Retaining two near-identical tests creates maintenance burden with zero regression-catching gain."
+    },
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:258",
+      "issue": "The test 'deleting only the start edge leaves a highlighted broken edge' (Task 6 addition at line 258) is near-identical to the existing Task 5 test 'renders the start node broken when on_start entryStepId is null' at line 65. Both mount `triggers: [{ triggerType: 'on_start', entryStepId: null }]` and assert `funnel-canvas-node--broken` class and `data-edge-field='entry'` broken-edge marker.",
+      "recommendation": "Remove the duplicate Task 6 test at line 258. The Task 5 test already covers this broken-edge rendering case. If Task 6 intends to test the *dynamic* edge deletion (start node's edge removed via a user action, not just initial-state with entryStepId=null), rewrite it to drive the edge-delete action and then assert the broken state — that would catch a genuinely different regression path."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelCanvasSidePanel.spec.ts",
+      "issue": "The 'emitted step still carries existing fields with pickers hidden' test asserts targetStepId='s2' and timeoutTargetStepId='s3' are preserved, but does NOT assert that subscribeEntryStepId is preserved (it is not even present in the messageStepWithTargets() fixture). The task spec explicitly lists 'SUBSCRIBE entry values are preserved unchanged' as a carry-through requirement.",
+      "recommendation": "Include subscribeEntryStepId in the carry-through assertion by using a SUBSCRIBE_TO_FUNNEL step fixture (or by adding subscribeEntryStepId to the existing fixture and asserting on it after submit). This directly validates that the SUBSCRIBE entry field is not zeroed by the hidden-picker path."
+    }
+  ],
+  "summary": "One major gap: the SUBSCRIBE entry picker's hideTargetPickers guard is untestable via the current MESSAGE-step fixture — the assertion is vacuously true regardless of whether the guard exists. The task explicitly requires all three hidden pickers to be tested with a value-based assertion; the third picker (SUBSCRIBE entry) needs a SUBSCRIBE_TO_FUNNEL step fixture to be meaningful. Two minor findings are redundant tests that duplicate Task 5 coverage with no additional regression value. The FunnelStepForm pre-existing tests (keyboard.spec.ts, composer.spec.ts) are untouched and their contract is unweakened. The palette exact-types test, delete-count exact-value test, start-node lifecycle tests, and emitted-step carry-through for the callback/timeout pickers are all well-formed value-based assertions.",
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 10,
+      "passed": 9,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 0,
+      "component": 14,
+      "assessment": "appropriate for frontend component task — all tests are component tests per tech-spec strategy"
+    }
+  }
+}

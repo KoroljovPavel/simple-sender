@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "round": 3,
+  "summary": "Round-3 re-review: the carry-over minor from round 2 (trim-normalization and empty-value branches of the duplicate guard) is now fully addressed by the new test 'normalizes whitespace when comparing duplicates and ignores empty names' (spec line 157). That test mounts [onStart(), event('purchase'), event(' purchase '), event(''), event('')], asserts duplicate-2 IS flagged (trim match: 'purchase' === ' purchase '.trim()), and asserts duplicate-3 and duplicate-4 are NOT flagged (empty name → skip). This pins duplicateIndices' .trim() normalization (component line 89) and the `if (!key) continue` branch (component line 91). Litmus: removing .trim() in the component makes the test fail correctly; dropping the `if (!key) continue` guard and flagging blank-duplicate rows would make the empty-value assertions fail correctly. The spec now has 9 tests, the full suite reports 527 passed. All TDD Anchor cases are fully covered with behavioral assertions: add (entryStepId defaults to s1 per Decision 14), delete (two-click, on_start preserved), entry-step picker (sentinel+s1+s2 present, id-less step absent, labels include position), sentinel→step-1-id emit direction (picks __START__, asserts entryStepId=s1, NOT null), sentinel display (closed input shows sentinel label, locale-agnostic positive assertion), duplicate advisory (exact-match + trim-normalization + empty-skip), on_start visible + empty state. Migrated specs (keyboard.spec.ts, funnels.spec.ts) correctly updated to the triggers-array fixture shape without weakening: keyword-hint matching still exercises the real containsAnyKeyword path over the nested triggers[].keywords (component FunnelStepForm.vue diff line +25-28), and the store spec's summary/full factories carry the canonical triggers array that flows through update()/syncRow(). i18n parity spec covers all 17 funnels.triggersPanel.* keys in both uk.json and en.json, checked against actual locale files in the diff (21+21 lines each, no empty values). No issues found this round.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 4,
+    "testFilesReviewed": [
+      "frontend/tests/components/funnels/FunnelTriggersPanel.spec.ts",
+      "frontend/tests/i18n/required-keys.spec.ts",
+      "frontend/tests/components/funnels/FunnelStepForm.keyboard.spec.ts",
+      "frontend/tests/stores/funnels.spec.ts"
+    ],
+    "litmusTest": {
+      "checked": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    "tddAnchorCoverage": {
+      "add_event_trigger": "covered — entryStepId===s1 asserted (Decision 14 invariant)",
+      "remove_trigger": "covered — two-click confirm, on_start preserved",
+      "entry_step_picker_lists_steps": "covered — sentinel+s1+s2, id-less skipped, labels with position",
+      "sentinel_to_step1_emit_direction": "covered — new test line 118, asserts entryStepId=s1 not null",
+      "null_START_entry_maps_to_step_1": "covered — positive sentinel-label assertion, locale-agnostic",
+      "flags_duplicate_event_name": "covered — advisory error on dup-2, first occurrence not flagged",
+      "trim_normalization_and_empty_skip": "covered — new test line 157, pins .trim() and !key branch",
+      "on_start_visible_empty_state": "covered — data-test funnel-trigger-on-start + funnel-triggers-empty",
+      "i18n_parity": "covered — required-keys.spec.ts, 17 funnels.triggersPanel.* keys, both locales"
+    },
+    "migratedSpecsIntegrity": {
+      "keyboard_spec": "triggers-array factory maps triggerType/keywords convenience params into single trigger element; matching path unchanged",
+      "store_spec": "summary/full fixtures updated to triggers:[{...}]; no behavioral weakening"
+    },
+    "coverageAssessment": "complete",
+    "pyramidBalance": {
+      "unit_component": 9,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy — frontend-only task; backend ITs cover the engine path; E2E excluded per tech-spec"
+    }
+  }
+}

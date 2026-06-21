@@ -1,0 +1,37 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 4,
+  "round": 2,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "id": "CF-R2-01",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java",
+      "severity": "critical",
+      "category": "cross-file-consistency",
+      "issue": "setOne() was dropped; Task 6 engine spec hard-references it",
+      "detail": "The public method setOne(projectId, subscriberId, type, key, value) was removed and replaced by validateAndNormalize(type, value) + applyAll(projectId, subscriberId, Map). Task 6 (work/10-funnels/tasks/06-funnel-execution-engine.md lines 87-91, 192, 238) explicitly calls SubscriberCustomFieldsService.setOne(...) for the SET_CUSTOM_FIELD step. As written, Task 6 will not compile against this API surface. The tech-spec (tech-spec.md line 136) also specifies setOne. This is a cross-file consistency break: the downstream consumer was written against an API that no longer exists.",
+      "impact": "Task 6 cannot be implemented as specified without modification. Either Task 6 must be updated to use validateAndNormalize + applyAll (adapting the one-key-per-step call pattern), or a setOne convenience wrapper must be added back to SubscriberCustomFieldsService that delegates to the two-pass methods. Without resolution, Task 6 author will hit a compile error and must deviate from the spec without documented justification.",
+      "recommendation": "Add a setOne(String projectId, String subscriberId, CustomFieldType type, String key, Object value) convenience method to SubscriberCustomFieldsService that (a) returns early if type == null (deleted field → skip, mirrors the controller pre-filter), (b) calls validateAndNormalize(type, value), and (c) calls applyAll(projectId, subscriberId, Map.of(key, normalized)) — then update Task 6 spec reference OR update the Task 6 task file to document use of the two-step pattern. Alternatively, document the API change in decisions.md so the Task 6 author knows to adapt. The cleanest path is adding the wrapper: it gives the engine the single-call surface it needs (one field per step in the engine), preserves the two-pass design internally, and keeps Task 6 compilable without changing its spec."
+    },
+    {
+      "id": "CF-R2-02",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsServiceTest.java",
+      "severity": "minor",
+      "category": "testing",
+      "issue": "TDD anchor setOne_deletedField_skips has no equivalent coverage for the relocated skip logic",
+      "detail": "The original task spec required setOne_deletedField_skips: type == null → no-op (no validator call, no DB write). With the two-pass refactor, the skip now lives in the controller loop (type == null → continue). No unit test verifies that the controller does NOT call validateAndNormalize when type == null. The controller integration test patchCustomFields_onlyUnknownKeys_200_noWriteNoAudit covers the full-stack observable outcome, but there is no unit-level assertion that the service method is never invoked with a null type (which would cause a NullPointerException because validator.validate(null, value) is undefined).",
+      "impact": "If validateAndNormalize is ever called with null (e.g., a future refactor removes the controller pre-filter), it passes null directly to validator.validate(null, value). There is no guard in validateAndNormalize itself, and no test that enforces the pre-condition. The integration test provides indirect coverage but does not pinpoint the failure mode.",
+      "recommendation": "Either (a) add a guard in validateAndNormalize that throws IllegalArgumentException on null type (fail-fast, self-documenting pre-condition), and add a unit test verifying it; or (b) add a controller unit/mock test asserting validateAndNormalize is never called for the unknown-key entry. Option (a) is safer because it protects the engine path too."
+    }
+  ],
+  "round1_resolution": {
+    "partial_write_regression": "FIXED — two-pass architecture confirmed: Pass 1 calls validateAndNormalize (pure, no DB) for ALL keys; Pass 2 calls applyAll (one aggregated MongoTemplate update) + recordCustomFieldsSet once. A 422 in Pass 1 exits before any DB write.",
+    "dead_subscriberService_dependency": "FIXED — SubscriberService removed from constructor and field list. Service now has only CustomFieldValueValidator + MongoTemplate.",
+    "aggregated_audit_once": "CONFIRMED — recordCustomFieldsSet called exactly once per PATCH, guarded by !newValues.isEmpty(), with full aggregated old/new maps.",
+    "applyAll_projectId_scoping": "CORRECT — Query at line 83 of SubscriberCustomFieldsService scopes by both _id and projectId.",
+    "empty_map_handling": "CORRECT — applyAll has early return on empty map; controller guard !newValues.isEmpty() prevents both applyAll and recordCustomFieldsSet for all-unknown-key payloads.",
+    "test_mixed_valid_invalid": "FIXED — patchCustomFields_partialKeyOrder_422_writesNothing integration test added; explicitly verifies that a valid first key + invalid second key leaves subscriber untouched and emits no audit event."
+  },
+  "summary": "Round 1 critical (partial-write regression) and both majors (dead dependency, missing mixed-key test) are fully resolved. The two-pass refactor is architecturally correct: validate-all-then-apply-once guarantees all-or-nothing semantics, projectId scoping is present in applyAll, and aggregated audit fires exactly once. One new critical issue arises from the API surface change: setOne() was the agreed contract for the funnel engine (Task 6 spec lines 87-91), and its removal creates a cross-file consistency break that will prevent Task 6 from compiling as specified. A setOne convenience wrapper delegating to validateAndNormalize + applyAll resolves this with minimal code. One minor gap: the deleted-field skip logic moved to the controller but lacks a unit-level assertion that validateAndNormalize is never called with null type."
+}

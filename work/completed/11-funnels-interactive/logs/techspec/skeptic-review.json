@@ -1,0 +1,47 @@
+{
+  "verdict": "pass",
+  "round": 2,
+  "summary": "Round-2 re-verification: the previously flagged high mirage (application.yml) is FIXED, and all newly added round-2 claims verify clean against actual source. 0 critical/high findings.",
+  "findings": [],
+  "round1_fix_confirmed": {
+    "claim": "Task 3 referenced backend/src/main/resources/application.yml which does not exist (project uses application.properties)",
+    "status": "FIXED",
+    "reality": "application.yml does NOT exist in src/main/resources (only application.properties + templates/). Task 3 Files-to-modify (tech-spec line 420) now correctly lists backend/src/main/resources/application.properties. Decision 4 also uses property syntax app.funnel.max-steps-per-tick:100, consistent with existing app.funnel.* keys."
+  },
+  "round2_new_claims_verified": [
+    {
+      "claim": "resumeOnCallback(executionId, subscriberId, targetStepId) — subscriberId-scoped CAS is feasible (findAndModify pattern supports an extra predicate)",
+      "verdict": "confirmed",
+      "reality": "FunnelExecutionEngine.claim() (L199-203) builds Query.query(Criteria.where(\"_id\").is(...).and(\"status\").in(...).and(\"nextRunAt\").lte(...).and(\"stepRunStatus\").is(...)). Adding .and(\"subscriberId\").is(sub.id) is a trivial, idiomatic extension of this exact CAS. FunnelExecution.subscriberId exists to support it."
+    },
+    {
+      "claim": "exec.subscriberId / exec.projectId fields exist on FunnelExecution for the IDOR auth check",
+      "verdict": "confirmed",
+      "reality": "FunnelExecution declares private String subscriberId (L50, getSubscriberId L73) and @Indexed private String projectId (L47, getProjectId L67). Both readable for advanceOnCallback owner check (Decision 6)."
+    },
+    {
+      "claim": "FunnelTriggerServiceImpl.insertExecution is the correct seed site for currentStepId, and it is now listed in Task 3 files",
+      "verdict": "confirmed",
+      "reality": "insertExecution (L188) is exactly where the cursor is seeded: setCurrentStepIndex(0) at L196, alongside setStatus/setStepRunStatus/setStepsSnapshot. Correct site to also seed currentStepId = first step id. FunnelTriggerServiceImpl.java IS listed in Task 3 Files-to-modify (tech-spec L420)."
+    },
+    {
+      "claim": "URL URI strict scheme parse is a standard JDK approach (no fictional API)",
+      "verdict": "confirmed",
+      "reality": "java.net.URI with getScheme()/getHost() is standard JDK API (no fictional method). Not currently used in project (clean introduction). ApplicationRunner backfill precedent confirmed via SuperAdminSeeder (implements ApplicationRunner L21, run(ApplicationArguments) L41, idempotent log-not-throw)."
+    }
+  ],
+  "additional_spot_checks": [
+    "All Task-referenced backend source files exist (FunnelStep, ExecutionStatus, StepType, StepRunStatus, StepExecutor, FunnelService, FunnelStepDto, TelegramSender, TelegramApiClient, ProcessTelegramUpdateJob, TelegramUpdate, Message, Chat, User, SubscriberService, EventService, ClockConfig) plus all named test files (FunnelStatusEnumTest, FunnelIndexesIT, FunnelExecutionEngineIT, TelegramSenderIT, FunnelControllerIT, ProcessTelegramUpdateJobTest).",
+    "All Task-referenced frontend files exist (types/funnel.ts, FunnelStepForm.vue, FunnelStepsList.vue, SearchableSelect.vue, stores/funnels.ts, [funnelId].vue, i18n uk.json + en.json).",
+    "TelegramSender.sendText(botId, chatId, text, parseMode, ownerId) exists (L128) with only-if-non-null parse_mode idiom (L133-134) — the exact pattern Task 2 mirrors for reply_markup.",
+    "SubscriberService.findByChat(projectId, telegramBotId, chatId) exists (L88) — matches Dependencies callback-resolve claim.",
+    "TelegramUpdate already exposes a callback_query slot (L23, opaque JsonNode); Task 7 typed CallbackQuery DTO replacement is consistent.",
+    "Existing cycle-guard 'int guard = size + 1' present at FunnelExecutionEngine L152 — the exact guard Decision 4 replaces with max-steps-per-tick.",
+    "cancelActiveFor / cancelExistingForPair exist across engine + FunnelTriggerServiceImpl + FunnelTriggerService — matching cancel-path status literal sites in Architecture (L45)."
+  ],
+  "stats": {
+    "total_claims_checked": 18,
+    "confirmed": 18,
+    "mirages_found": 0
+  }
+}

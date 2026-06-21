@@ -1,0 +1,37 @@
+{
+  "summary": "Task 6 test suite is high quality and passes green: 13 IT (@Tag(\"slow\")) + 8 unit, 0 skipped, 0 failures (verified via build/test-results JUnit XML and a fresh -PrunSlow=true run). Every TDD-anchor test exists and is meaningful — all assert persisted Mongo state + observable behavior (send counts, subscriber flip, log constants), not mock wiring. The four scrutiny points all hold: (a) the at-most-once tests genuinely prove the CAS — crashAfterSend seeds stepRunStatus=in_progress and asserts 0 resend (claim predicate requires pending), and the race test runs two real concurrent sweep() calls via ConcurrencyTestUtils.parallelInvoke(2) asserting exactly 1 send; (b) MockWebServer request-count uses a per-test baseline delta (sendBaseline captured in @BeforeEach after seeding), neutralizing the JVM-singleton cumulative counter — no false positive; (c) the mutable @Primary test Clock (declared static-inner in the IT, never leaking to other contexts) drives delay/resume deterministically with advance(), no Thread.sleep; (d) tests assert real behavior. Production signatures (TelegramSendException.TerminalReason, sendText/sendPhoto returning SentMessage / throwing, setOne arity) match the test mocks. Findings are all minor coverage gaps; status passed.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "test": "(none — gap)",
+      "finding": "No test exercises the batch-cap / saturation path. AC requires 'batch-cap FUNNEL_SWEEP_BATCH_SIZE respected, sort nextRunAt asc, hitting cap → WARN (LOG_SWEEP_SATURATED)'. The sweep() saturation branch (FunnelExecutionEngine.java:98-100) and the nextRunAt-asc ordering (oldest-first, no starvation) are unverified by any test. The litmus test fails here only in the sense that this branch could regress (e.g. cap removed, or sort dropped) with zero test signal.",
+      "recommendation": "Add an IT: set app.funnel.sweep-batch-size to a small value (e.g. 2) via @DynamicPropertySource or a dedicated context, seed 3+ due executions, attach a ListAppender to FunnelExecutionEngine logger, call sweep(), assert a message containing LOG_SWEEP_SATURATED was logged and that exactly batchSize executions were claimed/advanced in the tick. Optionally seed two executions with different nextRunAt and assert the older one progresses first to lock in the asc sort."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+      "test": "addTagDelegatesToSubscriberService / (REMOVE_TAG gap)",
+      "finding": "ADD_TAG is covered by a unit test only (addTagDelegatesToSubscriberService) and REMOVE_TAG has no test at all. The unit test verifies subscriberService.addTag(projectId, subscriberId, slug) was called and outcome==CONTINUE — acceptable since the delegation IS the behavior — but there is no end-to-end IT confirming a tag step advances the execution through the engine, and the REMOVE_TAG dispatch arm (StepExecutor.java:78-81) is entirely untested. AC explicitly lists 'Add/Remove Tag via SubscriberService interface'.",
+      "recommendation": "Add a REMOVE_TAG unit test mirroring addTagDelegatesToSubscriberService that verifies subscriberService.removeTag(PROJECT_ID, SUBSCRIBER_ID, slug) and outcome==CONTINUE. Optionally add one IT that seeds an ADD_TAG (or REMOVE_TAG) step and asserts the execution reaches completed, to cover the dispatch arm end-to-end through the engine loop."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+      "test": "(none — gap)",
+      "finding": "BotTokenInvalidException mapping is untested. StepExecutor.sendMessage/sendImage each catch BotTokenInvalidException and map to fail(\"invalid_bot_token\") (StepExecutor.java:99-100, 124-125); the task Send-fail semantics call this out explicitly ('BotTokenInvalidException — separate type, also catch and map to failed'). No unit or IT covers this branch, so it could silently stop mapping (e.g. exception propagating as an uncaught RuntimeException → swallowed by the sweep's generic catch and logged as FUNNEL_SWEEP_EXECUTION_ERROR instead of a proper failed) with no test signal.",
+      "recommendation": "Add a unit test in FunnelStepExecutorTest: when(sender.sendText(...)).thenThrow(new BotTokenInvalidException(...)), execute a SEND_MESSAGE step, assert result.outcome()==FAIL and result.reasonCode()==\"invalid_bot_token\"."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "test": "stateTransitionsEmitNamedLogConstantsWithoutPayload",
+      "finding": "The observability test only asserts the no-PII / named-constant discipline on a happy-path (completed) execution: it checks LOG_CLAIM_WON and LOG_EXECUTION_COMPLETED are present and the PII string is absent. It does not verify the same payload-free discipline on a send-fail terminal path (LOG_EXECUTION_FAILED / LOG_EXECUTION_CANCELLED with a reason code), which is where rendered text/caption leakage is most likely to creep in. The TDD anchor frames this test around 'send-fail / terminal transitions log constants with codes; rendered body absent'.",
+      "recommendation": "Extend (or add a sibling test) that drives a send-fail path (e.g. reuse the 403 blocked or 5xx scenario) with a recognizable PII string in the message text, attaches the ListAppender, and asserts: messages anyMatch LOG_EXECUTION_CANCELLED/LOG_EXECUTION_FAILED, a reason code is present, and noneMatch contains the PII string. This locks the no-PII guarantee specifically on the terminal-error branch."
+    }
+  ]
+}

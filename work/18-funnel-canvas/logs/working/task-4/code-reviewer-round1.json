@@ -1,0 +1,55 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 4,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "category": "testing",
+      "file": "frontend/tests/composables/useFunnelCanvas.spec.ts",
+      "line": 313,
+      "title": "Degenerate-dagre fallback path not actually exercised",
+      "detail": "The test labeled 'degenerate graph falls back to grid placement' uses 10 disconnected nodes with no edges. dagre handles disconnected forests without throwing, so the `catch` branch in `layoutNodes` is never reached. The grid-fallback code path is therefore not covered by the test suite. A true regression in the fallback (e.g. NaN returned without throw) would not be caught.",
+      "recommendation": "Add a second assertion or a separate test that forces a dagre throw — e.g. by temporarily patching `dagreLayout` to throw, or by a graph shape known to produce non-finite coords. Alternatively, add an explicit branch-coverage note acknowledging the limitation. This is minor because the fallback itself is correct and the primary path (finite coords for disconnected nodes) is confirmed."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "category": "correctness",
+      "file": "frontend/composables/useFunnelCanvas.ts",
+      "line": 233,
+      "title": "Empty-string `next` silently ignored instead of flagged as broken",
+      "detail": "Lines 233, 244, 255, 267: `if (step.next != null && step.next !== '')` — an empty-string id is filtered out and no edge is produced and no broken-edge is flagged. `detectBrokenEdges` also skips empty strings (line 394: `if (targetId == null || targetId === '') return`). The spec states `\"no edge\" must serialize as null, never \"\"` and that a broken edge is flagged when the target does not resolve. An empty string is neither null nor a valid saved-step id, so silently dropping it loses the broken-edge signal that the UI should surface.",
+      "recommendation": "Treat `''` the same as a non-null non-resolving id in `detectBrokenEdges`: remove the `|| targetId === ''` short-circuit from `flagMissing`, so a stored `step.next = ''` (which would 422 on activate) is flagged broken rather than silently ignored. The `buildEdges` filter for `''` can stay as-is (no edge produced to a missing id is correct); only the detection needs the fix."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "category": "correctness",
+      "file": "frontend/composables/useFunnelCanvas.ts",
+      "line": 409,
+      "title": "Redundant `onStartPresent` check in broken-edge detection",
+      "detail": "Line 409 computes `onStartPresent = triggers.some(t => t.triggerType === 'on_start')`, then line 413 uses it as an extra guard alongside `trig.triggerType === 'on_start'`. When the inner loop body reaches a trigger that IS `on_start`, `onStartPresent` is always `true` by definition — the outer `.some()` is redundant. This is purely a readability/maintenance issue: a future refactor inside the loop that removes the per-iteration type check could inadvertently disable the broken-edge guard without a compiler warning.",
+      "recommendation": "Remove the `onStartPresent` variable and simplify line 413 to `if (trig.triggerType === 'on_start' && (trig.entryStepId == null || trig.entryStepId === ''))`. The start-node-present condition is implicitly satisfied since the loop only reaches this branch when the trigger type matches."
+    }
+  ],
+  "passing_checks": [
+    "Edge→model-field mapping: all four kinds (next, button, timeout, entry) write exactly one field; sibling fields left untouched — confirmed in applyEdgeValue switch, tested end-to-end.",
+    "No-edge serializes to null: disconnectEdge delegates to applyEdgeValue(funnel, ref, null); the value `null` is never replaced with `''` anywhere in the reverse path.",
+    "Callback-button indexing: buttonIndex is the position within the filtered callback-only array, consistent in both buildEdges (forward) and applyEdgeValue (reverse). A URL button inserted between two callback buttons does not shift the stable index.",
+    "Reverse functions clone: cloneFunnel performs a correct shallow+one-level-deep copy (spread outer, map steps/triggers/notes, spread each step with mapped buttons). No reverse mutation touches the caller's object.",
+    "dagre layout: forest-aware (all nodes set, all edges wired, multiple roots possible); mixed case correctly uses storedPositionFor() against the model to distinguish stored vs unpositioned; grid fallback is deterministic and always produces finite coords.",
+    "On_start broken edge (entryStepId==null): detectBrokenEdges correctly flags on_start triggers with null or empty entryStepId as 'on_start_entry_null' when the start node is present.",
+    "Delete-node exact disconnect count: deleteStepNode iterates all steps and triggers, nulls each matching inbound field, and counts correctly. The deleted step's own outbound fields are skipped via `continue`.",
+    "Notes isolation: FunnelNote objects come only from funnel.notes[]; buildNodes produces 'note' type nodes from notes[]; buildPatchPayload writes notes[] separately; steps[] never receives note objects.",
+    "SUBSCRIBE_TO_FUNNEL exit badge: step.stepType === 'SUBSCRIBE_TO_FUNNEL' with a targetFunnelId produces an exitBadge on the node data and no graph edge is created.",
+    "Saved-node-only edge constraint: buildEdges only pushes edges to ids in savedStepIds; connectEdge throws on null/empty and on non-saved ids.",
+    "Cycle serialization: buildPatchPayload is a flat field copy with no graph traversal — A.next->B, B.button->A serializes in O(n) with no recursion.",
+    "Type safety: all exported functions use concrete model types; no `any` usage found.",
+    "No Vue Flow runtime import: only model types from ~/types/funnel and @dagrejs/dagre are imported; no @vue-flow/core runtime dependency.",
+    "Test coverage: all 16 TDD-anchor scenarios are covered with concrete field-value assertions and at least one sibling-unchanged assertion per connect test."
+  ],
+  "summary": "The implementation is correct and complete across all load-bearing contracts. Edge→field mapping, null serialization, callback-button indexing, clone-before-mutate, dagre layout with grid fallback, broken-edge detection, notes isolation, SUBSCRIBE exit badge, saved-node-only constraint, cycle safety, and delete-node disconnect count all behave per spec. Three minor findings: (1) the degenerate-dagre test does not exercise the actual catch branch; (2) empty-string field values are silently dropped rather than flagged as broken edges; (3) a redundant `onStartPresent` guard in the detection loop. None are blockers or majors. Verdict: pass."
+}

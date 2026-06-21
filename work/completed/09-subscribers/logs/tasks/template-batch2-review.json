@@ -1,0 +1,105 @@
+{
+  "validator": "task-validator",
+  "iteration": 1,
+  "batch": 2,
+  "feature_path": "work/09-subscribers",
+  "task_numbers": [6, 7, 8, 9, 10],
+  "template_path": ".claude/shared/work-templates/tasks/task.md.template",
+  "status": "changes_required",
+  "tasks": [
+    {
+      "task": 6,
+      "file": "work/09-subscribers/tasks/6.md",
+      "status": "needs_fix",
+      "findings": [
+        {
+          "severity": "critical",
+          "category": "decomposition",
+          "section": "frontmatter",
+          "issue": "Wave/depends_on ordering violation: task 6 has `wave: 2` and `depends_on: [1, 3]`, but task 3 is also `wave: 2`. Per validator rule, a task with depends_on:[X] must have wave > wave of task X. Tasks in the same wave run in parallel, so task 6 cannot depend on task 3 unless task 3 is in an earlier wave.",
+          "fix": "Either (a) move task 6 to `wave: 3` (clean dependency on task 3 finishing) — but this delays the TelegramSender hook unnecessarily; OR (b) keep wave 2 but soften the dependency: drop `3` from `depends_on` (task 6 only needs the interface signature, which is part of Task 1's `SubscriberService.java` extension contract — task 6's own Details narrative already states 'Task 6 only depends on the INTERFACE methods existing; runtime wiring is exercised by Task 3'). Recommended (b): change `depends_on: [1, 3]` → `depends_on: [1]` and document the interface-only coupling in task 3 as a 'producer of the interface signature consumed by task 6 in parallel'."
+        }
+      ]
+    },
+    {
+      "task": 7,
+      "file": "work/09-subscribers/tasks/7.md",
+      "status": "approved",
+      "findings": []
+    },
+    {
+      "task": 8,
+      "file": "work/09-subscribers/tasks/8.md",
+      "status": "needs_fix",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "content",
+          "section": "Required Skills",
+          "issue": "Skill link path is relative without prefix: `[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)`. Resolving from `work/09-subscribers/tasks/` would lookup `work/09-subscribers/tasks/.claude/skills/code-writing/SKILL.md`, which does not exist. Tasks 6, 7, 9 use the correct `../../../.claude/skills/code-writing/SKILL.md` prefix.",
+          "fix": "Change the link target to `../../../.claude/skills/code-writing/SKILL.md` to match the established pattern in tasks 6/7/9 and resolve correctly from the task file's directory."
+        }
+      ]
+    },
+    {
+      "task": 9,
+      "file": "work/09-subscribers/tasks/9.md",
+      "status": "approved",
+      "findings": []
+    },
+    {
+      "task": 10,
+      "file": "work/09-subscribers/tasks/10.md",
+      "status": "needs_fix",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "content",
+          "section": "Required Skills",
+          "issue": "Skill link path is relative without prefix: `[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)`. Same issue as task 8 — from `work/09-subscribers/tasks/` it resolves to `work/09-subscribers/tasks/.claude/skills/code-writing/SKILL.md`, which does not exist.",
+          "fix": "Change the link target to `../../../.claude/skills/code-writing/SKILL.md` to match the established pattern in tasks 6/7/9."
+        }
+      ]
+    }
+  ],
+  "cross_task_checks": {
+    "shared_resources_compliance": {
+      "status": "pass",
+      "notes": "Tech-spec Shared Resources lists GridFsOperations, RedisTemplate, SignedDownloadToken, JobScheduler, SubscriberService, MongoTemplate. Task 1 owns SignedDownloadToken (consumer chain references it). Task 3 owns SubscriberServiceImpl. Tasks 6, 7, 8, 9 correctly declare consumer dependencies on Task 1 / Task 3 where they touch these resources."
+    },
+    "dependency_cycles": {
+      "status": "pass",
+      "notes": "No circular dependencies. Wave ordering otherwise clean except the task-6/task-3 same-wave violation flagged above."
+    },
+    "carry_forward_ac_tdd": {
+      "status": "pass",
+      "notes": "All five tasks carry forward AC and TDD anchors from tech-spec Implementation Tasks + Testing Strategy. Task 6 covers Decision 4 + AC5. Task 7 covers Decision 8 + AC22. Task 8 covers AC4/AC9/AC13/AC14/AC15/AC21 + Decisions 5/9/10. Task 9 covers AC16-AC20/AC22 + Decisions 7/8/9/15/16. Task 10 covers Decision 12 + UX surface for the AC chain. No AC items lost; tasks even add detail beyond tech-spec where needed."
+    },
+    "reviewer_report_paths": {
+      "status": "pass",
+      "notes": "All 5 tasks anchor reviewer report paths at `work/09-subscribers/logs/working/task-{N}/...` (not bare `logs/...`). Matches the task-creator rule on path anchoring."
+    },
+    "section_order": {
+      "status": "pass",
+      "notes": "All 5 tasks have sections in template-prescribed order: Required Skills → Description → What to do → TDD Anchor → Acceptance Criteria → Context Files → Verification Steps → Details → Reviewers → Post-completion."
+    },
+    "frontmatter_well_formed": {
+      "status": "pass",
+      "notes": "All tasks: status=planned, depends_on=array of numbers, wave>=1, skills=[code-writing] (array), verify=array, reviewers=array of 3 reviewers, teammate_name empty. No extra fields."
+    },
+    "verify_alignment_with_tech_spec": {
+      "status": "pass",
+      "notes": "Task 6: verify=[smoke] — tech-spec entry has Verify-smoke only. Task 7: [smoke] — matches. Task 8: [smoke] — matches. Task 9: [smoke] — matches. Task 10: [user] — tech-spec entry has Verify-user only. All consistent."
+    }
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3,
+    "critical": 1,
+    "major": 0,
+    "minor": 2,
+    "approved_tasks": 2,
+    "needs_fix_tasks": 3
+  },
+  "summary": "Batch 2 (tasks 6-10) is largely solid: section structure, frontmatter, reviewer paths, AC/TDD carry-forward, and shared-resource consumer wiring all check out. Three issues found: (1) CRITICAL — task 6 declares `depends_on: [1, 3]` while running in the same wave (wave 2) as task 3, violating wave-ordering invariant; recommend dropping `3` from depends_on (task 6's own narrative documents interface-only coupling) or moving task 6 to wave 3. (2) MINOR — task 8 Required Skills link uses `.claude/skills/code-writing/SKILL.md` instead of `../../../.claude/skills/code-writing/SKILL.md` and won't resolve from the task file. (3) MINOR — task 10 has the same skill-link issue. Tasks 7 and 9 are approved as-is."
+}

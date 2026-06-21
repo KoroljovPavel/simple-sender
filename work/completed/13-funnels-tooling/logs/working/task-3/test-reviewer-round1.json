@@ -1,0 +1,41 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 3,
+  "round": 1,
+  "verdict": "approved",
+  "status": "passed",
+  "summary": "8 new vitest cases (happy + error path for duplicate / stopAllExecutions / testRun / preview) are well-targeted and non-tautological. Each happy path asserts the exact URL + method (and body for preview) via toHaveBeenLastCalledWith, and each error path asserts the promise rejects AND store.error flips to true, with no useApiError call. Mutation testing confirmed the assertions catch real defects (broken URL, dropped body, swallowed re-throw, un-flipped error flag). One minor gap: the duplicate happy-path test does not actually prove syncRow was invoked.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/stores/funnels.spec.ts:177 (duplicate posts and returns the new draft funnel)",
+      "issue": "The duplicate test asserts the list stays ['a'] and no synthetic row is fabricated, but it never verifies that syncRow(created) was actually called — the TDD anchor and AC (3.md line 62) require duplicate to call syncRow. Mutation test confirms this is unguarded: removing `syncRow(created)` from the store leaves all 18 tests green. The syncRow call is a no-op for the new copy's id (id absent from list), so its presence/absence has no observable effect in this scenario; the test passes regardless. This is the only litmus-test failure among the 8 cases, and it is low-impact because syncRow is intentionally a no-op here (contract symmetry, not behavior).",
+      "recommendation": "Add (or extend) a case where the duplicate response shares an id already present in the loaded list, then assert syncRow's observable effect — e.g. seed funnels with summary('a') (status 'draft'), have apiMock resolve { ...full('a'), status: 'active', steps: [{ stepType: 'SEND_MESSAGE', text: 'Hi' }] }, call store.duplicate('a'), and assert store.funnels[0].status === 'active' and store.funnels[0].stepCount === 1 (mirroring the existing activate/pause syncRow assertions at lines 138-139). This makes the syncRow contract non-tautological. Alternatively, a lighter touch: keep the no-op case but add `expect(store.funnels[0].id).toBe('a')` is insufficient — prefer the shared-id assertion above."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 7,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 18,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "verificationAgainstTask": {
+    "happyPathPerAction": "yes — duplicate / stopAllExecutions / testRun / preview each have a happy path asserting correct URL + method (+ body for preview) and returned shape (created.id, { cancelled }, void, { rendered, sampleData, kind })",
+    "errorPathRethrowsAndFlagsError": "yes — all four error-path cases use `await expect(...).rejects.toMatchObject(...)` and assert `store.error === true`",
+    "storeDoesNotCallUseApiError": "verified — store source never imports/calls useApiError; error-path tests assert no swallowing and the 422 funnel_owner_not_linked case explicitly documents the store does NOT map the code",
+    "previewSendsRequestBodyAndAssertsShape": "yes — preview test passes a typed PreviewStepRequest as `body`, asserts toHaveBeenLastCalledWith(.../steps/s1/preview, { method:'POST', body: payload }) and res === { rendered, sampleData, kind }; dropping `body: payload` from the store fails this test (mutation-confirmed)",
+    "duplicateAssertsSyncRowAndReturnedFunnelResponse": "partial — returned FunnelResponse asserted (created.id === 'a-copy'); syncRow invocation is NOT verified (see minor finding)",
+    "nonTautological": "confirmed via 6 mutations (broken preview body, un-flipped duplicate error flag, wrong testRun URL, wrong stopAll URL, swallowed testRun re-throw) — all caught; only the syncRow mutation survived"
+  },
+  "notes": "Full suite green: 18/18 pass (vitest run tests/stores/funnels.spec.ts). Tests mock only useApi + useRoute (2 deps) — appropriate for a Pinia store unit test, no excessive mocking. Error-path cases correctly assert behavior (rejects + error flag) rather than mock-call counts. Verdict approved: zero critical/major findings; the single minor syncRow-coverage gap is optional polish and does not block — recommend addressing it opportunistically when the duplicate UI lands in Task 5."
+}

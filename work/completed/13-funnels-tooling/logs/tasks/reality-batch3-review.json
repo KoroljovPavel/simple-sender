@@ -1,0 +1,34 @@
+{
+  "status": "approved",
+  "tasks": [
+    {
+      "task": 7,
+      "verdict": "ok",
+      "findings": []
+    },
+    {
+      "task": 8,
+      "verdict": "ok",
+      "findings": []
+    },
+    {
+      "task": 9,
+      "verdict": "ok",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "feasibility",
+          "issue": "Verification Steps include running `./gradlew test` and `npx vitest run` as part of the audit task. Tasks 1-6 are not yet implemented (decisions.md is empty, no new endpoints/store-actions/components exist yet), so these test runs cannot be green at audit time. The task correctly frames these as 'вспомогательний прогон для аудиту', but the commands will fail if run before wave 1-5 complete.",
+          "fix": "No change needed — depends_on [1,2,3,4,5,6] and wave: 6 correctly gate execution. The note is purely informational for the reviewer. The framing in the task body is accurate ('зелений прогон підтверджує…'). Minor because the dependency guard is correct and the task prose acknowledges it."
+        },
+        {
+          "severity": "minor",
+          "category": "feasibility",
+          "issue": "Task 9 expects 'нові сервісні unit-тести FunnelService*Test.java' as a separate unit-test file (distinct from IT). Existing FunnelService*Test files (FunnelServiceEmitEventTest, FunnelServiceKeywordTest, FunnelServiceTriggerTypeTest) all extend AbstractIntegrationTest (full SpringBootTest+Testcontainers), so the project pattern for FunnelService tests is IT-level, not pure unit with Mockito. The tech-spec Testing Strategy section does specify unit tests for duplicate/stop-all/test-run/preview service logic, so those may be written as new MockitoExtension-based files or as IT extensions. Task 9 should be aware that 'unit test' in this project context for FunnelService is actually IT-level.",
+          "fix": "T9 auditor should check actual test files created by tasks 1-2 (as found in decisions.md) rather than assuming a split between pure-Mockito unit and IT. The task already says to use decisions.md as source of truth, so no change to the task file is needed. Flag as minor awareness note."
+        }
+      ]
+    }
+  ],
+  "notes": "All three audit tasks (7/8/9) are correctly framed as analysis-only. No TDD Anchor sections are present. reviewers: [] in all three frontmatter blocks. Skills match exactly: T7 code-reviewing, T8 security-auditor, T9 test-master. depends_on: [1,2,3,4,5,6] and wave: 6 in all three. Scope references real files: FunnelController.java, FunnelService.java, FunnelStep.java (copyOf verified), FunnelExecutionFactory.java (cancelExistingForPair + insertExecution verified), VariableTemplateRenderer.java (render signature verified), Bot.java (getOwnerChatId verified), SubscriberService interface (findByChat verified), FunnelControllerIT.java, FunnelExecutionEngineIT.java (MockWebServer harness verified), frontend stores/funnels.ts (catch-flip-error-RETHROW pattern verified), FunnelStepForm.vue (never-v-html convention comment verified), check-locales.mjs (exists at frontend/scripts/), i18n locales (both uk.json and en.json exist). Key cross-component concerns (claim-CAS dual-field stop-all, ownerChatId-resolution duplication test-run vs preview, no-v-html) are all explicitly named and correctly grounded in real code architecture. decisions.md is correctly called out as the runtime source of truth for the actual file set (tasks 1-6 not yet implemented — decisions.md is currently empty template). FunnelMessagePreview.vue does not yet exist (pre-implementation) — all three tasks correctly note they read files in post-implementation state. No hallucinated APIs, functions, or patterns found."
+}

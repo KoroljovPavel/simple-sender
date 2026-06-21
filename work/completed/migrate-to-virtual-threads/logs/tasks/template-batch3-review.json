@@ -1,0 +1,59 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14, 15],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "structure",
+      "task": 14,
+      "section": "Reviewers",
+      "issue": "Task 14 is missing the mandatory `## Reviewers` section entirely. The H2 headings between Details and Post-completion (## Summary verdict, ## Scope, ## Findings by focus area, etc.) appear inside a fenced code block that documents the *audit report* template — they are not real document sections. The file goes directly from `## Details` (ending at the Implementation hints bullets) to `## Post-completion`. The template (and task-creator agent rules §10) mandates a Reviewers section even when reviewers=[] — it should contain a sentinel like 'None. This task is self-verifying — its output is the audit report; no downstream reviewer.' (Task 15 does this correctly at line 170-172.)",
+      "fix": "Insert a `## Reviewers` section between the Details and Post-completion sections containing one short paragraph noting that this is a self-verifying audit task with no downstream reviewers (mirroring Task 15's pattern). Example body: 'None. This task is the code-quality audit for the feature — its output (`work/migrate-to-virtual-threads/audit/code-audit.md`) is consumed by Task 17 pre-deploy QA, not by a downstream reviewer agent.'"
+    },
+    {
+      "severity": "critical",
+      "category": "decomposition",
+      "task": 13,
+      "section": "frontmatter.wave / frontmatter.depends_on",
+      "issue": "Task 13 declares `depends_on: [11]` with `wave: 3`, but Task 11 also has `wave: 3`. The validator's dependency-correctness rule requires that any task with `depends_on: [X]` must have a `wave` strictly greater than X's wave. The tech-spec (line 441) intentionally bundles Task 11 → Task 12 (parallel) → Task 13 (sequential after 11) into Wave 3 to express the single-writer constraint on patterns.md, but this collapses two ordering levels into one wave label and breaks the wave-based scheduler invariant: a feature-execution agent that dispatches a wave in parallel could try to start Task 13 before Task 11 finishes, since they share wave=3.",
+      "fix": "Either (a) bump Task 13 to `wave: 4` and Task 14/15/16/17 to `wave: 5` to preserve strict dependency-implies-higher-wave, or (b) keep Task 13 at wave 3 but document the in-wave ordering convention explicitly in tech-spec and document that the feature-execution skill must honor `depends_on` even within a wave. Option (a) is the safer fix and aligns with the validator rule. Verify no other task has the same in-wave dependency pattern after the bump."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 14,
+      "section": "Required Skills",
+      "issue": "The skill link uses a project-root-relative path that will not resolve from the task file. Current: `- /skill:code-reviewing — [skills/code-reviewing/SKILL.md](.claude/skills/code-reviewing/SKILL.md)`. From `work/migrate-to-virtual-threads/tasks/14.md` this link points to `work/migrate-to-virtual-threads/tasks/.claude/skills/code-reviewing/SKILL.md` (which does not exist). All other tasks in this batch use `../../../.claude/...` correctly.",
+      "fix": "Change link target to `../../../.claude/skills/code-reviewing/SKILL.md` (matching the pattern used by tasks 11, 12, 13, 15). Also fix the display label `[skills/code-reviewing/SKILL.md]` to `[.claude/skills/code-reviewing/SKILL.md]` to match the actual file path shown in the link target, mirroring siblings."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 13,
+      "section": "Reviewers",
+      "issue": "Reviewer report path uses an absolute filesystem path (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/migrate-to-virtual-threads/logs/working/task-13/code-reviewer-{round}.json`) while every other task in the batch (11, 12) uses repo-relative `work/migrate-to-virtual-threads/logs/working/...`. The absolute path is machine-specific (hardcodes `/Users/pavlokorolov/...`) and will not work for other developers or CI.",
+      "fix": "Change to relative repo path: `work/migrate-to-virtual-threads/logs/working/task-13/code-reviewer-{round}.json`. This matches the task-creator agent rule §10 (feature-anchored repo-relative paths)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Required Skills",
+      "issue": "Skill link display label shows `[skills/code-writing/SKILL.md]` (missing the leading `.claude/`) while the link target is `../../../.claude/skills/code-writing/SKILL.md`. Cosmetic mismatch between label and target — link resolves correctly, but the label is misleading.",
+      "fix": "Make label match the actual path: `[.claude/skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)` to mirror task 11 and 13 patterns."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 11,
+      "section": "Verification Steps",
+      "issue": "The tech-spec Verify-smoke for Task 11 is `./gradlew bootRun -PappArgs=\"-Djdk.tracePinnedThreads=full\" + manual log inspection` (line 447). The task's Verification Steps reproduces this but uses `./gradlew :backend:bootRun -PappArgs=\"...\"` (with the `:backend:` module prefix). This is likely correct given multi-module gradle layout, but the carry-forward is not verbatim — should confirm with project gradle setup. Not a blocker; minor consistency note.",
+      "fix": "Either align the task's smoke command with tech-spec verbatim (`./gradlew bootRun -PappArgs=...`) or update tech-spec to include the `:backend:` prefix. Verify against `backend/build.gradle` / `settings.gradle` what the actual module path is."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 6
+  }
+}

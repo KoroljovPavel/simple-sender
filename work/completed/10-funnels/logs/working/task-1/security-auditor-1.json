@@ -1,0 +1,21 @@
+{
+  "reviewer": "security-auditor",
+  "task": 1,
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelStep.java:33",
+      "finding": "customFieldValue declared as Object (untyped). Spring Data MongoDB reads BSON back into the raw Java type — no polymorphic Jackson deserialization risk here because MappingMongoConverter does not perform class-polymorphism on Object fields. However, the untyped field means any BSON primitive, array, or sub-document can be round-tripped without schema enforcement. Validation is explicitly deferred to Task 5 (DTO/service layer) per the tech-spec, which is acceptable. Risk is contained to Task 5 implementing that validation.",
+      "recommendation": "No action required in this layer. Task 5 must validate customFieldValue with CustomFieldValueValidator before persisting (as spec'd). Consider documenting the accepted types (String, Number, Boolean) in the field's Javadoc to make the contract explicit for future implementors."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/funnel/Funnel.java:82 | backend/src/main/java/com/botfunnel/funnel/FunnelExecution.java:91",
+      "finding": "getSteps() and getStepsSnapshot() return direct references to the internal mutable List. Callers can add/remove elements from the backing list without going through the intended copyOf() snapshot path, potentially corrupting the snapshot isolation guarantee (Decision 3). This is a persistence POJO so the impact is limited to within the JVM process, but it is an integrity gap in the snapshot contract.",
+      "recommendation": "Either return Collections.unmodifiableList(stepsSnapshot) from the getter, or document clearly that callers must not mutate the returned list. The actual deep-copy duty already falls on the fire() caller in Task 7 — no snapshot correctness regression today, but the gap should be closed before the engine layer (Task 6/7) is written."
+    }
+  ],
+  "summary": "No critical or major security findings. The domain/persistence layer is clean: no hardcoded secrets, no injection vectors, partialFilter literals are correctly lowercase and defended by static class-load asserts in both Funnel and FunnelExecution, tenant isolation is correctly expressed through top-level projectId fields with appropriate indexes, and the re-enter guard unique partial index is correctly declared with unique=true. Two low-severity notes: (1) customFieldValue is Object-typed — acceptable for this layer per spec, but Task 5 must enforce type validation; (2) list getters expose mutable references — integrity risk for the snapshot contract that should be addressed before the engine tasks are implemented."
+}

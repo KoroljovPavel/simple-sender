@@ -1,0 +1,585 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-05-07 10:00:00"
+  last_updated: "2026-05-08 14:00:00"
+  status: "completed"
+  can_resume: false
+  current_question_num: 7
+  feature_size: "M"
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-05-07 10:15:00"
+    topic: "library + URL + storage + scope reduction + testing"
+    agent_question: |
+      Library: @nuxtjs/i18n vs vue-i18n; URL strategy (prefix_except_default vs no_prefix);
+      cookie vs localStorage; do we need 3 languages now or fewer; testing approach (Vitest +
+      one Playwright E2E + optional grep gate, no per-key unit tests).
+    user_answer: |
+      1. @nuxtjs/i18n with prefix_except_default.
+      2. Cookie storage — agreed.
+      3. Reduce to two languages: uk + en (drop ru).
+      4. Testing strategy approved.
+    summary: "Lib chosen, URLs prefixed except default, cookie persistence, 2 langs (uk+en), test plan agreed"
+  - question_num: 2
+    timestamp: "2026-05-07 10:30:00"
+    topic: "user_problem + acceptance criteria + fallback + date/number scope"
+    agent_question: |
+      Frame user_problem (no users yet, MVP — cheap to translate now, costly later);
+      pin AC checklist (string inventory, switcher in both layouts, cookie, URL strategy,
+      <html lang>, 1 Vitest + 1 Playwright E2E, backend untouched);
+      missing-key fallback (uk vs raw key);
+      date/number formatters and lazy-load.
+    user_answer: |
+      5. Cheap now (~10 files), would be 50+ later — agreed.
+      6. AC list ok.
+      7. Fallback to uk.json.
+      8. No formatters now, eager-load locales agreed.
+    summary: "Cycle 1 closed: rationale, AC, fallback, eager-load all confirmed"
+  - question_num: 3
+    timestamp: "2026-05-07 10:50:00"
+    topic: "switcher placement + URL/cookie precedence + translation source + risk mitigations"
+    agent_question: |
+      Switcher position in default + auth layouts; toggle vs dropdown style;
+      URL > cookie > Accept-Language > default precedence;
+      who writes EN copy;
+      bulk-confirm 6 risk mitigations from code-research (routeRules, middleware,
+      NuxtLink/navigateTo localization, Zod live-switch, existing test asserts kept,
+      useApiError composable centralization).
+    user_answer: |
+      9. Variant A (absolute-positioned switcher in top-right of auth bg) + toggle style.
+      10. Agreed: URL > cookie > Accept-Language > default uk.
+      11. Agent (Claude) writes EN copy during implementation.
+      12. All 6 mitigations agreed including useApiError centralization.
+    summary: "UX placement, URL precedence, EN copy by agent, all 6 mitigations confirmed"
+  - question_num: 4
+    timestamp: "2026-05-07 11:05:00"
+    topic: "user stories + edge cases + interaction details + locale file structure"
+    agent_question: |
+      Confirm 5 user stories (first-visit EN/UA, switcher click, bookmark, invalid prefix);
+      edge cases (invalid cookie, broken locale JSON, mid-form switch reset, pending-banner localized);
+      switcher interaction (silent immediate swap, eager-load, active state);
+      locale file path + nested JSON + camelCase EN keys.
+    user_answer: |
+      13. Stories ok except E: invalid prefix /fr/dashboard should fallback to default uk (strip prefix), not 404.
+      14. Edge cases ok.
+      15. Interaction details ok.
+      16. File structure ok.
+    summary: "User stories agreed; invalid prefix fallback to default (not 404); edges/interaction/file structure confirmed"
+  - question_num: 5
+    timestamp: "2026-05-07 11:25:00"
+    topic: "fallback middleware + deploy + useApiError + verification"
+    agent_question: |
+      Server-side global middleware for invalid-locale-prefix fallback;
+      deploy/integration/manual actions zero-impact;
+      useApiError composable signature;
+      verification matrix split agent vs user.
+    user_answer: |
+      17. Agreed (server-side global middleware before auth).
+      18. Yes (no CI changes, no backend, no manual steps).
+      19. Norm (signature ok).
+      20. Ok (verification matrix accepted).
+    summary: "Cycle 2 closed: fallback middleware, no-deploy-impact, useApiError, verification matrix all confirmed"
+  - question_num: 6
+    timestamp: "2026-05-07 11:40:00"
+    topic: "cleanup: brand name, title tag, pluralization, existing tests"
+    agent_question: |
+      Brand name 'Bot Funnel' stays as-is (proper noun);
+      <title> via useHead is out of scope (separate refactor);
+      no pluralization API (no item counts in current UI);
+      existing UA-literal test asserts kept as-is (default locale stays uk).
+    user_answer: |
+      21. Yes (brand stays).
+      22. Yes (title out of scope).
+      23. Yes (no plural).
+      24. Yes (tests untouched).
+    summary: "Cycle 3 closed: brand kept, title out of scope, no plural, tests untouched"
+  - question_num: 7
+    timestamp: "2026-05-07 12:00:00"
+    topic: "completeness-checker gaps: middleware test paths, redirectOn, cookieSecure, app.vue, Playwright bootstrap"
+    agent_question: |
+      Resolve 4 gaps flagged by completeness-checker:
+      25. auth.global.spec.ts path asserts — keep as-is (uk default has no prefix) vs mock localePath.
+      26. detectBrowserLanguage.redirectOn ('no prefix' vs 'root') and cookieSecure (env-conditional) and sameSite.
+      27. app.vue: explicitly wire useLocaleHead() to update <html lang> on locale change.
+      28. Playwright bootstrap split into a separate Wave 1 task vs bundled with E2E.
+    user_answer: |
+      25. Agreed (variant A: keep tests as-is, localePath returns same string for uk).
+      26. Ok (redirectOn: 'no prefix'; cookieSecure: env-conditional; sameSite: 'lax').
+      27. Agreed (explicit useLocaleHead() in app.vue is in scope).
+      28. Agreed (separate 'Playwright bootstrap' task in Wave 1, distinct from i18n.spec.ts).
+    summary: "All checker gaps closed: test paths kept, redirectOn=no prefix, cookieSecure env-conditional, useLocaleHead in app.vue, Playwright bootstrap separate task"
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "03-i18n"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 95
+    status: "complete"
+    value: |
+      Add @nuxtjs/i18n@^9 to the Nuxt 4 frontend with two locales: uk (default) and en.
+      URL strategy `prefix_except_default` (uk paths unchanged, en paths get `/en/...` prefix).
+      Locale persisted in cookie `i18n_lang` (1y TTL). Detection precedence: URL > cookie >
+      Accept-Language > default uk. Translate ALL existing user-visible strings: 5 auth pages,
+      dashboard, profile, default + auth layouts, API error mappings (401/403/429/generic),
+      Zod validation messages. Add a UK | EN toggle switcher (text-only): in default layout
+      topbar (right of avatar/Logout), and absolute-positioned top-right of auth layout
+      background. Backend (email templates, error messages) stays Ukrainian — out of scope.
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: |
+      ux-guidelines mandates `t('key')` from MVP, but the current frontend has all strings
+      hardcoded (UA on auth pages, EN on default layout). With ~10 frontend files now, the
+      translation cost is small (~150 strings, 1 person-day with agent writing both locales).
+      In 5 epics this grows to 50+ files and becomes painful. This feature pays the cost
+      now and unblocks EN-first demos to potential early users / investors.
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 80
+    status: "complete"
+    value: |
+      Primary near-term: founder for screenshots and EN-language demos to potential early
+      users / investors. Long-term: end-users on EN-speaking markets. Internally also: any
+      future agent or contributor who must add a new page — i18n infrastructure is in place
+      so they cannot accidentally hardcode strings.
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 95
+    status: "complete"
+    value: |
+      Concrete checklist:
+      (1) Every visible string in 5 auth pages, dashboard, profile, default + auth layouts,
+          API error mappings, Zod messages → moved to locale files.
+      (2) Switcher (UK | EN, text-only toggle, active state highlighted) in default topbar
+          and auth bg (absolute top-right).
+      (3) Cookie `i18n_lang` (1y TTL); SSR returns correct locale on first request — no flicker.
+      (4) URL: uk has no prefix; en has `/en/...` prefix.
+      (5) `<html lang="...">` updates on switch (handled by lib).
+      (6) 1× Vitest spec on `<LangSwitcher>` component (render + click + locale change);
+          1× Playwright E2E (login → switch → form re-rendered EN).
+      (7) Optional CI grep gate: 0 raw multi-letter visible strings in pages/ + layouts/.
+      (8) Untouched: backend email templates (UA), backend error responses, existing UA test asserts.
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: |
+      - Default locale uk; second locale en. No ru in this feature.
+      - URL strategy `prefix_except_default`.
+      - Cookie persistence (not localStorage) — required for SSR.
+      - Eager-load locales (small ~10KB each, 2 langs only — no lazy split).
+      - Missing-key fallback: en → uk; if uk missing, raw key + console.warn (dev).
+      - No pluralization API (no item counts in current UI).
+      - No date/number formatters (no current UI surfaces them).
+      - Brand name 'Bot Funnel' is a proper noun — same in both locales.
+      - <title> via useHead is out of scope — separate refactor.
+      - Backend (email templates, server error messages) stays UA.
+      - Existing UA-literal test asserts kept as-is (default locale stays uk).
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 95
+    status: "complete"
+    value: |
+      Feature size M → focused testing, not exhaustive:
+      - Vitest: 1 spec on `<LangSwitcher>` component (render UK/EN buttons; click toggles
+        active state; verify `setLocale` called and cookie updated). NO per-key unit tests
+        (those would be tautological — string == string).
+      - Playwright E2E: 1 spec — open `/auth/login` (uk default), click EN toggle, assert
+        URL becomes `/en/auth/login`, assert visible button text changes from 'Увійти' to
+        'Sign in', submit invalid email and assert validation message is in EN.
+      - **Playwright bootstrap is a separate task in Wave 1** (install @playwright/test,
+        create playwright.config.ts, add `test:e2e` npm script, create `e2e/` dir,
+        gitignore `playwright-report/` + `test-results/`). The i18n.spec.ts E2E lives in
+        a later wave once features are implemented.
+      - Optional CI grep gate: pre-commit / CI script that fails if `pages/` or `layouts/`
+        contain 3+ letter visible strings outside `t('...')` (catches future regressions).
+      - Existing 5 frontend spec files keep UA asserts (default locale stays uk).
+      - tests/middleware/auth.global.spec.ts path asserts kept unchanged — `localePath`
+        for default uk returns the same path string, so existing asserts pass.
+      - No backend tests change.
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 90
+    status: "complete"
+    value: |
+      A. First visit no cookie, browser EN: user opens `/dashboard` (not logged in) →
+         `Accept-Language: en` detected → redirect `/en/auth/login`, cookie `i18n_lang=en` set.
+      B. First visit no cookie, browser UA: user opens any path → renders uk (no prefix),
+         cookie `i18n_lang=uk` set.
+      C. Switcher in topbar: logged-in user on `/dashboard` (uk) clicks "EN" toggle →
+         URL becomes `/en/dashboard`, cookie updates, content re-renders EN.
+      D. Bookmark: `/en/profile` opened on a fresh device (no cookie) → renders EN, cookie
+         set to en. Sharing EN URLs works.
+      E. Invalid prefix: `/fr/dashboard` → server-side global middleware (runs before auth)
+         strips the unknown 2-letter prefix → 302 redirect to `/dashboard` (default uk).
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 95
+    status: "complete"
+    value: |
+      See success_criteria — same testable checklist will become AC in user-spec.md.
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 90
+    status: "complete"
+    value: |
+      - Cookie with invalid value (`i18n_lang=xx`): ignored, fall through to Accept-Language → default uk.
+      - Locale JSON file missing/malformed at build: build fails (CI catches).
+      - Form mid-input on switch: `setLocale()` navigates to new URL, form state resets.
+        No 'unsaved changes' warning (MVP, action is rare, no autosave).
+      - Pending-user banner on `/dashboard` localized too — value (`status === 'pending'`)
+        from authStore, but text via `t()`.
+      - Invalid 2-letter prefix in URL: stripped to default by global middleware (Story E).
+      - Zod schemas constructed at module scope: wrap in `computed(() => toTypedSchema(...))`
+        so they re-build on locale change — otherwise live-switch leaves stale UA validation messages.
+      - SSR/hydration mismatch risk: locale resolved server-side from cookie + Accept-Language
+        before render — both sides see the same locale, no mismatch.
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 85
+    status: "complete"
+    value: |
+      - Missing key in en.json → fallback to uk.json + console.warn(dev only).
+      - Missing key in uk.json (impossible if pre-commit checks both files have same keys,
+        else lib falls through to raw key string).
+      - API call fails → useApiError(err, context) maps to t('errors.{context}.{code}') with
+        fallback to t('errors.generic'). Replaces 8 hardcoded catch-block strings today.
+      - Network error during locale file load: not applicable — eager-loaded, bundled.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 95
+    status: "complete"
+    value: |
+      Agent verification:
+        - `pnpm test` → Vitest green (LangSwitcher spec).
+        - `pnpm playwright test e2e/i18n.spec.ts` → green (login → EN switch → assert EN strings).
+        - Optional: `pnpm test:no-raw-strings` (grep-based gate).
+      User verification:
+        - `pnpm dev` → open localhost:3000/auth/login → click EN → URL becomes `/en/auth/login`,
+          form re-renders EN.
+        - Clear cookies → open `/dashboard` → redirect to `/auth/login`, locale = uk (or per
+          Accept-Language if browser is set to en).
+        - Incognito → `localhost:3000/en/profile` → 302 to `/en/auth/login`, page in EN.
+        - `localhost:3000/fr/dashboard` → 302 → `/dashboard` (default).
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 90
+    status: "complete"
+    value: |
+      Switcher placement:
+        - default.vue topbar: right side, before Logout button: `[UK | EN]` (text-only toggle, active in bold/underline).
+        - auth.vue: absolute-positioned top-right of background container (above the central card).
+      Style: simple text toggle, no flag icons, no dropdown (overkill for 2 langs).
+      Behavior: silent immediate swap, no toast/notification, no loading flash (eager load).
+      Active locale visually highlighted.
+      Brand name 'Bot Funnel' stays as-is in both locales.
+    gaps: ""
+    required: false
+
+  risks:
+    score: 90
+    status: "complete"
+    value: |
+      1. **Security regression on prefixed auth URLs.** `/auth/**` routeRules (X-Robots-Tag,
+         Referrer-Policy) currently protect `?token=` URLs from indexing/leaking. After
+         enabling `prefix_except_default`, `/en/auth/**` must get the same headers. Mitigation:
+         add mirror rule in nuxt.config.ts.
+      2. **Auth middleware path-based check breaks.** `middleware/auth.global.ts` uses
+         `path.startsWith('/auth/')` — fails for `/en/auth/...`. Mitigation: use
+         `getRouteBaseName(route)` from @nuxtjs/i18n.
+      3. **20 hardcoded paths** in `<NuxtLink to=...>` and `navigateTo(...)` across pages /
+         middleware / layouts. Mitigation: replace with `<NuxtLinkLocale>` or `localePath()`.
+      4. **Zod schema live-switch** leaves stale messages. Mitigation: wrap schema in
+         `computed()` so it rebuilds on locale change.
+      5. **Existing test asserts** match UA literals (`/коректний email/i`). They keep
+         passing because default locale stays uk — confirmed acceptable, no rewrite needed.
+      6. **Nuxt 4 + @nuxtjs/i18n@9 path convention.** Locale files live at `frontend/i18n/locales/`
+         (not `frontend/locales/`) under Nuxt 4 default `restructureDir: 'i18n'`. Risk of
+         misconfig — verify on smoke test.
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 90
+    status: "complete"
+    value: |
+      - Library: @nuxtjs/i18n@^9 (vue-i18n@11 internally).
+      - URL strategy: prefix_except_default.
+      - Persistence: cookie `i18n_lang`, 1-year TTL.
+      - Detection precedence: URL > cookie > Accept-Language > default uk.
+      - Locale files: `frontend/i18n/locales/uk.json`, `frontend/i18n/locales/en.json`.
+      - Key naming: nested JSON, camelCase, English keys (e.g. `auth.login.title`).
+      - Namespaces: common, layout, auth.{login|register|forgotPassword|resetPassword|verifyEmail},
+        dashboard, profile, validation, errors.
+      - Eager-load locales (no async chunks).
+      - Missing-key fallback: en → uk → raw key + dev warn.
+      - useApiError composable: signature `useApiError(): (err, context) => string`,
+        replaces 8 duplicated status-extraction + UA error-mapping copies.
+      - Invalid-locale-prefix fallback: server-side global middleware
+        `middleware/00-i18n-fallback.global.ts` strips unknown 2-letter prefixes → default.
+      - Brand 'Bot Funnel' unchanged across locales.
+      - <title>/useHead localization: explicitly out of scope.
+      - detectBrowserLanguage.redirectOn: 'no prefix' (returning EN visitor on '/dashboard'
+        redirected to '/en/dashboard').
+      - Cookie config: `cookieSecure` = env-conditional (false in dev, true in prod —
+        mirrors SESSION_COOKIE_SECURE pattern in deployment.md), `sameSite: 'lax'`.
+      - app.vue: explicit `useLocaleHead({ addSeoAttributes: true })` + `useHead({ htmlAttrs })`
+        — lib does NOT auto-update `<html lang>`.
+      - Existing tests/middleware/auth.global.spec.ts path asserts kept unchanged: variant A
+        (`localePath('/auth/login')` returns `/auth/login` for default uk — no prefix).
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 90
+    status: "complete"
+    value: |
+      Frontend-only change. Same build pipeline (`pnpm build`). No env vars added.
+      No backend or infra changes. No DB migration. CI: existing test job runs Vitest;
+      add E2E job step (Playwright) — flagged as part of test infrastructure work.
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 100
+    status: "complete"
+    value: "None. All work is code + JSON locale files."
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 90
+    status: "complete"
+    value: |
+      Frontend-only. Touchpoints:
+      - nuxt.config.ts: add `@nuxtjs/i18n` module, configure locales/strategy/detection,
+        widen routeRules to mirror `/en/auth/**`.
+      - layouts/default.vue + layouts/auth.vue: add `<LangSwitcher>` component.
+      - All 7 pages (5 auth + dashboard + profile): swap hardcoded strings → `t()`, swap
+        NuxtLink/navigateTo to locale-aware variants, wrap Zod schemas in `computed`.
+      - middleware/auth.global.ts: switch from `path.startsWith('/auth/')` to
+        `getRouteBaseName(route)`.
+      - new middleware/00-i18n-fallback.global.ts: invalid-prefix fallback.
+      - new composables/useApiError.ts: centralized API-error → translated message.
+      - new components/LangSwitcher.vue.
+      - new i18n/locales/uk.json + en.json.
+      Backend: zero changes.
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 90
+    status: "complete"
+    value: |
+      New: @nuxtjs/i18n@^9 (peer: vue-i18n@^11, transitively).
+      Existing reused: vee-validate + zod (Zod messages will live in locale files), Pinia
+      (auth store unchanged), Nuxt 4 router (locale-aware via lib).
+      No new backend deps.
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 85
+    status: "complete"
+    value: |
+      - Nuxt 4.4.x compatibility — verified via Context7: @nuxtjs/i18n@9 supports Nuxt 3+4
+        on vue-i18n v11.
+      - Default `restructureDir: 'i18n'` in Nuxt 4 means locales path is
+        `frontend/i18n/locales/`, not `frontend/locales/` — must use the new path.
+      - SSR-first: locale resolution must happen on server before render to avoid
+        hydration mismatch.
+      - prefix_except_default does NOT prefix URLs for default locale (uk) — meaning all
+        existing UA bookmarks remain valid.
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 90
+    status: "complete"
+    value: |
+      Translation source: locale JSON files in repo at `frontend/i18n/locales/{uk,en}.json`.
+      Initial UA copy: copied verbatim from current hardcoded strings (single-source-of-truth
+      migration). Initial EN copy: written by agent during implementation (~150 strings,
+      UI-quality copy).
+      No external translation service, no backend storage of translations.
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 85
+    status: "complete"
+    value: |
+      Code migration only — no data migration, no user impact (no users yet).
+      - Switch 12 NuxtLink + 8 navigateTo call sites to locale-aware equivalents.
+      - Centralize 8 duplicated status-extractor + error-mapping blocks via useApiError.
+      - Wrap 8 Zod schemas in `computed`.
+      - Update 1 auth.global.ts middleware check.
+      - Mirror routeRules pattern for /en/auth/**.
+      - Existing 5 frontend test specs left untouched (UA asserts work because default stays uk).
+      - Existing /auth/* bookmarks remain valid (uk has no prefix).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/03-i18n/user-spec.md"
+  status: "approved"
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase1_feature_overview"
+  questions_asked: 0
+  last_question: ""
+  total_required_score: 0
+  total_optional_score: 0
+  completion_estimate: "0%"
+  user_detail_level: "unknown"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Free-form notes:
+  - Important insights
+  - Areas of uncertainty
+  - Pivot points
+  - Scope changes
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

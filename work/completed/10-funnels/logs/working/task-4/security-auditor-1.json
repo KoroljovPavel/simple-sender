@@ -1,0 +1,79 @@
+{
+  "reviewer": "security-auditor",
+  "task": 4,
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Per-key Mongo updates replace single batched update — partial-write window on multi-key PATCH",
+      "description": "The original controller built one aggregated MongoDB Update document (all keys appended in the loop) and issued a single mongoTemplate.update() call. After the refactor, SubscriberCustomFieldsService.setOne() issues an individual mongoTemplate.update() per key inside the controller loop. If the JVM is interrupted (OOM, kill signal, timeout) between two setOne() calls, some keys are persisted in MongoDB while later ones are not, and the audit event (recordCustomFieldsSet) is never written because it lives outside the loop. This is not a vulnerability in the classic OWASP sense, but it degrades audit integrity (Decision 11 sole-writer guarantee) and data consistency under partial failure. For typical single-key patches the impact is zero; for multi-key patches it is a correctness gap.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java:68-71 / SubscriberCustomFieldsController.java:77-84",
+      "impact": "On a multi-key PATCH that is interrupted mid-loop, MongoDB will reflect a subset of the requested changes while no subscriber_custom_field_set audit event is recorded, silently violating the sole-writer invariant (Decision 11). An attacker cannot exploit this directly, but it degrades operational auditability.",
+      "recommendation": "Options: (a) Have the controller build a single aggregated Update (as before) and only delegate validation to the service, issuing one mongoTemplate.update() after the loop — this restores single-statement atomicity. (b) Alternatively, add a setAll(projectId, subscriberId, Map<String,CustomFieldType>, Map<String,Object>) method to SubscriberCustomFieldsService that builds one Update and calls recordCustomFieldsSet once, matching the original single-operation semantics. The current per-key write is acceptable only if the engine always calls setOne for exactly one field at a time.",
+      "cwe": "CWE-362 (Race Condition / Partial Write)"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "SubscriberService field injected but unused in SubscriberCustomFieldsService",
+      "description": "The subscriberService field is declared, constructor-injected, and suppressed with @SuppressWarnings(\"unused\") with a comment 'reserved for the map-taking overload / engine path'. As shipped in Task 4 this field is dead code. Dead injected dependencies are a minor code-quality issue and could confuse future reviewers about where audit events are written, potentially leading a Task 6 implementer to call recordCustomFieldsSet from inside the service (breaking the aggregated-audit invariant).",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java:27-28",
+      "impact": "Low. Future contributor may incorrectly add per-key audit calls inside setOne based on the presence of subscriberService, fragmenting audit events.",
+      "recommendation": "Remove subscriberService from the constructor and field until Task 6 actually requires it. If Task 6's engine path calls setOne in a loop and needs to audit, add the dependency then with the correct aggregated calling convention documented. Alternatively document explicitly that the engine caller is responsible for recordCustomFieldsSet.",
+      "cwe": "CWE-1164 (Irrelevant Code)"
+    },
+    {
+      "severity": "info",
+      "category": "OWASP A01: Broken Access Control",
+      "title": "Tenant isolation / IDOR — confirmed enforced; no regression",
+      "description": "CONFIRMED SECURE. The controller retains requireOwned(currentUserId(), projectId, false) before any data access, which enforces project ownership and collapses foreign/missing/soft-deleted projects to identical 404 (anti-enumeration). The subscriber lookup uses subscriberRepository.findById(subscriberId).filter(s -> projectId.equals(s.getProjectId())).orElseThrow(), which provides projectId-scoped cross-tenant isolation. SubscriberCustomFieldsService.setOne() additionally includes .and('projectId').is(projectId) in the Mongo Update Criteria, so a stale or forged subscriberId that somehow bypassed the controller guard would still not match a cross-tenant document. The design decision (service has no requireOwned — caller's responsibility) is correctly implemented.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:56-61",
+      "impact": "N/A — no vulnerability found.",
+      "recommendation": "No action required. The defense-in-depth projectId scoping inside setOne's Criteria is a positive additional safeguard.",
+      "cwe": "N/A"
+    },
+    {
+      "severity": "info",
+      "category": "OWASP A03: Injection (NoSQL)",
+      "title": "NoSQL field-path injection — no risk due to slug-enforced key ancestry",
+      "description": "CONFIRMED SECURE. The key used in 'customFields.' + key inside setOne originates from the controller's allowedTypes(project) map, which is keyed by CustomFieldDefinition.name(). Those names are validated at field creation time by @Pattern(regexp = '^[a-z0-9_-]{1,32}$') on CreateCustomFieldRequest and enforced again as a path-variable guard (NAME_SLUG pattern) in CustomFieldsController. The slug pattern excludes dots, dollar signs, and other MongoDB operator characters, so no dotted path injection (e.g., 'x.y') or operator injection ('$where') is possible through this code path.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java:64-66 / backend/src/main/java/com/botfunnel/project/dto/CreateCustomFieldRequest.java:16",
+      "impact": "N/A — no vulnerability found.",
+      "recommendation": "No action required. Consider adding an assertion or log.warn in setOne if key contains a dot as a defense-in-depth measure, but it is not required given existing validation.",
+      "cwe": "N/A"
+    },
+    {
+      "severity": "info",
+      "category": "OWASP A01: Broken Access Control (mass-assignment)",
+      "title": "Mass-assignment defense — confirmed intact",
+      "description": "CONFIRMED SECURE. Unknown request keys are rejected before reaching setOne. The controller filters keys through allowedTypes(project) (built from Project.customFieldDefinitions); type == null keys hit the 'continue' branch with a debug log and are never passed to setOne. The setOne method also has a null-type guard as a secondary defense. Arbitrary customFields.* writes are not possible through this path.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:74-78",
+      "impact": "N/A — no vulnerability found.",
+      "recommendation": "No action required.",
+      "cwe": "N/A"
+    },
+    {
+      "severity": "info",
+      "category": "OWASP A09: Security Logging and Monitoring (audit integrity)",
+      "title": "Audit sole-writer invariant — confirmed preserved",
+      "description": "CONFIRMED SECURE. SubscriberCustomFieldsService has no direct access to subscriberEventRepository or EventService. The subscriberService field is injected but not called anywhere in setOne. The sole recordCustomFieldsSet call is in the controller, outside and after the loop, with aggregated old/new maps — matching the Decision 11 requirement of one subscriber_custom_field_set event per PATCH. The idempotent guard (empty changedKeys → no event) is in SubscriberServiceImpl.recordCustomFieldsSet and is not bypassed.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:89-93",
+      "impact": "N/A — no vulnerability found.",
+      "recommendation": "No action required.",
+      "cwe": "N/A"
+    },
+    {
+      "severity": "info",
+      "category": "best-practice",
+      "title": "Commented Telegram bot token in application.properties line 31 (pre-existing, out of diff scope)",
+      "description": "PRE-EXISTING, already being escalated. Line 31 of application.properties contains a commented-out Telegram bot token (#8998527537:AAFMehsshbFz3QLRZB8MElyJ4zcHgofJdNM). This is not part of the Task 4 diff. Noted once per instructions; escalation is already in progress.",
+      "location": "backend/src/main/resources/application.properties:31",
+      "impact": "If this is a live token, it should be revoked via BotFather immediately.",
+      "recommendation": "Revoke the token via BotFather; remove the comment line; rotate to a fresh token stored only in CI/CD secrets (not in source).",
+      "cwe": "CWE-798"
+    }
+  ],
+  "summary": "Task 4 diff is APPROVED with no critical or major security findings. The three primary security objectives are met: (1) IDOR/tenant isolation is fully preserved — requireOwned + projectId-scoped subscriber lookup remain in the controller, and setOne adds a defense-in-depth projectId Criteria in its Mongo query; (2) mass-assignment defense is intact — unknown keys are dropped in the controller before reaching setOne, with a secondary null-type guard in the service; (3) audit sole-writer invariant (Decision 11) is preserved — setOne does not call recordCustomFieldsSet; the controller calls it exactly once per PATCH with aggregated old/new maps; SubscriberService is injected but unused in the service. NoSQL key-path injection risk is mitigated by the slug constraint (^[a-z0-9_-]{1,32}$) enforced at field-definition creation. The lookup-by-chat exposure is internal only (no new endpoint). Two minor findings are flagged: the per-key Mongo update loop replaces the original single-statement batch (partial-write/audit gap on multi-key PATCH failure), and the unused subscriberService injection is dead code that could mislead Task 6 implementers. Neither is a security vulnerability."
+}

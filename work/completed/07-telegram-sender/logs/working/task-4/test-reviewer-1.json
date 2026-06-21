@@ -1,0 +1,52 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 246,
+      "issue": "sendText_5xxThenSuccess_retriesAndReturnsSentMessage_attemptsEqualsTwo: tech-spec line 297 requires asserting 'audit metadata attempts == 2', but the test only verifies request count == 2 and falls back to a comment ('attempts-equals-N semantics... is asserted indirectly... on failure paths'). This is reasonable because the success-path sentMetadata shape per tech-spec line 248 is {botId, chatId, messageId} (no 'attempts' key) — so the assertion in the spec is literally not testable on success. The test name therefore makes a claim the spec contradicts.",
+      "suggestion": "Either (a) capture the success-path EventService.logEvent metadata map via ArgumentCaptor and explicitly assert it does NOT contain an 'attempts' key (pinning the spec line 248 success-metadata shape), or (b) rename the test to drop '_attemptsEqualsTwo' from the success-path test (keep the suffix only on the failure-path siblings where the assertion is real). Same applies to sendText_429And5xxInterleaving_succeeds_attemptsEqualsFour (line 395) and sendText_ioExceptionRetriedThenSuccess_attemptsEqualsTwo (line 288). At minimum, add a one-line assertion that proves the AtomicInteger counter advanced correctly — e.g. for the 5xx-then-success, change EventService into a verify(eventService, times(1)).logEvent(eq(OWNER_ID), eq(EVENT_TELEGRAM_MESSAGE_SENT), ..., metaCap.capture()) and assert metaCap.getValue() shape, mirroring lines 190-198."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 472,
+      "issue": "sendText_malformedTokenInBot_throwsBotTokenInvalidException_beforeHttp and sendText_invalidBase64Ciphertext_throwsBotTokenInvalidException_beforeHttp (line 493) verify the exception type and request count == 0, but do NOT assert the audit event side effect. Per tech-spec error-mapping table (lines 265-266), both pre-HTTP failure modes must emit telegram_send_failed (no errorCode/errorDescription keys for the BotTokenInvalidException branch — see failedMetadata at TelegramSender.java:272-282). The production code's isTerminalAuditable returns true for BotTokenInvalidException, so the event IS emitted; the tests do not pin this contract.",
+      "suggestion": "Add an ArgumentCaptor<Map<String,Object>> after the StepVerifier and assert verify(eventService).logEvent(eq(OWNER_ID), eq(EVENT_TELEGRAM_SEND_FAILED), isNull(), isNull(), metaCap.capture()); then assertThat(metaCap.getValue()).containsEntry(\"botId\", BOT_ID).containsEntry(\"attempts\", 0).doesNotContainKey(\"errorCode\").doesNotContainKey(\"errorDescription\"). Without these, a refactor that accidentally drops the BotTokenInvalidException branch from isTerminalAuditable would pass these tests silently."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 636,
+      "issue": "sendText_tokenIn5xxRetryLog_scrubbed_warnLevel asserts only the negative direction (no raw TOKEN in WARN messages) but does NOT assert positive presence of '[REDACTED_TOKEN]' in any WARN line, unlike the 4xx (line 632) and 429 (line 671) siblings. The 5xx retry log message format (WebClientResponseException.getMessage()) may contain only the body excerpt 'failure for token <TOKEN>' which after scrubbing becomes 'failure for token [REDACTED_TOKEN]'. If the retry observer's WARN line is silently dropped by a future refactor (e.g. log level reduced to DEBUG), the negative-only assertion still passes vacuously.",
+      "suggestion": "Add `assertThat(warnMessages).anyMatch(m -> m.contains(\"[REDACTED_TOKEN]\"))` after line 653, mirroring the 4xx (line 632) and 429 (line 671) tests. Same fix for sendText_tokenInTerminalFailureLog_scrubbed_errorLevel (line 674) — add `assertThat(errorMessages).anyMatch(m -> m.contains(\"[REDACTED_TOKEN]\"))` after line 690. And for sendText_tokenInTransportErrorMessage_scrubbed (line 693), add `assertThat(leakSites).anyMatch(m -> m.contains(\"[REDACTED_TOKEN]\"))` ONLY IF the closed-port transport-error message is empirically known to embed a token-shaped substring (the URI segment '/bot<TOKEN>/sendMessage' from the WebClientRequestException message would qualify) — if uncertain, leave transport-error as negative-only with a comment explaining why."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 693,
+      "issue": "sendText_tokenInTransportErrorMessage_scrubbed re-initializes mockServer at lines 711-712 inside the test body to keep @AfterEach happy. This is a non-obvious side-effect that future maintainers may delete as 'dead code' (no assertion follows the re-init). Also: the constructed deadServerSender uses Duration.ofSeconds(15) overall timeout and Duration.ofMillis(500) response timeout while the WebClient transport-error path will retry 3 times via the transient classifier (filter isTransient) — total wall-clock can be ~7s of backoff (1s+2s+4s) on top of connect attempts. The verify(Duration.ofSeconds(20)) ceiling is generous enough, but the test wall-clock is the second-longest in the suite (after the 3-4 SHORT_OVERALL_TIMEOUT scenarios).",
+      "suggestion": "Add a code comment above the `mockServer = new MockWebServer()` re-init at line 711 explaining why this is necessary ('@AfterEach calls mockServer.shutdown() which throws on a non-started instance — we re-init to a started instance to keep teardown idempotent'). Alternatively, refactor to track a 'serverShutdownExpected' boolean in the test and skip the mockServer.shutdown() call in @AfterEach for this test. Either approach is acceptable; the comment is the smaller fix."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 132,
+      "issue": "The helper okSendMessage and status5xx/status5xxWithToken/status429/status429WithToken are private static — fine. However, the test imports `java.util.function.Predicate` (line 33) only for the anyMessageMatches helper (line 164), which is only used once at line 632. Minor: helper exists but most token-leak tests don't reuse it, leading to inconsistent assertion style (line 632 uses the helper, lines 648-653/666-671/685-690 inline `logAppender.list.stream()...`).",
+      "suggestion": "Either delete anyMessageMatches and inline the stream filter at line 632 to match the other tests, OR refactor lines 648-653, 666-671, 685-690 to use anyMessageMatches (and a sibling allMessages(Level)) for consistency. Pick one style for all five token-leak tests."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 374,
+      "issue": "sendText_429NegativeRetryAfter_clampsToZero_thenCapsAtOverallTimeout asserts request count `>=2 AND <=100`. The lower bound `>= 2` is weak — proves at least one retry happened but does not differentiate 'correct: a handful of attempts within a 3s budget' from 'minor latency anomaly: only 2 attempts'. A spin-loop bug (clamp removed, immediate re-subscribe) would saturate at 100 quickly, so the upper bound is what matters. The lower bound should be tightened or accompanied by an assertion on average inter-attempt delay (>= 0ms after clamp, but jitter 0-200ms means avg should be ~100ms, so under 3s budget we'd expect ~15-30 attempts).",
+      "suggestion": "Either tighten lower bound to `>= 5` (with a comment explaining the math: 3s budget / (200ms avg jitter) ~= 15 attempts in the no-bug case; >= 5 catches a 'no retry at all' regression), or supplement with `assertThat(mockServer.getRequestCount()).isLessThan(50)` to make the spin-loop check explicit. Current `<= 100` upper bound is fine but conflates 'spin loop' (would be 100) with 'high but acceptable retry rate' (e.g. 80)."
+    }
+  ],
+  "scenario_coverage": {
+    "present": 32,
+    "missing": []
+  },
+  "summary": "All 28 unit + 4 IT scenarios from tech-spec Testing Strategy are present and named verbatim per the spec; method names match the canonical list at tasks/4.md lines 49-103. Litmus test passes on every behavioral scenario — removing the corresponding production-code line (5xx retry, 429 clamp, requireValidTokenShape, switchIfEmpty for 404, .timeout, scrubTokens) reliably fails the relevant test. Retry-attempt assertions (attempts==1, 2, 4) are correctly asserted via captured event metadata on failure paths (lines 280-285 for 5xxRetryExhausted, line 615 for overallTimeout). Token-leak coverage spans all 5 required log sites (4xx WARN, 5xx retry WARN, 429 wait WARN, terminal ERROR, transport-error WARN/ERROR) — each as an independent test using ListAppender. The IT file correctly extends AbstractIntegrationTest, uses a class-level MockWebServer with @DynamicPropertySource, and Awaitility-with-settle-window for negative event-presence assertions. Test-fast strategy via the package-private TelegramSender constructor (SHORT_OVERALL_TIMEOUT=3s, SHORT_RESPONSE_TIMEOUT=200ms) keeps the four ~30s-budget scenarios at ~3s each — suite should finish well under 60s. Six findings, all minor/nit: (1-3) three retry-success tests assert request count but not the corresponding audit-metadata 'attempts' shape, which the spec's success-metadata definition makes literally impossible to assert — recommend renaming to drop the '_attemptsEqualsN' suffix from success-branch tests; (4) two pre-HTTP BotTokenInvalidException tests don't pin the telegram_send_failed audit emission; (5) three token-leak tests assert only the negative direction (no raw token) without asserting positive '[REDACTED_TOKEN]' presence, inconsistent with their 4xx sibling; (6) one test re-inits MockWebServer mid-body to keep @AfterEach idempotent without explanation. Recommendation: APPROVE. The findings are tightening opportunities, not gaps — the suite already pins all the security-critical (token leak), correctness-critical (retry attempts), and behavior-critical (anti-enumeration 404, decrypt error-class scoping per Risk R7) properties from the tech-spec."
+}

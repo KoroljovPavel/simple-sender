@@ -1,0 +1,54 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 4,
+      "issue": "TDD Anchor names `SubscriberServiceImplTest.java::lookupByChat_delegatesToRepository`, but that unit-test file does not exist. The existing file is `SubscriberServiceImplIT.java` (extends AbstractIntegrationTest, full Spring context). A new unit-test file for a single delegation assertion is fine, but the task should clarify that the file must be created (not added to the IT).",
+      "fix": "Create `backend/src/test/java/com/botfunnel/subscriber/SubscriberServiceImplTest.java` as a Mockito unit-test, or add the delegation test to the existing `SubscriberServiceImplIT` and update the TDD Anchor path to `SubscriberServiceImplIT`."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 4,
+      "issue": "TDD Anchor names `SubscriberCustomFieldsControllerTest.java::patchCustomFields_behaviourUnchanged`, but this test file does not exist. The task text says 'if the controller-test already exists — ensure it stays green'. No such file exists, so it must be created. The task does not list this creation in 'Files to modify'.",
+      "fix": "Add `backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsControllerTest.java` to the task's 'Files to modify' list and confirm it must be created."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 4,
+      "issue": "Details say: 'mirror рядків 99-102 контролера' referring to the controller's MongoTemplate update block. The actual lines in SubscriberCustomFieldsController.java are 98-103 (mongoTemplate.update(...) chain). Line numbers are approximate and likely to shift during refactoring; the hint is still directionally correct but the line reference may confuse implementers.",
+      "fix": "Replace the line-number reference with a structural description: 'mirror the MongoTemplate update(Subscriber.class).matching(...).apply(update).first() pattern from SubscriberCustomFieldsController'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "The Details section describes two alternative delegation strategies (per-key delegation vs. aggregate-map delegation) and acknowledges the current controller does ONE aggregated Update + ONE recordCustomFieldsSet call. The task instructs to 'choose delegation that preserves current aggregated semantics' but does not mandate which approach, leaving room for accidental behaviour change. The AC states 'external behaviour MUST be byte-identical' but the implementer must reason through the trade-off themselves.",
+      "fix": "Minor: the task is feasible but consider explicitly mandating the aggregate-map delegation form (e.g., setMany(projectId, subscriberId, allowedTypes, requestedValues)) to eliminate per-key audit-event fragmentation risk."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 6,
+      "issue": "Dependencies section (line 227) refers to TelegramSender's return type as '(`record SendResult` / `enum Outcome`)'. In the actual codebase the return type is `SentMessage` (a record in `bot/dto/SentMessage.java`). There is no `SendResult` record or `Outcome` enum. This is a parenthetical clarification note, not a code reference, so it cannot break compilation, but it is factually wrong and may confuse the implementer into looking for non-existent types.",
+      "fix": "Replace '(`record SendResult` / `enum Outcome`)' with '(`SentMessage` record in `bot/dto/SentMessage.java`)' to match the actual return type."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 6,
+      "issue": "Task 6 details describe the Clock IT strategy as: 'create own @TestConfiguration with @Primary mutable Clock (following AbstractIntegrationTest.MailpitTestConfig @Primary-override pattern)'. AbstractIntegrationTest already imports JobRunrInMemoryConfig; the @Primary MailpitTestConfig pattern is the right approach. However, there is a subtle complication: AbstractIntegrationTest is imported via @Import on the class, so the implementer cannot add a @Primary Clock to it without modifying shared infra. The task should note that the test-Clock @TestConfiguration must be placed inside FunnelExecutionEngineIT itself, not in AbstractIntegrationTest, to avoid polluting other tests.",
+      "fix": "Add a note: 'Define @TestConfiguration with @Primary Clock as a static inner class of FunnelExecutionEngineIT, mirroring how AbstractIntegrationTest defines MailpitTestConfig as a static inner class — do NOT add it to AbstractIntegrationTest itself.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 6
+  }
+}

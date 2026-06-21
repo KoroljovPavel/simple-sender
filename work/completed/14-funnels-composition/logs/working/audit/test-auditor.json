@@ -1,0 +1,128 @@
+{
+  "task": "Task 7 — Test Audit",
+  "feature": "14-funnels-composition (SUBSCRIBE_TO_FUNNEL)",
+  "auditor": "test-auditor",
+  "mode": "read-only",
+  "verdict": "clean",
+  "status_pyramid": "passed",
+  "summary": "The feature's test net is strong and well balanced: every user-spec AC and tech-spec Testing-Strategy item is covered with behaviour-asserting tests (enrollDepth, telegramBotId inheritance, currentStepId, parent status, skip+greppable-WARN, both backstops, re-enter no-op/restart, fail-closed cross-project, return-to-menu, self-target, test-run). Engine-IT is deterministic (MutableClock @Primary local config, JVM-singleton MockWebServer with per-test baseline + drain, Redis rate-key cleanup, explicit engine.sweep()). No critical/major findings. Two minor findings (re-enter no-op logged at INFO not WARN vs AC wording; SUBSCRIBE non_message preview only covered generically via DELAY, not pinned for SUBSCRIBE) plus a couple of info notes. Full suite confirmed green.",
+  "scope": {
+    "test_files_read": [
+      "backend/src/test/java/com/botfunnel/funnel/StepTypeTest.java",
+      "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+      "backend/src/test/java/com/botfunnel/funnel/FunnelServiceEmitEventTest.java",
+      "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "backend/src/test/java/com/botfunnel/funnel/FunnelTestRunSendIT.java",
+      "frontend/tests/pages/funnel-editor.spec.ts"
+    ],
+    "production_files_consulted": [
+      "backend/.../funnel/FunnelEventService.java (enrollSpecificFunnel, WARN/INFO log constants, autoEnrollRateLimitExceeded)",
+      "backend/.../funnel/FunnelControllerIT.java (non_message preview path via DELAY)"
+    ],
+    "plan_drift": [
+      "Save/activation validation tests live in FunnelServiceEmitEventTest.java (an AbstractIntegrationTest subclass) as planned by Task 2; they are integration-level (real Mongo) rather than pure unit, which is correct because validateSteps now does a DB lookup. Not a defect — matches tech-spec ('перша валідація, що торкається БД').",
+      "non_message preview assertion for SUBSCRIBE is NOT in a feature test; the generic non_message placeholder path is asserted in FunnelControllerIT via a DELAY step (kind=non_message). See finding minor-2."
+    ]
+  },
+  "ac_coverage": [
+    { "ac": "Editor has new step type with target/entry/end fields", "status": "covered", "test": "funnel-editor.spec.ts::'renders SUBSCRIBE_TO_FUNNEL in the type picker + the target/entry pickers and the end checkbox'" },
+    { "ac": "Form loads project funnels + target steps (reuses pickers)", "status": "covered", "test": "funnel-editor.spec.ts::render (asserts fetch('all')) + ::'emits ... entry step' (lazy fetchOne steps picked)" },
+    { "ac": "Inline hint when chosen target not active", "status": "covered", "test": "funnel-editor.spec.ts::'shows the inactive-target hint only when a non-active funnel is chosen' (non-vacuous: both active+draft options present, hint absent for active, present for draft)" },
+    { "ac": "Save validation: target_required / target_not_found / target_step_not_found codes", "status": "covered", "test": "FunnelServiceEmitEventTest::subscribe_save_requiresTargetFunnelId (null+blank), ::subscribe_save_targetNotFound_missingOrMalformedOrForeignProject (missing+malformed+foreign), ::subscribe_save_targetEntryStepNotInTarget" },
+    { "ac": "active NOT checked at save; activation blocked if target not active (funnel_subscribe_target_inactive)", "status": "covered", "test": "FunnelServiceEmitEventTest::subscribe_save_draftTargetAllowed_andRoundTrips (draft allowed at save) + ::subscribe_activate_blocksOnInactiveTarget + ::subscribe_activate_blocksWhenAnySecondTargetInactive (loop validates every target)" },
+    { "ac": "Runtime enroll: new child execution, currentStepId=entry, telegramBotId inherited, enrollDepth=parent+1", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeEnrollsTargetWithEntryStepAndInheritedBot (asserts currentStepId='entry-2', enrollDepth==1, telegramBotId==parent's, subscriberId)" },
+    { "ac": "endParentAfter=false: parent continues, both funnels parallel", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeEndParentFalseParentContinuesParallel (parent 'after' send fires this tick, child completes next sweep — both halves asserted)" },
+    { "ac": "endParentAfter=true: parent completed immediately, later steps NOT run", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeEndParentTrueCompletesParentNoFurtherSteps (parent completed + 'after' step skipped → sentCount==0) + unit FunnelStepExecutorTest::subscribeStepEndParentTrueCompletesAndEnrolls (Outcome.COMPLETE)" },
+    { "ac": "Return-to-menu: B → SUBSCRIBE(A, entry=M, end=true) lands subscriber on step M", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeReturnToMenuLandsOnEntryStep (child currentStepId='M', then menu re-sent + parks waiting_for_reply)" },
+    { "ac": "Cycle A→B→A: enrollDepth > max-enroll-depth → enroll skipped + WARN, parent NOT failed", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeDepthCapSkipsAndParentSurvives (childExecution null, parent completed, LOG_ENROLL_DROP_DEPTH_CAP at WARN asserted)" },
+    { "ac": "Rate-limit backstop (separate from depth-cap): >per-min enrolls → skip + WARN, parent not failed", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeRateLimitBackstopSkipsAndParentSurvives (counter pre-seeded to 1000 in Redis, child null, parent completed, LOG_ENROLL_DROP_VOLUME at WARN). Deterministic: Redis INCR counter, no wall-clock minute window." },
+    { "ac": "Target draft/paused/deleted/foreign at runtime → skip + greppable-WARN, parent continues", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeTargetDraftSkipsGracefully (INACTIVE), ::subscribeTargetDeletedSkipsGracefully (MISSING), ::subscribeTargetWrongProjectSkipsGracefully (WRONG_PROJECT IDOR fail-closed). Each asserts child null + parent completed + the specific WARN constant. (paused not separately seeded — same code path as draft, see info-1.)" },
+    { "ac": "Deleted entry step at runtime → child starts from start + WARN", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeMissingEntryStepFallsBackToStart (child currentStepId='first' (step 0), LOG_ENROLL_ENTRY_STEP_FALLBACK at WARN)" },
+    { "ac": "Re-enter allowReEnter=false → no-op + separate greppable log; allowReEnter=true → restart at entry", "status": "covered_with_note", "test": "FunnelExecutionEngineIT::subscribeReEnterNoOpWhenTargetInflight (exactly one active child kept, same id, parent completed, LOG_ENROLL_REENTER_IGNORED asserted via infoAndWarn) + ::subscribeReEnterTrueRestartsTargetFromEntry (old child cancelled, fresh child at 'mid'). NOTE: the no-op log is emitted at INFO, not WARN — see finding minor-1." },
+    { "ac": "Self-target A→A → no-op (false) / restart (true)", "status": "covered", "test": "FunnelExecutionEngineIT::subscribeSelfTargetReEnterFalseNoOp (only the original execution remains for the (funnelId,subscriberId) pair → no duplicate self-enroll). allowReEnter=true self path covered implicitly by the generic restart test." },
+    { "ac": "Test-run passes through SUBSCRIBE: HTTP confirms parent enroll; DB has child with enrollDepth=parent+1; child-send next sweep", "status": "covered", "test": "FunnelTestRunSendIT::testRunParentWithSubscribeStepEnrollsTargetAtChildDepth (parent depth 0, child depth 1 + inherited bot, second sweep issues real send) + ::testRunLinkedBotSends (delivery proof: path /bot<token>/sendMessage, chat_id, rendered text)" },
+    { "ac": "Preview panel shows non_message placeholder for SUBSCRIBE", "status": "partial", "test": "Generic non_message path asserted in FunnelControllerIT (DELAY → kind=non_message). No SUBSCRIBE-specific pin. See finding minor-2." },
+    { "ac": "StepType enum pin includes SUBSCRIBE_TO_FUNNEL (no silent rename / deser break)", "status": "covered", "test": "StepTypeTest::subscribeToFunnel_present (valueOf + name())" },
+    { "ac": "TECH: unit StepResult — SUBSCRIBE cont()/complete() + enrollSpecificFunnel(parent.depth+1) with inherited bot", "status": "covered", "test": "FunnelStepExecutorTest::subscribeStepEndParentFalseContinuesAndEnrolls (CONTINUE, enroll depth 1, TELEGRAM_BOT_ID) + ::subscribeStepEndParentTrueCompletesAndEnrolls (COMPLETE, depth 3 from parent depth 2, null entry)" },
+    { "ac": "TECH: each 422 code matches user-spec (funnel_subscribe_*)", "status": "covered", "test": "FunnelServiceEmitEventTest asserts FunnelService.CODE_SUBSCRIBE_TARGET_{REQUIRED,NOT_FOUND,STEP_NOT_FOUND,INACTIVE} by constant" },
+    { "ac": "TECH: enrollSpecificFunnel applies depth-cap + rate-limit BEFORE factory (no duplicated backstops)", "status": "covered", "test": "Both backstop ITs above; production reuse confirmed (shared maxEnrollDepth + private autoEnrollRateLimitExceeded / same Redis key)" },
+    { "ac": "TECH: fail-closed by projectId at save AND runtime", "status": "covered", "test": "Save: subscribe_save_...foreignProject; Runtime: subscribeTargetWrongProjectSkipsGracefully (explicit cross-project target → skip)" },
+    { "ac": "TECH: no DB migration / new ExecutionStatus / new status $in site", "status": "covered_by_design", "test": "No new status seeded anywhere; child reuses running/waiting/waiting_for_reply. Not a test assertion per se — structurally guaranteed, acceptable." }
+  ],
+  "assertion_quality": {
+    "verdict": "strong — behaviour-asserting, not green-for-green",
+    "highlights": [
+      "Skip cases assert BOTH the absence of a child execution (childExecution(...) is null / activeChildren size 1) AND the parent reaching completed — not merely 'sweep threw no exception'. Passes the litmus test (removing the skip would create a child / fail the parent).",
+      "WARN logs are asserted against greppable constants captured from FunnelEventService via ListAppender at the matching logger — the AC's 'greppable / відстежуваним' requirement is genuinely verified, and each backstop/skip reason uses a DISTINCT constant so the tests cannot pass on the wrong WARN.",
+      "fail-closed projectId has a dedicated cross-project target test (subscribeTargetWrongProjectSkipsGracefully) distinct from the missing-target test — both required paths covered, at save and runtime.",
+      "enrollDepth is asserted as an exact value (==1, ==3, isZero) everywhere, not just 'enroll happened'. telegramBotId inheritance asserted explicitly against the parent's id. currentStepId asserted to the exact entry/fallback step.",
+      "endParentAfter=true asserts BOTH halves (parent completed AND the 'after' step did not send). endParentAfter=false asserts the parallel half (parent 'after' send this tick + child completes next sweep).",
+      "test-run delivery is proven by inspecting the RecordedRequest path/chat_id/body, not just a request count."
+    ],
+    "weak_or_tautological": "None material. The only soft spot is the re-enter no-op log level mismatch (minor-1) and the missing SUBSCRIBE-specific non_message pin (minor-2)."
+  },
+  "engine_it_determinism": {
+    "clock": "MutableClock (volatile Instant, set/advance) wired @Primary via a LOCAL TestClockConfig @Import so it never leaks into other IT contexts. No Instant.now()/Thread.sleep for timing in any SUBSCRIBE case.",
+    "telegram": "JVM-singleton MockWebServer; each test measures sends as a delta from a per-test sendBaseline; @BeforeEach resets dispatcher to a fresh QueueDispatcher and @AfterEach drains leftover enqueued responses. FunnelTestRunSendIT explicitly drains its takeRequest() to avoid cross-test queue bleed (the very bug Task 3 review caught).",
+    "sweep": "engine.sweep() invoked directly (deterministic, not JobRunr-scheduled).",
+    "rate_limit_determinism": "GOOD — the rate-limit IT seeds the Redis counter to '1000' directly (seedRateLimitExhausted) and @BeforeEach deletes bf:rate:auto-enroll:* keys, so the backstop trips without any wall-clock wait. The production limiter is a Redis INCR counter with TTL, not a per-minute wall-clock window — no time-based flakiness.",
+    "cross_test_state": "Mongo (FunnelExecution/Event), subscribers, bots, funnels all wiped @BeforeEach; Redis rate keys cleared. No order dependence observed.",
+    "named_flaky_risks": [
+      "LOW: MockWebServer request log is cumulative across the class; correctness depends on the per-test baseline + the explicit takeRequest() drain in FunnelTestRunSendIT. Already handled, but it is the one structural footgun if a future test forgets to drain.",
+      "LOW: subscribeReEnterNoOpWhenTargetInflight seeds the existing child with nextRunAt = BASE + 365 days so the sweep does not claim it mid-tick. Correct, but relies on that far-future value staying outside any clock advance — fine as written."
+    ]
+  },
+  "pyramid_balance": {
+    "verdict": "well balanced, matches tech-spec",
+    "unit": "StepTypeTest (enum pin) + FunnelStepExecutorTest (SUBSCRIBE cont/complete + enroll args, all collaborators mocked) — fast, isolated logic where it belongs.",
+    "integration": "Engine-IT (15 SUBSCRIBE cases over real Mongo+Redis+MockWebServer) + FunnelTestRunSendIT (2) + FunnelServiceEmitEventTest save/activation (6) — the runtime/thin-state behaviour correctly tested at integration level (engine claims, depth/rate backstops, fail-closed projectId, re-enter guard all need a real DB).",
+    "frontend": "6 vitest cases on FunnelStepForm covering render+fetch('all'), submit shape, sentinel→null, non-vacuous inactive hint, entry reset on target switch, edit pre-fill re-emit.",
+    "e2e": "None, as specified (manual Telegram run deferred to user in Task 8).",
+    "over_under_testing": "No over-testing of trivia. No heavy Testcontainers IT used where a unit would do — validation logic that touches the DB is legitimately an IT. Save-validation could in principle be unit-tested with a mocked repo, but the DB-lookup nature makes the IT placement reasonable."
+  },
+  "findings": [
+    {
+      "id": "minor-1",
+      "severity": "minor",
+      "title": "Re-enter no-op is logged at INFO, not WARN — user-spec AC literally says 'greppable-WARN'",
+      "location": "FunnelEventService.java:306 (log.info LOG_ENROLL_REENTER_IGNORED); asserted by FunnelExecutionEngineIT.java:1179 via infoAndWarn(...)",
+      "detail": "user-spec line 65 and tech-spec Testing-Strategy line 170 phrase the re-enter no-op observability as a greppable WARN; the production code emits it at INFO and the IT therefore asserts it through an info+warn capture rather than warn(...). The AC's underlying intent ('щоб тихе неповернення було відстежуваним' / greppable) IS met — a distinct constant LOG_ENROLL_REENTER_IGNORED is emitted and asserted — so this is a wording/level mismatch, not a coverage hole.",
+      "recommendation": "Either (a) bump the production log to log.warn to match the AC wording (then tighten the test to warn(appender)), or (b) consciously record in decisions/tech-spec that re-enter no-op is intentionally INFO (it is an expected benign outcome, not an anomaly) and update the AC wording. Test-side change alone is enough to harden the assertion if level stays INFO.",
+      "blocks_task8": false
+    },
+    {
+      "id": "minor-2",
+      "severity": "minor",
+      "title": "non_message preview for SUBSCRIBE_TO_FUNNEL not pinned by a feature test",
+      "location": "user-spec AC line 67 / tech-spec Testing-Strategy line 157; only generic coverage in FunnelControllerIT.java:797-812 (DELAY → kind=non_message)",
+      "detail": "The tech-spec asks to assert SUBSCRIBE → non_message placeholder (not in isMessageStep). No SUBSCRIBE-specific assertion exists. isMessageStep is an allow-list so SUBSCRIBE falls through to non_message by construction, and the DELAY IT proves the placeholder path works — but there is no regression pin tying SUBSCRIBE specifically to non_message, so a future accidental addition of SUBSCRIBE to the message allow-list would not be caught.",
+      "recommendation": "Add a one-line assertion: either a unit assert that previewStep(SUBSCRIBE step).kind == non_message (or !isMessageStep(SUBSCRIBE)), or extend FunnelControllerIT's non_message test to also feed a SUBSCRIBE_TO_FUNNEL step. Cheap, closes the pin gap.",
+      "blocks_task8": false
+    },
+    {
+      "id": "info-1",
+      "severity": "info",
+      "title": "'paused' target runtime-skip not separately seeded",
+      "location": "FunnelExecutionEngineIT::subscribeTargetDraftSkipsGracefully",
+      "detail": "The runtime skip-on-not-active AC names draft AND paused. Only draft is seeded; the production guard is `status != FunnelStatus.active` (a single branch), so draft exercises the exact same code path as paused. Acceptable — adding a paused variant would be redundant per the 'every test earns its place' rule.",
+      "recommendation": "No action required. Noting for completeness only.",
+      "blocks_task8": false
+    },
+    {
+      "id": "info-2",
+      "severity": "info",
+      "title": "Self-target allowReEnter=true restart not separately tested",
+      "location": "FunnelExecutionEngineIT::subscribeSelfTargetReEnterFalseNoOp",
+      "detail": "Only the self-target allowReEnter=false no-op is seeded. The allowReEnter=true self-restart shares the generic insertTargetExecution re-enter branch already covered by subscribeReEnterTrueRestartsTargetFromEntry. tech-spec (Decision/§Self-target) states self behaviour falls out of the re-enter guard with no dedicated code branch, so this is acceptable.",
+      "recommendation": "No action required.",
+      "blocks_task8": false
+    }
+  ],
+  "verification": {
+    "backend_unit": "./gradlew test --tests '*StepTypeTest*' --tests '*FunnelStepExecutorTest*' --tests '*FunnelServiceEmitEventTest*' → BUILD SUCCESSFUL",
+    "backend_it_slow": "./gradlew test --tests '*FunnelExecutionEngineIT*' --tests '*FunnelTestRunSendIT*' -PrunSlow=true → BUILD SUCCESSFUL (28s)",
+    "frontend": "vitest run tests/pages/funnel-editor.spec.ts → 45 passed (incl. 6 SUBSCRIBE_TO_FUNNEL cases)"
+  },
+  "blockers_for_task8": [],
+  "overall": "clean — no critical or major findings; 2 minor (non-blocking) + 2 info. The test net is ready for pre-deploy QA (Task 8)."
+}

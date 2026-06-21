@@ -1,0 +1,68 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 Context Files lists 'ProjectHardDeleteJobIT.java' and 'ProjectHardDeleteJobTest.java' under 'Backend (backend/src/test/java/com/botfunnel/project/)'. But tech-spec task 4 (Files to create) explicitly places them in 'backend/src/test/java/com/botfunnel/jobs/'. The existing analogous file HardDeleteJobTest.java is in package com.botfunnel.jobs (verified). Task 13 auditor will look in the wrong directory and incorrectly report both files as missing blocker findings — or silently skip auditing them.",
+      "fix": "Change the Context Files 'Backend' header from 'backend/src/test/java/com/botfunnel/project/' to correctly list the two Job test files under 'backend/src/test/java/com/botfunnel/jobs/': ProjectHardDeleteJobTest.java and ProjectHardDeleteJobIT.java. The other four (ProjectServiceTest, ValidTimezoneValidatorTest, ProjectControllerSliceTest, ProjectControllerIT) remain under project/."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 14,
+      "issue": "Task 14 Verification Steps (AC-T8) instructs: 'pre-commit run gitleaks --all-files'. This command requires the pre-commit Python framework and a .pre-commit-config.yaml file. Neither exists in the repository. The project uses a raw git hook installed via 'scripts/install-hooks.sh', which runs 'gitleaks detect --staged --verbose'. Running 'pre-commit run gitleaks --all-files' will fail with 'command not found' or produce no output.",
+      "fix": "Replace 'pre-commit run gitleaks --all-files' with 'gitleaks detect --source . --verbose --no-banner' (or 'git stash && gitleaks detect --verbose') to invoke gitleaks directly as the project actually configures it. Alternatively, trigger the raw hook by running 'bash .git/hooks/pre-commit' against a test staged change."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 Verification step says: './gradlew test --tests \"com.botfunnel.project.*\" → passes without skipped/ignored'. If ProjectHardDeleteJobIT and ProjectHardDeleteJobTest live in package com.botfunnel.jobs (per tech-spec task 4), the wildcard 'com.botfunnel.project.*' will NOT include them. The auditor's self-verification command will pass even if those IT tests are broken or missing, giving false confidence.",
+      "fix": "Update the Verification command to include both packages: './gradlew test --tests \"com.botfunnel.project.*\" --tests \"com.botfunnel.jobs.Project*\"'. Alternatively run './gradlew test' without filter and grep the report."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 step 3 says 'Read IT tests in backend/src/test/java/com/botfunnel/project/ProjectControllerIT.java and ProjectHardDeleteJobIT.java', implying both files are in the same project/ directory. ProjectHardDeleteJobIT.java is in com/botfunnel/jobs/ per tech-spec. The step 3 instruction will lead the auditor to read the wrong path or miss the file entirely.",
+      "fix": "Change step 3 to specify the correct paths: 'ProjectControllerIT.java in com/botfunnel/project/' and 'ProjectHardDeleteJobIT.java in com/botfunnel/jobs/'. Update the path reference accordingly."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 Description and Acceptance Criteria consistently refer to '10 технических AC-T1..AC-T10 из tech-spec'. The tech-spec actually defines AC-T1..AC-T12 (AC-T11: NoSQL safety, AC-T12: single localStorage.setItem call site). The Details section of task 13 even says 'lines 407–420 (AC-T1..AC-T12)' — contradicting the Description and AC sections. The auditor will build a coverage matrix that omits AC-T11 and AC-T12 entirely, leaving two testable criteria unaudited before pre-deploy QA.",
+      "fix": "Update task 13 Description and AC section to consistently say 'tech-spec AC-T1..AC-T12'. Ensure the AC coverage matrix step (step 2) explicitly maps AC-T11 and AC-T12 to test evidence. AC-T11 (NoSQL Criteria safety) is grep-verified; AC-T12 (single localStorage.setItem) is grep-verified — both are quick checks the auditor can include."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 Context Files lists 'ValidTimezoneValidatorTest.java' under the header 'Backend (backend/src/test/java/com/botfunnel/project/)' implying it is in that package. However, tech-spec task 1 (Files to create) places it at 'backend/src/test/java/com/botfunnel/project/validation/ValidTimezoneValidatorTest.java' (a validation/ subdirectory). The existing analogous file ValidPasswordValidatorTest.java lives at 'backend/src/test/java/com/botfunnel/auth/validation/'. If the auditor looks for the file directly in the project/ directory, the audit will incorrectly flag it as missing.",
+      "fix": "Correct the Context Files listing for ValidTimezoneValidatorTest.java to 'backend/src/test/java/com/botfunnel/project/validation/ValidTimezoneValidatorTest.java'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Task 14 step 5 says 'Docker Compose: Mongo + Redis' as the local stack services. The project's docker-compose.yml at infra/docker-compose.yml also includes Mailpit (port 1025/8025), which is required for email-dependent flows (registration, password reset) during the golden-path and 'Локально перед merge' checklist. Omitting Mailpit from the Docker Compose start instruction may cause the stack to behave incorrectly during user-triggered email flows.",
+      "fix": "Update step 5 to reference all three services: 'Docker Compose: Mongo + Redis + Mailpit (infra/docker-compose.yml)'. The compose file path should also be specified since it's not at the repo root."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 step 4 uses abbreviated paths in parentheses: '(stores/projects.spec.ts, components/ProjectSelector.spec.ts, pages/dashboard.spec.ts, ...)' without the 'tests/' prefix. The Context Files section correctly lists them with 'tests/' prefix. The inline step 4 description is inconsistent and could confuse the auditor about the actual file locations.",
+      "fix": "Minor clarity issue — update step 4 inline paths to match the Context Files format: 'tests/stores/projects.spec.ts', 'tests/components/ProjectSelector.spec.ts', etc. (The tests/i18n/required-keys.spec.ts path in step 4 already correctly uses the full prefix.)"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 31,
+    "issues_found": 8
+  }
+}

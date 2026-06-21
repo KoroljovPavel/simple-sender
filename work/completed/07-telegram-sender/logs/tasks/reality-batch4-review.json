@@ -1,0 +1,133 @@
+{
+  "validator": "reality-checker",
+  "batch": [10],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Tech-spec Verify-smoke entries for tasks 1–5 (referenced as completion-state context in decisions.md) use incorrect gradle syntax such as './gradlew :backend:test' and './gradlew :backend:compileJava'. These will fail with 'Project :backend not found' because backend is a standalone Gradle root with rootProject.name = 'bot-funnel-backend'. Task 10 itself is entirely correct — it uses 'cd backend && ./gradlew ...' throughout and explicitly warns about the ':backend:' anti-pattern in its Details section. The risk is a QA agent reading tech-spec Verify-smoke rows to cross-check task completion might be confused by the wrong syntax.",
+      "fix": "No change required in task 10. The Details section warning (line 212) already covers this. Optionally fix the Verify-smoke entries in tech-spec.md tasks 1–5 as a housekeeping item."
+    }
+  ],
+  "iteration_notes": {
+    "resolved_from_iteration_1": [
+      "BotResponse.java path corrected to backend/src/main/java/com/botfunnel/bot/dto/BotResponse.java in all three occurrences (step 5, Context Files, Verification Steps). File confirmed to exist at that exact path.",
+      "AC13 clarification added: explicit 'AC13 exception hierarchy interpretation' block in Details (lines 201-204) and in Acceptance Criteria (line 59) cites Decision 5, states TelegramRateLimitException extends RuntimeException intentionally, and directs QA to cite Decision 5 in the AC13 evidence row.",
+      "All gradlew commands in task 10 use 'cd backend && ./gradlew ...' form. No ':backend:' subproject prefix appears anywhere in task 10. Verified by grep.",
+      "pre-deploy-qa skill path ../../../.claude/skills/pre-deploy-qa/SKILL.md resolves correctly to the project root .claude/skills directory and file exists.",
+      "Pre-execution state of prerequisites (tasks 1-9 not done, files missing, audit reports absent) is not re-flagged per iteration 2 instructions. Task 10 has depends_on: [7, 8, 9]; full chain 10->7/8/9->6->5->4->1/2/3 is intact with no gaps."
+    ]
+  },
+  "verification_results": {
+    "bot_response_path": {
+      "claimed_path": "backend/src/main/java/com/botfunnel/bot/dto/BotResponse.java",
+      "file_exists": true,
+      "occurrences_in_task": ["line 40 (step 5)", "line 81 (Context Files)", "line 103 (Verification Steps)"],
+      "result": "PASS"
+    },
+    "ac13_clarification": {
+      "acceptance_criteria_line_59": "present — cites Decision 5, states TelegramRateLimitException extends RuntimeException NOT AppException",
+      "details_lines_201_204": "present — full interpretation block with four evidence requirements (a/b/c/d) and explicit NO-GO conditions",
+      "result": "PASS"
+    },
+    "gradle_commands": {
+      "pattern_used": "cd backend && ./gradlew ...",
+      "colon_backend_prefix_in_task_10": false,
+      "explicit_warning_in_details": "line 212 warns ':backend:test' will fail with 'Project :backend not found'",
+      "result": "PASS"
+    },
+    "pre_deploy_qa_skill_path": {
+      "relative_path_in_task": "../../../.claude/skills/pre-deploy-qa/SKILL.md",
+      "resolved_absolute": "/Users/pavlokorolov/IdeaProjects/simple-sender/.claude/skills/pre-deploy-qa/SKILL.md",
+      "file_exists": true,
+      "result": "PASS"
+    },
+    "dependency_chain": {
+      "task_10_depends_on": [7, 8, 9],
+      "tasks_7_8_9_depend_on": [6],
+      "task_6_depends_on": [5],
+      "task_5_depends_on": [4],
+      "task_4_depends_on": [1, 2, 3],
+      "tasks_1_2_3_depends_on": [],
+      "chain_complete": true,
+      "result": "PASS"
+    },
+    "context_files_at_execution_time": {
+      "user_spec_md": true,
+      "tech_spec_md": true,
+      "decisions_md": true,
+      "project_md": true,
+      "architecture_md": true,
+      "patterns_md": true,
+      "deployment_md": true,
+      "AbstractIntegrationTest_java": true,
+      "WithMockAppUser_java": true,
+      "SecurityConfig_java": true,
+      "BotController_java": true,
+      "BotResponse_java_at_correct_dto_path": true,
+      "TelegramApiClient_java": true,
+      "Bot_java": true,
+      "BotService_java": true,
+      "BotServiceTest_java": true,
+      "BotControllerIT_java": true,
+      "BotRepositoryTest_java": true,
+      "BotTokenLeakTest_java": true,
+      "TelegramApiClientTest_java": true,
+      "pre_execution_missing_guaranteed_by_depends_on": [
+        "TelegramSender.java", "BotTokenInvalidException.java", "TelegramSendException.java",
+        "TelegramRateLimitException.java", "dto/SentMessage.java", "dto/TelegramSendResult.java",
+        "dto/TelegramSendParameters.java", "TelegramSenderTest.java", "TelegramSenderIT.java",
+        "docs/staging-smoke/07-telegram-sender.md"
+      ]
+    },
+    "existing_code_claims_verified": {
+      "AppException_factory_methods": "unprocessableEntity, notFound, badRequest all present",
+      "EventService_logEvent_signature": "logEvent(String userId, String eventType, String ipAddress, String userAgent, Map<String,Object> metadata) matches tech-spec claim",
+      "BotRepository_is_reactive": "extends ReactiveMongoRepository<Bot, String>",
+      "scrubTokens_is_public_static": "public static String scrubTokens(String input) at TelegramApiClient.java line 171",
+      "requireValidTokenShape_isTransient_currently_private": "private static at lines 113 and 154 — Task 1 promotes to public",
+      "constants_currently_private": "DEFAULT_RESPONSE_TIMEOUT at line 38, CONNECT_TIMEOUT at line 40 — Task 1 promotes",
+      "BotTokenLeakTest_method_exists": "botEntityDoesNotDeclareToStringExposingEncryptedTokenFields at line 52",
+      "BotControllerIT_epic06_test_exists": "postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents at line 742",
+      "BotService_sendTestMessage_exists": "line 109; verbatim 422 message 'Send /start to your bot in Telegram first, then try again' at line 115 matches task claim exactly",
+      "mockwebserver_in_build_gradle": "testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0' confirmed",
+      "awaitility_used_in_BotControllerIT": "imported and used at lines 47 and 229 — pattern validated",
+      "ListAppender_pattern_in_TelegramApiClientTest": "ListAppender<ILoggingEvent> used at lines 6, 34, 44 — pattern available for TelegramSenderTest to follow",
+      "ReactiveMongoTemplate_pattern_in_tests": "used in BotIndexTest.java — available for TelegramSenderIT legacy document insert",
+      "TokenEncryptor_decrypt": "public String decrypt(byte[] iv, byte[] ciphertext) throws IllegalStateException wrapping GeneralSecurityException — matches arch description",
+      "GlobalErrorHandler_exists": true,
+      "AuthService_null_userId_precedent": "logEvent(null, EVENT_PASSWORD_RESET_REQUESTED, ...) at line 301 confirmed",
+      "app_telegram_base_url_property": "present at application.properties line 45",
+      "app_bot_token_encryption_key_property": "present at application.properties line 44",
+      "gradlew_wrapper": "backend/gradlew exists",
+      "git_main_branch": "exists",
+      "staging_smoke_06_template": "docs/staging-smoke/06-bot-connection.md exists for Task 6 to mirror"
+    },
+    "security": {
+      "no_hardcoded_secrets": true,
+      "bot_token_key_instructions": "task instructs to export from local .env, never paste in chat — correct",
+      "input_validation_planned": "requireValidTokenShape guard before HTTP call; Base64 decode error caught as IllegalArgumentException and mapped to BotTokenInvalidException",
+      "no_sql": "MongoDB with Spring Data reactive"
+    },
+    "tdd_adequacy": {
+      "user_spec_acs": "AC1-AC23 all mapped to named test methods in Testing Strategy; AC13 explicitly reconciled with Decision 5",
+      "tech_spec_acs": "all 11 tech-spec ACs mapped to concrete evidence (test report, zero-diff confirmation, grep, ListAppender assertions)",
+      "listappender_split_per_site": "5 distinct test methods required covering all 5 scrubber sites — specified",
+      "awaitility_for_async": "specified for all async event assertions in TelegramSenderIT; negative-presence settle-window pattern also specified",
+      "result": "PASS"
+    },
+    "output_target": {
+      "path": "work/07-telegram-sender/logs/working/task-10/pre-deploy-qa.json",
+      "working_dir_exists": true,
+      "task_10_subdir_created_at_execution": true
+    }
+  },
+  "stats": {
+    "tasks_checked": 1,
+    "claims_verified": 45,
+    "issues_found": 1
+  }
+}

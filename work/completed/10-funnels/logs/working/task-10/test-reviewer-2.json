@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round-2 fixes close the round-1 gaps. The new executable page spec (frontend/tests/pages/funnel-editor.spec.ts) genuinely exercises the editor's headline logic and is mutation-verified: breaking the 404 branch (=== 404 → === 999) kills the redirect test, and swallowing the activate error kills the inline-error/draft-guard test. So the inline-vs-toast distinction, the status-stays-draft guard, and the anti-IDOR 404 redirect now have always-on CI coverage instead of only the skippable E2E. The AddStepDialog spec now covers SET_CUSTOM_FIELD (empty-key blocks emit — verified by weakening the zod min(1)→min(0) mutation — and filled-key emits the narrowed payload) and REMOVE_TAG. The E2E reorder leg asserts real ORDER (row text 'Still here?' at index 1 after move-up, index 2 after move-down) and the referenced data-test selectors all exist. All 12 tests in the two touched specs pass; vitest default locale is 'uk' and no hardcoded English assertions were introduced (text-length + not.toContain('errors.funnels') checks are locale-agnostic). One residual minor remains: the 422 test pins that AN inline error appears and the funnel stays draft, but not that the CODE-SPECIFIC mapping fired — deleting the te()/t() errors.funnels.<code> branch leaves the test green because the useApiError fallback (errors.funnels.activate.generic) also returns a non-empty localized string. This is a one-line strengthening, not a blocker.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:68-72",
+      "issue": "The 422 test asserts only that [data-test=funnel-activate-error] exists with non-empty, non-raw text. That passes through the useApiError fallback too: for statusCode 422 with contextKey 'funnels.activate', useApiError resolves errors.funnels.activate.generic ('Не вдалося активувати воронку') — non-empty and free of the 'errors.funnels' literal. Mutation confirmed: deleting the `if (code && te(\\`errors.funnels.${code}\\`)) return t(...)` line in resolveFunnelError leaves all 4 page tests green. So the defining novel logic from round 1 (code→errors.funnels.<code> inline mapping) is still not litmus-pinned; only 'an inline error appears + status stays draft' is (both of those ARE mutation-verified). The two resolved strings differ and are distinguishable: funnel_no_steps='Додайте принаймні один крок перед активацією.' vs activate.generic='Не вдалося активувати воронку'.",
+      "recommendation": "Strengthen one assertion to pin the code mapping: resolve the expected text through the same i18n instance and compare, e.g. assert err.text() contains the funnels.funnel_no_steps message (or, locale-agnostically, mount with a useI18n stub whose t() echoes the key and assert err.text() === 'errors.funnels.funnel_no_steps'). Add a sibling case where the 422 body has NO mapped code (e.g. code:'something_unmapped') and assert the text falls back to the generic activate message — that distinguishes the two branches. One-line change; do not block on it."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 16,
+      "passed": 15,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 12,
+      "integration": 0,
+      "e2e": 2,
+      "assessment": "healthy"
+    }
+  }
+}

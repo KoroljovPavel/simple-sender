@@ -1,0 +1,116 @@
+1ecf587 fix: address review round 1 for task 5 (35 seconds ago) <johnypashka>
+.../com/botfunnel/funnel/FunnelEventService.java   |  9 +++++++-
+ .../botfunnel/funnel/FunnelExecutionEngine.java    |  8 +++++++
+ .../botfunnel/funnel/FunnelTriggerServiceImpl.java |  3 +++
+ .../com/botfunnel/funnel/FunnelEventServiceIT.java | 20 ++++++++++++-----
+ .../botfunnel/funnel/FunnelEventServiceTest.java   | 25 ++++++++++++++++++++++
+ 5 files changed, 59 insertions(+), 6 deletions(-)
+
+backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java
+  @@ -257,7 +257,10 @@ public class FunnelEventService {
+  -                log.info("{} projectId={} funnelId={}", LOG_DISPATCH_REDIRECT, projectId, funnel.getId());
+  +                // The engine's LOG_REDIRECT (info) is the single authoritative record of a WON redirect claim;
+  +                // this dispatch-side line fires BEFORE the CAS even runs (so it cannot assert success) — keep it
+  +                // at debug for cross-class correlation only, not as a second info-level success log (Decision 16).
+  +                log.debug("{} projectId={} funnelId={}", LOG_DISPATCH_REDIRECT, projectId, funnel.getId());
+                   executionEngine.redirectExecution(inFlightId, subscriberId, funnel.getId(), entryStepId);
+                   return true;
+               }
+  @@ -305,6 +308,10 @@ public class FunnelEventService {
+  +        // SECURITY (Decision 16, SEC-T5-001): triggerType is a fixed taxonomy CODE (on_start/event/keyword/
+  +        // tag_added/custom_field_set), safe to log. matchKey/triggerValue/event_name MUST NOT be added to this
+  +        // line — they are business-defined slugs (PII-adjacent) that would leak the internal event taxonomy to
+  +        // log aggregators. Keep this WARN ids/codes only.
+           log.warn("{} funnelId={} triggerType={}", LOG_DISPATCH_NO_MATCHED_ELEMENT,
+                   funnel.getId(), triggerType);
+           return null;
+  +8 -1
+
+backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java
+  @@ -228,6 +228,14 @@ public class FunnelExecutionEngine {
+  +        // Precondition (Decision 3): redirect is only ever called with a resolved entryStepId (the dispatcher
+  +        // routes a null entryStepId to start-from-beginning, never here). Guard it explicitly so a logical
+  +        // dispatch error fails fast as a no-op WARN rather than silently drifting into the broken-cursor
+  +        // terminal-fail branch below, which would emit misleading LOG_REDIRECT_BROKEN_CURSOR telemetry.
+  +        if (entryStepId == null || entryStepId.isBlank()) {
+  +            log.warn("{} executionId={} funnelId={}", LOG_REDIRECT_CLAIM_LOST, executionId, funnelId);
+  +            return;
+  +        }
+           FunnelExecution exec = claimForRedirect(executionId, subscriberId, funnelId, entryStepId, now);
+           if (exec == null) {
+               // Lost the CAS: the sweep (or a concurrent redirect/callback) already owns this row
+  +8 -0
+
+backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java
+  @@ -150,6 +150,9 @@ public class FunnelTriggerServiceImpl implements FunnelTriggerService {
+  +            // .findFirst() is safe (no silent drop of a second match): on_start uniqueness is enforced by the
+  +            // onStartTriggerValue unique partial index (Decision 6 / FunnelTriggerIndexReconciliation), so at
+  +            // most one active on_start funnel exists per (projectId, payload) — the list never carries >1 row.
+               String triggerValue = payload == null ? "" : payload;
+               Funnel funnel = funnelRepository
+                       .findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
+  +3 -0
+
+backend/src/test/java/com/botfunnel/funnel/FunnelEventServiceIT.java
+  @@ -232,16 +232,26 @@ class FunnelEventServiceIT extends AbstractIntegrationTest {
+  -        // allowReEnter=true start-at-entry: cancelExistingForPair then insert a fresh row at the entry step.
+  -        // (No in-flight here, but the cancel-then-insert branch still runs and produces a fresh entry row.)
+  +        // allowReEnter=true start-at-entry with a PRE-EXISTING terminal predecessor: the cancel-then-insert
+  +        // branch runs against a real prior row. The in-flight probe misses the terminal row (so the start
+  +        // branch is taken, not redirect), cancelExistingForPair is invoked (a no-op on the already-terminal
+  +        // row — it only touches running|waiting), then a FRESH execution is inserted at the entry step. We
+  +        // assert the old terminal row is left untouched AND a distinct fresh entry row was created.
+           Funnel f = seedEventFunnelAllowReEnter("purchase", "entry", "s1", "entry");
+  +        String oldId = seedTerminalExecution(f.getId(), ExecutionStatus.cancelled, "s1");
+   
+           funnelEventService.dispatchForSubscriber(projectId, subscriberId, "event", "purchase", 0);
+   
+           List<FunnelExecution> rows = executionsFor(f.getId());
+  -        assertThat(rows).hasSize(1);
+  -        assertThat(rows.get(0).getCurrentStepId()).isEqualTo("entry");
+  -        assertThat(rows.get(0).getStatus()).isEqualTo(ExecutionStatus.running);
+  +        // Exactly one fresh in-flight row at the entry step, distinct from the untouched terminal predecessor.
+  +        List<FunnelExecution> fresh = rows.stream()
+  +                .filter(r -> r.getStatus() == ExecutionStatus.running).toList();
+  +        assertThat(fresh).hasSize(1);
+  +        assertThat(fresh.get(0).getId()).isNotEqualTo(oldId);
+  +        assertThat(fresh.get(0).getCurrentStepId()).isEqualTo("entry");
+  +        // The pre-existing terminal row is left exactly as it was (cancel is a no-op on a terminal status).
+  +        FunnelExecution oldRow = mongoTemplate.findById(oldId, FunnelExecution.class);
+  +        assertThat(oldRow.getStatus()).isEqualTo(ExecutionStatus.cancelled);
+       }
+   
+       @Test
+  +15 -5
+
+backend/src/test/java/com/botfunnel/funnel/FunnelEventServiceTest.java
+  @@ -238,6 +238,31 @@ class FunnelEventServiceTest {
+  +    @Test
+  +    void eventMatchedFunnel_inMemoryTriggerDrift_warnsAndFallsBackToStepZero() {
+  +        // TR-3 drift guard: the array-aware $elemMatch query returned this funnel for an `event` dispatch,
+  +        // but the loaded triggers[] carries only a NON-event element (here tag_added) — so the in-memory
+  +        // re-scan finds no matching event element. matchedEntryStepId must surface the greppable drift WARN
+  +        // (LOG_DISPATCH_NO_MATCHED_TRIGGER_ELEMENT) and fall back to start-from-step-0 (insertExecution once,
+  +        // entryStepId == null). Locks the defensive .equals branch against a silent type-check regression.
+  +        stubBotAndSubscriber();
+  +        Funnel drifted = funnel("drift");
+  +        Trigger mismatched = new Trigger();
+  +        mismatched.setTriggerType("tag_added"); // not `event` → the event re-scan finds nothing
+  +        mismatched.setTriggerValue("purchase");
+  +        drifted.setTriggers(new ArrayList<>(List.of(mismatched)));
+  +        stubEventFunnels(drifted);
+  +
+  +        service.dispatchForSubscriber(PROJECT_ID, SUBSCRIBER_ID, "event", "purchase", 0);
+  +
+  +        assertThat(warn(FunnelEventService.LOG_DISPATCH_NO_MATCHED_ELEMENT)).isTrue();
+  +        // Fell back to start-from-beginning (no entryStepId → step-0 insert), NOT the entry-step path.
+  +        verify(executionFactory, times(1))
+  +                .insertExecution(eq(PROJECT_ID), eq(drifted), eq(SUBSCRIBER_ID), eq(TELEGRAM_BOT_ID), eq(0));
+  +        verify(executionFactory, never())
+  +                .insertExecutionAt(any(), any(), any(), any(), anyInt(), anyString());
+  +    }
+  +
+       @Test
+       void reEnter_allowReEnterFunnel_cancelsExistingThenInserts() {
+           stubBotAndSubscriber();
+  +25 -0

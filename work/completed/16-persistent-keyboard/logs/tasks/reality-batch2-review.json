@@ -1,0 +1,95 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 5,
+      "issue": "Skill and project-knowledge links in the Required Skills and Context Files sections use incorrect relative paths: '.claude/skills/code-writing/SKILL.md', '.claude/skills/project-knowledge/references/project.md', etc. Relative to 'work/16-persistent-keyboard/tasks/5.md' (three levels deep), these resolve to 'work/16-persistent-keyboard/tasks/.claude/...' which does not exist. Task 4 and Task 6 correctly use '../../../.claude/...'.",
+      "fix": "Replace '.claude/skills/code-writing/SKILL.md' with '../../../.claude/skills/code-writing/SKILL.md', and similarly prefix all '.claude/skills/project-knowledge/references/*.md' links with '../../../' in Task 5. Affects lines 16, 129-132 of tasks/5.md."
+    }
+  ],
+  "verified": [
+    {
+      "task": 4,
+      "claims_checked": [
+        "PreviewStepRequest exists at backend/src/main/java/com/botfunnel/funnel/dto/PreviewStepRequest.java — 2-component record (String stepType, List<ContentBlockDto> blocks) with @JsonIgnoreProperties(ignoreUnknown = true). CONFIRMED.",
+        "PreviewStepResponse exists at dto/PreviewStepResponse.java — 3-component record (renderedBlocks, sampleData, kind). CONFIRMED.",
+        "FunnelService.previewStep at lines 396-421 — exact lines verified. CONFIRMED.",
+        "FunnelService.renderBlocks at lines 427-449 — exact lines verified. CONFIRMED.",
+        "FunnelService.isMessageStep at lines 469-471 — exact lines verified. CONFIRMED.",
+        "FunnelControllerIT preview section starts at line 606 — CONFIRMED.",
+        "previewBody/previewBodyBlocks helpers at lines 1719-1728 — CONFIRMED.",
+        "previewUrl helper at line 1893 — CONFIRMED.",
+        "seedConnectedBotWithOwner and seedOwnerSubscriber exist in FunnelControllerIT — CONFIRMED.",
+        "VariableTemplateRenderer.render(String template, String parseMode, Subscriber subscriber) static method at line 64 — CONFIRMED.",
+        "FunnelControllerIT.java file exists at claimed path — CONFIRMED.",
+        "KeyboardRowDto/KeyboardButtonDto are Task 1 outputs (not yet created) — dependency correctly declared (depends_on: [1]).",
+        "No new packages required — CONFIRMED (no new imports beyond existing project dependencies).",
+        "Task 4 depends_on: [1] (wave 2) — correct; Task 1 provides StepType constants, FunnelStep keyboard fields, and DTO records this task consumes."
+      ]
+    },
+    {
+      "task": 5,
+      "claims_checked": [
+        "FunnelMessagePreview.vue is 315 lines — CONFIRMED.",
+        "isMessageStep gate at line 50 — CONFIRMED.",
+        "previewBlocks computed at lines 60-64 — CONFIRMED.",
+        "runPreview function at lines 77-100 — CONFIRMED.",
+        "watch tuple at line 116 — CONFIRMED: '[props.step?.stepType, props.step?.id, props.step?.blocks]'.",
+        "Template renderable branch <template v-else> at line 163 — CONFIRMED.",
+        "Inline-buttons block (funnel-preview-buttons) at lines 301-311 — CONFIRMED.",
+        "PreviewStepRequest at types/funnel.ts lines 181-184 — CONFIRMED.",
+        "PreviewStepResponse at types/funnel.ts lines 215-219 — CONFIRMED.",
+        "StepType does not yet include SET_KEYBOARD/CLEAR_KEYBOARD — correct pre-state; Task 2 (depends_on) adds them. CONFIRMED.",
+        "FunnelMessagePreview.spec.ts is 395 lines — CONFIRMED.",
+        "response() factory at line 27-28 hardcodes kind:'message' with override param — CONFIRMED; the factory already has 'over: Partial<PreviewStepResponse> = {}' so keyboard cases can pass {kind:'keyboard', keyboardRows:...}.",
+        "previewMock via vi.hoisted, mockNuxtImport('useFunnelsStore'), mockNuxtImport('useRoute') with funnelId:'f1' — CONFIRMED.",
+        "mountWith/settle helpers exist — CONFIRMED.",
+        "funnelsStore.preview(funnelId, stepId, payload: PreviewStepRequest) action signature — CONFIRMED.",
+        "Task 5 depends_on: [2, 4] — correct; Task 2 adds TS types, Task 4 ships the backend contract.",
+        "SKILL.md link is incorrect relative path — see finding above (minor)."
+      ]
+    },
+    {
+      "task": 6,
+      "claims_checked": [
+        "FunnelExecutionEngineIT.java exists at claimed path, is 1785 lines — CONFIRMED (file ends at line 1785).",
+        "@Tag('slow') annotation at line 59 — CONFIRMED.",
+        "Static MockWebServer TELEGRAM at line 70 — CONFIRMED.",
+        "@BeforeEach cleanAndSeed resets dispatcher at line 107, sets sendBaseline at line 122 — CONFIRMED.",
+        "@AfterEach drain() resets dispatcher but NOT recorded request queue — CONFIRMED; drain() calls TELEGRAM.setDispatcher(new QueueDispatcher()) which drops enqueued responses only. Task 6's warning about manual takeRequest() for body-asserting tests is accurate.",
+        "sentCount() delta at line 126-127 — CONFIRMED.",
+        "seedActiveSubscriber() at line 1668 — CONFIRMED.",
+        "seedExecution(subscriberId, Instant, FunnelStep...) at line 1648 — CONFIRMED.",
+        "enqueueOk(int) at line 1384 — CONFIRMED.",
+        "reload(String id) at line 1380 — CONFIRMED.",
+        "sendMessage(String text) builder at line 1399 — CONFIRMED.",
+        "delay(int, String) builder at line 1413 — CONFIRMED.",
+        "multiTextMessageIndexed() at line 1440 — CONFIRMED; no-id comment at lines 1433-1442 verified.",
+        "multiTextMessageBlocks() at line 1446 — CONFIRMED.",
+        "seedTargetFunnel hardcodes TRIGGER_ON_START at line 1548 — CONFIRMED; task correctly advises seeding keyword funnels via funnelRepository.save() directly with triggerType='keyword'.",
+        "No ObjectMapper/OBJECT_MAPPER in FunnelExecutionEngineIT — CONFIRMED; task correctly says to add 'new ObjectMapper()' static constant.",
+        "No FunnelEventService @Autowired in FunnelExecutionEngineIT — CONFIRMED; task correctly says to add it.",
+        "No takeRequest() calls in FunnelExecutionEngineIT — CONFIRMED; zero body assertions currently.",
+        "TelegramSenderIT.sendText_withReplyMarkup_includesInlineKeyboardInBody at lines 286-314 — CONFIRMED; uses OBJECT_MAPPER.readTree() + drainRequests() helper (not bare takeRequest). Task 6 can use either idiom.",
+        "TelegramSenderIT.OBJECT_MAPPER = new ObjectMapper() static constant at line 86 — CONFIRMED; matches the pattern task 6 recommends.",
+        "FunnelTestRunSendIT takeRequest at line 131, readUtf8 at line 134, drain at line 174 — CONFIRMED.",
+        "FunnelTestRunSendIT has its OWN static TELEGRAM MockWebServer (not shared with FunnelExecutionEngineIT) — CONFIRMED; each IT class has an independent server.",
+        "FunnelEventService.dispatchForSubscriber(projectId, subscriberId, triggerType, matchKey, originDepth) signature — CONFIRMED.",
+        "FunnelEventService.TRIGGER_KEYWORD constant at line 66 — CONFIRMED.",
+        "matchingKeywordFunnels lowercases matchKey internally at line 361 — CONFIRMED; Task 6's case-insensitivity test recommendation is accurate.",
+        "ProcessTelegramUpdateJobTest.plainText_dispatchesKeyword test exists — CONFIRMED.",
+        "activeChildren helper exists at line 1579 for querying (funnelId, subscriberId) executions — CONFIRMED.",
+        "Task 6 depends_on: [3] — correct; Task 3 provides StepExecutor SET_KEYBOARD/CLEAR_KEYBOARD cases whose wire output the IT pins down."
+      ]
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 52,
+    "issues_found": 1
+  }
+}

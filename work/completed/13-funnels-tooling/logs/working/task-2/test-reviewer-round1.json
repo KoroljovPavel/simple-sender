@@ -1,0 +1,27 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 2,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "test": "FunnelTestRunSendIT::testRunLinkedBotSends",
+      "issue": "The send-assertion only checks sentCount()==1 (a raw MockWebServer request-count delta) and execution status completed. It never inspects the recorded request, so any single outbound HTTP call (e.g. a getMe / setWebhook / non-sendMessage call) would satisfy the count. The brief explicitly asks to 'confirm a sendMessage went out' — current assertions prove 'one request happened' + 'engine marked it complete', not 'a sendMessage with the rendered body'. Litmus: if the engine sent to a wrong Telegram method but still 200'd and completed, this test stays green.",
+      "recommendation": "Capture the request via TELEGRAM.takeRequest() and assert request.getPath() ends with '/sendMessage' and request.getBody().readUtf8() contains the rendered text 'hello from test-run' (and chat_id = OWNER_CHAT_ID). That ties the delta to the actual send path and the rendered content, closing the gap the count alone leaves open."
+    },
+    {
+      "severity": "minor",
+      "test": "FunnelControllerIT::previewIdorPrecedenceOver422AndStepId404",
+      "issue": "The test asserts only status 404 for (foreign funnel + unknown stepId). Because both the requireFunnel-404 and the stepId-404 collapse to 404, the test cannot observe which guard fired first — it passes identically whether requireFunnel runs before or after findStep. The comment itself concedes 'both collapse to 404'. As written it is effectively a duplicate of previewForeignFunnelReturns404 and does NOT prove the IDOR-precedence (Decision 9) it claims to.",
+      "recommendation": "Make the precedence observable: against an OWNED funnel, send an unknown stepId and assert 404 (stepId path); against a FOREIGN funnel, send a stepId that DOES exist in that foreign funnel and assert 404 (proving requireFunnel masks a real step). The two together show the foreign-funnel check wins regardless of step existence — currently no test distinguishes the two 404 sources."
+    },
+    {
+      "severity": "minor",
+      "test": "FunnelControllerIT preview (message-kind coverage)",
+      "issue": "isMessageStep() returns true for SEND_MESSAGE, SEND_IMAGE and MENU, but only SEND_MESSAGE is exercised for kind=message. MENU and SEND_IMAGE message-rendering branches are untested; the only non-SEND_MESSAGE preview test (previewNonMessageStepReturnsPlaceholder) uses DELAY. A regression that misclassified MENU/SEND_IMAGE as non-message (kind=non_message, rendered=\"\") would not be caught.",
+      "recommendation": "Add one preview case with a MENU (or SEND_IMAGE) step asserting kind=message and a rendered, substituted body — confirms the multi-type isMessageStep branch, not just SEND_MESSAGE."
+    }
+  ],
+  "notes": "Strong, non-tautological suite. test-run: ownerChatId=null / subscriber-missing / non-ACTIVE all assert HTTP body $.code=funnel_owner_not_linked (422, not 500) across the three distinct resolveOwnerSubscriber branches; empty→funnel_no_steps, invalid step→funnel_step_invalid; draft→2xx with a verified Mongo execution row (running, enrollDepth=0, currentStepIndex=0, telegramBotId pinned); restart proven by previous row→cancelled + a fresh running row with a NEW id (cancel-before-insert order — a clean 2xx instead of a DuplicateKey 500 is the observable evidence); anti-IDOR foreign funnel→404. Preview parse_mode assertions are EXACT-STRING and byte-for-byte faithful to VariableTemplateRenderer (verified against source: HTML escapes & < > \" with author <b> untouched; MarkdownV2 escapes the full special set plus a preceding backslash for the backslash itself; null = no escape; {{/}} literals; unclosed { verbatim; Double 30.0→30; stub Іван/Петренко/ivan + sampleData=true, no NPE; on-the-fly request-text wins over saved step; non-message→kind=non_message; unknown stepId→404). Send-assertion IT genuinely hits MockWebServer (sweep + enqueueOk + request-count delta), is correctly @Tag(\"slow\") and gated by -PrunSlow=true (build.gradle excludeTags 'slow' unless runSlow). All findings are minor coverage/precision gaps — zero critical, zero major — so verdict is approved; the takeRequest() send-path assertion is the most worthwhile follow-up."
+}

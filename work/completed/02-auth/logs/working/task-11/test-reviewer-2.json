@@ -1,0 +1,54 @@
+{
+  "verdict": "passed",
+  "summary": "All four round-1 majors are closed. Terminate-all-sessions has both happy-path (asserts API call shape, store-clear, navigation) and error-path (asserts terminate-error renders and navigateTo NOT called). Modal consequences list is asserted with three regex matches (проект/бот/підписник) covering all three list items. Change-password gains three new error-path tests — empty-current, weak-new (no digit), and backend-400 — and the 400 test correctly asserts the request body is { currentPassword, newPassword } without confirmPassword. Email read-only is pinned by both the readonly attribute and the value mirror. Name edit flow exercises click→type→submit and asserts PATCH body, store mutation, and the name-saved indicator. The data-test=\"name-edit-form\" addition to profile.vue is justified (commit message documents the happy-dom button-click→form-submit limitation). All new tests pass the litmus test: removing the corresponding implementation line breaks the assertion. Test count grew from 8 to 12 in profile.spec.ts as expected. Two minor cleanups from round 1 remain (cargo-culted setActivePinia in both files; useState('auth-user') line in dashboard.spec.ts; mock-shape comment added to profile.spec.ts but not dashboard.spec.ts) — none affect correctness, all are noise. NOTE: vitest run was blocked by sandbox; static analysis only — orchestrator should confirm green suite separately.",
+  "tdd_anchor_coverage": [
+    {
+      "anchor": "dashboard_pendingUser_showsBanner",
+      "covered": true,
+      "notes": "frontend/tests/pages/dashboard.spec.ts:34. Now also asserts banner link text matches /Перейти до профілю/i (round-1 minor closed)."
+    },
+    {
+      "anchor": "dashboard_activeUser_noBanner",
+      "covered": true,
+      "notes": "frontend/tests/pages/dashboard.spec.ts:48. Unchanged from round 1; still passes litmus."
+    },
+    {
+      "anchor": "profile_pendingUser_showsResendButton",
+      "covered": true,
+      "notes": "frontend/tests/pages/profile.spec.ts:79. Unchanged from round 1."
+    },
+    {
+      "anchor": "profile_activeUser_hidesResendSection",
+      "covered": true,
+      "notes": "frontend/tests/pages/profile.spec.ts:89. Unchanged from round 1."
+    },
+    {
+      "anchor": "changePasswordForm_wrongConfirm_showsInlineError",
+      "covered": true,
+      "notes": "frontend/tests/pages/profile.spec.ts:99. Unchanged from round 1; complemented by three new sibling tests (empty-current, weak-new, backend-400)."
+    },
+    {
+      "anchor": "deleteAccount_clickConfirm_callsDeleteProfile",
+      "covered": true,
+      "notes": "frontend/tests/pages/profile.spec.ts:215. Now also asserts authStoreMock.user is cleared after successful DELETE (round-1 minor closed). Modal consequences list is exercised by the dedicated deleteAccount_modalShowsConsequencesList test at line 201."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "smell",
+      "file": "frontend/tests/pages/dashboard.spec.ts",
+      "line": 31,
+      "issue": "Round-1 minor (cargo-culted setActivePinia + useState('auth-user') = null) is partially addressed: profile.spec.ts gained a clarifying comment explaining why the plain-object mock is sufficient, but dashboard.spec.ts still calls setActivePinia(createPinia()) on line 29 and useState<unknown>('auth-user').value = null on line 31. Neither line affects test behavior because useAuthStore is fully mocked via mockNuxtImport. Pure noise that confuses future readers.",
+      "suggestion": "Remove lines 29 and 31 from beforeEach in dashboard.spec.ts. Keep setUser(null). Optionally mirror the explanatory comment from profile.spec.ts so readers understand the mock-is-non-reactive constraint applies here too."
+    },
+    {
+      "severity": "minor",
+      "category": "smell",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 37,
+      "issue": "setActivePinia(createPinia()) is still called in beforeEach despite the store being fully mocked via mockNuxtImport. The clarifying comment at lines 7-10 acknowledges the non-reactive mock but does not justify keeping the Pinia init. Harmless — Pinia is never used by the mocked store — but adds noise.",
+      "suggestion": "Remove line 37 (setActivePinia(createPinia())). The pinia import on line 2 can also be dropped. The explanatory comment at lines 7-10 already captures the meaningful constraint."
+    }
+  ]
+}

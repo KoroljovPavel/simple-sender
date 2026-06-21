@@ -1,0 +1,36 @@
+{
+  "task": 3,
+  "round": 1,
+  "summary": "Servlet-stack flip is faithful to the task spec — starters swapped, VT enabled, cookie keys renamed, GlobalErrorHandler swapped to MethodArgumentNotValidException with the joined-message + null-code invariants preserved, RememberMeCookieSerializer correctly extends DefaultCookieSerializer with PropertyMapper pass-through and per-request Max-Age branching. The documented deviation (CsrfCookieMaterializer as private inner OncePerRequestFilter) is correct per Spring Security 6.5 SPA pattern and surfaced clearly in the Javadoc. Only minor cleanups remain (Javadoc accuracy and lambda style).",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/security/RememberMeCookieSerializer.java",
+      "lines": "11-26",
+      "issue": "Javadoc class summary says 'Boot's auto-configured DefaultCookieSerializer supports only a single cookieMaxAge value (set at bean creation)' — but Boot does NOT auto-configure a DefaultCookieSerializer for the SESSION cookie. Spring Session's SessionRepositoryFilter uses an internal default when no CookieSerializer bean is registered; calling that 'Boot's auto-configured' is inaccurate. The real motivation is the per-request branching, not a Boot-vs-custom distinction.",
+      "suggestion": "Reword to: 'DefaultCookieSerializer applies a single cookieMaxAge value to every cookie write; per-request remember-me requires overriding writeCookieValue to mutate the CookieValue.cookieMaxAge before the parent writes the Set-Cookie header.' Drop the 'Boot's auto-configured' phrasing."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "lines": "96-97",
+      "issue": "Lambda style inconsistency: `.httpBasic(httpBasic -> httpBasic.disable())` and `.formLogin(formLogin -> formLogin.disable())` use explicit lambdas where method references would be shorter and match the Spring Security 6.x DSL examples (`AbstractHttpConfigurer::disable`).",
+      "suggestion": "Use `.httpBasic(AbstractHttpConfigurer::disable).formLogin(AbstractHttpConfigurer::disable)` for consistency with the standard Spring Security 6.x style. Pure stylistic — optional."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "lines": "41-47",
+      "issue": "The `SecurityContextRepository` bean is declared but never wired into HttpSecurity via `http.securityContext(c -> c.securityContextRepository(...))`. Spring Security 6.x's default servlet chain builds its own DelegatingSecurityContextRepository internally, so the bean is consumed only by AuthService (which is intentional per Decision 11). However a future reader may wonder why the bean is exposed but not registered on the chain — a one-line comment pinning that 'AuthService consumes this bean directly, not the filter chain' would prevent confusion.",
+      "suggestion": "Either (a) extend the existing comment on line 43-45 to explicitly state 'Not wired into HttpSecurity — the default DelegatingSecurityContextRepository handles per-request load/save; this bean exists only for AuthService.saveContext after manual auth.', or (b) wire the bean into HttpSecurity for symmetry. Option (a) preserves current behaviour and is recommended."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "lines": "102-114",
+      "issue": "The CsrfCookieMaterializer Javadoc says 'Reads the deferred CsrfToken attribute set by CsrfFilter and calls CsrfToken.getToken()'. In Spring Security 6.x the attribute under CsrfToken.class.getName() is a CsrfToken proxy/lazy wrapper (not a Mono<CsrfToken> as the reactive code used). The wording 'deferred' is borrowed from the reactive code path — for the servlet stack the more accurate term is 'lazy' (the CsrfToken.getToken() call triggers the underlying Supplier and writes the cookie via the DeferredCsrfTokenRepositoryDecorator).",
+      "suggestion": "Replace 'deferred' with 'lazy' in the first sentence, and reference DeferredCsrfTokenRepositoryDecorator in passing if you want full fidelity. Minor wording polish only."
+    }
+  ],
+  "verdict": "approved"
+}

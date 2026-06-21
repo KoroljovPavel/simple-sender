@@ -1,0 +1,124 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "decomposition",
+      "task": 8,
+      "section": "Frontmatter",
+      "issue": "Task 8 has wave=5 and depends_on=[6,7]. Task 7 is now also wave=5 (fixed in iter1). A task's wave must be strictly greater than the wave of every task it depends on. wave 5 is NOT > wave 5 — this means Task 8 cannot execute in the same wave as Task 7 while also depending on it.",
+      "fix": "Either increase Task 8's wave to 6 (making it execute after Task 7), or remove Task 7 from Task 8's depends_on if Task 8 does not actually need Task 7 to complete first. Based on Description ('Tasks 10 and 11 depend on everything here'), Task 8 is correctly independent of Task 7 backend work — the dependency is unnecessary. Remove depends_on Task 7; keep only depends_on=[6]. Then wave=5 is valid since Task 6 is wave 4."
+    },
+    {
+      "severity": "critical",
+      "category": "decomposition",
+      "task": 9,
+      "section": "Frontmatter",
+      "issue": "Task 9 has wave=5 and depends_on=[6,7]. Task 7 is now wave=5 (fixed in iter1). wave 5 is NOT > wave 5. Same wave dependency violation as Task 8.",
+      "fix": "Either increase Task 9's wave to 6, or reassess the dependency. Task 9 is a documentation update and reads architecture/deployment/ux-guidelines.md — these docs exist before Task 7 runs. If the only reason for depends_on Task 7 is to pick up env vars and new files, and those are already captured in the tech-spec, remove Task 7 from depends_on. Alternatively keep depends_on=[6,7] and change wave to 6. Tech-spec lists Task 9 in Wave 5 but that was before Task 7 was moved from wave 4 to wave 5."
+    },
+    {
+      "severity": "major",
+      "category": "atomicity",
+      "task": 7,
+      "section": "What to do",
+      "issue": "Task 7 still bundles three distinct logical units: (1) ProfileController + ProfileService with 5 endpoints, (2) SuperAdminSeeder (ApplicationRunner in admin/ package), (3) HardDeleteJob (JobRunr in jobs/ package). 7 new files across 3 packages. Removing steps 4-5 (seeder + job) leaves the profile feature fully functional; the seeder and job are independently testable. This is a split candidate that was already flagged in iter1 — it was not addressed.",
+      "fix": "Consider splitting into Task 7a (profile endpoints) and Task 7b (SuperAdminSeeder + HardDeleteJob) both in wave 4. If splitting increases task count beyond budget, document the bundling rationale in the task Description. The existing atomicity violation remains from iter1."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Required Skills",
+      "issue": "Skill path uses absolute home-dir path `~/.claude/skills/code-writing/SKILL.md` instead of a project-relative path. All other project context file links in Context Files use relative paths (e.g., `../../.claude/skills/...`). The tilde path may not resolve correctly when the task is executed by an agent with a different working directory.",
+      "fix": "Change to project-relative path: `[SKILL.md](../../.claude/skills/code-writing/SKILL.md)` (or whatever relative depth is correct from tasks/ directory)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 7,
+      "section": "Required Skills",
+      "issue": "Same as Task 6 — skill path uses absolute home-dir path `~/.claude/skills/code-writing/SKILL.md`.",
+      "fix": "Change to project-relative path."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 8,
+      "section": "Required Skills",
+      "issue": "Same as Tasks 6 and 7 — skill path uses absolute home-dir path `~/.claude/skills/code-writing/SKILL.md`.",
+      "fix": "Change to project-relative path."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Required Skills",
+      "issue": "Skill path uses absolute home-dir path `~/.claude/skills/documentation-writing/SKILL.md`.",
+      "fix": "Change to project-relative path."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Required Skills",
+      "issue": "Same as other tasks — skill path uses absolute home-dir path `~/.claude/skills/code-writing/SKILL.md`.",
+      "fix": "Change to project-relative path."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "TDD Anchor",
+      "issue": "Test `logout_invalidatesCurrentSession_otherSessionUnaffected` covers two distinct behaviors in a single test. Still not addressed from iter1.",
+      "fix": "Consider splitting into `logout_invalidatesCurrentSession` and `logout_doesNotAffectOtherSessions` for clearer failure diagnostics."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Details",
+      "issue": "Details section uses `**Important:**` label instead of `**Implementation hints:**` per template structure. Still partially unresolved from iter1.",
+      "fix": "Rename `**Important:**` to `**Implementation hints:**` to match the expected subsection label."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Details",
+      "issue": "vee-validate + zod pattern block shows inline API call signatures (`useForm({ validationSchema: toTypedSchema(schema) })`, `useField('fieldName')`) which is code-like HOW content rather than declarative WHAT hints. Still not addressed from iter1.",
+      "fix": "Replace with declarative description: 'Use vee-validate useForm() with toTypedSchema(zodSchema). useField() per field. handleSubmit() for async submit with automatic isSubmitting state.' No code syntax needed."
+    }
+  ],
+  "iter1_resolutions": {
+    "task_6_decisions_md": "RESOLVED — decisions.md now present in Context Files",
+    "task_6_dependencies_subsection": "RESOLVED — **Dependencies:** subsection now present in Details",
+    "task_7_decisions_md": "RESOLVED — decisions.md now present in Context Files",
+    "task_7_wave_and_depends_on": "RESOLVED — wave changed to 5, depends_on now includes [5,6]. NOTE: this fix introduced a new critical wave violation for Tasks 8 and 9",
+    "task_7_dependencies_subsection": "RESOLVED — **Dependencies:** subsection now present in Details",
+    "task_8_decisions_md": "RESOLVED — decisions.md now present in Context Files",
+    "task_8_middleware_name": "RESOLVED — middleware correctly named auth.global.ts",
+    "task_8_test_paths": "RESOLVED — test paths use frontend/tests/",
+    "task_8_dependencies_subsection": "RESOLVED — **Dependencies:** subsection now present in Details",
+    "task_9_decisions_md": "RESOLVED — decisions.md now present in Context Files",
+    "task_9_project_md": "RESOLVED — project.md now present in Context Files",
+    "task_9_dependencies_subsection": "PARTIALLY RESOLVED — Dependencies subsection added; Implementation hints still labeled as Important",
+    "task_10_decisions_md": "RESOLVED — decisions.md now present in Context Files",
+    "task_10_architecture_md": "RESOLVED — architecture.md now present in Context Files",
+    "task_10_dependencies_subsection": "RESOLVED — **Dependencies:** subsection now present in Details",
+    "task_10_jwt_hint": "RESOLVED — no JWT-like token hint; token described correctly as raw 32-byte base64url value"
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 11,
+    "critical": 2,
+    "major": 1,
+    "minor": 8,
+    "iter1_critical_resolved": 7,
+    "iter1_major_resolved": 0,
+    "new_critical_introduced": 2
+  }
+}

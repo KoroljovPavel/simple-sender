@@ -1,0 +1,39 @@
+{
+  "reviewer": "security-auditor",
+  "task": "fix-album-type",
+  "round": 1,
+  "standard": "OWASP Top 10",
+  "focus": "anti-SSRF (no new dereference), token-scrub parity, injection surface of the new per-item type field",
+  "verdict": "OK",
+  "findings": [
+    {
+      "id": "SA-1",
+      "severity": "info",
+      "area": "Anti-SSRF (A10)",
+      "finding": "No new URL dereference. The per-item type is a closed BlockType enum; mediaUrl handling is unchanged and still validated by requireMediaSource (http(s) scheme or opaque file_id) per item in validateAlbum. Backend still never fetches the media — Telegram does. Decision 6 invariant intact.",
+      "action": "no change"
+    },
+    {
+      "id": "SA-2",
+      "severity": "info",
+      "area": "Injection / wire safety",
+      "finding": "The Telegram media[].type wire value is produced by albumElementType from a closed enum mapping to four fixed literals (photo/video/audio/document). No user-controlled raw string reaches the wire type field. parseBlockType / MediaItemDto.type deserialize to the BlockType enum (unknown -> rejected with 422, never 400/500).",
+      "action": "no change"
+    },
+    {
+      "id": "SA-3",
+      "severity": "info",
+      "area": "Token scrubbing (logging)",
+      "finding": "TelegramSender send/album mappers and scrubTokens paths are untouched by this change. Token-scrub parity preserved.",
+      "action": "no change"
+    },
+    {
+      "id": "SA-4",
+      "severity": "info",
+      "area": "XSS / preview",
+      "finding": "Preview RenderedMediaItem shape unchanged; no v-html introduced; parseMode escaping path unchanged. Out of scope of this correction but verified not regressed.",
+      "action": "no change"
+    }
+  ],
+  "notes": "No new attack surface. Anti-SSRF and token-scrub invariants hold."
+}

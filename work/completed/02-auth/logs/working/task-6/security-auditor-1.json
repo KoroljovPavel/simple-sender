@@ -1,0 +1,157 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 7,
+    "critical": 0,
+    "major": 2,
+    "minor": 5
+  },
+  "critical": [],
+  "major": [
+    {
+      "severity": "major",
+      "category": "OWASP A04 - Insecure Design / A07 - Auth Failures",
+      "title": "No rate limit on POST /api/auth/forgot-password — email-bombing and enumeration amplification",
+      "description": "AuthService.forgotPassword performs no per-IP and no per-email rate limiting. Compare with AuthService.resendVerification which uses a Redis SET-NX-EX 60s key, and with login which uses dual brute-force counters. An attacker can call /api/auth/forgot-password repeatedly to (a) flood the inbox of any known account with reset emails, (b) repeatedly overwrite an in-flight passwordResetTokenHash so a legitimate user's first reset link silently stops working, and (c) generate unbounded SMTP traffic from your backend (potential abuse-for-spam vector that could lead to your sender domain being blacklisted). It also lengthens the timing-oracle attack window for enumeration (see separate finding) by allowing an attacker to send arbitrary samples per second.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:241-279 (forgotPassword)",
+      "impact": "(1) Targeted email-flood / reputation attack against any known user. (2) Silent denial of password-reset capability for a victim by repeatedly overwriting their pending reset token. (3) Outbound SMTP abuse / sender-domain blacklisting. (4) Enables practical brute-force of the timing oracle described in the next finding.",
+      "recommendation": "Mirror the resendVerification pattern: add a Redis SET-NX-EX rate-limit key (e.g. forgot:rate:{email} TTL 60s and forgot:rate:ip:{ip} threshold ~10/15min) executed unconditionally before the user lookup so timing remains uniform. Pseudocode:\n\n  return redisTemplate.opsForValue()\n      .setIfAbsent(forgotKey(email), \"1\", FORGOT_RATE_TTL)\n      .onErrorResume(err -> { log.warn(...); return Mono.just(true); })\n      .flatMap(ok -> { if (Boolean.FALSE.equals(ok)) return Mono.empty(); /* still 200 — never reveal rate-limit state */ return doForgotPassword(...); });\n\nNote: returning 429 here would itself be an enumeration oracle (timing differs); silently dropping the request and still returning 200 preserves anti-enumeration. Combine with a per-IP counter that DOES surface 429 for clearly abusive volumes (e.g. >30/15min from a single IP).",
+      "cwe": "CWE-307 / CWE-799"
+    },
+    {
+      "severity": "major",
+      "category": "OWASP A07 - Auth Failures (Email enumeration via timing)",
+      "title": "Timing oracle in forgot-password: known users incur a Mongo write, unknown users do not",
+      "description": "AuthService.forgotPassword has asymmetric work along the two branches:\n  - known active/pending user: SecureRandom token gen + SHA-256 hash + userRepository.save() (Mongo round-trip, typically 10-50ms p50, more on contention) + synchronous EmailService.sendPasswordResetEmail call (the actual SMTP work is fire-and-forget on boundedElastic, but template loading and MimeMessage construction inside sendAsync still happens before subscribe returns).\n  - unknown email or status=deleted: a single fire-and-forget logEvent() call returning immediately.\n\nThe time difference between these branches is reliably measurable (>10ms is detectable over the network with batch-averaging). An attacker can therefore enumerate which emails belong to active/pending accounts by measuring response latency, defeating the anti-enumeration intent in the task spec (lines 41-42). The IT only verifies that response status is uniform (200 vs 200) and that no email lands in Mailpit for the unknown branch — it does not assert timing parity. Decision 13 implements timing parity for /login (DUMMY_HASH BCrypt); the same defense was not applied to /forgot-password.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:241-279",
+      "impact": "An attacker with a list of email addresses can determine which ones are registered and active/pending, even though the task spec's anti-enumeration goal is to make this impossible. Combined with the missing rate limit (preceding finding), this is practically exploitable: tens of probes per second yield reliable enumeration in minutes.",
+      "recommendation": "Make the two branches do equivalent work. Two options:\n\nOption A (preferred — cheap, mirrors login pattern): on the unknown/deleted branch, also perform a no-op Mongo round-trip of comparable cost (e.g. userRepository.findByEmail(email).then() is already done; additionally do a save of an unrelated document or schedule a Mono.delay calibrated to median save latency). The cleanest implementation is to enqueue a fixed Schedulers.boundedElastic delay matching observed p50 of the known-user save+email-build, applied uniformly. Example:\n\n  Mono<Void> uniformDelay = Mono.delay(Duration.ofMillis(50)).then();\n  // append .then(uniformDelay) on every branch.\n\nOption B (stronger): always do the userRepository.save() with the same fields wrapped in a transactional rollback, OR always perform a SecureRandom + SHA-256 (these are cheap but constant cost). This narrows the gap but does not fully equalize Mongo round-trip timing.\n\nIn either case, add an integration assertion (or a unit timing assertion using a controllable clock) so regressions don't sneak back in.",
+      "cwe": "CWE-208 (Observable Timing Discrepancy) / CWE-204"
+    }
+  ],
+  "minor": [
+    {
+      "severity": "minor",
+      "category": "OWASP A09 - Security Logging and Monitoring",
+      "title": "Anti-enumeration asymmetry in events log metadata",
+      "description": "On the unknown/deleted-user branch, forgotPassword writes Map.of(\"email\", email) into events.metadata while the known-user branch passes null metadata. The events collection is server-side only (not user-readable), so this is not a direct enumeration channel for an external attacker, but it does invert the data-minimization principle: the audit log retains the email of accounts that DON'T exist and omits the email for accounts that DO. If an internal actor (DBA, support engineer, future admin endpoint reading events) ever inspects the events stream, the absence of email metadata becomes a positive signal of account existence. Also, recording arbitrary attacker-controlled emails in your audit log is a minor logging-injection / log-storage growth concern.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:256-258 vs 274-275",
+      "impact": "(1) Internal information disclosure: presence/absence of metadata.email in events.password_reset_requested rows leaks account-existence to anyone with events read access. (2) Audit log can be filled with attacker-supplied strings (mitigated by the missing-rate-limit finding above; once that is fixed the volume is bounded).",
+      "recommendation": "Either (a) record email metadata on BOTH branches (preferred — operationally useful and removes the asymmetric signal), or (b) record it on NEITHER branch. If (a), also bound metadata length (e.g. truncate to 254 chars) to defend against pathological inputs that survive Bean Validation in some edge cases.",
+      "cwe": "CWE-532 / CWE-203"
+    },
+    {
+      "severity": "minor",
+      "category": "Best practice - Secure logging",
+      "title": "Email address (PII) emitted in warn-level logs on email dispatch failure",
+      "description": "log.warn(\"Reset email dispatch failed for {}: {}\", saved.getEmail(), ex.getMessage()) writes the user's email address into application logs. Email addresses are PII under GDPR. The same pattern exists in the registration/resend flows already, so this finding is consistent with prior code; flagging it here per task focus on log hygiene. Tokens are correctly NOT logged.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:271-272",
+      "impact": "PII in plaintext logs. If logs are shipped to a central log aggregator, retention and access controls must cover them. Minor regulatory exposure.",
+      "recommendation": "Log the user id instead of email, or redact: log.warn(\"Reset email dispatch failed for userId={}: {}\", saved.getId(), ex.getMessage()). The user id is already an opaque ObjectId and is sufficient to correlate with users collection during incident response.",
+      "cwe": "CWE-532"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A02 - Cryptographic Failures (defense-in-depth)",
+      "title": "Reset token hash lookup uses a non-constant-time DB equality comparison",
+      "description": "userRepository.findByPasswordResetTokenHash(hash) performs an ordinary MongoDB equality match. The hash is SHA-256 of the raw token, so even if the comparison is short-circuited internally, an attacker would have to invert SHA-256 to use any timing leak — practically infeasible. However, because the raw token is sent to the server (not its hash), the request-handling chain DOES handle the raw token in a non-constant-time manner (e.g. the @NotBlank check, hashToken using a non-constant-time UTF-8 encoder). For a brute-force-resistant 32-byte token this is also infeasible. Documenting as a defense-in-depth note rather than an exploitable issue.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:289 (findByPasswordResetTokenHash)",
+      "impact": "No realistic exploit at 256-bit token entropy. Documented for completeness.",
+      "recommendation": "No change required for the current threat model. If token entropy ever drops below ~80 bits, revisit and use MessageDigest.isEqual / constant-time compare on the hash before the DB lookup.",
+      "cwe": "CWE-208"
+    },
+    {
+      "severity": "minor",
+      "category": "Best practice - Information exposure",
+      "title": "Reset token transported as URL query parameter — leaks via browser history, referrer, server access logs",
+      "description": "The reset email contains {APP_URL}/auth/reset-password?token={TOKEN}. URL query parameters are stored in the browser's history, can be sent in the Referer header to any third-party resource loaded by the reset-password page (analytics scripts, fonts, images), and are routinely captured in webserver access logs. The token is single-use, time-limited (1h), and HTTPS-protected in production, so window of abuse is small — but a leaked URL within the TTL window is a take-over vector. Industry-standard for email-reset flows; flagging because it's directly relevant to OWASP A02 / A09 best practice.",
+      "location": "backend/src/main/resources/templates/email/reset-password.html:12",
+      "impact": "If the reset-password page loads any external resource OR if the reset URL is shared / pasted / logged before user consumes it, the token is recoverable within the 1h TTL.",
+      "recommendation": "Two complementary mitigations: (1) Ensure the /auth/reset-password Nuxt page sets meta name=\"referrer\" content=\"no-referrer\" or a Referrer-Policy: no-referrer header so the token is never leaked via Referer to third parties. (2) Strip the ?token=... from the URL on the client immediately after extracting it (history.replaceState with the token removed) so it's not retained in browser history. Both are frontend-side fixes; the backend implementation is fine.",
+      "cwe": "CWE-598"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A05 - Security Misconfiguration",
+      "title": "SUPER_ADMIN_PASSWORD has no default in application.properties — accidental misconfig fails open in test profile",
+      "description": "Out-of-scope for Task 6 functional changes but visible in the wider auth chain: application-test.properties hardcodes SUPER_ADMIN_PASSWORD=test-admin-password. If a developer ever copies application-test.properties into a staging environment, the super-admin account would have a known weak password. Test fixtures should use a generated/random value or be loaded from a CI secret to avoid the copy-paste-into-prod failure mode.",
+      "location": "backend/src/test/resources/application-test.properties:4",
+      "impact": "Low — only triggers if someone misuses the test profile. No active production exposure today.",
+      "recommendation": "Replace the hardcoded test password with a randomly-generated value at test fixture setup time, or document loudly that application-test.properties must never be deployed. Add a smoke check in CI that staging/prod profiles are not the test profile.",
+      "cwe": "CWE-798"
+    }
+  ],
+  "nitpicks": [],
+  "findings": [
+    {
+      "severity": "major",
+      "category": "OWASP A04 - Insecure Design / A07 - Auth Failures",
+      "title": "No rate limit on POST /api/auth/forgot-password — email-bombing and enumeration amplification",
+      "description": "AuthService.forgotPassword performs no per-IP and no per-email rate limiting. Compare with AuthService.resendVerification which uses a Redis SET-NX-EX 60s key, and with login which uses dual brute-force counters. An attacker can call /api/auth/forgot-password repeatedly to (a) flood the inbox of any known account with reset emails, (b) repeatedly overwrite an in-flight passwordResetTokenHash so a legitimate user's first reset link silently stops working, and (c) generate unbounded SMTP traffic from your backend.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:241-279",
+      "impact": "Email flood attack against known users; silent DoS of reset capability by overwriting pending tokens; outbound SMTP abuse / sender-domain blacklisting; amplifies the timing oracle below.",
+      "recommendation": "Add a Redis SET-NX-EX rate-limit key (forgot:rate:{email} 60s) executed unconditionally before user lookup. Silently drop over-the-limit requests but still return 200 so timing remains uniform. Add a per-IP counter that returns 429 only for clearly abusive volumes (>30/15min).",
+      "cwe": "CWE-307"
+    },
+    {
+      "severity": "major",
+      "category": "OWASP A07 - Auth Failures (timing-based email enumeration)",
+      "title": "Timing oracle in forgot-password: known users incur a Mongo write, unknown users do not",
+      "description": "Known users trigger token gen + Mongo save() + email-template build (10-50ms+); unknown / deleted users complete in ~0ms (only a fire-and-forget logEvent). The latency delta is reliably measurable and enumerates account existence, defeating the spec's anti-enumeration goal.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:241-279",
+      "impact": "Email enumeration via response-time analysis. Combined with the missing rate limit, practically exploitable.",
+      "recommendation": "Equalize work between branches: append a calibrated Mono.delay (matched to known-user p50 latency) on the unknown/deleted branch, OR perform a no-op Mongo round-trip on the empty branch. Mirrors the DUMMY_HASH BCrypt pattern in /login (Decision 13). Add an automated timing assertion to prevent regression.",
+      "cwe": "CWE-208"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A09 - Security Logging and Monitoring",
+      "title": "Anti-enumeration asymmetry in events log metadata",
+      "description": "Unknown/deleted-user branch records {email: ...} in events.metadata; known-user branch records null metadata. Inverts data minimization and makes events log a side-channel for any internal actor with events read access.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:256-258 vs 274-275",
+      "impact": "Internal information disclosure of account existence; potential audit-log injection via attacker-controlled email strings.",
+      "recommendation": "Record email metadata on both branches (or neither). Truncate metadata strings to a safe bound.",
+      "cwe": "CWE-532"
+    },
+    {
+      "severity": "minor",
+      "category": "Best practice - Secure logging",
+      "title": "PII (email) emitted at warn level on email-dispatch failure",
+      "description": "log.warn writes saved.getEmail() into application logs. PII under GDPR.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:271-272",
+      "impact": "PII in plaintext logs; minor regulatory exposure depending on log retention and access controls.",
+      "recommendation": "Log saved.getId() (opaque ObjectId) instead of email.",
+      "cwe": "CWE-532"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A02 - Cryptographic Failures (defense-in-depth)",
+      "title": "Reset token hash lookup uses non-constant-time DB equality",
+      "description": "Practical risk is zero at 256-bit token entropy and SHA-256 hashing, but flagged for defense-in-depth completeness.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:289",
+      "impact": "Negligible at current entropy.",
+      "recommendation": "No change required. Revisit if token entropy drops.",
+      "cwe": "CWE-208"
+    },
+    {
+      "severity": "minor",
+      "category": "Best practice - Information exposure",
+      "title": "Reset token transported as URL query parameter",
+      "description": "Token in URL is retained in browser history and can be leaked via Referer to third-party resources loaded by the reset-password page. 1h TTL bounds the window; HTTPS protects in transit.",
+      "location": "backend/src/main/resources/templates/email/reset-password.html:12",
+      "impact": "Token recoverable within 1h TTL if URL is leaked or shared.",
+      "recommendation": "Set Referrer-Policy: no-referrer on /auth/reset-password page; client-side history.replaceState to remove token from URL after extraction. Frontend-side mitigation; backend OK.",
+      "cwe": "CWE-598"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A05 - Security Misconfiguration",
+      "title": "Hardcoded test super-admin password in application-test.properties",
+      "description": "SUPER_ADMIN_PASSWORD=test-admin-password is fixed in test profile. Risk only triggers if test profile is misused in non-test deployments.",
+      "location": "backend/src/test/resources/application-test.properties:4",
+      "impact": "Low.",
+      "recommendation": "Generate test password at fixture setup; add CI guard that staging/prod do not run with profile=test.",
+      "cwe": "CWE-798"
+    }
+  ]
+}

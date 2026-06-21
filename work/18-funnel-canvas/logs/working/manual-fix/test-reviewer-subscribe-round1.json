@@ -1,0 +1,23 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-subscribe-exclude",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "The new test is value-based, load-bearing, and correctly structured. It places funnels [fX, fA, fB] in the store with the route mock supplying funnelId:'fX', opens the dropdown via focus, and asserts on actual option DOM elements (data-test attribute per-value) — not on substring/text presence. Against pre-fix code (subscribeTargetOptions used storeFunnels.value.map without .filter), the fX option would be present in the DOM and the `toBeNull()` assertion would fail, confirming load-bearing character. Existing SUBSCRIBE tests in funnel-editor.spec.ts use a route mock without funnelId (resolves to ''), so currentFunnelId==='' matches no funnel and nothing is excluded — the pre-existing tests are unaffected and were not weakened by this change. No anti-patterns, no empty assertions, no missing coverage for this specific fix.",
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 1,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

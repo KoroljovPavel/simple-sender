@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "summary": "Task 6 regression-preservation rewrite is solid. Every pre-flip test method maps 1:1 to a post-flip equivalent and AssertJ assertions are equivalent to or stronger than the original StepVerifier ones (status extraction via .extracting and InstanceOfSatisfying gives finer-grained failure messages). The new login_success_callsChangeSessionId_beforeSaveContext_forSessionFixationDefense test correctly verifies the new invariant via Mockito spy + InOrder. Mocks are switched correctly to servlet types (RedisTemplate / SecurityContextRepository / MongoTemplate). @WebFluxTest -> @WebMvcTest and WebTestClient -> MockMvc conversions look clean; csrf() mutator is imported from the servlet path. Mockito.lenient() is used only on permissive register/forgot rate-limit defaults that conflicting tests override explicitly — appropriate use. FORGOT_DUMMY_DELAY test asserts a 30ms lower bound against a 40ms target, leaving clock-jitter slack. Three minor observations below are stylistic, not behavioural — none weakens an invariant.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:184-188, 535-539",
+      "issue": "await().atMost(5s).until(...) polling for EventRepository assertions in verifyEmail_validToken_userActive_tokenCleared and passwordChanged_event_logged is now over-cautious. The comments correctly note EventService.logEvent is synchronous post-Task-5 — by the time MockMvc.perform() returns, the event write has already committed inside the same request thread. The await is dead weight (5s upper bound × 100ms poll) that adds neither flake protection nor latency tolerance. Direct assertion on eventRepository.findAll() after the mockMvc.perform() call would be exactly as reliable.",
+      "recommendation": "Drop the await(...).until(...) wrapper and replace with: List<Event> events = eventRepository.findAll(); Event evt = events.stream().filter(e -> \"email_verified\".equals(e.getEventType()) && saved.getId().equals(e.getUserId())).findFirst().orElseThrow(); assertThat(evt.getUserId()).isEqualTo(saved.getId()); — same for password_changed_event_logged. Keeps the comment about synchronous-post-Task-5 to document intent."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java:247-261",
+      "issue": "forgotPassword_unknownEmail_incursDummyDelay_forEnumerationOracleSuppression asserts only a lower bound (>= 30ms). If a future refactor accidentally pads the unknown-email branch with an extra blocking call (e.g. an unnecessary DB roundtrip), elapsed grows and the test still passes — silently masking a regression. The intent is to lock in the calibrated 40ms target, not 'at least 30ms'.",
+      "recommendation": "Add an upper bound: assertThat(elapsed).isGreaterThanOrEqualTo(Duration.ofMillis(30)).isLessThanOrEqualTo(Duration.ofMillis(500)); The 500ms cap is loose enough to absorb GC pauses and CI scheduler jitter but tight enough to catch an extra Mongo/Redis roundtrip slipping into the no-op path."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServiceRegistrationTest.java:278-293",
+      "issue": "register_emailDispatchFailure_doesNotPropagate_returns201 test name promises '_returns201' but the assertion only checks resp.id() — there is no HTTP status code at this layer (it is a unit test invoking authService.register directly). The name reads like an integration test, which can mislead future maintainers into looking for a status assertion that isn't there.",
+      "recommendation": "Rename to register_emailDispatchFailure_doesNotPropagate_returnsValidResponse or register_emailDispatchFailure_swallowedByService_callerReceivesNormalResponse. The 201 invariant is already covered at the IT layer; keep this unit test focused on 'service does not propagate the SMTP exception'."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 13,
+      "passed": 13,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 60,
+      "integration": 17,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

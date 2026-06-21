@@ -1,0 +1,43 @@
+{
+  "reviewer": "infrastructure-reviewer",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 14,
+      "issue": "server.servlet.session.cookie.http-only=true is a Servlet-stack property and has no effect in a Spring WebFlux application. This app uses @EnableWebFluxSecurity and spring-boot-starter-webflux, which means it runs on the reactive Netty server — not a Servlet container. The property is silently ignored at runtime. The HttpOnly flag on the session cookie will not be set by this property; it must be configured programmatically in SecurityConfig using CookieWebSessionIdResolver or equivalent WebFlux-native API.",
+      "suggestion": "Remove the property from application.properties (it does nothing). In SecurityConfig (Task 2), configure session cookie flags programmatically:\n\n  @Bean\n  public WebSessionIdResolver webSessionIdResolver() {\n      CookieWebSessionIdResolver resolver = new CookieWebSessionIdResolver();\n      resolver.addCookieInitializer(builder -> builder\n          .httpOnly(true)\n          .sameSite(\"Strict\")  // or Lax for dev\n          .path(\"/\")\n      );\n      return resolver;\n  }\n\nThis is the correct WebFlux approach documented in Spring Session Data MongoDB reactive docs."
+    },
+    {
+      "severity": "minor",
+      "file": "infra/docker-compose.yml",
+      "line": 44,
+      "issue": "Mailpit uses image tag 'latest' while all other services are pinned (mongo:8.0, redis:7.4). Using 'latest' means the local environment can silently upgrade to a breaking Mailpit release between runs. The testcontainers-mailpit:1.3.1 library is pinned to a specific Mailpit version internally — a mismatch between the Docker Compose Mailpit and the Testcontainer Mailpit version can cause API differences during smoke testing vs integration testing.",
+      "suggestion": "Pin Mailpit to a specific version. Match the version used internally by testcontainers-mailpit:1.3.1. Check the library source or Maven Central page for the bundled version. A conservative safe choice:\n\n  mailpit:\n    image: axllent/mailpit:v1.21\n\nAlternatively, confirm what version testcontainers-mailpit:1.3.1 pulls and use that exact tag."
+    },
+    {
+      "severity": "minor",
+      "file": "infra/docker-compose.yml",
+      "line": 43,
+      "issue": "Mailpit has no healthcheck. MongoDB and Redis both define healthchecks with retries and start_period. Without a healthcheck, the smoke test relies on a hardcoded 'sleep 2' delay and Docker has no signal for when Mailpit is ready to accept connections. In CI or on slow machines, Mailpit may not be ready when the smoke test curl runs.",
+      "suggestion": "Add a healthcheck to the mailpit service:\n\n  healthcheck:\n    test: [\"CMD\", \"curl\", \"-f\", \"http://localhost:8025/api/v1/messages\"]\n    interval: 5s\n    timeout: 3s\n    retries: 5\n    start_period: 5s\n\nAlternatively use the smoke test step: 'docker compose ... up -d mailpit && docker compose ... wait mailpit' once a healthcheck is defined."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/build.gradle",
+      "line": 40,
+      "issue": "JaCoCo is configured to generate a report (jacocoTestReport) but there is no jacocoTestCoverageVerification task to enforce the 80%+ coverage threshold stated in the tech-spec acceptance criteria. The report will be created but the build will not fail if coverage drops below the required threshold.",
+      "suggestion": "Add a coverage enforcement block and wire it into the check lifecycle:\n\n  jacocoTestCoverageVerification {\n      dependsOn test\n      violationRules {\n          rule {\n              element = 'PACKAGE'\n              includes = ['com.botfunnel.auth.*', 'com.botfunnel.user.*', 'com.botfunnel.profile.*', 'com.botfunnel.email.*', 'com.botfunnel.events.*']\n              limit {\n                  counter = 'LINE'\n                  value = 'COVEREDRATIO'\n                  minimum = 0.80\n              }\n          }\n      }\n  }\n\n  check.dependsOn jacocoTestCoverageVerification\n\nThis can be deferred to the test audit task (Task 14) if the intent is to add enforcement only after integration tests are written."
+    },
+    {
+      "severity": "nitpick",
+      "file": ".env.example",
+      "line": 14,
+      "issue": "SUPER_ADMIN_PASSWORD=changeme123 is a weak example value that could be copied directly into a .env file without being changed. 'changeme123' meets minimum password rules (8 chars, letter, digit) and would pass Bean Validation, creating a real account with a guessable password.",
+      "suggestion": "Use a placeholder that is obviously not a real password and cannot satisfy login without being changed:\n  SUPER_ADMIN_PASSWORD=<replace-with-strong-password>\nor\n  SUPER_ADMIN_PASSWORD=YourStr0ngP@ssword!\n\nThis signals intent more clearly and reduces the risk of the example value being used in staging/production."
+    }
+  ],
+  "summary": "5 findings: 1 major, 3 minor, 1 nitpick. The critical infrastructure work is correctly implemented — MONGODB_URI and REDIS_URL bindings are fixed, all 7 required dependencies are present with correct scopes, Mailpit is added with 127.0.0.1 binding, application-test.properties exists, and .env.example is synced with all new vars and JWT vars removed. The major finding is that server.servlet.session.cookie.http-only=true is a Servlet-stack property with no effect in this WebFlux application — the HttpOnly cookie flag must be set programmatically in SecurityConfig via CookieWebSessionIdResolver. The three minor findings (Mailpit latest tag, no Mailpit healthcheck, no JaCoCo coverage enforcement) reduce reliability but do not block compilation or basic functionality.",
+  "approved": false
+}

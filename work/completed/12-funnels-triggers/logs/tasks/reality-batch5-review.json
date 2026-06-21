@@ -1,0 +1,61 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14, 15],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 lists 'backend/src/test/java/com/botfunnel/api/' and 'backend/src/test/java/com/botfunnel/security/' as test directories to read. The api/ test dir does not exist in the codebase today (the api/ source package is entirely new in Phase 3). While depends_on: [1..10] makes this structurally sound (those tasks must create it), the task description does not note that these paths are to-be-created. If the executor runs before Wave 4 (Tasks 7–8) completes, it will find nothing to audit in the api/ and security/ dirs and may produce a misleadingly clean verdict. The security/ test dir exists at backend/src/test/java/com/botfunnel/security/ but has no Phase 3 tests yet.",
+      "fix": "Add a note in the Context Files section: 'backend/src/test/java/com/botfunnel/api/ is created by Tasks 7–8 (Wave 4); if absent, the executor must treat it as a critical gap (no api key / EventsController tests at all), not skip it silently.'"
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "FunnelIndexesIT.java currently exists and is @Tag(\"slow\"), but its funnelsCollectionHasExpectedIndexes assertion checks the OLD partial filter shape: partialFilterExpression.getString(\"status\") == \"active\" (status-only, no triggerType constraint). After Phase 3's trigger-index reconciliation runner runs and Task 1 relaxes the annotation, the index will have a two-field partial filter {status:'active', triggerType:'on_start'}. The existing assertion does NOT verify the new shape, and crucially it does NOT verify that the old full-active shape is GONE. Task 13's audit contract says to check 'old index gone; two active event funnels coexist; two on_start with same payload still collide' — none of these three are currently in FunnelIndexesIT. Task 13 must flag this as a missing coverage gap that requires updating FunnelIndexesIT (or adding a sibling) before Task 14's test run.",
+      "fix": "Task 13 should flag FunnelIndexesIT as missing the three Phase-3 index assertions. The executor must read the file, note the status-only assertion, and report it as a major coverage gap requiring the test to be updated as part of Wave 1/2 implementation (Tasks 1–2)."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 references 'frontend/tests/components/funnels/*' as a directory to read for Phase 3 Vitest specs (trigger-type selector, EMIT_EVENT form, API-key card). The only file currently in that directory is CreateFunnelDialog.spec.ts, which predates Phase 3. There is no FunnelStepForm spec file. FunnelTriggerSettings.spec.ts exists at frontend/tests/components/FunnelTriggerSettings.spec.ts but only tests the old on_start deep-link UI — it has zero Phase 3 trigger-type selector or keyword/tag/field/event value-editor tests. Task 13 must treat the absence of new trigger-type selector Vitest coverage as a finding, not skip it because the file 'exists'.",
+      "fix": "Task 13 executor must read FunnelTriggerSettings.spec.ts and note that all four assertions in it cover only the on_start/deeplink case. Any Phase 3 trigger-type selector, keyword list, tag/field SearchableSelect, or event-name slug tests must exist (created by Task 9). If absent after Tasks 9–10 run, flag as critical missing frontend coverage."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Task 14's Details section says 'user-spec «Критерії приєднання» — 16 пунктів'. The actual user-spec acceptance criteria list has 15 items (verified by grep). This is a factual mismatch in the task description.",
+      "fix": "Change '16 пунктів' to '15 пунктів' in the Details section of Task 14."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Task 14's Details section says 'tech-spec «Acceptance Criteria» — технические (8 пунктів)'. The actual tech-spec Acceptance Criteria section has 9 items (verified by grep). One-off count mismatch.",
+      "fix": "Change '8 пунктів' to '9 пунктів' in the Details section of Task 14."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Task 14 Verification Steps says 'Backend (slow, index-migration IT + latency-пробы): cd backend && ./gradlew test -PrunSlow=true'. The comment is slightly misleading: the existing @Tag(\"slow\") tests include TelegramWebhookP99IT (P99 latency probe), SubscriberExportEstimateLatencyIT, SubscriberExportHeapIT, FunnelExecutionEngineIT, FunnelStepIdBackfillTest, and FunnelIndexesIT — plus the new Phase 3 FunnelTriggerIndexReconciliation* siblings. Running -PrunSlow=true enables ALL slow-tagged tests, not just the index-migration IT. This could cause unexpectedly long runtimes if not anticipated. Minor documentation gap, not a correctness issue.",
+      "fix": "Add a note: '-PrunSlow=true enables ALL @Tag(\"slow\") tests including the P99 latency probe (TelegramWebhookP99IT) and subscriber export heap tests — total slow suite run time may be significant on a cold JVM.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 Verification Steps says the rate-limit curl test should 'залити запросами вище глобального лімиту (~300/мін)'. The rate-limit key is 'bf:rate:events' (a Redis fail-open counter). The task correctly notes 'fail-open rate-limit: якщо Redis недоступен, 429 не сработает (by design)' but does not specify a concrete time window to saturate the limit within 1 minute. An automated agent may struggle to reliably trigger 429 in a short live test without a scripted loop. Minor but worth noting.",
+      "fix": "Add a hint: 'Use a shell loop: for i in $(seq 1 350); do curl -s -o /dev/null -w \"%{http_code}\\n\" ... ; done — expect 429 responses after ~300 within the same minute window. Redis must be up.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 7
+  }
+}

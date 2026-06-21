@@ -1,0 +1,29 @@
+{
+  "summary": "BotService correctly implements the documented Connect / Disconnect / Get / TestMessage pipeline: side-effect order matches the tech-spec step-by-step (requireOwned -> INCR -> per-project pre-check -> getMe -> platform-wide pre-check -> setWebhook -> encrypt -> save -> event -> DEL), `Mono.defer` wraps each downstream step so the no-Telegram-call guarantee holds on early short-circuit (AC11), `compensateAndPropagate` correctly swallows compensation failures without shadowing the original persist error (AC9 / D4), and `DuplicateKeyException` discrimination plus the recheck fallback for drivers that omit the index name is in line with the spec. Brute-force counter uses `count > BRUTE_FORCE_THRESHOLD` so the 429 trips on the 11th attempt as required; the dedicated WARN message constant is package-private and stable for log-based test assertions (D14). AppException factories, EventService.logEvent inside `.doOnSuccess` (ProjectService pattern), and AES-bytes -> Base64 boundary owned by this service (D15) all match project conventions. Findings below are minor and not blocking.",
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "minor",
+      "title": "Repeated `requireOwned -> findByProjectIdAndStatus(CONNECTED) -> switchIfEmpty(notFound)` pattern across three public methods",
+      "location": "backend/src/main/java/com/botfunnel/bot/BotService.java:79-83, 100-106, 108-117",
+      "description": "The exact same three-step prologue is duplicated in `getByProject`, `disconnect`, and `sendTestMessage`. The body differs only in the terminal `flatMap`. Extracting a private helper such as `requireConnectedBot(ownerId, projectId): Mono<Bot>` would remove three near-identical reactive prefixes and let each public method read as `requireConnectedBot(...).flatMap(...)`. Marginal complexity cost, modest readability win, and would localize a future change to the lookup semantics (e.g. swapping the derived query, adding a soft-deleted include flag, etc.) to one place.",
+      "recommendation": "Optional. Extract a private `Mono<Bot> requireConnectedBot(String ownerId, String projectId)` helper that runs `projectService.requireOwned(...).then(Mono.defer(...)).switchIfEmpty(notFound)` and have the three public methods call it. Keep `connect`'s pipeline as-is — it does NOT use this prefix (uses `ensureNoConnectedBotForProject` instead, which expects empty)."
+    },
+    {
+      "id": "C2",
+      "severity": "minor",
+      "title": "`incrementBruteForceCounter` silently fails open on a null INCR result",
+      "location": "backend/src/main/java/com/botfunnel/bot/BotService.java:237-247",
+      "description": "Both the TTL conditional and the threshold check are guarded by `count != null && ...`. If `ReactiveValueOperations.increment(...)` ever emits Mono.empty() (the Mono contract forbids null elements, but a degenerate Reactor binding could in principle), the chain falls through to the implicit `Mono.empty()` return at line 246 (the `ttl` local resolves to `Mono.empty()` when count is null). That collapses to 'no rate-limit check, no TTL set, proceed'. This is consistent with the D14 fail-open stance and mirrors `AuthService.incrementWithTtl`, but the AuthService variant explicitly does not branch on null and lets a hypothetical null propagate as an NPE that the outer `onErrorResume` would catch — uniform behaviour at least. Worth a short comment so a future reader does not 'fix' the null guard by treating it as a real branch.",
+      "recommendation": "Optional. Either add a one-line comment explaining the null guard is defensive against a non-spec emit (and the silent fail-open is intentional), or simplify by dropping the null check and letting an unexpected null surface via the outer `onErrorResume` (matches the AuthService shape). No functional change either way."
+    },
+    {
+      "id": "C3",
+      "severity": "low",
+      "title": "Static initialisation of `secureRandom` field by direct field initializer instead of constructor",
+      "location": "backend/src/main/java/com/botfunnel/bot/BotService.java:61",
+      "description": "The `SecureRandom` instance is created at field-initialisation time (`new SecureRandom()`), which runs during `@Service` bean construction. This is fine — `SecureRandom` is thread-safe — and it matches `TokenEncryptor`'s field-level `SecureRandom` instantiation, so the pattern is at least consistent across the bot module. Two stylistic notes: (a) for `final` `SecureRandom`s the project's convention elsewhere is constructor-assigned fields, so a future reader scanning for 'where are this service's collaborators wired up?' has to look in two places; (b) declaring it as `private static final` (rather than instance-`final`) would emphasise the share-across-threads semantics. Strictly cosmetic.",
+      "recommendation": "Optional. Either move `secureRandom = new SecureRandom()` into the constructor (matches the rest of the field-init style in this class) or promote to `private static final SecureRandom SECURE_RANDOM = new SecureRandom()` to emphasise thread-shared semantics. No behavioural difference."
+    }
+  ]
+}

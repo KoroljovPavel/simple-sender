@@ -1,0 +1,35 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 8,
+      "section": "Description / What to do / Acceptance Criteria / Details",
+      "issue": "Task repeatedly states user-spec 'Критерии приёмки' has 16 items ('16 пунктів' at What-to-do step 1, Acceptance Criteria, and Details->Acceptance matrix). The actual user-spec 'Критерии приёмки' section contains 15 checklist items. The QA acceptance matrix is scoped against a miscounted source, risking a phantom 16th row or a confused traceability check.",
+      "fix": "Change '16 пунктів' to '15 пунктів' wherever it appears for the user-spec criteria count (or recount and cite the exact number). tech-spec count of 7 technical AC is correct."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "PK reference links use the from-task relative form '../../../.claude/skills/project-knowledge/references/project.md', while tasks 7 and 8 use the root-relative form '.claude/skills/project-knowledge/references/project.md'. Both resolve to the same existing files, but the path style is inconsistent across the batch.",
+      "fix": "Standardize PK link style across batch (pick one form). Cosmetic only — all referenced files exist and resolve."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "PK reference links use root-relative '.claude/skills/project-knowledge/references/...' while task 6 in the same batch uses '../../../.claude/...'. Inconsistent path style within the batch.",
+      "fix": "Standardize PK link style across tasks 6/7/8. Both forms resolve; cosmetic."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "issues_found": 3
+  }
+}

@@ -1,0 +1,84 @@
+{
+  "task": "Task 6 — Security Audit (14-funnels-composition)",
+  "auditor": "security-auditor",
+  "date": "2026-06-08",
+  "scope": {
+    "backend": [
+      "backend/src/main/java/com/botfunnel/funnel/StepType.java",
+      "backend/src/main/java/com/botfunnel/funnel/FunnelStep.java",
+      "backend/src/main/java/com/botfunnel/funnel/dto/FunnelStepDto.java",
+      "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionFactory.java",
+      "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+      "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java"
+    ],
+    "frontend": [
+      "frontend/types/funnel.ts",
+      "frontend/components/funnels/FunnelStepForm.vue",
+      "frontend/i18n/locales/uk.json",
+      "frontend/i18n/locales/en.json"
+    ]
+  },
+  "summary": "The SUBSCRIBE_TO_FUNNEL composition feature is secure for deploy. Multitenant isolation is fail-closed at BOTH trust boundaries (save/activate in FunnelService.resolveSubscribeTarget and runtime in FunnelEventService.enrollSpecificFunnel) via an explicit projectId.equals(target.getProjectId()) check after the non-project-scoped findById; missing/malformed-ObjectId/foreign-project all collapse to one indistinguishable rejection with no existence oracle. Runaway/DoS is bounded by depth-cap + auto-enroll rate-limit applied before the factory in the same order as the existing dispatcher. WARN logs carry ids/enum-codes only. No injection, SSRF, insecure deserialization, hardcoded secrets, or new dependencies introduced. 0 critical, 0 major, 0 minor. 4 informational observations recorded.",
+  "owasp_coverage": [
+    {"category": "A01 Broken Access Control / IDOR", "verdict": "OK", "note": "Fail-closed projectId scoping enforced at save (resolveSubscribeTarget), activation (requireSubscribeTargetsActive), and runtime (enrollSpecificFunnel). findById is not project-scoped at the DB level — the explicit equals() guard is the sole barrier and is present and correct on every path. Cross-funnel reference cannot enroll a foreign-project target."},
+    {"category": "A02 Cryptographic Failures", "verdict": "N/A", "note": "Feature adds no crypto, secrets, key handling, or sensitive-data-at-rest."},
+    {"category": "A03 Injection (incl. log injection)", "verdict": "OK", "note": "Mongo access via Spring Data derived queries / criteria-builder (no string concatenation). No SQL, no template/eval. WARN logs on the new paths interpolate only projectId, targetFunnelId (an ObjectId-hex string), subscriberId, enum status, originDepth, and exception class name — no raw user message text, keyword, or PII. Telegram never dereferenced server-side."},
+    {"category": "A04 Insecure Design (runaway/DoS, rate-limit)", "verdict": "OK", "note": "Two per-subscriber backstops applied BEFORE the factory: Redis-independent depth-cap (originDepth > maxEnrollDepth) and Redis auto-enroll rate-limit, in the same order as dispatchForSubscriber. A->B->A cycle is bounded by enrollDepth = parent+1. Exceedance => silent skip + WARN, parent not failed. Backstops reused, not duplicated or forked."},
+    {"category": "A05 Security Misconfiguration", "verdict": "N/A", "note": "No new config beyond reuse of existing app.funnel.* props (max-enroll-depth=10, auto-enroll-rate-per-min=20). No CORS/header/endpoint surface added."},
+    {"category": "A06 Vulnerable & Outdated Components", "verdict": "N/A", "note": "New packages: None (tech-spec Dependencies). Backend adds no deps; frontend reuses existing SearchableSelect/store/zod/vee-validate. No package.json change => npm audit not applicable to this feature."},
+    {"category": "A07 Identification & Authentication", "verdict": "N/A", "note": "No auth surface added. All HTTP entry (create/update/activate/test-run) still routes through ProjectService.requireOwned FIRST (uniform 404, anti-enumeration), unchanged by this feature."},
+    {"category": "A08 Software & Data Integrity", "verdict": "OK", "note": "Snapshot isolation preserved (FunnelStep.copyOf deep-copies the new scalar fields; stepsSnapshot insulates the child from later target edits). No deserialization of untrusted data; FunnelStepDto is a plain Jackson record with @JsonIgnoreProperties(ignoreUnknown=true), no polymorphic _class. At-most-once: enroll is a side-effect before the claim-conditional advance/complete; a crash-replay re-enroll is made a no-op by the (funnelId, subscriberId) re-enter guard (DuplicateKeyException swallowed)."},
+    {"category": "A09 Security Logging & Monitoring", "verdict": "OK", "note": "Each skip reason has a distinct greppable id (LOG_ENROLL_SKIP_TARGET_MISSING / _WRONG_PROJECT / _INACTIVE, LOG_ENROLL_DROP_DEPTH_CAP / _VOLUME, LOG_ENROLL_REENTER_IGNORED, LOG_ENROLL_ENTRY_STEP_FALLBACK, LOG_ENROLL_ERROR). ids/codes only — operator can triage without PII leakage."},
+    {"category": "A10 SSRF", "verdict": "N/A", "note": "No user-controlled URL dereferenced server-side. targetFunnelId is an internal ObjectId reference, not a URL. (Existing SEND_IMAGE imageUrl is fetched by Telegram, not the backend; MENU url buttons are strict-scheme-validated http(s) — both pre-existing, unchanged.)"}
+  ],
+  "findings": [
+    {
+      "id": "INFO-1",
+      "severity": "info",
+      "owasp": "A01 Broken Access Control",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java:255-261",
+      "title": "Runtime fail-closed projectId guard present and correct",
+      "detail": "enrollSpecificFunnel resolves the target via the non-project-scoped FunnelRepository.findById then enforces `!projectId.equals(target.getProjectId())` -> skip + LOG_ENROLL_SKIP_TARGET_WRONG_PROJECT. A null/malformed targetFunnelId yields an empty Optional (or throws IllegalArgumentException caught by the outer try/catch Throwable) -> LOG_ENROLL_SKIP_TARGET_MISSING / LOG_ENROLL_ERROR. No distinct error code leaks existence across projects (runtime path is internal, no HTTP response anyway). projectId is the parent execution's, pinned by the engine. No bypass path identified.",
+      "remediation": "None. Verified correct."
+    },
+    {
+      "id": "INFO-2",
+      "severity": "info",
+      "owasp": "A01 Broken Access Control",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java:780-795",
+      "title": "Save/activate fail-closed projectId guard mirrors runtime",
+      "detail": "resolveSubscribeTarget (used by validateSubscribeTarget at save and requireSubscribeTargetsActive at activate) loads via findById then `.filter(f -> projectId.equals(f.getProjectId()))`. Blank/null -> funnel_subscribe_target_required; missing OR malformed-ObjectId (IllegalArgumentException caught) OR foreign-project all collapse to the SINGLE code funnel_subscribe_target_not_found — anti-enumeration, no cross-tenant existence oracle. Active-status deliberately deferred to activation (Decision 6, chicken-and-egg) — not a gap. Save-time and runtime guards are independent and both present (defense-in-depth, not a single barrier).",
+      "remediation": "None. Verified correct on both boundaries."
+    },
+    {
+      "id": "INFO-3",
+      "severity": "info",
+      "owasp": "A04 Insecure Design",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java:227-242, 388-404",
+      "title": "Depth-cap + rate-limit ordering matches dispatcher; not duplicated",
+      "detail": "Order is depth-cap (line 229) -> rate-limit (line 238) -> resolve+IDOR guard -> insert, mirroring dispatchForSubscriber (lines 142,151). A SUBSCRIBE enroll is always originDepth = parent.enrollDepth+1 >= 1, so it unconditionally counts toward the volume limit (unlike depth==0 roots, which the dispatcher exempts) — correct, no off-by-one. originDepth is computed in StepExecutor.subscribeToFunnel as execution.getEnrollDepth()+1 (StepExecutor.java:128), never 0, so the depth-cap cannot be silently bypassed. Both backstops reuse the same maxEnrollDepth / autoEnrollRateLimitExceeded / bf:rate:auto-enroll: key — no forked second limit. Redis fail-open on the rate-limit is bounded by the Redis-independent depth-cap (holds during a Redis outage). Exceedance returns (skip) without throwing — parent continues via Outcome handling.",
+      "remediation": "None. Verified correct."
+    },
+    {
+      "id": "INFO-4",
+      "severity": "info",
+      "owasp": "A03/A09 Injection / Logging",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java:252-282; StepExecutor.java:126-131",
+      "title": "Log injection / PII: WARN logs carry ids and enum codes only",
+      "detail": "All new WARN/INFO lines interpolate projectId, targetFunnelId (server-side ObjectId-hex of an internal funnel id), targetEntryStepId (a server-minted step id), subscriberId, target.getStatus() (enum), originDepth (int), maxEnrollDepth (int), and t.getClass().getSimpleName(). None interpolate author-entered free text (no funnel name, no message body, no keyword, no custom-field value). The foreign-project WARN deliberately logs only the CALLER's projectId, never the target's (foreign data). No newline/CRLF-injection vector from user free text. Exhaustive switch on StepType in StepExecutor.execute and FunnelService.validateSteps has no default branch, so an unhandled future StepType is a compile error, not a silent security gap.",
+      "remediation": "None. Verified correct."
+    }
+  ],
+  "focus_area_verdicts": {
+    "multitenant_failclosed_projectId": "PASS — explicit projectId.equals(target.getProjectId()) present at save (FunnelService:793), activate (FunnelService:758-768 via resolveSubscribeTarget), and runtime (FunnelEventService:255). Missing/malformed/foreign all -> safe rejection with no distinct existence leak. findById not being project-scoped is fully compensated by the explicit guard on every path.",
+    "runaway_dos": "PASS — depth-cap and auto-enroll rate-limit both applied before the factory, in dispatcher order, reused not duplicated; A->B->A bounded by enrollDepth; exceedance => skip + WARN, parent not failed.",
+    "cross_funnel_reference_idor": "PASS — malformed ObjectId caught (try/catch Throwable runtime, IllegalArgumentException at save) => skip/422, no stack-trace leak; stale/deleted target => inactive/missing skip + WARN (snapshot isolation); deleted entry step => factory fallback to step 0 + WARN; self-target A->A => same (funnelId, subscriberId) re-enter guard, no uncontrolled cycle.",
+    "log_injection": "PASS — new-path logs contain only ids and enum/int codes, no raw user input."
+  },
+  "dependencies": "N/A (no new packages — tech-spec Dependencies: None; frontend reuses existing components, no package.json change; npm audit not run).",
+  "verdict": "clean",
+  "deploy_recommendation": "Ready to deploy. No Critical/Major/Minor findings. The feature does not regress the multitenant isolation, runaway/DoS, or logging posture of Phases 1-4."
+}

@@ -1,0 +1,60 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 11,
+      "issue": "Skill link path uses '.claude/skills/test-master/SKILL.md' (no leading '../../../'), so the markdown href resolves to work/15-message-composer/tasks/.claude/... which does not exist. All other tasks in this feature use '../../../.claude/skills/...' (verified: tasks 3, 7, 9). The skill itself loads by slash-command name ('/skill:test-master'), so execution is not blocked, but the clickable link is broken.",
+      "fix": "Change '(.claude/skills/test-master/SKILL.md)' to '(../../../.claude/skills/test-master/SKILL.md)' to match convention."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 11,
+      "issue": "Context file paths for project.md, architecture.md, and patterns.md use '.claude/skills/project-knowledge/references/...' without '../../../' prefix. These resolve to wrong paths from tasks/11.md. All other tasks in this feature use '../../../.claude/skills/project-knowledge/references/...'.",
+      "fix": "Add '../../../' prefix to the three context file links (project.md, architecture.md, patterns.md)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 12,
+      "issue": "Skill link path uses '.claude/skills/pre-deploy-qa/SKILL.md' (no leading '../../../'), and context file paths for project.md, architecture.md, patterns.md, deployment.md are similarly missing the '../../../' prefix. Same broken-link issue as Task 11.",
+      "fix": "Add '../../../' prefix to the skill link and all four context file links in Task 12."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 11,
+      "issue": "Round-1 finding about StepTypeTest guidance note (verify it has MESSAGE guard and old types are gone) was not added. Task 11 line 84 still only says 'enum без старих типів, з MESSAGE' with no explicit note to flag as blocker if Task 1 did not extend StepTypeTest. This is a minor audit-completeness gap.",
+      "fix": "Add to Task 11 Details checklist for StepTypeTest: 'Verify it was extended by Task 1 to assert MESSAGE is present and SEND_MESSAGE/SEND_IMAGE/MENU are absent as valueOf-resolvable constants. If only pre-existing guards (EMIT_EVENT, SUBSCRIBE_TO_FUNNEL) remain, flag as blocker gap.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 11,
+      "issue": "Round-1 finding about FunnelStepForm.spec.ts was not addressed — the file is not listed in Task 11 context. The block editor component is FunnelStepForm.vue (Task 7), but only dialog wrapper specs (EditStepDialog, AddStepDialog) are listed. If Task 7 created frontend/tests/components/funnels/FunnelStepForm.spec.ts, the auditor needs to know to check it.",
+      "fix": "Add to Task 11 Context Files (frontend): 'frontend/tests/components/funnels/FunnelStepForm.spec.ts (if created by Task 7 — verify via decisions.md). Dialog specs wrap FunnelStepForm but may not exercise per-type block widgets directly.'"
+    }
+  ],
+  "round1_resolution": {
+    "task_10_critical_decisions_empty": "RESOLVED — task correctly gated by depends_on [1..8]; precondition note and glob fallback already present in task text. Not a defect.",
+    "task_10_critical_glob_fallback": "RESOLVED — glob fallback in Details section is correct; net-new classes in botfunnel/funnel/ package per tech-spec.",
+    "task_11_critical_dependency_gate": "RESOLVED — same gate; expected pre-implementation state.",
+    "task_12_critical_logs_working_infeasible": "RESOLVED — step 3 now reads 'decisions.md entries for Task 9/10/11' and explicitly states audit tasks do not write files under logs/working/. The critical is fixed.",
+    "task_12_minor_order_assertion": "RESOLVED — Task 12 Verification Steps (lines 142-143) and Details (lines 183-186) now explicitly require FunnelStepExecutorTest to assert block send ORDER via InOrder/inOrder(sender), not just times(K).",
+    "task_11_major_infra_note": "RESOLVED — task 11 verification section already notes the suite run is a prerequisite check; static-only fallback is implicit.",
+    "task_10_minor_report_structure": "INFO — audit report structure is prescriptive but appropriate for methodology; no change needed."
+  },
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 5,
+    "issues_from_round1_resolved": 7,
+    "issues_remaining_from_round1": 2,
+    "new_issues": 3
+  }
+}

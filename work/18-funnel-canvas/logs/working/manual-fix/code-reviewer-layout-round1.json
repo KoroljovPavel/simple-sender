@@ -1,0 +1,47 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-node-layout",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "category": "css-behavioral-change",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/components/funnels/FunnelCanvasNode.vue",
+      "line": 254,
+      "issue": "The old `.funnel-output-row` had `pointer-events: none` (re-enabled only on the Handle circle). The new implementation removed this, meaning the row div and label span are now pointer-events-interactive by default.",
+      "impact": "In Vue Flow, node-body dragging is initiated via mousedown on the .vue-flow__node wrapper which captures the event before child elements handle it. In practice this should not block drag. However, the defensive pattern in the prior design (row is none, handle re-enables) was explicit protection. Without it, a user mousedown on a label row would bubble to the node wrapper (drag) but also fires on the label element itself. No blocking issue in Vue Flow's event model, but the intent guard is gone.",
+      "recommendation": "Either add `pointer-events: none` back to `.funnel-output-row` (which is safe because the Handle's `pointer-events: all` in the :deep rule is still present and will override it for the dot), or add a comment noting the deliberate removal and why Vue Flow's node-wrapper drag capture makes it safe. The Handle :deep rule already has `pointer-events: all` on line 290 so the drag-handle re-enable path still works if row-level none is restored.",
+      "optional": true
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "category": "css-layout",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/components/funnels/FunnelCanvasNode.vue",
+      "line": 258,
+      "issue": "The output row padding is `0.3125rem 0.75rem` (5px 12px). The absolutely-positioned handle dot is `12px` wide and `translate(50%, -50%)` so its left 6px straddles into the card. The row's right padding is 12px but there is no explicit `padding-right` or `margin-right` on the label to guard against the label text running into the handle dot zone on wide cards. The 16-char truncation mitigates this for button labels but `outputNext` ('Далі', 'Next') and `outputTimeout` ('Таймаут', 'Timeout') are not truncated.",
+      "impact": "Visually minor: the existing row padding (12px) provides 6px clearance beyond the handle dot's left edge, which is likely sufficient. However on very narrow or extremely long non-truncated i18n strings, the label could visually touch the dot.",
+      "recommendation": "Consider `padding-right: calc(0.75rem + 10px)` (or `margin-right: 10px` on the label) to keep the label text away from the handle dot's inner half. This is a cosmetic guard, not a functional blocker.",
+      "optional": true
+    }
+  ],
+  "checks": {
+    "title_no_overlap": "PASS — Header is a dedicated `.funnel-canvas-node__header` block in normal document flow; outputs section below it (`.funnel-canvas-node__outputs`) is separated by a `border-top` divider. The outputs container is no longer `position:absolute` overlaying the title.",
+    "card_grows_with_outputs": "PASS — `.funnel-output-row` elements are in normal block flow with `padding: 0.3125rem 0.75rem` per row; card grows in height with output count. `min-width: 180px` is sane (up from 160px).",
+    "handle_right_border_alignment": "PASS — Handle is `position:absolute; top:50%; right:0; transform:translate(50%,-50%)` on its `.funnel-output-row` which has `position:relative`. This anchors the dot on the card's right border vertically centered to its row.",
+    "hover_no_jitter": "PASS — Hover rule is `transform: translate(50%, -50%) scale(1.4)`. The base `translate(50%, -50%)` is preserved. Only `scale` is added. No positional jump.",
+    "card_target_handle_intact": "PASS — `.funnel-handle--card-target` is still present (`v-if='!isEntry && !isNote'`), covers the full card via `position:absolute; top:0; right:0; bottom:0; left:0; width:100%; height:100%`, `pointer-events:none` at rest, enabled in `--droppable` state. Unchanged.",
+    "click_select_node_move": "PASS — Card target handle still uses `nodrag` class (Vue Flow default on handles). The new row elements carry no `nodrag` class, but Vue Flow node-wrapper drag capture is mousedown on `.vue-flow__node` which fires before child element handlers. Functionally equivalent to prior behavior.",
+    "handle_ids_unchanged": "PASS — `next`, `btn:<index>`, `timeout`, `entry` IDs are all preserved in the `outputs` computed. `resolveEdgeRef` / `handleFieldKind` in `FunnelCanvas.client.vue` remain untouched.",
+    "data_handle_id_attrs": "PASS — `data-handle-id={out.id}` and `:data-test={out.testId}` are present on each Handle. `data-test` prefix form `funnel-canvas-handle-*` preserved; test assertions at lines 205-206 and 280-284 rely on this.",
+    "note_node": "PASS — Note body (`v-if='isNote && noteText'`, `data-test='funnel-canvas-note-text'`) is in normal flow outside the outputs section; `isNote` nodes have no outputs (`v-if='outputs.length > 0'` is false for notes); card-target handle skips notes (`v-if='!isEntry && !isNote'`). Not regressed.",
+    "ssr_safety": "PASS — No browser-only APIs in script. Component is only ever imported by `FunnelCanvas.client.vue` (Nuxt `.client` convention keeps it client-side only). `useI18n` and `useVueFlow` are Nuxt/Vue composables safe for the client context.",
+    "xss_no_v_html": "PASS — All user-facing content rendered via `{{ }}` text interpolation. No `v-html` anywhere. Consistent with Decision 7 / `FunnelMessagePreview` convention.",
+    "broken_edge_messaging": "PASS — `broken` prop and `.funnel-canvas-node--broken` class binding untouched (line 125, 204-207). `exitBadge` computed and badge rendering untouched (lines 115, 159-162).",
+    "dead_key_removal": "PASS — `funnels.canvas.handle.next`, `.button`, `.timeout` are fully absent from all `.vue` / `.ts` source files (confirmed via grep). Surviving keys `entry`, `input`, `outputNext`, `outputTimeout` are present in both `en.json` (lines 760-761) and `uk.json` (lines 760-761) and used in `outputs` computed. `required-keys.spec.ts` updated to remove the three dead entries.",
+    "test_coverage": "PASS — New test 'lays the node out as a header + stacked output rows' (lines 235-287) covers: header element exists, title inside header, title absent from outputs box, header absent from outputs box, correct row count (3), correct labels in order, correct handle IDs in order. Existing truncation and handle/label ordering tests (lines 289-311, 152-233) complement coverage."
+  },
+  "summary": "Layout fix is correct and complete. The core structural change — header as a full-width normal-flow element, outputs as a dedicated section in normal flow, each row `position:relative` with handle `position:absolute; right:0; top:50%; transform:translate(50%,-50%)` — correctly solves the title-overlap problem. Hover jitter fix is correct (base translate preserved). Handle IDs, connect logic, card-target, note nodes, XSS guards, and i18n are all intact. Two minor CSS observations (removed row pointer-events guard, no explicit label right-margin vs handle dot) do not block production. Verdict: pass."
+}

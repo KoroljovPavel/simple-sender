@@ -1,0 +1,45 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review of 17-funnel-multi-entry Testing Strategy. All four round-1 medium findings are now resolved with named, behavioral test scenarios; the round-1 lows (component spec owner, i18n parity owner, intra-vs-cross on_start 422 split) are also resolved. The plan now names the core 'one execution' invariant as a no-second-row IT, the self-loop termination as a regression IT, the CAS-loss IT as a state-integrity+WARN assertion, and a cross-funnel isolation IT. Two residual minor watch-items remain (i18n assertion shape, multi-funnel fan-out dispatch case) but neither is a blocking coverage gap. Pyramid is healthy (unit + slow-lane IT, no E2E, correct for API/Backend).",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy / Frontend (line 224); AC line 274",
+      "issue": "i18n uk/en parity now has a named owner ('asserted (no empty keys) in the component spec'), which resolves the round-1 ownership gap. Residual nuance: the spec does not state HOW parity is asserted. A component spec that renders the Triggers panel in a single active locale will not catch a key present in en but missing/empty in uk (or vice versa) unless it explicitly diffs the two locale key sets. Round-1 finding is downgraded to minor, not fully closed.",
+      "recommendation": "Specify the assertion mechanism: either (a) a key-set diff test that fails if any Triggers-panel label key exists in en.json but is missing/empty in uk.json (and reverse), or (b) render the panel twice (uk and en) and assert every visible label is non-empty and not equal to its raw i18n key. Asserting in only one locale is insufficient."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy / Integration tests (line 220-223); How it works step 1-3 (fan-out)",
+      "issue": "Cross-funnel isolation is now covered for the single-other-funnel case ('event firing while in-flight in a different funnel STARTs the trigger's funnel and leaves the other untouched') — round-1 M4 resolved. Residual: the fan-out boundary where ONE event matches TWO active funnels at once (redirect for the funnel the subscriber is in-flight in, start for the other) is part of the same correctness surface (How it works step 1 LIST-queries all matching funnels; Decision 11 centralizes per-funnel evaluation) but is not named as a distinct scenario. The matched-element re-scan unit test (line 216) covers element selection within ONE funnel, not independent per-funnel dispatch on a multi-match.",
+      "recommendation": "Add to EventsControllerIT or FunnelEventServiceTest: subscriber in-flight in funnel A; event E has matching event triggers in BOTH A and B; assert A is REDIRECTED to its trigger entryStepId and B gets a FRESH execution started at B.entryStepId, each evaluated independently in the same dispatch. Asserts the fan-out loop applies the redirect-vs-start decision per matched funnel rather than once globally."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 6,
+      "integration": 14,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "round1FindingResolution": {
+    "M1_no_second_execution": "RESOLVED — line 220 names an engine IT asserting redirect mutates the existing row and inserts NO second funnel_executions document; mirrored in AC line 272.",
+    "M2_emit_event_self_loop_regression_IT": "RESOLVED — line 220 'EMIT_EVENT->trigger self-loop terminates at the per-tick budget / human-press gate (US Risk 4 proof as a regression gate, not only the live check)'; Risk table line 257 'A self-loop termination IT is added'; backed by Architecture loop-bound proof line 81.",
+    "M3_cas_loss_state_integrity_and_warn": "RESOLVED — line 220 'CAS-loss best-effort no-op — assert the row is untouched AND the WARN is emitted (not just a boolean return)'; AC line 272 'no-op with a greppable WARN and intact state'. Litmus closed: a boolean-only test would pass on a corrupted row; assertion now targets row state.",
+    "M4_cross_funnel_isolation": "RESOLVED for the single-other-funnel case — line 220. Multi-funnel fan-out dispatch (one event matching two funnels) remains a minor residual (see findings).",
+    "low_FunnelTriggersPanel_component_spec": "RESOLVED — line 224 names FunnelTriggersPanel.vue component spec (add/delete, entry-step pick, duplicate-event-name guard).",
+    "low_i18n_parity_owner": "MOSTLY RESOLVED — owner named (component spec); assertion shape unspecified (minor residual).",
+    "low_intra_vs_cross_on_start_422_split": "RESOLVED — line 222 splits intra-funnel 'at most one on_start' vs cross-funnel duplicate on_start value as distinct 422 cases across FunnelServiceTriggerTypeTest and FunnelControllerIT.",
+    "low_slow_lane_enforcement": "STANDING — slow-lane engine ITs enforced via Task 5 Verify-smoke (-PrunSlow=true) and Task 11 pre-deploy QA; no CI pipeline yet (deployment TBD), so enforcement is human/agent-gated. Acceptable; unchanged from round 1."
+  }
+}

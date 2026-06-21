@@ -1,0 +1,64 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": 33,
+      "issue": "SecurityConfig uses `new WebSessionServerSecurityContextRepository()` instead of the singleton `WebSessionServerSecurityContextRepository.getInstance()`. The task spec explicitly forbids the `new` form (edge cases section). No test catches this violation because the test only checks the HTTP status code, not which repository instance is wired.",
+      "suggestion": "Change line 33 of SecurityConfig.java to use `WebSessionServerSecurityContextRepository.getInstance()`. Add a test that verifies the security context repository type via `http.securityContextRepository(...)` or, at minimum, add a comment in SecurityConfigTest explaining this contract. The simplest guard: assert the wired chain uses a session-backed repository by checking that a session cookie is set on an auth response."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/common/GlobalErrorHandlerTest.java",
+      "line": 1,
+      "issue": "Only one of three @ExceptionHandler methods is tested. `handleBindException` (WebExchangeBindException → 400 with field errors) and `handleThrowable` (Throwable → 500) are completely untested. The `handleThrowable` case is security-relevant: it must not expose internal exception details. If someone changes the Throwable handler to re-throw the message verbatim, no test will catch it.",
+      "suggestion": "Add two additional test methods: (1) `bindException_returnsFieldErrors` — create a mock WebExchangeBindException with at least one FieldError, call `handler.handleBindException(ex)`, assert status is 400 and body message contains the field name and constraint message. (2) `unexpectedException_returns500_withoutInternals` — call `handler.handleThrowable(new RuntimeException(\"secret db password\"))`, assert status is 500, and assert body message does NOT contain \"secret db password\" (assert it equals \"Internal server error\")."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/common/GlobalErrorHandlerTest.java",
+      "line": 14,
+      "issue": "AppException factory methods cover five HTTP statuses (400, 401, 403, 409, 429) per spec, but only 400 is tested. If the `unauthorized`, `forbidden`, `conflict`, or `tooManyRequests` factory methods produce the wrong status code (e.g., all map to 400 due to a copy-paste error), no test would catch it.",
+      "suggestion": "Add parameterized or individual tests for each factory method: `unauthorized_returns401`, `forbidden_returns403`, `conflict_returns409`, `tooManyRequests_returns429`. Each should call `handler.handleAppException(AppException.unauthorized(\"...\"))` and assert the corresponding HTTP status. Use `@ParameterizedTest` with a method source of `(factory, expectedStatus)` pairs for conciseness."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/security/SecurityConfigTest.java",
+      "line": 1,
+      "issue": "The acceptance criteria explicitly requires that `/api/auth/**` is accessible without authentication. There is no test verifying that a request to `/api/auth/login` (or any `/api/auth/` path) returns something other than 401 for unauthenticated callers. Only the negative path (protected endpoint returns 401) is tested.",
+      "suggestion": "Add a test `unauthenticated_authEndpoint_isAccessible` that sends a request to `/api/auth/register` or `/api/auth/login` without credentials and asserts the status is NOT 401/403. If no auth endpoints exist yet, use a stub or verify the response is 404 (endpoint not found) rather than 401 (access denied) — this proves the security rule permits the path."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/user/UserServiceTest.java",
+      "line": 39,
+      "issue": "`canActivate_blockedUser_returnsFalse` only covers the negative (blocked → false). The spec states `canActivate` is a status transition guard; the positive paths (active, pending, deleted users) are not tested. If someone changes `canActivate` to always return false, the existing test still passes.",
+      "suggestion": "Add `canActivate_activeUser_returnsTrue` and `canActivate_pendingUser_returnsTrue` tests. Litmus check: if `canActivate` returned `!status.equals(UserStatus.active)` instead of `!= blocked`, the blocked test passes but the active test would fail — revealing the bug."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/security/SecurityConfigTest.java",
+      "line": 1,
+      "issue": "`/health` endpoint is configured as `permitAll()` in SecurityConfig but there is no test asserting it is accessible without authentication. If the path matcher is accidentally removed or reordered, no test will catch the regression.",
+      "suggestion": "Add `unauthenticated_healthEndpoint_isAccessible` that sends `GET /health` without credentials and asserts status is 200 (or at least not 401)."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/user/UserServiceTest.java",
+      "line": 24,
+      "issue": "`softDelete_setsStatusDeletedAndDeletedAt` does not assert that `updatedAt` is set. The implementation sets `updatedAt` in the same code path (UserService.java line 29). This is documented behavior that is silently untested.",
+      "suggestion": "Add `assertThat(result.getUpdatedAt()).isNotNull()` after the existing assertions. This makes the test a complete contract for the softDelete operation."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/user/UserServiceTest.java",
+      "line": 24,
+      "issue": "`softDelete` on a non-existent userId is not tested. The current implementation calls `findById` which returns `Mono.empty()` when the user is not found; `flatMap` on an empty Mono completes empty without error. Whether this silent empty result is correct behavior is not specified and not verified.",
+      "suggestion": "Add `softDelete_nonExistentUser_returnsEmpty` test: mock `userRepository.findById(\"missing\")` to return `Mono.empty()`, call `userService.softDelete(\"missing\").block()`, and assert the result is null (or use `StepVerifier.create(...).verifyComplete()`). This documents the intended behavior for the not-found case."
+    }
+  ],
+  "summary": "The four TDD anchor tests required by the task spec are present and each passes the litmus test — they would fail if the corresponding core logic were removed. However, coverage is narrow. GlobalErrorHandlerTest covers only 1 of 3 exception handlers and only 1 of 5 AppException factory statuses; the untested Throwable handler is security-relevant (must not leak internal messages). SecurityConfigTest covers only the 'deny unauthorized' rule but not the 'permit /api/auth/**' rule, which is an explicit acceptance criterion. SecurityConfig itself uses `new WebSessionServerSecurityContextRepository()` where the spec mandates `getInstance()` — no test catches this implementation deviation. Overall: 3 major findings (missing critical coverage) and 3 minor findings (positive-case gaps, undocumented behaviors).",
+  "approved": false
+}

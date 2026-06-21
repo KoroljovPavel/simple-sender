@@ -1,0 +1,27 @@
+{
+  "validator": "task-validator",
+  "batch": [11],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Context Files",
+      "issue": "Audit report paths are plain text, not markdown links. Lines 143-146 list `work/16-persistent-keyboard/logs/working/task-8/` etc. as bare text rather than `[task-8 audit](../logs/working/task-8/)` links.",
+      "fix": "Convert audit report references to markdown links: `[task-8 audit report](../logs/working/task-8/)`, `[task-9 security report](../logs/working/task-9/)`, `[task-10 test report](../logs/working/task-10/)`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Details",
+      "issue": "Standard Details subsections (`**Files**`, `**Dependencies**`, `**Edge cases**`, `**Implementation hints**`) are absent; content is written as free-form paragraphs. For a QA/non-code task `**Files**` and `**Implementation hints**` are semantically N/A, but `**Dependencies**` and `**Edge cases**` are present as prose (tasks 8/9/10 dependency paragraph; local-infra unavailability edge case). Template expects labelled subsections.",
+      "fix": "Optionally restructure Details into labelled subsections for template conformance: `**Dependencies**` (tasks 8, 9, 10 must be done), `**Edge cases**` (Docker unavailable for slow lane; local infra missing for AVP step 4 — fallback documented). `**Files**` and `**Implementation hints**` can be omitted or replaced with N/A notes for a verification-only task."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 1,
+    "issues_found": 2
+  }
+}

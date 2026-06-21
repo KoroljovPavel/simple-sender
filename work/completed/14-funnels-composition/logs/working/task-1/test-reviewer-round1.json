@@ -1,0 +1,15 @@
+{
+  "task": "1",
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "skill": "test-master",
+  "verdict": "pass",
+  "summary": "Task 1 is a data-model/mapping foundation. The TDD anchor (StepTypeTest.subscribeToFunnel_present) is present and pins both the enum constant and its persisted name(), mirroring emitEvent_present. Round-trip mapping and non_message preview behaviour are explicitly deferred to Task 2/Task 3 per the task spec, so no further tests are required in this task.",
+  "findings": [],
+  "positive_notes": [
+    "subscribeToFunnel_present asserts both valueOf(\"SUBSCRIBE_TO_FUNNEL\") == constant and .name() == \"SUBSCRIBE_TO_FUNNEL\" — guards against a silent rename breaking deserialisation of persisted stepType documents. Each assertion earns its place.",
+    "No redundant tests added: mapping/preview coverage correctly left to Task 2/3 as the task instructs, avoiding duplicate coverage.",
+    "Existing FunnelServiceEmitEventTest updated to keep compiling without altering its assertions (constructor args extended with null, null, false) — no regression to existing test intent.",
+    "Whole funnel module test suite green (./gradlew test --tests 'com.botfunnel.funnel.*' BUILD SUCCESSFUL); compileJava + compileTestJava confirm both exhaustive switches are covered."
+  ]
+}

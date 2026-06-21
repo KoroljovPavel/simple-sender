@@ -1,0 +1,74 @@
+[
+  {
+    "severity": "major",
+    "file": "backend/src/main/java/com/botfunnel/email/EmailService.java:95",
+    "issue": "Recipient email logged on send failure: log.error(\"Email send failed to {}: {}\", to, err.toString()). Email is PII (per code-reviewing skill mapping: 'Secrets or PII logged → critical'). This pattern was deliberately removed from AuthService.doForgotPassword in Task 6 (now logs userId at line 305) but EmailService still does it for every send path (verify, reset, blocked).",
+    "recommendation": "Stop logging the recipient address. EmailService doesn't have userId available, so either (a) accept the email argument as a redacted form (e.g., 'u***@example.com') and let callers redact, or (b) drop the recipient from the log line entirely and rely on the caller's userId-keyed warn at AuthService.java:157,230 / AuthService.java:305. Caller-side warns are sufficient for incident response."
+  },
+  {
+    "severity": "major",
+    "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java:157, 230",
+    "issue": "Two PII-leaking warns: register() — `log.warn(\"Verification email dispatch failed for {}: {}\", saved.getEmail(), ex.getMessage())` and resendVerification() — `log.warn(\"Resend verification email dispatch failed for {}: {}\", saved.getEmail(), ex.getMessage())`. Same pattern that doForgotPassword (line 305) was explicitly fixed to use `saved.getId()` per Task 6 security-auditor finding #4. The fix was applied inconsistently — registration paths still leak email.",
+    "recommendation": "Replace `saved.getEmail()` with `saved.getId()` at AuthService.java:157 and AuthService.java:230. One-line edit at each site."
+  },
+  {
+    "severity": "minor",
+    "file": "backend/src/main/java/com/botfunnel/email/EmailService.java:53,64,74,98",
+    "issue": "Email templates (verify-email.html, reset-password.html, account-blocked.html) are loaded from the classpath on EVERY send call via getResourceAsStream(...).readAllBytes(). Templates are immutable post-deployment; reloading them per send is wasted I/O and adds latency to the boundedElastic-pinned send chain.",
+    "recommendation": "Cache loaded templates in @PostConstruct (or as static final after first load) into final String fields. Sketch: `private final String verifyEmailTemplate = loadTemplate(\"/templates/email/verify-email.html\")`. Removes the per-send classpath read."
+  },
+  {
+    "severity": "minor",
+    "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java:50",
+    "issue": "`/api/auth/**` is permitAll, including /api/auth/logout. Unauthenticated POSTs hit AuthService.logout, which does exchange.getSession() → creates a fresh empty WebSession → invalidates it. CSRF protection (CookieServerCsrfTokenRepository) requires a valid X-XSRF-TOKEN, so this is not exploitable, but it is wasted work and surfaces in metrics as session-create churn from any unauth probe.",
+    "recommendation": "Either (a) move /api/auth/logout under .authenticated() — clients that don't have a session are a no-op anyway, so the UX is unchanged; or (b) guard with a short-circuit at the top of AuthService.logout that checks if a session already exists before creating one. (a) is cleaner."
+  },
+  {
+    "severity": "minor",
+    "file": "backend/src/main/java/com/botfunnel/jobs/HardDeleteJob.java:53",
+    "issue": "log.info logs the full ID list on every run when there are deletions: `log.info(\"Hard-delete job: removing {} users (ids={}, cutoff={})\", ids.size(), ids, cutoff)`. For a steady-state deletion volume this could be a multi-kilobyte INFO line each day. IDs are not PII, but bulk log expansion is noisy.",
+    "recommendation": "Log count + cutoff at INFO; emit the full ID array at DEBUG. Two log lines, conditional on the logger level. Optional — fine for current scale."
+  },
+  {
+    "severity": "minor",
+    "file": "backend/src/main/java/com/botfunnel/admin/SuperAdminSeeder.java:68,72,78",
+    "issue": "log.info calls log the admin email at startup (\"Super admin created: {}\", \"Super admin already present: {}\", \"Existing user promoted to super admin: {}\"). Email is PII; this is a pure ops trace and goes to stdout.",
+    "recommendation": "Operationally useful — keep, but drop to DEBUG once seeding is stabilized, or emit a redacted form (local-part hashed). Low priority."
+  },
+  {
+    "severity": "minor",
+    "file": "frontend/stores/auth.ts:5",
+    "issue": "useState('auth-user') backs the Pinia store. Nuxt's useState is per-request server-side ONLY when the consumer respects the request scope. A Pinia setup-store calling useState during SSR may cache its first-request user across concurrent requests on the same Nuxt server (the deferred 'useState SSR leak' note from Task 8 security-auditor round 1).",
+    "recommendation": "Add a server-side concurrency test: hit /api/auth/me with two different session cookies in parallel, assert each request resolves to its own user. If the leak reproduces, switch the auth state to a route-rule-scoped composable or use Pinia's onSSR + Nuxt SSR context store binding."
+  },
+  {
+    "severity": "minor",
+    "file": "frontend/pages/profile.vue:53,177,206",
+    "issue": "Direct mutation of Pinia store: `authStore.user.name = trimmed`, `authStore.user = null`. Bypasses the action layer. Already documented in decisions.md as accepted technical debt — flagging here only because the audit pass enumerated it again.",
+    "recommendation": "Add `setUser(user)` and `clearUser()` actions to stores/auth.ts. Replace direct assignments. Optional — accepted in decisions.md Task 11."
+  },
+  {
+    "severity": "minor",
+    "file": "frontend/pages/auth/register.vue:8-22, frontend/pages/auth/reset-password.vue:14-26, frontend/pages/profile.vue:106-119",
+    "issue": "The `password.min(8).refine(/[A-Za-z]/).refine(/\\d/)` schema and the `data.password === data.confirmPassword` refine pattern are duplicated across three pages. Drift risk: if backend ValidPassword rules change (e.g., minimum bumped to 12), three files need parallel edits.",
+    "recommendation": "Extract a `passwordRules` zod fragment and `confirmPasswordMatch` helper into `frontend/lib/passwordSchema.ts`. Then `z.object({ password: passwordRules, confirmPassword: z.string() }).superRefine(confirmPasswordMatch)`."
+  },
+  {
+    "severity": "nitpick",
+    "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java:88-110",
+    "issue": "AuthService has 11 constructor dependencies (UserRepository, ReactiveRedisTemplate, PasswordEncoder, ServerSecurityContextRepository, EventService, EmailService, TokenService, ReactiveMongoTemplate, plus three @Value config strings/longs). The class spans ~630 lines and handles login, registration, email verification, resend, logout, forgot-password, reset-password.",
+    "recommendation": "Optional split: AuthService (login + me + logout), RegistrationService (register + verifyEmail + resendVerification), PasswordResetService (forgot + reset). Each shares TokenService/EventService/EmailService. Moves brute-force counter logic into a single LoginRateLimiter. Defer to next epic — not blocking."
+  },
+  {
+    "severity": "nitpick",
+    "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java:66",
+    "issue": "FORGOT_DUMMY_DELAY = 40ms is hardcoded. Calibrated against current Mongo save round-trip; could drift on different infra (e.g., Atlas remote cluster could push real save to 100ms+, making the delay sub-budget and re-opening the timing oracle).",
+    "recommendation": "Expose as `@Value(\"${app.forgot.dummy-delay-ms:40}\")` so it can be tuned per environment without a code change. Optional."
+  },
+  {
+    "severity": "nitpick",
+    "file": "backend/src/main/java/com/botfunnel/jobs/HardDeleteJob.java:40",
+    "issue": "`Instant.now().minus(RETENTION).plusNanos(1)` is a clever inversion of the strict `Before` finder to inclusive-at-30d. Works but is non-obvious without the inline comment.",
+    "recommendation": "Add `Mono<Flux<User>> findByStatusAndDeletedAtLessThanEqual(...)` to UserRepository and drop the .plusNanos(1) trick. Optional readability polish."
+  }
+]

@@ -1,0 +1,32 @@
+{
+  "status": "approved",
+  "summary": "Task 6 wires the TelegramSender subscriber hook exactly per Decision 4 and AC5: a typed TerminalReason on TelegramSendException routes 403 -> markBlockedByChatId and 400 chat-not-found -> markDeletedByChatId, dispatched AFTER the telegram_send_failed audit and isolated from the original exception. All cross-file signatures match, the 3-arg ctor preserves OTHER back-compat, null-safety and 401/429 paths are correct, and all three test classes are green (6 + 5 + 29 = 40 tests, 0 failures, 0 errors). No critical or major findings; two minor optional notes only.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 181,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "The hook resolves the subscriber by bot.getTelegramBotId() (the Telegram numeric id), which deliberately differs from the AC text that wrote 'botId'. This is the type-correct and lookup-correct value (SubscriberServiceImpl.findByChat queries by telegramBotId, and markBlockedByChatId's signature is (String projectId, Long telegramBotId, Long chatId)). The divergence from the AC is correct and intentional. Consider a one-line inline comment at the call site noting that the AC's 'botId' maps to bot.getTelegramBotId() (Mongo String id is NOT the Telegram numeric id) so a future reader does not 'fix' it back to the String botId and break the lookup.",
+      "benefit": "Prevents a well-intentioned future regression that would silently break the subscriber lookup (wrong-type / wrong-key arg).",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 185,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "dispatchSubscriberHook catches RuntimeException from mark-*; AppException (the project base exception thrown by SubscriberServiceImpl flows) extends RuntimeException, so this correctly absorbs any service-layer failure. The IT (hookFailureDoesNotSwallowOriginal) only exercises a plain RuntimeException('mongo down'). Optional: add a second hook-failure case that throws an AppException subtype to lock in that the catch breadth is intentional and an AppException from the CRM flip likewise cannot replace the original TelegramSendException.",
+      "benefit": "Pins the intended catch breadth so a future narrowing of the catch clause (e.g. to a specific exception) is caught by a test rather than leaking through to the caller.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 2,
+    "testCoverageAssessment": "excellent"
+  }
+}

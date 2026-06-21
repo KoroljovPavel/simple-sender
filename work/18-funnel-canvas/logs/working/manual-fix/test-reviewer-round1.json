@@ -1,0 +1,24 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-addnode",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "All 6 step-readiness gate tests are value-based and load-bearing. Pre-fix, onCanvasSteps called persist() unconditionally — every 'not.toHaveBeenCalled()' test would see an update call and fail; both 'filled step' tests would see update called on the first (incomplete) emit so the CalledTimes(1) assertion after the second emit would find 2 calls and fail. Coverage is adequate: 3 distinct required-field step types (MESSAGE/DELAY/ADD_TAG) prove the gate is general, not MESSAGE-only; persistence-proceeds tests verify the gate opens and check the body payload (not count-only); the any-incomplete-blocks-save test covers the mixed-array scenario. The mock id-minting mirrors the real applyResponse→steps.value round-trip — the wireable assertion reads live canvas props after applyResponse fires, so it is meaningful. No existing tests weakened.",
+  "status": "passed",
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 6,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

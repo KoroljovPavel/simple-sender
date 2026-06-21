@@ -1,0 +1,84 @@
+{
+  "status": "passed",
+  "summary": "Single golden-path E2E spec covers the full register-to-restore flow with stable data-test selectors that all map to shipped Wave 3 hooks. Anti-flake discipline is solid: no page.waitForTimeout, auto-retrying matchers (toContainText / toBeVisible / toBeDisabled / toBeEnabled / toHaveCount / toBeHidden), locale-agnostic URL regexes that tolerate /en prefix and query strings, unique per-run email for reuseExistingServer determinism, and no page.reload() between rename and selector-update assertion (the critical reactive path). Every Acceptance Criterion item that the spec is responsible for is provably asserted; only nits remain.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:104",
+      "issue": "Post-delete redirect waits for /\\/projects(?:\\?.*)?$/ which also matches /projects/new and /projects/{id}/settings. In the unlikely case settings.vue redirects to a wrong intermediate path, the regex would silently accept it. The current implementation in pages/projects/[projectId]/settings.vue redirects to '/projects' (when at least one active remains) so the spec passes — but the assertion is looser than the contract.",
+      "recommendation": "Tighten regex to '/\\/(?:[a-z]{2}\\/)?projects(?:\\/?\\?.*)?$/' so it only accepts exactly /projects or /<locale>/projects (with optional trailing slash + query). Same tightening is worth applying to the /dashboard regex on lines 38, 50, 61."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:28",
+      "issue": "page.waitForLoadState('networkidle') is documented as flaky on long-polling apps and Nuxt dev with HMR can keep websockets warm, sometimes exceeding the default 30s budget. It is used here to gate hydration on /auth/register. The reference i18n.spec.ts uses the same pattern, but only after click and before the next interaction — not as a pre-fill gate. If HMR/WS noise spikes in CI the spec may hang here even though the form is interactive.",
+      "recommendation": "Drop the networkidle wait on line 28 and rely on Playwright's auto-wait built into locator.fill (the #email input is server-rendered and present immediately). If a hydration race is observed, replace with await expect(page.locator('#email')).toBeEditable() which is cheap and bounded by the matcher timeout."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/e2e/projects.spec.ts:50-52",
+      "issue": "After creating project #1 the spec only asserts the topbar selector contains the project name (AC-19 selector populated). It does not assert that the dashboard transitioned from empty-state to welcome content. AC-18 → AC-19 transition is the user-facing observable: empty-state must disappear, welcome content must appear. Currently a regression that keeps showing the empty-state CTA on a non-empty dashboard would not be caught by this spec (component unit tests would, but this is the E2E pyramid layer for the dashboard state machine).",
+      "recommendation": "Add two assertions after the second waitForURL(/dashboard/) on line 50: `await expect(page.locator('[data-test=\"dashboard-empty-state\"]')).toBeHidden()` and ideally a positive welcome assertion. The welcome block in pages/dashboard.vue currently has no data-test hook — if adding one is in scope, request data-test=\"dashboard-welcome\" on the <template v-else-if=\"showWelcome\"> wrapper (already named in task spec but never shipped). If out of scope, the hidden assertion on dashboard-empty-state alone is sufficient and uses an already-shipped selector."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/e2e/projects.spec.ts:99-104",
+      "issue": "AC-22d acceptance includes 'toast' after confirm; the spec asserts the redirect but not the success feedback. The restore path on /projects shows data-test=\"restore-toast\" but the delete path has no equivalent toast in settings.vue at the moment, so this is partly out of the implementer's reach. Worth flagging as a gap so the next iteration either ships a delete-success toast hook or the AC text is amended.",
+      "recommendation": "Either: (a) defer to a follow-up Wave 3 fix that adds data-test=\"delete-success-toast\" on /projects and assert it here; or (b) record in decisions.md that the user-facing toast for delete-success is intentionally not in MVP and the redirect itself is the feedback. Do not add the assertion against an absent element."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:117",
+      "issue": "Manual page.keyboard.press('Escape') to close the dropdown before clicking the restore button couples the test to the menu's keyboard-handling implementation. If a future refactor of ProjectSelector switches from Escape-key listener to a different close trigger (Headless UI Menu, click-outside-only, etc.), this line breaks even though the user-facing behavior is unchanged.",
+      "recommendation": "Click outside the dropdown panel instead — e.g. `await page.locator('h1', { hasText: 'Recently deleted' }).click({ trial: false })` or `await page.locator('body').click({ position: { x: 10, y: 10 } })`. Either route exercises the same close-on-outside-click handler that real users hit. Alternative: rely on the fact that clicking the restore button is itself outside the panel — try removing this line entirely and see if the click still lands (Playwright auto-scrolls + retries, so it may already work)."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:17",
+      "issue": "All ~110 lines of golden-path live inside a single test() block with no test.step() wrappers. When this spec fails in CI 6 months from now, the trace viewer shows only `golden path: register → ...` and the failing locator, not which logical step (e.g. 'Step 7: rename') tripped. The inline `// Step N:` comments are visible in the source but not surfaced in Playwright reporters.",
+      "recommendation": "Wrap each of the 11 commented sections in `await test.step('register fresh user', async () => { ... })`. Zero behavioral impact, free CI failure-attribution, no extra deps. Same pattern as Playwright's official 'organize tests' guidance."
+    },
+    {
+      "severity": "nit",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:18-19",
+      "issue": "Email derived from Date.now() collides if the spec runs twice within the same millisecond (possible on retries or parallel workers — though playwright.config.ts has no workers override, default is per-machine CPU count). Probability is low but not zero, and a collision produces a 409 on register that aborts the spec.",
+      "recommendation": "Add randomness: `const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}``. Cost: 1 line, zero deps."
+    },
+    {
+      "severity": "nit",
+      "category": "missing_coverage",
+      "location": "frontend/e2e/projects.spec.ts:67-71",
+      "issue": "AC-21 also covers localStorage write (`bot-funnel.currentProjectId`). The spec asserts the trigger text changes (in-memory store update) but not the localStorage side effect. localStorage write is covered by stores/projects unit tests, so the pyramid is balanced — but a regression where the trigger updates yet localStorage write is dropped (e.g. an import.meta.client gate removed) would survive this E2E and only be caught next session-restore (which the spec does not exercise).",
+      "recommendation": "Optional, low ROI: add `await expect.poll(() => page.evaluate(() => localStorage.getItem('bot-funnel.currentProjectId'))).not.toBeNull()` after the switch. Skip if you prefer to keep the spec focused — unit tests already protect this."
+    },
+    {
+      "severity": "nit",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:38,45,50,58,61,76,104",
+      "issue": "Default page.waitForURL timeout in Playwright is 30s; the spec overrides to 10-15s. Tight timeouts catch flakiness fast locally but in CI under cold-start (fresh `pnpm dev` boot during webServer setup, MongoDB warmup) the first navigation after register can exceed 15s on slow runners. None of these overrides is load-bearing — the matchers below them will fail just as informatively.",
+      "recommendation": "Either bump the first navigation timeout (line 38) to 30s or drop all the explicit timeouts and use the playwright.config.ts default. Don't mix custom timeouts with no clear rationale per call site."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 7,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

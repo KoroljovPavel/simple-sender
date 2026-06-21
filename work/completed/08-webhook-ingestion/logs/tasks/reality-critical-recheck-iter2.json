@@ -1,0 +1,88 @@
+{
+  "validator": "reality-checker",
+  "batch": "critical-recheck",
+  "iteration": 2,
+  "tasks_rechecked": [9, 10, 11],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "hallucination",
+      "task": 11,
+      "item": "LINGERING — step 1 context-read description",
+      "verdict": "REGRESSED (partial)",
+      "issue": "T11 § What to do step 1 (line 30) still reads: 'SecurityConfig.java for the current chain shape (CookieServerCsrfTokenRepository + XorServerCsrfTokenRequestAttributeHandler, NOT csrf.disable())'. The actual SecurityConfig.java uses ServerCsrfTokenRequestAttributeHandler (non-Xor). The implementation instructions (step 4, AC line 85, Details line 126) were all fixed correctly to say ServerCsrfTokenRequestAttributeHandler. Only the context-read description in step 1 retains the wrong class name.",
+      "fix": "In T11 step 1, replace 'XorServerCsrfTokenRequestAttributeHandler' with 'ServerCsrfTokenRequestAttributeHandler'. The parenthetical describes what the developer will see when they open the file — it must match the actual file content."
+    },
+    {
+      "severity": "minor",
+      "category": "hallucination",
+      "task": "tech-spec (affects T9 consumers)",
+      "item": "LINGERING — tech-spec line 86 counter name",
+      "verdict": "REGRESSED",
+      "issue": "tech-spec.md Architecture → Worker path step 4 (line 86) still reads: 'increment worker_outcome_total{outcome=failure}'. T9 was correctly fixed to use 'telegram_worker_outcome_total' throughout (lines 68 and 112 of 9.md), but the tech-spec was not updated to match. This creates a naming inconsistency between the authoritative spec and the task that implements it. A developer reading the tech-spec after T9 is done would see a counter name that does not match the implemented code.",
+      "fix": "In tech-spec.md line 86, replace 'worker_outcome_total{outcome=failure}' with 'telegram_worker_outcome_total{outcome=failure}'."
+    }
+  ],
+  "previous_criticals_and_majors": [
+    {
+      "original_severity": "critical",
+      "task": 9,
+      "original_issue": "logEventBlocking called with 3 args (hallucinated signature)",
+      "verdict": "APPROVED — FIXED",
+      "evidence": "T9 § What to do step 3 now explicitly shows the 5-param call: eventService.logEventBlocking(project.getOwnerId(), 'telegram_command_start', null, null, Map.of(...)).block(). Comment states: 'The 5-param signature is (userId, eventType, ipAddress, userAgent, metadata) — mirror ProjectHardDeleteJob call shape.' Matches EventService.java line 34 exactly. ipAddress and userAgent are null for worker-originated events."
+    },
+    {
+      "original_severity": "critical",
+      "task": 9,
+      "original_issue": "userId source unspecified (could cause NPE or wrong value)",
+      "verdict": "APPROVED — FIXED",
+      "evidence": "T9 § What to do step 3 (line 49): 'Source userId for the event from project.getOwnerId() (the project's app user)'. Mirrors ProjectHardDeleteJob.java line 90: eventService.logEventBlocking(p.getOwnerId(), ...). Pattern confirmed correct."
+    },
+    {
+      "original_severity": "major",
+      "task": 9,
+      "original_issue": "Counter named worker_outcome_total instead of telegram_worker_outcome_total",
+      "verdict": "APPROVED — FIXED (in task file)",
+      "evidence": "T9 uses 'telegram_worker_outcome_total' consistently: § Description step 3 (line 25), § Cascade (line 68), § AC (line 112). NOTE: tech-spec line 86 still has the old name 'worker_outcome_total' — flagged separately above as a minor lingering issue."
+    },
+    {
+      "original_severity": "critical",
+      "task": 9,
+      "original_issue": "depends_on missing T1 (MeterRegistry), contained T2 (not needed)",
+      "verdict": "APPROVED — FIXED",
+      "evidence": "T9 frontmatter line 3: 'depends_on: [1, 3, 4, 5, 6, 7]'. T1 added (MeterRegistry bean required at context boot), T2 removed (worker does not call WebhookSecretVerifier or Sha256Hex). § Details Dependencies block (line 154) explains the reasoning explicitly."
+    },
+    {
+      "original_severity": "major",
+      "task": 10,
+      "original_issue": "PageRequest.ascOnUpdatedAt(10) doesn't exist in JobRunr 7.3.2",
+      "verdict": "APPROVED — FIXED",
+      "evidence": "T10 § What to do step 6 (line 63) now reads: 'storageProvider.getJobs(StateName.ENQUEUED, new org.jobrunr.storage.navigation.OffsetBasedPageRequest(\"updatedAt:ASC\", 0, 10))'. Parenthetical added: 'JobRunr 7.3.2 — PageRequest is abstract; OffsetBasedPageRequest(String order, long offset, int limit) is the concrete constructor'. Non-existent API removed."
+    },
+    {
+      "original_severity": "major",
+      "task": 10,
+      "original_issue": "Title said '4 counters' but controller owns 4 counters + 1 Timer (5 metrics total)",
+      "verdict": "APPROVED — FIXED",
+      "evidence": "T10 title (line 11) now reads: 'TelegramWebhookController + idempotent enqueue + 4 counters + 1 Timer'. Description (line 25) clarifies: 'The controller owns FOUR Counters + ONE Timer (the FIFTH counter, payload_too_large, lives on the filter from T11)'. AC line 108 also reads: 'All four controller-owned counters register exactly: received (success), duration (Timer), rejected{invalid_secret}, rejected{project_not_found}, rejected{duplicate}'."
+    },
+    {
+      "original_severity": "critical",
+      "task": 11,
+      "original_issue": "XorServerCsrfTokenRequestAttributeHandler hallucination — actual SecurityConfig uses non-Xor variant",
+      "verdict": "APPROVED — FIXED (implementation directives; one lingering description in step 1 — see findings)",
+      "evidence": "T11 § Description (line 24): 'ServerCsrfTokenRequestAttributeHandler (non-Xor variant; the current SecurityConfig source code rejected the Xor variant because it breaks the cookie/header round-trip)'. § What to do step 4 (line 47): 'ServerCsrfTokenRequestAttributeHandler (the non-Xor variant — the current SecurityConfig source code at the time of writing instantiates ServerCsrfTokenRequestAttributeHandler, NOT the Xor variant, because the Xor variant breaks the cookie/header round-trip)'. AC (line 85): 'Do NOT switch to XorServerCsrfTokenRequestAttributeHandler — the existing SecurityConfig deliberately rejected the Xor variant.' Details (line 126): same guidance. SecurityConfig.java line 64 confirmed: new ServerCsrfTokenRequestAttributeHandler(). Tech-spec line 46 also correctly says 'ServerCsrfTokenRequestAttributeHandler (the non-Xor variant)'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "previous_criticals_rechecked": 4,
+    "previous_majors_rechecked": 3,
+    "items_approved_fixed": 7,
+    "new_issues_found": 2,
+    "new_critical_issues": 0,
+    "new_major_issues": 0,
+    "new_minor_issues": 2
+  }
+}

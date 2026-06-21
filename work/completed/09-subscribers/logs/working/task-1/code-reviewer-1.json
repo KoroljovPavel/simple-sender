@@ -1,0 +1,16 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 1,
+  "round": 1,
+  "summary": "Task 1 faithfully implements the backend data layer and the SignedDownloadToken HMAC primitive. All five entities + three enums + four repositories match the tech-spec Data Models byte-for-byte (field order, index names/defs, @TextIndexed weights, language=\"none\", TTL 365d, partial-unique $in:[PENDING,RUNNING], class-load enum-drift guard mirroring RawUpdate/Bot). SignedDownloadToken is correct: HMAC computed over the raw base64url payload segment (not decoded JSON), constant-time MessageDigest.isEqual, verify ordering (format -> signature -> JSON parse -> expiry) prevents tampered payloads from reaching the parser or flipping to EXPIRED, and the fail-fast key parse mirrors TokenEncryptor with property-name-in-message and scrubbed JDK hex detail. NoOpSubscriberService and the SubscriberService interface are untouched (not in the commit). compileJava/compileTestJava succeed and SignedDownloadTokenTest is 9/9 green. Only one cosmetic issue found.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/common/crypto/SignedDownloadToken.java",
+      "line": 17,
+      "finding": "Unused import `static java.nio.charset.StandardCharsets.UTF_8`. The HMAC input and base64 segments are handled via US_ASCII (lines 52, 82); UTF_8 is never referenced in this file. TokenEncryptor.java imports UTF_8 because it genuinely uses it for plaintext, but here it is dead.",
+      "recommendation": "Remove the `import static java.nio.charset.StandardCharsets.UTF_8;` line to keep the import block clean. No functional impact; compilation succeeds with it present (Java only warns)."
+    }
+  ],
+  "verdict": "approve"
+}

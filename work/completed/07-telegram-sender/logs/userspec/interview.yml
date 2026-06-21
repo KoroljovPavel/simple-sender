@@ -1,0 +1,718 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-05-15 00:00:00"
+  last_updated: "2026-05-15 00:00:00"
+  status: "completed"
+  can_resume: false
+  current_question_num: 22
+  feature_size: "L"
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-05-15 00:00:00"
+    topic: "scope_unblock_test_message"
+    agent_question: |
+      Чи розблоковуємо sendTestMessage у 04c, чи це залишаємо на 04b?
+      (a) Чистий 04c — sender готовий, stub 422 лишається.
+      (b) 04c + одноразовий getUpdates-polling.
+      (c) Ручне введення chat_id.
+    user_answer: "варіант a"
+    summary: "Pure infra sender. test-message stub stays 422 until 04b lands."
+
+  - question_num: 2
+    timestamp: "2026-05-15 00:00:00"
+    topic: "method_set"
+    agent_question: |
+      Які методи реально треба в MVP 04c? Все 5 (sendText/sendWithButtons/sendImage/editMessage/deleteMessage) чи тільки sendText (YAGNI)?
+    user_answer: "тільки sendText"
+    summary: "MVP scope reduced to sendText only. Other methods deferred."
+
+  - question_num: 3
+    timestamp: "2026-05-15 00:00:00"
+    topic: "token_decrypt_cache"
+    agent_question: |
+      Кеш дешифрованого токена (Caffeine) — потрібен зараз чи відкладаємо?
+    user_answer: "без кешу"
+    summary: "No cache in MVP. Decrypt per call. Revisit when broadcast Epic 07 lands."
+
+  - question_num: 4
+    timestamp: "2026-05-15 00:00:00"
+    topic: "testing_strategy"
+    agent_question: |
+      Testing strategy: unit (error mapping, retry rules, log scrubber) + MockWebServer integration (5xx retry, 429 retry_after, success, 403/401/400 mapping). E2E не потрібен.
+    user_answer: "тести ок"
+    summary: "Unit + MockWebServer integration. No E2E."
+
+  - question_num: 5
+    timestamp: "2026-05-15 00:00:00"
+    topic: "sender_integration_in_test_message"
+    agent_question: |
+      Інтеграція sender у BotService.sendTestMessage — зараз (04c додає nullable ownerChatId у Bot doc, sendTestMessage гілкує на null/non-null) чи відкладаємо все на 04b?
+    user_answer: "i"
+    summary: "Variant (i): integrate now. Add nullable Bot.ownerChatId; sendTestMessage branches on null (422 stub) vs non-null (real send). 04b later populates ownerChatId."
+
+  - question_num: 6
+    timestamp: "2026-05-15 00:00:00"
+    topic: "audit_events_writer"
+    agent_question: |
+      Хто пише telegram_message_sent / telegram_send_failed — sender сам чи caller?
+    user_answer: "sender сам"
+    summary: "Sender writes audit events on every call. Callers add their own domain events on top (e.g. bot_test_message_sent)."
+
+  - question_num: 7
+    timestamp: "2026-05-15 00:00:00"
+    topic: "default_parse_mode"
+    agent_question: |
+      Default parse_mode для sendText — HTML, Markdown, MarkdownV2, plain?
+    user_answer: "HTML"
+    summary: "Default parse_mode=HTML. Optional override param per call."
+
+  - question_num: 8
+    timestamp: "2026-05-15 00:00:00"
+    topic: "exception_scope"
+    agent_question: |
+      Декларуємо повний набір exception types (5 з 04c-notes) чи мінімум (3): TelegramSendException, TelegramRateLimitException, BotTokenInvalidException?
+    user_answer: "мінімум"
+    summary: "MVP exception set: TelegramSendException, TelegramRateLimitException, BotTokenInvalidException. Subscriber-specific exceptions deferred to Epic 05."
+
+  - question_num: 9
+    timestamp: "2026-05-15 00:00:00"
+    topic: "401_reaction_scope"
+    agent_question: |
+      401 reaction у 04c: (a) тільки throw BotTokenInvalidException, реакція пізніше; (b) ще ставимо bot.status=TOKEN_INVALID + audit event.
+    user_answer: "a"
+    summary: "MVP: only throw BotTokenInvalidException. Bot status change / UI banner / auto-disconnect deferred. Caller maps exception to HTTP error."
+
+  - question_num: 10
+    timestamp: "2026-05-15 00:00:00"
+    topic: "test_message_event_dedupe"
+    agent_question: |
+      Events для test-message: sender завжди пише telegram_message_sent/_failed. BotService додатково пише bot_test_message_sent на success; на failure не дублює (sender вже залогував). Згода?
+    user_answer: "згода"
+    summary: "On success: telegram_message_sent (sender) + bot_test_message_sent (BotService). On failure: telegram_send_failed (sender) only, no duplicate bot_test_message_failed."
+
+  - question_num: 11
+    timestamp: "2026-05-15 00:00:00"
+    topic: "schema_change_bot_owner_chat_id"
+    agent_question: |
+      04c додає nullable Long ownerChatId у Bot doc/record, без index. 04b пізніше його заповнить. У 04c — null-safe використання. Згода?
+    user_answer: "ок"
+    summary: "Add nullable Bot.ownerChatId (Long) in 04c. No index. 04b will populate on /start handling."
+
+  - question_num: 12
+    timestamp: "2026-05-15 00:00:00"
+    topic: "retry_semantics"
+    agent_question: |
+      Retry semantics — 3 retries після першого attempt = 4 total спроби, sleeps 1s→2s→4s (як в існуючому TelegramApiClient)?
+    user_answer: "згода"
+    summary: "Retry.backoff(3, Duration.ofSeconds(1)) with maxBackoff suitable for 4s — 4 total attempts, sleeps 1s/2s/4s. Filter on transient only."
+
+  - question_num: 13
+    timestamp: "2026-05-15 00:00:00"
+    topic: "promote_helpers"
+    agent_question: |
+      Promote requireValidTokenShape + isTransient до public static на TelegramApiClient (mirror scrubTokens)?
+    user_answer: "згода"
+    summary: "Promote both helpers to public static on TelegramApiClient. Sender calls them directly. DRY."
+
+  - question_num: 14
+    timestamp: "2026-05-15 00:00:00"
+    topic: "parse_mode_default_revised"
+    agent_question: |
+      Перегляд Q7: default parseMode=null (Telegram default = plain text), optional override (HTML/Markdown/MarkdownV2)?
+    user_answer: "згода"
+    summary: "REVISES Q7. Default parseMode=null (Telegram plain). Optional per-call override. Safer default — no HTML injection risk for future user-content callers."
+
+  - question_num: 15
+    timestamp: "2026-05-15 00:00:00"
+    topic: "tampered_storage_handling"
+    agent_question: |
+      Token decrypt failure or malformed token after decrypt → wrap into BotTokenInvalidException (422 invalid_bot_token) замість unhandled IllegalArgumentException → 500?
+    user_answer: "згода"
+    summary: "Any decrypt failure or post-decrypt shape mismatch → BotTokenInvalidException → 422 invalid_bot_token. Single UX for all token-broken scenarios."
+
+  - question_num: 16
+    timestamp: "2026-05-15 00:00:00"
+    topic: "exception_inheritance"
+    agent_question: |
+      Three new exceptions extend AppException (a) чи RuntimeException (b)?
+    user_answer: "згода (a)"
+    summary: "Exceptions extend AppException. Single GlobalErrorHandler mapping. Matches bot/ module precedent."
+
+  - question_num: 17
+    timestamp: "2026-05-15 00:00:00"
+    topic: "ownerid_param"
+    agent_question: |
+      sendText signature: include optional ownerId param so sender writes telegram_message_sent event with userId=ownerId?
+    user_answer: "згода (b)"
+    summary: "sendText(botId, chatId, text, parseMode?, ownerId?). Sender writes event with userId=ownerId when caller provides it. Epic 06/07 workers may pass null (system context)."
+
+  - question_num: 18
+    timestamp: "2026-05-15 00:00:00"
+    topic: "text_size_validation"
+    agent_question: |
+      Pre-validate text length (4096)? Or let Telegram return 400?
+    user_answer: "згода (a)"
+    summary: "No pre-validation. Sender is thin — Telegram 400 maps to TelegramSendException."
+
+  - question_num: 19
+    timestamp: "2026-05-15 00:00:00"
+    topic: "staging_smoke_runbook"
+    agent_question: |
+      Окремий staging smoke runbook для 04c з ручним Mongo update для ownerChatId, чи переносимо повну перевірку test-message на 04b runbook?
+    user_answer: "згода (b)"
+    summary: "No new staging smoke runbook in 04c. Full test-message verification naturally lands in 04b runbook (ownerChatId becomes available via webhook then). 04c covered by integration tests only."
+
+  - question_num: 20
+    timestamp: "2026-05-15 00:00:00"
+    topic: "overall_timeout"
+    agent_question: |
+      Bound для 429 retry loop — overall .timeout(Duration.ofSeconds(30)) на весь Mono?
+    user_answer: "b"
+    summary: "Sender wraps final Mono with .timeout(Duration.ofSeconds(30)). Predictable upper bound aligned with frontend timeout. Exceeded → TelegramSendException."
+
+  - question_num: 21
+    timestamp: "2026-05-15 00:00:00"
+    topic: "dto_for_429_retry_after"
+    agent_question: |
+      DTO для parsing 429 parameters.retry_after: (a) розширити TelegramResult<T>; (b) окремий record TelegramSendResult<T>(ok, result, errorCode, description, parameters) тільки для sender.
+    user_answer: "b"
+    summary: "Separate TelegramSendResult<T> record with TelegramParameters. TelegramApiClient untouched. Lower blast radius."
+
+  - question_num: 22
+    timestamp: "2026-05-15 00:00:00"
+    topic: "rate_limit_exception_class"
+    agent_question: |
+      TelegramRateLimitException — окремий клас (used only inside retry loop) чи анонімний sentinel Mono.error?
+    user_answer: "a"
+    summary: "Dedicated TelegramRateLimitException class. Type-safe filter in retry loop. Documents intent."
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "07-telegram-sender"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 85
+    status: "complete"
+    value: "TelegramSender service (Epic 04c) — pure infrastructure layer for outbound Telegram messages. MVP scope: single method sendText only (other 4 methods from 04c-notes deferred until real caller exists). No token decrypt cache. WebClient-based, retry/backoff on 5xx + network errors, 429 retry_after handling, error mapping to domain exceptions. 04a sendTestMessage stub stays 422 until Epic 04b lands ownerChatId via webhook — sender wiring into sendTestMessage path TBD (see Q5)."
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: |
+      04a (06-bot-connection) shipped with sendTestMessage as a hard-coded 422 stub — comment in code explicitly defers the success branch to "06b" (now 04c). Funnels (Epic 06) and Broadcasts (Epic 07) cannot start without a shared outbound primitive. Without 04c, every future caller would re-implement WebClient + retry + rate-limit + error mapping, duplicating the patterns proven in TelegramApiClient. 04c is the unblocker for 04a's pending success branch AND the foundation 06/07 build on.
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 70
+    status: "complete"
+    value: |
+      Internal callers (not end users — 04c is pure infrastructure):
+        - BotService.sendTestMessage (04a) — owner clicks "Send test message" in Settings → Bot.
+        - FunnelStepExecutor (Epic 06) — send_message step in funnel execution.
+        - BroadcastWorker (Epic 07) — mass delivery to subscriber audience.
+      In MVP scope only the first caller is active (test-message wiring); 06/07 wire in later epics.
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 90
+    status: "complete"
+    value: |
+      Testable criteria:
+        1. sendText(botId, chatId, text, parseMode?) → SentMessage(chatId, messageId, sentAt). Default parseMode=HTML.
+        2. Token decrypted via TokenEncryptor on each call (no cache in MVP).
+        3. Retry policy: 3 attempts, exponential backoff 1s→2s→4s, on 5xx + IOException + TimeoutException only. 4xx never retried.
+        4. 429 retry_after: wait retry_after seconds + small jitter, retry; not counted against the 3-attempt cap.
+        5. Error mapping (no retry): 401 → BotTokenInvalidException; other 4xx → TelegramSendException (with code/description).
+        6. After all retries exhausted on transient class → TelegramSendException.
+        7. Sender writes audit event telegram_message_sent on success; telegram_send_failed on terminal failure (after retries).
+        8. Token NEVER appears in logs (log scrubber on error descriptions; verified via test that greps logback test output).
+        9. Token shape guard rejects malformed token BEFORE the HTTP call.
+        10. WebClient timeouts: connect 5s, read 10s; timeout treated as transient (retried).
+        11. BotService.sendTestMessage: ownerChatId==null → existing 422 owner_chat_id_unknown (stub preserved); ownerChatId!=null → real sendText call, on success: 200 OK + event bot_test_message_sent; on failure: HTTP error mapped from exception, no duplicate bot_test_message_failed event.
+        12. Bot doc gains nullable ownerChatId (Long), no index, no migration of existing docs (defaults to null).
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: |
+      Technical:
+        - HTTPS only (Telegram API requirement).
+        - WebClient timeouts: connect 5s, read 10s.
+        - Retry shape mirrors TelegramApiClient pattern (Retry.backoff filtered to transient).
+        - Default parse_mode=HTML; optional per-call override.
+        - Token decrypted per-call (no cache); decryption goes through common/crypto/TokenEncryptor (already exists, AES-256-GCM).
+        - Bot tokens NEVER in logs — apply same log-scrubber pattern documented in patterns.md "Log scrubber for upstream descriptions".
+        - Reactive only — Mono<SentMessage> / Mono<Void> return types; no blocking.
+        - Test isolation: okhttp3 MockWebServer (already testImplementation in build.gradle); no live Telegram in CI.
+      Scope:
+        - sendText only in MVP. sendWithButtons/sendImage/editMessage/deleteMessage deferred.
+        - Subscriber-specific exceptions (SubscriberBlocked/Deleted) deferred to Epic 05.
+        - Bot status change on 401 deferred (only throw exception in 04c).
+        - Token decrypt cache deferred (Epic 07 broadcast load may justify it).
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: "Unit tests for: error mapping (403/401/400/429/5xx → specific exceptions), retry policy (filter on transient), token shape guard, log scrubber. Integration via okhttp3 MockWebServer (already testImplementation): scripted responses for retry-on-5xx, 429 retry_after, success, 403/401 mapping. No E2E (no live Telegram, no UI flow in 04c)."
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 90
+    status: "complete"
+    value: |
+      04c is pure infrastructure — no direct end-user story. Internal caller stories:
+
+      1. As BotService.sendTestMessage (Epic 04a path), when user clicks "Send test message" in Settings → Bot:
+         - If Bot.ownerChatId is null → return 422 owner_chat_id_unknown (existing stub preserved).
+         - If Bot.ownerChatId != null → call TelegramSender.sendText(botId, ownerChatId, "Hello from Bot Funnel Service! Bot connected ✅", parseMode=null, ownerId=current user).
+            - On success → HTTP 200 OK + event bot_test_message_sent + sender already wrote telegram_message_sent.
+            - On failure → exception mapped to HTTP error by GlobalErrorHandler. Sender already wrote telegram_send_failed.
+
+      2. As FunnelStepExecutor (Epic 06, future) — calls sendText with no ownerId (or system context). Out of scope for 04c.
+
+      3. As BroadcastWorker (Epic 07, future) — calls sendText with no ownerId. Out of scope for 04c.
+
+      Note: in production 04c happy-path is unobservable until Epic 04b lands (Bot.ownerChatId stays null without webhook ingestion).
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 95
+    status: "complete"
+    value: |
+      AC1. TelegramSender bean exists with method:
+        sendText(String botId, long chatId, String text, @Nullable String parseMode, @Nullable String ownerId) → Mono<SentMessage>
+        where SentMessage is a record (long chatId, long messageId, Instant sentAt).
+
+      AC2. Sender loads bot via BotRepository.findById(botId). If absent → AppException.notFound("Bot not found"). If status != CONNECTED → AppException.notFound (anti-enumeration).
+
+      AC3. Sender decrypts token via TokenEncryptor.decrypt(iv, ciphertext). Base64 boundary at caller (mirror BotService.disconnect:216-218 pattern).
+
+      AC4. Token shape guard (TelegramApiClient.requireValidTokenShape — promoted to public static) runs after decrypt. Any failure (decrypt exception, post-decrypt shape mismatch) → BotTokenInvalidException(botId) → 422 invalid_bot_token.
+
+      AC5. POST to /bot{token}/sendMessage with body { chat_id, text, parse_mode? } (parse_mode included only when non-null).
+
+      AC6. WebClient timeouts: connect 5s, read 10s (reuse TelegramApiClient.CONNECT_TIMEOUT + DEFAULT_RESPONSE_TIMEOUT constants).
+
+      AC7. Retry policy: Retry.backoff(3, Duration.ofSeconds(1)) producing 3 retries AFTER the first attempt = 4 total attempts, sleeps 1s → 2s → 4s. Filter via TelegramApiClient.isTransient (promoted to public static). Transient = 5xx OR IOException OR TimeoutException (incl. Netty ReadTimeoutException via cause-chain walker, 16-hop bound).
+
+      AC8. 429 handling: response body parsed as new record TelegramSendResult<T>(boolean ok, T result, Integer errorCode, String description, TelegramParameters parameters) where TelegramParameters carries retry_after. Wait retry_after seconds + small jitter, retry. NOT counted against the 3-retry cap. Implemented as a separate retryWhen wrapping the 5xx loop (outer-vs-inner ordering verified in tests). Signal exception type: dedicated TelegramRateLimitException (extends AppException, but never escapes — caught by 429-loop retryWhen filter).
+
+      AC9. Overall .timeout(Duration.ofSeconds(30)) on the final Mono. Exceeded → TelegramSendException.
+
+      AC10. Error mapping (no retry):
+        - 401 Unauthorized → BotTokenInvalidException(botId) → 422 invalid_bot_token.
+        - Other 4xx → TelegramSendException(errorCode, scrubbedDescription) → 400 telegram_send_failed.
+        - After retries exhausted on transient class → TelegramSendException.
+
+      AC11. Audit events written by sender (fire-and-forget via EventService.logEvent, userId=ownerId param):
+        - telegram_message_sent { botId, chatId, messageId } on success.
+        - telegram_send_failed { botId, chatId, errorCode?, errorDescription? (scrubbed), attempts } on terminal failure.
+
+      AC12. Log scrubber (TelegramApiClient.scrubTokens — already public) applied to every WARN/ERROR line that echoes Telegram description / error_message. Token NEVER appears in logback output (verified via ListAppender assertion in tests).
+
+      AC13. Bot.java gains nullable field: Long ownerChatId. Mongo persistence: camelCase field name (Spring Data default). No @CompoundIndex change. No migration script — existing docs read back ownerChatId as null.
+
+      AC14. BotService.sendTestMessage rewritten:
+        - bot.ownerChatId == null → return AppException.unprocessableEntity("owner_chat_id_unknown", ...) (current 422 stub preserved verbatim).
+        - bot.ownerChatId != null → call telegramSender.sendText(bot.id, bot.ownerChatId, TEST_MESSAGE_TEXT, null, ownerId).then(eventService.logEvent(ownerId, "bot_test_message_sent", ip, ua, metadata)).then().
+        - On TelegramSender error: exception propagates to GlobalErrorHandler; BotService writes NO additional bot_test_message_failed event (sender already wrote telegram_send_failed).
+
+      AC15. Three new exception classes extend AppException:
+        - TelegramSendException(HttpStatus.BAD_REQUEST, "telegram_send_failed", ...).
+        - TelegramRateLimitException(int retryAfterSeconds) — dedicated class, internal-only (caught inside the 429 retryWhen filter, never escapes to GlobalErrorHandler). Carries retryAfter for jitter computation.
+        - BotTokenInvalidException(HttpStatus.UNPROCESSABLE_ENTITY, "invalid_bot_token", ...) — carries botId for log context.
+
+      AC16. SecurityConfig: NO change required (POST /api/v1/projects/{projectId}/bot/test-message already covered by /api/** authenticated rule per SecurityConfig.java:68-73).
+
+      AC17. Tests:
+        - Unit (TelegramSenderTest, MockWebServer + no Spring context): success, retry-then-success on 5xx, retry-exhausted → TelegramSendException, 429 retry_after honored, 401 → BotTokenInvalidException, other 4xx → TelegramSendException, token shape guard rejects malformed before HTTP, log scrubber on description.
+        - Integration (TelegramSenderIT, full Spring context with embedded Mongo, MockWebServer for Telegram): end-to-end through BotRepository + TokenEncryptor + EventService, including awaitility assertion on async event write.
+        - BotServiceTest update: split existing test BotServiceTest.java:554-573 into ownerChatId-null branch (422 preserved) + ownerChatId-set branch (sender invoked, no 422).
+        - BotControllerIT update: existing 422 test at BotControllerIT.java:740-760 stays as null-branch case; add positive-path test that seeds ownerChatId in Mongo and asserts 200 + event.
+        - "Token never in logs" test using ListAppender (mirror TelegramApiClientTest.java:43-47 pattern).
+        - NO new staging smoke runbook (deferred to Epic 04b).
+        - NO E2E (no live Telegram, no new UI flow).
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 90
+    status: "complete"
+    value: |
+      1. Bot doc not found (botId mismatch / deleted) → 404 (anti-enumeration).
+      2. Bot status DISCONNECTED (token nulled out, ownerChatId may or may not exist) → treated as not found (404) — sender refuses to operate on disconnected bots.
+      3. Bot doc has CONNECTED status but encryptedToken fields are null (impossible per invariants, but defensive) → BotTokenInvalidException.
+      4. TokenEncryptor.decrypt throws (corrupted ciphertext, wrong key, BadPaddingException) → BotTokenInvalidException.
+      5. Decrypted token fails requireValidTokenShape → BotTokenInvalidException.
+      6. Telegram returns 401 (token revoked externally between Connect and now) → BotTokenInvalidException.
+      7. Telegram returns 429 with retry_after: honor, retry, success — counts as one logical send (one telegram_message_sent event, attempts metadata reflects total attempts incl. 429 retries).
+      8. Telegram returns 429 → wait → 429 → wait → eventually hits 30s overall timeout → TelegramSendException.
+      9. Telegram returns 5xx 4 times in a row → TelegramSendException after exhaustion.
+      10. Network failure mid-flight (TimeoutException, ReadTimeoutException, IOException) → retry as transient.
+      11. Telegram returns 200 OK with ok=false in body (rare, but possible) → treat as failure, map to TelegramSendException (description preserved, scrubbed).
+      12. Telegram returns 400 for text > 4096 chars → TelegramSendException (NO pre-validation).
+      13. Telegram returns 400 chat_not_found → TelegramSendException (no Subscriber-specific mapping in 04c).
+      14. Concurrent sendText calls for the same botId → no state contention; each loads + decrypts independently.
+      15. Race: sender loads bot, owner disconnects mid-flight → in-memory token still works for the in-flight call; next call will see DISCONNECTED. Acceptable.
+      16. ownerId == null at sender level (Epic 06/07 system context, future) → telegram_message_sent.userId stored as null; EventService accepts null (precedent: AuthService.java:301).
+      17. Mongo unavailable during EventService.logEvent → event lost (fire-and-forget); sender's main Mono unaffected (matches existing bot_connected/bot_disconnected behavior).
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 95
+    status: "complete"
+    value: |
+      Exception → HTTP mapping (via GlobalErrorHandler since all extend AppException):
+
+      | Sender outcome | Exception | HTTP status | Code |
+      |---|---|---|---|
+      | Telegram 200 ok=true | — | 200 OK | — |
+      | Telegram 200 ok=false | TelegramSendException | 400 | telegram_send_failed |
+      | Telegram 401 | BotTokenInvalidException | 422 | invalid_bot_token |
+      | Telegram 4xx other | TelegramSendException | 400 | telegram_send_failed |
+      | Telegram 5xx after retries | TelegramSendException | 400 | telegram_send_failed |
+      | Telegram 429 (during loop) | TelegramRateLimitException (internal) | — handled internally | — |
+      | 30s overall timeout | TelegramSendException | 400 | telegram_send_failed |
+      | Network / IOException after retries | TelegramSendException | 400 | telegram_send_failed |
+      | Bot not found / DISCONNECTED | AppException.notFound | 404 | (no body code) |
+      | Decrypt failure / shape mismatch | BotTokenInvalidException | 422 | invalid_bot_token |
+      | Programming bug (null arg, etc.) | IllegalArgumentException | 500 | (GlobalErrorHandler fallback) |
+
+      All description fields scrubbed via TelegramApiClient.scrubTokens before logging or surfacing.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      Pre-deploy (during development):
+        - Run `./gradlew test` — full unit + integration suite. MockWebServer scripts all Telegram scenarios.
+        - Inspect logs for "token never in logs" assertion (ListAppender test).
+        - Manual: `./gradlew bootRun` + curl POST /api/v1/projects/{id}/bot/test-message — still expects 422 owner_chat_id_unknown because production Bot.ownerChatId is null.
+        - Manual smoke for end-to-end happy path: in dev, manually mongosh `db.bots.updateOne({_id: ObjectId(...)}, {$set: {ownerChatId: <my_telegram_user_id>}})` to simulate what 04b will do, then test-message → real Telegram delivery. Document command in tech-spec but NOT a permanent runbook.
+
+      Post-deploy (production):
+        - 04c does NOT change observable behavior in production (sendTestMessage still 422 until 04b populates ownerChatId).
+        - Verify deploy via: GET /health → 200 (existing); deployment metrics (CI green); no new endpoints to verify.
+
+      Staging:
+        - No new staging smoke runbook in 04c. Existing 06-bot-connection runbook stays untouched. Full sendText smoke moves to Epic 04b runbook (where ownerChatId becomes available via webhook).
+
+      Test coverage targets (mirror auth/profile/project conventions):
+        - TelegramSender business logic: 90%+ line coverage on retry/error-mapping/timeout branches.
+        - BotService.sendTestMessage: both null and non-null branches covered.
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 100
+    status: "complete"
+    value: "None for 04c. Existing Settings → Bot 'Send test message' button (Epic 04a) is unchanged. Frontend has NO new strings, NO new components. Pure backend feature."
+    gaps: ""
+    required: false
+
+  risks:
+    score: 90
+    status: "complete"
+    value: |
+      R1. Sender exercising in production is impossible until 04b lands (Bot.ownerChatId stays null). Mitigation: cover via integration tests with seeded Mongo + flag the dependency in tech-spec verification section.
+
+      R2. Promoting requireValidTokenShape + isTransient from private to public on TelegramApiClient changes its public surface area. Mitigation: keep same signature; comment why promoted; recompile-check.
+
+      R3. Reactor retry-loop ordering: 429 outer / 5xx inner. Wrong order causes 5xx retry-cap to exhaust during retry_after wait. Mitigation: explicit unit tests for interleaving (429 immediately followed by 5xx and vice versa).
+
+      R4. Long 429 loops + 30s overall timeout: user sees timeout from frontend BEFORE sender's own 30s fires, because frontend default ofetch timeout is ~35s but full network round-trip + cancellation latency could vary. Mitigation: explicit `.timeout(30s)` on sender Mono; ensure frontend handles 504/timeout gracefully (already in scope of existing useApiError patterns).
+
+      R5. EventService.logEvent is fire-and-forget — terminal-failure event (telegram_send_failed) may not flush before process death. Mitigation: acceptable for MVP (matches bot_connected/bot_disconnected); document in tech-spec, do not gate.
+
+      R6. Bot.ownerChatId addition lands in DB schema without explicit migration. Mitigation: Spring Data MongoDB reads missing fields as null for object types (Long, not primitive long); precedent verified in research §5.5 (disconnectedAt added the same way).
+
+      R7. Token corruption (tampered Mongo storage, key rotation gone wrong) → BotTokenInvalidException → 422 looks like "user-fixable" but root cause is operations. Mitigation: WARN-level log with scrubbed context + ops alert (manual review).
+
+      R8. TelegramSender called from non-user contexts (Epic 06/07 future) — ownerId=null in audit events reduces observability. Out of scope for 04c; flag in tech-spec as "Epic 06/07 may want to introduce a system-context sentinel".
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 80
+    status: "complete"
+    value: |
+      D1. Single method sendText only — other 4 methods (sendWithButtons/sendImage/editMessage/deleteMessage) deferred until concrete caller exists. YAGNI.
+      D2. No token decrypt cache — premature; revisit when Epic 07 broadcast load demonstrates need.
+      D3. Audit events written by sender, not caller — guaranteed audit trail regardless of caller.
+      D4. ownerId as optional param to sender — caller passes its context; null acceptable for system context.
+      D5. Exceptions extend AppException — leverages existing GlobalErrorHandler; consistent with bot/ module precedent.
+      D6. Default parse_mode=null (not HTML) — safer default; HTML injection risk for future user-content callers.
+      D7. Sender refuses to operate on DISCONNECTED bots (404, anti-enumeration) — no implicit re-validation.
+      D8. Pre-validation absent for text length — Telegram is the source of truth; sender stays thin.
+      D9. Overall 30s timeout on sender Mono — bounded worst-case; aligns with frontend timeout.
+      D10. requireValidTokenShape + isTransient promoted to public static on TelegramApiClient — mirrors prior scrubTokens promotion; DRY.
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 75
+    status: "complete"
+    value: |
+      Backend-only change. Standard GitHub Actions CI/CD when platform is chosen (deployment.md: TBD). Locally — `./gradlew bootRun`. No new env vars. No new infrastructure dependencies. No Mongo migration (nullable field added, existing docs read back as null). No SecurityConfig change.
+
+      Rollout: standard PR merge → main → CI build/test → deploy. Existing 06-bot-connection users unaffected (sendTestMessage continues returning 422 until 04b populates ownerChatId).
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 85
+    status: "complete"
+    value: |
+      For users: NONE. UI behavior of "Send test message" button does not change visibly (still returns 422 owner_chat_id_unknown error in toast until Epic 04b lands).
+
+      For developers / ops (dev/staging smoke testing of the happy path before 04b):
+        - mongosh: `db.bots.updateOne({_id: ObjectId(...)}, {$set: {ownerChatId: <numeric Telegram user id>}})` against a connected bot, then click "Send test message" in UI. Expect message in Telegram + event records.
+        - Get your Telegram user id from @userinfobot in Telegram.
+        - This is one-time exploratory; NOT codified as a permanent runbook (deferred to 04b).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 95
+    status: "complete"
+    value: |
+      Inbound callers (who uses TelegramSender):
+        - BotService.sendTestMessage (04a, 04c rewires this) — passes ownerId.
+        - Future Epic 06 FunnelStepExecutor (send_message step) — out of 04c scope; will pass null/system ownerId.
+        - Future Epic 07 BroadcastWorker — same as above, out of scope.
+
+      Outbound calls (what TelegramSender uses):
+        - BotRepository.findById(String) → Mono<Bot> — to load bot doc.
+        - common/crypto/TokenEncryptor.decrypt(byte[] iv, byte[] ciphertext) → String — per-call decryption.
+        - WebClient (reactive Netty) → POST https://api.telegram.org/bot{token}/sendMessage.
+        - events/EventService.logEvent(...) — fire-and-forget audit.
+        - TelegramApiClient.scrubTokens (already public static) — log line scrubbing.
+        - TelegramApiClient.requireValidTokenShape (to be promoted to public static) — token shape guard.
+        - TelegramApiClient.isTransient (to be promoted to public static) — retry filter.
+
+      External:
+        - Telegram Bot API (https://api.telegram.org) — sendMessage method.
+
+      No SecurityConfig change. No new endpoint routes (reuses existing POST /api/v1/projects/{projectId}/bot/test-message).
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 95
+    status: "complete"
+    value: |
+      Code dependencies (existing, no new code):
+        - 04a (Epic 06, work/completed/06-bot-connection) — Bot/BotRepository/BotService/TelegramApiClient/BotController.
+        - common/crypto/TokenEncryptor — shared AES-256-GCM helper.
+        - events/EventService — audit log.
+        - common/AppException + GlobalErrorHandler — error mapping.
+
+      Build dependencies (no new ones):
+        - spring-boot-starter-webflux (WebClient).
+        - reactor-core (Retry, Mono.timeout).
+        - okhttp3 mockwebserver (testImplementation, already in build.gradle:38).
+
+      External:
+        - Telegram Bot API (existing dependency from 04a).
+
+      Future epics that depend on 04c:
+        - 04b webhook ingestion (will populate Bot.ownerChatId, unlocking sendTestMessage non-null branch in production).
+        - 06 funnels (send_message step calls sendText).
+        - 07 broadcasts (broadcast worker calls sendText).
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 90
+    status: "complete"
+    value: |
+      - HTTPS only for Telegram API (https://api.telegram.org).
+      - Reactive only: Mono<SentMessage> return type; no blocking calls.
+      - WebClient timeouts: connect 5s, read 10s.
+      - Retry: max 3 retries after first attempt (4 total), filter on transient only.
+      - 429: parameters.retry_after honored, not counted against retry cap.
+      - Overall .timeout(30s) on sender Mono (worst-case bound).
+      - Token never in logs (log scrubber applied to all WARN/ERROR descriptions).
+      - Token decrypted per-call (no cache in MVP).
+      - All exceptions extend AppException for GlobalErrorHandler integration.
+      - Audit events fire-and-forget (no flush guarantee).
+      - Test isolation: okhttp3 MockWebServer, no live Telegram in CI.
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 95
+    status: "complete"
+    value: |
+      Reads:
+        - bots collection by _id (via BotRepository.findById). Reads encryptedTokenIv, encryptedTokenCiphertext, status, ownerChatId.
+
+      Writes:
+        - events collection (via EventService): telegram_message_sent, telegram_send_failed, bot_test_message_sent. Append-only, no read-back.
+
+      Schema change:
+        - bots collection gains nullable Long ownerChatId field. No @CompoundIndex change. No migration script — Spring Data MongoDB reads missing fields as null (verified precedent: disconnectedAt in Bot.java:63).
+
+      No new collections. No Redis usage. No new application.properties.
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 100
+    status: "complete"
+    value: "None. Bot.ownerChatId nullable, existing bot docs read back as null. No data backfill required. No env var changes."
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/07-telegram-sender/user-spec.md"
+  status: "approved"
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase1_feature_overview"
+  questions_asked: 0
+  last_question: ""
+  total_required_score: 0
+  total_optional_score: 0
+  completion_estimate: "0%"
+  user_detail_level: "unknown"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Free-form notes:
+  - Important insights
+  - Areas of uncertainty
+  - Pivot points
+  - Scope changes
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

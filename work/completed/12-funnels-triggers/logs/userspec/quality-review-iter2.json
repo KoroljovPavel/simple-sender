@@ -1,0 +1,83 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "15 acceptance criteria exceed the >10 warning threshold. Declared size L is consistent with actual scope (5 trigger types + public API foundation + anti-cycle mechanisms + index migration), so this is not a mismatch — informational only.",
+      "location": "Критерії приймання (15 items); frontmatter size: L",
+      "fix": "No action required. Size L is correctly declared and all 15 criteria are non-redundant, each mapping to a distinct feature area."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "interview.yml constraints.value still contains the pre-Cycle-2 text referencing 'key on project create + backfill', which contradicts the CYCLE-2 CONFIRMED decision (lazy generation, no backfill). The spec itself is correct; only the YAML interview artifact is stale. Not a spec defect.",
+      "location": "interview.yml — constraints.value (phase1_feature_overview)",
+      "fix": "Housekeeping: update interview.yml constraints.value and testing_strategy.value to reflect the CYCLE-2 CONFIRMED API-key decision (lazy on demand, no auto-gen on create, no backfill). No change needed in user-spec.md."
+    }
+  ],
+  "round1_resolution": {
+    "critical_acceptance_criteria_error_isolation": {
+      "status": "resolved",
+      "evidence": "Replaced with two concrete testable AC: (1) webhook path — вебхук повертає 200 OK (не 5xx), JobRunr-джоба не фейлиться, WARN-лог з greppable-маркером (line 104); (2) API path — POST /api/integrations/v1/events повертає 202 навіть якщо engine кидає виняток, без 5xx (line 105)."
+    },
+    "critical_completeness_subscriberId_missing": {
+      "status": "resolved",
+      "evidence": "subscriberId as optional secondary identifier now present in Scenario 4 (line 67: 'опційно замість нього приймається наш внутрішній subscriber_id (lookup по (projectId, subscriber_id))'), in the api-event AC (line 96: 'або опційним subscriber_id'), and referenced in constraints context."
+    },
+    "major_completeness_ui_canvas_migration": {
+      "status": "resolved",
+      "evidence": "Added as the final bullet in Технічні рішення (line 138): 'Ми вирішили будувати форму тригера як переносний компонент: при майбутньому переході на canvas-редактор вона мігрує як форма-вузол, а тимчасовою є лише list-обгортка — тому UI-інвестиція майже не throwaway.'"
+    },
+    "major_edge_cases_fail_open_semantics": {
+      "status": "resolved",
+      "evidence": "Риски section (line 123) now explicitly states: 'Fail-open: якщо Redis недоступний — rate-limit-перевірка пропускається, запит проходить і подія диспатчиться у звичайному режимі (доступність важливіша за жорсткий ліміт під час збою Redis).'"
+    },
+    "depth_cap_added": {
+      "status": "resolved",
+      "evidence": "Redis-independent depth-cap (10) documented in Scenario 7 (line 83), Риски (line 118), AC (line 101: 'enroll-ланцюг глибше 10 обривається з WARN навіть за недоступного Redis'), and Технічні рішення (line 136)."
+    }
+  },
+  "interview_coverage": {
+    "covered": [
+      "five trigger types: keyword, tag_added, custom_field_set, api-event, EMIT_EVENT",
+      "subscriber-scoped triggers (one execution per subscriber per trigger fire)",
+      "telegram_user_id as primary external identifier; subscriberId as optional secondary (CYCLE-1 confirmed)",
+      "custom_field_set fires on any set/change, no value predicate v1",
+      "keyword: contains, case-insensitive, multiple keywords (any-of-many), separate List<String> field",
+      "keyword precedence: waiting_for_reply wins, keyword suppressed",
+      "fan-out via index relax (N separate funnels, same trigger) — no List<Trigger>",
+      "List<Trigger> / multi-entry deferred to Epic 8",
+      "loop protection: per-subscriber auto-enroll rate-limit 20/min, Redis fail-open, WARN log",
+      "Redis-independent depth-cap enroll-chain = 10 (added in round 2)",
+      "API key: lazy generation on demand, no auto-gen on project create, no backfill (CYCLE-2 revised)",
+      "plaintext shown once per (re)generation, hash-only in DB (SHA-256)",
+      "separate @Order(1) SecurityFilterChain for /api/integrations/**",
+      "namespace /api/integrations/v1/** (version inside namespace)",
+      "rate-limit on /events: fixed global ~300/min via Redis; fail-open semantics clarified",
+      "per-project/admin-editable limits deferred to Epic 08",
+      "event data payload NOT mapped to funnel variables in v1",
+      "regex keyword: nice-to-have, deferred",
+      "index migration: hand-rolled idempotent ApplicationRunner (FunnelStepIdBackfill pattern)",
+      "Mongock deferred as separate task",
+      "EMIT_EVENT: new StepType, subscriber-scoped, same event_name namespace as API events",
+      "internal dispatcher named FunnelEventService (not EventService — name collision)",
+      "unknown telegram_user_id → 404 (no auto-create subscriber)",
+      "idempotent tag add does NOT fire tag_added trigger",
+      "API key authorizes /api/integrations/** only; session does not authorize /api/integrations/**",
+      "error-isolation: trigger dispatches never throw outward (webhook 200 OK, API 202 on engine exception)",
+      "UI: trigger-type selector in FunnelTriggerSettings.vue (static badge → selector)",
+      "UI: trigger form built as portable component for future canvas migration (added in round 2)"
+    ],
+    "missing": []
+  },
+  "summary": "Усі п'ять знахідок раунду 1 (два critical, два major, один minor-YAML) усунуто. Документ не містить нетестовних критеріїв, відсутніх тем інтерв'ю чи суперечностей — статус змінено на approved."
+}

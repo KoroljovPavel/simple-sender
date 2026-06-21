@@ -1,0 +1,27 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-left-anchor",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "correctness",
+      "file": "frontend/components/funnels/FunnelCanvasNode.vue",
+      "line": 273,
+      "issue": "The drop-overlay Handle (id='in-drop') also declares :position='Position.Left', but its position attribute is semantically irrelevant since edges never target it (targetHandle='in' is always set in flowEdges). The position binding is harmless but could mislead a future maintainer into thinking it affects edge rendering.",
+      "impact": "No runtime consequence; edges always pin to id='in'. Risk is confusion only.",
+      "recommendation": "Either document the Position.Left on 'in-drop' as cosmetic (a brief inline comment is sufficient) or remove the binding to make it explicit that the position of the drop overlay is inert for edge endpoints. No code change strictly required."
+    },
+    {
+      "severity": "minor",
+      "category": "test-coverage",
+      "file": "frontend/tests/components/funnels/FunnelCanvas.spec.ts",
+      "line": 363,
+      "issue": "The test at line 363 ('the whole-card target handle carries the stable \"in\" id') was written for the previous one-handle design. After the fix, data-test='funnel-canvas-handle-target' now refers to the LEFT-BORDER ANCHOR (class funnel-handle--target-anchor), not the whole-card cover. The test still passes (the anchor still has id='in'), but its name/comment says 'whole-card' which is now the DROP OVERLAY — a stale label that makes the intent misleading.",
+      "impact": "No test failure; intent mismatch could mislead a future maintainer into weakening the anchor's class assertion.",
+      "recommendation": "Rename the test description from 'the whole-card target handle carries the stable \"in\" id' to 'the left-border edge anchor carries the stable id \"in\"'. One-line rename."
+    }
+  ],
+  "summary": "The left-edge anchor fix is architecturally sound and internally consistent. The two-handle split (dedicated small left-border anchor id='in' for edge endpoint + transparent full-card overlay id='in-drop' for drop-anywhere) correctly addresses the root cause: Vue Flow's getHandlePosition collapses cover-sized handles to their center, so a small left-pinned handle is the only reliable way to land the arrowhead on the left border. The forced targetHandle:'in' in flowEdges is the correct pinning point; handleConnect/resolveEdgeRef read only conn.target (node id), so id='in' vs id='in-drop' is genuinely inert for model writes. Strict-mode + isValidConnection still reject source-handles and self-loops; the drop overlay's pointer-events:none-at-rest / pointer-events:all-while-droppable gate is unchanged and correct. z-index:1 on the card root is load-bearing for keeping edge SVG segments from bleeding through the node body. Two minor findings: the Position.Left binding on the drop overlay is semantically inert but not commented as such, and one legacy test description name says 'whole-card' where it now refers to the left-border anchor."
+}

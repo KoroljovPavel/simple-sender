@@ -1,0 +1,61 @@
+{
+  "summary": {
+    "totalFindings": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1,
+    "scope": "Task 3 of feature 07-telegram-sender: 6 new files (3 exceptions + 3 records). No business logic, no Spring wiring, no consumers."
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "owasp_category": "A09 - Security Logging and Monitoring Failures",
+      "finding": "TelegramSendResult<T> exposes the raw 'description' field via the auto-generated record toString(). If a future caller logs a TelegramSendResult instance with '{}' / '%s' / '+ result', and the producer ever forgets to pre-scrub the description before constructing the result, a bot token embedded in Telegram's error description could leak into logs. Today no logger statement references TelegramSendResult anywhere in the codebase, so this is a defense-in-depth observation, not a live leak. Note: SentMessage.toString() exposes chatId / messageId / sentAt — none are secrets, so no concern there. TelegramSendParameters only carries an integer retry_after.",
+      "suggestion": "Optional hardening (not required for Task 3 acceptance): override toString() on TelegramSendResult to either redact 'description' or document at the field level that callers MUST treat 'description' as untrusted and pass it through TelegramApiClient.scrubTokens(...) before any log/exception construction. Same precedent as the comment already present on TelegramSendException (line 11-12). When Task 4 wires the producer, the scrubbing obligation should be enforced at the construction site (call scrubTokens before passing into the TelegramSendResult constructor).",
+      "location": "backend/src/main/java/com/botfunnel/bot/dto/TelegramSendResult.java:5-11"
+    }
+  ],
+  "checks_performed": [
+    {
+      "check": "BotTokenInvalidException.botId leak via GlobalErrorHandler / getMessage()",
+      "result": "pass",
+      "evidence": "Constructor at line 10-13 calls super(HttpStatus.UNPROCESSABLE_ENTITY, \"invalid_bot_token\", reason). The botId is stored as a private field and never concatenated into the message. GlobalErrorHandler.handleAppException (GlobalErrorHandler.java:21-24) serialises only ex.getMessage() and ex.getCode() into ErrorResponse — botId is NOT serialised. Throwable.toString() (auto-inherited) uses the supplied message only and does not introspect subclass fields, so log.error(\"…\", ex) also does not print botId. Retrieval is only via explicit getBotId() for log calls — matches the design intent stated in the task brief."
+    },
+    {
+      "check": "TelegramSendException scrubbing contract documented in-file",
+      "result": "pass",
+      "evidence": "Lines 11-12 carry the comment: 'scrubbedDescription parameter name documents the caller's obligation: callers MUST pre-scrub with TelegramApiClient.scrubTokens(...). This constructor never scrubs.' Parameter is named scrubbedDescription rather than description, reinforcing the contract at every call site. The helper TelegramApiClient.scrubTokens is public static (TelegramApiClient.java:179), accessible to future callers in Task 4."
+    },
+    {
+      "check": "TelegramRateLimitException visibility — must be package-private",
+      "result": "pass",
+      "evidence": "Line 6: 'class TelegramRateLimitException extends RuntimeException' — no public modifier on the class, constructor, or accessor. Verified no cross-package import exists today (grep for 'import com.botfunnel.bot.TelegramRateLimitException' across backend/src returns zero matches). Cannot leak into GlobalErrorHandler, controllers, or other epics by language-level access control. In-file comment (lines 3-5) documents the design intent so future maintainers do not promote it to public."
+    },
+    {
+      "check": "Records — custom toString / equals / hashCode overrides that might leak data",
+      "result": "pass",
+      "evidence": "All three records (SentMessage, TelegramSendResult, TelegramSendParameters) declare no custom methods — only the canonical record components. Auto-generated toString includes all components; the only potentially sensitive component is TelegramSendResult.description, covered by the minor finding above."
+    },
+    {
+      "check": "snake_case fields error_code / retry_after — Jackson deserialisation risk via public endpoints",
+      "result": "pass",
+      "evidence": "Grep for @RequestBody / @RestController / @Controller across backend/src/main/java referencing any of the new DTO types returns zero matches — these records are not declared in any controller request body. They are response-shape DTOs for Telegram's outbound API only (the comment on TelegramSendResult line 3-4 confirms this is the wire-format pattern from TelegramResult<T>). Even if a malicious user could submit JSON shaped like these records, the fields are inert data carriers with no side effects on construction (no setters, no validators, no I/O). No deserialisation attack surface is broadened by these additions."
+    },
+    {
+      "check": "Hardcoded secrets in any of the six files",
+      "result": "pass",
+      "evidence": "Read all six files end-to-end. No API keys, tokens, passwords, connection strings, or base64 blobs. Only literal constants are the AppException error codes 'invalid_bot_token' and 'telegram_send_failed' (HTTP error code identifiers, not secrets)."
+    },
+    {
+      "check": "OWASP A09 — logger statements in the six new files",
+      "result": "pass",
+      "evidence": "No import of org.slf4j.Logger / LoggerFactory and no log calls in any of the six files. Confirmed by re-reading. Logging happens at producer sites (e.g. TelegramApiClient, future TelegramSender) which already own the scrubbing responsibility."
+    },
+    {
+      "check": "OWASP A04 — insecure design / attack-surface broadening",
+      "result": "pass",
+      "evidence": "Exception shapes match existing AppException pattern; HTTP statuses (422, 400) are appropriate for the modelled conditions; rate-limit sentinel is correctly package-private. Records expose only the minimum fields required by the Telegram protocol contract and the SentMessage outcome. No new endpoints, no new authentication paths, no new deserialisation entry points, no new outbound URL parameters. Additive scaffolding only — does not broaden attack surface."
+    }
+  ],
+  "verdict": "approved"
+}

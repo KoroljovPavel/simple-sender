@@ -1,0 +1,13 @@
+{
+  "status": "approved",
+  "summary": "Round-2 cleanly addresses both round-1 majors and the two priority minors (focus-restore on onSelect; disabled '+ Create' rendered as a real <button> with title tooltip). The active-only computation is centralized in a single activeProjects ref consumed by both sortedProjects and atLimit, eliminating the stale-current and false-positive limit risks identified earlier. Test coverage grows from 16 to 22 specs and now exercises AC-19 soft-deleted filtering, AC-30 active-only enabled-create, the SSR absolute-URL branch of extractPath, the mid-fetch race, and outside-click / Escape close behaviours. The remaining round-1 minors were explicitly deferred with reasons in decisions.md and are not re-flagged. No new issues introduced.",
+  "criticalIssues": [],
+  "suggestions": [],
+  "metrics": {
+    "filesReviewed": 3,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 0,
+    "testCoverageAssessment": "excellent"
+  }
+}

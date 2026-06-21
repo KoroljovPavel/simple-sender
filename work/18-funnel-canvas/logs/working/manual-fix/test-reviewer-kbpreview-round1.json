@@ -1,0 +1,31 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-keyboard-preview",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:741",
+      "issue": "Real-time setTimeout(700) used to wait past the 600ms FunnelMessagePreview debounce before asserting backend call and preview rendering. Works correctly but is slow (~700ms per run) and carries a low risk of flakiness on heavily loaded CI runners where the 700ms window may not be sufficient.",
+      "recommendation": "Replace the real wait with fake timers: call `vi.useFakeTimers()` before the emit, then `vi.advanceTimersByTime(700)` in place of the setTimeout, and restore with `vi.useRealTimers()` in afterEach. This makes the test deterministic, fast, and immune to runner load."
+    }
+  ],
+  "summary": "All 5 new tests are value-based and load-bearing. FunnelCanvas tests assert rendered text content and chip counts by value (not existence-only), XSS test verifies entity-encoding in DOM HTML. Page-level tests assert heading text, FunnelMessagePreview props by value (stepType, id, stepNumber), storeMock.preview call with the correct step id, and rendered preview-keyboard element — the full wiring from canvas node selection through to preview panel is covered. required-keys.spec.ts adds clearKeyboard to both presence and non-empty value checks for both locales. No existing preview/MESSAGE coverage was weakened. One minor finding: real setTimeout(700) for debounce handling should use fake timers instead.",
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 5,
+      "passed": 5,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 5,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

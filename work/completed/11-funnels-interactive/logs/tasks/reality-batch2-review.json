@@ -1,0 +1,110 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 modifies FunnelService.validateSteps and FunnelService.toSteps/toStepDto, but those methods exist with Faza-1 shapes only — they do not yet contain Button/MENU handling. More importantly, the forward-reference artifacts that Task 4 CONSUMES (FunnelStep.id/next/buttons/timeout-fields, record Button, StepType.MENU, ExecutionStatus.waiting_for_reply) are ALL missing from the codebase: Task 1 has not been executed yet. FunnelStep has no `id`, `next`, `buttons`, `timeoutValue`, `timeoutUnit`, `timeoutTargetStepId` fields. StepType has no MENU. ExecutionStatus has no waiting_for_reply. Button.java and FunnelStepIdBackfill.java do not exist.",
+      "fix": "Task 4 correctly declares depends_on: [1]. Confirm Task 1 is complete before starting Task 4. Validator notes this is an ordering issue, not a spec hallucination — the dependency is correctly declared. Flag to block execution until Task 1 artifacts are present."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 5,
+      "issue": "Task 5 calls resumeOnCallback(executionId, subscriberId, targetStepId) on FunnelExecutionEngine, but this method does NOT exist in FunnelExecutionEngine.java. The engine has no such public method — it only has sweep(), runExecution() (private), claim() (private), persistProgress() (private), scheduleDelay() (private), complete() (private), terminate() (private). Task 5 depends_on: [3], so Task 3 is supposed to add resumeOnCallback — but the spec must be verified: if the forward-reference signature in Task 3 differs from what Task 5 calls, there is a bug.",
+      "fix": "Verify Task 3 adds exactly `public void resumeOnCallback(String executionId, String subscriberId, String targetStepId)` or equivalent to FunnelExecutionEngine. Task 5's Details section states the signature as resumeOnCallback(executionId, subscriberId, targetStepId) — confirm Task 3's spec matches this. Block Task 5 execution until Task 3 is done."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 5,
+      "issue": "Task 5 calls TelegramSender.answerCallbackQuery(botId, callbackQueryId, text?) but this method does NOT exist in TelegramSender.java. Current TelegramSender only has sendText() and sendPhoto(). Task 5 depends_on: [3], but Task 2 (Wave 1) is what adds answerCallbackQuery. Task 5 does not declare depends_on: [2] — the dependency on Task 2's output is undeclared.",
+      "fix": "Add `depends_on: [2, 3]` to Task 5's frontmatter. Task 2 creates answerCallbackQuery; Task 5 calls it. Missing this dependency is a critical cross-task integration issue."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 also consumes FunnelExecution.currentStepId, FunnelExecution.lastButtonClicked, ExecutionStatus.waiting_for_reply, Button record, and StepType.MENU — all from Task 1. Task 5's depends_on is only [3], not [1]. Task 3 is in Wave 2 and depends_on [1], so Task 1 is transitively required, but the direct declaration is missing. The real concern is that Task 5 also reads Button fields (button.targetStepId(), button.type()) from the stepsSnapshot — this requires Task 1's Button record. The dependency chain is: Task 5 → Task 3 → Task 1, which is correct transitively, but Task 2 is missing (see previous finding).",
+      "fix": "Add depends_on: [2, 3] to Task 5. Document the transitive Task 1 dependency as a note in the task."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 6,
+      "issue": "Task 6 consumes types/funnel.ts MENU type, Button interface, and graph fields (id, next, buttons, timeoutValue, timeoutUnit, timeoutTargetStepId) from Task 1. These do NOT exist in frontend/types/funnel.ts currently: StepType has no MENU, FunnelStep has no graph fields, there is no Button interface. Task 6 depends_on: [4] only, not [1]. Task 1 adds frontend types/funnel.ts. This is a missing frontend dependency.",
+      "fix": "Add depends_on: [1, 4] to Task 6 frontmatter. Task 1 creates the frontend TypeScript types that Task 6 consumes."
+    },
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 needs to load FunnelExecution by executionId from MongoDB inside advanceOnCallback. FunnelExecutionRepository.findById() inherits from MongoRepository<FunnelExecution, String> and is available. HOWEVER, FunnelTriggerServiceImpl currently does NOT inject FunnelExecutionRepository or have access to it — only botRepository, subscriberService, funnelRepository, mongoTemplate, and clock are injected. Task 5 must add FunnelExecutionRepository injection to FunnelTriggerServiceImpl constructor. The task description mentions this in Details ('Додати залежності TelegramSender, EventService, доступ до рушія (FunnelExecutionEngine.resumeOnCallback), і lookup execution за id (через mongoTemplate/FunnelExecutionRepository)'). This is feasible but the implementation hint underspecifies it — using mongoTemplate.findById would work.",
+      "fix": "Minor clarification needed: confirm either mongoTemplate.findOne(Query.query(Criteria.where('_id').is(executionId)), FunnelExecution.class) or injecting FunnelExecutionRepository. Both work; the constructor injection list in FunnelTriggerServiceImpl must be updated."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "FunnelStepDto is a Java record with a canonical constructor. Task 4 adds new fields (id, List<ButtonDto> buttons, timeoutValue, timeoutUnit, timeoutTargetStepId) to the record, which means all 7 existing call sites that construct FunnelStepDto via new FunnelStepDto(...) must be updated simultaneously. The only known call site is FunnelService.toStepDto (line 382-393), which constructs the record with 10 arguments. After adding 5 more fields, this constructor call breaks compilation. The task mentions this implicitly ('Record — додати поля у канонічний конструктор; усі сайти створення record-а оновляться') but the implementor must be careful to find ALL sites.",
+      "fix": "Before coding, grep for `new FunnelStepDto(` across the codebase. The only known site is FunnelService.toStepDto (static, line 381). The hint in Details is correct but under-emphasizes the compilation-break risk. Consider using @JsonIgnoreProperties + nullable fields approach or a builder instead of record if more call sites exist in tests."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "FunnelStepsList.vue summary() function has an exhaustive switch on StepType (SEND_MESSAGE, SEND_IMAGE, DELAY, ADD_TAG, REMOVE_TAG, SET_CUSTOM_FIELD). When Task 1 adds MENU to the StepType union, TypeScript will produce a type error if summary() is not updated simultaneously. Task 6 says to add the MENU case to summary(), but the task also says it reads types from Task 1. If Task 1 adds MENU to StepType before Task 6 touches FunnelStepsList.vue, the code will fail the typecheck (`npm run lint / vue-tsc --noEmit`). This is a cross-task compilation dependency.",
+      "fix": "Task 6 handles this correctly by adding the MENU case to summary(). The ordering concern is: between Task 1 completing (adding MENU to StepType) and Task 6 completing (adding MENU case to summary), `vue-tsc --noEmit` may fail. Acceptable if Tasks run sequentially. Highlight in task that FunnelStepsList.vue update is required as soon as MENU enters StepType."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "FunnelStepForm.vue's onSubmit handler uses an exhaustive switch with no default case (line 284-311). When MENU is added to STEP_TYPES and selectedType can be 'MENU', the switch falls through to the implicit undefined assignment for `step`, and `emit('submit', step)` emits undefined. TypeScript will catch this if strict mode is on, but the task description must ensure the MENU case is added to onSubmit — it is mentioned ('onSubmit case MENU emits...') but the interaction with the existing switch structure needs careful implementation.",
+      "fix": "Implementation note is correct. Verify the switch in onSubmit is extended with case 'MENU', not treated as a default fallthrough."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "AddStepDialog.vue and EditStepDialog.vue currently do NOT pass any `siblingSteps` or `stepOptions` prop to FunnelStepForm.vue. Task 6 Implementation hints correctly note this needs a new prop-path: AddStepDialog → FunnelStepForm (new prop siblingSteps/stepOptions). The parent page [funnelId].vue passes steps[] to AddStepDialog, but AddStepDialog has no such prop in its defineProps. Task 6 must modify BOTH dialog components, yet they are only listed under 'read' context files (not 'modify'). The task Description does say to 'оновити AddStepDialog.vue/EditStepDialog.vue', but they are not in the Files to modify list in the task frontmatter.",
+      "fix": "Add AddStepDialog.vue and EditStepDialog.vue to the 'Files to modify' list in Task 6. This is a real modification: new prop `siblingSteps: FunnelStep[]` must be threaded through both dialogs. Missing from the modification list risks the implementor skipping these files."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 4,
+      "issue": "The Details/Implementation hints section for Task 4 contains step-by-step algorithmic guidance that crosses into implementation prescription: it specifies building the id-set ONCE before the loop, dictates the exact method modifier analysis (`toStepDto` is static — check modifiers), prescribes a `static final String CODE_BROKEN_EDGE = ...` constant plus a `brokenEdge(msg)` helper. While these are hints toward patterns (not full code blocks), the level of prescription (exact constant name, exact helper name) reduces implementor freedom and could cause confusion if the actual code diverges.",
+      "fix": "Informational — hints are directional and accurate to actual codebase patterns. No fix required but note that the exact constant name CODE_BROKEN_EDGE and helper name brokenEdge() should be treated as suggestions consistent with existing CODE_* pattern in FunnelService (line 53-57)."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 5,
+      "issue": "TDD Anchor for Task 5 places all new tests in FunnelExecutionEngineIT.java. However, advanceOnCallback is a method on FunnelTriggerService/FunnelTriggerServiceImpl, not on FunnelExecutionEngine. Placing tests for advanceOnCallback in FunnelExecutionEngineIT mixes two service responsibilities in one IT class. The existing FunnelExecutionEngineIT tests the engine's sweep/claim/step-advance loop. advanceOnCallback integration tests should arguably be in FunnelTriggerServiceIT or a dedicated class. This is not a blocking issue but creates an oversized IT class.",
+      "fix": "Minor — existing test structure in the project shows FunnelExecutionEngineIT as the full-context engine IT. Acceptable to add advanceOnCallback tests there since it exercises the full callback→resume→engine path. No blocking change needed, but note the naming mismatch for reviewers."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 6,
+      "issue": "Task 6 implementation hint says to reuse IMAGE_URL_RE = /^https?:\\/\\//i for URL button validation. This regex uses startsWith semantics (matches if scheme starts with http/https but does not reject 'http://evil.com' with leading whitespace at JS string level). The tech-spec Decision 10 requires strict URI parse on the backend. The frontend hint accurately says this is a UX mirror (not the strict backend check), but the comment in FunnelStepForm.vue says IMAGE_URL_RE is the canonical client mirror — clarification that this regex is intentionally looser than backend URI parse would help.",
+      "fix": "Acceptable as documented in the hint ('strict parse is backend Task 4; client is UX-mirror'). No fix needed."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 Edge cases section notes 'validateSteps викликається і з update (на PATCH), і з activate — broken_edge мусить спрацьовувати в обох'. The current FunnelService.update() calls validateSteps() (line 127). This means a draft funnel with a broken MENU edge would fail to save, contradicting the user-spec 'draft зберегти можна, активувати — ні'. Task 4 itself notes this tension and says to resolve it in decisions.md. The ambiguity is acknowledged, but the resolution is left to the implementor without guidance.",
+      "fix": "The task correctly flags this and instructs the implementor to decide and record in decisions.md. The likely correct resolution is: move MENU/graph-edge validation to activate-only (not update), consistent with user-spec. Task description is accurate in flagging this but should suggest the expected resolution to avoid the implementor choosing the wrong path."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 14
+  }
+}

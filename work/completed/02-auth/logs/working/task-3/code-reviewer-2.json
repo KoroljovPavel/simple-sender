@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": "All five major and minor issues from round 1 have been correctly addressed: PII removed from error logs, empty-body guard added to all three public methods, both supportEmail and token are now HTML-escaped, and the htmlEscape function covers single-quotes. The test suite was meaningfully extended with package-private builder methods, a template-not-found test, subject and recipient assertions for all three email types, and a URL-content assertion for the verification body. No critical or major issues remain.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/main/java/com/botfunnel/email/EmailService.java",
+      "line": 58,
+      "severity": "minor",
+      "category": "security",
+      "suggestion": "{APP_URL} is substituted without HTML-escaping in both buildVerificationBody (line 58) and buildPasswordResetBody (line 67). appUrl comes from the @Value('${app.url}') config property — in practice it is operator-controlled and not user-supplied, so the XSS risk is low. However, if the value ever contains '&' (e.g., a URL with query params like http://host?foo=1&bar=2), the resulting href will contain a raw '&' rather than '&amp;', which is invalid HTML and may confuse some email clients. Consider applying htmlEscape(appUrl) at construction time (in the constructor, store it pre-escaped) or at substitution time, consistent with how name and token are treated.",
+      "benefit": "Produces well-formed HTML in edge-case URLs and maintains a consistent escaping policy: all substituted values are HTML-escaped, regardless of their origin.",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/test/java/com/botfunnel/email/EmailServiceTest.java",
+      "line": 71,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "sendVerificationEmail_fireAndForget_exceptionDoesNotPropagate uses lenient() stubs, which means if the async path is never exercised (e.g., the method returns before calling sendAsync), the test still passes. The test currently only asserts that the synchronous call does not throw, but it does not verify whether the async error path was actually triggered. Consider adding an await().atMost(2, SECONDS) assertion that verifies the mock was invoked (and then threw), confirming the async path ran and the exception was indeed swallowed rather than the send being silently skipped.",
+      "benefit": "Distinguishes between 'send was attempted and the exception was swallowed' (correct behaviour) and 'send was never attempted' (e.g., due to an empty-body guard that incorrectly fired), making the test a genuine fire-and-forget proof rather than a no-exception surface check.",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/test/java/com/botfunnel/email/EmailServiceTest.java",
+      "line": 57,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "sendVerificationEmail_htmlEscapesNameWithSpecialChars calls buildVerificationBody directly and checks the returned String, which verifies escaping in the body-building path. This is correct and sufficient for a unit test. A complementary note: the single-quote escaping introduced in round 1 (replace(\"'\", \"&#39;\")) is not explicitly tested. Adding assertThat(body).contains(\"&#39;\") for a name containing a single quote (e.g., \"O'Brien\") would close this gap at zero cost.",
+      "benefit": "Explicitly covers the single-quote escaping case that was added as a security fix in round 1, ensuring it is not accidentally reverted.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "adequate"
+  }
+}

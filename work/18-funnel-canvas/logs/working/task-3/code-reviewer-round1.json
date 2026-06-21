@@ -1,0 +1,30 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 3,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+      "line": 404,
+      "issue": "Duplicate private static onStartEntryStepId(Funnel) helper. FunnelService already defines the identical method (line 911). Both scan triggers[] by TRIGGER_ON_START with the same null-guard and return logic. The duplication is benign (both methods are private static and the module boundary prevents a shared non-static call), but it creates a maintenance hazard: a future change to the scan logic must be applied in two places.",
+      "fix": "Extract onStartEntryStepId to a package-private static utility on FunnelService (or a new FunnelTriggerUtils class) and have FunnelTriggerServiceImpl delegate to it. Since TRIGGER_ON_START is already package-level on FunnelService, the access is clean with no new dependency."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": 692,
+      "issue": "The TDD anchor in the task spec names FunnelExecutionEngineIT::test_run_enters_on_start_entryStepId, but the implementer placed this test in FunnelServiceTriggerTypeTest (line 333). The test itself is correct and exercises the right behavior (testRun enters entryStepId, not array[0]). The deviation is the class location, not missing coverage.",
+      "fix": "No action required — the spec also allows 'the existing FunnelService/controller IT' as an acceptable home for applyTriggers-path tests. The testRun test in FunnelServiceTriggerTypeTest satisfies the acceptance criterion. If strict test-class alignment is desired, add a mirror test to FunnelExecutionEngineIT, but this is cosmetic."
+    }
+  ],
+  "summary": "Implementation is correct and complete. The graphMode discriminator in advanceToNext is the right gate: graphMode() returns true iff the snapshot's first step carries a stable id, which is an all-or-nothing invariant for canvas funnels. Legacy Phase-1 snapshots (no ids) correctly retain index+1 drain, preserving the 4 legacy ITs. Canvas funnels with next==null correctly reach the End state. requireOnStartEntryStep is properly null-tolerant, validates non-null ids funnel-scoped, and throws CODE_INVALID_ENTRY_STEP on a dangling id. Both fire() callsites and testRun use insertExecutionAt with the correct factory field names. resolveStartCursor and insertExecutionAt are untouched. The step-budget loop backstop is unaffected. Two minor findings: duplicated onStartEntryStepId helper (maintenance risk) and test placed in a different class than the TDD anchor specified (coverage is present). No blockers or majors.",
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 2,
+    "testCoverageAssessment": "adequate"
+  }
+}

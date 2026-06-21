@@ -1,0 +1,27 @@
+{
+  "task": "7",
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "changes_requested",
+  "findings": [
+    {
+      "severity": "medium",
+      "test": "FunnelTriggerServiceIT::snapshotIsDeepCopyDecoupledFromFunnelEdits",
+      "issue": "The deep-copy/decoupling anchor does not actually kill a shallow-copy mutant. The test mutates the test-side `funnel` object (the instance returned by seedActiveFunnel) and re-saves it, but the snapshot inside fire() was built from a SEPARATE Funnel instance loaded fresh from Mongo by funnelRepository.findBy...(). The two FunnelStep lists never share references. If deepCopySteps() were replaced with `return funnel.getSteps();` (a pure shallow copy), this test would STILL pass, because the mutated steps belong to a different in-memory object than the one fire() snapshotted. Litmus test fails: removing the deep-copy logic does not fail the test.",
+      "fix": "Prove reference-level decoupling within a single fire() invocation. Option A (preferred): in a unit-style assertion, capture the Funnel that fire() loads and assert snapshot steps are NOT the same object instances as the funnel's steps — e.g. assertThat(exec.getStepsSnapshot().get(0)).isNotSameAs(loadedFunnel.getSteps().get(0)). Option B: after fire(), mutate the SAME funnel document the service would re-read (reload via funnelRepository.findById, mutate, save), then assert the already-persisted snapshot is unchanged — but that still only proves persistence isolation, not in-memory aliasing. The robust check is the isNotSameAs identity assertion on the step objects, since copyOf returns new FunnelStep instances. Keep the existing 'original' vs 'edited' text assertion as a secondary check."
+    },
+    {
+      "severity": "low",
+      "test": "FunnelTriggerServiceIT (Clock)",
+      "issue": "The TDD-anchor text promises a deterministic Clock via ClockConfig, but the production ClockConfig bean is Clock.systemUTC() and the IT does not override it with a fixed clock. nextRunAt/createdAt/updatedAt are therefore wall-clock values. No assertion currently pins an exact timestamp (only isNotNull on nextRunAt), so there is no flakiness today — but the stated 'deterministic Clock' guarantee is not actually in force, and any future assertion on an exact instant would be non-deterministic.",
+      "fix": "Either drop the 'deterministic Clock' claim for this IT (the current assertions don't need it), or add a @TestConfiguration @Primary Clock bean (Clock.fixed) and tighten nextRunAt to assert it equals the fixed now (proving nextRunAt=now wiring rather than merely non-null). Tightening would strengthen the snapshot anchor: assertThat(exec.getNextRunAt()).isEqualTo(exec.getCreatedAt()) under a fixed clock proves 'nextRunAt=now so the next sweep picks it up'."
+    },
+    {
+      "severity": "low",
+      "test": "FunnelTriggerServiceIT::reactivationOrderingFirstSendNotSelfCancelled",
+      "issue": "The HIGH reactivation-ordering test proves the worker-order invariant (subscriber flipped ACTIVE before fire(), execution created running and not immediately cancelled), which is the contract Task 7 owns. It does NOT exercise the engine's actual pre-send status gate (that lives in the FunnelExecutionEngine / Task 6), so the 'first send would pass the gate' claim is asserted indirectly via subscriber status only. The test comment is honest about this, so it is a scope note rather than a defect — but the assertion 'would pass the engine's pre-send gate' is inferred, not demonstrated.",
+      "fix": "Acceptable as-is for a trigger-scope IT. Optionally strengthen by also asserting exec.getCurrentStepIndex()==0 and exec.getStepRunStatus()==pending (matching the engine's claimable predicate) to make the 'sweep would pick this up and not self-cancel' linkage explicit, and add a short comment that the gate itself is covered by FunnelExecutionEngineIT."
+    }
+  ],
+  "summary": "Strong, real-DB IT (13 tests, all green, 0 skipped, ~1s). Every TDD anchor is present and most assert concrete Mongo state: snapshot content + size, pinned telegramBotId, currentStepIndex=0, status=running, stepRunStatus=pending, nextRunAt set, subscriberId. Re-enter guard tests rely on the genuine unique partial index (auto-index-creation=true) and assert execution identity/count, not just absence of exception. cancelActiveFor distinctly verifies running+waiting flip to cancelled while completed/failed/cancelled are left untouched (distinct funnelIds avoid index collisions on seed). Both HIGH cases are exercised end-to-end through ProcessTelegramUpdateJob.handle: error isolation asserts raw_update ends DONE with null processingError (not FAILED, no retry-storm), and reactivation asserts subscriber ACTIVE-before-fire ordering. The single failing-repo fault is injected via @MockitoSpyBean FunnelRepository — targeted, not over-mocking; everything else is real beans + Testcontainers Mongo. ProcessTelegramUpdateJobTest stays green (38 tests) and its @MockitoSpyBean FunnelTriggerService resolves exactly one bean now that NoOp is deleted. One real gap: the deep-copy decoupling test does not kill a shallow-copy mutant (different Funnel instances), so it should add an identity (isNotSameAs) assertion. Plus two low-severity notes (clock determinism claim not enforced; reactivation gate asserted indirectly). No flakiness observed; verdict changes_requested solely to harden the deep-copy anchor."
+}

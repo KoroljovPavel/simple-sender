@@ -1,0 +1,35 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 8,
+      "section": "Verification Steps / Acceptance Criteria",
+      "issue": "Audit-report path convention is inconsistent across the audit wave. Task 8 writes its report to `logs/working/task-8/code-audit-1.json` (a per-task working-review path, JSON), while Task 9 writes `logs/audits/security-audit.md` and Task 10 writes `logs/audits/test-audit.md` (a dedicated audits dir, markdown). All three are members of the same Audit Wave and should use ONE convention. The `logs/working/task-{N}/` tree is conventionally for reviewer reports during task execution, not for the audit-task's own deliverable; Task 8 also diverges from siblings on both directory and format (.json vs .md).",
+      "fix": "Pick one convention for the Audit Wave deliverables and apply it to Tasks 8/9/10. Recommended: move Task 8's report to `logs/audits/code-audit.md` (aligning dir+format with Tasks 9/10), and update every reference in Task 8 (Acceptance Criteria last item, Verification Steps -> Audit deliverable, Details -> Files, Post-completion decisions.md link) accordingly. If JSON is intentionally preferred for the code audit, at minimum relocate it under `logs/audits/` (e.g. `logs/audits/code-audit.json`) so all three audits share the same directory."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 9,
+      "section": "Verification Steps",
+      "issue": "Verification Steps contains only an `### Automated` subsection whose body states tests are not applicable for an audit and instead lists report-existence/completeness checks. This is acceptable content for an audit task, but the check is really a smoke-style deliverable check placed under the `Automated` heading. Tasks 10 correctly uses a `### Smoke` subsection (`test -f ... -> report written`) for the equivalent check.",
+      "fix": "For consistency with Task 10, move the report-existence/completeness checks under a `### Smoke` subsection (e.g. `test -f work/17-funnel-multi-entry/logs/audits/security-audit.md`). Cosmetic; content is otherwise complete and correct."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 8,
+      "section": "Reviewers",
+      "issue": "Audit tasks (8/9/10) have `reviewers: []` and no `## Reviewers` section. Per the template the `## Reviewers` section is listed as present/non-empty; for self-reviewing audit tasks its absence is expected and correct (the task is itself the review). Recorded as informational only to confirm the intentional omission was reviewed, not a defect.",
+      "fix": "No action required. Confirmed correct: audit tasks are self-reviewing (`reviewers: []`), so the `## Reviewers` section is legitimately absent. TDD Anchor is also correctly absent on all three audit tasks (read-only, produce reports not code)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3
+  }
+}

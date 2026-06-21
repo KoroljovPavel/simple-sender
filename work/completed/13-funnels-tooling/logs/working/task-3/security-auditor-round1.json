@@ -1,0 +1,19 @@
+{
+  "reviewer": "security-auditor",
+  "task": 3,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A03: Injection (defense-in-depth)",
+      "title": "funnelId/stepId interpolated into request paths without encodeURIComponent",
+      "description": "The four new actions interpolate `funnelId` and `stepId` directly into the request URL template (e.g. `${listUrl()}/${funnelId}/duplicate`, `${listUrl()}/${funnelId}/steps/${stepId}/preview`) without calling encodeURIComponent. This matches the pre-existing store convention exactly (update/fetchOne/delete_/activate/pause all interpolate the same way), and the task brief explicitly required matching how the existing actions construct paths. These IDs are MongoDB ObjectId hex strings originating from server responses and route params, not free-form user input, so there is no realistic injection sink here (path segments, not query parameters; the backend validates the ObjectId format). Flagged only as a defense-in-depth/consistency note for the whole store layer, not introduced by this task.",
+      "location": "frontend/stores/funnels.ts:177,193,207,224",
+      "impact": "None exploitable in current usage. If a future caller ever passes an attacker-influenced, non-ObjectId string as funnelId/stepId, an unencoded value could alter the path structure (extra '/', '?', '..'). Low likelihood given the ID source.",
+      "recommendation": "Optional, store-wide: wrap path segments with encodeURIComponent (e.g. `${listUrl()}/${encodeURIComponent(funnelId)}/duplicate`). Do as a separate consistency pass across all actions rather than touching only the four new ones, to keep the contract uniform. Not blocking.",
+      "cwe": "CWE-20"
+    }
+  ],
+  "notes": "Pinia store layer only, no server surface. CSRF/XSRF: all four new POST actions go through useApi(), whose onRequest hook auto-attaches X-XSRF-TOKEN for non-safe methods (SAFE_METHODS excludes POST); no manual header tampering, no token read/log in the store. No sensitive data persisted or logged: store state is only funnels/loading/error; the preview response {rendered,sampleData,kind} is returned verbatim and never stored or console-logged, and the PreviewStepResponse type deliberately excludes ownerChatId/identity. Error-flip pattern is correct and matches the store contract: each action sets error.value=false at entry, sets error.value=true in catch, and RE-THROWS (no swallowing, only a boolean leaks to state); useApiError is correctly NOT called in the store. No eval/dynamic code. Tests cover happy + error paths for all four actions and assert the re-throw + error flag. Zero critical/major findings; one minor pre-existing defense-in-depth note (URL segment encoding) that is consistent with the established store convention the task was told to follow."
+}

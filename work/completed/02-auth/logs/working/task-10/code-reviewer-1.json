@@ -1,0 +1,104 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "All 5 auth pages implement the required vee-validate/zod forms, layout assignment, error-state handling, and redirect contracts; the 6 TDD-anchor tests are present and assert the right surface. No critical or major issues found. The cluster of minor findings is dominated by duplication that wants extracting (status-code coercion, token-from-route, Tailwind class strings) and one cross-page UX gap where register.vue / reset-password.vue push success-flag query params to /auth/login that login.vue never reads.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/login.vue",
+      "line": 40,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "The `(e as { statusCode?: number; status?: number; response?: { status?: number } })` plus `e?.statusCode ?? e?.status ?? e?.response?.status` triplet is duplicated verbatim in login.vue:40-41, register.vue:49-50, reset-password.vue:52-53, and verify-email.vue:31-37 (the verify-email variant additionally extracts `data.code` / `response._data.code`). Four copies of the same ofetch FetchError shape knowledge means a future shape change (e.g. ofetch rename, Nuxt upgrade) requires four edits in lockstep. Extract `frontend/utils/api-error.ts` exporting `getErrorStatus(e: unknown): number | undefined` and `getErrorCode(e: unknown): string | undefined`, replace the four inline blocks with single calls. Sets a precedent for future page error handlers; aligns with the Task 7 review precedent that flagged 3-way duplication of `extractIp` / `USER_AGENT_MAX` as a `minor`.",
+      "benefit": "Single source of truth for FetchError shape extraction; easier to migrate when Nuxt/ofetch error API evolves; cuts ~6 lines per page; one test on the helper covers all four pages.",
+      "optional": false
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/login.vue",
+      "line": 47,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "register.vue:47 navigates to `/auth/login?registered=1` and reset-password.vue:50 navigates to `/auth/login?reset=1`, but login.vue never reads `route.query.registered` or `route.query.reset` and never renders a success banner. The user-spec contract is: register success → \"редірект на /login\" + success message; reset-password success → \"редірект на /login\" with \"Пароль змінено\" message. Without a banner the user lands on the login form with no confirmation that registration / reset succeeded — a UX regression vs the spec. Add a small banner block at the top of login.vue, e.g.: `const registered = computed(() => route.query.registered === '1'); const reset = computed(() => route.query.reset === '1');` then `<p v-if=\"registered\" class=\"...green\">Реєстрація успішна. Перевірте пошту для підтвердження email і увійдіть.</p>` / `<p v-if=\"reset\">Пароль змінено. Увійдіть з новим паролем.</p>`. Wire equivalent `data-test` attrs and add a test (one for each flag) so the contract between register/reset and login is locked.",
+      "benefit": "Closes the spec gap (\"редірект на /login з повідомленням про успіх\" / \"Пароль змінено\"); the redirect-with-query handshake is no longer dead code.",
+      "optional": false
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/verify-email.vue",
+      "line": 8,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Token-from-route logic is duplicated character-for-character in reset-password.vue:8-12 and verify-email.vue:10-14: `const route = useRoute(); const token = computed(() => { const t = route.query.token; return typeof t === 'string' && t.length > 0 ? t : null; })`. Two copies of the same string-vs-string[]-vs-undefined narrowing. Extract a tiny composable, e.g. `frontend/composables/useQueryToken.ts` returning `ComputedRef<string | null>`. Both pages then become one line.",
+      "benefit": "DRY; single place to harden against weird routing states (e.g. multiple `?token=` values producing string[]).",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/verify-email.vue",
+      "line": 47,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Cross-file consistency observation (NOT a Task 10 fix request — the middleware lives in Task 8 scope): `frontend/middleware/auth.global.ts` redirects any authenticated user away from `/auth/**` to `/dashboard`. A pending user who is already signed in (allowed by tech-spec line 54: `pending → allow login`) and clicks the verification link from email lands on `/auth/verify-email?token=...` while authenticated → middleware fires `navigateTo('/dashboard')` BEFORE `onMounted`'s `verify()` runs → the GET to `/api/auth/verify-email?token=...` is never made → the user's status stays `pending` despite a valid token click. Workaround per user-spec: pending users can resend from /profile, so the email-link path is mainly for unauthenticated registrants. Worth documenting in decisions.md or, longer-term, having `/auth/verify-email` opt out of the middleware's authenticated-redirect (e.g. via `definePageMeta({ allowAuthenticated: true })`).",
+      "benefit": "Documents a real but bounded UX edge case; lets future Epic 02 polish (or Epic 11 admin) fix the middleware exception cleanly.",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/register.vue",
+      "line": 10,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`name` has `.trim().min(1)` but `email` does not have `.trim()` before `.email()`. A user who types ` user@example.com ` (or pastes from a mail client) gets a confusing 'Введіть коректний email' error rather than a successful submit. Same omission in login.vue:9, forgot-password.vue:9, verify-email.vue:52. Apply `.trim()` (or `.transform((s) => s.trim()).pipe(z.string().email(...))`) consistently for emails. The backend's `@Email` validator behaves the same way, but the frontend is the better place to fix UX-grade typos before the round trip.",
+      "benefit": "Friendlier validation; matches the `name.trim()` precedent in register.vue and avoids leaking whitespace into POST bodies.",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/tests/pages/auth/login.spec.ts",
+      "line": 64,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "Error-status mapping (lines 42-50 of login.vue, lines 51-59 of register.vue, lines 54-58 of reset-password.vue) is non-trivial logic that decides what user-visible error text appears for each backend status code, yet none of the tests exercise these branches. A copy/paste typo or accidental code-priority swap would not be caught. Add at least one error-mapping test per page: e.g. `loginForm_returns429_showsTooManyAttemptsMessage` (apiMock.mockRejectedValueOnce({ statusCode: 429, response: { status: 429 } }), submit valid data, assert `data-test=\"submit-error\"` text contains 'Забагато спроб'). Same shape for register 409 and reset-password 400 → linkInvalid. Verify-email already has the 400+TOKEN_EXPIRED test, so its mapping is partially covered.",
+      "benefit": "Locks in the user-facing error copy contract from the user-spec; catches future status-code-mapping regressions cheaply.",
+      "optional": false
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/login.vue",
+      "line": 69,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "The same Tailwind class chains `w-full border rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500` (text input) and `w-full bg-blue-600 text-white rounded-md py-2 font-medium disabled:opacity-50 hover:bg-blue-700` (primary button) appear ~12 times across the five pages. Once `shadcn-vue` Button/Input components are installed (the task hint anticipates this; the current departure is documented as acceptable), these strings should disappear. In the meantime, consider a single `~/components/Ui/AuthInput.vue` + `~/components/Ui/AuthButton.vue` (or even just a CSS class in a tailwind layer) so the visual contract is defined once. Helps the eventual shadcn migration land as a one-file change.",
+      "benefit": "Cuts duplicated strings now; makes the future shadcn-vue migration (mentioned in task hints) a flat replacement; consistent focus/hover/disabled visual contract.",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/verify-email.vue",
+      "line": 67,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`resendStatus` flips to `'sent'` on a successful resend; `startCooldown(60)` is called and `cooldownSecondsLeft` decrements to 0; the timer's `if (resendStatus.value === 'cooldown') resendStatus.value = 'idle'` branch leaves `resendStatus = 'sent'` permanently. The success message therefore stays visible past the 60s window with the button now re-enabled. Subtle: clicking the button again starts another cooldown but the success text from the previous send is still there. Either reset `resendStatus` to `'idle'` on every successful submit start, or also clear `'sent'` when the cooldown elapses. Acceptable as-is for first ship — flagged for visibility.",
+      "benefit": "Cleaner resend-then-resend visual; users won't see a stale 'Якщо акаунт існує...' line for the second submit.",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/login.vue",
+      "line": 36,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`const authStore = useAuthStore()` is created inside the submit handler instead of at script-setup top-level. Convention in stores/auth.ts and middleware/auth.global.ts is top-level instantiation; the lazy form here serves no purpose (Pinia handles the singleton). Move `const authStore = useAuthStore()` to the top of `<script setup>` for consistency with the rest of the codebase. Same nit applies to the Vue ergonomics: top-level use makes IDE jump-to-definition cleaner.",
+      "benefit": "Matches the existing convention from Task 8; trivial readability fix.",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/pages/auth/reset-password.vue",
+      "line": 67,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The `v-if=\"!token || linkInvalid\"` block uses `data-test=\"invalid-link\"`. The `<form v-else>` does not set a `data-test` attribute, while every other page uses `data-test=\"...\"` consistently on form children. Adding `data-test=\"reset-password-form\"` (and analogous wrappers on login / register form roots) would make future Playwright / Vitest selectors more robust to class refactors. Optional — current selectors via `find('input[name=\"...\"]')` work.",
+      "benefit": "Easier E2E + integration testing later; eliminates fragile attribute selectors.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 8,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 10,
+    "testCoverageAssessment": "adequate"
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "agent": "wave2-gate",
+  "task": "Wave 2 compile gate — prove full backend compiles and the whole test suite is green; fix only old-step-type-removal breakage in files not owned by tasks 1-5",
+  "result": "PASS",
+  "compileJava": "BUILD SUCCESSFUL (tasks 1-5 already landed, no main changes)",
+  "compileTestJava": "BUILD SUCCESSFUL after migrations",
+  "fullSuite": {
+    "command": "./gradlew test",
+    "tests": 1101,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 2,
+    "suites": 101,
+    "build": "SUCCESSFUL"
+  },
+  "filesMigrated": [
+    {
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStatusEnumTest.java",
+      "change": "stepTypeDiscriminatorIsUppercase: replaced removed SEND_MESSAGE/SEND_IMAGE/MENU name() assertions with MESSAGE; kept surviving discriminators. Preserves the UPPERCASE-name() persistence contract."
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelEventServiceIT.java",
+      "change": "seedFunnel: SEND_MESSAGE+setText(\"hi\") -> MESSAGE step with single ContentBlock(TEXT,\"hi\"). Same rendered text."
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTestRunSendIT.java",
+      "change": "seedActiveTargetFunnel + seedDraftFunnel: SEND_MESSAGE+setText(text) -> MESSAGE step with single ContentBlock(TEXT,text). Downstream assertions (/sendMessage path, body contains text) preserved."
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelServiceEmitEventTest.java",
+      "change": "messageStep(): SEND_MESSAGE flat 'hello' -> MESSAGE with ContentBlockDto(TEXT,'hello'); added ContentBlockDto import. emitStep()/subscribeStep() DTO positional arg lists realigned to the new 17-field FunnelStepDto signature (blocks replaced flat msg fields)."
+    }
+  ],
+  "taskOwnedRegressions": [],
+  "deviations": [
+    "FunnelStatusEnumTest: the test enumerated each step type's name(); since 3 were removed, I substituted the composer replacement MESSAGE and dropped the removed ones rather than the whole assertion. StepTypeTest (task-owned) already pins MESSAGE via valueOf, so there is minor overlap, but FunnelStatusEnumTest guards the distinct UPPERCASE-name() persistence contract and intent is preserved."
+  ],
+  "commit": "095f32f",
+  "selfReview": {
+    "lens": "test-master + code-reviewing (nested sub-agent spawning restricted; applied methodologies directly to the diff)",
+    "intentPreserved": true,
+    "assertionsWeakened": false,
+    "taskOwnedFilesTouched": false,
+    "notes": "All migrations are content-construction-only changes; no assertion was relaxed. Rendered text identical so send-path ITs still verify delivery. Arg counts verified against FunnelStepDto (17) and ContentBlock/ContentBlockDto (6) records."
+  }
+}

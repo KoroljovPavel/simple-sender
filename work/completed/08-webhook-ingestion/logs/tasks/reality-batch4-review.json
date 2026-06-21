@@ -1,0 +1,83 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 11,
+      "issue": "Task 11 description (lines 24, 30, 85) and tech-spec line 46 both state 'CookieServerCsrfTokenRepository.withHttpOnlyFalse() + XorServerCsrfTokenRequestAttributeHandler'. The actual SecurityConfig.java (line 64) uses ServerCsrfTokenRequestAttributeHandler — the Xor variant is explicitly NOT used, and the code comment at line 59 explains why (Xor would break the cookie/header round-trip with CookieServerCsrfTokenRepository). AC line 85 says 'XorServerCsrfTokenRequestAttributeHandler are preserved unchanged' — an implementer following this instruction would change the existing handler, which would regress the existing SPA CSRF flow. The handler to preserve is ServerCsrfTokenRequestAttributeHandler, not Xor.",
+      "fix": "In T11 description (line 24), step 1 (line 30), AC (line 85), and tech-spec line 46: replace every occurrence of 'XorServerCsrfTokenRequestAttributeHandler' with 'ServerCsrfTokenRequestAttributeHandler'. The implementation must preserve the existing import 'org.springframework.security.web.server.csrf.ServerCsrfTokenRequestAttributeHandler' and the .csrfTokenRequestHandler(new ServerCsrfTokenRequestAttributeHandler()) call unchanged."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Task 10 step 6 instructs the IT to read enqueued-job count via 'StorageProvider.getJobs(StateName.ENQUEUED, PageRequest.ascOnUpdatedAt(10))'. In JobRunr 7.3.2 (the version on the classpath), PageRequest is an abstract class with no 'ascOnUpdatedAt' static factory method. The concrete subclass is OffsetBasedPageRequest(String order, long offset, int limit) — the order string is a raw string like 'updatedAt:ASC', not a factory method. Calling PageRequest.ascOnUpdatedAt(10) will not compile.",
+      "fix": "Replace 'PageRequest.ascOnUpdatedAt(10)' with 'new OffsetBasedPageRequest(\"updatedAt:ASC\", 0, 10)' (import org.jobrunr.storage.navigation.OffsetBasedPageRequest). Alternatively, verify the order string constant via StorageProvider Javadoc and use the correct constructor. The import for StateName is org.jobrunr.jobs.states.StateName (verified present in jar)."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 title says '4 counters' and AC line 108 says 'all four controller-owned counters', but the counter list in both the Description and the AC enumerates 5 distinct registrations: (1) telegram_webhook_received_total, (2) telegram_webhook_duration_seconds (Timer), (3) rejected{invalid_secret}, (4) rejected{project_not_found}, (5) rejected{duplicate}. The Timer is a different Micrometer metric type from Counter, but calling the set '4 counters' will confuse implementers about whether 5 metric objects need to be registered or 4.",
+      "fix": "Clarify: 'controller owns 4 counters + 1 Timer: (Counters) received_total, rejected{invalid_secret}, rejected{project_not_found}, rejected{duplicate}; (Timer) duration_seconds'. Update the title, AC line 108, and the Description bullet list to reflect this 4+1 split explicitly."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 10,
+      "issue": "Implementation hint (line 161) says 'use WebTestClient.bindToApplicationContext(...) (not bindToServer) to bypass the HTTP transport overhead'. AbstractIntegrationTest.rebindWebTestClient() already does exactly this in @BeforeEach — it binds to applicationContext. The hint is redundant and may confuse the implementer into thinking they need custom binding logic in the IT beyond what the base class already provides.",
+      "fix": "Replace the hint with: 'The base class AbstractIntegrationTest already binds WebTestClient to applicationContext in @BeforeEach — no additional binding needed for AC1 latency measurement. The in-memory transport removes network round-trip, making P99 < 100ms achievable in CI.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 step 6 AC5 idempotency test uses 'Flux.range(0, 2).parallel(2).flatMap(i -> POST same updateId)' to simulate concurrent duplicate posts. However, WebTestClient.bindToApplicationContext runs in-process without a real Netty server — parallel Flux requests dispatched via WebTestClient in this mode are still serialized through the test's reactor scheduler unless subscribeOn(boundedElastic()) is added per-request. BotControllerIT uses Mono.fromCallable(...).subscribeOn(boundedElastic()) for its parallel tests (see postConnect_parallelSameToken pattern). The AC5 test as written may not actually produce a race.",
+      "fix": "Follow the BotControllerIT pattern: wrap each POST in Mono.fromCallable(() -> webTestClient.post()...exchange()...).subscribeOn(Schedulers.boundedElastic()), then Mono.zip them. This matches the established concurrency test convention in the codebase."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 5
+  },
+  "notes": {
+    "files_verified_exist": [
+      "backend/src/main/java/com/botfunnel/bot/BotController.java — exists, WebFlux @RestController style confirmed",
+      "backend/src/main/java/com/botfunnel/bot/BotRepository.java — findByProjectIdAndStatus(String, BotStatus) exists",
+      "backend/src/main/java/com/botfunnel/project/ProjectRepository.java — findById exists (inherited from ReactiveMongoRepository); deletedAt field exists on Project entity",
+      "backend/src/main/java/com/botfunnel/jobs/JobRunrMongoConfig.java — exists, provides sync com.mongodb.client.MongoClient bean",
+      "backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java — exists, @Import(JobRunrInMemoryConfig.class) present, rebindWebTestClient() in @BeforeEach confirmed",
+      "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java — exists, ListAppender pattern present, MockitoSpyBean pattern confirmed",
+      "backend/src/test/java/com/botfunnel/JobRunrInMemoryConfig.java — exists, provides InMemoryStorageProvider",
+      "backend/src/test/java/com/botfunnel/SecurityBlockTest.java — exists, @MockitoBean com.mongodb.reactivestreams.client.MongoClient confirmed"
+    ],
+    "files_planned_not_yet_existing": [
+      "ProcessTelegramUpdateJob.java — created by T9 (T10 depends_on includes 9 — dependency correctly declared)",
+      "RawUpdateRepository.java / RawUpdate.java — created by T5 (T10 depends_on includes 5 — correct)",
+      "WebhookSecretVerifier.java — created by T2 (T10 depends_on includes 2 — correct)"
+    ],
+    "apis_verified": [
+      "BackgroundJob.enqueue(UUID id, IocJobLambda<S> iocJob) — exists in JobRunr 7.3.2 at line 123 of BackgroundJob.java. The typed form BackgroundJob.<ProcessTelegramUpdateJob>enqueue(jobId, j -> j.handle(rawUpdateId)) matches the IocJobLambda<S> overload. CORRECT.",
+      "TelegramApiClient.scrubTokens(String) — public static method, exists at line 179 of TelegramApiClient.java. CORRECT.",
+      "StorageProvider.getJobs(StateName state, PageRequest pageRequest) — method exists in StorageProvider interface at line 154. StateName class exists. PageRequest.ascOnUpdatedAt() does NOT exist — see findings.",
+      "NegatedServerWebExchangeMatcher + PathPatternParserServerWebExchangeMatcher — Spring Security 6.5 reactive API: requireCsrfProtectionMatcher(matcher) method confirmed to exist on CsrfSpec. NegatedServerWebExchangeMatcher and PathPatternParserServerWebExchangeMatcher are standard Spring Security WebFlux classes present since 5.x — API shape is FEASIBLE for Spring Boot 3.5.0 / Spring Security 6.5.x."
+    ],
+    "cross_task_integration": [
+      "T10 depends_on [1, 2, 4, 5, 9] — covers MeterRegistry(T1), WebhookSecretVerifier(T2), TelegramUpdate types(T4), RawUpdate+RawUpdateRepository(T5), ProcessTelegramUpdateJob(T9). No missing cross-task dependency detected.",
+      "T11 depends_on [10] — SecurityConfig and filter changes depend on controller existing. Correct.",
+      "T12 depends_on [11] — audit requires all Wave 4 output. Correct.",
+      "MeterRegistry shared resource: single SimpleMeterRegistry bean from MeterRegistryConfig (T1), consumed by controller (T10) and filter (T11). No duplicate initialization.",
+      "payload_too_large counter ownership: T10 AC explicitly guards against this (grep check in AC), T11 owns the counter in filter. No overlap."
+    ],
+    "security_observations": [
+      "T10 scrubTokens usage at WARN and ERROR sites is correct — only projectId+updateId logged (no payload Document), matching security audit M7 requirement.",
+      "T11 filter path scope single-segment check aligns with security M4 — pattern /webhooks/telegram/{projectId} will NOT match /webhooks/telegram/abc/def. Feasible.",
+      "T12 audit scope is realistic and well-scoped for a Wave 5 cross-component review."
+    ]
+  }
+}

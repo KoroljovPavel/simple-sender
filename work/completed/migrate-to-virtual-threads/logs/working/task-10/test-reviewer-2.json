@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "summary": "Round-2 fixes address all actionable round-1 items correctly. The barrier-spread widening (200ms) is well-justified in the comment. The n<=0 guard test is correctly shaped (asserts message containment + negative case). SecurityBlockTest is now deterministic at isEqualTo(403) with a precise rationale comment. Rename of returnsResultsInSubmissionOrder -> _noLossNoDuplicates aligns the name with the assertions. The 1-throws/2-succeed reshape of the exception test now exercises a realistic race shape. Two round-1 partials remain by design: (a) the doesNotHang test still does not exercise the finally-block hedge (the litmus gap is explicitly disclosed in the class comment and impl JavaDoc — the team accepted the inspection-only tradeoff to avoid impl-internal pokes); (b) InterruptedException paths remain uncovered (the team rationale — interrupting a parked VT mid-await is brittle for low marginal value — is defensible). One small new finding: the comment on the reshaped exception test claims 'Submission #1 always fails' but the AtomicInteger race actually selects whichever VT wins incrementAndGet(); behaviour is still correct (exactly one throws, others succeed) but the comment is inaccurate. No regressions introduced. Status promoted to passed: the remaining items are documented design tradeoffs, not test-quality defects.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/common/test/ConcurrencyTestUtilsTest.java:111-121",
+      "issue": "Comment on parallelInvoke_propagatesCallableException_evenWhenOtherTasksSucceed says 'Submission #1 always fails; #2 and #3 always succeed' — but with all 3 VTs released simultaneously by the start latch, the failing task is whichever VT wins the AtomicInteger.incrementAndGet() race, not deterministically the first submission. The test behaviour is still correct (exactly one task observes count==1 and throws; the other two return 'ok'; assertThatThrownBy passes regardless of submission index), but the comment misleads a reader into thinking submission order determines the failing task. Additionally the phrase 'impl surfaces the FIRST future's failure unwrapped' is true only in the sense of iteration order over futures (submission order) — if the racey-loser-to-throw is submitted at index 2, futures.get(0).get() and .get(1).get() are called and return 'ok' before the throw surfaces at index 2. Minor — does not affect pass/fail signal, only the documentation of WHY the test passes.",
+      "recommendation": "Either (a) reshape the body to make submission #1 deterministically throw: use an `int[] idxBox = {0}` captured by a per-submission lambda, OR pre-build a List<Callable<String>> where tasks.get(0) throws and tasks.get(1..2) return 'ok', and extend parallelInvoke to accept `List<Callable<T>>` (small follow-up); OR (b) rewrite the comment to: 'Exactly one of the 3 VTs wins the incrementAndGet race and throws; the other 2 return ok. The impl iterates futures in submission order — when it reaches the failing future's index it unwraps the ExecutionException and rethrows IllegalStateException, dropping any subsequent successful results.' Option (b) is the cheap fix; option (a) is the durable fix if you want positional-fail semantics in race tests."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/common/test/ConcurrencyTestUtilsTest.java",
+      "issue": "Round-1 finding #2 (InterruptedException paths at ConcurrencyTestUtils.java:50-53 and :58-60) remains uncovered. The team's rationale is documented in the round-2 commit message: interrupting a parked VT mid-await is brittle and the impl just restores the flag + rethrows. The skip is defensible — the interrupt paths are mechanical (`Thread.currentThread().interrupt(); throw new RuntimeException(...)`) and a regression would manifest immediately at any race-test call-site whose test thread gets a JUnit @Timeout interrupt. However the impl's contract for race-test sites (e.g. BotConnectRaceIT under @Timeout(10)) is 'caller's interrupt flag is preserved on rethrow' — if a future refactor swallowed the flag, no test in this suite would catch it.",
+      "recommendation": "Reopening is optional, not required for Task 10 sign-off. If addressed in a follow-up: one cheap test covers both paths — `parallelInvoke_callerInterrupted_restoresInterruptFlagAndRethrows`. Shape: spawn a worker Thread that calls `ConcurrencyTestUtils.parallelInvoke(5, () -> { Thread.sleep(5000); return 1; })`; from the test thread, call `worker.interrupt()` after a brief sleep (50ms — long enough for VTs to park and the parent to call ready.await/start.countDown then enter the future.get loop); assert worker terminates with RuntimeException containing 'interrupted' AND worker observed Thread.interrupted() == true at the catch site (pass a Boolean[] holder). Catches both the await-loop interrupt and the future.get interrupt — they share the same recovery shape, so one test covers both. If skipped, document the gap explicitly in patterns.md (Task 13) so future maintainers know the interrupt-flag contract is enforced by code review, not tests."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/common/test/ConcurrencyTestUtilsTest.java:51-73",
+      "issue": "Round-1 finding #1 (doesNotHang does not exercise the finally-block hedge) is still present but now honestly disclosed in the class comment (lines 22-25) and the impl JavaDoc (ConcurrencyTestUtils.java:34-38). The team's call: keep the test as a regression guard for the in-body-throw shape (which the test does cover correctly — removing the pre-barrier countDown would cause the hang), and accept that the duplicate finally-countDown is dead-code-from-tests-perspective hedge that requires impl-injection to exercise. This is a defensible tradeoff: the test pins the shape called out in the TDD anchor, the gap is disclosed rather than hidden, and a future refactor that deletes the finally-block would not pass code review without explanation. The litmus-test failure from round-1 still stands strictly speaking, but the disclosure changes the risk profile — a maintainer who reads the impl JavaDoc cannot 'silently' regress the finally block.",
+      "recommendation": "Acceptable as-is for Task 10 sign-off. If addressed in a future hardening pass: add a single targeted test using bytecode-level injection (Byteman) or a test-only subclass that overrides start.await() to throw — both add infra complexity disproportionate to the marginal coverage. Better path: in Task 13 patterns.md, document that 'the finally-clause hedge in ConcurrencyTestUtils is intentionally not exercised by unit tests and any change to its semantics requires a `// SAFETY:` comment update justifying the new shape' — turns the inspection contract into a code-review gate. No code change required now."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 5,
+      "passed": 4,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 5,
+      "integration": 1,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

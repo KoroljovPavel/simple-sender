@@ -1,0 +1,23 @@
+{
+  "reviewer": "security-auditor",
+  "task": 1,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 801,
+      "issue": "Echoed note IDs are not validated for format. When a client sends back a previously-minted note id, the service preserves it verbatim via blankToNull() with no shape check. A client could supply an arbitrary string (e.g. '../../../etc' or a 1000-char string) as the note id and it will be persisted as-is. Step IDs have the same behavior, but note IDs are new to this task. The task description says 'never trusted from the body for shape', meaning format validation was expected.",
+      "fix": "After blankToNull(), validate the format if incomingId is non-null: require it to match the ObjectId hex pattern ([0-9a-f]{24}) — e.g., `if (incomingId != null && !incomingId.matches(\"[0-9a-f]{24}\")) throw AppException.unprocessableEntity(CODE_NOTE_INVALID, \"Invalid note id format\");`. This is consistent with the server-minted shape and prevents arbitrary strings from persisting as note IDs. Note: this is a best-practice gap, not an exploitable vulnerability in the current context, since note IDs are editor metadata only and not used in any query or lookup."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 782,
+      "issue": "No duplicate-ID check on notes array. The step-minting loop in toSteps() (line 988) uses a seenIds set to reject duplicate step IDs within the same request. The applyNotes() loop has no equivalent check — a client can send multiple notes with the same id and both will be persisted, which can create ambiguous state if the frontend ever needs to look up a note by id. This is an inconsistency with the step-id model, not a direct security vulnerability.",
+      "fix": "Add a Set<String> seenNoteIds = new HashSet<>() guard before the notes loop, and after resolving the final id (server-minted or preserved), add `if (!seenNoteIds.add(id)) throw AppException.unprocessableEntity(CODE_NOTE_INVALID, \"Duplicate note id within funnel\");`. This mirrors the step-id duplicate-rejection pattern."
+    }
+  ],
+  "summary": "verdict=pass. 2 minor findings, 0 major/blocker. The implementation correctly applies defense-in-depth across all mandated security surfaces: (1) DoS guards — @Size(max=MAX_NOTES) at the DTO layer and a service-side re-check in applyNotes(); (2) note text length cap at both DTO and service layer; (3) finite-coordinate validation via @AssertTrue on CanvasPositionDto with @Valid cascade from parent DTOs; (4) server-minted note IDs using new ObjectId().toHexString() when incomingId is null; (5) access control unchanged — requireFunnel() enforces ownership via projectService.requireOwned() + projectId filter before any canvas/notes mutation; (6) no hardcoded secrets in any new file; (7) no SSRF vectors introduced; (8) @JsonIgnoreProperties(ignoreUnknown=true) on all new DTOs blocks mass-assignment; (9) Trigger.canvasPosition is correctly excluded from equals()/hashCode(). The two minor findings are best-practice gaps (missing format check on echoed note IDs; missing duplicate-ID guard in the notes array) that pose no immediate exploitable risk given the editor-only nature of note IDs."
+}

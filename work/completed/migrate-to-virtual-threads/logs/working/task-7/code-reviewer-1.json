@@ -1,0 +1,46 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 7's atomic flip of ProjectService/Controller, BotService/Controller, ProfileService/Controller (and their tests) to the servlet stack is well-executed: D14 INCR-every-attempt brute-force semantics, D2/D4 compensating deleteWebhook + driver-fallback mapPersistError, anti-enumeration 4-way 404 collapse in requireOwned, AC13b TELEGRAM_DISCONNECT_WARN fail-open, REDIS_FAIL_OPEN_WARN fail-open, deletedAt-FIRST guard in restore, event-AFTER-save ordering, and token-scrub at every Telegram error log site are all preserved verbatim. HttpRequestUtils consolidation is complete and SecurityContextHolder usage in currentUserId() across the three controllers is uniform. One real concern: BotConnectRaceIT reads protected static MONGO_DB/REDIS fields from AbstractIntegrationTest from a non-subclass in a different package — this will fail to compile when Task 10 lands unless those fields are widened to public, or BotConnectRaceIT subclasses something that exposes them.",
+  "findings": [
+    {
+      "severity": "high",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotConnectRaceIT.java",
+      "line": 81,
+      "category": "correctness",
+      "title": "protected-static access from non-subclass / different package will not compile",
+      "description": "BotConnectRaceIT lives in com.botfunnel.bot and deliberately does NOT extend AbstractIntegrationTest (it needs RANDOM_PORT instead of the MOCK env Task 10 will set on AbstractIntegrationTest). It then reads `com.botfunnel.AbstractIntegrationTest.MONGO_DB::getReplicaSetUrl` and `AbstractIntegrationTest.REDIS.getHost()` / `.getFirstMappedPort()` directly. Those fields are declared `protected static final` (see AbstractIntegrationTest.java lines 50/54). Per JLS §6.6.2, `protected` members of a class S in package P can be accessed from outside P only via a subclass of S — fully-qualified class access (`P.S.field`) from a non-subclass class in a different package is rejected at compile time with 'MONGO_DB has protected access in com.botfunnel.AbstractIntegrationTest'. Task 10's spec line 141 says 'Keep singleton containers' but does NOT widen visibility, so even after Wave 2 fully lands the file would not compile. Suggested fix: either (a) Task 10 widens MONGO_DB / REDIS to `public static`, (b) extract the singleton container holder into a dedicated `com.botfunnel.testsupport.SharedContainers` class with `public static` fields and have AbstractIntegrationTest delegate to it, or (c) have BotConnectRaceIT extend a slim base in `com.botfunnel` that exposes the containers — none of which Task 7 itself can do in isolation, but the issue must be raised so Task 10 widens visibility or Task 7's BotConnectRaceIT @DynamicPropertySource is refactored to start its own MongoDBContainer/Redis (defeats singleton intent). Flag in decisions.md so Task 10 picks this up."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotService.java",
+      "line": 250,
+      "category": "design",
+      "title": "incrementBruteForceCounter throws AppException through a catch-Exception fail-open guard — relies on rethrow-before-broad-catch ordering",
+      "description": "The structure `try { ...; if (count > THRESHOLD) throw AppException.tooManyRequests(...); } catch (AppException e) { throw e; } catch (Exception e) { log.warn(REDIS_FAIL_OPEN_WARN, ...); }` is correct as written, but the dependency on the catch-AppException-first rethrow is subtle: AppException extends RuntimeException, so a careless reordering of the catches (or refactor to a single `catch (Exception e)`) would silently swallow the 429 and let the chain continue to Telegram. The current catches do not destructure or wrap the AppException, so the rethrow is functionally identical to `throw` directly — the same effect would be achieved by moving the threshold check OUT of the try and into a separate post-try `if (count != null && count > THRESHOLD) throw ...` after the catch block. That refactor would also eliminate the AppException-as-control-flow-through-catch pattern, which Checkstyle / SpotBugs sometimes flag. Not a bug; cosmetic. Tests do cover the 11th-attempt path and the redis-down-on-increment path independently."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotService.java",
+      "line": 267,
+      "category": "security",
+      "title": "REDIS_FAIL_OPEN_WARN logs raw e.getMessage() without scrubTokens — acceptable but worth noting",
+      "description": "Both Redis fail-open warn sites (lines 267 and 276) log `e.getMessage()` directly without `TelegramApiClient.scrubTokens(...)`. Redis driver exceptions (RedisConnectionFailureException, etc.) do not carry Telegram tokens in their messages — they carry Redis host/port/timeout info. So this is correct as-is. Adding `scrubTokens(...)` would be defense-in-depth at zero cost, and would make a future refactor that surfaces a chained-exception message including HTTP context (e.g. if a Redis-wrapper exception ever embeds the originating request URI) safe by default. Optional hardening — not required by the task spec."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotConnectRaceIT.java",
+      "line": 305,
+      "category": "testing",
+      "title": "extractXsrfToken splits on both ';' and ',' — fragile against XSRF values that contain commas",
+      "description": "`cookieHeader.split(\"[;,]\")` will split a comma inside the XSRF token value into two cookie segments. Spring Security's default `CookieCsrfTokenRepository` uses base64url-style tokens which do not contain commas, so this is safe today. However if Spring ever changes XSRF token format (or if a test seeds a custom token), the split would corrupt the extracted token. Suggested fix: split only on `;` (the within-Set-Cookie separator); cookies are joined across multiple Set-Cookie headers using `String.join(\"; \", ...)` so comma is never a delimiter. Cosmetic robustness; tests pass on current Spring."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java",
+      "line": 182,
+      "category": "testing",
+      "title": "Compensating deleteWebhook WARN log scrub site is not directly asserted",
+      "description": "The Connect-compensation log line at BotService.java:182 (`log.warn(\"Compensating deleteWebhook failed during Connect rollback: {}\", TelegramApiClient.scrubTokens(compErr.getMessage()))`) is functionally exercised by `connect_persistFails_compensatesDeleteWebhookAndPropagatesError` and the Mongo-down compensation paths, but no test asserts a token-scrub regression on the COMPENSATION error message specifically. The Disconnect path has `disconnect_telegramErrorMessageWithTokenInUri_isScrubbedInWarnLog` (BotServiceTest:440) which gates that branch; an analogous test for the Connect-compensation WARN would close the symmetric token-leak gap. Not blocking — the production code already calls scrubTokens — but worth adding so the gate persists against a future refactor that drops the scrub from the compensation site."
+    }
+  ]
+}

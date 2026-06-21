@@ -1,0 +1,125 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 references AppException.notFound() and AppException.unprocessableEntity() factories as already available, but these methods DO NOT exist in backend/src/main/java/com/botfunnel/common/AppException.java. The existing factories are: badRequest, unauthorized, forbidden, conflict, tooManyRequests. Task 4 itself does not directly call these (ProjectHardDeleteJob doesn't need them), but the companion context description on line 36 says 'constructor injection of ProjectRepository (added in Task 1)' — Task 1 creates those factories; they are not yet in the codebase. This is not a blocker for Task 4 itself since the job doesn't call those factories. However, Task 4's IT imports EventRepository and EventService which do exist.",
+      "fix": "Confirmed non-blocking for Task 4 specifically — the job class itself does not invoke notFound() or unprocessableEntity(). Downgrade to major for awareness. The factories are Task 1's responsibility."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "HardDeleteJob (the reference implementation Task 4 mirrors) does NOT call EventService at all — it only uses UserRepository.deleteAll(). The existing HardDeleteJobTest extends AbstractIntegrationTest (which is an IT, not a unit test). Task 4 treats HardDeleteJobTest as the reference IT pattern, but the actual file at backend/src/test/java/com/botfunnel/jobs/HardDeleteJobTest.java is the integration test (extends AbstractIntegrationTest), not a pure Mockito unit test. Task 4 calls for BOTH a unit test (ProjectHardDeleteJobTest with @ExtendWith(MockitoExtension.class)) and an IT (ProjectHardDeleteJobIT extending AbstractIntegrationTest). The existing HardDeleteJobTest does not have a separate 'unit test' counterpart — the codebase has only one file for the user hard-delete job, which is the IT. The task description for TDD Anchor says unit tests go in ProjectHardDeleteJobTest.java but uses the same file name as what would be expected for the IT by project convention. This naming is fine — just note that the project has no precedent for pure Mockito unit tests on job classes.",
+      "fix": "No code change needed, but implementer must be aware that the Mockito unit test (ProjectHardDeleteJobTest) has no existing codebase precedent for jobs — only the IT pattern exists. This is feasible but not a 'mirror' of existing code."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 IT test calls storageProvider.getRecurringJobs() to assert recurring job registration. The actual JobRunrInMemoryConfig.java creates an InMemoryStorageProvider bean, but the codebase has NO existing test that actually calls storageProvider.getRecurringJobs() — the comment in AbstractIntegrationTest.java says 'Recurring-job registration still runs at startup and is verified by HardDeleteJobTest invoking the @Recurring method directly' which is NOT the same as calling getRecurringJobs(). The task instructs to use this API but it has never been used in any existing test. The task acknowledges this ('This is a new pattern — there's no precedent in the current codebase') and provides a fallback via JobScheduler. The critical issue is that the task claims the fallback is 'JobScheduler.getRecurringJobs()' but JobScheduler is a job-enqueuing API and does not expose getRecurringJobs() — that method belongs to StorageProvider. The fallback guidance is internally inconsistent.",
+      "fix": "Remove the fallback reference to 'JobScheduler.getRecurringJobs()' — this method does not exist on JobScheduler. The only correct path is StorageProvider.getRecurringJobs(). Add a note that if the InMemoryStorageProvider does not populate recurring jobs from @Recurring annotations at test startup (since no workers run in test), the test may need to call the method directly first or verify registration via a different assertion."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 5,
+      "issue": "Task 5 says useApi.ts 'currently has only onRequest' and instructs adding onResponseError. This is accurate — verified. However, the task says 'surface the toast (i18n key errors.projects.unavailable)' and instructs using 'the existing toast helper convention used elsewhere in the frontend. Read frontend/composables/useApiError.ts and grep frontend/pages/** for the existing toast call shape before inventing one.' There is NO toast helper in the codebase — useApiError.ts returns a string (error message), not a toast, and no pages use any useToast/toast() call. The task correctly mentions the fallback: 'expose a pendingToastKey on the projects store (Task 2 already owns the store)'. However, the primary guidance to 'read useApiError.ts and grep for existing toast call shape' will waste implementer time since no such toast helper exists. This creates a false expectation that a toast infrastructure exists.",
+      "fix": "Update the task description to state clearly: 'No toast helper exists in the frontend codebase. Use the pendingToastKey approach on the projects store (per Task 2 decisions.md) or implement a minimal inline toast ref in the composable.' Remove the instruction to grep for an existing toast convention."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 5,
+      "issue": "Task 5 depends_on: [2] and references frontend/stores/projects.ts (created in Task 2) extensively. Task 2 is status: planned and the file frontend/stores/projects.ts does NOT exist in the codebase yet. Similarly, frontend/types/project.ts does not exist. Task 5 also references i18n keys projects.create.limitReachedTooltip and errors.projects.unavailable which do not yet exist in frontend/i18n/locales/uk.json or en.json (confirmed: 0 matches for 'projects' in both locale files). The dependency is declared (depends_on: [2]) so this is not a dependency tracking failure, but the task's context verification step should flag that all Wave 1 artifacts are absent.",
+      "fix": "No structural change needed — depends_on: [2] correctly declares the dependency. Implementer must ensure Task 2 is fully completed before starting Task 5. Add explicit verification gate: 'Before starting, confirm frontend/stores/projects.ts exists and frontend/i18n/locales/uk.json contains projects.* keys.'"
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 6,
+      "issue": "Task 6 depends_on: [2] and references multiple Wave 1 artifacts that do not yet exist: frontend/stores/projects.ts, frontend/types/project.ts, i18n keys projects.empty.*, projects.create.*, validation.projectName*, validation.projectDescriptionMax, validation.timezoneInvalid, errors.projects.create.{400,409,422,generic}. Verified: frontend/i18n/locales/uk.json has 0 lines matching 'projects'. Same for en.json. Task 6 also references frontend/tests/helpers/settle.ts which DOES exist (confirmed). The depends_on: [2] is declared correctly.",
+      "fix": "Same as Task 5 — structurally correct but implementer must verify Wave 1 completion. Add explicit pre-condition check gate."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 4,
+      "issue": "Task 4 implementation hint states: 'For EventService.logEvent, signature is (String userId, String eventType, String ipAddress, String userAgent, Map<String, Object> metadata). Cron-emitted events have no IP/UA — pass null for both.' This signature is CORRECT and matches the actual EventService.java. However, EventService.logEvent is fire-and-forget (returns void, not Mono<Void>), which means calling it inside a blocking JobRunr worker thread is fine. The task description says 'capture runDurationMs via long t0 = System.currentTimeMillis()' — this is correct. The issue: the task cascade step 1 calls template.remove(...).block() and step 3 calls template.remove(...).block(). Step 2 calls eventService.logEvent(...) which is fire-and-forget (void, subscribe internally). This means step 2 may not fully complete before step 3 begins, since logEvent does eventRepository.save(event).subscribe(...) asynchronously. The ordering guarantee in AC-17b ('project_hard_deleted event post-dates the sweep so it survives') could be violated if step 3 runs before the subscribe-based save completes.",
+      "fix": "The task should note this potential ordering gap. Options: (1) call eventRepository.save(event).block() directly in the job instead of using eventService.logEvent, or (2) accept the race since the event is saved to 'events' collection and step 3 removes from 'projects' — the event will not be swept by the same run's step 1 (which already ran). The AC-17b risk is real: if step 3 runs before logEvent's internal subscribe fires, the event might land AFTER the cascade but the project is already gone, which is acceptable for audit purposes. Add a code comment explaining this."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 4,
+      "issue": "Task 4 references AppException.conflict(\"project_name_taken\", ...) in the tech-spec description (line 130 of tech-spec). The actual AppException.conflict(String message) factory only accepts ONE argument (message), setting code=null. Task 4 itself does not call AppException.conflict — that is Task 1's concern — but the surrounding context description on task 4 line 35 says 'constructor injection of ProjectRepository (added in Task 1)' which implies Task 1 is complete. Decision 7 says a 2-arg AppException.conflict with code is needed. If Task 1 has not added an overloaded AppException.conflict(code, message) factory, the tech-spec references will be wrong for other tasks. This is not a Task 4 bug per se but a systemic risk from AppException.conflict signature mismatch.",
+      "fix": "Verify Task 1 adds an AppException.conflict(String code, String message) overload or that Decision 6/7 is satisfied by Task 1. The existing single-arg conflict() factory passes null for code, which breaks useApiError's 3-level key resolution for 409 errors on the frontend."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 instructs testing the onResponseError hook in useApi-404-interceptor.spec.ts via 'invoking the onResponseError callback directly (extract via the same approach that exposes the underlying $fetch.create config)'. The current useApi.ts returns the result of $fetch.create({...}) directly — there is no exported hook factory and $fetch.create returns a fetch function, not an object with accessible hook callbacks. Extracting the onResponseError callback for direct invocation in tests requires either (a) refactoring useApi to export the hook config object or (b) using mockNuxtImport('useApi', ...) to intercept $fetch.create and capture the config. The task acknowledges this uncertainty ('Pick whichever requires the least new infra') but provides no concrete guidance on HOW to extract the callback from the current structure. No existing composable test in the project tests a $fetch hook directly.",
+      "fix": "Add concrete guidance: the recommended approach is to mock $fetch.create via vi.hoisted + mockNuxtImport('useApi', ...) capturing the options object passed to $fetch.create, then call options.onResponseError({request, response}) directly. This avoids widening the public API of useApi."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "Task 6 step 5 instructs extending frontend/tests/pages/dashboard.spec.ts, saying 'Зберегти існуючі два тести як є (isLoaded=true, projects=[active1] для активного user-сценарію)'. However, the ACTUAL existing tests in dashboard.spec.ts do NOT mock useProjectsStore at all — they only mock useAuthStore and useLocalePath. Adding projectsStore mock requires modifying the existing test setup. The task's instruction to 'keep existing tests as-is' conflicts with the need to add a useProjectsStore mock that must be present when DashboardPage mounts (after the store is integrated into dashboard.vue). The existing test 'dashboard_activeUser_noBanner' will FAIL after dashboard.vue is modified to call projectsStore.fetchAll() unless the mock is added.",
+      "fix": "Clarify that 'keep existing tests as-is' means preserving their ASSERTIONS, not their setup. Both existing tests must have the projectsStore mock added to their setup (projectsStoreMock.isLoaded=true, projectsStoreMock.projects=[...]) to remain green after dashboard.vue modification."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 6,
+      "issue": "Task 6 Details section contains a full pseudocode implementation of frontend/pages/projects/new.vue including exact import statements, variable names, the complete computed schema expression, the full onSubmit handler with exact try/catch structure, and template structure details. This crosses from 'hint' into 'prescribed implementation': `const schemaComputed = computed(() => toTypedSchema(z.object({...})))`, `const { defineField, handleSubmit, isSubmitting, errors } = useForm({ validationSchema: schemaComputed, initialValues: { name: '', description: '', timezone: Intl.DateTimeFormat().resolvedOptions().timeZone } })`, and the full onSubmit function body are given verbatim. Same for dashboard.vue modification details — exact v-if/v-else-if/v-else structure with class names and data-test attributes.",
+      "fix": "Trim Details section to architectural pointers: 'Mirror register.vue structure; use computed() for schema reactivity; normalize blank description to null before calling store.create'. Remove verbatim code blocks for onSubmit handler and template structure."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 6,
+      "issue": "Task 6 Details section for dashboard.spec.ts modification contains full TypeScript code block showing the exact vi.hoisted factory and mockNuxtImport call. This is an implementation prescription, not a hint.",
+      "fix": "Replace with: 'Follow the LangSwitcher.spec.ts hoisted-refs pattern to mock useProjectsStore. The mock object needs projects, isLoaded, and fetchAll fields.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 4,
+      "issue": "Task 4 TDD Anchor test 'cutoff_isSevenDaysAgoPlusOneNano' captures the Instant argument to findByDeletedAtBefore and asserts it equals (now - 7d).plusNanos(1) with 'small slack'. The test design requires capturing the argument via ArgumentCaptor or similar, comparing two Instant values computed at different times. The 'small slack' is not defined — in a slow CI environment this could be 100ms or more. The task does not specify the slack window, which may cause flaky tests.",
+      "fix": "Specify a concrete slack window (e.g., within 5 seconds of expected). Use assertThat(captured).isBetween(expected.minusSeconds(5), expected.plusSeconds(5))."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 5,
+      "issue": "Task 5 TDD Anchor includes test 'settings link hidden when currentProject is null — assert the settings link element does not exist; with currentProject set, it exists with href /projects/{id}/settings'. The href check uses a path like /projects/{id}/settings but the component uses NuxtLinkLocale which may render as /uk/projects/{id}/settings or /projects/{id}/settings depending on locale setup in tests. The existing LangSwitcher.spec.ts does not need to test locale-prefixed hrefs. Task 5 provides no guidance on how to handle this in the test.",
+      "fix": "Add test setup note: mock useLocalePath as identity (path: string) => path — same as other page specs. The href assertion will then be /projects/{id}/settings without locale prefix."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 instructs 'Manual ARIA per pages/profile.vue style: role=menu, aria-haspopup, aria-expanded. Plain Tailwind divs (no shadcn-vue scaffolding).' The profile.vue file exists in the codebase but does NOT contain role=menu, aria-haspopup, or aria-expanded attributes — it is a plain form-based settings page. The tech-spec reference at 'pages/profile.vue (per tech-spec Dependencies, around lines 431-477) for manual-ARIA modal/dropdown patterns' may be referring to a tech-spec section, not the actual current profile.vue code.",
+      "fix": "Verify the tech-spec ARIA pattern reference is in the tech-spec document (not in profile.vue). Implementer should not expect to find a dropdown ARIA pattern by reading profile.vue — they should implement it from scratch following ARIA spec."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 IT test asks to verify structured INFO log via OutputCaptureExtension. No existing test in the project uses OutputCaptureExtension (grep confirms 0 matches). The import path is correct (org.springframework.boot.test.system.OutputCaptureExtension) and it is part of spring-boot-starter-test already on the classpath. This is a new pattern but feasible.",
+      "fix": "No code change needed. Add a note confirming OutputCaptureExtension is available via spring-boot-starter-test dependency already in build.gradle."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 15
+  }
+}

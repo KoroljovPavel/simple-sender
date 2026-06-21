@@ -1,0 +1,66 @@
+{
+  "task": "4",
+  "round": 1,
+  "reviewer": "code-reviewer",
+  "verdict": "OK",
+  "summary": "Locale dictionaries are structurally symmetric across uk/en, top-level namespaces match Decision 8 exactly (auth, dashboard, profile, layout, validation, errors, common, brand), and the 2-level auth / 3-level profile error shapes line up with the contextKey contract reserved for Task 10. check-locales.mjs cleanly separates pure helpers (collectKeySet, compareKeySets) from a main entry guarded by an isMain check, uses Object.create(null) plus an explicit unsafe-key filter for defense-in-depth, and resolves paths via import.meta.url so the prebuild hook is CWD-independent. package.json wires the prebuild without disturbing existing scripts. No blocking findings; a small handful of minor/nit-level polish opportunities below.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/scripts/check-locales.mjs:64-85",
+      "category": "readability",
+      "issue": "Main block uses an early `process.exit(0)` inside an `if`, then falls through to the missing-key reporters and a final `process.exit(1)`. The flow is correct only because `process.exit(0)` terminates the process, not because of a structural guard. A future edit that swallows the exit (e.g. wrapping in a function and returning early) would silently let the diff branch run on a clean state.",
+      "fix": "Express the success path as an `else` (or `return` from a small `main()` function): `if (diff.missingInA.length || diff.missingInB.length) { ...print...; process.exit(1) } else { process.exit(0) }`. Pure structural change, no behavioral diff."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/scripts/check-locales.mjs:22-28",
+      "category": "best-practices",
+      "issue": "`compareKeySets` calls `.sort()` on both key arrays but the sort result is only used by `filter`, which doesn't depend on order. The sort is actually meaningful for downstream stderr stability (`.join(', ')` of the sorted-then-filtered arrays is deterministic), but that intent is not documented. A reviewer/refactorer might drop the sort thinking it's dead.",
+      "fix": "Either drop the sort (and document order is non-deterministic) or keep it with a one-line comment: `// sort so missing-key stderr is deterministic across Node versions / Object.keys orderings`. Optional."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/scripts/check-locales.mjs:7-20",
+      "category": "best-practices",
+      "issue": "`collectKeySet` reports a *flat* path string per leaf, so a divergence where uk has `a: 'x'` (leaf) and en has `a: { b: 'x' }` (subtree) surfaces as `missingInB: ['a']` + `missingInA: ['a.b']`. Both lines are correct in isolation but read as unrelated keys in stderr; nothing tells the operator the same parent path has incompatible shape. Not a defect at AC level (AC2 is about identical key sets), just slightly worse DX when type-mismatches happen.",
+      "fix": "Optional: when collecting, also record the immediate parent in a separate map and add a third diff bucket `shapeMismatches: string[]` printed before the missing-key lists. Worth doing only if Wave 4 produces real cases. Skip for now."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/scripts/check-locales.mjs:30-45",
+      "category": "error-handling",
+      "issue": "`readLocale` does an `existsSync` pre-check, then `readFileSync`, then `JSON.parse`, with three distinct error shells. The TOCTOU window is harmless (build-time tool), but the existsSync branch is functionally redundant with the readFileSync ENOENT path — if `existsSync` were dropped the readFileSync catch would throw `Cannot read ${path}: ENOENT...`, which still satisfies `assert.match(stderr, /not found|missing|ENOENT|en\\.json/i)` in the test. The current shape is fine; just calling out it's belt-and-braces.",
+      "fix": "Optional: drop the `existsSync` branch and let `readFileSync` throw, OR keep it and tighten the catch message to `Locale file not found: ${filePath}` for ENOENT specifically (instead of the generic `Cannot read ...`). Pure polish."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/scripts/check-locales.mjs:5",
+      "category": "readability",
+      "issue": "`UNSAFE_KEYS` is a top-level `const` with no comment. The reasoning (defense-in-depth on top of `Object.create(null)` + intentional skip-recursion to avoid prototype-pollution payloads) is in the task spec and commit message but not in the file. A single line above the constant would make the intent self-documenting at the call site.",
+      "fix": "Add `// Defense-in-depth alongside Object.create(null): never recurse into __proto__/constructor/prototype values from JSON-parsed input.` Optional."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/scripts/check-locales.mjs:61-62",
+      "category": "readability",
+      "issue": "`isMain` detection uses `process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href`. Idiomatic and works, but the comparison is allocating a URL object on every script start. Trivial cost; mention only because Node 20.11+ exposes `import.meta.filename` which gives the same answer with no URL allocation.",
+      "fix": "Optional micro-polish on Node 20+: `const isMain = process.argv[1] === import.meta.filename`. Same semantics, slightly cleaner. Keep current form if cross-version compat with older Node is desired."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/i18n/locales/uk.json:22 / frontend/i18n/locales/en.json:22",
+      "category": "best-practices",
+      "issue": "`validation.passwordMin8Login` is added alongside `validation.passwordMin8` (the AC list enumerates only `passwordMin8`). The split is justified — code-research distinguishes two UA strings (`'Мін. 8 символів'` for register vs `'Пароль має містити щонайменше 8 символів'` for login) — but the deviation from the explicit AC enumeration should be explicitly recorded in `decisions.md` per the Post-completion checklist (`Якщо відхилились від спека ... описати відхилення і причину`).",
+      "fix": "Add a 1-2 sentence note in the task-4 entry of decisions.md justifying the extra `passwordMin8Login` key. No code change needed."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/i18n/locales/uk.json:90 / frontend/i18n/locales/en.json:90",
+      "category": "maintainability",
+      "issue": "`dashboard.welcome` is `\"Ласкаво просимо{name}\"` / `\"Welcome{name}\"` — placeholder is literally adjacent with no separator, on the assumption that the consumer (Task 8 dashboard page) interpolates `{name: name ? \", ${name}\" : \"\"}`. If a future consumer passes the bare name string, the rendered output collapses to `\"Welcome John\"` without separator. The contract between the dictionary value and the consumer is not enforceable here, only by a code-side comment when `t('dashboard.welcome', { name: ... })` is called.",
+      "fix": "Optional: when Task 8 wires this key, add a one-line comment at the call site documenting the leading-comma convention. Out of scope for Task 4 itself."
+    }
+  ]
+}

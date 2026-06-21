@@ -1,0 +1,58 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "Task 7 has two Context Files sections: the first one (lines 99-107) is the correct, feature-specific section with detailed links; the second one (lines 109-118) is a leftover template stub containing placeholder text ('другие файлы по необходимости — БД, API, деплой, конкретные файлы кода') and template paths (.claude/skills/project-knowledge/architecture.md, patterns.md, project.md, testing.md) that don't use the proper ../../.claude/skills/project-knowledge/references/ prefix used in the first section.",
+      "fix": "Remove the second Context Files section entirely (lines 109-118). The first section already covers all necessary context including user-spec.md, tech-spec.md, decisions.md, project.md, architecture.md, ux-guidelines.md, and the 09-subscribers.md format precedent. The leftover duplicate adds no value and contains a placeholder comment."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "In the second (duplicate) Context Files section of Task 7, the path for architecture.md uses a relative path without the correct 'references' subdirectory: '.claude/skills/project-knowledge/architecture.md' instead of '../../../.claude/skills/project-knowledge/references/architecture.md'. Same issue for patterns.md, project.md, testing.md. These are template placeholders that weren't cleaned up.",
+      "fix": "Remove the entire second Context Files section (it is a template leftover). The first Context Files section contains the correctly resolved paths."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths contain a literal '{round}' placeholder: 'work/16-persistent-keyboard/logs/working/task-6/code-reviewer-{round}.json' and 'work/16-persistent-keyboard/logs/working/task-6/test-reviewer-{round}.json'. The template specifies '{round}' as a template token; it should be replaced with the literal round number '1' (first round).",
+      "fix": "Replace '{round}' with '1' in both reviewer paths: 'work/16-persistent-keyboard/logs/working/task-6/code-reviewer-1.json' and 'work/16-persistent-keyboard/logs/working/task-6/test-reviewer-1.json'."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 7,
+      "section": "Reviewers",
+      "issue": "Reviewer report path contains a literal '{round}' placeholder: 'work/16-persistent-keyboard/logs/working/task-7/code-reviewer-{round}.json'.",
+      "fix": "Replace '{round}' with '1': 'work/16-persistent-keyboard/logs/working/task-7/code-reviewer-1.json'."
+    }
+  ],
+  "notes": {
+    "task_6": "Passes all critical and major checks. Frontmatter correct (status: planned, depends_on: [3], wave: 3, skills: [code-writing], verify: [smoke], reviewers: [code-reviewer, test-reviewer]). TDD Anchor present and appropriate — task writes tests, not production code; anchors have path::name and description. All required sections present and in order. Context files use markdown links including user-spec.md, tech-spec.md, decisions.md, project.md, architecture.md, patterns.md. Verification Steps include Automated and Smoke subsections. Details has Files, Dependencies, Edge cases, and Implementation hints subsections. AC carry-forward: tech-spec Task 6 ACs fully reflected (exact wire body assertions, completed-not-parked, drain idiom, keyword dispatch). TDD Anchor carry-forward: tech-spec Testing Strategy integration tests reflected. Dependency correctness: depends_on: [3] is wave 2, task 6 is wave 3 — correct.",
+    "task_7": "Passes all critical and major checks. Non-code task (documentation-writing); TDD Anchor correctly absent. Frontmatter correct (status: planned, depends_on: [3], wave: 3, skills: [documentation-writing], verify: [], reviewers: [code-reviewer]). Minor: duplicate Context Files section containing template placeholder text. Reviewer '{round}' placeholder not resolved. AC carry-forward: user-spec 'Пользователь проверяет' chain fully reflected in ACs. Dependency correctness: depends_on: [3] is wave 2, task 7 is wave 3 — correct.",
+    "task_8": "Passes all checks. Audit Wave task; TDD Anchor correctly absent; reviewers: [] by design (auditor IS the review). Frontmatter correct (status: planned, depends_on: [1,2,3,4,5,6,7], wave: 4, skills: [code-reviewing], verify: [], reviewers: []). All required sections present. Context files comprehensive covering all feature source files. Verification Steps has Automated (targeted greps) and Audit output subsections — appropriate for an audit task. Details has Files, Dimensions in focus, Key cross-component checks, Dependencies, Edge cases, and Implementation hints. AC fully matches tech-spec cross-component checks. Dependency correctness: depends_on covers waves 1-3 (tasks 1-7); wave 4 > wave 3 — correct.",
+    "task_9": "Passes all checks. Audit Wave task; TDD Anchor correctly absent; reviewers: [] by design. Frontmatter correct (status: planned, depends_on: [1,2,3,4,5,6,7], wave: 4, skills: [security-auditor], verify: [], reviewers: []). All required sections present. Context files list all feature source files (backend + frontend) with explicit note on net-new classes. Verification Steps section describes what 'automated' means for an audit task (completeness/quality of the report). Details has Files, Dependencies, Edge cases/targeted checks, and Implementation hints. AC fully maps to tech-spec security axes (OWASP A01/A03/A04/A09). Dependency correctness: correct.",
+    "task_10": "Passes all checks. Audit Wave task; TDD Anchor correctly absent; reviewers: [] by design. Frontmatter correct (status: planned, depends_on: [1,2,3,4,5,6,7], wave: 4, skills: [test-master], verify: [], reviewers: []). All required sections present. Context files include all 7 test files to audit plus cited existing tests. Verification Steps section includes test commands appropriate for pre-audit green-gate. Details has artifact description, coverage checklist from tech-spec Testing Strategy, anti-patterns to hunt, Dependencies, and Implementation hints. AC carry-forward: all 13 user-spec ACs referenced, all tech-spec Testing Strategy items covered. Dependency correctness: correct.",
+    "decomposition": "Dependency graph is acyclic. Tasks 8/9/10 all depend on [1-7] and run in wave 4 — correct sequencing. No dependency cycles. No merge candidates (each task has a distinct, non-overlapping scope). Task 6 modifies only FunnelExecutionEngineIT.java — atomic. Task 7 creates only smoke.md — atomic. Tasks 8/9/10 are read-only audits — by design no files modified.",
+    "carry_forward": "Tech-spec Implementation Task 6 ACs and TDD Anchor entries are fully represented in task 6. Tech-spec Implementation Task 7 description is fully reflected in task 7 ACs. Audit tasks 8/9/10 expand on the tech-spec Testing Strategy and Architecture sections appropriately — no items dropped."
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 4,
+    "by_severity": {
+      "critical": 0,
+      "major": 0,
+      "minor": 4
+    }
+  }
+}

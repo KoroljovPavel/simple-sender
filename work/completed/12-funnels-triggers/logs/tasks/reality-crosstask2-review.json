@@ -1,0 +1,58 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "batch_number": 98,
+  "iteration": 2,
+  "focus": "cross-task integration re-validation — confirm resolution of 4 prior criticals + depth-threading + wave-2 move",
+  "status": "approved",
+  "prior_critical_resolution": {
+    "critical_1_subscriberService_findById_single_owner": {
+      "verdict": "RESOLVED",
+      "evidence": "Task 4 declares sole ownership explicitly in its description ('Task 4 is the SOLE OWNER/CREATOR of this method'), Acceptance Criteria ('Subscriber-by-id resolution goes through a project-scoped SubscriberService.findById boundary method that Task 4 creates and owns'), and Post-completion checklist. Task 7 lists SubscriberService.java and SubscriberServiceImpl.java ONLY under 'Code — read' (not 'Code — modify'). Task 7 Details section states verbatim: 'READ-ONLY here. Task 7 does NOT modify these. The project-scoped Optional<Subscriber> findById(projectId, subscriberId) boundary method is created and solely owned by Task 4... Task 7 REUSES it.' Task 7 TDD Anchor test references 'REUSE the project-scoped findById... added by Task 4 (do NOT add it here)'. No ambiguity remains."
+    },
+    "critical_2_spring_bean_cycle_structurally_enforced": {
+      "verdict": "RESOLVED",
+      "evidence": "Task 4 elevates FunnelExecutionFactory from 'preferred fix' to a hard requirement. Acceptance Criteria include: (a) 'FunnelEventService has ZERO dependency on FunnelTriggerServiceImpl — it injects FunnelExecutionFactory instead'; (b) 'No circular bean dependency — provably future-proof for Task 5. The full Spring context starts cleanly... AND FunnelExecutionFactory has no edge back into FunnelExecutionEngine/StepExecutor'; (c) 'Do NOT use @Lazy edge to paper over a cycle'. The bean-graph startup check is an explicit Verification step in Task 4 ('assert that FunnelEventService does NOT inject FunnelTriggerServiceImpl at all... and that FunnelExecutionFactory has NO dependency on FunnelExecutionEngine/StepExecutor'). Task 5 closes the edge and carries a mandatory @SpringBootTest context-load AC: 'The application context starts without BeanCurrentlyInCreationException after wiring FunnelEventService into StepExecutor — proven by a @SpringBootTest context-load assertion.' TDD Anchor has FunnelTriggerContextIT::contextStarts_afterFunnelEventServiceWiredIntoStepExecutor."
+    },
+    "critical_3_FunnelIndexesIT_single_owner": {
+      "verdict": "RESOLVED",
+      "evidence": "Task 1 TDD Anchor contains a boxed note: 'Index-shape proof is NOT owned by this task... Do not add or modify any FunnelIndexesIT assertion here; that file is co-owned only if both tasks touch it, so Task 1 stays out entirely.' Task 1 AC explicitly states: 'New unit tests pass (no FunnelIndexesIT assertion is added here — that IT is owned by Task 2).' Task 1 Verification section says: 'Note: FunnelIndexesIT is owned by Task 2 — do not add assertions to it here.' Task 2 is the sole owner of FunnelIndexesIT.java under 'Code — modify' and contains all three required assertions (funnelsCollectionHasExpectedIndexes update, twoActiveEventFunnelsWithSameTriggerValueCoexist NEW, twoActiveOnStartFunnelsWithSamePayloadStillCollide NEW)."
+    },
+    "critical_4_FunnelRepository_sole_owner": {
+      "verdict": "RESOLVED",
+      "evidence": "Task 1, step 5, opens with: 'this task OWNS every FunnelRepository change for the feature.' Task 4, step 2, states: 'do NOT add them here — Task 1 owns all FunnelRepository changes'. Task 4 Context Files lists FunnelRepository.java under 'Code (read, do NOT modify)'. Task 4 Acceptance Criteria mandates: 'Task 4 does not modify FunnelRepository.java (Task 1 owns those queries) — it only consumes the list/keyword/single-result queries Task 1 ships.' No other task lists FunnelRepository.java under modify."
+    }
+  },
+  "depth_threading_signature_consistency": {
+    "verdict": "CONSISTENT",
+    "evidence": "Task 4 defines the canonical signature: dispatchForSubscriber(String projectId, String subscriberId, String triggerType, String matchKey, int originDepth). Task 5 threads originDepth as an explicit int parameter on addTag(projectId, subscriberId, slug, originDepth) and recordCustomFieldsSet(projectId, subscriberId, oldValues, newValues, originDepth), with StepExecutor passing execution.getEnrollDepth()+1 and manual controllers passing 0. Task 6 passes originDepth=0 (keyword=human root). Task 7 passes originDepth=0 (external api-event=root). All callers are consistent — depth-0 for human/external roots, enrollDepth+1 for funnel-step-originated children. Task 5 explicitly instructs the implementer to read the FINAL Task-4 signatures before writing code, and its TDD Anchor tests pin the exact expected parameter shapes at compile time."
+  },
+  "task2_wave2_move_impact": {
+    "verdict": "CLEAN — no new undeclared dependencies",
+    "evidence": "Task 2 moved from Wave 1 (depends_on: []) to Wave 2 (depends_on: [1]). This is correct and necessary: the FunnelIndexesIT assertions in Task 2 verify the new {status:'active', triggerType:'on_start'} partial-filter shape, which only materializes from Task 1's @CompoundIndex annotation change via auto-index-creation during Testcontainers context startup. Running Task 2's IT before Task 1 lands would make the assertions fail. File overlap check: Task 2 only creates FunnelTriggerIndexReconciliation.java (new) and modifies FunnelIndexesIT.java. Task 4, which also sits in Wave 2 (depends_on: [1]), modifies FunnelEventService.java (new), FunnelExecutionFactory.java (new), FunnelTriggerServiceImpl.java, SubscriberService.java, SubscriberServiceImpl.java, and application.properties. Zero file overlap between Task 2 and Task 4 in Wave 2 — parallel execution is safe. No previously undeclared consumer of Task 2's output was identified: Task 2's FunnelTriggerIndexReconciliation runner is a standalone @Component with no dependents in other tasks. No consumer task is missing a depends_on as a result of the wave-2 move."
+  },
+  "findings": [],
+  "stats": {
+    "tasks_checked": 15,
+    "cross_task_claims_verified": 42,
+    "issues_found": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "cross_task_verification_matrix": {
+    "SubscriberService_findById_single_owner": "PASS — Task 4 sole owner; Task 7 read-only (explicitly stated in Details + Code section).",
+    "FunnelEventService_single_creation": "PASS — only Task 4 creates it; Tasks 5/6/7 are read-only consumers.",
+    "FunnelRepository_single_owner": "PASS — Task 1 sole owner; Task 4 read-only consumer; AC enforces no modification.",
+    "FunnelIndexesIT_single_owner": "PASS — Task 1 explicitly excludes itself; Task 2 sole owner.",
+    "spring_bean_cycle_prevention": "PASS — FunnelExecutionFactory is a hard AC in Task 4 (not optional); factory has no edge into engine/StepExecutor; context-load AC in both Task 4 (structural) and Task 5 (closing-edge @SpringBootTest).",
+    "depth_threading_signature_consistency": "PASS — all callers (Tasks 5/6/7 + StepExecutor) use consistent dispatchForSubscriber(projectId, subscriberId, triggerType, matchKey, originDepth); depth-0 for roots, enrollDepth+1 for step-originated children.",
+    "task2_wave2_no_new_undeclared_deps": "PASS — Task 2 and Task 4 share Wave 2 with zero file overlap; no consumer task is missing a depends_on.",
+    "error_isolation_consistency": "PASS — all four dispatch paths route through FunnelEventService try/catch(Throwable); Tasks 5/6 add no secondary swallow that would compete; Task 6 outer keyword block is correct per Decision 12.",
+    "redis_key_namespace_collision": "PASS — bf:rate:auto-enroll:{subscriberId} (Task 4) and bf:rate:events (Task 7) are distinct; no collision.",
+    "SecurityFilterChain_ordering": "PASS — Task 7 is sole owner of @Order annotations on both chains.",
+    "no_duplicate_FunnelEventService_instantiation": "PASS — single @Service in Task 4; no other task declares or re-creates it.",
+    "locale_file_serialization_Task9_Task10": "PASS — Task 10 depends_on [8, 9]; serialization prevents merge collision.",
+    "FunnelExecutionFactory_no_engine_edge": "PASS — Task 4 explicitly requires FunnelExecutionFactory to have zero dependency on FunnelExecutionEngine/StepExecutor as a hard AC and a mandatory verification step."
+  }
+}

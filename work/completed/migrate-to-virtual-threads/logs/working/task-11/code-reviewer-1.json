@@ -1,0 +1,77 @@
+{
+  "task_id": 11,
+  "round": 1,
+  "verdict": "approved_with_nits",
+  "ac_coverage": [
+    {
+      "ac": "Backend boots cleanly with JAVA_TOOL_OPTIONS=-Djdk.tracePinnedThreads=full ./gradlew :backend:bootRun (no startup errors)",
+      "status": "pass",
+      "evidence": "boot.log shows 'Picked up JAVA_TOOL_OPTIONS: -Djdk.tracePinnedThreads=full' three times (gradle wrapper + bootRun forked JVM) and a normal Spring Boot startup banner; final exit code 143 is operator-initiated SIGTERM after the storms, not a startup failure."
+    },
+    {
+      "ac": "At least three workload shapes (idle, register-storm, webhook-storm) driven and pinning stacks captured in boot.log",
+      "status": "pass",
+      "evidence": "Storm-driver block appended at end of boot.log enumerates four shapes (idle + register 20x then 40x + login 20x + webhook 20x); register-storm warnings ('Забагато спроб реєстрації' x29) and login-storm warnings ('Invalid credentials' x20) prove BCrypt encode + dummy-hash + Lettuce INCR actually fired."
+    },
+    {
+      "ac": "Every distinct pinning stack from the captured logs enumerated in new 'Virtual Threads' section",
+      "status": "pass",
+      "evidence": "grep -c 'Thread held by virtual thread' boot.log = 0; section line 51: 'Total Thread held by virtual thread banners observed across all four workloads: 0' — enumeration matches captured evidence (empty set)."
+    },
+    {
+      "ac": "BCrypt pinning documented (both password-match path and dummy-hash path)",
+      "status": "pass",
+      "evidence": "patterns.md line 55: 'BCryptPasswordEncoder.matches / BCryptPasswordEncoder.encode (Spring Security 6.5.0) — both the password-match path on login and the DUMMY_HASH timing-attack-guard path on unknown-user 401' — covers R1 with explicit honest note on why no trace entries (line 60)."
+    },
+    {
+      "ac": "Lettuce internal-lock / sync-API pinning documented",
+      "status": "pass",
+      "evidence": "patterns.md line 56: 'io.lettuce.core.* sync API — invoked by AuthService brute-force counters ... routes sync calls through j.u.c.locks.ReentrantLock and CompletableFuture.get()' — matches R2."
+    },
+    {
+      "ac": "Any unexpected pinning stack named and surfaced as deviation in decisions.md report",
+      "status": "pass",
+      "evidence": "No unexpected stacks observed (total=0). Section line 60 explicitly flags the BCrypt empty-trace result as a deviation from the task brief's expectation and points to decisions.md — honest, not silent."
+    },
+    {
+      "ac": "Each site states (a) why acceptable today and (b) SB4/JDK24 future-fix",
+      "status": "pass",
+      "evidence": "Table at lines 53–58 has 'Why acceptable today' and 'Future fix' columns populated for all four rows (BCrypt, Lettuce, mongodb-driver-sync 5.4.0, JobRunr 7.3.2); JEP 491 cited correctly."
+    },
+    {
+      "ac": "'What we deliberately don't do' explicitly cites D4 (no Semaphore), R2 (no Lettuce async), user-spec line 86 (no preemptive fixes)",
+      "status": "pass",
+      "evidence": "Lines 64–67 cite D4 (with deep-link), R2, user-spec line 86, and AC7 — all four constraints named verbatim."
+    },
+    {
+      "ac": "'How to re-observe' contains copy-pasteable boot + storm commands",
+      "status": "pass",
+      "evidence": "Lines 73–101 contain a single fenced bash block with XSRF prime + three storms (register / login / webhook); copy-paste-runnable from backend/."
+    },
+    {
+      "ac": "No section of patterns.md other than appended 'Virtual Threads' is edited (additions-only)",
+      "status": "pass",
+      "evidence": "Pre-existing sections (Git Workflow → Testing Requirements → Spring Boot Test Specifics at lines 1–38; Spring Security WebFlux at line 109 onward; Auth & Sessions at 119) are intact and unchanged in wording — verified by direct read. The ownership marker at line 40 plus the new section at 41–107 are pure additions."
+    },
+    {
+      "ac": "User-spec AC7 satisfied: file exists, contains 'Virtual Threads' section, lists BCrypt + Lettuce locks",
+      "status": "pass",
+      "evidence": "Section header at patterns.md line 41 ('## Virtual Threads'); BCrypt at line 55; Lettuce at line 56."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "nit",
+      "where": "patterns.md:64",
+      "issue": "Cross-link to user-spec uses GitHub-flavored line anchor `[user-spec](../../../../work/migrate-to-virtual-threads/user-spec.md#L127)` — `#Lxxx` anchors render only on GitHub's blob view, not in editors/local previews, so the deep-link to D4 is brittle.",
+      "fix": "Drop the `#L127` fragment or replace with a Markdown heading anchor (e.g. `#технические-решения`); keep the inline parenthetical line number for human navigation."
+    },
+    {
+      "severity": "nit",
+      "where": "patterns.md:41–107 (whole section)",
+      "issue": "Section is ~67 lines from the ownership marker through the Upgrade horizon paragraph — under the 80–120 line target the task brief recommends. Not a content gap (everything required is present), but the empty-trace result compresses the table commentary; future readers might miss the JDK-21-trace-flag-semantics caveat that's parked in a single sentence at line 60.",
+      "fix": "Optionally promote the JDK-21 `park`-inside-monitor scoping note from a parenthetical aside to a one-sentence prelude on the table, or accept the current density as a deliberate trade-off."
+    }
+  ],
+  "notes": "Documentation-only diff, additions-only on patterns.md. All 11 acceptance criteria from tasks/11.md pass. The five required H3 subsections appear in the prescribed order (Why VT → Observed pinning sites → What we deliberately don't do → How to re-observe → Upgrade horizon). HTML ownership marker is present at line 40. Empirical claim of zero pinning is honest: the storms genuinely fired (register-storm produced 10× 201 + 30× 429 across two passes confirming BCrypt encode ran on the happy path; login-storm produced 20× 401 confirming dummy-hash + Lettuce INCR; webhook-storm produced 20× 404 confirming Mongo sync read pairs) and `grep -c 'Thread held by virtual thread' boot.log` returns 0. The section explicitly flags the BCrypt empty-trace as a deviation from the task brief's expectation and points to decisions.md — that's the requested honesty rather than a documentation lie. Version claims (Liberica 21.0.9, Lettuce 6.5.5.RELEASE, mongodb-driver-sync 5.4.0, spring-security-core 6.5.0, JobRunr 7.3.2) are consistent with the JVM banner in boot.log and the Spring Boot 3.5.0 BOM in backend/build.gradle. Tone is neutral observational, no first-person plural, no loaded language, table format is used as required, no code blocks for production code (only the operational replay recipe). Two nits, both purely stylistic; no blockers, no major findings."
+}

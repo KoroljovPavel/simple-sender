@@ -1,0 +1,53 @@
+{
+  "status": "needs_improvement",
+  "summary": "Strong, behavior-focused IT suite. All 8 TDD-anchor tests (plus the optional smoke) are present and green (ProjectHardDeleteJobIT: 11 tests, ProjectSoftDeleteCascadeIT: 3 tests, 0 failures on --rerun-tasks). The comprehensive cascade test asserts real post-run state (all 5 collections drained + GridFS blob null), the young-project test proves isolation, the extended log-shape test pins all per-collection counts, the zero-deletion-day test verifies the liveness shape with zeros, and entity collection/projectId mappings all match the production cascade. Tests assert real DB state, not mock calls, so they survive the litmus test. Two substantive gaps keep this from a clean pass: (1) the idempotency test does NOT actually exercise cascade idempotency — its second run hits the empty-deletedIds short-circuit (zero-deletion path), so it is effectively a duplicate of cron_zeroDeletionDay and never proves a remove-on-already-empty collection (the real partial-cascade recovery contract AC22 mandates) is a no-op; (2) no test proves the mandated GridFS-before-subscriber_exports ordering — only the drained end-state is asserted, so an implementation that reversed the order (re-introducing the orphan-blob risk the order exists to prevent) would still pass. Remaining items are minor (cross-test isolation reliance on ExportStatus.DONE / nanoTime seeds, and an unused import).",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "redundant_testing",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": 417,
+      "description": "cron_cascadeIsIdempotent_secondRunIsNoOp does not test what its name and comment claim. The comment says 'Partial-cascade recovery contract: a re-fire on already-drained state must be a clean no-op', but the second job invocation finds an empty projects list (the project doc was dropped in run 1) and takes the zero-deletion-day short-circuit at ProjectHardDeleteJob lines 69-78 — it never reaches a single cascade remove(...) call. Litmus test: delete every cascade remove() line from the production code and this test STILL passes, because the assertion only checks the zero-shape log line that the short-circuit emits. This makes the test a behavioral duplicate of cron_zeroDeletionDay_emitsExtendedStructuredLineWithZeros (same assertion, just with seed rows that are gone by the time it matters). The genuine partial-cascade scenario AC22 cares about (project doc STILL present, some subscriber-domain collections already empty, others populated → re-run drains survivors with no exception and no double-count) is never exercised by any test.",
+      "suggested_fix": "Make the second run actually hit the cascade. Either (a) re-insert the project doc (back-dated deletedAt) without re-seeding the already-drained subscriber collections before the second invocation, then assert the run reports exportsRemoved=0/subscribersRemoved=0/etc. for the empty collections but deletedCount=1, OR (b) pre-drain a subset of collections (e.g. delete subscribers + the GridFS blob manually) while leaving the project doc + tags row in place, run once, and assert no exception is thrown and the still-populated collection is swept while the already-empty ones report 0. This proves remove-on-empty-match is a true no-op (the actual idempotency contract). If you keep the current scenario, rename it to reflect what it tests (second-run-finds-nothing) and drop it as redundant with cron_zeroDeletionDay."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": 349,
+      "description": "The Decision-8 / AC22 cascade ORDER (GridFS files removed BEFORE subscriber_exports, so a mid-cascade crash never orphans a binary blob whose only pointer row is already gone) is the explicit rationale for the whole task, but no test proves it. cron_cascadesAllSubscriberDomainCollectionsAndGridFs asserts only the drained end-state — an implementation that deleted subscriber_exports BEFORE GridFS (re-introducing the orphan-blob risk) would pass every assertion in the suite. The order is only observable under a partial-cascade crash, which is genuinely hard to simulate without fault injection, so this is a real-but-low-cost-to-leave gap rather than a blocker.",
+      "suggested_fix": "Add a focused test that proves the order indirectly: seed a GridFS blob whose subscriber_exports pointer row was already manually removed (the exact edge case named in task.md line 142), run the job, and assert the blob is still swept (gridFsFileExists == false). This locks in the 'GridFS keyed by metadata.projectId, not by exportId' contract that justifies the ordering. A stronger but heavier alternative is a spy/fault-injection that throws after the GridFS delete and asserts the blob is already gone while the pointer row survives for the retry — only worth it if order regressions are a realistic concern."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": 120,
+      "description": "Test isolation across the suite leans on two implicit invariants that are correct today but undocumented as load-bearing: (1) seedSubscriberExport hardcodes ExportStatus.DONE specifically to dodge the partial-unique index on (projectId) filtered to PENDING/RUNNING — if a future test seeds a PENDING/RUNNING export for the same project in the same method, it will collide; (2) seedSubscriber/seedTag/seedSubscriberEvent use System.nanoTime() for the unique-compound fields (telegramUserId, slug, subscriberId). nanoTime collisions are astronomically unlikely so this is not a flakiness risk, but using it for telegramChatId AND telegramUserId from back-to-back calls produces two values that differ only in the low digits — harmless here but a smell. cleanState (lines 49-62) correctly wipes all five collections + GridFS via mongoTemplate.remove(new Query(), ...) and gridFsOperations.delete(new Query()), so cross-test bleed is properly prevented.",
+      "suggested_fix": "No functional change required. Optionally add a one-line comment on seedSubscriberExport noting that DONE is mandatory (not incidental) to avoid the in-flight partial-unique index, and consider an AtomicLong counter instead of nanoTime for unique seeds to make the determinism explicit. Leave cleanState as-is — it is correct."
+    },
+    {
+      "severity": "low",
+      "category": "anti_pattern",
+      "file": "backend/src/test/java/com/botfunnel/project/ProjectSoftDeleteCascadeIT.java",
+      "line": 12,
+      "description": "Imports com.mongodb.client.gridfs.model.GridFSFile and uses GridFsOperations both in cleanAndSeed (defensive wipe) and in softThenHardDelete_drainsAllCascadeCollections (seed + null-assert), so the import is used — not dead. However softDeletedProject_subscribersListEndpoint_returns404 (line 101) is the requireOwned-direct fallback the task mandates and is correctly a service-layer call (no @WithMockAppUser needed because it passes USER_ID explicitly), while softDeletedProject_tagsListEndpoint_returns404 (line 93) correctly exercises the real HTTP 404 surface via MockMvc + @WithMockAppUser(userId = USER_ID) matching the project owner. Both are sound. Minor: the subscribers fallback test's TODO marker says 'Task 8' whereas task.md line 56 suggests 'Task 8/4/5' — cosmetic drift only.",
+      "suggested_fix": "No change required for correctness. Optionally align the TODO marker wording with task.md ('// TODO Task 8/4/5 — replace with full controller IT once the subscriber list endpoint lands') so the cross-reference is unambiguous when the controller arrives."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 14,
+      "passed": 13,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 14,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

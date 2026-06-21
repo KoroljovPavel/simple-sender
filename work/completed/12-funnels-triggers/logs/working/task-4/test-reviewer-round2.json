@@ -1,0 +1,10 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "4",
+  "round": 2,
+  "commit": "075a836",
+  "summary": "Re-review after round-1 fix. TR-1 is resolved: two unit tests now cover the per-funnel re-enter interplay — DuplicateKeyException on one matched funnel does not abort the rest of the fan-out (sibling still inserts, LOG_DISPATCH_REENTER_IGNORED logged), and allowReEnter=true cancels the existing pair before inserting (InOrder assertion).",
+  "findings": [],
+  "verdict": "approve",
+  "notes": "All TDD-anchor items plus the re-enter edge case are now covered. No remaining gaps. Tests green."
+}

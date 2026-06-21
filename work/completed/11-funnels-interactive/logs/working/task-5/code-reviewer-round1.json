@@ -1,0 +1,22 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "OK",
+  "summary": "advanceOnCallback mirrors the established fire()/cancelActiveFor() structure (outer try/catch(Throwable) swallow, early-return no-op ladder, greppable LOG_* constants, ids/codes-only logging). Cross-file signatures verified against real code: resumeOnCallback(executionId, subscriberId, targetStepId):boolean, answerCallbackQuery(botId, callbackQueryId, text), findByChat, findByProjectIdAndStatus, logEvent, Button.type()/targetStepId(). No circular dependency (engine/sender do not depend back on the trigger service). answerCallbackQuery guaranteed on every exit path via finally. No heavy-resource duplication (all injected singletons).",
+  "findings": [
+    {
+      "severity": "minor",
+      "dimension": "Separation of Concerns / DRY",
+      "finding": "stepById(snapshot, id) is duplicated from FunnelExecutionEngine's private static helper. The engine keeps it private, so it cannot be reused without widening its visibility; both classes navigate the snapshot independently.",
+      "action": "Accepted as-is. A 6-line trivial linear lookup; widening engine API surface to share it would couple the two classes more than the duplication costs. Documented in a code comment.",
+      "blocking": false
+    },
+    {
+      "severity": "minor",
+      "dimension": "Error Handling",
+      "finding": "recordButtonClick runs AFTER the engine CAS already committed the advance; if eventService.logEvent throws, the outer catch(Throwable) logs LOG_CALLBACK_ERROR and lastButtonClicked may not be set, but the advance stays durable.",
+      "action": "Accepted by design. The event + lastButtonClicked are explicitly best-effort secondary writes (Decision 9 analytics hook); isolating their failure from the committed advance is the intended behaviour and is documented.",
+      "blocking": false
+    }
+  ]
+}

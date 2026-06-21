@@ -1,0 +1,43 @@
+{
+  "summary": "All 5 mandated TDD-anchor cases are present (parse OK, missing file, invalid JSON, key-divergence, prototype-pollution) plus a bonus compareKeySets unit. Test isolation is solid — each case allocates its own mkdtempSync directory and cleans up in finally. stderr substring matching is reasonable. The blocking concern is the prototype-pollution test: it does NOT actually exercise the dangerous code path that the script's defenses (Object.create(null) + UNSAFE_KEYS filter) protect against, so a regression that removes those defenses would not be caught. Two of the three assertions in that test pass tautologically (independent of the implementation), and the third checks the wrong key path.",
+  "blocking_findings": [
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "frontend/scripts/check-locales.test.mjs:83-89 (prototype-pollution payload safe)",
+      "issue": "The prototype-pollution test fails the litmus test — none of its assertions catch a regression where Object.create(null) or the UNSAFE_KEYS filter is removed from check-locales.mjs.\n\n  Detailed trace:\n  1. `assert.equal(({}).polluted, undefined)` — JSON.parse in modern V8 treats `__proto__` as a regular own data property on the parsed object and does NOT mutate Object.prototype. So `({}).polluted` is always `undefined`, even if collectKeySet did `Object.assign(target, payload)` directly. This assertion verifies a property of JSON.parse, not of the script.\n  2. `assert.equal(keys.real, true)` — verifies a happy-path key collection (already covered by 'parse OK' test). Does not relate to pollution safety.\n  3. `assert.equal(keys.polluted, undefined, 'unsafe key __proto__.polluted leaked into key set')` — checks the wrong key path. If UNSAFE_KEYS filter were removed, collectKeySet would still walk `__proto__` (an own enumerable property after JSON.parse) and produce the key string `'__proto__.polluted'`, NOT `'polluted'`. So `keys.polluted` is `undefined` in both the safe and the regression case — the assertion passes regardless.\n\n  Net effect: deleting `if (UNSAFE_KEYS.has(key)) continue` and replacing `Object.create(null)` with `{}` in collectKeySet leaves all three assertions green. The test provides false confidence about the very defense it claims to verify.",
+      "recommendation": "Strengthen the test so removing either defense makes it fail.\n\n  Approach: assert directly on the keys returned by collectKeySet for an `__proto__` payload, AND assert that the accumulator has a null prototype.\n\n  Replacement assertions:\n  ```js\n  it('prototype-pollution payload safe — collectKeySet ignores __proto__ branch and uses null-proto accumulator', () => {\n    const payload = JSON.parse('{\"__proto__\": {\"polluted\": \"yes\"}, \"real\": \"ok\"}')\n    const keys = collectKeySet(payload)\n    // 1. accumulator must have null prototype (catches Object.create(null) removal)\n    assert.equal(Object.getPrototypeOf(keys), null, 'collectKeySet accumulator must have null prototype')\n    // 2. no key derived from __proto__ branch is collected (catches UNSAFE_KEYS filter removal)\n    const collected = Object.keys(keys)\n    assert.deepEqual(collected.filter(k => k.startsWith('__proto__')), [], 'must not recurse into __proto__')\n    assert.ok(!('__proto__.polluted' in keys), '__proto__.polluted must not appear in key set')\n    // 3. global Object.prototype check (defense-in-depth)\n    assert.equal(({}).polluted, undefined, 'Object.prototype must not be polluted')\n    // 4. legitimate sibling keys still collected\n    assert.equal(keys.real, true)\n  })\n  ```\n\n  Optionally also exercise the constructor/prototype filter branches with a second fixture (`{\"constructor\": {\"x\": 1}, \"prototype\": {\"y\": 1}}`) and assert no `constructor.*` / `prototype.*` keys leak. That covers the full UNSAFE_KEYS list, which is currently untested.\n\n  Also consider an end-to-end variant via spawnSync that writes a payload like `{\"__proto__\": {\"polluted\": \"yes\"}, \"real\": \"ok\"}` to both uk.json and en.json — this would catch a regression where the main script bypasses collectKeySet entirely (e.g. someone refactors to use deep-merge). Without it, the script-level path of the prototype-pollution scenario (the one the TDD anchor literally describes: 'after script-execution') is not exercised."
+    }
+  ],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/scripts/check-locales.test.mjs (UNSAFE_KEYS coverage)",
+      "issue": "UNSAFE_KEYS contains three values (`__proto__`, `constructor`, `prototype`) but only `__proto__` is exercised. A regression that narrows the filter to only `__proto__` would silently pass.",
+      "recommendation": "Add a fixture covering all three: `JSON.parse('{\"constructor\": {\"x\": 1}, \"prototype\": {\"y\": 1}, \"real\": \"ok\"}')`, assert that no resulting key starts with `constructor` or `prototype`, and that `keys.real === true`."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/scripts/check-locales.test.mjs (no script-level prototype-pollution test)",
+      "issue": "The TDD anchor in tasks/4.md explicitly states 'after script-execution' — i.e. the prototype-pollution case should be observable end-to-end via the spawned script, mirroring how the script runs in `prebuild`. Currently only the exported pure function is tested for this case, so a regression that bypasses collectKeySet in the main path (e.g. someone introduces a deep-clone / Object.assign) would not be caught.",
+      "recommendation": "Add a sixth case that writes `{\"__proto__\": {\"polluted\": \"yes\"}, \"real\": \"ok\"}` to both uk.json and en.json in a tmp dir, runs runScript(dir), and asserts result.status === 0 AND `({}).polluted === undefined` in the parent process. (The parent assertion has limited value because the spawn is in a child process, but combined with status===0 it confirms the script didn't choke and did walk the payload safely.)"
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/scripts/check-locales.test.mjs:42-53 (missing file test)",
+      "issue": "The regex `/not found|missing|ENOENT|en\\.json/i` will match if stderr merely contains the substring `en.json` — which the script's other error paths (e.g. invalid JSON in en.json) also contain. The assertion does not specifically tie to the missing-file branch.",
+      "recommendation": "Tighten to `/not found|missing|ENOENT/i` (drop the `en\\.json` alternative) so the test verifies the missing-file phrasing rather than coincidental file-name presence. Current implementation says `Locale file not found:` which matches `not found` cleanly."
+    },
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/scripts/check-locales.test.mjs:91-97 (compareKeySets bonus test)",
+      "issue": "This is a 6th test not mandated by the 5 TDD-anchor cases. It exercises a pure helper that is already implicitly covered by the key-divergence end-to-end test (which spawns the script and verifies the exact missing-key path appears in stderr). No additional regression is caught — the helper is small and trivially correct, and any defect would surface in the divergence test.",
+      "recommendation": "Either remove this test (low signal, adds maintenance) or upgrade it to cover something the spawn-based divergence test cannot — e.g. ordering / sort-stability of the diff output, or behaviour when one side has zero keys. As-is it is duplicative."
+    }
+  ],
+  "verdict": "needs_fixes"
+}

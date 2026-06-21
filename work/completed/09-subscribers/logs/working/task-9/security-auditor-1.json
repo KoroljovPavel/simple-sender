@@ -1,0 +1,39 @@
+{
+  "reviewer": "security-auditor",
+  "round": 1,
+  "verdict": "changes_requested",
+  "findings": [
+    {
+      "severity": "medium",
+      "owasp": "A09:2021 Security Logging and Monitoring Failures",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/export/SubscriberExportController.java",
+      "line": 211,
+      "finding": "F4 audit blind spot against its stated threat actor. The download endpoint is mounted under /api/v1/projects/** which SecurityConfig.java:97 forces to .authenticated(). An UNauthenticated request (the exact recon attacker F4/Decision 16 targets — token enumeration, expired-URL brute-forcing, cross-project token replay from outside any session) is rejected by the Spring Security filter chain with 401/403 BEFORE the controller's deny() helper runs, so NO subscribers_export_download_denied audit event is ever written for that actor. Every download IT proves this: each test carries @WithMockAppUser (SubscriberExportSignedUrlIT.java:113,131,...) and there is no test for an unauthenticated download. The F4 control therefore only fires for already-authenticated sessions and is invisible for the unauthenticated-by-session, HMAC-only surface Decision 16 explicitly calls out as 'the most-attacked public surface in this epic'. The HMAC token still protects the data (no data exposure), so this is a detection-coverage gap, not a data breach — hence medium, not critical.",
+      "recommendation": "Reconcile the access model with Decision 16's threat model. Either: (a) permitAll the download path (e.g. .requestMatchers(HttpMethod.GET, \"/api/v1/projects/*/subscribers/exports/*/download\").permitAll()) so the HMAC token is the sole access control and the controller's deny()/audit path actually runs for unauthenticated recon traffic (then replace currentUserId() at line 247 with currentUserIdOrNull() — see related finding); OR (b) if session auth is intentionally required, add a security event at the filter-chain level (custom AuthenticationEntryPoint / AccessDeniedHandler) that records denied unauthenticated hits to this path, and update Decision 16/tech-spec to state the download surface IS session-guarded. Add an explicit IT for an unauthenticated download asserting the chosen behaviour."
+    },
+    {
+      "severity": "low",
+      "owasp": "A01:2021 Broken Access Control",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/export/SubscriberExportController.java",
+      "line": 247,
+      "finding": "Spec deviation: task 9 step 3 and tech-spec Decision 15/16 describe the download as 'no session auth' with the signed HMAC token as the sole gate, and the controller javadoc (lines 64-70) repeats this. In practice the endpoint requires an authenticated session (SecurityConfig /api/** rule), and the download path calls currentUserId() (line 247) which throws unauthorized when no session is present, plus passes false (exclude-soft-deleted is overridden to true here) into requireOwned. The implementation is MORE restrictive than the spec, so it is not itself an exploitable weakness, but the divergence (a) breaks the email-link UX for a recipient without an active SPA session and (b) is the root cause of the F4 audit blind spot above. Flagging for an explicit decision rather than silent drift.",
+      "recommendation": "Pick one model and make code + tests + tech-spec agree. If keeping session auth, update Decision 15/16 and the controller javadoc to remove the 'no session auth / unauthenticated by session' language. If the email link must work for a logged-out recipient, permitAll the GET download path and switch the download-event userId to currentUserIdOrNull()."
+    },
+    {
+      "severity": "info",
+      "owasp": "A02:2021 Cryptographic Failures",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 52,
+      "finding": "Out-of-scope-for-this-commit observation (carried from Task 1, line unchanged in d5672cb): app.subscriber.export.token-key defaults to a 64-char zero-hex string. The comment claims the default 'trips fail-fast on real deploys', but SignedDownloadToken.decodeKey only validates hex-charset and 32-byte length — an all-zero key is valid hex and 32 bytes, so it does NOT fail fast. If SUBSCRIBER_EXPORT_TOKEN_KEY is left unset in production, every signed download token is HMAC'd with a publicly-known all-zero key, allowing arbitrary token forgery (full IDOR over every export). Not introduced by Task 9 and the .env wiring is Task 1's, but it directly governs this task's signed-URL security, so it is recorded here for the orchestrator.",
+      "recommendation": "Either remove the default so a missing env var fails to boot, or add an explicit guard in SignedDownloadToken/SubscriberExport config that rejects an all-zero (or otherwise sentinel) key on a non-test profile. Track against Task 1 if Task 9 is not allowed to touch the token-key line."
+    }
+  ],
+  "summary": "The export pipeline correctly implements every explicitly-targeted control: F1 formula-injection neutralization (= + - @ TAB CR trigger set applied to all string and stringified numeric/date cells before RFC4180 escaping, including the whole customFields JSON cell), F2 24h URL TTL computed at completion, F3 single-key rotation-invalidates design, F4 audit metadata shape (reason/projectId/exportId/payload-segment tokenSegmentPrefix, written before the response in deny()), F8 scrubTokens+1024 truncation+cause-less scrubbed rethrow, F10 GridFS metadata.rowCount back-fill, constant-time HMAC (MessageDigest.isEqual) with cross-project substitution rejected at verify level before any DB hit, fail-open download vs fail-closed refresh asymmetry, requireOwned anti-IDOR on all endpoints, and project-scoped repository/Criteria-API queries with no NoSQL-injection or SSRF surface and no secret leakage in logs. One medium finding: because the download endpoint sits under the /api/** authenticated() rule, the F4 download-denied audit never fires for the unauthenticated recon attacker it is designed to detect (filter chain rejects before the controller). Plus one low spec-deviation (session-auth vs the 'no session auth' design) and one info-level carried Task-1 concern (predictable all-zero default HMAC key that does not fail fast).",
+  "summaryCounts": {
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 1,
+    "info": 1
+  }
+}

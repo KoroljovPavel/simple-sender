@@ -1,0 +1,130 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "mode": "cross-task-integration",
+  "iteration": "cross-check",
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 declares a TelegramSenderIT scenario `sendText_endToEndViaBotService_emitsBothEvents` that calls `POST /api/v1/projects/{id}/bot/test-message` and expects 200 OK + both audit events. This scenario is driven through `BotService.sendTestMessage`, which Task 5 (Wave 3) rewrites. Task 4 correctly notes the `@Disabled` deferral until Task 5. However Task 4's IT also declares `sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls` — an integration test hitting `BotService.sendTestMessage` — as expected to pass in Wave 2. The current `requireConnectedBot` uses `botRepository.findByProjectIdAndStatus(projectId, BotStatus.CONNECTED)`, not `botRepository.findById(botId)`. The IT seeds a bot and calls the endpoint via `BotService.sendTestMessage`; the null-branch short-circuit path does NOT require `findById`. This is consistent. BUT: the `TelegramSender` sender flow itself starts with `botRepository.findById(botId)` — and in the IT the caller is `BotService.sendTestMessage` which loads the bot via `requireConnectedBot` (project+status query) and THEN calls `telegramSender.sendText(bot.getId(), ...)`. The sender's OWN `findById` is a second round-trip. The tech-spec and all tasks are consistent on this double-load design, but Task 7/8/9 auditors must flag this as a known N+1: `requireConnectedBot` → `findByProjectIdAndStatus`, then inside `TelegramSender.sendText` → `findById(botId)`. Audit tasks must not re-flag it as a new bug, but Task 4 does NOT document this double-load anywhere, creating a gap that may surface as a finding in Task 7.",
+      "fix": "Add a brief comment in `TelegramSender.sendText` (step 2 of sender flow) noting that the bot is loaded a second time here — the first load was in `BotService.requireConnectedBot`. This is intentional: the sender is a self-contained bean callable by future system-context callers (Epic 06/07 workers) that will NOT go through `BotService`. Document this in the tech-spec Shared Resources table or Architecture notes so auditors in Tasks 7/8/9 do not flag it as an unintended regression."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 instructs using `AppException.notFound(\"bot_not_found\")` in the sender's anti-enumeration guard. However, `AppException.notFound(String message)` in the actual codebase (verified at `AppException.java:36-38`) constructs `new AppException(HttpStatus.NOT_FOUND, null, message)` — the second argument (`code`) is `null`. The existing `requireConnectedBot` in `BotService` also uses this factory and the message is `MESSAGE_BOT_NOT_FOUND = \"Bot not found\"`. Tech-spec Decision 7 says the sender returns `AppException.notFound(\"bot_not_found\")` — using `\"bot_not_found\"` as the *message*, not as the *code*. The actual GlobalErrorHandler response body will serialize `{\"code\": null, \"message\": \"bot_not_found\"}` (or similar), which differs from the established pattern where `code` is a machine-readable discriminator. Compare: `AppException.unprocessableEntity(\"owner_chat_id_unknown\", \"...\")` correctly sets code. The `notFound` factory has NO `code` parameter. Tech-spec AC2 says the HTTP response code is 404 (correct), but the body's `code` field will be `null`, not `\"bot_not_found\"`. Task 4 and Task 7/8/9 all assume a `code: \"bot_not_found\"` shape in responses — this assumption may be wrong given the actual factory signature.",
+      "fix": "Verify how `GlobalErrorHandler` serializes `AppException(NOT_FOUND, null, message)`. If the `code` field is omitted or null in the JSON response, add a two-arg `notFound(String code, String message)` overload to `AppException` (mirroring the existing `conflict(String code, String message)` pattern at lines 32-34), and have the sender use `AppException.notFound(\"bot_not_found\", \"Bot not found\")`. Alternatively, if the existing `requireConnectedBot` behavior of `code: null` is acceptable for 404, document that Decision 7's phrase `AppException.notFound(\"bot_not_found\")` uses the string as a *message* (not a code) and align all audit expectations accordingly."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 `TelegramSenderIT` scenario `sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls` passes in Wave 2 as currently specified. It seeds a bot WITHOUT `ownerChatId` and expects 422. However the IT test calls `POST /api/v1/projects/{id}/bot/test-message` — a full HTTP call through `BotController` → `BotService.sendTestMessage`. `BotService.sendTestMessage` currently short-circuits to 422 for ALL bots (stub from Epic 06). After Task 5 rewrites it, `ownerChatId == null` still produces 422. Task 4's IT is marked as a test of `BotService.sendTestMessage`'s null-branch — but `TelegramSender` is NOT invoked at all in this path. The test is correctly scoped. BUT: Task 4's IT is declared in `TelegramSenderIT.java`. After Task 5 lands, `sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls` still passes (null branch preserved). `sendTestMessage_legacyDocumentReadsAsNull` only tests `BotRepository.findById` deserialization — it does NOT go through the HTTP endpoint. These two scenarios in `TelegramSenderIT.java` are actually testing `BotService`/`BotRepository` behavior, not `TelegramSender` behavior. Task 9 (Test Audit) must recognize this to avoid flagging them as redundant with `BotControllerIT` and `BotRepositoryTest`.",
+      "fix": "Document in Task 4's implementation notes (or via code comment in `TelegramSenderIT.java`) that `sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls` and `sendTestMessage_legacyDocumentReadsAsNull` are placed in `TelegramSenderIT` for pre-Task-5 green-run compliance but test `BotService`/`BotRepository` boundaries, not `TelegramSender` internals. Task 9 should acknowledge this intentional placement rather than flagging redundancy."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 warns heavily that `seedConnectedBot` uses placeholder ciphertext (`\"Zm9v\"`/`\"YmFy\"` — 3-byte IV) which will fail the `iv.length != 12` check inside `TokenEncryptor.decrypt` (line 46-49, verified). Task 5 says the new positive-path `BotControllerIT` test must use `seedConnectedBotWithRealEncryption`. HOWEVER: Task 5 does NOT provide guidance on the `seedConnectedBotWithOwnerChatId` helper name that Task 4 introduces in `TelegramSenderIT`. The two helpers (`TelegramSenderIT.seedConnectedBotWithOwnerChatId` from Task 4 and `BotControllerIT.seedConnectedBotWithRealEncryption` from Task 5) serve the same purpose but are defined in different files with different names. Tasks 7, 9, and 10 all reference these helpers by their respective task-origin names without cross-referencing. If a future executor conflates them or copies the wrong helper shape, they risk silently reusing placeholder bytes. The naming split is intentional (different IT classes) but is not called out as a cross-task naming convention anywhere.",
+      "fix": "Add a cross-reference comment in both helper definitions: `// Pattern mirrored in BotControllerIT.seedConnectedBotWithRealEncryption` (in TelegramSenderIT) and `// Pattern mirrored from TelegramSenderIT.seedConnectedBotWithOwnerChatId` (in BotControllerIT). This makes the parallel explicit for Task 7/9 auditors and future maintainers."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-naming-drift",
+      "task": 4,
+      "issue": "Task 4's TDD Anchor lists test path prefixes as `tests/com/botfunnel/bot/TelegramSenderTest.java::...` (note: `tests/` prefix). The actual test path convention in this project is `backend/src/test/java/com/botfunnel/bot/` (verified from existing files). The `tests/` prefix is not a valid relative path from the project root and does not exist. All other tasks (1, 2, 5, 9, 10) correctly reference `backend/src/test/java/...`. This is a naming inconsistency in Task 4's TDD Anchor section only — the path used in Verification Steps and Context Files within Task 4 are correct.",
+      "fix": "Minor: the `tests/` path in TDD Anchor lines 48-87 of Task 4 is editorial/illustrative and not an actual filesystem command — the Verification Steps use the correct Gradle command. No code change needed, but flag for task author clarity: TDD Anchor test paths should use the real path `backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java` to avoid confusion."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 7,
+      "issue": "Task 7 (Code Audit) declares `depends_on: [6]` and lists the full audit scope including `TelegramSender.java`, `BotService.java`, test files, and `docs/staging-smoke/07-telegram-sender.md`. The dependency chain is transitive as stated. However, Tasks 7, 8, and 9 all declare `depends_on: [6]` (Wave 4 end), meaning they are all in Wave 5 and can run in parallel. This is by design per tech-spec. BUT: Task 9 (Test Audit) explicitly states it audits `TelegramSenderTest.java` and `TelegramSenderIT.java` created in Task 4, AND `BotControllerIT.java` and `BotServiceTest.java` updated in Task 5. Task 8 (Security Audit) also audits `TelegramSenderTest.java` for scrubber-coverage verification. If Tasks 7, 8, and 9 run in parallel (as Wave 5 allows), and one of them discovers a BLOCKER/critical finding in a file that another parallel audit is simultaneously reading, the resolution workflow is unclear. Tech-spec says BLOCKERs must be fixed before Task 10, but does not specify whether a BLOCKER found by Task 7 blocks Task 8/9 from signing off on the same file.",
+      "fix": "Acceptable as-is per the documented design (audits run in parallel, findings converge at Task 10). Document in Task 10's audit-gate check: if any of Tasks 7/8/9 finds a BLOCKER/critical unresolved finding, Task 10 must produce NO-GO regardless of the other audits' verdict. No task file changes needed — this is a process clarification."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 TDD Anchor specifies `BotControllerIT.java::postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent` — it seeds a bot with real AES-GCM ciphertext via `tokenEncryptor.encrypt(VALID_TOKEN)` and enqueues a Telegram 200 on `mockTelegram`. After Task 5, the disabled IT scenarios from Task 4 (`sendText_endToEndViaBotService_emitsBothEvents`, `sendText_terminalFailureViaBotService_emitsFailedEventOnly`) are re-enabled. BOTH `TelegramSenderIT` and `BotControllerIT` will then have tests that exercise the full `BotService.sendTestMessage` → `TelegramSender.sendText` happy path with real encryption. Both use the same class-level `mockTelegram` / `mockWebServer` infrastructure. There is no indication that `TelegramSenderIT` and `BotControllerIT` run in the same JVM with a shared `MockWebServer`. They are separate test classes with separate static `MockWebServer` instances and separate `@DynamicPropertySource` overrides. But both set `app.telegram.base-url` to their respective MockWebServer URL. Since both extend `AbstractIntegrationTest` and use the same embedded Mongo, there is a risk of event-collection pollution between test classes if `@BeforeEach` does not delete all events. Task 4 instructs `eventRepository.deleteAll().block()` in `@BeforeEach`, and `BotControllerIT` already does the same (confirmed by existing test cleanup pattern). This is safe. No finding needed — flagging as verified.",
+      "fix": "No action required. Verified that both IT classes reset event collection in @BeforeEach. Flag this as a cross-class isolation check passed."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-naming-drift",
+      "task": 4,
+      "issue": "Tech-spec (Architecture step 8 / Implementation hints item 8 in Task 4) specifies the fallback for a malformed 4xx body as `new TelegramSendResult<>(false, null, null, null, null)` — a 5-argument constructor matching the `TelegramSendResult<T>` record `(boolean ok, T result, Integer error_code, String description, TelegramSendParameters parameters)`. This is correct for Task 3's new 5-field record. However, the existing `TelegramApiClient.mapClientError` fallback (verified at lines 122-125) uses a 4-field `TelegramResult<>` fallback: `new TelegramResult<>(false, null, null, null)`. Task 3 creates `TelegramSendResult<T>` as a SEPARATE record (Decision 9) and the 4-field `TelegramResult<T>` is untouched. The hint in Task 4 explicitly notes the 5-field fallback shape. This is consistent. BUT: the hint text says \"the precedent (`TelegramApiClient.mapClientError` lines 122-123) uses the 4-field `TelegramResult` (`new TelegramResult<>(false, null, null, null)`)\" — this correctly distinguishes the two records. No naming drift in code; the hint prose is accurate. No finding.",
+      "fix": "No action required. Verified consistent: TelegramResult (4-field, existing) vs TelegramSendResult (5-field, new). Hint in Task 4 correctly documents the distinction."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 9,
+      "issue": "Task 9 (Test Audit) states the audit catalog is `38 scenarios minimum` (28 unit + 4 integration + 3 BotServiceTest + 2 BotControllerIT + 1 BotRepositoryTest). The Task 9 verification step `jq -e '.scenarios_audited | length >= 38'` gates on this count. However, the two IT scenarios in `TelegramSenderIT` that are `@Disabled` until Task 5 (`sendText_endToEndViaBotService_emitsBothEvents`, `sendText_terminalFailureViaBotService_emitsFailedEventOnly`) will be re-enabled by Task 5 BEFORE Task 9 runs (Wave 5). By the time Task 9 audits the files, all 4 IT scenarios should be enabled. If Task 9 audits before Task 5 merges (scenario that cannot happen given `depends_on: [6]` chain), 2 scenarios would still be `@Disabled`. The dependency chain makes this impossible — Task 9 depends on Task 6, which depends on Task 5. Flagging as verified: by design, all 4 IT scenarios will be active when Task 9 runs.",
+      "fix": "No action required. Verified dependency chain ensures Task 5 is complete before Task 9 runs. All 4 IT scenarios will be active and auditable."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4's `TelegramSender` implementation hint item 8 specifies `map4xx` on 429 should log: `log.warn(\"Telegram 429 retry_after={}s: {}\", retryAfter, TelegramApiClient.scrubTokens(result.description()))`. This is the 429 scrub site in `map4xx`. But the 429 log in `buildRateLimitRetry` is described separately at hint item 11 as `log.warn(\"Telegram 429 — waiting {}s + {}ms jitter\", delaySeconds, jitterMs)` — no scrub call because the message contains no external string (just the computed delay values). The tech-spec 'Scrubber coverage' section (Architecture line 70) says the 429-wait WARN is one of the required six scrubber sites. But the wait-announcement log in `buildRateLimitRetry` (hint 11) does NOT contain an external Telegram string — it only contains computed integers. The scrubber call on the 429 path is in `map4xx` (where `result.description()` is scrubbed). Task 9 checks `sendText_tokenIn429RetryLog_scrubbed_warnLevel` which tests that a `[429 with description containing token, 200]` sequence produces a scrubbed WARN. This WARN must come from `map4xx`'s 429 branch (which logs the description). The `buildRateLimitRetry` wait-announcement WARN has no token to scrub. This is consistent across all tasks — but the statement 'six required scrub sites' in the tech-spec (Architecture line 70) counts the 429 site as ONE site covering both the detection in `map4xx` AND the wait announcement. Task 9's per-site split test `sendText_tokenIn429RetryLog_scrubbed_warnLevel` will verify only the `map4xx` path's scrub (the token is in the `description` field from the 429 response). This is architecturally correct. No discrepancy — flagging as verified.",
+      "fix": "No action required. The six-site scrubber coverage is self-consistent across tasks. The token-in-429 test correctly covers the `map4xx` 429 branch's description scrub."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-naming-drift",
+      "task": 5,
+      "issue": "Task 5 line 52 references `EVENT_BOT_TEST_MESSAGE_SENT_LITERAL` as the string passed to `verify(eventService, never()).logEvent(any(), eq(EVENT_BOT_TEST_MESSAGE_SENT_LITERAL), ...)`. This appears to be a prose placeholder for the string literal `\"bot_test_message_sent\"` — not an actual constant name. The constant Task 5 defines on `BotService` is `EVENT_BOT_TEST_MESSAGE_SENT`. In the `verify(eventService, never())` call, the test would reference the constant `BotService.EVENT_BOT_TEST_MESSAGE_SENT` (or just the string literal). The `_LITERAL` suffix in the task description is a writing artifact and not an actual symbol. This creates no code bug — the implementer will use the real constant — but the inconsistency in the task description could cause brief confusion.",
+      "fix": "Minor editorial: replace `EVENT_BOT_TEST_MESSAGE_SENT_LITERAL` with `EVENT_BOT_TEST_MESSAGE_SENT` in Task 5 line 52 prose to match the actual constant name defined two paragraphs above."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 10,
+      "issue": "Task 10 smoke check `git diff main -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java` will show an empty diff only if the feature branch has not yet been merged to main. At QA time (all tasks 1-9 done), the branch may or may not have been merged. The task notes this edge case: 'If `main` already contains the merge (rare timing edge), fall back to `git log --oneline -p -- ...`'. This is not a task design error but it IS a cross-task concern: the QA agent in Task 10 depends on the branch state at the time of execution, not on any prior task output. The concern is already acknowledged in Task 10's Implementation Hints. Flagging as verified.",
+      "fix": "No action required. Task 10 already documents the fallback approach. Confirmed the check is robust."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 2,
+      "issue": "Task 2 instructs adding `ownerChatId` between `telegramFirstName` and `status`. The current `Bot.java` (verified) has `private String telegramFirstName;` at line 50 immediately followed by `private BotStatus status;` at line 51 — no gap. The getter/setter pair for `telegramFirstName` is at lines 77-78 and `getStatus()`/`setStatus()` must appear after. Task 2 says to insert the field between the two field declarations AND place the getter/setter after `setTelegramFirstName(...)` and before `getStatus()`. The field declaration placement is clear. But the accessor placement instruction ('after `setTelegramFirstName(...)` accessor and before the `getStatus()` accessor') needs the implementer to find those accessor positions. This is correct and feasible — just noting for Task 7 audit awareness that accessor placement may drift from what is specified without breaking functionality.",
+      "fix": "No action required. Task 2 is clear enough. Task 7 auditor should verify field placement (between telegramFirstName and status at the field declaration level) and that no toString override was added."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4's `sendText` implementation references `TelegramApiClient.isTransient` as the retry filter. Looking at the existing `TelegramApiClient.isTransient` (lines 154-167, verified), it checks for `WebClientResponseException` 5xx, `IOException`, `TimeoutException`, and `ReadTimeoutException`. The `TelegramRateLimitException` created in Task 3 extends `RuntimeException` (not `IOException`, not `WebClientResponseException`). The outer 429 retry loop in Task 4 (`buildRateLimitRetry`) filters on `instanceof TelegramRateLimitException` using a separate `Retry.from(companion -> ...)` chain. The inner `transientRetry` uses `filter(TelegramApiClient::isTransient)` which will NOT match `TelegramRateLimitException` (correct by design — 429 should NOT be consumed by the transient loop). This cross-task dependency is architecturally sound. However: the `onRetryExhaustedThrow` handler in `buildTransientRetry` produces `TelegramSendException(null, \"transient_failure_exhausted\", attempts.get())`. If this exhaustion exception propagates outward into `buildRateLimitRetry`'s companion filter, the `instanceof TelegramRateLimitException` check will be false, so `buildRateLimitRetry` will re-emit the `TelegramSendException` via `Mono.error(rs.failure())`. This is the correct pass-through behavior. The ordering guarantees that `TelegramSendException` from exhausted retries is NOT re-consumed by the 429 loop. Verified consistent across all tasks. No finding — flagging as a dependency verified.",
+      "fix": "No action required. Cross-task dependency between Task 3 (TelegramRateLimitException shape), Task 1 (isTransient promotion), and Task 4 (retry composition) is correctly specified and internally consistent."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 specifies `BotService.sendTestMessage` calls `telegramSender.sendText(bot.getId(), bot.getOwnerChatId(), TEST_MESSAGE_BODY, null, ownerId)`. The `TelegramSender.sendText` method in Task 4 starts with `botRepository.findById(botId)`. This means after `requireConnectedBot` loads the bot by `projectId+status`, `TelegramSender` loads the same bot AGAIN by `botId` from MongoDB. This is a documented N+1 per the shared resources design. HOWEVER: between `requireConnectedBot` returning the bot and `TelegramSender.findById(botId)` executing, the bot's status could theoretically change to DISCONNECTED (race condition). `TelegramSender` would then return 404 `bot_not_found` for a bot that `BotService` just confirmed as CONNECTED. This is acknowledged nowhere in the tech-spec Risks section, and it differs from the behavior if `TelegramSender` accepted the already-loaded `Bot` object directly. Tasks 7 and 8 may independently discover this as a TOCTOU race. It is a minor security/consistency concern but cross-task (emerges from the Task 4 + Task 5 interface contract).",
+      "fix": "Document in tech-spec Risks as Risk R13 (or in a decisions.md entry): 'TOCTOU window between BotService.requireConnectedBot and TelegramSender.findById — bot could be disconnected in the window; TelegramSender returns 404 to the already-in-flight request. Accepted: the window is microseconds in practice; disconnect requires the owner to initiate it; this is consistent with eventual-consistency guarantees across the platform.' This documents the accepted design trade-off and prevents Tasks 7/8 from filing it as an unacknowledged BLOCKER."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 10,
+    "cross_task_dependencies_verified": 18,
+    "issues_found": 11,
+    "critical_issues": 5,
+    "major_issues": 5,
+    "minor_issues": 3,
+    "verified_consistent_no_finding": 4
+  },
+  "summary": {
+    "duplicate_heavy_resource": "PASS — TelegramSender and TelegramApiClient each own a distinct WebClient instance (documented in Shared Resources table). TokenEncryptor, BotRepository, EventService are singletons shared without re-creation. No two tasks instantiate the same heavy resource independently.",
+    "hidden_dependencies": "2 FINDINGS — Task 4 IT scenarios depend on BotService stub behavior (currently 422-for-all) but the @Disabled mechanism handles this correctly. The double-load N+1 (requireConnectedBot + TelegramSender.findById) is an undocumented cross-task interface contract worth documenting.",
+    "inconsistent_approaches": "PASS — All tasks use Mono.error() for reactive error propagation consistently. AtomicInteger attempts counter placement is specified identically across Tasks 4, 7, 8, 9. Awaitility pattern for async event assertions is consistent across Tasks 4, 5, 7, 9, 10.",
+    "naming_drift": "2 FINDINGS — AppException.notFound() factory accepts only a message string (no code parameter), but tasks reference 'bot_not_found' as if it were a response body code. EVENT_BOT_TEST_MESSAGE_SENT_LITERAL prose artifact in Task 5.",
+    "test_seeding_consistency": "PASS with DOCUMENTATION GAP — seedConnectedBot (placeholder ciphertext, Tasks 5/10 correctly forbid for positive path) vs seedConnectedBotWithOwnerChatId (real encryption, Task 4 TelegramSenderIT) vs seedConnectedBotWithRealEncryption (real encryption, Task 5 BotControllerIT). The split is intentional and consistent: placeholder bytes are only used in null-branch tests that never reach decrypt. Real encryption is required for any test that exercises TelegramSender.sendText. Cross-reference comments between the two real-encryption helpers are recommended."
+  }
+}

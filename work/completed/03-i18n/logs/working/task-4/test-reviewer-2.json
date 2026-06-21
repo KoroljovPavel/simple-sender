@@ -1,0 +1,21 @@
+{
+  "summary": "Round-1 finding (tautological prototype-pollution test) is fully addressed in 7f2655a. The three new assertions independently catch each piece of the safe-merge implementation: Object.getPrototypeOf(keys) === null catches reversion of the Object.create(null) accumulator; the !collected.some(k => k.startsWith('__proto__')) check plus keys['__proto__.polluted'] === undefined catch removal of the UNSAFE_KEYS filter for __proto__; and the new dedicated constructor/prototype test exercises the other two filter branches. Missing-file regex was also tightened. Static reasoning confirms each protection: JSON.parse defines __proto__ as an own enumerable data property in V8, so removing the UNSAFE_KEYS check would cause Object.keys() to surface it and recursion would emit '__proto__.polluted' into the accumulator — the test would fail. Same logic for constructor/prototype keys. Verdict OK.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/scripts/check-locales.test.mjs:100,112",
+      "issue": "The legacy `assert.equal(({}).polluted, undefined, ...)` line is now decorative — JSON.parse never pollutes Object.prototype regardless of implementation. The comment honestly notes it is 'defensive ... would fail only if some future refactor swapped JSON.parse for an unsafe merge'. Acceptable as documented defense-in-depth, but it does not provide regression coverage today and could mislead a future reader into thinking the filter is what makes that line pass.",
+      "recommendation": "Optional: drop the `({}).polluted` assertions, or convert one of them into an explicit `Object.assign(Object.create(null), payload)` regression case if you want the line to actually exercise something. No action required to unblock the task."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/scripts/check-locales.test.mjs:103-113",
+      "issue": "The constructor-key test does not assert on `Object.getPrototypeOf(keys) === null` like the __proto__ test does. The two pollution tests are slightly inconsistent in coverage shape — only one of them guards the accumulator prototype.",
+      "recommendation": "Optional: mirror the `Object.getPrototypeOf(keys) === null` assertion in the constructor test for symmetry. Not blocking, since the __proto__ test already covers that regression path."
+    }
+  ],
+  "verdict": "OK"
+}

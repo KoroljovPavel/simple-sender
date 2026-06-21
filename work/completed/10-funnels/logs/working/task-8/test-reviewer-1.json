@@ -1,0 +1,8 @@
+{
+  "task": "8",
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "approve",
+  "findings": [],
+  "summary": "Both new cascade tests are present and strongly asserted with real DB-state checks, not shallow log-only assertions. cron_cascadeRemovesFunnelsAndExecutions asserts funnels.count(projectId)==0 AND funnel_executions.count==0 plus the log line funnelsRemoved=2 funnelExecutionsRemoved=1 matching the 2 funnels / 1 execution seeded. cron_cascadeDoesNotTouchFunnelsOfOtherProjects proves cross-project isolation: deleted project swept to 0 while the active control project's funnels/executions survive (count==1 each). REGRESSION fully covered: all 5 pre-existing containsPattern assertions on the 'ProjectHardDeleteJob - run completed:' log line (lines 262, 346, 372, 431, 489) were updated to append funnelsRemoved=0 funnelExecutionsRemoved=0 — none missed (grep confirms this is the only test file referencing the line) — and the subscriber-domain tests correctly show 0/0 since no funnels are seeded there. The no-op countOccurrences substring (line 498-499) was also updated with the funnel tokens. Token order in every assertion matches the implementation emission order (tagsRemoved -> funnelsRemoved -> funnelExecutionsRemoved -> runDurationMs). cleanState wipes both new collections (lines 67-68), preventing cross-test pollution. Litmus test passes: removing either removeByProjectId(...FUNNEL...) call or breaking the counters fails the new tests on both DB-state and log assertions. Note: testing.md at the given path does not exist in project-knowledge/references; standard test-master criteria were applied instead. The environmental TelegramWebhookP99IT failure was excluded per instruction."
+}

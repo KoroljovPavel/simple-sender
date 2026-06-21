@@ -1,0 +1,33 @@
+{
+  "task": 6,
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "mode": "self-applied (nested sub-agent spawning restricted per task brief)",
+  "scope": "frontend/tests/types/funnel-blocks.spec.ts",
+  "summary": "This is a pure-types task with no runtime logic, so the only meaningful test is a compile-time assignability fixture. The added fixture constructs one ContentBlock per BlockType (all 6), a MediaItem album, PreviewStepRequest{stepType:'MESSAGE', blocks:[...]}, and PreviewStepResponse{renderedBlocks:[RenderedBlock...], sampleData, kind}. It fails to compile if types drift from the backend DTOs, which is the intended guard. Trivial expect() keeps vitest from skipping it.",
+  "dimensions_checked": [
+    "right test type for the change (compile-time, not behavioral)",
+    "coverage of all 6 BlockType members",
+    "coverage of nested RenderedBlock + RenderedMediaItem",
+    "no over-mocking",
+    "no false-precedent on subscriber-filters.spec.ts (runtime-fn test, correctly NOT copied)"
+  ],
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "info",
+      "title": "Fixture asserts exhaustiveness of BlockType (6 members)",
+      "detail": "blockKinds covers all 6 BlockType values; request.blocks length 6; response.renderedBlocks covers TEXT + ALBUM (with nested RenderedMediaItem). Adequate for a type-mirror guard.",
+      "action": "accept"
+    },
+    {
+      "id": "T2",
+      "severity": "info",
+      "title": "Downstream behavioral tests intentionally left broken",
+      "detail": "funnels.spec.ts / FunnelMessagePreview.spec.ts and other consumer specs still use old shapes and won't compile; rewriting them is Task 8 scope per the task brief. Not in this task's test ownership.",
+      "action": "documented as known handoff"
+    }
+  ],
+  "verdict": "approved",
+  "blocking": false
+}

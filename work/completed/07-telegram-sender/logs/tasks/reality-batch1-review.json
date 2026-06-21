@@ -1,0 +1,74 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 'Details' section still prescribes line-level edits with exact current line numbers ('Line 38:', 'Line 40:', 'Lines 113-117 (requireValidTokenShape):', 'Lines 154-167 (isTransient):'). This finding was raised in iteration 1 and has NOT been resolved. The line numbers are accurate at current HEAD (verified: DEFAULT_RESPONSE_TIMEOUT is at line 38, CONNECT_TIMEOUT at line 40, requireValidTokenShape at lines 113-117, isTransient at lines 154-167), but pinning implementation instructions to source line numbers crosses from hinting into prescribing mechanical steps, and makes the task brittle if the file drifts before the task is executed.",
+      "fix": "Replace line-number references with member names and descriptions. For example: 'Find the four private static members (DEFAULT_RESPONSE_TIMEOUT, CONNECT_TIMEOUT, requireValidTokenShape, isTransient) and change their visibility to public static. Follow the scrubTokens comment style for the added comments.' This is actionable without being a step-by-step prescription at a specific line."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 'Details' block still provides prescriptive per-file implementation with full import lists for every new file (e.g. 'Imports: com.botfunnel.common.AppException, org.springframework.http.HttpStatus', 'No imports beyond java.lang.RuntimeException (implicit)', 'No imports beyond same-package TelegramSendParameters (no import needed)'). This finding was raised in iteration 1 and has NOT been resolved. Per validation category H, hints should point to patterns and approaches, not prescribe solutions.",
+      "fix": "Condense the 'Details' block to reference AppException constructor signature and TelegramResult.java as a precedent. Remove per-file import lists. Keep only approach-level hints such as 'mirror TelegramResult.java shape' and 'package-private class means omit public modifier'."
+    }
+  ],
+  "resolved_from_iteration_1": [
+    {
+      "finding": "critical / hallucination / task 3 — TokenEncryptor exception wrapping mismatch",
+      "resolution": "Tech-spec Architecture step 3 has been rewritten: catch is now narrowed to IllegalArgumentException from Base64.getDecoder().decode() only; IllegalStateException from TokenEncryptor.decrypt() propagates as 500. Task 3 itself creates only typed exception scaffolding and contains no catching logic, so no stale hint is present. Confirmed by reading tech-spec Architecture step 3 and TokenEncryptor.decrypt() source (wraps all GeneralSecurityException in IllegalStateException). A dedicated unit test stub is called out in the tech-spec testing strategy. RESOLVED."
+    },
+    {
+      "finding": "minor / feasibility / task 3 — broken SKILL.md path",
+      "resolution": "Task 3 line 16 link target is '../../../.claude/skills/code-writing/SKILL.md' — same resolved path as Tasks 1 and 2. File exists at /Users/pavlokorolov/IdeaProjects/simple-sender/.claude/skills/code-writing/SKILL.md (verified). Display text differs cosmetically ('skills/code-writing/SKILL.md') but the hyperlink resolves correctly. RESOLVED."
+    },
+    {
+      "finding": "minor / feasibility / task 2 — Russian language in Required Skills and Post-completion",
+      "resolution": "Task 2 Required Skills section now reads 'Before starting, load:' (English). Post-completion section uses English throughout. RESOLVED."
+    }
+  ],
+  "additional_checks": {
+    "task_1_reality": {
+      "file_exists": "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java — EXISTS",
+      "members_verified": "requireValidTokenShape at lines 113-117 (private static void), isTransient at lines 154-167 (private static boolean), DEFAULT_RESPONSE_TIMEOUT at line 38 (private static final Duration), CONNECT_TIMEOUT at line 40 (private static final Duration) — all confirmed private, all present, signatures match task description",
+      "scrubTokens_precedent": "Line 169-170 promotion comment exists and matches described style",
+      "private_constants_to_leave": "MONO_TIMEOUT at line 39, CAUSE_CHAIN_MAX_HOPS at line 41, TOKEN_PATTERN at line 36, TOKEN_SHAPE at line 37 — all confirmed private",
+      "test_file": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java — EXISTS, imports and structure verified"
+    },
+    "task_2_reality": {
+      "bot_java_exists": "backend/src/main/java/com/botfunnel/bot/Bot.java — EXISTS",
+      "field_placement": "telegramFirstName at line 50, status at line 51 — adjacent, insertion point correct",
+      "no_toString": "Bot.java has no toString method — confirmed by reading full file",
+      "no_ownerChatId_yet": "ownerChatId field not yet present in Bot.java — task is additive-only as expected",
+      "disconnectedAt_precedent": "Instant disconnectedAt at line 63, set to null at BotService.java:233 — nullable wrapper pattern confirmed",
+      "bot_repository_test": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java — EXISTS, newBot() helper verified (does not set ownerChatId), StepVerifier pattern confirmed in use",
+      "bot_token_leak_test": "backend/src/test/java/com/botfunnel/bot/BotTokenLeakTest.java — EXISTS, checks getDeclaredMethods() for toString with zero params — getter/setter pair safe"
+    },
+    "task_3_reality": {
+      "appexception_constructor": "AppException(HttpStatus status, String code, String message) — 3-arg, confirmed. BotTokenInvalidException super(UNPROCESSABLE_ENTITY, 'invalid_bot_token', reason) — correct. TelegramSendException super(BAD_REQUEST, 'telegram_send_failed', scrubbedDescription) — correct.",
+      "telegram_result_precedent": "TelegramResult<T>(boolean ok, T result, Integer error_code, String description) — 4 components, snake_case pattern confirmed",
+      "dto_dir_exists": "backend/src/main/java/com/botfunnel/bot/dto/ — EXISTS, contains BotResponse.java, ConnectBotRequest.java, TelegramResult.java, TelegramUser.java",
+      "new_files_absent": "SentMessage.java, TelegramSendResult.java, TelegramSendParameters.java, BotTokenInvalidException.java, TelegramSendException.java, TelegramRateLimitException.java — all absent as expected (task is additive)",
+      "exception_shapes_vs_appexception": "AppException has no factory for BAD_REQUEST with code; TelegramSendException correctly uses 3-arg constructor directly — consistent",
+      "token_encryptor_decrypt": "TokenEncryptor.decrypt() confirmed: throws IllegalArgumentException for invalid IV, wraps GeneralSecurityException in IllegalStateException('AES-GCM decryption failed'). Base64 decode at call site in BotService.java:216-217 is the source of IllegalArgumentException for bad ciphertext/IV strings. Tech-spec Architecture step 3 exception model is accurate.",
+      "package_private_visibility": "TelegramRateLimitException package-private instruction matches Java default access semantics — correct for com.botfunnel.bot package (TelegramSender lives in same package)",
+      "mapClientError_fallback": "TelegramApiClient.mapClientError line 123 uses TelegramResult<>(false, null, null, null) — 4-arg constructor. Adding a fifth field (TelegramSendParameters) to TelegramResult would break this. Decision 9 to keep separate TelegramSendResult is correctly justified."
+    },
+    "cross_task": {
+      "wave_1_independence": "Tasks 1, 2, 3 all have depends_on: [] — verified no circular dependencies within wave",
+      "task_4_depends_on_wave1": "Task 4 (Wave 2) will consume all three artifacts; no dependency declared from Tasks 1/2/3 to each other — correct",
+      "no_duplicate_resources": "No heavy resource initialized in multiple wave-1 tasks; WebClient created only in TelegramSender (Task 4)"
+    }
+  },
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 2
+  }
+}

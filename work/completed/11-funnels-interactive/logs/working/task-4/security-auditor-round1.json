@@ -1,0 +1,35 @@
+{
+  "reviewer": "security-auditor",
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "info",
+      "owasp": "A03 Injection / A10 SSRF",
+      "location": "FunnelService.requireHttpUrl",
+      "finding": "URL-button scheme is validated by URI parse + exact http|https scheme (equalsIgnoreCase, not startsWith) + non-empty host + pre-parse whitespace reject. javascript:/data:/tg://, leading-whitespace, and empty-host are all rejected with 422 (covered by ITs). Defense matches Decision 10. These links are surfaced to the Telegram client, not fetched server-side, so the risk is scheme-injection/phishing rather than classic SSRF; strict validation is the correct mitigation.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "owasp": "A08 Software & Data Integrity (mass assignment)",
+      "location": "ButtonDto, FunnelStepDto",
+      "finding": "Both DTOs keep @JsonIgnoreProperties(ignoreUnknown=true); server-authoritative fields (order, minted id) are set in toSteps, not client-trusted. Duplicate client-supplied step ids are rejected (422), preventing graph corruption.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "owasp": "A04 Insecure Design (DoS bounds)",
+      "location": "validateMenu",
+      "finding": "Button count (<=8), label length (<=64) and step count (<=maxSteps) are all bounded; no unbounded iteration over client input.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "owasp": "A05 Security Misconfiguration (error handling)",
+      "location": "FunnelService.requireHttpUrl",
+      "finding": "Malformed URI is caught and mapped to 422 (never a 500); error messages echo only client-supplied target ids/urls, no sensitive data leak.",
+      "action": "none"
+    }
+  ]
+}

@@ -1,0 +1,57 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 2,
+  "prior_report": "reality-batch3-review.json",
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "Task 3 Details (line 113) says `public enum BotStatus { CONNECTED, DISCONNECTED }` and adds the explicit instruction 'do not annotate with anything that changes it [name() serialisation]' because the MongoDB partial-filter expression depends on uppercase `\"CONNECTED\"`. However, the iter1 fix to Tasks 7 and 8 now mandates that `BotStatus.CONNECTED` MUST emit lowercase `\"connected\"` on the HTTP wire via `@JsonValue` (or `spring.jackson.serialization.write-enums-using-to-string=true`). These two instructions directly contradict each other. The implementing agent for Task 3 (Wave 1, no depends_on) will follow Task 3's spec and produce an unannotated enum; the agents for Task 7 and Task 8 will expect lowercase wire format. At integration time either (a) the JSON responses come back uppercase breaking Task 7 frontend types and Task 8 AC assertions, or (b) someone adds the annotation mid-stream without a task owning the change. Note: the confusion arises from conflating Mongo storage format (must stay uppercase to match the partial-filter string `\"CONNECTED\"`) with JSON HTTP serialization (must be lowercase per user-spec AC1). These are independent concerns — `@JsonValue` only affects Jackson serialization, not Spring Data MongoDB's enum-to-string mapping, which reads the enum's `.name()` by default regardless of Jackson annotations.",
+      "fix": "Update Task 3 Details to: 'The JSON HTTP serialization of `BotStatus` must emit lowercase (`\"connected\"` / `\"disconnected\"`) per user-spec AC1. Add `@JsonValue public String getValue() { return name().toLowerCase(); }` and `@JsonCreator public static BotStatus from(String v) { return valueOf(v.toUpperCase()); }` to the enum. Spring Data MongoDB uses the enum `.name()` for persistence (uppercase `CONNECTED`/`DISCONNECTED`) independently of Jackson — the partial-filter expression `{ status: \"CONNECTED\" }` continues to work correctly. Remove the existing instruction that prohibits annotations.' Also verify Task 3's index-enforcement test seeds rows using `BotStatus.CONNECTED` (the Java constant) not the string literal, so it is immune to the JSON serialization change."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 9,
+      "issue": "Task 9 Context Files lists `frontend/pages/projects/[projectId]/settings/index.vue` as a 'code file to read' reference for the page-shell layout (line 106). This file does not exist in the codebase — the current path is `frontend/pages/projects/[projectId]/settings.vue` (the monolithic pre-Task-5 file). The `settings/` subdirectory and `settings/index.vue` are Task 5 deliverables. An agent that opens this link before Task 5 is complete will get a file-not-found error and lose the reference. The description text now correctly warns that Task 5 must be done first, but the link itself remains broken until Task 5 lands.",
+      "fix": "Either (a) annotate the link with '(Task 5 deliverable — does not exist until Task 5 completes; fall back to reading `frontend/pages/projects/[projectId]/settings.vue` for the pre-Task-5 shell pattern)', or (b) replace the link target with the actually existing `frontend/pages/projects/[projectId]/settings.vue` and note 'pre-Task-5 equivalent — Task 5 refactors this into `settings/index.vue`'. The `depends_on: [4, 5, 7]` ensures ordering at the task scheduler level, but the link annotation helps a human agent reading the task before execution."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 8,
+      "issue": "Task 8 implementation hints (line 186) say 'Mirror whatever pattern Task 3 / Task 6 settled on (read their tests first to avoid double-configuring Jackson)'. This is sound advice, but with the cross-task conflict in Task 3 still unresolved (see critical finding above), the instruction to 'read Task 3's tests first' may lead the Task 8 agent to observe uppercase serialization (if Task 3 landed without `@JsonValue`) and then incorrectly accept it rather than flagging the deviation. The hint lacks a safety net for the case where Task 3 is non-conformant.",
+      "fix": "Append to the hint: 'If Task 3's integration tests show uppercase JSON output (e.g. `\"status\":\"CONNECTED\"`), that is a Task 3 bug — file a follow-up against Task 3 before proceeding. Task 8 AC assertions must check lowercase regardless of what Task 3 currently emits.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 7,
+      "issue": "TDD Anchor (lines 121-125) adds a test 'watcher clears on currentProjectId=null — drive the transition to null through the projects-store action surface (e.g. `projectsStore.clearSelection()` or whichever action sets `currentProjectId = null`)'. The actual projects.ts store does not expose a `clearSelection()` action — the store exposes `selectProject(id: string | null)` (line 52 of projects.ts) and internally calls `selectProject(null)` via `handleStaleCurrent`. From outside the store, the correct call is `projectsStore.selectProject(null)`. The hint `clearSelection()` is an invented method name.",
+      "fix": "Replace 'projectsStore.clearSelection()' with 'projectsStore.selectProject(null)' in the TDD Anchor wording. The exposed API is `selectProject` accepting `null` (confirmed in projects.ts line 52 and projects.spec.ts line 231)."
+    }
+  ],
+  "iter1_fixes_verified": {
+    "wire_format_task7": "FIXED — Task 7 'Wire-format contract (CRITICAL)' section added; BotStatus union is lowercase; @JsonValue instruction for Task 3 and lowercase AC instruction for Task 8 both present.",
+    "wire_format_task8_ac": "FIXED — Task 8 AC1 now includes the full wire-format note with Jackson options; assertions must check lowercase 'connected'/'disconnected'.",
+    "wire_format_task9": "FIXED — Task 9 branch condition uses `current.status == \"connected\"` (lowercase).",
+    "task9_radix_vue": "FIXED — Task 9 package.json context entry (line 103) and Details (line 141) both explicitly state radix-vue is the peer-dep, not reka-ui.",
+    "task9_task5_ownership": "FIXED — Description paragraph clearly states Task 5 delivers the settings/ folder and bot.vue placeholder; Task 9 overwrites it in Wave 3.",
+    "task9_context_markdown_links": "FIXED — All context file entries use markdown link format.",
+    "task8_pseudocode_trimmed": "FIXED — Implementation hints are now pointer-level; full MockWebServer API call sequences and exact retry scripting removed.",
+    "task8_ac23_event_metadata": "FIXED — AC item at line 110 covers bot_connected / bot_disconnected event metadata shape and token-leak negative assertion.",
+    "task7_references_paths": "FIXED — Context files use ../../../.claude/skills/project-knowledge/references/ paths correctly.",
+    "task7_promise_type": "FIXED — inFlight type stated as Promise<Bot | null> | null with clarification it is distinct from projects.ts Promise<void> | null.",
+    "task7_watcher_tdd": "FIXED — TDD Anchor now explicitly instructs to call selectProject('b') rather than mutating currentProjectId directly."
+  },
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 4,
+    "iter1_issues_resolved": 8,
+    "new_issues_introduced": 1
+  }
+}

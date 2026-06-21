@@ -1,0 +1,56 @@
+{
+  "status": "needs_improvement",
+  "summary": "Strong test suite for Task 8: every TDD-Anchor method is present, the unit tests (SegmentFilterBuilderTest, TelegramTextValidatorTest) assert real Query document shape / sort / limit / cursor codec rules with no mock-return anti-patterns, and the integration tests drive the real controller through Mongo+Redis+MockWebServer with meaningful state and event assertions. Pyramid balance is healthy (heavy unit on the pure builder/validator, integration for cross-module flows, no E2E needed here). The cursor tie-break and rate-limit tests are correct and verify the real keyset/Redis behavior. Gaps that keep this from a clean pass: (1) the two tag endpoints SubscriberController actually mounts (POST/DELETE /{id}/tags) have NO HTTP-layer integration test in Task 8 — only the service layer is covered elsewhere; (2) the IT named cursor_dollarPrefixedKeys does not exercise the recursive dollar-walk it claims to (it is caught by the unknown-key rule, duplicating cursor_unknownKeys), so the F6 nested-operator guard is only covered at the unit layer at the HTTP boundary; (3) the mass-assignment and multi-field text-search ITs under-assert relative to the behavior their names promise.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/ (no IT for POST /{id}/tags and DELETE /{id}/tags/{slug})",
+      "issue": "SubscriberController mounts POST /{id}/tags (200 + findOrCreate + addTag) and DELETE /{id}/tags/{slug} (204 + removeTag), but no Task-8 test hits these two endpoints through HTTP. SubscriberServiceImplIT (Task 3) covers addTag/removeTag at the service layer only; TagControllerIT (Task 4) hits /tags CRUD and never /subscribers/{id}/tags (grep: 0 matches for 'subscribers/'). The tech-spec-anchored race test addSameTag_concurrentlyFrom10Subscribers does not exist anywhere. Result: the controller wiring for tags — first-line requireOwned guard, requireOwnedSubscriber projectId scoping, the tagService.findOrCreate call, 200 vs 204 status, response body shape, and the foreign-owner/soft-deleted/unknown-subscriber 404 paths — is entirely unverified at the HTTP layer for two of the controller's seven endpoints. Litmus: deleting the requireOwned line or the findOrCreate call in addTag would not fail any test.",
+      "recommendation": "Add to a SubscriberTagIT (extends AbstractIntegrationTest): (a) addTag_persistsTagAndBumpsCounter — POST /{id}/tags {slug:'vip'} → 200, assert subscriber.tags contains 'vip', Tag('vip').subscriberCount == 1, and tag row was created by findOrCreate; (b) addTag_idempotentReattach_doesNotDoubleCount — POST same slug twice → counter still 1; (c) removeTag_pullsAndDecrements — DELETE /{id}/tags/vip → 204, tag removed, counter back to 0; removeTag_notPresent → 204 + counter unchanged; (d) access guards for both verbs: foreign-owner / soft-deleted project / unknown subscriberId → 404 (matches the list/profile guard battery). Keep the concurrent counter race in Task 4's TagControllerIT per the task split, but it must actually POST /subscribers/{id}/tags."
+    },
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberControllerIT.java:199 (cursor_dollarPrefixedKeys_returns400)",
+      "issue": "The test feeds base64 of {\"$where\":\"1\",\"id\":\"...\"} — a TOP-LEVEL $-prefixed key. In SegmentFilterBuilder.decodeCursor, assertExactlyVAndId() runs BEFORE assertNoDollarKeys() (SegmentFilterBuilder.java:133-134), so '$where' is rejected as an UNKNOWN KEY, never reaching the recursive dollar-walk. This IT therefore does not exercise the NoSQL-operator-injection guard it is named for; it is functionally a duplicate of cursor_unknownKeys_returns400. The actual nested-operator path (e.g. {\"v\":{\"$ne\":null},...}, the real F6 attack from the tech-spec) is covered only by the unit test decodeCursor_dollarPrefixedKey, not at the HTTP boundary. Litmus: deleting assertNoDollarKeys() entirely would NOT fail this IT (assertExactlyVAndId still rejects $where).",
+      "recommendation": "Change the payload to the nested form that only the dollar-walk can catch: base64 of {\"v\":{\"$ne\":null},\"id\":\"0123456789abcdef01234567\"} (keys are exactly {v,id}, so it passes assertExactlyVAndId and must be rejected by assertNoDollarKeys). Assert 400 + code invalid_cursor + that no rows leak. This matches the tech-spec cursor_invalidShape example and makes the IT a true regression catch for the F6 recursive guard."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberPersonalMessageIT.java:249 (create_hostileBodyMassAssignment_dropped)",
+      "issue": "Test name promises mass-assignment safety (AC §mass-assignment) but only asserts status 200 + $.status==sent. It never proves the hostile keys ('evil_key', 'status':'hacked') were dropped or had no side effect — the assertion would pass even if those keys were bound somewhere. Because SendMessageRequest only has a 'text' field there is nothing to bind, but the test does not demonstrate that invariant.",
+      "recommendation": "After the send, re-read the subscriber and assert its status is still ACTIVE (proving 'status':'hacked' had no effect), and assert SendMessageRequest carries @JsonIgnoreProperties(ignoreUnknown=true) behavior by also sending a malformed extra key and confirming no 400 from strict-binding. Minimal concrete addition: assertThat(subscriberRepository.findById(subscriberId).orElseThrow().getStatus()).isEqualTo(SubscriberStatus.ACTIVE)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberControllerIT.java:86 (list_textSearch_matchesFirstNameLastNameUsername)",
+      "issue": "The method name asserts text-index coverage across firstName, lastName AND username, but the body seeds two subscribers and only searches 'ivanna' (a firstName). lastName and username matching are never exercised; a regression that dropped lastName or username from the text index would not be caught here.",
+      "recommendation": "Add two more assertions in the same test (or parameterize): search by lastName token (e.g. ?search=petrenko → 1 hit) and by username token (e.g. ?search=ivanna_p → 1 hit), each asserting the matched subscriber. This makes the test honor its name and pins all three indexed fields."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberControllerIT.java:147 (list_cursorForward3Pages_noDuplicatesNoSkips)",
+      "issue": "The test asserts only that 120 distinct ids are collected across pages (no duplicates, full count). It does not assert NO SKIPS against the known total nor that ordering is strictly descending across the page boundary. With 120 distinct subscribedAt values a skip would manifest as a missing id, which the count==120 check happens to catch — but the assertion does not independently verify the keyset ordering / boundary continuity that the cursor tie-break protects.",
+      "recommendation": "Strengthen by also asserting the collected ids equal the full seeded set (assertThat(all).containsExactlyInAnyOrderElementsOf(seededIds)) and that the concatenated pages are sorted by subscribedAt desc with _id desc as tie-break, mirroring the builder's Sort. This converts the implicit no-skip check into an explicit invariant."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 9,
+    "litmusTest": {
+      "checked": 41,
+      "passed": 39,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 24,
+      "integration": 22,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

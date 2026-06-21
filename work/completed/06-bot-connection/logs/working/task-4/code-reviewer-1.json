@@ -1,0 +1,13 @@
+{
+  "summary": "Task 4 ships the bot.* and errors.bot.* i18n subtrees correctly: both files are valid JSON with 2-space indent, key parity holds (pnpm prebuild exits 0), the inventory matches AC22 exactly (connect 400/422/500/502/409/429 + generic, testMessage 422/502 + generic, disconnect 404 + generic, no 401 anywhere, per-action generic fallbacks present in both locales), dot-segmented paths are canonical (bot.connect.form.*, bot.disconnect.modal.*), the {username} placeholder is in place, and the 409 copy carries no foreign-project identifiers. Only a minor stylistic finding: two Ukrainian strings inside the new bot block (errors.bot.connect.500 and bot.toasts.webhookConfigError) use the formal 'зверніться' (ви) while every other new bot string uses the informal 'ти' form mandated by the task spec.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "readability",
+      "location": "frontend/i18n/locales/uk.json:errors.bot.connect.500 and bot.toasts.webhookConfigError",
+      "finding": "Tone inconsistency inside the new bot block. The task spec mandates 'friendly, second-person singular' for the bot subtree and every other new Ukrainian string honors it ('Спробуй', 'напиши', 'встав', 'Підключи'). However errors.bot.connect.500 = 'Помилка конфігурації вебхука — зверніться до підтримки' and bot.toasts.webhookConfigError = 'Помилка конфігурації вебхука — зверніться до підтримки.' both use 'зверніться' (second-person plural / formal 'ви'). This breaks the singular-informal voice consistently used elsewhere in the bot strings of this task.",
+      "recommendation": "Switch 'зверніться' to the singular informal form, e.g. 'звернись до підтримки' (or rephrase to 'напиши в підтримку'). Apply to both errors.bot.connect.500 and bot.toasts.webhookConfigError so the entire bot.* and errors.bot.* Ukrainian subtree speaks in one voice. This is internal to the bot block and does not require touching existing errors.projects/login/profile copy."
+    }
+  ],
+  "verdict": "approve"
+}

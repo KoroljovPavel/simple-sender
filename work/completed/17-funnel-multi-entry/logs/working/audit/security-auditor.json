@@ -1,0 +1,103 @@
+{
+  "task": "Task 9 — Security Audit (full-feature, 17-funnel-multi-entry)",
+  "scope": "OWASP Top 10 across all backend + frontend components of the multi-entry feature (Tasks 1-7)",
+  "status": "clean",
+  "summary": "No security findings. The feature's new attack surface (public /events ingress, subscriberId+funnelId-scoped redirect CAS, the per-trigger array + keyword DoS surface, the EMIT_EVENT->trigger self-loop, and the new redirect/start WARN markers) is correctly defended end-to-end. The anti-IDOR redirect CAS (Decision 3) is bound to BOTH subscriberId AND funnelId and the executionId originates solely from a trusted in-flight probe inside the dispatcher (never request input) with the CAS re-verifying the pair as a second atomic layer. fail-closed projectId discipline is preserved on every redirect/start path. WARN/info/error logs across all new paths are ids/codes only — event_name/triggerValue/keyword text/PII are never logged (verified, with explicit guard comments locking it). DoS caps (Decision 14: @Size(50) on the trigger array + per-trigger keyword caps + the existing rate-limit and fan-out ceiling) are in place at both the DTO contract boundary and the service re-check. Mass-assignment is defended with @JsonIgnoreProperties(ignoreUnknown=true) on every request DTO. Error-isolation (try/catch(Throwable)+swallow-and-WARN) wraps every new path so a redirect fault can never 5xx the events API nor fail the webhook job. Frontend has no v-html/innerHTML/eval sinks; the client duplicate-guard is correctly advisory-only with the server 422 as the real backstop.",
+  "findings": [],
+  "controls_verified": [
+    {
+      "control": "Anti-IDOR redirect CAS bound to subscriberId AND funnelId (Decision 3)",
+      "owasp": "A01 Broken Access Control",
+      "where": "FunnelExecutionEngine.java:413-428 (claimForRedirect) — Criteria _id + subscriberId + funnelId + status IN (running,waiting,waiting_for_reply) + stepRunStatus=pending; a mismatched subscriber or foreign funnel fails the predicate -> findAndModify returns null -> guaranteed no-op (FunnelExecutionEngine.java:240-246).",
+      "verdict": "PASS"
+    },
+    {
+      "control": "executionId for redirect comes only from a trusted in-flight probe, never request input (end-to-end)",
+      "owasp": "A01 Broken Access Control / IDOR",
+      "where": "EventsController.java:104-106 passes only projectId+subscriberId+event_name (no executionId) -> FunnelEventService.redirectOrStart calls inFlightExecutionId (FunnelEventService.java:328-336) which findOne()s scoped by projectId+funnelId+subscriberId+in-flight statuses; that id is the ONLY redirect input (FunnelEventService.java:258-264) -> engine CAS re-checks the pair. No request field reaches the executionId.",
+      "verdict": "PASS"
+    },
+    {
+      "control": "fail-closed projectId discipline on redirect and start paths",
+      "owasp": "A01 Broken Access Control",
+      "where": "EventsController reads projectId from the pinned ApiKeyAuthentication, never path/body (EventsController.java:82-84,138-145); subscriber lookups are project-scoped (resolveSubscriber:113-120). inFlightExecutionId is scoped by projectId (FunnelEventService.java:329). enrollSpecificFunnel re-resolves the target and explicitly fails closed on projectId (FunnelEventService.java:404-421) since findById is not project-scoped. cancelInFlightExecutions scoped by projectId+funnelId (FunnelService.java:271-282).",
+      "verdict": "PASS"
+    },
+    {
+      "control": "No PII / event_name / triggerValue in WARN/info/error logs (anti log-injection)",
+      "owasp": "A09 Logging Failures / A03 Injection",
+      "where": "All new markers log ids/codes only: FunnelEventService LOG_DISPATCH_* / LOG_DISPATCH_NO_MATCHED_ELEMENT (explicit SEC guard comment at FunnelEventService.java:311-316 forbidding matchKey/triggerValue/event_name); FunnelExecutionEngine LOG_REDIRECT/LOG_REDIRECT_CLAIM_LOST/LOG_REDIRECT_BROKEN_CURSOR (executionId+funnelId only, :236,244,253,258); EventsController markers (projectId + exception class only, :89,97,108); FunnelTriggerServiceImpl.fire LOG_FIRE_* (:126,136,162,186). Exception logging uses t.getClass().getSimpleName(), never getMessage().",
+      "verdict": "PASS"
+    },
+    {
+      "control": "Mass-assignment defense on trigger DTOs",
+      "owasp": "A08 Software & Data Integrity",
+      "where": "@JsonIgnoreProperties(ignoreUnknown=true) on TriggerDto (TriggerDto.java:29), UpdateFunnelRequest (UpdateFunnelRequest.java:25), and EventIngressRequest fields are explicit @JsonProperty-mapped only. A hostile {status:...} or unknown field is dropped. status/projectId/id are never bound from the request body — the service sets status/projectId server-side.",
+      "verdict": "PASS"
+    },
+    {
+      "control": "DoS bounding — trigger-array @Size + per-trigger keyword caps (Decision 14, A04)",
+      "owasp": "A04 Insecure Design",
+      "where": "UpdateFunnelRequest @Size(max=MAX_TRIGGERS=50) on the array + @Valid cascade (UpdateFunnelRequest.java:30,36); TriggerDto @Size(max=MAX_KEYWORDS=50) per element (TriggerDto.java:33,39); service re-check MAX_TRIGGERS=50 -> 422 (FunnelService.java:688-691); keyword caps MAX_KEYWORDS=50 + MAX_KEYWORD_LENGTH=64 enforced in requireKeywords/normalizeKeywords (FunnelService.java:868-911). The N*keyword in-code scan iterates only over capped, normalized per-trigger lists (FunnelEventService.java:542-568).",
+      "verdict": "PASS"
+    },
+    {
+      "control": "Public /events input validation before fan-out",
+      "owasp": "A03 Injection / A04",
+      "where": "EventIngressRequest @NotBlank @Pattern(^[A-Za-z0-9_-]{1,64}$) on event_name + cross-field @AssertTrue requiring at least one identifier (blank subscriber_id counts absent) -> 400 before any DB hit (EventIngressRequest.java:21-41). Dangling entryStepId and duplicate event_name are rejected 422 at save (FunnelService.requireEventEntryStep:768-778, CODE_DUPLICATE_EVENT_NAME:736-739).",
+      "verdict": "PASS"
+    },
+    {
+      "control": "DoS rate-limit + fan-out ceiling on the /events path",
+      "owasp": "A04 Insecure Design",
+      "where": "Global fixed-window rate-limit (429, Redis fail-open) at EventsController.rateLimitExceeded:125-136 checked before subscriber resolution; per-subscriber auto-enroll rate-limit + Redis-independent depth cap + per-dispatch fan-out ceiling (max-fanout-per-event) in FunnelEventService.dispatchForSubscriber:163-225.",
+      "verdict": "PASS"
+    },
+    {
+      "control": "EMIT_EVENT <-> trigger self-loop bound (US Risk 4)",
+      "owasp": "A04 Insecure Design",
+      "where": "EMIT_EVENT dispatches with execution.getEnrollDepth()+1 (StepExecutor.java:161-162); redirect mutates the existing row (no new row, enrollDepth unchanged) so the depth cap still bounds enroll-driven expansion; a redirect-driven cycle is bounded by the per-tick maxStepsPerTick budget -> FUNNEL_STEP_BUDGET_EXCEEDED -> terminate(failed) (FunnelExecutionEngine.java:300-308) and the human-press/menu-park gate. No artificial counter, as designed.",
+      "verdict": "PASS"
+    },
+    {
+      "control": "Error-isolation as a security control (redirect fault never 5xx / never fails the webhook job)",
+      "owasp": "A04 / availability",
+      "where": "dispatchForSubscriber whole-body try/catch(Throwable) (FunnelEventService.java:163,226-230); per-funnel redirectOrStart try/catch(Throwable) (FunnelEventService.java:248,268-274); EventsController belt-and-braces try/catch(Throwable) around dispatch (EventsController.java:104-109) returns 202; redirectExecution CAS-loss best-effort no-op + WARN, broken-cursor terminal-fails ONLY that execution (FunnelExecutionEngine.java:240-256); fire() try/catch(Throwable) (FunnelTriggerServiceImpl.java:122,184-187).",
+      "verdict": "PASS"
+    },
+    {
+      "control": "Mongo derived/elemMatch queries safe from injection via triggerValue/entryStepId",
+      "owasp": "A03 Injection",
+      "where": "All trigger queries use parameterized Spring Data derivation or @Query with positional binders ($elemMatch, FunnelRepository.java:63-65,72-73); engine CAS/probes use Criteria builders with .is()/.in() (FunnelExecutionEngine.java:415-420, FunnelEventService.java:329-333). No string concatenation into query documents. triggerValue/entryStepId are also slug-regex validated at save.",
+      "verdict": "PASS"
+    },
+    {
+      "control": "Frontend: no XSS sink, client guard advisory-only",
+      "owasp": "A03 Injection (XSS)",
+      "where": "FunnelTriggersPanel.vue / [funnelId].vue / funnels.ts use text interpolation only (Vue auto-escaped) — no v-html/innerHTML/eval. duplicateIndices guard is advisory (does not gate save); the server 422 is the backstop. Store is a thin array pass-through.",
+      "verdict": "PASS"
+    }
+  ],
+  "files_reviewed": [
+    "backend/src/main/java/com/botfunnel/funnel/Trigger.java",
+    "backend/src/main/java/com/botfunnel/funnel/Funnel.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliation.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/UpdateFunnelRequest.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/FunnelResponse.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/FunnelSummaryResponse.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/TriggerDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+    "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+    "backend/src/main/java/com/botfunnel/api/EventsController.java",
+    "backend/src/main/java/com/botfunnel/api/EventIngressRequest.java",
+    "frontend/types/funnel.ts",
+    "frontend/stores/funnels.ts",
+    "frontend/components/funnels/FunnelTriggersPanel.vue",
+    "frontend/pages/projects/[projectId]/funnels/[funnelId].vue"
+  ],
+  "notes": "EventsController/EventIngressRequest were read though not in the task's explicit file list — they are the public attack surface and were required for the end-to-end anti-IDOR/input-validation trace. StepExecutor was read to verify the EMIT_EVENT->dispatcher depth-propagation that bounds the self-loop."
+}

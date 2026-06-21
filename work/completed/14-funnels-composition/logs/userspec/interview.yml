@@ -1,0 +1,399 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-06-08 00:00:00"  # Timestamp (YYYY-MM-DD HH:MM:SS)
+  last_updated: "2026-06-08 00:00:00"
+  status: "completed"  # not_started | in_progress | completed
+  can_resume: true
+  current_question_num: 0
+  feature_size: "L"  # S | M | L
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-06-08 00:10:00"
+    topic: "scope / cycle protection / testing"
+    agent_question: |
+      Cycle 1 batch: (1) scope — limit Phase 5 to SUBSCRIBE_TO_FUNNEL fire-and-forget, +jump, defer return?
+      (2) concrete use case? (3) cycle protection: reuse Phase 3 enrollDepth+backstops + block self-target?
+      (4) testing: engine ITs, no E2E?
+    user_answer: |
+      (1) C return = maybe just B+B (jump there + jump back)? or is there a better C variant? maybe Epic 8.
+      (2) wants "run again" OR "menu stays and can do a step". (3) does NOT want static cycle-detection —
+      cycles are WANTED. (4) agrees on testing.
+    summary: "User wants cycles (not a bug). Open on return semantics. Loose on use case."
+  - question_num: 2
+    timestamp: "2026-06-08 00:20:00"
+    topic: "return semantics / separate-funnel justification / explicit return action"
+    agent_question: |
+      Explained: jump=terminal placement (no separate mechanism); B+B lands at target START not mid-step;
+      true return-to-step = Epic 8 / C. Asked: (1) return to start ok or need specific step?
+      (2) is the sub-flow a separate reusable funnel or inline (Phase 2 already covers inline loop)?
+      (3) agree with "one step + composition patterns" or want explicit "end-parent / return" action?
+    user_answer: |
+      (1) Probably need to return to where we came from, or a specific step — not sure how best; maybe Epic 8.
+      (2) Yes separate funnel; menu uses INLINE keyboard (not persistent — contrasted with Epic 7).
+      (3) Wants an explicit button/action that returns.
+      CONCRETE EXAMPLE: main funnel has inline keyboard; one button → "personal offer generation" funnel;
+      after a few questions generates the offer → return user to the main funnel = just re-show the main
+      funnel's inline keyboard. Cycles are shallow (2-3 hops).
+    summary: "Real use case = cross-funnel call → sub-funnel → return to the caller's MENU. Needs return-to-specific-step (menu), explicit return action. This is C-lite or Epic-8 mid-entry, NOT bare fire-and-forget."
+  - question_num: 3
+    timestamp: "2026-06-08 00:30:00"
+    topic: "return mechanism decision / modes / success criteria"
+    agent_question: |
+      Challenged the C choice: multi-caller (the only thing requiring C) is unobserved; variant 2
+      (fire-and-forget + optional entry-step target) covers the exact use case visually identically at
+      far less code. Recommended variant 2. Asked: (1) variant 2 or C? (2) include fire-and-forget mode?
+      (3) success criteria wording ok?
+    user_answer: |
+      (1) variant 2 for now. (2) yes include fire-and-forget (it's cheap). (3) success criteria as worded
+      is enough.
+    summary: "LOCKED: variant 2. One step SUBSCRIBE_TO_FUNNEL, fire-and-forget, target funnel + optional entry step. No new wait state, no parent park, no resume hook. jump/transfer = terminal placement; return = a SUBSCRIBE in B targeting A's menu step. Cycles allowed via runtime backstops, no static detection."
+  - question_num: 4
+    timestamp: "2026-06-08 00:50:00"
+    topic: "Cycle 2 code-informed decisions"
+    agent_question: |
+      After code-research: A) add endParentAfter flag (off=parallel continue, on=transfer)? B) target
+      draft/paused/deleted at execution = silent skip or explicit error? C) deleted return step -> fallback
+      to start? D) validate active at save or execution? + confirm no deploy/migration.
+    user_answer: |
+      A agreed. B = EXPLICIT ERROR (parent execution fails). C ok (fallback to start). D agreed
+      (existence+project+step at save, active at execution). No deploy — runs locally for now (Test-for-me).
+    summary: "All Cycle-2 decisions locked. Note B deviates from the silent-skip precedent: an unavailable target FAILS the parent execution (user wants to notice). Depth-cap exceeded stays a silent skip+WARN (runaway backstop, distinct from config error)."
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "14-funnels-composition (Epic 06 Phase 5, fixed in docs/roadmap/funnels.md)"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 92
+    status: "complete"
+    value: "ONE new funnel step type SUBSCRIBE_TO_FUNNEL (fire-and-forget). Config: targetFunnelId (required; active; same project) + optional targetStepId (entry step in the target; default = target's start). On execute: enrol the same subscriber into the target funnel (snapshot of target's steps, currentStepId = targetStepId or start), enrollDepth = parent+1, returns CONTINUE so the parent proceeds along `next`. Composition patterns over this one step: parallel start (step has a next), jump/transfer (step is terminal, parent ends), return-to-menu (sub-funnel B has a SUBSCRIBE_TO_FUNNEL targeting caller A's MENU step). Variant 2 (static return-to-step) chosen over dynamic call/return C — visually identical for the single-caller use case, far less code (no waiting_for_subfunnel state, no parent stack, no resume hook). Cycles ALLOWED; runtime backstops only."
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature (new step type(s) on the funnel engine)"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: "Author wants to factor a sub-scenario (e.g. personal-offer generation) into its own funnel, call it from a main-funnel MENU button, and bring the subscriber back to the main menu when done. Today there is no way to enrol a subscriber from one funnel into another. Separate funnel chosen for cleanliness/reuse (intra-funnel loop already exists in Phase 2; multi-caller is theoretically possible but unobserved -> static return is acceptable)."
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Who specifically will use this"
+    required: false
+
+  success_criteria:
+    score: 85
+    status: "complete"
+    value: "Done when: in the editor the author adds a 'Почати воронку' (SUBSCRIBE_TO_FUNNEL) step, picks the target funnel and optionally a return step, tests via Test-for-me, and the subscriber traverses A -> B -> back to A's menu. Engine enrols correctly, cycles work without runaway, inactive/missing targets degrade gracefully."
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: |
+      Cycles A->B->A are a WANTED feature -> NO static cycle-detection at save. RESOLVED: SUBSCRIBE_TO_FUNNEL
+      calls FunnelExecutionFactory DIRECTLY (bypasses FunnelEventService), so the dispatcher's rate-limit
+      (20/min) and fan-out ceiling do NOT apply. The ONLY runaway backstop is the enrollDepth cap
+      (max-enroll-depth=10), which MUST be wired explicitly in StepExecutor (child=parent+1; over cap ->
+      skip enroll + WARN, NOT fail). Plus the re-enter partial-unique index. Human-gated cycles are safe under
+      the depth cap. endParentAfter=on at execution: parent ends as `completed` (NOT cancelled) immediately
+      after enroll, any following steps skipped. Target active-state checked at execution -> not active/missing
+      => parent execution FAILS (decision B). Tenant isolation: target lookup scoped to projectId.
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: "Integration tests on the engine mirroring existing funnel ITs: enroll into target works; cycle allowed but runaway backstop trips; re-enter guard + allowReEnter; active-only target; deleted/paused target skipped without failing the parent; return lands on the correct step. No E2E (editor = SearchableSelect reuse, backend-centric feature). Frontend vitest on the new step form. Agreed by user."
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 90
+    status: "complete"
+    value: |
+      US1 (author): add a 'Почати воронку' step, pick target funnel (active) + optional entry step + the
+      'завершити цю воронку після старту' flag; validate/activate/test-run.
+      US2 (cross-funnel call+return): main funnel A's MENU button -> SUBSCRIBE(B, end=on); B runs a sub-scenario
+      (offer generation); B's last step SUBSCRIBE(A, entryStep=A's MENU, end=on) -> subscriber lands back on A's menu.
+      US3 (parallel start): SUBSCRIBE(B, end=off) -> A continues while B also runs.
+      US4 (subscriber): experiences a seamless hop into the sub-flow and back to the menu.
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 88
+    status: "complete"
+    value: "See user-spec Acceptance Criteria. Core: step CRUD in editor; enroll into target at execution; endParentAfter on/off; return-to-menu lands on the chosen step; cycle A->B->A bounded by enrollDepth cap (no runaway); target unavailable at execution -> parent FAILS; deleted entry step -> fallback to start; re-enter guard + allowReEnter honored; save-time validation codes; preview shows non-message placeholder; test-run enrolls."
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 88
+    status: "complete"
+    value: |
+      - Cycle A->B->A: allowed; bounded by enrollDepth cap (max-enroll-depth=10) -> beyond cap: skip enroll + WARN (NOT fail; runaway backstop).
+      - Self-target A->A: hits re-enter guard (no-op unless allowReEnter); not the intended cycle path (use A->B->A).
+      - Target already in-flight for subscriber + allowReEnter=false: enroll is a no-op (DuplicateKey swallowed).
+      - allowReEnter=true target: cancel-then-insert restarts target fresh at entry step.
+      - Deleted/draft/paused target at execution: skip + WARN, parent CONTINUES (decision B REVISED after adequacy review — loud at save/activate/test, graceful at runtime to preserve snapshot isolation / avoid blast radius).
+      - Deleted entry step in target at execution: fallback to target start + WARN (decision C).
+      - endParentAfter=on: parent completes after enroll; return to an already-completed A avoids the re-enter collision.
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 88
+    status: "complete"
+    value: |
+      Save-time 422 codes: funnel_subscribe_target_required (no target), funnel_subscribe_target_not_found
+      (missing / wrong project), funnel_subscribe_target_step_not_found (entry step not in target). Active NOT
+      checked at save (decision D) but ACTIVATION of the parent is blocked if target not active
+      (funnel_subscribe_target_inactive). Execution-time: target not active/missing -> skip + WARN, parent
+      CONTINUES (decision B revised — graceful at runtime, loud at save/activate/test); entry step missing ->
+      fallback to start + WARN (C); depth cap / rate-limit exceeded -> skip + WARN. Return no-op (in-flight
+      caller, allowReEnter=false) -> distinct greppable WARN. Surfaced via resolveFunnelError inline.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 88
+    status: "complete"
+    value: "Agent: backend engine ITs (FunnelExecutionEngineIT style — MutableClock + MockWebServer + engine.sweep()) covering enroll, depth-cap bound, re-enter, target-unavailable fail, entry-step fallback; validation unit tests for new codes; StepType enum pin; frontend vitest on the step form. User: local run + Test-for-me on a real Telegram (A->B->menu A). No live deploy, no E2E."
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 85
+    status: "complete"
+    value: |
+      New step type in the vertical-list editor (desktop-first funnel editor). FunnelStepForm gets a
+      SUBSCRIBE_TO_FUNNEL block: funnel picker (SearchableSelect over active funnels) + target-step picker
+      (SearchableSelect over the chosen target's steps via funnelsStore.fetchOne, with a 'start (default)'
+      sentinel) + 'завершити цю воронку після старту' checkbox. Inline hint if the referenced target is not
+      currently active. Preview panel shows a non-message placeholder. i18n keys for label + new error codes.
+    gaps: ""
+    required: false
+
+  risks:
+    score: 88
+    status: "complete"
+    value: |
+      R1 Cross-execution runaway cycle — factory bypasses dispatcher backstops; MUST explicitly carry
+      enrollDepth=parent+1 and check max-enroll-depth in StepExecutor before enroll (code-research §8/§14).
+      R2 Re-enter collision on return when caller still in-flight — mitigated by endParentAfter (caller ends
+      before child returns). R3 Cross-funnel step reference staleness — store (targetFunnelId, targetEntryStepId);
+      ids unique per-funnel only, so always carry both; handle deleted target/step (B/C). R4 Tenant isolation —
+      target lookup MUST verify same projectId (fail-closed). R5 Bean cycle — inject FunnelExecutionFactory into
+      StepExecutor and call directly (safe; factory has no engine edge); do NOT inject engine/FunnelService.
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 88
+    status: "complete"
+    value: |
+      TD1 One step SUBSCRIBE_TO_FUNNEL, fire-and-forget; variant 2 (static return-to-step), NOT dynamic C.
+      TD2 Field name targetEntryStepId (avoid collision with Button.targetStepId) + targetFunnelId + endParentAfter.
+      TD3 New FunnelExecutionFactory overload to start child at an arbitrary step (insertExecutionAt).
+      TD4 StepExecutor injects the factory, enrolls at enrollDepth+1, depth-cap check before enroll.
+      TD5 Reuse parent's telegramBotId (single bot per project) — no extra bot lookup.
+      TD6 No new ExecutionStatus, no status $in change, no DB migration, no index change.
+      TD7 Save validation does a DB lookup of the target (first DB-touching validateSteps rule); keep cross-funnel
+      target OUT of the generic requireExistingTarget edge pass.
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 85
+    status: "complete"
+    value: "No deploy for now — user runs locally and verifies via Test-for-me. (Project norm is GitHub CI/CD when deployed, but this feature has no deploy/infra step and no DB migration.)"
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 90
+    status: "complete"
+    value: "None beyond using the editor UI. The author must activate the target funnel before it can run (active-at-execution). Bot already connected from earlier epics."
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 90
+    status: "complete"
+    value: "funnel module: StepType, FunnelStep + copyOf, FunnelStepDto + toSteps/toStepDto, StepExecutor (new case + factory injection), FunnelExecutionFactory (start-at-step overload), FunnelService.validateSteps (new DB-backed case + codes), isMessageStep (unchanged). Frontend: types/funnel.ts, FunnelStepForm.vue, i18n. Reuses existing endpoints (funnels list + fetchOne) and SearchableSelect."
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 90
+    status: "complete"
+    value: "Phase 1 engine (snapshot, claim-CAS, sweep) — done. Phase 3 FunnelExecutionFactory + enrollDepth + max-enroll-depth backstop — done. Phase 2 graph model (stable step ids) — done. No new libraries."
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 88
+    status: "complete"
+    value: "At-most-once per step semantics preserved (child enroll is a side effect before claim-conditional advance). Tenant isolation: target funnel lookup scoped to projectId. Step ids unique per-funnel only -> reference is (targetFunnelId, targetEntryStepId). Runaway bounded by enrollDepth cap (factory bypasses dispatcher rate-limit/fan-out — depth cap must be wired explicitly). Single CONNECTED bot per project assumed (reuse parent's telegramBotId)."
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 90
+    status: "complete"
+    value: "New optional fields on embedded FunnelStep: targetFunnelId, targetEntryStepId (String), endParentAfter (boolean). No new collection, no new index. Existing steps default the new fields to null/false."
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 95
+    status: "complete"
+    value: "None. New optional embedded fields default null/false on existing documents; no index change; no backfill. (Contrast Phase 3 which needed an index relax.)"
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/14-funnels-composition/user-spec.md"  # work/{feature}/user-spec.md
+  status: "approved"  # pending | created | approved
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase1_feature_overview"
+  questions_asked: 0
+  last_question: ""
+  total_required_score: 0
+  total_optional_score: 0
+  completion_estimate: "0%"
+  user_detail_level: "unknown"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Free-form notes:
+  - Important insights
+  - Areas of uncertainty
+  - Pivot points
+  - Scope changes
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

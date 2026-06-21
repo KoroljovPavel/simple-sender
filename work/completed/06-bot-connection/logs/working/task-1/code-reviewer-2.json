@@ -1,0 +1,34 @@
+{
+  "summary": "Round-1 findings C1 and C2 are fully and cleanly resolved. The duplicated comment block is gone — the rationale now lives once in the class-level Javadoc, and the three negative boot tests collapse to `this::assertKeyValidationFailure`. The loose `hasStackTraceContaining(\"IllegalStateException\")` substring match has been replaced with a proper cause-chain walk (`findInCauseChain`) that pins the assertion to our actual `IllegalStateException` instance and its message, removing the dependence on Spring's wrapping shape. The new hex-error-message sanitization in `TokenEncryptor.decodeKey` is a genuine security hardening (drops the JDK `HexFormat.parseHex` message body, which would otherwise echo one character of the misconfigured key into the boot log) — and it is backed by a regression test (`hexParseErrorMessageDoesNotEchoKeyBytes`) that pins the no-leak property as an invariant. The simplified `tamperedIvRejected` (single bit-flip, deterministic) and the new parameterized null/empty/IV-length tests (`@NullAndEmptySource`, `@ValueSource(ints = {0, 11, 13, 16})` + a separate explicit `decryptRejectsNullIv` because nulls cannot be represented in an `int[]` source) are idiomatic JUnit 5 and an improvement over the round-1 shape. Nothing new was introduced outside of the four items listed in the fix-commit message, and none of the additions bring code smell. No critical or major findings remain.",
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "title": "Replacement hex-error wording is intentionally non-positional — worth a one-line invariant comment on the regression test, not the production code",
+      "location": "backend/src/test/java/com/botfunnel/common/crypto/TokenEncryptorTest.java:157-166",
+      "description": "`hexParseErrorMessageDoesNotEchoKeyBytes` is the test that locks the new security invariant in place. It asserts `hasMessageNotContaining(\"'z'\")` and `hasMessageNotContaining(\"at index\")`. The `'z'` check is tightly coupled to the test input (`\"zz\".repeat(32)`) — if someone in the future swaps the bad input from `\"zz\"...` to `\"xy\"...` to make the test more lifelike, the `'z'` assertion silently becomes vacuous (no `'z'` will ever appear in the message regardless of whether the JDK message body leaks). The `\"at index\"` half is robust (it's a fixed substring of the JDK message); the character-quoted-with-single-quotes pattern (`\"'\"`) would be more robust still. Not a defect today — the test reads correctly and passes — flagging only so a future input change does not silently weaken the security assertion.",
+      "suggestion": "Optional: change the first assertion to `hasMessageNotMatching(\".*'[^']'.*\")` (no single-character-in-single-quotes anywhere) or just add a one-line code comment next to the existing `hasMessageNotContaining(\"'z'\")` reminding the reader that this line assumes the bad input contains `'z'`. Either form makes the coupling between the test input and the assertion explicit. Skip if you prefer the simpler current form."
+    },
+    {
+      "severity": "minor",
+      "title": "Cause-chain walker uses single-step self-loop guard; harmless in practice",
+      "location": "backend/src/test/java/com/botfunnel/common/crypto/TokenEncryptorBootValidationTest.java:75-87",
+      "description": "`findInCauseChain` advances one cause at a time and breaks on the single-step self-cycle (`cur.getCause() == cur`). The JDK's `Throwable.initCause` already rejects self-causation, so this guard is essentially defensive — but it would not catch a multi-step cycle (`A.cause == B`, `B.cause == A`) if a misbehaving framework ever constructed one. In test code this is fine and probably more readable than a tortoise-and-hare. No change required.",
+      "suggestion": "No change required. If this helper is ever reused outside the test classpath, swap to a `Set<Throwable> seen` visited-set guard."
+    },
+    {
+      "severity": "low",
+      "title": "Carry-over from round 1 — error message wording uses the env-var name, not the Spring property name",
+      "location": "backend/src/main/java/com/botfunnel/common/crypto/TokenEncryptor.java:19, 84-87",
+      "description": "Unchanged from round 1: the boot-time failure message says `BOT_TOKEN_ENCRYPTION_KEY must be 32 bytes / 64 hex characters; …`, which is the env-var name and not the Spring property name `app.bot.token-encryption-key`. As noted in round 1 and explicitly accepted in the task disposition (C3 SKIPPED — per task spec), this is intentional. Repeated here only so the deviation is visible in the round-2 record.",
+      "suggestion": "No change required; the task spec dictates this wording."
+    },
+    {
+      "severity": "low",
+      "title": "Carry-over from round 1 — `EncryptedValue` record inherits identity-based equals/hashCode for byte[] fields",
+      "location": "backend/src/main/java/com/botfunnel/common/crypto/EncryptedValue.java:3",
+      "description": "Unchanged from round 1 and explicitly accepted in the task disposition (C4 SKIPPED — per spec, no caller compares records). Repeated here only so the constraint is visible in the round-2 record.",
+      "suggestion": "No change required for this task."
+    }
+  ]
+}

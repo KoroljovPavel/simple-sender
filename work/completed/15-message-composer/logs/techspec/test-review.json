@@ -1,0 +1,42 @@
+{
+  "summary": "Round-2 re-validation of the 15-message-composer Testing Strategy after round-1 fixes. All 8 round-1 findings are resolved: the strategy now specifies (1) a dedicated FunnelTriggerService callback-negatives IT covering strict-parse/out-of-range/non-callback-url/IDOR cross-subscriber+cross-project with an explicit 'execution does not advance' assertion; (2) lastButtonClicked currentStepId:buttonIndex coordinate inside the engine IT; (3) a DTO round-trip (save->fetch) test in FunnelControllerIT guarding against silent block-field drop across toSteps/toStepDto/FunnelResponse; (4) per-node at-most-once now asserts verify(sender, times(K)) across two sweep ticks with explicit no-re-send semantics rather than status-only; (5) snapshot isolation now mutates funnel blocks post-enroll and asserts the in-flight run still sends the original snapshot, plus a copyOf distinct-list-instance unit; (6) per-type caption trim+WARN for every caption-bearing media type at 1024; (7) album type-mixing and first-element-caption invariants in both backend save-validation and frontend vitest; (8) a fail-safe IT that a surviving legacy old-type document does not crash the engine (tolerant-read). The test pyramid remains healthy (unit-heavy, engine/controller ITs for critical surfaces, E2E=None justified). Remaining items are minor and non-blocking: a couple of behavioral assertions named in round-1 recommendations (callback-while-not-parked ignored; funnel_button_clicked analytics fires exactly once; explicit preview XSS-guard negative) are not individually enumerated, but the load-bearing assertions they protect are now covered. Verdict: pass.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy > Integration tests (FunnelTriggerService callback-negatives)",
+      "issue": "The callback-negatives IT now covers malformed/oversized/non-hex parse, out-of-range index, non-callback (url) button, and IDOR (cross-subscriber + cross-project) with a state-unchanged assertion. The 'callback arrives while execution is not waiting_for_reply' case (stale/duplicate webhook) from the round-1 recommendation is not individually listed.",
+      "recommendation": "Add one case asserting that a callback for an execution not in waiting_for_reply state is ignored and the execution cursor/status is unchanged. Low cost, closes the last negative path on the highest-regression-risk surface (Task 5)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy > Integration tests (engine IT, buttons-on-last-block)",
+      "issue": "The engine IT now asserts lastButtonClicked == currentStepId:buttonIndex. The recordButtonClick analytics emission (funnel_button_clicked fires exactly once with the correct coordinate) named in round-1 is not explicitly asserted.",
+      "recommendation": "Extend the existing buttons-on-last-block IT to assert funnel_button_clicked analytics fires exactly once with the correct currentStepId:buttonIndex coordinate. Reuses the same test setup; no new test needed."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy > Integration tests (FunnelControllerIT, preview multiblock)",
+      "issue": "Preview multiblock test asserts an array of rendered blocks with backend-side escaping, but there is no explicit XSS-guard negative (a hostile text/caption payload is escaped per parseMode and never returned as raw HTML). Decision 8 calls out OWASP A03 as a preserved invariant.",
+      "recommendation": "Add one preview case feeding a script/HTML-injection payload in a text and a media caption, asserting the rendered output is escaped per parseMode (no executable markup passes through). This locks the XSS-guard invariant against the multiblock render change."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 5,
+      "integration": 3,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "verdict": "pass"
+}

@@ -1,0 +1,23 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "adhoc-preview-image",
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/components/funnels/FunnelMessagePreview.vue:53 (watch(imageUrl) reset) — untested in FunnelMessagePreview.spec.ts",
+      "issue": "The component resets imageLoadFailed to false whenever imageUrl changes, so an image that previously failed (@error) gets a fresh chance to render when the author edits the URL to a new valid value. No test exercises this reset branch. Litmus: deleting the watch(imageUrl, () => imageLoadFailed.value = false) line leaves every current test green, so the recovery-after-error behavior is unprotected against regression.",
+      "recommendation": "Add a test: mount SEND_IMAGE with imageUrl 'https://cdn.example/broken.png', trigger('error') on the img, settle, assert placeholder shown; then setProps the step to imageUrl 'https://cdn.example/fixed.png', settle, and assert img[data-test=funnel-preview-image] exists again with src === the new URL and placeholder gone. This pins the imageLoadFailed reset path."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts:119-122",
+      "issue": "DOM-order ('image ABOVE caption') is asserted via panelHtml.indexOf('funnel-preview-image') < indexOf('funnel-preview-rendered') on the serialized HTML string. This works correctly here, but a string-position heuristic is slightly brittle (e.g. if a future class/comment also contained the substring it could misfire). It is a position-of-substring check rather than a structural sibling-order check.",
+      "recommendation": "Optional hardening: assert order structurally, e.g. collect wrapper.findAll('[data-test]') or compare element positions via compareDocumentPosition, instead of substring index on raw HTML. Not blocking — current assertion is correct for the present template."
+    }
+  ],
+  "notes": "Empirically verified (not just by inspection). All 15 tests pass against the committed (new) component. Reverting the component to its pre-commit state (2994c3b^) and re-running makes EXACTLY the 4 behavior-specific new tests fail: valid-imageUrl renders <img> with that src above the caption (line 133-area set), empty-caption image-only, blank/whitespace-URL placeholder (no broken <img>), and @error placeholder. The 5th new test (SEND_MESSAGE/MENU/DELAY -> no <img>) stays green on old code as expected — it is a true negative control (goes red if an image is rendered for non-SEND_IMAGE types), not a tautology. Assertions are real and non-tautological: actual src value is checked (not mere existence), placeholder/caption co-presence and non-empty text are asserted, and the @error case triggers a real DOM 'error' event that drives the reactive imageLoadFailed flip rather than asserting a mock. The no-v-html source guard and the caption/placeholder/sample-data/heading/empty-state tests are unaffected and all pass. i18n keys previewImageUnavailable and previewImageAlt exist in both en.json and uk.json, so placeholder/alt assertions resolve to real strings. Two minor, non-blocking findings: the imageLoadFailed-reset-on-url-change branch is untested, and DOM-order uses a substring-index heuristic. Coverage is adequate; verdict approved."
+}

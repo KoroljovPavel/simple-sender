@@ -1,0 +1,142 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10, 11],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context link for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context link for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 7,
+      "section": "Reviewers",
+      "issue": "Reviewer path contains the literal template placeholder `{round}` — `code-reviewer-{round}.json`. This was never substituted with a concrete round number.",
+      "fix": "Replace `{round}` with `1`: `work/01-foundation-infrastructure/logs/working/task-7/code-reviewer-1.json`."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context link for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section (under Feature specs)."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context link for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "frontmatter",
+      "task": 10,
+      "section": "Frontmatter",
+      "issue": "`wave` field is set to the string value `Audit` instead of a number. The field must be a number ≥ 1. The string `Audit` is not a valid YAML number and will break wave-based execution ordering. All other audit tasks correctly use `wave: 4`.",
+      "fix": "Change `wave: Audit` to `wave: 4` to match tasks 8 and 9."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 10,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context link for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 11,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. The template mandates decisions.md as a required context link for every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 8,
+      "section": "Required Skills",
+      "issue": "Skill link uses a relative path `../../.claude/skills/code-reviewing/SKILL.md` instead of the canonical `~/.claude/skills/code-reviewing/SKILL.md` used in the template and in tasks 9, 11.",
+      "fix": "Change to `/skill:code-reviewing` — [SKILL.md](~/.claude/skills/code-reviewing/SKILL.md)"
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "Code files listed for audit (`SecurityConfig.java`, `.gitignore`, `.env.example`, `scripts/install-hooks.sh`, `infra/docker-compose.yml`, `docs/local-setup.md`) are plain text, not markdown links `[name](path)`. All Context Files entries must be markdown links.",
+      "fix": "Convert each plain-text file path to a markdown link: e.g., `- [SecurityConfig.java](../../../backend/src/main/java/com/botfunnel/security/SecurityConfig.java)`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Required Skills",
+      "issue": "Skill link uses a machine-specific absolute path `/Users/pavlokorolov/.claude/skills/test-master/SKILL.md` instead of the canonical `~/.claude/skills/test-master/SKILL.md`.",
+      "fix": "Change to `/skill:test-master` — [SKILL.md](~/.claude/skills/test-master/SKILL.md)"
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Context Files",
+      "issue": "project.md, architecture.md, and patterns.md use machine-specific absolute paths (`/Users/pavlokorolov/...`) instead of canonical `~/.claude/...` or relative paths. This makes the task non-portable.",
+      "fix": "Replace absolute paths with `~/.claude/skills/project-knowledge/references/project.md` etc., matching the style used in tasks 8, 9."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Required Skills",
+      "issue": "Skill link uses a machine-specific absolute path `/Users/pavlokorolov/IdeaProjects/simple-sender/.claude/skills/pre-deploy-qa/SKILL.md` instead of the canonical `~/.claude/skills/pre-deploy-qa/SKILL.md`.",
+      "fix": "Change to `/skill:pre-deploy-qa` — [SKILL.md](~/.claude/skills/pre-deploy-qa/SKILL.md)"
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Context Files",
+      "issue": "project.md and architecture.md use machine-specific absolute paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/...`) instead of canonical `~/.claude/...` paths.",
+      "fix": "Replace with `~/.claude/skills/project-knowledge/references/project.md` and `~/.claude/skills/project-knowledge/references/architecture.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "patterns.md is absent from Context Files. The template lists it as a recommended project knowledge file. Task 6 involves shell scripting conventions where patterns.md could be relevant.",
+      "fix": "Add `- [patterns.md](../../.claude/skills/project-knowledge/references/patterns.md)` to Context Files."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "patterns.md is absent from Context Files. The template lists it as a recommended project knowledge file.",
+      "fix": "Add `- [patterns.md](../../.claude/skills/project-knowledge/references/patterns.md)` to Context Files."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 6,
+    "issues_found": 17,
+    "critical": 8,
+    "major": 0,
+    "minor": 9
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "verification": {
+    "round1Summary": "Round 1 produced 1 high (S1) + 3 low (S2, S3, S4) findings. Round-1 fix commit 978afbf addressed S1 and S2; S3 and S4 were explicitly skipped with documented justification.",
+    "s1_resolved": {
+      "status": "fixed",
+      "evidence": [
+        "TelegramApiClient.scrubTokens promoted from package-private to public static (TelegramApiClient.java:171) — single source of truth, no logic change to the regex itself.",
+        "BotService.java:167-168 (compensateAndPropagate / Connect-rollback WARN) now wraps compErr.getMessage() with TelegramApiClient.scrubTokens(...).",
+        "BotService.java:224 (doDisconnect WARN) now wraps err.getMessage() with TelegramApiClient.scrubTokens(...) and uses the pinned TELEGRAM_DISCONNECT_WARN constant (BotService.java:48-49) so tests can pin to the exact literal.",
+        "Regression test BotServiceTest.disconnect_telegramErrorMessageWithTokenInUri_isScrubbedInWarnLog (BotServiceTest.java:471-500) injects a RuntimeException whose message contains the plaintext TOKEN inside a https://api.telegram.org/bot{TOKEN}/deleteWebhook URI, then asserts every WARN line (a) contains the expected fragment, (b) does NOT contain the literal token, and (c) does NOT match the token-shape substring regex \\d{1,20}:[A-Za-z0-9_-]{30,50}. Both literal and regex assertions present — exactly the regression coverage requested in the round-1 recommendation.",
+        "TelegramApiClient scrubTokens boundary tests (TelegramApiClientTest.java:198-238) cover null, empty, whitespace, leading/trailing/embedded token, multiple tokens, suffix-29 (reject), suffix-30 (accept), suffix-50 (accept), suffix-51 (accept + 1 trailing char), 20-digit id (accept), 21-digit id (1 leading char + accept), and short-suffix non-match. The exposed regex is well-characterized."
+      ]
+    },
+    "s1_residual_observations": [
+      "The Connect-rollback path (BotService.java:167-168) now scrubs but has no dedicated regression test — only the Disconnect path is regression-tested. This is a test-coverage gap, not a security gap: both call sites invoke the same TelegramApiClient.scrubTokens static method with semantically identical inputs (Throwable.getMessage() from the same client), and the Disconnect test exercises the scrubber under the same conditions. Recommend (non-blocking) mirroring the Disconnect regression test for the Connect-rollback path in a future task to lock in the behavior at both sites. Flagged here for visibility, not as a finding."
+    ],
+    "s2_resolved": {
+      "status": "fixed",
+      "evidence": [
+        "BotService.java:213-215 comment now accurately describes the closure-capture lifetime: 'Closure capture by the downstream lambdas keeps the reference reachable until the subscription completes — not stack-only — but the token is never logged, never returned, and never serialized.' This matches the round-1 recommendation (option 1: document actual lifetime). The misleading 'lives only on this stack frame' wording from the original is gone."
+      ]
+    },
+    "s3_skipped": {
+      "status": "accepted_risk",
+      "reasoning": "Driver edge case 'both substrings present in one message' is theoretical — Spring Data Mongo / mongo-java-driver does not emit DuplicateKeyException messages listing both candidate indexes for a single insert violation. Low-severity finding correctly deferred. No change required."
+    },
+    "s4_skipped": {
+      "status": "accepted_risk",
+      "reasoning": "tokenSuffix 3-char persistence is mandated by design (D17 + AC1) for UI masked-token display. ~18 bits of disclosure on backup leak is documented residual risk per spec. No change required."
+    },
+    "newVulnerabilitiesIntroduced": "None.",
+    "newVulnerabilityChecks": [
+      "Visibility change scrubTokens package-private → public: scrubTokens is a stateless static function over a deterministic regex (TOKEN_PATTERN). No state to corrupt, no resources to exhaust, no side effects, no caller-controllable input that can degrade the call. Promotion is safe.",
+      "TELEGRAM_DISCONNECT_WARN constant extraction (BotService.java:48-49): static final String literal, package-private visibility for test access; no security impact — the literal was already in source.",
+      "requireConnectedBot refactor (BotService.java:118-122) extracted from three call sites (getByProject, disconnect, sendTestMessage): preserves the original guard sequence projectService.requireOwned → botRepository.findByProjectIdAndStatus → switchIfEmpty(notFound). Mono.defer wrapper around the repository call still present (AC11-style short-circuit semantics preserved). No authorization-bypass risk introduced.",
+      "Brute-force counter comment expansion (BotService.java:241-245): comment-only change documenting the count!=null defensive guards. No behavior change.",
+      "Log-site enumeration: 4 log.warn sites in BotService.java — lines 167 (scrubbed), 224 (scrubbed), 262 (Redis, no token in message), 272 (Redis, no token in message). 2 log.warn sites in TelegramApiClient.java — lines 134, 140 both operate on the locally-scrubbed variable. Zero unscrubbed Telegram-error log lines remain.",
+      "OWASP A02 (cryptographic failures): plaintext token lifetime semantics now correctly described; AES-GCM at-rest behavior unchanged.",
+      "OWASP A09 (security logging failures): R1/AC17 (no token in logs) now consistently enforced across all Telegram error log call sites.",
+      "OWASP A01/A04/A05/A07/A10 surfaces unchanged — round-1 fix is scoped to logging/comments only."
+    ]
+  }
+}

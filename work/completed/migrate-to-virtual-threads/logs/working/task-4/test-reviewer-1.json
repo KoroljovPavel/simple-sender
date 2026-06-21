@@ -1,0 +1,24 @@
+{
+  "verdict": "findings",
+  "summary": "Two pre-existing integration tests under the affected packages (BotRepositoryTest, RawUpdateRepositoryTest) still bind to the reactive driver and were left un-updated by this commit. Once Wave 2 lands they will fail to compile (Mono/Flux/StepVerifier/.block()/ReactiveMongoTemplate against a sync MongoRepository). TC7 alone is therefore insufficient as the acceptance signal.",
+  "findings": [
+    {
+      "severity": "high",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java",
+      "issue": "Task 4 flips BotRepository to MongoRepository (findByProjectIdAndStatus -> Optional<Bot>, findByProjectId -> List<Bot>, save -> Bot, deleteAll -> void) but this test still calls botRepository.save(...).block(), botRepository.deleteAll().block(), StepVerifier.create(botRepository.findByProjectIdAndStatus(...)) and botRepository.findByProjectId(\"proj-4\").collectList(). None of those will compile once Wave 2 is assembled. The task's TDD Anchor claims 'no tests in this task' but this file lives in the exact affected package set and is not enumerated for migration in tech-spec Testing Strategy (lines 280-283).",
+      "suggestion": "Either (a) migrate this file inside the Wave 2 commit alongside Task 4 (deleteAll() direct call, save() -> Bot, replace StepVerifier with assertThat(Optional<Bot>)/(List<Bot>)), or (b) explicitly enumerate it in tech-spec Testing Strategy and assign it to a named consuming task (likely Task 6 for bot/) before Wave 2 PR opens. Do not let it slip into Audit Wave (Task 15) — compile-breakage at the test source root will block `./gradlew test` and any CI gate that runs tests, not just the production grep gate TC7."
+    },
+    {
+      "severity": "high",
+      "file": "backend/src/test/java/com/botfunnel/webhook/RawUpdateRepositoryTest.java",
+      "issue": "Same reactive-binding leak as above: rawUpdateRepository.save(...).block(), deleteAll().block(), StepVerifier.create(rawUpdateRepository.save(...)). Additionally autowires @Autowired ReactiveMongoTemplate and calls mongoTemplate.indexOps(RawUpdate.class).getIndexInfo().collectList().block() in four tests — once Task 3 swaps spring-boot-starter-data-mongodb-reactive for the sync starter, ReactiveMongoTemplate ceases to be a managed bean and the @Autowired will fail context startup. Not covered by tech-spec Testing Strategy enumeration.",
+      "suggestion": "Migrate inside Wave 2 commit (or assign to Task 5 which owns the RawUpdate entity/repository area): swap ReactiveMongoTemplate -> MongoTemplate, replace .getIndexInfo().collectList().block() with .getIndexInfo() (sync returns List<IndexInfo> directly), drop .block() from save/deleteAll, replace StepVerifier on save with assertThatThrownBy(() -> rawUpdateRepository.save(...)).isInstanceOf(DuplicateKeyException.class). Add this file to tech-spec Testing Strategy enumeration."
+    },
+    {
+      "severity": "medium",
+      "file": "work/migrate-to-virtual-threads/tech-spec.md:351",
+      "issue": "TC7 ('MongoRepository replaces ReactiveMongoRepository in 5 repository interfaces — direct file grep') only proves the production source state. It does not detect un-migrated test sources that still reference Mono/Flux/StepVerifier on these repositories. The two findings above slip past TC7 cleanly but break the next `./gradlew test` invocation.",
+      "suggestion": "Strengthen the Task 4 acceptance gate to also run: `grep -rnE \"ReactiveMongoRepository|StepVerifier\\.create\\((bot|raw|user|project|event)Repository\\.\" backend/src/test/java/com/botfunnel/{user,project,bot,events,webhook}/` returns 0, OR explicitly require `./gradlew compileTestJava` to pass after Wave 2 is staged (currently the task only requires compileJava per line 100). Compile-test gate is the natural complement to TC7 for a pure type-signature refactor."
+    }
+  ]
+}

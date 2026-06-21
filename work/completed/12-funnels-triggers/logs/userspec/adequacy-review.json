@@ -1,0 +1,42 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "overengineering",
+      "severity": "major",
+      "issue": "The 'Технические решения' section and parts of 'Как должно работать' specify HOW, not WHAT: concrete method names (fireForSubscriber, fireKeyword, insertExecution, cancelExistingForPair, recordCustomFieldsSet, addTag), class/field names (FunnelTriggerService, StepExecutor, FunnelStep.eventName, copyOf, Sha256Hex, ApplicationRunner FunnelStepIdBackfill pattern), line-level hook points, index names (projectId_triggerType_triggerValue_unique_active), and the literal partial-filter rewrite. This is tech-spec territory leaking into the user-spec, which should define WHAT/WHY.",
+      "why_matters": "User-spec should be implementation-agnostic so the tech-spec owns the HOW and can change approach without invalidating the contract. Baking in exact method/class names couples the acceptance contract to one specific implementation and pre-empts tech-spec decisions (e.g. whether keyword scan reuses a list query or a new index).",
+      "fix": "Move 'Технические решения' content and the method/class/index/line references in 'Как должно работать' into the future tech-spec. Keep user-spec scenarios at the behavioral level (e.g. 'a subscriber-keyed fan-out path is needed' rather than 'add fireForSubscriber(projectId, subscriberId, ...) to FunnelTriggerService'). Acceptance criteria already read behaviorally and are fine."
+    },
+    {
+      "category": "underengineering",
+      "severity": "major",
+      "issue": "Cascade/loop protection relies solely on a per-subscriber auto-enroll rate limit (20/min, Redis fail-open) with NO depth guard. code-research.md §4 explicitly flags A->B->A chains and EMIT_EVENT fan-out as real, and notes the re-enter guard only stops re-entry into the SAME funnel. The rate limit is fail-open: if Redis is down, the ONLY cascade guard is disabled and an EMIT_EVENT/tag cascade can run unbounded (per-tick step budget bounds a single execution, not cross-execution fan-out).",
+      "why_matters": "An author-built A->B->A cycle (or EMIT_EVENT emitting an event a sibling funnel re-emits) during a Redis outage has no backstop and can create an unbounded number of funnel_executions and outbound Telegram sends, amplifying a config mistake into a runaway. 20/min still allows 28,800 auto-enrolls/day/subscriber when Redis is healthy. Fail-open is correct for availability but means the loop guard and the abuse guard are the same single point of failure.",
+      "fix": "Either (a) add a cheap in-process depth/visited guard on the emit cascade (e.g. carry an emit-depth counter on the execution, hard-cap at N) that does NOT depend on Redis, OR (b) explicitly justify in the spec why a depth guard is unnecessary given the per-tick budget and document the Redis-down blast radius as an accepted risk. Current text asserts 'rate-limit достатній' without addressing the fail-open hole."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "The api-key auth lookup hashes the presented key (SHA-256) and looks up api_keys by hash, but the spec does not state whether the lookup/compare is constant-time or how a malformed/missing header is distinguished from a wrong key (both should be a uniform 401). The webhook path uses MessageDigest.isEqual constant-time compare (architecture.md), but the api-key chain compares via a hash-indexed DB lookup, which is a different model and not addressed.",
+      "why_matters": "A DB lookup by keyHash is acceptable (the hash is the index key, no secret-dependent branch on the stored value), but the spec should state the 401 path is uniform (no timing/response oracle distinguishing 'no key', 'malformed key', 'unknown key') to match the project's established anti-enumeration posture (uniform 404 on webhook bot/project lookups).",
+      "fix": "Add a one-line acceptance criterion or constraint: all of missing key / malformed key / unknown key return an indistinguishable 401, and document that hash-indexed lookup is the chosen compare (no plaintext stored, so no constant-time compare against a stored secret is needed)."
+    },
+    {
+      "category": "better_alternative",
+      "severity": "minor",
+      "issue": "The public-API namespace chosen is '/api/integrations/v1/**' with an @Order(1) SecurityFilterChain. code-research.md §5 and patterns.md line 154 note ALL of '/api/**' is currently covered by a single blanket 'requestMatchers(\"/api/**\").authenticated()' rule. The spec correctly carves the new prefix out with a dedicated securityMatcher, but does not note that the chosen segment ('integrations') diverges from code-research's suggested '/api/public/**' or '/api/v1/events', nor confirm the segment is reserved against any existing route.",
+      "why_matters": "Namespace choice is a one-way door for an external/public contract (Epic 08 builds on it). The divergence from code-research's recommendation is a deliberate decision that should be explicitly justified, and the spec should confirm no existing '/api/integrations*' route exists (it does not today, but the assertion belongs in the spec).",
+      "fix": "Add a one-line rationale for choosing '/api/integrations/v1/**' over the code-research alternatives (it reads cleaner for the future public surface and version-inside-namespace is a reasonable call), and state explicitly that the @Order(1) chain's securityMatcher must precede the default '/api/**' chain so the carve-out is reliable. This is largely a tech-spec concern but the namespace is a user-visible contract."
+    },
+    {
+      "category": "sizing",
+      "severity": "minor",
+      "issue": "Declared size L is accurate, but the feature bundles two loosely-coupled deliverables: (1) the trigger expansion (keyword/tag/field/EMIT_EVENT + index relax) and (2) the greenfield public-API foundation (api_keys collection, @Order(1) key chain, settings UI, /events endpoint, on-demand key generation). The api-event trigger is the only hard dependency between them; keyword/tag/field/EMIT_EVENT ship without any public API.",
+      "why_matters": "The public-API foundation is the highest-risk, most net-new surface (security chain, new collection, new auth model, frontend settings card) and is independently shippable from the four event-source triggers. Bundling raises blast radius of a single iteration and makes review/rollback coarser. The roadmap scoped Phase 3 as one phase, so this is not a blocker, but the split is worth noting.",
+      "fix": "Acknowledge in the spec that the public-API foundation (+ api-event trigger) could be a separable increment, and either justify keeping them together (shared 'event_name' namespace with EMIT_EVENT is the cohesion argument) or note it as a candidate split if the iteration overruns. No spec content change required if the team accepts the bundled scope."
+    }
+  ],
+  "worst_category": "underengineering",
+  "summary": "The proposed solution is feasible and well-grounded in the existing stack (reuses JobRunr, Redis fail-open idiom, Sha256Hex, ApplicationRunner migration pattern; api_keys/api module already in the data model and architecture). Approved: no critical findings. Main concerns are the rate-limit-only cascade guard with a fail-open blind spot (add a non-Redis depth guard or justify the gap) and significant tech-spec-level implementation detail leaking into the user-spec."
+}

@@ -1,0 +1,56 @@
+{
+  "status": "approved",
+  "scope": "Task 5 — frontend preview panel for keyboard steps (16-persistent-keyboard). Files: frontend/components/funnels/FunnelMessagePreview.vue, frontend/types/funnel.ts, frontend/i18n/locales/uk.json + en.json, frontend/tests/components/funnels/FunnelMessagePreview.spec.ts",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "verifiedInvariants": [
+    {
+      "invariant": "A03 stored-XSS guard: keyboard branch renders rendered text + raw labels as literal text only",
+      "result": "PASS",
+      "evidence": "FunnelMessagePreview.vue:239 keyboardText via {{ }}; lines 254-258 each label via {{ label }} text interpolation. No v-html/innerHTML/outerHTML/insertAdjacentHTML/domPropsInnerHTML anywhere in the component (grep returned 0 real sinks; all 6 'v-html' string occurrences are in comments). The hostile-payload test (spec.ts:518-532) asserts <img>/<b> from a markup payload do NOT materialize in funnel-preview-keyboard-text or funnel-preview-keyboard, and the source-level guard (spec.ts:167-172) fails the build on any v-html=/innerHTML= use after comment stripping."
+    },
+    {
+      "invariant": "Keyboard mock reads the clamped response keyboardRows (string[][]), not raw step input",
+      "result": "PASS",
+      "evidence": "keyboardMockRows (vue:85-88) reads rendered.value.keyboardRows (PreviewStepResponse.keyboardRows: string[][]), gated on kind==='keyboard'. Labels are server-clamped (<=10x<=4, label <=64) per type doc (funnel.ts:257-258). Each label is still output as text, so even an unclamped/hostile label cannot become a DOM sink."
+    },
+    {
+      "invariant": "A10 SSRF / no URL dereference from keyboard data",
+      "result": "PASS",
+      "evidence": "The keyboard branch carries no mediaUrl/href/src — it is pure text (keyboardText + label chips). grep for fetch/$fetch/new Image/.src=/window.open/location in the component returned none beyond the store preview() call. Reply-keyboard labels are plain text by Telegram contract (KeyboardButton has only .text). The pre-existing media :src/:href paths (IMAGE/FILE/ALBUM) remain http(s)-scheme-guarded via isHttpUrl (vue:23-26, 287, 314, 352), rejecting file:/data:/javascript: and opaque file_id tokens; covered by spec.ts:196-208 and 263-274."
+    },
+    {
+      "invariant": "No identity/PII leakage in the new/changed type fields",
+      "result": "PASS",
+      "evidence": "PreviewStepResponse (funnel.ts:259-264) exposes exactly renderedBlocks, sampleData, kind, keyboardRows — no ownerChatId/chatId/userId/phone/email (matches Decision 8 'no ownerChatId/identity leakage'). The keyboard request fields (PreviewStepRequest keyboardText/keyboardParseMode/keyboardRows, funnel.ts:215-223) are author-authored funnel-definition data, not subscriber identity. Variable substitution producing sample data is flagged via sampleData and shown as a neutral indicator, not real subscriber PII."
+    },
+    {
+      "invariant": "aria-label binding cannot inject",
+      "result": "PASS",
+      "evidence": "vue:244 :aria-label binds a static i18n string t('funnels.editor.previewKeyboardAria'); Vue attribute binding auto-escapes and the value is not user-controlled. The two new i18n keys (uk.json/en.json) are static literals with no interpolation."
+    },
+    {
+      "invariant": "Fail-safe rendering on front/back desync",
+      "result": "PASS",
+      "evidence": "keyboardText returns null when renderedBlocks[0] is absent or not TEXT (vue:77-81); keyboardMockRows defaults to [] and filters non-array/empty rows (vue:85-88); template v-if guards (vue:236, 242) render nothing rather than crash. Covered by spec.ts:452-474."
+    }
+  ],
+  "owaspCoverage": {
+    "A01_BrokenAccessControl": "N/A — read-only preview panel, no authz logic introduced",
+    "A02_CryptographicFailures": "N/A — no crypto in scope",
+    "A03_Injection_XSS": "PASS — no HTML sink; all user/backend text via {{ }} interpolation",
+    "A04_InsecureDesign": "PASS — no-v-html invariant enforced by design + source-guard test",
+    "A05_SecurityMisconfiguration": "PASS — media links carry rel=noopener noreferrer nofollow + referrerpolicy=no-referrer (vue:290, 318, 356)",
+    "A06_VulnerableComponents": "N/A — no dependency changes in this task",
+    "A07_AuthFailures": "N/A",
+    "A08_SoftwareDataIntegrity": "N/A — no deserialization of untrusted input client-side",
+    "A09_LoggingMonitoring": "N/A — UI component",
+    "A10_SSRF": "PASS — keyboard branch dereferences no URL; pre-existing media paths http(s)-scheme-guarded"
+  },
+  "hardcodedSecrets": "NONE — no API keys/tokens/passwords/connection strings in any changed file"
+}

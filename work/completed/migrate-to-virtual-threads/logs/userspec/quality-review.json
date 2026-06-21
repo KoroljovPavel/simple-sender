@@ -1,0 +1,61 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "18 acceptance criteria (AC1–AC18) exceed the warning threshold of 10. Expected and justified for a full-stack backend refactoring of this scope (50–60 main files + 27 test files). AC16/AC17/AC18 were added post-interview as targeted automation of manual checks — all are internally consistent and traceable to interview risk/error-scenario discussion.",
+      "location": "Критерии приёмки (AC1–AC18)",
+      "fix": "No action required. The threshold is a heuristic; L-size full-stack refactoring legitimately produces >10 ACs. Acknowledge in tech-spec review."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "Feature intent: WebFlux → Spring MVC + Java 21 virtual threads (Q0)",
+      "Lombok dropped as low-ROI (Q0)",
+      "No current production pain; motivation is developer-ergonomics (Q0/Q1)",
+      "Multi-instance horizontal scaling planned; VT per-instance win not the driver (Q0)",
+      "Success criteria (all 7 required; load benchmark deferred) (Q1)",
+      "Constraints: no deadline, dev-env breakage OK, incremental merge, no in-flight features (Q1)",
+      "Strangler-fig per-module testing strategy (Q1)",
+      "Four concrete motivation points: debug traces, StepVerifier removal, JobRunr impedance (16 .block() calls cited), future features (Q1)",
+      "WebClient → RestClient (D1) (Q2)",
+      "Retry → hand-rolled while+Thread.sleep (D2) (Q2)",
+      "RememberMe → DefaultCookieSerializer subclass (D3) (Q2)",
+      "BCrypt back-pressure → do nothing now (D4) (Q2)",
+      "ProjectController.list → List not Flux (D6) (Q3)",
+      "All 14 original ACs accepted; AC15 added in G2, AC16–AC18 added as targeted automation (Q3/post-interview)",
+      "Phased PR approach: pre-flip modules → atomic flip → cleanup (Q3)",
+      "Six risks: R1 VT pinning, R2 Lettuce sync, R3 Spring Session schema, R4 CSRF cookie path, R5 in-flight session bytes, R6 JobRunr in-flight jobs (Q3/Q4)",
+      "R7 BCrypt back-pressure under VT — addressed by D4 decision and R7 entry (Q2 + D4)",
+      "AbstractIntegrationTest migration inside atomic flip PR (G1/D9)",
+      "@MockitoBean mock-triple update: AC15 added (G2)",
+      "AC14 expanded to architecture.md + deployment.md (G3)",
+      "Concurrency tests: Executors.newVirtualThreadPerTaskExecutor + CountDownLatch (G4/D10)",
+      "JobRunrMongoConfig dual MongoClient kept as-is (G5/D11)",
+      "REMEMBER_ME_ATTR constant move to common/ before migration (D7)",
+      "Atomic flip non-divisible commit scope (D5)",
+      "EC1 (ProjectController.list → [] not null) — now in Сохраняемое поведение",
+      "EC3 (webhook idempotency: duplicate updateId → 200 + re-enqueue, not double-processing) — now in Сохраняемое поведение",
+      "EC4 (JobRunr DONE re-entry guard short-circuits before side-effects) — now in Сохраняемое поведение",
+      "EC8 (brute-force counter Redis semantics unchanged under VT) — now in Сохраняемое поведение",
+      "ERR2 (Redis unreachable → rate-limit counters fail-open, WARN log) — now in Сохраняемое поведение",
+      "ERR3 (MongoTemplate.findAndModify returns null → benign no-op in ProcessTelegramUpdateJob) — now in Сохраняемое поведение"
+    ],
+    "missing": []
+  },
+  "round2_resolution": {
+    "AC7_patterns_md_reference": "resolved — AC7 now explicitly references .claude/skills/project-knowledge/references/patterns.md section 'Virtual Threads'",
+    "AC9_optional_removed": "resolved — AC9 text is now 'пройден вручную (Send Test Message happy-path)' with no 'опционально'",
+    "EC1_EC3_EC4_EC8_ERR2_ERR3_coverage": "resolved — all six items moved into 'Сохраняемое поведение' subsection under Ограничения (lines 90–95); AC16/AC17/AC18 additionally automate three of these into verifiable integration tests"
+  },
+  "summary": "Усі 5 minor-знахідок з раунду 1 усунені. EC1/EC3/EC4/EC8 та ERR2/ERR3 тепер явно зафіксовані в секції 'Сохраняемое поведение' під Ограничениями; AC7 містить точне посилання на patterns.md; AC9 не має 'опціонально'. Нових critical або major знахідок не виявлено. Залишається лише одна minor warning (18 ACs > порогу 10 для size_check) — очікувана і обгрунтована для L-розміру повної міграції стека. Документ схвалений."
+}

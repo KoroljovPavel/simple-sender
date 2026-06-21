@@ -1,0 +1,382 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-06-13"
+  last_updated: "2026-06-13"
+  status: "completed"  # not_started | in_progress | completed
+  can_resume: true
+  current_question_num: 0
+  feature_size: "L"  # S | M | L  — schema + index relax + multi-entry execution + editor for disconnected graphs
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    topic: "feature_framing + libraries"
+    agent_question: "Presented model/canvas split; offered editor variants A (sectioned list), B (list + read-only canvas), C (full editable canvas); libraries Vue Flow + dagre. Asked: do you truly need many entries in ONE funnel; which variant; per-entry re-enter; which screenshots."
+    user_answer: "Need multi-entry — from future API will throw triggers to lead user into the MIDDLE of a funnel. Leans variant C. Realizes the task splits in two: expected only canvas, but we are also adding backend functionality."
+    summary: "Multi-entry confirmed (API mid-entry driver). User intuits the model/canvas split."
+  - question_num: 2
+    topic: "task split + execution semantic"
+    agent_question: "Confirmed split: #17 = model+engine+minimal list editor; #18 = canvas (C). Canvas can't precede the model. Asked: accept split; not-in-funnel-at-fire behavior; waiting_for_reply precedence; completed/cancelled handling."
+    user_answer: "Accept split. Re #3: entry is effectively ONE — if subscriber already in funnel and a trigger fires, execute from that trigger's step (screenshot: trigger -> message -> menu). => redirect in-flight execution, not parallel runs."
+    summary: "Split accepted. Semantic = redirect in-flight cursor (one execution), not N parallel entries."
+  - question_num: 3
+    topic: "three execution edges"
+    agent_question: "Recommended: (1) not-in-funnel -> start fresh at entryStepId; (2) waiting_for_reply -> trigger overrides park; (3) completed/cancelled -> start fresh."
+    user_answer: "1) Want trigger to fire for a NEW user too (start fresh) — keep it unless very hard. 2) overrides. 3) agreed."
+    summary: "All three edges confirmed. Start-fresh is cheap (insertExecutionAt exists), so kept."
+  - question_num: 4
+    topic: "scope: editor form, trigger types, wipe"
+    agent_question: "Asked: Triggers panel shape (on_start separate on top); narrow mid-entry to `event` only; wipe vs data-migration."
+    user_answer: "1,2 agreed. 3 wipe ok (no prod). Note: competitor has 'Виконати дії' composite action step we don't have yet but will later. Sent screenshots 15-18 showing trigger-node (listen) vs 'Запустити подію' action (fire) + action dropdown."
+    summary: "event-only mid-entry; wipe; on_start separate. Listen vs fire clarified: fire = existing EMIT_EVENT; composite action node = deferred."
+  - question_num: 5
+    topic: "final edges"
+    agent_question: "Asked: loop protection (natural only?); allowReEnter for fresh-start branch; test scope; multiple triggers -> same step + duplicate event_name rule."
+    user_answer: "1,3,4 agreed. 2 — respect allowReEnter."
+    summary: "Loop = natural protection; allowReEnter respected; tests = ITs + frontend, no E2E; dup event_name rejected, shared entry step allowed."
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "17-funnel-multi-entry"
+    gaps: ""
+    required: true
+
+  # FINAL confirmations (user msg 8): loop = natural protection only (no artificial redirect counter);
+  # allowReEnter RESPECTED for the fresh-start branch; tests = extend FunnelExecutionEngineIT (slow) +
+  # FunnelTriggerIndexReconciliationIT + funnel-editor.spec.ts, no E2E; multiple triggers MAY point at the
+  # same entry step, but duplicate event_name within one funnel is REJECTED (validation).
+  feature_description:
+    score: 92
+    status: "complete"
+    value: >
+      Epic 8 SPLIT into two features (user-approved):
+        #17-funnel-multi-entry (THIS) = backend model + engine + minimal list-editor.
+        #18-funnel-canvas (NEXT)      = full editable Vue Flow canvas (variant C). NOT in scope here.
+      Core model: Funnel holds List<Trigger>, each Trigger carries (event_name, entryStepId).
+      A trigger node sits inside the graph with its own downstream branch (= a disconnected
+      island, reachable only when its event fires).
+      Refined execution semantic (user msg 3 + screenshot): there is still effectively ONE
+      execution per funnel per subscriber (NO parallel runs, NO re-enter index relax). When a
+      trigger fires for a subscriber ALREADY running this funnel, the engine REDIRECTS that
+      execution's currentStepId to the trigger's branch and continues. The "API throws trigger
+      -> user enters mid-funnel" use-case (msg 2) is the same mechanism driven by API events.
+      OPEN: behavior when subscriber is NOT currently in the funnel at fire time (start fresh
+      mid-entry vs no-op); precedence when the execution is parked waiting_for_reply; handling
+      when execution is completed/cancelled.
+    gaps: "Edge cases (button->emit->redirect loop); test strategy; exact entry-step picker UX"
+    required: true
+
+  # --- CLOSED MODEL (all three edges confirmed by user, msg 4) ---
+  # Firing = "upsert execution at entry E":
+  #   subscriber in-flight on this funnel  -> REDIRECT currentStepId to trigger branch, unpark, run now
+  #   subscriber NOT in funnel / completed / cancelled -> START FRESH at entryStepId (reuse insertExecutionAt)
+  #   waiting_for_reply park -> trigger OVERRIDES the park (stronger than Phase-3 keyword precedence)
+  # ONE execution per funnel per subscriber (no parallel runs, no re-enter index relax).
+  # Generalization: every entry becomes Trigger(type, value/keywords, entryStepId). Existing single
+  # funnel-level trigger migrates to a one-element list with entryStepId = start step.
+
+  # SCOPE confirmed (user msg 6): mid-entry trigger NODES = type `event` ONLY (on_start stays the main
+  # start). Migration = WIPE (no prod data, Decision 4). Editor = Triggers panel (list of N triggers,
+  # each = event_name + entry-step picker via SearchableSelect), on_start shown separately on top.
+  #
+  # LISTEN vs FIRE split (screens 15-18): the competitor "Тригер" node = LISTEN side = THIS feature.
+  # The competitor "Виконати дії -> Запустити подію SOME_TRIGGER" = FIRE side = our EXISTING `EMIT_EVENT`
+  # step (Phase 3) + API events. So the loop "menu button -> EMIT_EVENT fires SOME_TRIGGER -> event-trigger
+  # node catches it -> redirect in-flight execution" is fully expressible with existing fire-side + the new
+  # listen-side. The composite "Виконати дії" action-grouping node (Add tag/Remove tag/Update var/Fire
+  # event/integrations/payments) is OUT of scope — it is the deferred "Action block grouping" UI refinement
+  # (funnels-future-epics.md L184) + nice-to-have/payments-gated items, NOT #17.
+  # Vision screens persisted: docs/roadmap/assets/funnels-vision/15-18.
+  #
+  # LANDMINE: button->EMIT_EVENT->redirect-to-branch-with-another-button can self-reference. Not an infinite
+  # SERVER loop (each hop needs a human button press + menus park waiting_for_reply), but tech-spec must
+  # confirm redirect does NOT bump enrollDepth in a way that breaks backstops, and step-budget-per-tick holds.
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "What pain point, why it matters"
+    required: true
+
+  target_users:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Who specifically will use this"
+    required: false
+
+  success_criteria:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "How we measure success (concrete, testable)"
+    required: true
+
+  constraints:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Technical/business constraints"
+    required: true
+
+  testing_strategy:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Integration tests needed? E2E? Why/why not?"
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Step-by-step user interaction scenarios"
+    required: true
+
+  acceptance_criteria:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Testable checklist of what must work"
+    required: true
+
+  edge_cases:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Unusual scenarios, boundary conditions"
+    required: true
+
+  error_scenarios:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "What can go wrong, how to handle errors"
+    required: true
+
+  verification_strategy:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "How to verify feature works (agent and/or user)"
+    required: true
+
+  ui_ux_requirements:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Specific UI/UX requirements if applicable"
+    required: false
+
+  risks:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Risks and mitigations"
+    required: true
+
+  technical_decisions:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Key decisions (what we do/don't, why)"
+    required: false
+
+  deploy_approach:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "How to deploy: CI/CD, manual, Docker? What needs setup?"
+    required: false
+
+  manual_user_actions:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Steps user must do manually (create bot, get API keys, configure service)"
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Where this fits in existing system"
+    required: true
+
+  dependencies:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Existing features/services this depends on"
+    required: false
+
+  technical_constraints:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Technical limitations, performance, security"
+    required: false
+
+  data_requirements:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "What data needed, where from, how stored"
+    required: false
+
+  migration_needs:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Migration plan for existing users/data"
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/17-funnel-multi-entry/user-spec.md"
+  status: "approved"  # pending | created | approved
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase1_feature_overview"
+  questions_asked: 0
+  last_question: ""
+  total_required_score: 0
+  total_optional_score: 0
+  completion_estimate: "0%"
+  user_detail_level: "unknown"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  PIVOT (user-approved): Epic 8 split into #17 (model+engine+minimal list editor) and
+  #18-funnel-canvas (editable Vue Flow canvas, variant C). Roadmap funnels.md needs updating:
+  Phase 8 narrowed to the model; a new canvas phase inserted before the variable-picker phase.
+
+  KEY SEMANTIC (user msg 3 + screenshot): NOT N independent fresh entry points. There is ONE
+  execution per funnel per subscriber. A trigger node inside the graph, when its event fires,
+  REDIRECTS the in-flight execution's currentStepId to the trigger's branch. The API-driven
+  "enter mid-funnel" (msg 2) is the same mechanism via API events. => keep "one in-flight per
+  funnel" guard, NO parallel-execution index relax. This is much cheaper than the roadmap's
+  original "disconnected fresh entries" framing.
+
+  CAUTION: moving a live execution's currentStepId is the unsafe part flagged under "Funnel
+  versioning" in funnels.md. Here it is SAFE because (a) the trigger names an explicit target
+  step id, no ambiguous remap, and (b) the execution snapshot already deep-copies ALL funnel
+  steps incl. trigger-reachable ones — so the target id exists in the snapshot.
+
+  Libraries (for #18, not #17): Vue Flow (@vue-flow/core + background/controls/minimap) +
+  @dagrejs/dagre for auto-layout. No graph libs in frontend/package.json yet.
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

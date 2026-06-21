@@ -1,0 +1,61 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "notes": {
+    "scope": "Task 4 — TelegramUpdate, Message, Chat, User records + TelegramUpdateDeserializationTest (commit b8a2f4e).",
+    "checks": [
+      {
+        "name": "Mass-assignment defense (Decision 6)",
+        "result": "pass",
+        "evidence": "@JsonIgnoreProperties(ignoreUnknown=true) present on all four records (TelegramUpdate L16, Message L8, Chat L10, User L11). Tests deserialize_unknownTopLevelField_isIgnored (extra top-level 'some_future_field' + 'another_unknown') and deserialize_unknownNestedField_isIgnored (extra 'junk' in message and 'future_field' in chat) both deserialise without throwing, confirming both top-level and nested unknowns are swallowed."
+      },
+      {
+        "name": "Type-safety regression (String→Long)",
+        "result": "pass",
+        "evidence": "deserialize_updateIdAsString_throwsMismatchedInputException asserts com.fasterxml.jackson.databind.exc.MismatchedInputException is thrown for {\"update_id\":\"abc\"}."
+      },
+      {
+        "name": "No Object/Map catch-all",
+        "result": "pass",
+        "evidence": "Non-message slots typed JsonNode (a sealed Jackson tree node), not Object/Map. Worker must call explicit .get(...) accessors; no implicit POJO binding surface. Records contain no Object/Map components."
+      },
+      {
+        "name": "No @JsonCreator / @JsonAutoDetect / @JsonTypeInfo",
+        "result": "pass",
+        "evidence": "grep -rn for @JsonCreator|@JsonAutoDetect|@JsonTypeInfo|enableDefaultTyping|activateDefaultTyping under backend/src/main/java/com/botfunnel/webhook/ returned no matches. Jackson defaults preserved."
+      },
+      {
+        "name": "OWASP A08 — Insecure deserialisation / polymorphism",
+        "result": "pass",
+        "evidence": "Java records are implicitly final; no @JsonTypeInfo / default typing; no untrusted-class instantiation vector. ObjectMapper used in tests is `new ObjectMapper()` with default config (default typing off). JsonNode is inert tree data, not a POJO factory."
+      },
+      {
+        "name": "OWASP A03 — Injection surface",
+        "result": "pass",
+        "evidence": "DTOs are pure data carriers; no SQL/command/template execution. Snake-case field name matching uses Jackson's record-component name binding (no @JsonProperty aliases, no reflection escape hatch)."
+      },
+      {
+        "name": "Test fixtures — secrets / PII",
+        "result": "pass",
+        "evidence": "Fixtures use synthetic data only: 'Alice'/'Liddell'/'alice', language 'uk', numeric IDs (100200300, 9876543210, 123456789, -100), callback id 'cb-1', text '/start ref_abc', 'hi'. No real bot tokens, API keys, production user IDs, phone numbers or e-mail addresses present."
+      },
+      {
+        "name": "Hardcoded secrets scan",
+        "result": "pass",
+        "evidence": "No API_KEY, SECRET, PASSWORD, TOKEN, private-key blocks, or connection strings in any of the five new files."
+      }
+    ],
+    "informational_observations": [
+      "Chat.type is String rather than an enum — deliberate forward-compat choice documented in Javadoc; not a security concern.",
+      "Boolean is_bot is boxed so a missing field stays null and is not silently coerced to false — correct for trust-boundary integrity.",
+      "JsonNode slots will need concrete records in Epic 05/06; mass-assignment defense must be carried over to those records when they are introduced.",
+      "Records are pure data; no toString/logging override that could leak content downstream — no logging concerns introduced by this task."
+    ]
+  }
+}

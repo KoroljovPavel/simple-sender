@@ -1,0 +1,579 @@
+# Interview Plan for Feature Planning: 10-funnels
+# Phase 1 of the 4-phase Funnels decomposition (see docs/roadmap/funnels.md).
+# Scope = LINEAR funnels only. Buttons/branches/Wait-for-Reply/Menu deferred to phase 2.
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-05-31 00:00:00"
+  last_updated: "2026-05-31 00:00:00"
+  status: "in_progress"        # not_started | in_progress | completed
+  can_resume: true
+  current_question_num: 4
+  feature_size: "L"  # New module: step engine + execution state machine + JobRunr scheduler + new collections (funnels, funnel_executions) + CRUD REST API + vertical-list editor UI + replaces NoOpFunnelTriggerService stub consumed by Epic 04b webhook worker.
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+conversation_history:
+  - question_num: 0
+    timestamp: "2026-05-31 00:00:00"
+    topic: "scope_framing: epic decomposition, keyboard interpretation, phase-1 boundary"
+    agent_question: |
+      Рамкові рішення перед інтерв'ю (епік "серце продукту", найбільший):
+      1. Назва фічі — пропоную 10-funnels.
+      2. Обсяг одного user-spec: (A) повний MVP воронок в одному spec, чи (B) тонкий перший зріз
+         (лінійні воронки) + декомпозиція на наступні фази. README сам радить розбити на 5 підзадач.
+      3. "Крок із клавіатурою": (i) inline-кнопки+гілки (вже у scope README), (ii) композитний крок
+         "Меню" (повідомлення+кнопки+очікування+розгалуження в одному вузлі), (iii) reply-keyboard.
+      Плюс: engine-стек = JobRunr + MongoDB (НЕ BullMQ/pg-boss з README — це абстрактний референс).
+    user_answer: |
+      Клавіатура = (ii). Назва 10-funnels — ок. Обсяг = (B), тонкий перший зріз.
+      Прохання пояснити план розбиття, щоб не загубити контекст (що зроблено/що треба).
+    summary: |
+      Узгоджено декомпозицію на 4 вертикальні (shippable) фази, roadmap = docs/roadmap/funnels.md:
+        1. 10-funnels — лінійні воронки end-to-end (ця фаза, цей user-spec). Без кнопок/гілок.
+        2. 11-funnels-interactive — inline-кнопки + callback_query + Wait-for-Reply + Branch + крок "Menu" (ii).
+        3. 12-funnels-triggers — Keyword / Tag-added / API-event тригери.
+        4. 13-funnels-tooling — Test-for-me, дублювання, force-stop-all, превʼю+валідація.
+      Per-execution аналітика → епік аналітики, не воронки. Повний spec пишемо лише на фазу 1;
+      решта фаз — високорівнево в роадмапі (just-in-time). Memory: project_funnels_decomposition.md.
+  - question_num: 1
+    timestamp: "2026-05-31 00:10:00"
+    topic: "cycle1: step set, send-image source, /start deep-link payload + conflict rule, delay granularity"
+    agent_question: |
+      1. Перелік кроків фази 1 (6 лінійних: Send Message text-only, Send Image, Wait/Delay, Add Tag,
+         Remove Tag, Set Custom Field; без End Funnel)?
+      2. Send Image — URL-only у фазі 1 (upload → пізніше)?
+      3. /start тригер: (а) deep-link payload (t.me/bot?start=ref_promo → /start ref_promo, ≤64 chars,
+         [A-Za-z0-9_-]); у редакторі генеруємо посилання. (б) конфлікт: дві active-воронки з однаковим
+         (/start, trigger_value) — заборона на валідації (A)?
+      4. Затримка: одиниці хв/год/дні, мінімум 1 хв, точність ±~30с (через JobRunr ~30s scheduler) (A)?
+    user_answer: |
+      1. Набір ок, End Funnel не потрібен.
+      2. Ок, тільки URL.
+      3. Хочу через глибоке посилання /start (= deep-link payload, пояснено). 3б — A.
+      4. (уточнення: крок 'Затримка' — автор вказує тривалість+одиницю; мій scheduler-нюанс прийнято) — A.
+    summary: |
+      LOCK-INS Cycle 1:
+      - Step set фази 1 = 6 лінійних типів (Send Message TEXT-ONLY, Send Image URL-only, Delay, Add Tag,
+        Remove Tag, Set Custom Field). НЕ: Wait-for-Reply, Branch, Menu, End Funnel (кінець списку = завершення).
+      - Send Image = URL + caption, без upload (upload → фаза 4 / improvement).
+      - Тригер /start з опц. deep-link payload (trigger_value). Редактор показує готове посилання
+        t.me/<bot>?start=<payload> + копіювати. Голий /start = trigger_value порожній.
+      - Конфлікт (3б=A): не дозволити активувати другу active-воронку з тим самим (/start, trigger_value);
+        різні payload співіснують; голий /start = окремий слот.
+      - Затримка (4=A): одиниці хвилини/години/дні, мінімум 1 хв; точність ±~30с (JobRunr recurring ~30s),
+        задокументувати; секунди НЕ підтримуємо.
+  - question_num: 2
+    timestamp: "2026-05-31 01:00:00"
+    topic: "cycle2: mid-flight edits, status lifecycle+delete, re-enter, send-failure semantics, execution retention"
+    agent_question: |
+      Після code-research (work/10-funnels/code-research.md). Поведінкові рішення:
+      1. Редагування воронки з активними виконаннями → snapshot кроків на виконання (правки = лише нові запуски)?
+      2. Статуси: draft не тригериться; active ловить; paused — нові не створюються, активні дограють.
+         Видалення воронки скасовує активні виконання + підтвердження. Активація лише валідної (≥1 крок).
+      3. allow_re_enter=true при повторному /start: (A) скасувати старе й почати заново, чи (B) паралельні потоки?
+         За замовчуванням false (повторний /start ігнорується поки активне).
+      4. Збій send: 403/400-chat-not-found → TelegramSender сам flip blocked/deleted, виконання=cancelled;
+         інші (5xx exhausted/4xx) → failed (без додаткових ретраїв воронки). Send/старт лише для active підписників;
+         перед кожним send перевірка статусу, не-active → cancel.
+      5. Ретенція виконань: (A) безстроково (re-enter guard + майбутня аналітика) чи (B) TTL 90д на completed/cancelled/failed?
+    user_answer: "1 snapshot, 2 ok, 3 A, 4 ok, 5 A"
+    summary: |
+      LOCK-INS Cycle 2:
+      - Mid-flight edit = SNAPSHOT step list onto FunnelExecution at start; funnel edits affect only NEW runs;
+        in-flight executions finish on their snapshotted version. No edit-lock on active funnels.
+      - Status lifecycle: draft (no trigger) / active (triggers) / paused (no new executions, active ones finish).
+        Delete funnel → cancel all active executions + confirm dialog. Activate only valid funnel (≥1 step, required fields filled).
+      - allow_re_enter=true → (A) CANCEL old active execution + restart fresh (no parallel streams). Default false →
+        repeat /start ignored while an execution is active (running OR waiting).
+      - Send-failure semantics: 403/400-chat-not-found → TelegramSender auto-flips subscriber (Decision 4),
+        execution → cancelled (expected end). Other terminal (5xx-exhausted / other 4xx) → execution failed,
+        persisted/visible, NO extra funnel-level retries (TelegramSender already retries internally).
+        Funnel sends/starts ONLY for ACTIVE subscribers; pre-send status check, non-active → cancel execution.
+      - Execution retention = (A) keep forever in phase 1 (re-enter guard + analytics epic reads them); TTL is
+        an analytics-epic decision.
+  - question_num: 3
+    timestamp: "2026-05-31 01:30:00"
+    topic: "cycle3: testing matrix, deploy + env vars, verification boundary"
+    agent_question: |
+      6. Testing matrix: unit (step executors, VariableTemplateRenderer, state transitions, trigger-matcher,
+         funnel validation) + integration (AbstractIntegrationTest + Testcontainers Mongo + JobRunr in-memory +
+         MockWebServer: trigger→run, Delay→nextRunAt+resume, idempotency, /stop cancel, paused, re-enter,
+         atomic-claim race, send-fail 403→cancelled/5xx→failed, requireOwned+cross-project, snapshot,
+         ProjectHardDeleteJob cascade) + Playwright E2E (editor) + staging-smoke. Delay timing made
+         deterministic via Clock injection (ClockConfig exists) + manual sweep invocation.
+      7. New env vars: FUNNEL_SCHEDULER_INTERVAL_SECONDS (30), FUNNEL_MAX_STEPS (~50). Other limits needed?
+      8. Verification boundary: local (Docker Compose + MockWebServer + manual sweep) vs staging (real bot + ngrok).
+    user_answer: "6 ok. 7 в нас зараз немає ci/cd, тому ок. 8 Ок, я все буду тестити локально з телеграмом."
+    summary: |
+      LOCK-INS Cycle 3:
+      - Testing matrix accepted as proposed. Delay determinism = inject java.time.Clock (reuse ClockConfig) +
+        call the sweep/step-runner bean method directly in tests (mirrors HardDeleteJobTest / ExportCleanupJobIT).
+      - Deploy: THERE IS NO CI/CD YET (correction to earlier PK assumption). Funnels ships without a pipeline;
+        env vars (FUNNEL_SCHEDULER_INTERVAL_SECONDS=30, FUNNEL_MAX_STEPS=50) go to .env.example + docs/local-setup.
+        No CI secrets step. Per-project funnel limits beyond MAX_STEPS deferred; existing /start rate-limit
+        (epic 09, 100/min) already throttles mass execution starts. Production index mgmt = annotation-driven
+        auto-index-creation=true (existing convention), no @PostConstruct ensureIndex.
+      - Verification: USER will test end-to-end LOCALLY with REAL Telegram (local backend + ngrok tunnel +
+        BotFather throwaway bot + deep-link /start). Automated coverage (unit+integration+E2E) runs locally via
+        gradlew/vitest/playwright. staging-smoke runbook (docs/staging-smoke/10-funnels.md) authored but executed
+        locally-with-ngrok rather than on a separate staging host (no deployed env yet).
+  - question_num: 4
+    timestamp: "2026-05-31 02:00:00"
+    topic: "cycle3 gap-closure: multi-replica sweep, bot pinning, parse_mode, deleted-custom-field"
+    agent_question: |
+      Закриття gaps від completeness-checker:
+      A. Кілька інстансів бекенду одночасно у фазі 1? (визначає механізм sweep)
+      B. Бот reconnect посеред активних виконань: (A) пін telegramBotId на execution, не-CONNECTED→failed;
+         (B) щоразу резолвити поточного CONNECTED-бота.
+      C. parse_mode у Send Message: picker None/HTML/MarkdownV2, default None?
+      D. Custom-field визначення видалене поки вживається кроком Set Custom Field: (A) skip+continue / (B) failed.
+    user_answer: "A точно кілька реплік. B A. C Ок. D A."
+    summary: |
+      LOCK-INS gap-closure:
+      - MULTI-REPLICA confirmed → sweep MUST be JobRunr @Recurring with distributed lock (NOT Spring @Scheduled).
+        Atomic per-execution findAndModify claim is the second layer so two replicas never run the same step.
+      - Bot pinning = (A): snapshot telegramBotId onto FunnelExecution at start; if that bot is no longer
+        CONNECTED at send time → execution failed (do NOT silently switch to a different reconnected bot).
+      - parse_mode = picker None / HTML / MarkdownV2 in editor, DEFAULT None (plain text — safest with variable
+        substitution, won't break on special chars in names).
+      - Deleted custom-field definition mid-execution (Set Custom Field step references a now-removed field) =
+        (A): silently skip the step + continue (mirrors controller dropping unknown keys); do NOT fail execution.
+      Agent-resolved minor gaps (recorded, not asked): re-enter guard = atomic unique partial index
+      (funnelId, subscriberId) on active executions, "active"=running OR waiting; subscriber missing at fire()
+      (deleted between upsert and fire) → log + skip; Set-Custom-Field logic extracted to shared service
+      (callable from controller + engine, no request-scope deps); per-funnel active-execution count NOT in phase 1
+      (analytics epic); Playwright E2E adds trigger-config + deep-link Copy flow.
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "10-funnels"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 88
+    status: "complete"
+    value: |
+      Фаза 1 епіку воронок: LINEAR funnels end-to-end. Реальна реалізація замість
+      NoOpFunnelTriggerService stub (споживається 04b-вебхуком ProcessTelegramUpdateJob).
+      Backend:
+      - Funnel entity (нова колекція funnels) — embed step list [{type, config, order}], назва/опис/статус (draft/active/paused), trigger definition, execution settings (allow_re_enter).
+      - Лінійні типи кроків: Send Message (text+parse_mode, БЕЗ кнопок у фазі 1), Send Image, Wait/Delay, Add Tag, Remove Tag, Set Custom Field.
+      - Шаблонізація змінних у текстах ({user.first_name|last_name|username}, {custom.field}, невідома→"", {{ escape).
+      - Engine: funnel_executions collection (per-subscriber state machine), JobRunr recurring job (~30s) забирає прострочені nextRunAt; idempotency (pending→in_progress→done per step), SELECT-FOR-UPDATE-аналог через Mongo atomic findAndModify / SKIP-LOCKED-аналог.
+      - Тригер /start (через FunnelTriggerService.fire, замінює NoOp). Anti-spam: один підписник не перезапускає ту саму воронку поки попередня не завершилась (allow_re_enter обхід).
+      - Зупинка: /stop → cancelActiveFor; статус paused → нові execution не створюються, активні дограють.
+      Frontend (Nuxt):
+      - Список воронок у проєкті (фільтр за статусом) + CRUD + базовий вертикальний редактор кроків (+Add step, ↑↓, видалити, редагувати).
+      Замінює NoOpFunnelTriggerService; готує grounds для фази 2 (інтерактив).
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 85
+    status: "complete"
+    value: |
+      Серце продукту: без воронок користувач підключив бота й має підписників (Epic 04/09), але не може
+      автоматизувати спілкування — мусить або кодити бота вручну, або платити за дорогі no-code інструменти.
+      Фаза 1 дає базову автоматизацію: лінійну drip-послідовність (повідомлення + затримки + дії з тегами/
+      полями), що запускається на /start. Це мінімальна працююча воронка, на якій будується інтерактив (фаза 2).
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 85
+    status: "complete"
+    value: |
+      Прямий UI: Project owner (User) — будує воронку в кабінеті (редактор кроків), активує, моніторить.
+      Непрямий: Telegram Subscriber — для кого воронка виконується (отримує повідомлення, проходить кроки,
+      зупиняє /stop). Super Admin (Epic 10) — read-only огляд, поза scope цієї фази.
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 88
+    status: "complete"
+    value: |
+      Тестовані критерії під ЛІНІЙНУ фазу (без гілок/кнопок):
+      - Користувач створює лінійну воронку (Send → Delay → Send → Add Tag), активує (валідація: ≥1 крок).
+      - deep-link /start ref_x → створюється виконання саме тієї воронки, що має trigger_value=ref_x;
+        голий /start → воронка з порожнім trigger_value.
+      - Підписник проходить кроки по черзі; Delay витримується (±~30с від sweep-інтервалу).
+      - У повідомленні підставлене {user.first_name}; невідома змінна → "".
+      - /stop посеред воронки → активне виконання cancelled.
+      - Повторний прогін claimed-кроку (JobRunr retry / рестарт) → повідомлення НЕ дублюється (at-most-once per step).
+      - paused → нові виконання не створюються; активні дограють.
+      - Send 403/400-chat-not-found → виконання cancelled + підписник blocked/deleted; інші термінальні → failed.
+      - Видалення воронки → активні виконання cancelled.
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 88
+    status: "complete"
+    value: |
+      Stack: Java 21 + Spring MVC on virtual threads + MongoDB sync + JobRunr 7.3.2 (НЕ BullMQ/pg-boss з README).
+      - Engine = новий sweep ~30с (FUNNEL_SCHEDULER_INTERVAL_SECONDS) + funnel_executions (architecture.md "Funnel Step Execution").
+      - ProjectService.requireOwned(ownerId, projectId, false) FIRST на всіх project-scoped endpoint (patterns.md).
+      - TelegramSender.sendText наявний; новий sendPhoto для Image; у фазі 1 БЕЗ reply_markup (кнопки — фаза 2).
+      - Інтеграція: замінити NoOpFunnelTriggerService реальним @Service (єдиний бін); fire/cancelActiveFor викликаються ProcessTelegramUpdateJob.
+      - Subscriber status: воронка стартує/шле тільки для active підписників (pre-send check; broadcast/funnel фільтрують active).
+      - Add Tag / Remove Tag / Set Custom Field — через subscriber-сервіси; subscriber_events sole-writer (patterns.md, не форкати).
+      - Delay через nextRunAt (НЕ Thread.sleep); мін 1 хв; точність ±~30с.
+      - Telegram ліміт тексту 4096; deep-link payload ≤64 chars [A-Za-z0-9_-].
+      - FUNNEL_MAX_STEPS (default 50) стеля кроків.
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 88
+    status: "complete"
+    value: |
+      - Unit: step executors (SendMessage/SendImage/Delay/AddTag/RemoveTag/SetCustomField), VariableTemplateRenderer
+        (підстановка / unknown→"" / {{ escape / Double+Instant рендер), engine state transitions, trigger-matcher
+        (payload exact-match), funnel-validation-before-activate.
+      - Integration (AbstractIntegrationTest + Testcontainers Mongo + JobRunrInMemoryConfig + MockWebServer): /start →
+        execution створено й проходить кроки; Delay → nextRunAt + resume на наступному sweep; idempotency (повторний
+        прогін claimed-кроку не дублює send); /stop → cancel; paused → no new executions, активні дограють; re-enter
+        (false ігнор / true=A cancel+restart); atomic-claim race (як SubscriberExportConcurrencyIT); send-fail
+        403→cancelled / 5xx-exhausted→failed; requireOwned + cross-project isolation; snapshot (правка воронки не
+        чіпає активне execution); ProjectHardDeleteJob cascade видаляє funnels + funnel_executions.
+      - E2E (Playwright): редактор — створити лінійну воронку, додати/перемістити/видалити крок, активувати.
+      - Staging-smoke (docs/staging-smoke/10-funnels.md): реальний бот + ngrok → deep-link /start ref_x → проходження → /stop.
+      Delay-timing детермінується інʼєкцією java.time.Clock (reuse ClockConfig) + ручним викликом sweep-методу
+      (як HardDeleteJobTest / ExportCleanupJobIT). Telegram send не автоматизується (потрібен реальний бот) —
+      покривається MockWebServer в IT + ручним локальним прогоном через ngrok.
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 88
+    status: "complete"
+    value: |
+      S1 (create funnel). Owner у /projects/{id}/funnels тисне "Create funnel" → назва + опц. опис → нова воронка
+      зі статусом draft, порожній список кроків.
+      S2 (build steps). У редакторі (вертикальний список, desktop-first ≥1024px) тисне "+ Add step" → picker типу
+      (Send Message / Send Image / Delay / Add Tag / Remove Tag / Set Custom Field) → форма кроку → крок додано.
+      Кроки можна переміщати ↑↓, редагувати, видаляти.
+      S3 (set trigger + deep link). У налаштуваннях воронки обирає тригер /start + опц. trigger_value (payload);
+      UI показує готове посилання t.me/<bot>?start=<payload> з кнопкою "Скопіювати".
+      S4 (activate). Тисне "Activate" → валідація (≥1 крок, усі обовʼязкові поля, немає конфлікту (/start,trigger_value)
+      з іншою active-воронкою) → статус active.
+      S5 (subscriber runs funnel). Підписник тисне deep-link → Telegram шле /start ref_x → engine створює
+      funnel_execution зі snapshot кроків → проходить кроки по черзі; Delay витримується; у Send підставлене ім'я.
+      S6 (stop). Підписник пише /stop → активне виконання cancelled (cancelActiveFor).
+      S7 (pause). Owner ставить воронку на paused → нові /start не створюють виконань; ті, хто вже в дорозі, дограють.
+      S8 (re-enter). Повторний /start поки активне виконання: default (allow_re_enter=false) → ігнор;
+      allow_re_enter=true → старе виконання cancelled, нове стартує з початку.
+      S9 (edit while running). Owner міняє кроки active-воронки → нові запуски йдуть за новою версією; виконання,
+      що вже в дорозі, доходять за своїм snapshot.
+      S10 (delete). Owner видаляє воронку → confirm → усі активні виконання cancelled, воронка видалена.
+      S11 (list). Owner бачить список воронок проєкту з фільтром за статусом; empty-state з CTA коли воронок немає.
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 88
+    status: "complete"
+    value: |
+      AC-набір під фазу 1 (повний у user-spec). Ключові:
+      - CRUD: створення (draft) / редагування складу кроків / дублювання — НІ (фаза 4) / видалення (cancel активних
+        + confirm) / список з фільтром за статусом. Усі endpoint під /api/v1/projects/{projectId}/funnels,
+        guard ProjectService.requireOwned, cross-project 404.
+      - 6 типів кроків працюють: Send Message (text+parse_mode, без кнопок), Send Image (URL+caption), Delay
+        (хв/год/дні, мін 1 хв), Add Tag, Remove Tag, Set Custom Field (валідація через CustomFieldValueValidator).
+      - Templating: {user.first_name|last_name|username}, {custom.<key>}, unknown→"", {{ escape.
+      - Тригер: deep-link /start ref_x → виконання воронки з trigger_value=ref_x; голий /start → trigger_value="".
+        Активація блокується при конфлікті (/start, trigger_value) з іншою active.
+      - Engine: проходження кроків; Delay через nextRunAt + sweep (±~30с); at-most-once per step (idempotency
+        через atomic claim); /stop → cancel; paused → no new; delete → cancel active; send-fail 403/400→cancelled
+        + blocked/deleted, інші→failed; send/start лише для active підписників.
+      - allow_re_enter=false ігнорує повторний /start поки активне; =true cancel+restart.
+      - Snapshot: правка воронки не змінює поведінку активних виконань.
+      - ProjectHardDeleteJob cascade видаляє funnels + funnel_executions.
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 85
+    status: "complete"
+    value: |
+      EC1. Редагування active-воронки з активними execution → snapshot захищає; in-flight доходять за старою версією.
+      EC2. Видалення воронки з активними execution → усі cancelled перед видаленням.
+      EC3. Невідома змінна / порожнє поле в шаблоні → "" (без падіння виконання). {{ → літерал {.
+      EC4. Підписник unsubscribed/blocked/deleted під час виконання → pre-send status check → execution cancelled
+          (не шлемо в неактивний чат).
+      EC5. Конфлікт двох active-воронок на однаковому (/start, trigger_value) → блокується на активації (валідація).
+      EC6. Голий /start vs /start ref_x — різні слоти, співіснують.
+      EC7. Race: два інстанси беруть одне due-execution → atomic findAndModify claim, програвший — no-op.
+      EC8. JobRunr retry / рестарт worker посеред кроку → claimed in_progress/done крок не пере-надсилається.
+      EC9. Delay 5с не підтримується (мін 1 хв); точність ±~30с від sweep.
+      EC10. fire() кидає виняток → НЕ має поронити webhook-обробку (idempotent / swallow+log), інакше raw_update
+           марковано FAILED і ретраїться разом із повторним upsert + повторним fire.
+      EC11. Кінець списку кроків = завершення воронки (немає явного End Funnel).
+      EC12. Бот reconnect посеред воронки (telegramBotId/ownerChatId змінюються) — як execution пінить бота (→ tech-spec).
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 85
+    status: "complete"
+    value: |
+      ER1. Send 403 (заблокував) → TelegramSender markBlockedByChatId; execution cancelled.
+      ER2. Send 400 chat-not-found → markDeletedByChatId; execution cancelled.
+      ER3. Send 429 → TelegramSender internal retry+backoff; якщо вичерпано → термінально → execution failed.
+      ER4. Send 5xx exhausted / інші 4xx → execution failed (persisted, видно автору); без funnel-level ретраїв.
+      ER5. Активація невалідної воронки (0 кроків / порожнє обовʼязкове поле / конфлікт тригера) → 422 з кодом.
+      ER6. Set Custom Field з невалідним значенням типу → 422 custom_field_type_mismatch (через CustomFieldValueValidator).
+      ER7. Невідомий тег у Remove Tag → no-op (idempotent removeTag).
+      ER8. Mongo/JobRunr недоступні під час sweep → крок не claimed, повтор на наступному прогоні (at-most-once збережено).
+      ER9. requireOwned fail (чужий/soft-deleted/невалідний projectId) → uniform 404.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 85
+    status: "complete"
+    value: |
+      During development (no deploy needed):
+      - Unit + Integration matrix (див. testing_strategy) — gradlew test (+ -PrunSlow для @Tag("slow")).
+      - Frontend Vitest (компоненти редактора + i18n parity) + Playwright E2E (golden-path редактора).
+      Local end-to-end with REAL Telegram (користувач робитиме сам):
+      - docker compose up (Mongo+Redis+Mailpit) + bootRun + pnpm dev + ngrok tunnel + BotFather throwaway bot →
+        Connect → побудувати лінійну воронку → активувати з trigger_value → deep-link /start ref_x з власного
+        Telegram → спостерігати проходження кроків (повідомлення, Delay, тег додано) → /stop → execution cancelled.
+      - Inspect funnel_executions у mongosh (status/currentStep/nextRunAt).
+      Staging: окремого staging-хоста ще немає (CI/CD відсутній) — той самий runbook виконується локально-з-ngrok.
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 85
+    status: "complete"
+    value: |
+      Pages (project-scoped, потребує currentProject):
+      - /projects/{id}/funnels — список воронок: назва, статус (Badge), тригер, кількість кроків; фільтр за статусом;
+        "Create funnel"; empty-state ("No funnels yet. Create your first funnel.") per ux-guidelines.
+      - /projects/{id}/funnels/{funnelId} — редактор (desktop-first ≥1024px per ux-guidelines.md "Funnel Editor"):
+        вертикальний список кроків; "+ Add step" → picker типу; на кожному кроці ↑/↓/edit/delete; inline-форма для
+        простих (Send Message), модалка для складніших; статус-перемикач draft/active/paused; кнопка Activate з
+        валідацією; налаштування тригера + згенероване deep-link посилання з "Copy"; кнопка Delete (confirm).
+      - Превʼю повідомлень + drag-and-drop — НЕ у фазі 1 (превʼю → фаза 4; canvas → nice-to-have).
+      Конвенції: shadcn-vue + Tailwind; усі рядки через t('funnels.*'); i18n parity gate (uk+en); useApi/useApiError
+      (errors.funnels.*); компоненти за зразком components/customFields/* (List + Add/Edit Dialog); store funnels.ts.
+      Toasts: "Funnel activated", "Step added", "Funnel deleted" тощо.
+    gaps: ""
+    required: false
+
+  risks:
+    score: 85
+    status: "complete"
+    value: |
+      R1. Дублювання повідомлень при JobRunr retry / рестарті. Mitigation: atomic claim (findAndModify CAS,
+          pending→in_progress→done) ПЕРЕД send; re-entry guard на claimed/done. At-most-once per step.
+      R2. Drift таймінгу Delay (sweep ~30с). Mitigation: документувати ±~30с; мін 1 хв; для drip це невидимо.
+      R3. Навантаження sweep на великій базі executions. Mitigation: індекс (status, nextRunAt); atomic-claim
+          обмежує батч; масовий старт стримується наявним /start rate-limit (epic 09, 100/min).
+      R4. Зміна воронки під час активних execution. Mitigation: snapshot кроків на execution при старті.
+      R5. fire() кидає виняток і поронить webhook-обробку. Mitigation: real fire() idempotent + swallow/log
+          власних помилок; не дати raw_update піти у FAILED+retry.
+      R6. Дві @Service FunnelTriggerService → context startup fail. Mitigation: ЗАМІНИТИ NoOp (не додавати другий бін).
+      R7. Бот reconnect посеред воронки змінює telegramBotId/ownerChatId. Mitigation: рішення пінінгу бота → tech-spec.
+      R8. Send у неактивний чат. Mitigation: pre-send status-check; non-active → cancel execution (не покладатись на bounce).
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 80
+    status: "complete"
+    value: |
+      (Деталі — у tech-spec; тут зафіксовані напрями.)
+      TD1. Колекції: funnels (embed step list, trigger, allow_re_enter, status) + funnel_executions (projectId
+           top-level для cascade, snapshot кроків, currentStep, nextRunAt, status, per-step claim-token).
+      TD2. Engine: JobRunr @Recurring sweep ~30с з РОЗПОДІЛЕНИМ локом (MULTI-REPLICA підтверджено — НЕ Spring
+           @Scheduled) + step-runner; Delay = nextRunAt, НЕ Thread.sleep. Друга лінія захисту — atomic per-execution claim.
+      TD2b. Bot pinning: telegramBotId снапшотиться на execution при старті; якщо бот не CONNECTED на момент send →
+           execution failed (не переключатись на reconnected-бота).
+      TD2c. Send Message parse_mode: picker None/HTML/MarkdownV2, default None.
+      TD2d. Set Custom Field на видалене визначення поля → skip+continue (не failed).
+      TD2e. Re-enter guard: atomic unique partial index (funnelId, subscriberId) на активних (running|waiting).
+      TD3. Atomic claim через MongoTemplate.findAndModify (enum як .name()), за прецедентами ProcessTelegramUpdateJob
+           / ExportSubscribersJob. Idempotency pending→in_progress→done.
+      TD4. Step modeling: flat FunnelStep POJO + StepType enum + nullable type-specific поля (рекомендація research,
+           матчить codebase; без _class дискримінатора).
+      TD5. Trigger: замінити NoOpFunnelTriggerService реальним @Service (НЕ додавати другий бін). fire("on_start",
+           payload) → exact-match trigger_value. fire() idempotent + swallow/log.
+      TD6. Send Image: новий sendPhoto у TelegramSender (reuse retry/429/Decision-4 hook), не sibling.
+      TD7. Set Custom Field: винести validate→update→recordCustomFieldsSet у спільний сервіс (нема
+           SubscriberCustomFieldsService) — callable і з контролера, і з engine.
+      TD8. Subscriber lookup by chat: SubscriberRepository.findByProjectIdAndTelegramBotIdAndTelegramChatId
+           (або новий service-метод). Tag/CustomField мутації — лише через SubscriberServiceImpl (sole-writer events).
+      TD9. VariableTemplateRenderer — новий pure-util (нема наявного); Double/Instant рендеряться по-людськи.
+      TD10. ProjectHardDeleteJob: +funnels +funnel_executions у cascade (removeByProjectId), перед drop projects.
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 85
+    status: "complete"
+    value: |
+      CI/CD ЩЕ НЕМАЄ (виправлення раннього припущення PK) — фаза 1 виходить без пайплайна; деплой ручний/локальний.
+      Нові env vars (у .env.example + docs/local-setup.md, БЕЗ CI-secrets кроку):
+      - FUNNEL_SCHEDULER_INTERVAL_SECONDS (default 30) — період sweep.
+      - FUNNEL_MAX_STEPS (default 50) — стеля кроків на воронку.
+      Без infra-змін (funnels/funnel_executions — той самий Mongo). Індекси — annotation-driven
+      (auto-index-creation=true, наявна конвенція), без @PostConstruct ensureIndex. Додаткові per-project ліміти
+      воронок — deferred; наявний /start rate-limit стримує масовий старт.
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 85
+    status: "complete"
+    value: |
+      Pre-run (one-time, локально): за потреби виставити FUNNEL_SCHEDULER_INTERVAL_SECONDS / FUNNEL_MAX_STEPS у .env.
+      Author flow: створити воронку → додати кроки → задати тригер /start (+ опц. payload) → скопіювати deep-link →
+      активувати. Local verify with real Telegram: ngrok + BotFather throwaway bot + Connect → /start deep-link →
+      пройти воронку → /stop. Runbook: docs/staging-smoke/10-funnels.md (виконується локально-з-ngrok).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 88
+    status: "complete"
+    value: |
+      Inbound (підтверджено code-research):
+      - ProcessTelegramUpdateJob.handleStart:242 → fire(projectId, chatId, "on_start", parsed.payload());
+        handleStop:254 → cancelActiveFor(projectId, chatId). Замінити NoOpFunnelTriggerService реальним @Service.
+        fire() МАЄ бути idempotent + swallow/log (бо викликається всередині catch-Throwable+retry воркера).
+      - Frontend HTTP → /api/v1/projects/{projectId}/funnels[/{funnelId}] (requireOwned(ownerId,projectId,false) FIRST).
+      Outbound:
+      - TelegramSender.sendText(botId, chatId, text, parseMode, ownerId) — наявний; новий sendPhoto для Send Image.
+        403/400-chat-not-found уже авто-flip subscriber (Decision 4 dispatchSubscriberHook).
+      - Add/Remove Tag → SubscriberServiceImpl.addTag/removeTag (auto-emit subscriber_events; sole-writer).
+      - Set Custom Field → винести validate→update→recordCustomFieldsSet у спільний сервіс (inline у контролері зараз).
+      - Subscriber lookup → SubscriberRepository.findByProjectIdAndTelegramBotIdAndTelegramChatId (chatId→subscriberId).
+      - Bot resolve → botRepository.findByProjectIdAndStatus(projectId, CONNECTED) (як воркер).
+      - EventService.logEvent для funnel-подій (платформні events, не subscriber_events).
+      Scheduler: JobRunr @Recurring sweep ~30с з розподіленим локом (multi-replica) → FunnelExecutionEngine.step-runner.
+      Cascade: ProjectHardDeleteJob.removeByProjectId(:146) +funnels +funnel_executions перед drop projects.
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 88
+    status: "complete"
+    value: |
+      05-підписники (SubscriberServiceImpl.addTag/removeTag, CustomFieldValueValidator, SubscriberRepository
+      lookup-by-chat, Subscriber.status gating), 04-боти (TelegramSender + новий sendPhoto, BotRepository),
+      04b-вебхук (ProcessTelegramUpdateJob → fire/cancelActiveFor), JobRunr 7.3.2 (sweep + atomic-claim),
+      project (ProjectService.requireOwned), common (AppException/GlobalErrorHandler), ClockConfig (тести Delay).
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 80
+    status: "complete"
+    value: |
+      - Mongo sync driver, без replica-set транзакцій → atomic-claim через findAndModify CAS (не транзакції);
+        cascade non-transactional+idempotent.
+      - Enum-статуси в Criteria/Update писати як .name() (byte-match індексів/partial-filter).
+      - auto-index-creation=true → індекси annotation-driven (@CompoundIndex); критичний (status, nextRunAt) для sweep,
+        (projectId,...) для cascade, опц. unique (funnelId, subscriberId) для re-enter guard.
+      - JobRunr: dashboard вимкнено; default 10 retries якщо не задано per-job; sub-minute sweep — нова каденція;
+        MULTI-REPLICA → @Recurring з розподіленим локом + atomic per-execution claim (друга лінія від задвоєння).
+      - Virtual threads: блокуючі Mongo+RestClient у JobRunr-воркері — наявна норма (безпечно).
+      - Delay через nextRunAt, НЕ Thread.sleep (інакше пін воркер-треда на години/дні).
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 82
+    status: "complete"
+    value: |
+      Нова колекція funnels: {id, projectId, name, description?, status(draft|active|paused), trigger{type:"on_start",
+      value?}, allowReEnter:bool, steps:[FunnelStep flat POJO {order, type:StepType, + type-specific nullable поля}],
+      createdAt/updatedAt}. Індекси: (projectId, status), опц. для конфлікту тригера.
+      Нова колекція funnel_executions: {id, projectId(top-level для cascade), funnelId, subscriberId, telegramBotId,
+      chatId, stepsSnapshot:[...], currentStepIndex, perStepStatus(pending|in_progress|done), status(running|waiting|
+      completed|cancelled|failed), nextRunAt, claimToken?, startedAt, finishedAt, lastError?}.
+      Індекси: (status, nextRunAt) для sweep; (projectId) для cascade; опц. unique (funnelId, subscriberId) активних.
+      Ретенція: keep forever у фазі 1 (re-enter guard + аналітика); TTL — рішення епіку аналітики.
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 85
+    status: "complete"
+    value: |
+      Нові колекції — міграції наявних даних немає. Індекси створюються автоматично (auto-index-creation=true).
+      Заміна біна: видалити/переписати NoOpFunnelTriggerService на реальний @Service (єдиний бін інтерфейсу).
+      Розширити ProjectHardDeleteJob cascade. Винести Set-Custom-Field логіку у спільний сервіс (рефактор контролера).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/10-funnels/user-spec.md"
+  status: "created"  # pending | created | approved
+  validation_round_2: |
+    quality-validator: APPROVED (всі 6 чеків pass; size_check=warning бо L-фіча природно >10 AC / >3 flows).
+    adequacy-validator: APPROVED (no critical). Залишкові minor вже внесені: Send Image AC named-outcomes +
+    недоступний URL, текст >4096 після підстановки → обрізання, E2E rationale, sub-minute sweep помʼякшено
+    до "рішення tech-spec".
+  validation_round_1: |
+    quality-validator: changes_required — BUT only because user-spec.md was still the empty template
+    (Write was rejected: file existed from init, not yet Read). Re-written under template structure, size: L.
+    adequacy-validator: changes_required — same root cause (empty template → stale size: S); the design
+    itself rated reasonable/buildable/right-sized. Substantive fixes folded in: multi-step-per-sweep,
+    value-escaping under HTML/MarkdownV2, observability AC (log lifecycle transitions), sole-writer as a
+    firm constraint, re-enter mechanism reconciled to atomic unique partial index, size: L.
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+  required_threshold: 85
+  optional_threshold: 50
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  - Engine stack = JobRunr + MongoDB (funnel_executions), NOT BullMQ/pg-boss from workflow/06 README (reference TZ).
+  - Integration stub already exists: FunnelTriggerService / NoOpFunnelTriggerService, called by ProcessTelegramUpdateJob.
+  - TelegramSender.sendText is text+parse_mode only; reply_markup (inline buttons) is phase 2 — phase 1 has NO buttons.
+  - Per-execution analytics belongs to Analytics epic, not funnels.
+  - Master roadmap: docs/roadmap/funnels.md. Decomposition memory: project_funnels_decomposition.md.

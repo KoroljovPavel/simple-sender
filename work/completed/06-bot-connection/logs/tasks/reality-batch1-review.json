@@ -1,0 +1,102 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "BotRepositoryTest and BotIndexTest require a full Spring context (the only Mongo test pattern in the project is AbstractIntegrationTest which is @SpringBootTest). Once Task 1's TokenEncryptor is compiled and present in the application, any AbstractIntegrationTest subclass will fail to boot unless a valid 64-hex-char BOT_TOKEN_ENCRYPTION_KEY is supplied. Neither Task 1 nor Task 3 adds this key to `backend/src/test/resources/application-test.properties`. Task 3's implementation hints say 'check what project/ uses (likely @DataMongoTest or AbstractIntegrationTest)', but @DataMongoTest does not exist anywhere in this codebase — only AbstractIntegrationTest is the established pattern, confirmed by searching all test files.",
+      "fix": "Task 1 must add a safe all-zeros test key to `backend/src/test/resources/application-test.properties`: `app.bot.token-encryption-key=0000000000000000000000000000000000000000000000000000000000000000`. Alternatively, Task 3's BotRepositoryTest and BotIndexTest can each declare `@DynamicPropertySource static void props(DynamicPropertyRegistry r) { r.add(\"app.bot.token-encryption-key\", () -> \"0000...\"); }` at the class level. Either way, Task 3 should explicitly state which approach to use. The 64-zero hex string is a valid 32-byte key for test purposes only."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 implementation hints say 'check what backend/src/test/java/com/botfunnel/project/ uses (likely @DataMongoTest or an AbstractIntegrationTest base)'. In practice @DataMongoTest is never used anywhere in this codebase (verified by grep). The actual pattern is always AbstractIntegrationTest (@SpringBootTest + Testcontainers). The parenthetical '(likely @DataMongoTest or ...)' may mislead the executing agent into attempting @DataMongoTest, which has no precedent and would require a separate test slice configuration. Task 3's BotIndexTest specifically needs `ReactiveMongoTemplate.indexOps()` and enforcement of partial unique indexes, which requires the actual Testcontainer MongoDB — making @DataMongoTest an even less suitable choice.",
+      "fix": "Replace the hint with: 'Use AbstractIntegrationTest as base class (the only integration test base in this project). BotRepositoryTest and BotIndexTest both extend AbstractIntegrationTest. Ensure application-test.properties (or a @DynamicPropertySource in the test class) provides a valid test value for app.bot.token-encryption-key.'"
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 2,
+      "issue": "Task 2 implementation hints and TDD Anchor contain a mix of signals about @DynamicPropertySource. The Description section says 'тести перевизначають його через @DynamicPropertySource' while the Details section explicitly states 'Без @SpringBootTest — чистий unit, без Spring context' for TelegramApiClientTest and shows construction via `new TelegramApiClient(WebClient.builder(), mockServer.url(\"/\").toString())`. The @DynamicPropertySource mention in the Description refers to the future BotControllerIT (Wave 2+), not TelegramApiClientTest. This inconsistency could lead the executing agent to try @DynamicPropertySource on a pure unit test class, which would have no effect without @SpringBootTest.",
+      "fix": "Clarify in the Description or TDD Anchor: 'TelegramApiClientTest is a pure unit test — no @SpringBootTest, no @DynamicPropertySource. The mock base URL is passed directly to the constructor. @DynamicPropertySource is used in BotControllerIT (Task 8), not here.'"
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 edge cases note: 'TimeoutException від Reactor Netty responseTimeout приходить як ReadTimeoutException (Netty internal). У retry-фільтрі дозволити java.util.concurrent.TimeoutException І io.netty.handler.timeout.ReadTimeoutException (або умовно — будь-який підклас IOException).' The retry filter as specified uses `ex instanceof java.util.concurrent.TimeoutException`. However, Reactor Netty's ReadTimeoutException extends io.netty.handler.timeout.ReadTimeoutException which extends RuntimeException, NOT java.io.IOException and NOT java.util.concurrent.TimeoutException. The filter as written in the task body will NOT catch Netty read timeouts. The per-Mono `.timeout(Duration.ofSeconds(10))` Reactor operator DOES produce java.util.concurrent.TimeoutException, but the Netty-level responseTimeout does not. The edge case section notes this but the main retry filter specification does not handle it. No existing code in the repo uses Reactor Netty responseTimeout so there is no project precedent to follow.",
+      "fix": "Update the retry filter to also match `io.netty.handler.timeout.ReadTimeoutException`: `.filter(ex -> (ex instanceof WebClientResponseException w && w.getStatusCode().is5xxServerError()) || ex instanceof IOException || ex instanceof TimeoutException || ex instanceof io.netty.handler.timeout.ReadTimeoutException)`. Or note explicitly in the task that the `.timeout()` Reactor operator (which produces TimeoutException) is the primary defense and the responseTimeout is belt-and-braces — and that in practice the Reactor .timeout() fires first given they are both set to 10s."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 2,
+      "issue": "Task 2 build.gradle section says: 'Вибір версії — без явного pin, щоб spring-boot dependency-management вирішив сумісну (okhttp3 уже непрямо тягне через інші spring-стартери).' However, Spring Boot 3.5.0's BOM (io.spring.dependency-management 1.1.7) does not manage okhttp3/mockwebserver directly. okhttp3 is an optional transitive dependency of some Spring libraries but is not in spring-boot-dependencies BOM as a managed version. The task's fallback 'Якщо BOM не резолвить — поставити 4.12.0' is the correct path and should likely be the primary recommendation rather than a fallback.",
+      "fix": "Change the build.gradle hint to specify the version explicitly: `testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'`. This avoids a dependency resolution failure on first build. The BOM fallback note can remain as informational."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 1,
+      "issue": "Task 1's TDD Anchor test `longKeyFailsFast` specifies '33 bytes (66 hex chars)'. The test string would be `\"ab\".repeat(33)` = 66 hex chars. However, test `shortKeyFailsFast` specifies `\"ab\".repeat(31)` (62 hex chars → 31 bytes). This is internally consistent. Minor observation: the test for `longKeyFailsFast` with `\"ab\".repeat(33)` (66 hex chars) correctly tests the over-length boundary. No fix needed — just noting it passes a consistency check.",
+      "fix": "No fix required."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 6,
+    "critical": 1,
+    "major": 3,
+    "minor": 2
+  },
+  "verification_notes": {
+    "task_1": {
+      "files_to_read_verified": {
+        "backend/src/main/java/com/botfunnel/auth/TokenService.java": "EXISTS — uses HexFormat.of().formatHex(), SecureRandom, no Lombok. Pattern matches task description.",
+        "backend/src/main/java/com/botfunnel/security/SecurityConfig.java": "EXISTS — @Value(\"${app.url:http://localhost:3000}\") pattern confirmed.",
+        "backend/build.gradle": "EXISTS — spring-boot-starter-validation present, no new dependencies needed for Task 1."
+      },
+      "files_to_modify_verified": {
+        "backend/src/main/resources/application.properties": "EXISTS — ends at line 42 with logging.level.org.springframework.security=INFO, exactly as stated in task Details.",
+        ".env.example": "EXISTS — ends with PROJECTS_MAX_PER_USER=5, exactly as stated in task Details.",
+        "new_files": "com.botfunnel.common.crypto package does not exist yet — greenfield, correct."
+      },
+      "api_reality": "javax.crypto.Cipher, javax.crypto.spec.SecretKeySpec, javax.crypto.spec.GCMParameterSpec, java.security.SecureRandom, java.util.HexFormat — all JDK 21 standard library, no external dependency needed. Correct.",
+      "tdd_adequacy": "10 test cases covering round-trip ASCII/Unicode, fresh IV, tampered ciphertext/IV, wrong key, and 4 fail-fast constructor variants. Excellent coverage of behavior and failure modes. Pure unit test (no Spring context required).",
+      "security": "AES-256-GCM with fresh IV per call, 128-bit tag. Fail-fast on missing/short/non-hex key. No hardcoded secrets. Token never logged (no log statements in crypto component). Sound."
+    },
+    "task_2": {
+      "files_to_read_verified": {
+        "backend/src/main/java/com/botfunnel/common/AppException.java": "EXISTS — factory methods confirmed: badRequest(String), unprocessableEntity(String code, String message), 3-arg constructor AppException(HttpStatus, String, String). No badGateway factory but 3-arg constructor is used for 502 — correct.",
+        "backend/src/main/java/com/botfunnel/common/GlobalErrorHandler.java": "EXISTS — AppException flows to ErrorResponse(message, code). Error codes must align with what GlobalErrorHandler serializes.",
+        "backend/src/main/java/com/botfunnel/email/EmailService.java": "EXISTS — SLF4J logger pattern `private static final Logger log = LoggerFactory.getLogger(...)` confirmed."
+      },
+      "files_to_modify_verified": {
+        "backend/build.gradle": "EXISTS — mockwebserver not yet present. Task adds testImplementation.",
+        "new_files": "com.botfunnel.bot package does not exist yet — greenfield, correct. TelegramResult, TelegramUser, TelegramApiClient all new."
+      },
+      "api_reality": "WebClient.Builder from Spring autoconfig (spring-boot-starter-webflux on classpath), ReactorClientHttpConnector from Reactor Netty, Retry.backoff from reactor-core — all on classpath. ParameterizedTypeReference for generic JSON deserialization is correct pattern. Reactor StepVerifier available via reactor-test in test scope.",
+      "tdd_adequacy": "7 test cases covering happy path, 401 mapping, 5xx retry exhaustion, 4xx config error, scrubber, deleteWebhook retry, setWebhook body fields. Good behavior coverage. Pure unit test using MockWebServer — no Spring context needed.",
+      "security": "Token-regex scrubber is correctly specified and tested. WARN logs scrubbed before emission. No hardcoded secrets. Implementation correctly uses generic user-facing messages for config errors while logging Telegram description to operator logs."
+    },
+    "task_3": {
+      "files_to_read_verified": {
+        "backend/src/main/java/com/botfunnel/project/Project.java": "EXISTS — @Document, @CompoundIndexes, @Indexed, bean-style getters/setters pattern (no Lombok) confirmed. Task 3 correctly mirrors this.",
+        "backend/src/main/java/com/botfunnel/project/ProjectRepository.java": "EXISTS — ReactiveMongoRepository, Mono<T>/Flux<T> derived query naming confirmed.",
+        "backend/src/main/java/com/botfunnel/events/Event.java": "EXISTS — @CompoundIndex (singular, not plural) used as contrast reference."
+      },
+      "files_to_modify_verified": {
+        "new_files": "Bot.java, BotStatus.java, BotRepository.java all greenfield in com.botfunnel.bot. Correct."
+      },
+      "api_reality": "ReactiveMongoRepository<Bot, String>, @Document, @CompoundIndexes, @CompoundIndex, @Indexed — all from spring-boot-starter-data-mongodb-reactive, already on classpath. Derived query naming (findByProjectIdAndStatus, findFirstByTelegramBotIdAndStatus) follows Spring Data conventions correctly.",
+      "tdd_adequacy": "9 test cases across BotRepositoryTest (4 derived-query tests) and BotIndexTest (5 index-enforcement + presence tests). The index tests correctly use StepVerifier and DuplicateKeyException assertions. ReactiveMongoTemplate.indexOps() for the presence assertion is a valid pattern (confirmed in AuthControllerIT and other ITs that inject ReactiveMongoTemplate).",
+      "security": "No business logic in this task. Pure persistence shape. Status enum serializes as name() which is required for partial filter expression to match 'CONNECTED'."
+    }
+  }
+}

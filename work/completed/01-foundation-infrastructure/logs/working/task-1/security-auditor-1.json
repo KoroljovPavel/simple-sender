@@ -1,0 +1,51 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 4,
+    "critical": 0,
+    "major": 1,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "best-practice",
+      "title": "Lock files ignored globally — non-deterministic dependency resolution",
+      "description": "The pre-existing .gitignore contains `*.lock` (line 37), which silently ignores pnpm-lock.yaml, package-lock.json, yarn.lock, and any other lock files. For application projects (as opposed to libraries), lock files must be committed to guarantee reproducible builds and to enable supply-chain integrity tools (Dependabot, Renovate, npm audit) to detect transitive CVEs. Without a committed lock file, every fresh install may resolve different transitive dependency versions, including versions with known vulnerabilities.",
+      "location": ".gitignore:37",
+      "impact": "Developers installing frontend dependencies get non-deterministic package versions. A transitive dependency could silently upgrade to or regress to a version with a known CVE without any visible change in the repository. CI/CD builds may diverge from local builds. Supply-chain attack surface is increased.",
+      "recommendation": "Remove `*.lock` from .gitignore and commit lock files. Add targeted ignores for files that actually should be excluded, e.g. `.terraform.lock.hcl` if Terraform is used. For this project: commit `frontend/pnpm-lock.yaml` (pnpm) and keep it tracked. Example replacement entry if any lock files truly should be excluded: `# .terraform.lock.hcl` (not `*.lock`).",
+      "cwe": "CWE-1395"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Missing .env.* variant patterns in .gitignore",
+      "description": "Only `.env` is listed in the secrets section. Developers commonly create environment-specific files such as `.env.local`, `.env.production`, `.env.staging`, `.env.test` that may contain real credentials. Nuxt in particular uses `.env.local` for local environment overrides by convention (Vite/Nuxt dotenv loading order). None of these variants are covered by the current .gitignore.",
+      "location": ".gitignore:58",
+      "impact": "A developer creating `.env.local` or `.env.production` with real database URIs, API keys, or secrets would inadvertently commit those credentials to the repository.",
+      "recommendation": "Add the following lines to the Secrets & credentials section:\n```\n.env.*\n!.env.example\n```\nThis wildcard covers all `.env.*` variants while explicitly re-including `.env.example` so it stays tracked.",
+      "cwe": "CWE-312"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Spring Boot profile-specific property files not ignored",
+      "description": "Spring Boot resolves `application-{profile}.properties` and `application-{profile}.yml` files at runtime. Developers frequently create `application-local.properties` or `application-prod.yml` locally with real connection URIs, passwords, or API keys. These files are not excluded by the current .gitignore patterns.",
+      "location": ".gitignore (Secrets & credentials section)",
+      "impact": "A developer creating `backend/src/main/resources/application-local.properties` with real MongoDB credentials or a JWT secret would commit those secrets to the repository without any gitignore protection.",
+      "recommendation": "Add profile-specific Spring Boot config file patterns to the Secrets section:\n```\nbackend/src/main/resources/application-local*.properties\nbackend/src/main/resources/application-local*.yml\nbackend/src/main/resources/application-prod*.properties\nbackend/src/main/resources/application-prod*.yml\n```\nOr more broadly: `backend/src/main/resources/application-*.yml` with an explicit `!backend/src/main/resources/application.yml` re-include.",
+      "cwe": "CWE-312"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "credentials.json pattern not covered for non-root locations",
+      "description": "The pre-existing .gitignore covers `.credentials.json` (with a leading dot, line 9) — a Claude Code internal file. However, the more common Google service account or OAuth credential file name `credentials.json` (no leading dot) is not excluded. If a developer places a GCP service account JSON or any OAuth2 credentials file at any path other than root (e.g. `backend/credentials.json`, `infra/credentials.json`), it would not be protected.",
+      "location": ".gitignore (Secrets & credentials section)",
+      "impact": "GCP service account keys or OAuth client secrets committed to the repository expose cloud resource access to anyone with repository read access.",
+      "recommendation": "Add to the Secrets & credentials section:\n```\ncredentials.json\nservice-account*.json\n*-credentials.json\n```",
+      "cwe": "CWE-312"
+    }
+  ]
+}

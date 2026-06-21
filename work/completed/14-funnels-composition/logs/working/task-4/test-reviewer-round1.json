@@ -1,0 +1,29 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "4",
+  "round": 1,
+  "commit": "84f9aa3",
+  "scope": "tests/pages/funnel-editor.spec.ts — new describe('FunnelStepForm — SUBSCRIBE_TO_FUNNEL')",
+  "summary": "Five new tests cover the task's required anchors: picker/entry/checkbox render (+ fetch('all') wiring), full submit payload shape, the 'from the start' sentinel -> null mapping, the non-vacuous inactive-target hint, and edit pre-fill. All assert on real emitted payloads / rendered DOM (behaviour, not mock-called). The hint test is correctly non-vacuous (asserts both active+non-active options are present BEFORE choosing the non-active one). storeMock was extended with a reactive funnels ref + fetch, seeded with one active and one non-active funnel in beforeEach. 458/458 vitest green, no unhandled rejections. Two optional coverage gaps noted.",
+  "findings": [
+    {
+      "id": "TR1",
+      "severity": "minor",
+      "dimension": "Edge-case coverage",
+      "file": "frontend/tests/pages/funnel-editor.spec.ts",
+      "finding": "No test asserts the documented edge case that switching the target funnel resets the previously-chosen entry step back to the 'from the start' sentinel (step ids are funnel-local). The watch implements it but it is unverified.",
+      "recommendation": "Add a test: pick target A, pick entry st1, switch to target B, submit -> targetEntryStepId is null. Optional (the reset is simple), but it is the one behaviour in the SUBSCRIBE branch with no guard.",
+      "status": "open"
+    },
+    {
+      "id": "TR2",
+      "severity": "info",
+      "dimension": "Edit pre-fill completeness",
+      "file": "frontend/tests/pages/funnel-editor.spec.ts",
+      "finding": "The edit-pre-fill test asserts the target label and the end-parent checkbox, but not that the pre-filled targetEntryStepId (st2) is retained on submit. The submit path for the edit case is therefore only partially guarded. Low risk since the fresh-pick submit tests cover the emit logic.",
+      "status": "open"
+    }
+  ],
+  "verdict": "approve_with_minor",
+  "tests": "vitest 458 passed; 5 new SUBSCRIBE tests green; check-locales.mjs green"
+}

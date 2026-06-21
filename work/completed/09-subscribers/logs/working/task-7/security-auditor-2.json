@@ -1,0 +1,48 @@
+{
+  "status": "approved",
+  "task": "Task 7 — ProjectHardDeleteJob cascade extension (subscriber-domain PII + GridFS export blobs) — round 2 re-audit",
+  "commit": "8ceec6c",
+  "summary": {
+    "verdict": "approved",
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0,
+    "overview": "Round-2 re-audit confirms the PII-erasure security contract still holds and all three round-1 dispositions are acceptable. The fix commit 8ceec6c is comment-only on the production file (ProjectHardDeleteJob.java) plus test-quality improvements — no production logic, query, ordering, scoping, or log shape changed. Verified by line-by-line read of the current production file against the round-1 audited state: the cascade order (events -> GridFS -> subscriber_exports -> subscriber_events -> subscribers -> tags -> project_hard_deleted events -> drop projects), the projectId/metadata.projectId scoping, the deletedIds derivation from projectRepository.findByDeletedAtBefore(cutoff) (DB-derived, never user input), and the GridFS metadata.projectId key are all byte-for-byte identical to round 1. The two minor findings were correctly dispositioned in-code as accepted, documented trade-offs: (1) the orphan fs.chunks window is now explicitly called out in the cascade comment as a narrow, accepted non-transactional window consistent with Decision 8's accepted trade-off; (2) the GridFS pre-delete count is now explicitly documented as an advisory snapshot for the log line, not a transactional erasure receipt, with the note that erasure correctness comes from the independent delete query. The low finding (per-project erasure-count audit event) was deferred to Epic-12 with the project_hard_deleted event shape intentionally unchanged per spec — acceptable. Additionally, test coverage now strengthens the very contract round 1 cared about: a new IT cron_gridFsFileWithoutExportPointer_isStillSwept directly locks in the R11 anti-orphan ordering (GridFS swept by metadata.projectId even when the subscriber_exports pointer row is already gone), and the former trivial no-op idempotency test was upgraded to a real partial-cascade recovery test that asserts survivor sweeps per-collection. Seed determinism was hardened (AtomicLong replacing System.nanoTime for unique-compound keys), removing a flaky-test risk that could have masked a regression. No new findings. No critical or major issues. Status: approved."
+  },
+  "findings": [],
+  "dispositionReview": [
+    {
+      "round1Finding": "minor — orphan fs.chunks on mid-delete crash (CWE-459)",
+      "round1Severity": "minor",
+      "disposition": "accepted — documented as a narrow non-transactional window in the cascade comment (lines 106-108), consistent with Decision 8's explicitly accepted non-transactional trade-off; no orphan-chunk reaper (out of scope for this task).",
+      "round2Verdict": "acceptable",
+      "rationale": "Severity was already minor: low-probability (delete-by-query for fs.files+fs.chunks is a single fast GridFsOperations.delete on a daily, non-hot-path cron) and the operation is not externally triggerable, so there is no attacker-controlled path to widen the window. Adding a cross-collection-orphan reaper is genuine scope creep against the task spec and would address all orphan sources, not just this cascade — appropriately deferred. The residual is now explicit in-code so future readers/the Epic-12 GDPR work inherit the known limitation. Acceptable as an MVP-grade GDPR-erasure trade-off."
+    },
+    {
+      "round1Finding": "minor — TOCTOU on the advisory pre-delete count (CWE-367)",
+      "round1Severity": "minor",
+      "disposition": "accepted — cascade comment (lines 110-112) now states the GridFS count is an advisory pre-delete snapshot for the log line, not a transactional erasure receipt; erasure itself re-runs the query independently.",
+      "round2Verdict": "acceptable",
+      "rationale": "This was never an erasure-correctness bug — the gridFsOperations.delete(gridFsByProject) call issues its own fresh query, so the actual erasure is complete regardless of count drift. The only impact was log-line interpretation, and the comment now removes the misleading 'authoritative receipt' framing. For a project past the 7-day grace window an in-flight export is not a realistic concurrency case. Fully resolved at the documentation level the finding called for."
+    },
+    {
+      "round1Finding": "low — no per-project audit event with PII-erasure counts (GDPR Art. 17 defensibility)",
+      "round1Severity": "low",
+      "disposition": "deferred to Epic-12 follow-up; project_hard_deleted event shape intentionally unchanged per task spec.",
+      "round2Verdict": "acceptable",
+      "rationale": "Originally raised as low and explicitly out of strict Task-7 scope. The durable project_hard_deleted event plus the structured per-run INFO log line (now carrying all seven per-collection counts) provide reasonable coarse traceability today. Changing the event metadata shape mid-task would contradict the spec and the AC-17/AC-17b/AC-17c contract. Correct to defer to the Epic-12 GDPR work referenced in the user-spec out-of-scope list."
+    }
+  ],
+  "verifiedControls": [
+    "No production logic change round 1 -> round 2: ProjectHardDeleteJob.java diff in 8ceec6c is comment-only (collection-constant comment lines 39-41; cascade comment lines 105-112). Cascade order, queries, projectId/metadata.projectId scoping, and the structured log shape are byte-for-byte identical to the round-1 approved state.",
+    "projectId scoping intact: all four subscriber-domain removes via removeByProjectId() filter Criteria.where(\"projectId\").in(deletedIds); GridFS filters Criteria.where(\"metadata.projectId\").in(deletedIds); deletedIds sourced only from projectRepository.findByDeletedAtBefore(cutoff). No user input reaches any Criteria — no cross-project over-deletion, no NoSQL-injection surface.",
+    "R11 anti-orphan ordering preserved and now regression-locked: GridFS swept BEFORE subscriber_exports, keyed by metadata.projectId (not exportId/pointer row). New IT cron_gridFsFileWithoutExportPointer_isStillSwept seeds a GridFS blob with NO subscriber_exports pointer row and asserts it is still swept — exactly the leak round 1 flagged as the worst case.",
+    "Partial-cascade recovery hardened in tests: cron_cascadeIsIdempotent_secondRunIsNoOp was rewritten to cron_cascadeRecoversPartialDrainThenSecondRunIsNoOp, which models a crashed prior run (subscribers already drained, tags/events/exports/GridFS surviving), asserts per-collection survivor sweeps to zero, asserts subscribersRemoved=0 no-op, then asserts a clean second-run all-zero line. Exercises the real cascade remove steps, not the zero-deletion shortcut.",
+    "Test seed determinism hardened: AtomicLong SEQ replaces System.nanoTime() for the unique-compound seeds (subscribers (projectId,telegramUserId), tags (projectId,slug)), removing a cross-platform flaky-uniqueness risk that could have intermittently masked a cascade regression. No security impact, positive reliability impact.",
+    "Anti-enumeration 404 contract still guarded: ProjectSoftDeleteCascadeIT change is a TODO-comment-only edit (Task 8 -> Task 8/4/5); requireOwned soft-deleted -> 404 assertion unchanged.",
+    "Grace-window safety unchanged: 7-day RETENTION + 1ns inclusive-cutoff trick intact; young soft-deleted projects keep all rows + blobs.",
+    "PII coverage completeness unchanged: subscribers, subscriber_events, subscriber_exports, tags, and GridFS CSV blobs (fs.files/fs.chunks via default bucket) all swept; embedded customFieldDefinitions ride along with the project doc drop; retained platform events are by-design (Decision 16) and not subscriber-identity-joined.",
+    "No hardcoded secrets, no new external/URL sinks, no deserialization of untrusted input, no new dependencies introduced by the fix commit."
+  ]
+}

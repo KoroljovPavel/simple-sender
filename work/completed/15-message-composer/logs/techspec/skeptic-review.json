@@ -1,0 +1,32 @@
+{
+  "summary": "Verified 60+ factual claims in tech-spec 15-message-composer against the codebase: all 30 referenced files exist; every named class/method/field/enum/DTO/component resolves in actual code; net-new symbols (ContentBlock/BlockType/MediaItem) are correctly absent today. Zero mirages found. No critical or major discrepancies.",
+  "findings": [],
+  "stats": {
+    "total_claims_checked": 62,
+    "confirmed": 62,
+    "mirages_found": 0,
+    "verified_claims": [
+      "FunnelStep.java exists; flat fields text/parseMode/imageUrl/caption + buttons/timeoutValue/timeoutUnit/timeoutTargetStepId + copyOf present",
+      "StepType.java contains SEND_MESSAGE, SEND_IMAGE, MENU (to remove) and DELAY/ADD_TAG/REMOVE_TAG/SET_CUSTOM_FIELD/EMIT_EVENT/SUBSCRIBE_TO_FUNNEL (final-state enum matches spec minus 3 plus MESSAGE)",
+      "FunnelExecutionFactory.deepCopySteps() exists and calls FunnelStep.copyOf",
+      "TelegramSender.sendText/sendPhoto/answerCallbackQuery + private shared send(...) + mapBodyToSentMessage present",
+      "mapBodyToSentMessage requires top-level message_id and throws otherwise (validates Decision 5 album-mapper rationale)",
+      "sendVideo/sendAudio/sendDocument/sendMediaGroup correctly absent (net-new)",
+      "StepExecutor.java: sendMessage/sendImage/menu branches, buildReplyMarkup, waitForReply, cont(), CALLBACK_DATA_SEPARATOR, VariableTemplateRenderer.render present",
+      "FunnelService.validateSteps/toSteps/toStepDto/previewStep/isMessageStep present; FunnelSummaryResponse imported; MAX_BUTTONS=8",
+      "FunnelTriggerServiceImpl.advanceOnCallback/parseCallbackData/recordButtonClick present; resumeOnCallback delegated to engine",
+      "PreviewStepRequest(stepType,text,parseMode) and PreviewStepResponse(rendered,sampleData,kind) exist in current flat shape",
+      "VariableTemplateRenderer.render(template,parseMode,subscriber) static method present",
+      "ButtonDto.java, FunnelResponse.java, FunnelController.java, FunnelExecution.java, ProcessTelegramUpdateJob.java, FunnelStepIdBackfill.java, Button.java, SentMessage.java, TelegramApiClient.java all exist",
+      "frontend/types/funnel.ts: StepType union with SEND_MESSAGE/SEND_IMAGE/MENU, Button interface, FunnelStep interface, preview DTOs",
+      "ContentBlock/BlockType/MediaItem correctly absent in frontend types (net-new)",
+      "FunnelStepForm.vue: STEP_TYPES array, MENU button sub-editor present",
+      "FunnelMessagePreview.vue: MESSAGE_TYPES, isMessageStep, :src binding, never-v-html convention present",
+      "SearchableSelect.vue: presentational combobox with defineProps/modelValue/options",
+      "stores/funnels.ts: preview() and update() actions present",
+      "frontend i18n uk.json/en.json exist with funnels root key",
+      "frontend editor page [funnelId].vue exists"
+    ]
+  },
+  "verdict": "pass"
+}

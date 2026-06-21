@@ -1,0 +1,8 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-savenoop",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "Both F1 and F2 from round 1 are resolved. The staleness guard at FunnelCanvas.client.vue:307 correctly bails only when selId and atIdxId are both non-null and differ; the fresh-node path (id:null on either side) is unaffected and still writes by index. The integer and non-empty-slot guards on lines 296-298 are intact. The emit-ordering comment on lines 308-310 is present and accurately describes the load-bearing dependency. Three new tests cover the staleness-guard bail, the fresh-node pass-through regression, and the save-feedback clear path. No new issues introduced."
+}

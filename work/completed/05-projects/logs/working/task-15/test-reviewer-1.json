@@ -1,0 +1,84 @@
+{
+  "status": "needs_improvement",
+  "summary": "Task 15 tests broadly cover the smoke-test findings: AC-30 visible-text contract is tested triangularly (no title attr + visible text + aria-describedby) in both ProjectSelector and projects/index; the 404-redirect contract is tested for cross-tab, same-tab-empty, 500-no-redirect, and happy-path. TimezonePicker has 9 component tests covering combobox ARIA, typeahead, keyboard, empty state, UTC offset and outside-click. Findings concentrate on (a) a weak keyboard-selection assertion that fails the litmus test, (b) one non-404 'other status' branch left untested in settings, (c) a test that bypasses the picker UI via $emit and effectively tests the schema, not the UI contract, (d) a missing assertion that staleness banner is truly persistent (does not auto-dismiss like restore-toast), and (e) a missing assertion for the `!pendingBannerKey` overwrite-guard branch. Overall the test pyramid is balanced and the new tests are written with stable, ICU-safe values (Europe/Berlin, Europe/London, GMT|UTC regex). No critical or DST-fragile assertions found.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "empty_test",
+      "location": "frontend/tests/components/TimezonePicker.spec.ts:114-130",
+      "issue": "Test 'ArrowDown + Enter selects the next option' asserts only `emitted!.length > 0`. This passes if Enter emits ANY value — including the currently-selected one. A regression that makes Enter re-emit modelValue (e.g. failure to advance activeIndex on ArrowDown) would still pass. Litmus test: if you delete the `activeIndex.value = Math.min(activeIndex.value + 1, ...)` line in TimezonePicker.vue:93, the test still passes because Enter would just emit the current selection (Europe/Berlin) and length would still be > 0.",
+      "recommendation": "Assert the EXACT emitted value matches the option at the expected index. Replace lines 127-129 with:\n```\nconst emitted = wrapper.emitted('update:modelValue') as string[][]\nexpect(emitted).toBeDefined()\nconst payload = emitted[emitted.length - 1][0]\n// modelValue Europe/Berlin → openDropdown sets activeIndex to its index → ArrowDown advances by 1\nconst tzList = Intl.supportedValuesOf('timeZone')\nconst expected = tzList[tzList.indexOf('Europe/Berlin') + 1]\nexpect(payload).toBe(expected)\n```\nIf the next-after-Berlin zone is ICU-fragile, instead set modelValue to a stable boundary (e.g. seed with the first zone and assert second zone is selected), OR use a custom prop with a known list."
+    },
+    {
+      "severity": "major",
+      "category": "wrong_test_type",
+      "location": "frontend/tests/pages/projects/new.spec.ts:93-121 (new_invalidTimezone_showsValidationError)",
+      "issue": "The test bypasses the TimezonePicker UI by directly calling `picker.vm.$emit('update:modelValue', 'Mars/Olympus_Mons')`. This synthetically forces an invalid value into the form, which means the test verifies only the zod refine() guard — not the integration of TimezonePicker + form. The comment acknowledges the trade-off, but the result is a test that lives in the page spec while testing schema behavior. The TimezonePicker contract says 'компонент не приймає довільний рядок' (Files / item 4 of task) — meaning users CANNOT reach this state through the UI. So this test guards a defense-in-depth path that the picker itself is supposed to make unreachable.",
+      "recommendation": "Either:\n(a) Move this to a pure schema unit test: `tests/schemas/projectSchema.spec.ts` — extract the zod schema from new.vue (or duplicate it), assert `schema.safeParse({name:'x', description:'', timezone:'Mars/Olympus_Mons'}).success === false` with the i18n key returned. Remove from new.spec.ts.\nOR\n(b) Keep but rename to `new_picker_forcesInvalidViaEmit_validationCatchesIt` and add a positive complementary assertion that proves the picker DOES NOT accept the value if entered via UI: type `'Mars/Olympus_Mons'` into the input, blur, assert `picker.vm.modelValue === 'Europe/Kyiv'` (or default — unchanged from initial). Otherwise this test creates a false sense that 'the UI guards against invalid TZs', when in fact only the form does.\nRecommendation: (a) — keeps page spec focused on the page contract."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/projects/settings.spec.ts (no test covers !pendingBannerKey guard)",
+      "issue": "settings.vue:51-53 and 60-63 contain `if (!projectsStore.pendingBannerKey) projectsStore.pendingBannerKey = 'errors.projects.unavailable'`. This guard exists to NOT overwrite a key already set by useApi's 404 interceptor (typically a more specific key). No test seeds `pendingBannerKey` non-null before mount and asserts it remains untouched after the 404 catch.",
+      "recommendation": "Add to settings.spec.ts after `mount_apiReturns404_setsBannerKeyAndRedirectsToProjects`:\n```\nit('mount_apiReturns404_doesNotOverwriteExistingBannerKey', async () => {\n  routeMock.params = { projectId: 'p-deleted' }\n  projectsStoreMock.pendingBannerKey = 'errors.projects.staleSpecific'\n  apiMock.mockReset()\n  apiMock.mockRejectedValueOnce({ statusCode: 404 })\n  await mountSuspended(SettingsPage)\n  await settle()\n  expect(projectsStoreMock.pendingBannerKey).toBe('errors.projects.staleSpecific')\n  expect(navigateToMock).toHaveBeenCalledWith('/projects')\n})\n```\nThis catches the regression where someone removes the guard and the page clobbers the interceptor-set key."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/projects/index.spec.ts:308-320 (index_pendingBannerKeySet_rendersPersistentStalenessBanner)",
+      "issue": "Task description explicitly demands that the staleness banner is PERSISTENT (no auto-dismiss like restore-toast). The current test only asserts the banner is rendered when the key is non-null. It does not assert the absence of an auto-dismiss timer, so a regression that adds `setTimeout(() => pendingBannerKey = null, 4000)` would pass the test.",
+      "recommendation": "Add a dedicated test that advances fake timers past BANNER_TIMEOUT_MS and re-asserts the banner is still visible:\n```\nit('index_stalenessBanner_doesNotAutoDismiss', async () => {\n  vi.useRealTimers()\n  vi.useFakeTimers({ now: FAKE_NOW })\n  pendingBannerKeyRef.value = 'errors.projects.unavailable'\n  apiMock.mockResolvedValueOnce([])\n  const wrapper = await mountSuspended(ProjectsIndexPage)\n  await Promise.resolve()\n  expect(wrapper.find('[data-test=\"staleness-banner\"]').exists()).toBe(true)\n  await vi.advanceTimersByTimeAsync(10_000)\n  await wrapper.vm.$nextTick()\n  expect(wrapper.find('[data-test=\"staleness-banner\"]').exists()).toBe(true)\n  vi.useRealTimers()\n})\n```"
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/projects/new.spec.ts:43-54 (new_initialValues_timezoneDefaultsToBrowser)",
+      "issue": "The assertion `expect(input.value).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone)` is fragile against the page's own UTC-fallback branch. pages/projects/new.vue:13-17 sets defaultTz to 'UTC' if the browser TZ is NOT in `Intl.supportedValuesOf('timeZone')`. The test would fail spuriously on any runtime where the resolved browser TZ has been renamed (e.g. older ICU returns 'Europe/Kiev' but supportedValuesOf may already list 'Europe/Kyiv'). Low-probability on Node 22 but observed on CI mismatches in the past.",
+      "recommendation": "Either:\n(a) Match the page's actual logic in the test:\n```\nconst browser = Intl.DateTimeFormat().resolvedOptions().timeZone\nconst expected = Intl.supportedValuesOf('timeZone').includes(browser) ? browser : 'UTC'\nexpect(input.value).toBe(expected)\n```\nOR\n(b) Mock `Intl.DateTimeFormat` for this test to force a deterministic value (e.g. 'Europe/Berlin' which is always in the list)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/TimezonePicker.spec.ts (no test for aria-activedescendant during keyboard nav)",
+      "issue": "TimezonePicker.vue:139 wires `aria-activedescendant` to the currently active option id — this is a load-bearing ARIA contract for screen readers in the combobox pattern. None of the 9 component tests assert that aria-activedescendant updates on ArrowDown. A regression that breaks the binding (or removes `activeIndex` updates) would not be caught by ARIA-screened tools without this test.",
+      "recommendation": "Add:\n```\nit('updates aria-activedescendant when navigating with ArrowDown', async () => {\n  const wrapper = await mountSuspended(TimezonePicker, { props: { modelValue: 'Europe/Berlin' } })\n  const input = wrapper.find('[data-test=\"timezone-picker-input\"]')\n  await input.trigger('focus')\n  await settle()\n  const before = input.attributes('aria-activedescendant')\n  expect(before).toBeDefined()\n  await input.trigger('keydown', { key: 'ArrowDown' })\n  await settle()\n  const after = input.attributes('aria-activedescendant')\n  expect(after).toBeDefined()\n  expect(after).not.toBe(before)\n})\n```"
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/TimezonePicker.spec.ts (no test asserts the unfiltered list is the full set)",
+      "issue": "The test for empty-state uses an obviously non-IANA string; the typeahead test asserts London matches and Berlin doesn't. But no test confirms that opening the dropdown WITHOUT typing shows the full IANA list — a regression that mistakenly filters by `props.modelValue` when query is empty (instead of returning allTimezones) would slip through. This matters because `openDropdown()` resets query to '' and the user expects to see all zones.",
+      "recommendation": "Add:\n```\nit('opens with the full IANA list when query is empty', async () => {\n  const wrapper = await mountSuspended(TimezonePicker, { props: { modelValue: 'Europe/Berlin' } })\n  await wrapper.find('[data-test=\"timezone-picker-input\"]').trigger('focus')\n  await settle()\n  const options = wrapper.findAll('[data-test^=\"timezone-picker-option-\"]')\n  // Cheap lower-bound — Intl.supportedValuesOf returns ~400+ zones across runtimes; > 50 is safe.\n  expect(options.length).toBeGreaterThan(50)\n  // Sanity: both Berlin and London visible without any filter.\n  expect(wrapper.find('[data-test=\"timezone-picker-option-Europe/Berlin\"]').exists()).toBe(true)\n  expect(wrapper.find('[data-test=\"timezone-picker-option-Europe/London\"]').exists()).toBe(true)\n})\n```"
+    },
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/tests/pages/projects/settings.spec.ts:329-338 (mount_apiReturns500_doesNotRedirect_keepsForm) and :340-347 (mount_apiResolves_doesNotRedirect_rendersForm)",
+      "issue": "Both tests verify the same negative outcome (no navigateTo, settings-form visible). The differentiator is mock setup. The 500 test only adds value if a separate code branch handles non-404 differently. Looking at settings.vue:44-58, the catch only branches on 404; any other status falls through to the `if (!project.value)` check, which DOES redirect when project is null. So the 500 test passes ONLY because seedActive(makeProject()) was called in beforeEach, making project.value truthy. The test does not actually exercise the 500 catch path meaningfully — remove the seedActive call and the test would redirect (failing).",
+      "recommendation": "Either:\n(a) Make the 500 test load-bearing by adding a complementary assertion that proves the 500-branch warning was logged but no banner key was set:\n```\nexpect(projectsStoreMock.pendingBannerKey).toBe(null)\nexpect(navigateToMock).not.toHaveBeenCalled()\n```\nOR\n(b) Add a third case: `mount_apiReturns500_andProjectMissing_stillRedirects` — clears the store before mount AND mocks 500. This is the actual asymmetry the test claims to cover (\"non-404 errors are tolerated — we only redirect for project-gone\" comment is misleading: the page redirects on either path if project.value is null after fetch).\nRecommendation: (b) — exposes the real branch logic."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/projects/settings.spec.ts:297-312 (mount_apiReturns404_setsBannerKeyAndRedirectsToProjects)",
+      "issue": "The test calls `seedActive(makeProject({ id: 'p-deleted', name: 'Stale' }))` but routeMock.params is set to `{ projectId: 'p-deleted' }`. The project IS in the store as active — yet the test asserts a redirect happens after the 404 response. Looking at settings.vue:60-65, after the 404 catch (which navigates to /projects and returns), the code below `if (!project.value)` would not even run because the function already returned. The test name says 'cross-tab stale' but the store-stale setup is moot since the early return fires. The setup is misleading and the test could pass with empty store too. Litmus: replace `seedActive(...)` with `projectsStoreMock.projects = []` — the test still passes.",
+      "recommendation": "Clarify the test intent. If verifying 'cross-tab stale' (store has the deleted project as active), assert that pendingBannerKey was set BEFORE navigateTo and that NO 'project missing' branch ran. If just verifying the 404 path, drop the seedActive() to keep the setup minimal. Suggested rewrite:\n```\nit('mount_apiReturns404_whileStoreShowsProjectActive_setsBannerAndRedirects', async () => {\n  routeMock.params = { projectId: 'p-deleted' }\n  // Cross-tab scenario: this tab still has the row, but the API returns 404.\n  seedActive(makeProject({ id: 'p-deleted', name: 'Stale' }))\n  apiMock.mockReset()\n  apiMock.mockRejectedValueOnce({ statusCode: 404 })\n  await mountSuspended(SettingsPage)\n  await settle()\n  // The 404 branch runs first (line 47), so store state at that moment is irrelevant.\n  expect(projectsStoreMock.pendingBannerKey).toBe('errors.projects.unavailable')\n  expect(navigateToMock).toHaveBeenCalledWith('/projects')\n  expect(navigateToMock).toHaveBeenCalledTimes(1)\n})\n```\nNote the `toHaveBeenCalledTimes(1)` guards against the second navigateTo at line 64 firing too."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "litmusTest": {
+      "checked": 30,
+      "passed": 26,
+      "failed": 4
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 9,
+      "integration": 21,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

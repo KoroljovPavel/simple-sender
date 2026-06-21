@@ -1,0 +1,63 @@
+{
+  "verdict": "fail",
+  "iterations": 1,
+  "findings": [
+    {
+      "severity": "high",
+      "type": "underengineering",
+      "location": "Architecture / How it works: Hard-delete cron (every day 03:00 UTC)",
+      "issue": "The stated ordering 'emit project_hard_deleted event BEFORE deletion' does NOT prevent the event from being swept by the subsequent cascade delete. The cascade step removes ALL events where metadata.projectId IN deletedIds — which includes the freshly emitted project_hard_deleted event because that event also carries metadata.projectId = deletedId. The spec claims the ordering solves AC-17b ('event survives cascade'), but the mechanism is logically incorrect and the IT will fail unless the cascade query is scoped to exclude eventType = 'project_hard_deleted', or the event is emitted AFTER the cascade delete, or the event does not carry metadata.projectId.",
+      "recommendation": "Either (a) emit project_hard_deleted AFTER the cascade delete (so the event is not in the collection when the delete query runs), (b) add AND eventType != 'project_hard_deleted' to the cascade delete query, or (c) store the projectId under a different metadata key (e.g. metadata.deletedProjectId) so the cascade query does not match it. Update Architecture, ProjectHardDeleteJobTest, and ProjectHardDeleteJobIT to reflect the correct mechanism."
+    },
+    {
+      "severity": "medium",
+      "type": "underengineering",
+      "location": "Data Models / REST DTOs — UpdateProjectRequest; Architecture / How it works: Project create (Scenario 1)",
+      "issue": "UpdateProjectRequest has @ValidTimezone on the optional timezone field, and the ValidTimezone validator returns true for null/blank (delegating to @NotBlank). But UpdateProjectRequest does NOT have @NotBlank on timezone (it is optional/patch). The Architecture section explicitly maps blank description → null in the controller but does NOT mention the same blank → null mapping for timezone in PATCH. If a client sends timezone: '' in a PATCH body, it will pass @ValidTimezone (blank → true) and reach the service with an empty string, potentially overwriting a valid timezone with ''. AC-22c (timezone update path) is partially uncovered.",
+      "recommendation": "Either (a) add explicit blank → null mapping for timezone in the controller (same pattern as description), documented in the Architecture section and tested in ProjectControllerIT, or (b) add @NotBlank to timezone in UpdateProjectRequest but then also ensure the controller ignores null vs sets-to-blank correctly. Update the UpdateProjectRequest DTO comment and the integration test list to cover this case."
+    },
+    {
+      "severity": "medium",
+      "type": "gap",
+      "location": "Testing Strategy / Frontend unit tests — stores/projects.spec.ts; Risks — R6",
+      "issue": "Risk R6 mitigation says 'explicit SSR-context test ensures no throw' for localStorage access during server render. However the Testing Strategy unit test list for stores/projects.spec.ts does not include this SSR-context test case — it only lists client-side behaviours (fetch, create, softDelete, restore, selectProject writes localStorage, handleStaleCurrent). The SSR test is mentioned only in the Risks section but not planned in Testing Strategy. For an L-sized feature this constitutes a gap: the mitigation is stated but not scheduled.",
+      "recommendation": "Add an explicit SSR-context test case to stores/projects.spec.ts in the Testing Strategy section: 'running Pinia store init in SSR context (import.meta.client = false) does NOT throw ReferenceError on localStorage'. Alternatively add it to a dedicated composables test. Task 2 should call this out in Verify-smoke."
+    },
+    {
+      "severity": "medium",
+      "type": "gap",
+      "location": "Architecture / How it works: Auth on every request (Scenario 5) + Integration Tests list",
+      "issue": "The IT list for ProjectControllerIT covers 'GET /{foreign-id}, GET /{malformed-id}, GET /{soft-deleted-own-id} → 404 uniformly' but the PATCH and DELETE foreign-id / malformed-id cases are not explicitly listed as separate test cases. The anti-enumeration guarantee (AC-8/9/10) must hold for ALL verbs (GET, PATCH, DELETE) on /{projectId}. User-spec AC-8/9 doesn't restrict the verb and the text ('Будь-який /api/v1/projects/*') implies all methods. Missing explicit IT cases for PATCH /{foreign-id} → 404, PATCH /{malformed-id} → 404, DELETE /{foreign-id} → 404, DELETE /{malformed-id} → 404.",
+      "recommendation": "Add four integration test cases to ProjectControllerIT: PATCH /{foreign-id} → 404, PATCH /{malformed-id} → 404, DELETE /{foreign-id} → 404, DELETE /{malformed-id} → 404. The service-layer guard already handles these, but explicit IT cases are required for an L-sized feature with a stated anti-enumeration guarantee."
+    },
+    {
+      "severity": "medium",
+      "type": "gap",
+      "location": "Architecture / Soft-delete + restore (Scenario 4); Testing Strategy / Integration tests",
+      "issue": "Idempotency of DELETE is described: 'a second DELETE on already-soft-deleted ID returns 404 (because guard rejects it)'. This is covered implicitly by the requireOwned guard (includeSoftDeleted=false). However the IT test list does NOT include a test for 'DELETE /{already-soft-deleted-id} → 404'. For a feature that explicitly documents idempotency behavior, the absence of a dedicated IT case is a gap — especially since the behavior deviates from standard REST (some implementations return 200/204 for idempotent deletes).",
+      "recommendation": "Add 'DELETE /{id} when already soft-deleted → 404' to ProjectControllerIT test list. This is a one-line test given the existing soft-delete flow."
+    },
+    {
+      "severity": "low",
+      "type": "gap",
+      "location": "Architecture / What we're building: ProjectRepository; Decisions — Decision 4",
+      "issue": "ProjectRepository lists a derived finder findByOwnerIdAndNameAndDeletedAtIsNull for uniqueness pre-check before insert. Decision 4 mentions this is also needed 'when name changes' in update. However ProjectRepository does NOT list findByOwnerIdAndNameAndDeletedAtIsNullAndIdNot (which would be needed for update uniqueness check to exclude the project being renamed from the collision result). Without this, the update pre-check would incorrectly flag a project being renamed to its own current name as a conflict — the tech-spec does say 'renaming to own name (no-op rename) does NOT trigger 409' (AC-12b), which implies the service must handle this. The service description says 'update no-op rename does NOT trigger 409' but doesn't detail HOW. The repository finder may be insufficient.",
+      "recommendation": "Add findByOwnerIdAndNameAndDeletedAtIsNullAndIdNot(String ownerId, String name, String excludeId) to ProjectRepository, or explicitly document in ProjectService.update that it checks name != currentName before performing the uniqueness query. Update the IT test 'PATCH /{id} rename to own name (no-op) → 200' to verify this path works. This is currently implied but not spelled out."
+    },
+    {
+      "severity": "low",
+      "type": "gap",
+      "location": "Testing Strategy / E2E tests",
+      "issue": "The single Playwright golden-path spec does not include the stale-currentProjectId recovery flow (Scenario 6 / AC-24): delete project from tab A, then make an API call that returns 404 from tab B. This scenario is only covered by unit tests of the useApi composable. For an L-sized feature with an explicitly documented Scenario 6, the absence of even a minimal E2E smoke for the 404-interceptor / stale-state recovery is a gap.",
+      "recommendation": "Consider adding a second Playwright spec or a scenario within the golden-path spec that exercises stale-state recovery: create project, switch to it, hard-delete the project directly via API (or simulate a 404), navigate to dashboard, assert the selector auto-selects another project and shows the unavailable toast. Alternatively, explicitly document why unit tests are sufficient here."
+    },
+    {
+      "severity": "low",
+      "type": "gap",
+      "location": "Acceptance Criteria — AC-T4; Architecture / What we're building/modifying",
+      "issue": "AC-T4 requires app.projects.max-per-user=${PROJECTS_MAX_PER_USER:5} in application.properties and PROJECTS_MAX_PER_USER=5 in .env.example. The tech-spec correctly documents this in AC-T4 and Task 1. However neither the Architecture section nor any task specifies how ProjectService reads this config value — whether via @Value(\"${app.projects.max-per-user}\"), a @ConfigurationProperties class, or a hardcoded constant. Given the existing codebase pattern (no precedent for @ConfigurationProperties per code-research), this implementation detail should be spelled out to avoid a developer defaulting to a hardcoded 5 or creating a new config class unnecessarily.",
+      "recommendation": "Add one sentence to Task 1 or Decision 15 specifying that the quota is injected via @Value(\"${app.projects.max-per-user:5}\") into ProjectService. This matches the established pattern in the codebase (no @ConfigurationProperties precedent)."
+    }
+  ],
+  "summary": "31/31 user-spec requirements are addressed in the tech-spec. No requirements are fully missing. However the spec fails on one critical logic error: the described mechanism for AC-17b (project_hard_deleted event surviving the cascade delete) is incorrect — the emitted event carries metadata.projectId which the subsequent cascade query targets, so the event will be deleted by its own cascade. This will cause the ProjectHardDeleteJobIT assertion to fail. Additionally there are four medium-severity gaps: (1) PATCH blank-timezone edge case in UpdateProjectRequest is unhandled, (2) SSR localStorage test is stated in Risks but not scheduled in Testing Strategy, (3) PATCH/DELETE foreign+malformed-id 404 cases are missing from the IT list, (4) idempotent double-DELETE is undocumented in tests. Two low-severity gaps round out the findings: repository finder for update uniqueness check is incomplete, and the E2E golden-path does not cover stale-state recovery. No scope creep, overengineering, or shallow solution found — the tech-spec is otherwise thorough and well-structured for an L-sized feature."
+}

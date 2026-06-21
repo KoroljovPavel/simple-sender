@@ -1,0 +1,135 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "iteration": "final",
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 7,
+      "issue": "Task 7 says 'Read Task 6's AuthService.terminateAllSessions() implementation to use the verified sessions collection field path. Do NOT guess the field name' — but Task 6 itself says only 'Expected field path (verify, do not assume): principal at document top level' and instructs verification at runtime. Task 7 runs in Wave 5 alongside nothing, after Wave 4 (Tasks 6 and 7 are both Wave 4/5 sequenced). However, Task 7 has depends_on: [5, 6], meaning Task 6 MUST complete before Task 7 starts. The concern is implementation duplication: both AuthService (Task 6) and ProfileService (Task 7) independently implement terminate-all-sessions via ReactiveMongoTemplate without a shared utility. If Task 6 gets the field path wrong and updates it, Task 7 has no mechanism to inherit the correction — the two copies can diverge. The tech-spec 'Shared Resources' table does NOT designate an owner for the terminate-all-sessions utility. This creates a risk of two independent implementations using potentially different field names.",
+      "fix": "Extract terminateAllSessions(String userId) and terminateAllSessionsExcept(String userId, String currentSessionId) as shared methods in a dedicated SessionService or within AuthService as package-internal methods that ProfileService delegates to. Add this shared utility to the tech-spec Shared Resources table. Task 7 must explicitly import/call AuthService.terminateAllSessions(), not re-implement it."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 creates a TokenService skeleton (generateRawToken and hashToken methods), then Task 5 'finalizes' TokenService. Task 4 also creates AuthService (login + me). AuthService in Task 4 is described as injecting UserRepository (created in Task 2, correctly in depends_on). However, Task 4 also lists EventService as a dependency ('Task 3 (EmailService for event notifications)' in its dependency list), but Task 3 creates EmailService, NOT EventService. EventService is actually created IN Task 4 itself. This dependency note is internally contradictory: Task 4 lists 'Task 3 (EmailService for event notifications)' as a dependency, but EventService (which does the notifications) is being created by Task 4. The real issue is that AuthService.login() must call EventService.logEvent() — but at the point AuthService is created, EventService is being created in the same task. This is a same-task circular dependency risk where the implementation order within the task matters.",
+      "fix": "Remove 'Task 3 (EmailService for event notifications)' from Task 4's dependency rationale. Clarify in Task 4 Details that EventService must be created BEFORE AuthService within the task (EventService is a dependency of AuthService, both created in Task 4)."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 3,
+      "issue": "Task 3 implementation hints state: 'For fire-and-forget timing: use Awaitility.await().atMost(2, SECONDS).until(...) to verify async email was sent — import: org.awaitility:awaitility is already a Testcontainers transitive dep.' Awaitility is NOT a transitive dependency of Testcontainers. Testcontainers brings in Docker client libraries, not testing utilities like Awaitility. Awaitility comes transitively via spring-boot-starter-test (through awaitility 4.x as a transitive dep of spring-test in Boot 3.5.x). The claim 'already a Testcontainers transitive dep' is incorrect and could mislead the implementer into thinking no explicit import is needed when Awaitility is actually coming from a different source — or not available at all if the test being written is a unit test (not using SpringBoot starter).",
+      "fix": "Update the hint to read: 'org.awaitility:awaitility is available as a transitive dependency of spring-boot-starter-test (not Testcontainers). No explicit declaration needed in build.gradle for unit tests that already use spring-boot-starter-test.'"
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "Task 8 (Frontend bootstrap, Wave 5) declares depends_on: [6], meaning it only depends on Task 6 (Logout + password reset). Task 7 (Profile endpoints + Super Admin seed + JobRunr, also Wave 5) also declares depends_on: [5, 6]. Tasks 7 and 8 are both in Wave 5 — they run in parallel. However, Task 8's middleware/auth.ts checks auth routes and protected routes, and Task 10 (Profile page, Wave 6) reads `frontend/stores/auth.ts` and `frontend/layouts/auth.vue` from Task 8. Task 11 (Profile page, Wave 6) reads `frontend/stores/auth.ts` and `frontend/layouts/default.vue` from Task 8. The dependency chain is correct (Tasks 10 and 11 depend on Task 8). HOWEVER: Task 8 depends_on: [6] but NOT [7]. Task 9 (Documentation) depends_on: [7]. Task 10 and 11 depend_on: [8]. Neither Task 10 nor Task 11 declares a dependency on Task 9 (Documentation). The profile page in Task 11 uses components and patterns from Task 8, and Task 9 updates ux-guidelines.md which Task 11 reads. Since Task 9 and Tasks 10/11 run in the same Wave 6 in parallel, Task 11 reads ux-guidelines.md (context file listed) while Task 9 may still be updating it — potentially causing the profile page to be built against the OLD ux-guidelines.md.",
+      "fix": "Add Task 9 to Task 11's depends_on (Task 11 depends on ux-guidelines.md being updated per Decision 5 — account deletion without password). Either move Task 9 to Wave 5 (before Task 8), or move Task 11 to Wave 7."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 9,
+      "issue": "Task 9 instructs: 'In the Tech Stack table: update the Redis row description to include HTTP session storage (spring-session-data-mongodb) alongside the existing brute-force and analytics entries.' This is self-contradictory: spring-session-data-mongodb is MongoDB-based session storage, NOT Redis-based session storage. Adding it to the Redis row in the tech stack table is factually incorrect. Sessions are stored in MongoDB (via spring-session-data-mongodb), not Redis. The Redis row should be updated to reference brute-force counters only (removing the JWT blacklist reference), while MongoDB row or a new Sessions row should reflect spring-session-data-mongodb.",
+      "fix": "Update Task 9 to correctly place spring-session-data-mongodb under the MongoDB row (or as a separate Sessions entry), NOT under the Redis row. Redis row should say: 'brute-force rate limiting counters, analytics cache (1-min TTL)'. MongoDB row should add: 'session storage (spring-session-data-mongodb)'."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 integration test hint says: 'Integration tests extend AbstractIntegrationTest (created in later task) — for now, create a minimal base class stub or write tests without it; refactor when AbstractIntegrationTest is available.' AbstractIntegrationTest is created in Task 5 (not 'a later task' — it's the very next task). This is acceptable for sequencing (Task 5 depends on Task 4), BUT the hint to 'create a minimal base class stub' in Task 4 risks having TWO versions of AbstractIntegrationTest — the stub created in Task 4 and the real one created in Task 5 — which may conflict or result in Task 5 missing that AbstractIntegrationTest already partially exists and needs extension rather than creation.",
+      "fix": "Remove the suggestion to create a stub in Task 4. Instead, state explicitly: 'Integration tests for Task 4 (AuthControllerIT) will be added to the class created in Task 5. For now, write unit tests only for AuthServiceTest. AuthControllerIT integration tests listed in Task 4 TDD Anchor will be included when AbstractIntegrationTest is created in Task 5.'"
+    },
+    {
+      "severity": "major",
+      "category": "inconsistent_approach",
+      "task": 6,
+      "issue": "Task 6 instructs resetting ALL sessions for a user via ReactiveMongoTemplate using Criteria.where(\"principal\").is(userId) — userId being a String. Task 7 uses the same pattern (terminateAllSessionsExcept). The tech-spec states userId is a MongoDB ObjectId stored as String in the User document. However, spring-session-data-mongodb stores the principal name as set during authentication. In Task 4, the AuthService stores a UsernamePasswordAuthenticationToken with 'user as principal'. If the principal is a User object, the stored principal name in the sessions collection will be whatever UserDetails.getUsername() returns — likely the email string, not the userId. If the principal is the userId string, the query works. The tasks are inconsistent: tech-spec says 'terminate all sessions for the given userId' but the sessions collection field 'principal' contains the principal NAME (likely email), not the ObjectId. This mismatch between userId and principal name is never resolved in the tasks.",
+      "fix": "Explicitly clarify in Task 4 what value is stored as the principal in the SecurityContext (the User's id string, or the User's email). Then in Tasks 6 and 7, the ReactiveMongoTemplate query must use the same value. If email is the principal name, the query should use Criteria.where(\"principal\").is(user.getEmail()), not user.getId(). Add a concrete note: 'When creating UsernamePasswordAuthenticationToken, set the principal to user.getId() (not email) so that terminate-all-sessions queries can use userId directly.'"
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 creates AbstractIntegrationTest with all three Testcontainers (MongoDB, Redis, Mailpit). The Redis container is described as 'GenericContainer (Redis 7.4)' but the Testcontainers dependency added in Task 1 is 'org.testcontainers:mongodb' and 'org.testcontainers:junit-jupiter' — there is NO 'org.testcontainers:redis' in Task 1's build.gradle additions. For Redis, the only option is GenericContainer with a redis image, which does not require a dedicated Testcontainers module. However, Task 14 (Test Audit) says 'Are all three containers present: MongoDBContainer (via org.testcontainers:mongodb), Redis (via org.testcontainers:redisstack or GenericContainer(\"redis:7-alpine\"))...' — the 'redisstack' reference in Task 14 suggests an alternative Testcontainers module name. GenericContainer works but requires manually specifying the TCP port (6379) and exposing it. No task explicitly specifies this port-mapping code, creating ambiguity about how to properly configure the Redis Testcontainer.",
+      "fix": "Add to Task 5 Details: 'Redis Testcontainer: use GenericContainer(\"redis:7-alpine\").withExposedPorts(6379). No separate module needed. DynamicPropertySource override: spring.data.redis.url=redis://localhost:{container.getMappedPort(6379)}'. Remove the 'redisstack' reference from Task 14."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 4,
+      "issue": "Task 4 implementation hint for AuthService.login() provides a 10-step numbered algorithm with full logic details (check brute:fail:{email} GET, INCR with EXPIRE on first, flatMap chaining, exact method calls). This is an algorithm, not a hint. It prescribes the reactive chain structure step by step.",
+      "fix": "Replace with a pointer to the tech-spec login flow section and a note about the correct flatMap pattern for reactive chains. Avoid step-by-step algorithm prescriptions in hints."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 5,
+      "issue": "Task 5 step 4 (extend AuthService with registration logic) provides a full 9-step reactive chain algorithm for register() and a 7-step algorithm for verifyEmail() and resendVerification() inline in the 'What to do' section — not in hints but in the main steps. This is full implementation pseudocode, not task guidance.",
+      "fix": "The 'What to do' steps should describe WHAT behavior to achieve, not the exact reactive chain sequence. Move the chain details to Implementation Hints or reference the tech-spec flow description."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 9,
+      "issue": "Task 9 instruction for architecture.md states 'spring-boot-starter-validation is missing from architecture.md — add it'. But the current architecture.md (confirmed by reading) does NOT list spring-boot-starter-validation. However, Task 9 also states: 'jobrunr-spring-boot-3-starter, spring-boot-starter-mail, and all frontend packages (@pinia/nuxt, @tanstack/vue-query, shadcn-vue, vee-validate, zod) are already present in architecture.md — do not add duplicates'. Reading the actual architecture.md confirms: jobrunr-spring-boot-3-starter IS present, spring-boot-starter-mail IS present, but jjwt IS still present (Task 9 must remove it). The Task 9 instruction is partially correct but the claim that frontend packages are 'already present' is NOT verifiable without reading it — the file shows only 5 specific frontend libs listed but NOT shadcn-vue separately. More critically: Task 9 says 'spring-boot-starter-validation is missing' and must be added, which is correct. This is not a blocking issue but the instructions could create confusion.",
+      "fix": "No code change needed, but Task 9 instructions should be verified against current architecture.md state. The claim about which packages are already present vs. missing should be validated before running the task."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 12,
+      "issue": "Task 12 (Code Audit, Wave 7) depends on Tasks 10 and 11 (Wave 6). However Task 12 also reviews Task 9 files (architecture.md, deployment.md, ux-guidelines.md) via its audit of 'all feature code written in Tasks 1–11'. Task 9 documentation changes are in scope for audit. Yet Task 12 has no dependency on Task 9 (it only depends_on: [10, 11]). Since Task 9 is in Wave 6 (parallel with Tasks 10 and 11), it SHOULD complete before Wave 7 starts. However, if Task 9 is still in-progress when Task 12 starts (both Wave 6), the audit may miss reviewing the documentation updates.",
+      "fix": "This is acceptable given Wave 6 runs Tasks 9, 10, 11 all before Wave 7 starts. However, the dependency declaration for Task 12 should include Task 9 (add 9 to depends_on) to make this explicit and ensure Wave ordering is enforced."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "Task 8 creates middleware/auth.global.ts but Task 10 references vee-validate + zod forms using 'the pattern from frontend/tests/ examples set up in Task 8'. Task 8 creates the test infrastructure (vitest.config.ts, tests/ directory) but does NOT create any vee-validate form example in tests/. Task 10's hint says 'Use the vee-validate/zod pattern from frontend/tests/ examples set up in Task 8' — but Task 8 only sets up the test infrastructure, not vee-validate form pattern examples. There are no form example files listed in Task 8's Files section.",
+      "fix": "Update Task 10's hint to reference the tech-spec pattern (toTypedSchema + useForm) rather than non-existent 'examples set up in Task 8'. Alternatively, add a basic form pattern example file to Task 8's output."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 2,
+      "issue": "Task 2 SecurityConfigTest note says: 'The SecurityConfigTest class must include @MockitoBean for the same three infrastructure beans that existing tests mock: MongoClient, RedisConnectionFactory, and ReactiveRedisConnectionFactory.' This is correct and consistent with the existing test pattern (verified in HealthEndpointTest.java). However, patterns.md still says 'CSRF must be explicitly disabled for stateless REST APIs' — which contradicts Task 2's implementation. Task 2 correctly warns about this ('Ignore any patterns.md guidance about disabling CSRF') and says Task 9 will fix it. Task 9 however does NOT list patterns.md as a file to modify — only architecture.md, deployment.md, and ux-guidelines.md. The CSRF pattern in patterns.md will remain incorrect after all 15 tasks complete.",
+      "fix": "Add patterns.md to Task 9's files-to-modify list with a note to update the CSRF section: change 'CSRF must be explicitly disabled for stateless REST APIs' to 'CSRF is enabled for session-based authentication. Use CookieCsrfTokenRepository for SPA use.'",
+      "note": "patterns.md currently lives at .claude/skills/project-knowledge/references/patterns.md and is confirmed to contain the outdated CSRF guidance."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 1,
+      "issue": "Task 1 says to add the JaCoCo plugin and jacocoTestReport configuration. The task correctly lists this. Task 15 (QA) uses jacocoTestReport to verify 80%+ coverage. This chain is correctly sequenced. However, Task 1's 'application-test.properties' step says 'new file' with 'minimal (spring profile activation)' — but the actual URI overrides for Testcontainers are injected via @DynamicPropertySource in AbstractIntegrationTest (created in Task 5). The application-test.properties is described as 'minimal' in Task 1 but Task 5 says it overrides 'spring.data.mongodb.uri, spring.data.redis.url, spring.mail.host/port'. Task 14 (Test Audit) also says application-test.properties should override these. This creates ambiguity: are the overrides in application-test.properties (static) or @DynamicPropertySource (dynamic)? They should be in @DynamicPropertySource only, with application-test.properties being truly minimal (just spring.profiles.active=test). The two tasks describe different things for the same file.",
+      "fix": "Clarify in Task 1 that application-test.properties is ONLY for spring profile activation (spring.profiles.active=test or similar). The actual URI overrides are handled by @DynamicPropertySource in AbstractIntegrationTest (Task 5). Task 5 should be the authoritative source for what goes in application-test.properties."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 15,
+    "claims_verified": 62,
+    "issues_found": 15,
+    "by_severity": {
+      "critical": 5,
+      "major": 7,
+      "minor": 3
+    },
+    "categories": {
+      "cross-task-integration": 8,
+      "hallucination": 2,
+      "missing_function": 1,
+      "inconsistent_approach": 1,
+      "hints": 2,
+      "missing_file": 0,
+      "security": 0,
+      "feasibility": 0,
+      "tdd": 0
+    }
+  }
+}

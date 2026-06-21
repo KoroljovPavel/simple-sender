@@ -1,0 +1,76 @@
+{
+  "severity_counts": {
+    "critical": 0,
+    "major": 1,
+    "minor": 4,
+    "info": 3
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "414-437",
+      "issue": "warnLogOnDuplicate_noTokenInOutput fails the litmus test for AC18. The test fires the WARN log site (two POSTs with same updateId) but feeds it ONLY plain projectId + plain updateId — there is no token-shaped substring anywhere in the input that the scrubber could be asked to redact. The in-test comment even acknowledges this: 'Embed a Telegram-token-shaped value in projectId-like position is impossible'. Litmus check: delete both scrubTokens(projectId) and scrubTokens(String.valueOf(updateId)) calls from the WARN log site (controller line 153-155) — this test still passes because TOKEN_PATTERN (\\d{1,20}:[A-Za-z0-9_-]{30,50}) would not match a bare projectId/updateId either way. The test therefore does NOT exercise the scrubber it claims to defend. Contrast with errorLogOnEnqueueFail_noTokenInOutput (line 440-463), which injects a real token-shaped string into the exception message and would FAIL if scrubTokens were removed — that test is correct.",
+      "recommendation": "Force a token-shaped string through the WARN log site. Two options: (a) extend the WARN log to include the rawUpdate.getId() or some payload-derived field, then arrange for an updateId/projectId that contains the token regex shape (not feasible since both are server-controlled). (b) Best fix: extend the WARN log site to additionally log a payload-derived value (e.g. saved.getPayload().getString('text') or the body's chat.username field) wrapped in scrubTokens, then plant a token-shaped string in the message text field of samplePayload(), e.g. .append('text', '1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789xyz'), and run the duplicate scenario. The test will then fail if scrubTokens is removed. Alternative (c): if the WARN site genuinely never logs payload-derived strings, downgrade the test to a positive existence assertion (assert WARN line is emitted and contains the literal substring 'duplicate update') and add a code-grep guard asserting scrubTokens is called at that site — but that weakens the AC18 contract."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "139-149",
+      "issue": "enqueuedCount() uses a hand-rolled Thread.sleep busy-wait instead of Awaitility. BotControllerIT (the precedent IT in the same module) already imports Awaitility (`import static org.awaitility.Awaitility.await;` at line 50) and uses it for similar settle-then-assert patterns. The hand-rolled loop also has a subtle exit-too-early bug: it returns as soon as count > 0, which is fine for the happy-path test (one POST → expect 1) but is the wrong predicate for the idempotency tests where two POSTs may race — the helper can return after observing POST #1's enqueue while POST #2 is still in-flight. With the deterministic UUID the final stable count is still 1, but the helper does not actually verify stability.",
+      "recommendation": "Replace the body with: `return await().atMost(Duration.ofSeconds(2)).until(() -> storageProvider.countJobs(StateName.ENQUEUED), count -> count >= 1L);` for cases that expect >=1, OR add a sibling helper `awaitEnqueuedCountStable()` that polls until two successive reads (separated by 100ms) return the same value before returning it. For the parallel duplicate test specifically, prefer asserting via `await().atMost(...).untilAsserted(() -> assertThat(storageProvider.countJobs(StateName.ENQUEUED)).isEqualTo(1L))` — that pattern asserts both the value AND its stability."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "300-329",
+      "issue": "receive_enqueueFailsThenRetries_selfHealsToSingleJob asserts `s1 >= 500` rather than `s1 == 500`. Spring WebFlux's default error handler for an unhandled RuntimeException emits 500 — a 5xx range assertion accepts 502/503/504 which would indicate a different (and broken) failure mode. Loosening the assertion to 5xx hides regressions in error mapping.",
+      "recommendation": "Change `assertThat(s1).isGreaterThanOrEqualTo(500);` to `assertThat(s1).isEqualTo(500);`. If the actual response is 503 (because Spring's reactive handler escalates) — update the assertion to that exact value with a comment. Either way pin the exact status code; the AC for self-heal hinges on Telegram retrying on 5xx, but the test should still anchor the exact emitted status."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "65-72",
+      "issue": "@BeforeEach calls storageProvider.deleteJobsPermanently(..., Instant.now().plusSeconds(60)) for three states (ENQUEUED, SUCCEEDED, FAILED). The +60s upper bound is correct for purging jobs created during the test, but PROCESSING and DELETED states are not purged. If a prior test in another IT class leaves a PROCESSING job (low likelihood with JobRunrInMemoryConfig + no worker thread, but possible if a parent context bleeds state), `storageProvider.countJobs(StateName.ENQUEUED)` is unaffected but storage-wide invariants for shared-context tests could drift. Also, `meterRegistry.clear()` followed by `controller.cacheCounters()` works only because the controller exposes `cacheCounters()` package-private — this is an implementation-coupling between IT and controller that should be documented.",
+      "recommendation": "Add `storageProvider.deleteJobsPermanently(StateName.PROCESSING, Instant.now().plusSeconds(60));` and `storageProvider.deleteJobsPermanently(StateName.DELETED, Instant.now().plusSeconds(60));` to be defensive. For the meterRegistry/cacheCounters coupling: add a comment on the package-private `cacheCounters()` declaration in the controller stating 'visible for test reset; @BeforeEach in TelegramWebhookControllerIT calls this after meterRegistry.clear()'."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "279-298",
+      "issue": "receive_duplicateUpdateId_returns200_singleRowSingleJob uses `parallel(2).runOn(Schedulers.boundedElastic())` which IS the correct pattern per BotControllerIT comment ('runOn(boundedElastic) is required so the in-process WebTestClient.bindToApplicationContext path does not serialise them'). However, BotControllerIT's actual implementation (line 582-591) uses `Mono.fromCallable(...).subscribeOn(boundedElastic)` and zips two Monos, NOT the ParallelFlux runOn pattern. The runOn pattern works but has not been demonstrated to actually achieve real concurrency in this codebase. If runOn ends up serialising in practice (because Mono.fromCallable + flatMap collapses to a single elastic thread under load), the race is never exercised and the test passes trivially.",
+      "recommendation": "Mirror BotControllerIT's precedent exactly: replace the parallel().runOn block with `Mono.zip(Mono.fromCallable(() -> post(...)).subscribeOn(Schedulers.boundedElastic()), Mono.fromCallable(() -> post(...)).subscribeOn(Schedulers.boundedElastic()), (a, b) -> List.of(a, b)).block()`. This guarantees two distinct elastic threads. Alternatively, add a smoke instrumentation to the test (e.g. capture Thread.currentThread().getName() in a CopyOnWriteArrayList from each POST execution) and assert at least 2 distinct thread names appeared — that proves the race was real."
+    },
+    {
+      "id": "F6",
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "159-188",
+      "issue": "Two happy-path tests exist: `receive_happyPath_returns200_persistsAndEnqueues` (line 159) and `receive_happyPath_postEnqueuedJobCountEqualsOne` (line 180). The second is a strict subset of the first — it only asserts status == 200 and enqueuedCount == 1, both of which the first test already asserts. Per test-master 'redundant testing anti-pattern' guidance, the second test does not earn its place.",
+      "recommendation": "Delete `receive_happyPath_postEnqueuedJobCountEqualsOne`. If the intent was to anchor AC6 with a distinct test method name for traceability, rename the first test to `receive_happyPath_returns200_persistsAndEnqueues_AC6` and add an inline comment mapping each assertion to its acceptance criterion. Saves ~10s on the test class runtime (one full Spring context POST round-trip)."
+    },
+    {
+      "id": "F7",
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "381",
+      "issue": "api_csrfRegression_postWithoutXsrfToken_rejected posts `bodyValue(new Document(\"name\", \"anything\"))` to /api/v1/projects. Document is a BSON type; the Jackson serializer may not produce strictly canonical JSON for /api/v1/projects (the controller may reject with 400 before CSRF check). The test still asserts isForbidden() (403) which the security chain emits for unauthenticated state-changing requests, but the body shape is irrelevant to the CSRF check — the security filter chain runs first.",
+      "recommendation": "Replace `new Document(\"name\", \"anything\")` with `java.util.Map.of(\"name\", \"anything\")` for clarity. Functionally equivalent for this assertion, but signals intent (this is a Spring controller, not a BSON sink). Optional — does not affect correctness."
+    },
+    {
+      "id": "F8",
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "78-95 (task file line 82-94)",
+      "issue": "TDD anchor coverage check: all 13 anchors listed in tasks/10.md ## TDD Anchor are present (renames applied for csrfRegression: `_returns403` → `_rejected`). Two bonus tests beyond the anchor list: `receive_happyPath_postEnqueuedJobCountEqualsOne` (see F6) and `receive_anotherBotsSecret_returns401` (line 465-475 — defense-in-depth check that a CONNECTED bot with a DIFFERENT secret hash hits invalid_secret counter, not project_not_found). The second is a strong meaningful test and should remain.",
+      "recommendation": "No action — flagging this purely as a coverage record. Verdict: TDD anchor matrix is satisfied (13/13)."
+    }
+  ],
+  "summary": "Test suite is structurally sound: all 13 TDD anchors are present, the ListAppender per-site filter pattern (logger name + level) is correctly applied at both AC18 sites, setEnqueuer is reset cleanly in @AfterEach, and the race tests follow the documented `runOn(boundedElastic)` precedent. One major issue: `warnLogOnDuplicate_noTokenInOutput` fails the litmus test — it never plants a token-shaped string in the WARN log input, so the assertion passes even if scrubTokens were removed from the WARN site (the sibling ERROR-site test does this correctly). Minor concerns: hand-rolled poll loop instead of project-standard Awaitility, loose 5xx-range assertion in the self-heal test, an unjustified duplicate happy-path test, and BotControllerIT uses Mono.zip+subscribeOn rather than parallel().runOn for the actual race pattern.",
+  "verdict": "conditional"
+}

@@ -1,0 +1,153 @@
+{
+  "status": "pass",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 24,
+  "requirements_covered": 22,
+  "requirements_partial": 2,
+  "requirements_missing": 0,
+  "findings": [
+    {
+      "type": "partial",
+      "source": "tech-spec",
+      "requirement": "AC12: delete custom field → cascade to all subscribers, integration test with ≥10 subscribers",
+      "detail": "Tech-spec Testing Strategy specifies CustomFieldDefinitionIT with '≥5 seeded subscribers' for the delete-cascade assertion. User-spec AC12 explicitly requires '≥10 subscribers'. The cascade logic and integration test are present, but the test seeding threshold is below the AC requirement.",
+      "severity": "minor"
+    },
+    {
+      "type": "partial",
+      "source": "tech-spec",
+      "requirement": "AC23 / Decision 10: personal_message_failed event in subscriber_events",
+      "detail": "Decision 10 lists 'personal_message_failed' as a CRM event type written to subscriber_events. AC23 includes it in the enumerated CRM events. However, Task 6 (TelegramSender hook) and Task 8 (SubscriberController send-message endpoint) do not designate a writer for this event — AC5 test assertions only mention 'subscriber_blocked' (from SubscriberService) and 'telegram_send_failed' (from TelegramSender). It is unclear whether markBlockedByChatId/markDeletedByChatId are expected to write 'personal_message_failed' in addition to 'subscriber_blocked'/'subscriber_deleted', or if the controller writes it on the failure path. No unit or integration test asserts that 'personal_message_failed' is written to subscriber_events.",
+      "severity": "minor"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC16 / Decision 7: CSV export security — formula injection",
+      "detail": "Decision 7 specifies RFC 4180 escaping (double-quotes around fields containing commas, double-quotes, or newlines). It does not address CSV formula injection: cells whose value begins with '=', '+', '-', or '@' are interpreted as formulas by Excel/Google Sheets and can execute code when a victim opens the file. Task 13 (Security Audit) mentions this as a check item, but the tech-spec does not specify the mitigation strategy in Decision 7 or SubscriberCsvWriter design, nor does SubscriberCsvWriterTest enumerate it as a test case. For a feature that exports user-controlled content (firstName, lastName, username, custom field values) to spreadsheets, this omission in the design spec leaves the fix to the security auditor's discretion rather than encoding it as a testable requirement.",
+      "rationale": "User-supplied data (firstName, username, custom field values like city='=HYPERLINK(...)') flows directly into CSV cells. RFC 4180 quoting does not prevent formula evaluation — prefixing with a tab or single-quote is the standard mitigation. The tech-spec delegates detection to Task 13 but does not specify the fix.",
+      "recommendation": "Add to Decision 7: 'Cells whose value starts with =, +, -, or @ are prefixed with a tab character (U+0009) to suppress formula evaluation in spreadsheet applications.' Add a SubscriberCsvWriterTest case asserting this prefix.",
+      "severity": "major"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC8 / Task 4: subscriber-tag association endpoints task ownership ambiguity",
+      "detail": "Task 4 (TagService + TagController) description says '...also implement subscriber-tag association endpoints (POST/DELETE /subscribers/{id}/tags)... these live in SubscriberController but delegate to TagService (Task 8 wires the controller — this task only ships the service).' Task 8 description (SubscriberController) lists POST/DELETE /subscribers/{id}/tags as endpoints to implement, but TagControllerIT verify-smoke in Task 4 asserts 'counter inc/dec on add/remove via subscriber endpoints' — implying Task 4 tests subscriber-tag association via a controller that Task 4 is not supposed to create. The split is inconsistent: TagControllerIT would need SubscriberController wired to test counter behavior, creating a cross-task dependency that is not made explicit. The verify-smoke for Task 4 ('./gradlew test --tests TagControllerIT') will fail if subscriber-tag endpoints are deferred to Task 8.",
+      "rationale": "In the L feature, cross-task integration test dependencies need to be explicit. As written, Task 4's verify-smoke cannot pass without Task 8's controller output, making the 'parallel, depends on T1' wave claim for Task 4 incomplete.",
+      "recommendation": "Either (a) move subscriber-tag endpoint implementation fully into Task 4 including the SubscriberController stub needed for TagControllerIT, or (b) adjust Task 4's verify-smoke to exclude counter integration tests and move them to Task 8's verify-smoke. Clarify that Tasks 3-7 in Wave 2 are only partially independent.",
+      "severity": "major"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC1/AC24: SubscriberService interface extension not specified",
+      "detail": "The existing SubscriberService interface (code-research §1) has exactly two methods: upsertFromTelegramUpdate and markUnsubscribed. The tech-spec adds markBlockedByChatId, markDeletedByChatId, and unsubscribeManual to the implementation. Task 6 calls subscriberService.markBlockedByChatId from TelegramSender, which requires these methods on the interface. Task 3 description lists these methods as implementation targets. However, no task explicitly lists 'extend SubscriberService interface with markBlockedByChatId, markDeletedByChatId, unsubscribeManual' as a file-modification step. If Task 6 is executed before Task 3 reaches interface extension, it fails compilation.",
+      "rationale": "For an L-feature with strict wave ordering, interface contract updates need explicit ownership. The current task decomposition could leave Task 6 in a broken state if the implementer follows the 'Files to modify' list literally without inferring that the interface must be extended.",
+      "recommendation": "Add 'SubscriberService.java (extend interface with markBlockedByChatId, markDeletedByChatId, unsubscribeManual)' to Task 3 'Files to modify' list. Add a note to Task 6 that it depends on the interface extension from Task 3.",
+      "severity": "minor"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "Staging smoke runbook ownership (user-spec verification prerequisite)",
+      "detail": "User-spec 'Як проверить' section states 'Prerequisite: перед запуском smoke нужно создать docs/staging-smoke/09-subscribers.md (новый runbook, создаётся в рамках задач этой фичи).' Tech-spec assigns this to Task 11 OR Task 17 — using OR creates ambiguity. Task 11 description does not mention the runbook in its primary scope (tags page + custom-fields page + exports dialog + E2E). Task 17 says 'if not produced earlier.' Both tasks' 'Files to modify' lists include the runbook conditionally. This creates a risk that neither task explicitly claims ownership and the runbook is deferred or skipped, blocking post-deploy verification.",
+      "rationale": "The runbook is a prerequisite for Task 17 (Post-deploy QA) and for the user post-deploy checklist. Dual-task ambiguity in task decomposition for a required artifact is a planning gap.",
+      "recommendation": "Assign runbook creation definitively to Task 11 'Files to modify' list (unconditionally). Remove the conditional from Task 17.",
+      "severity": "minor"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC19: signed download URL expiry calculation not specified",
+      "detail": "The tech-spec specifies that the signed download URL includes expiresAt in the HMAC payload and that expiresAt < now returns 410 export_expired. The ExportResponse DTO has expiresAt field. However, the tech-spec does not specify when expiresAt is calculated: (a) at the time the export completes (createdAt + 7d), or (b) at the time the export list is fetched (now + 7d), or (c) at the time the URL is minted. The user-spec says '7 дней' retention on the export file and the cleanup job purges after 7 days. If the token is minted at list-fetch time (b/c), the URL could be valid past the GridFS purge window. If minted from createdAt (a), the URL expires at the same time the file is purged — correct semantics. This needs to be explicit in Decision 2 or the download endpoint description.",
+      "rationale": "Incorrect expiry calculation could lead to token-valid but file-purged state (returning 410 export_purged) or the reverse — file present but token expired. The consistency between token expiry and GridFS retention must be specified.",
+      "recommendation": "Add to Decision 2 or Task 9: 'expiresAt = export.createdAt + SUBSCRIBER_EXPORT_RETENTION_DAYS. Token is minted once (at export completion, stored as signedDownloadUrl on SubscriberExport) or minted on-the-fly at list-fetch from export.createdAt. Specify which.' Recommend storing the expiresAt value on the SubscriberExport document at DONE time, so it is consistent across list fetches.",
+      "severity": "minor"
+    }
+  ],
+  "ac_coverage": {
+    "covered": [
+      "AC1",
+      "AC2",
+      "AC3",
+      "AC4",
+      "AC5",
+      "AC6",
+      "AC7",
+      "AC8",
+      "AC9",
+      "AC10",
+      "AC11",
+      "AC13",
+      "AC14",
+      "AC15",
+      "AC16",
+      "AC17",
+      "AC18",
+      "AC19",
+      "AC20",
+      "AC21",
+      "AC22",
+      "AC24"
+    ],
+    "uncovered": [],
+    "shallow_coverage": [
+      "AC12 (cascade integration test threshold: tech-spec says ≥5 subscribers, user-spec requires ≥10)",
+      "AC23 (personal_message_failed event has no designated writer or test assertion)"
+    ]
+  },
+  "scope_creep": [],
+  "overengineering": [],
+  "underengineering": [
+    {
+      "item": "CSV formula injection not mitigated in SubscriberCsvWriter design",
+      "where": "Decision 7, SubscriberCsvWriterTest, Task 9",
+      "rationale": "RFC 4180 escaping in Decision 7 covers structural CSV safety but not spreadsheet formula injection. User-controlled fields (firstName, username, custom field values) flow to CSV. Task 13 Security Audit lists it as a check item but tech-spec does not specify or test the fix.",
+      "recommendation": "Add formula-prefix mitigation (tab or single-quote prefix on cells starting with =, +, -, @) to Decision 7 and SubscriberCsvWriterTest."
+    },
+    {
+      "item": "Subscriber-tag association endpoint task ownership creates broken wave dependency",
+      "where": "Task 4 verify-smoke vs Task 8 implementation scope",
+      "rationale": "Task 4 verify-smoke includes TagControllerIT which tests counter inc/dec via subscriber endpoints, but subscriber endpoints are implemented in Task 8. Tasks 4 and 8 are in different waves — Task 4 is Wave 2, Task 8 is Wave 3. The verify-smoke for Task 4 cannot pass without Wave 3 output.",
+      "recommendation": "Move TagControllerIT's subscriber-endpoint counter assertions to Task 8's verify-smoke, or extract a minimal subscriber-tag stub into Task 4."
+    },
+    {
+      "item": "SubscriberService interface extension has no explicit task ownership",
+      "where": "Task 3 Files to modify list, Task 6 dependency",
+      "rationale": "Three new interface methods (markBlockedByChatId, markDeletedByChatId, unsubscribeManual) required by TelegramSender (Task 6) are not listed as explicit interface changes in any task's Files to modify list.",
+      "recommendation": "Add SubscriberService.java to Task 3's Files to modify list with explicit note about interface extension."
+    },
+    {
+      "item": "Staging smoke runbook has dual-task ambiguous ownership",
+      "where": "Task 11 and Task 17 descriptions",
+      "rationale": "Using OR for runbook creation leaves open the risk that neither task explicitly claims it. The runbook is a post-deploy prerequisite.",
+      "recommendation": "Assign unconditionally to Task 11."
+    },
+    {
+      "item": "Signed download URL expiry calculation semantics not specified",
+      "where": "Decision 2, Task 9 (ExportSubscribersJob, ExportResponse DTO)",
+      "rationale": "Token expiresAt value derivation is unspecified — minted at completion vs. on-the-fly at list fetch. Inconsistency between token expiry and GridFS purge window is a correctness risk.",
+      "recommendation": "Specify: expiresAt = export.createdAt + retention; store on SubscriberExport at DONE time; mint token from stored expiresAt."
+    }
+  ],
+  "shallow_solution_sections": [],
+  "findings_requiring_user_decision": [
+    {
+      "type": "underengineering",
+      "summary": "CSV formula injection mitigation: specify or accept risk",
+      "user_spec_says": "No mention of formula injection; user-spec only mentions RFC 4180 escaping in passing. Security scope is implicit.",
+      "tech_spec_says": "Decision 7 specifies RFC 4180 quoting only. Task 13 Security Audit lists formula injection as a check item. No design decision or test specifies the mitigation. Leaves the fix to auditor discretion without encoding it as a testable requirement."
+    },
+    {
+      "type": "underengineering",
+      "summary": "Signed download URL expiry calculation: minted at completion or on-the-fly?",
+      "user_spec_says": "7-day retention window on exports; ExportResponse has expiresAt field. No specification of when expiresAt is calculated.",
+      "tech_spec_says": "ExportResponse DTO has expiresAt field. sendExportReadyEmail receives expiresAt parameter. ExportCleanupJob purges after 7 days. But the point of calculation is unspecified — if minted on-the-fly at list fetch, it can diverge from the actual purge time."
+    }
+  ]
+}

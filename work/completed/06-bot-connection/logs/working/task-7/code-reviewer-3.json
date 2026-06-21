@@ -1,0 +1,37 @@
+{
+  "summary": "approved",
+  "findings": [],
+  "verification": {
+    "scope": "Round-3 verification of BOT-STORE-005 fix (commit 5b2839c).",
+    "checks": [
+      {
+        "check": "All three stale-write guards use `inFlight?.promise === run`",
+        "result": "pass",
+        "evidence": "frontend/stores/bot.ts lines 22 (success path), 27 (404 path), 32 (finally). All three sites match the run-identity guard; no `inFlight?.projectId === projectId` remains."
+      },
+      {
+        "check": "`let run!` pattern has no TDZ pitfall",
+        "result": "pass",
+        "evidence": "Line 18 declares `let run!: Promise<Bot | null>`; line 19 synchronously assigns `run = (async () => { ... })()`. The IIFE body references `run` only at lines 22/27/32, all of which sit AFTER `await useApi()(...)` on line 21. The first synchronous tick assigns `run` before the IIFE's first microtask resumes, so the guard reads always see the assigned binding. Definite-assignment assertion (`!`) is appropriate here because TS cannot statically prove assignment-before-use through the IIFE indirection. Comment on lines 15-17 documents this correctly."
+      },
+      {
+        "check": "A→B→A test (bot.spec.ts:228-257) would fail under the old projectId-only guard",
+        "result": "pass",
+        "evidence": "Empirically verified: temporarily reverting all three guards to `inFlight?.projectId === projectId` (via in-place sed, then restored) causes exactly the `rapid A→B→A re-selection` test to fail with `expected { telegramUsername: 'StaleAlpha', ... } to be null`, while the other 17 tests remain green. The test is precisely targeted at this regression; the new run-identity guard is the minimal change that flips it from red to green."
+      },
+      {
+        "check": "Full test suite passes under current implementation",
+        "result": "pass",
+        "evidence": "`vitest run tests/stores/bot.spec.ts` — 18/18 passed."
+      },
+      {
+        "check": "Working tree clean after verification",
+        "result": "pass",
+        "evidence": "`git status frontend/stores/bot.ts` reports no changes; the three guard sites all read `inFlight?.promise === run` in the final file."
+      }
+    ],
+    "out_of_scope_per_instructions": [
+      "BOT-STORE-002, BOT-STORE-003, BOT-STORE-004, BOT-TYPES-001 — previously skipped findings; not re-litigated."
+    ]
+  }
+}

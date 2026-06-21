@@ -1,0 +1,38 @@
+{
+  "summary": "Holistic cross-component code audit of feature 12-funnels-triggers (Tasks 1-10). Read the final state of all 35 production source files plus key tests across funnel/webhook/subscriber/api/security/frontend, mapped via git diff 2212b64..HEAD. The feature lands as a consistent, non-duplicating architecture: exactly one FunnelEventService @Service singleton; a single FunnelExecutionFactory @Component owning insertExecution/cancelExistingForPair (both FunnelTriggerServiceImpl and FunnelEventService inject it — no forked writer, no FunnelEventService->FunnelTriggerServiceImpl edge); all four trigger sources (webhook keyword, subscriber tag/field, StepExecutor EMIT_EVENT, EventsController api-event) call the one dispatchForSubscriber entrypoint. Security chains are correctly ordered (@Order(1) STATELESS key-chain securityMatcher('/api/integrations/**') before @Order(2) session chain; matchers do not overlap — ApiKeyController at /api/v1/projects/** correctly stays on the session chain). Explicit-depth threading is uniform with NO ThreadLocal: roots pass 0 (fire, keyword webhook, manual controllers, EventsController), funnel-step callers pass execution.getEnrollDepth()+1 (StepExecutor ADD_TAG/SET_CUSTOM_FIELD/EMIT_EVENT), originDepth flows through the factory's enrollDepth stamp. Three backstops are genuinely independent: depth-cap (Redis-independent, gated first), volume rate-limit (Redis fail-open, depth>0 only, distinct key bf:rate:auto-enroll:{subscriberId} vs bf:rate:events), fan-out ceiling (Redis-independent, app.funnel.max-fanout-per-event). Error-isolation (try/catch(Throwable) + greppable PII-free WARN) is present on every new dispatch path. The Task 2 BeanPostProcessor deviation (vs ApplicationRunner) and the Task 5 @Lazy bean-cycle break in SubscriberServiceImpl are both sound and well-justified. event_name slug ^[A-Za-z0-9_-]{1,64}$ is identical in EventIngressRequest DTO, FunnelService EVENT_NAME_PATTERN, and the frontend EVENT_NAME_RE. copyOf preserves eventName. Config keys all present in application.properties. Frontend locale parity gate passes (exit 0). No critical or high findings; a small number of low/medium observations recorded below, none blocking.",
+  "findings": [
+    {
+      "severity": "low",
+      "area": "backstop ordering / rate-limit accounting",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": "138-142",
+      "description": "The per-subscriber auto-enroll volume counter (autoEnrollRateLimitExceeded -> Redis INCR) runs BEFORE bot/subscriber resolution and BEFORE the matchingFunnels() lookup. A depth>0 dispatch that ultimately matches ZERO funnels (e.g. an EMIT_EVENT step whose event_name has no listener) still consumes one token of the 20/min budget. This is a minor accounting nuance, not a correctness or safety bug — the cap is conservative (over-counting only ever tightens the loop guard, never loosens it) and the dispatcher is error-isolated. Worth noting because an author with a frequently-firing no-listener EMIT_EVENT inside a funnel could see auto enrolls throttled sooner than the '20 successful auto-starts' the user-spec text implies.",
+      "recommendation": "Optional: if exact 'counts only realized auto-enrolls' semantics are desired, move the volume INCR to after matchingFunnels() returns a non-empty list (still before the insert loop). Current placement is defensible (it bounds attempt volume / Mongo load too) — keep as-is unless QA flags the throttle-on-no-match behavior. Document the chosen semantics either way."
+    },
+    {
+      "severity": "low",
+      "area": "fan-out ceiling drop accounting",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": "171-182",
+      "description": "The fan-out ceiling's 'dropped' count in the WARN (matches.size() - inserted) counts as dropped any matched funnel beyond the ceiling index, but 'inserted' only increments when insertOneFunnel returns true (a re-enter no-op for an allowReEnter=false funnel returns false). So when the matched list contains re-enter no-ops near the ceiling boundary, the loop can iterate past maxFanoutPerEvent matches without ever reaching the ceiling break (because the guard is 'inserted >= ceiling', not 'iterated >= ceiling'). Net effect: the ceiling bounds INSERTED executions (the intended invariant — width of real fan-out), which is correct and safe; the only imprecision is that the dropped= number in the WARN can over-report when no-op duplicates precede the break. Cosmetic logging only.",
+      "recommendation": "No functional change needed (bounding inserted executions is the correct width invariant). If log precision matters, compute dropped from the remaining iterator position rather than matches.size()-inserted, or clarify in the WARN that the count is matched-funnels-not-attempted."
+    },
+    {
+      "severity": "low",
+      "area": "dead/unused constant",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": "76",
+      "description": "LOG_DISPATCH_REENTER_IGNORED is used (insertOneFunnel), but LOG_AUTO_ENROLL_RATE_REDIS_FAIL_OPEN, LOG_DROP_* and the no-op markers are all referenced — confirmed in use. No genuine dead code found in the dispatcher. (Recorded as a deliberately-empty no-finding for this axis: greppable-marker constants are all wired to a log site.)",
+      "recommendation": "None — included only to document that the dead-code axis was checked across the dispatcher and consumers and came back clean."
+    },
+    {
+      "severity": "medium",
+      "area": "webhook keyword path — redundant lookup / consistency",
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": "204-220",
+      "description": "In the plain-text private-chat branch the subscriber is upserted via upsertFromTelegramUpdate, then dispatchKeyword() immediately re-resolves the same subscriber via subscriberService.findByChat (and FunnelEventService internally resolves the bot AND the subscriber a third time via findById). This is three lookups (one upsert + findByChat in the job + findById in the dispatcher) for one subscriber on the hot webhook path. It is correct and was accepted in the Task-6 review as intentional (the dispatcher is subscriberId-keyed and self-contained), but it is the one place in the feature where the per-trigger-source call shape causes measurable redundant DB work on every inbound free-text message. Not a defect — flagged as the highest-value perf/consistency observation for a busy bot.",
+      "recommendation": "Optional perf hardening (post-MVP): have upsertFromTelegramUpdate return the resolved Subscriber so the job can pass subscriberId straight into dispatchForSubscriber, and/or let the keyword caller pass the already-resolved subscriber. Keep current shape if simplicity/uniformity across the four trigger sources is preferred — the cost is bounded by the existing /start rate-limit and the indexed (projectId, botId, chatId) lookup."
+    }
+  ],
+  "verdict": "issues"
+}

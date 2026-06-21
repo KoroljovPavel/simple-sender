@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "summary": "Round 1 fixes are sound. The four new me() unit tests cover the documented branches with meaningful StepVerifier assertions; the validAppUserDetails case asserts on every response field, and the principalNotAppUserDetails case uses an explicit String principal so it isolates the type-check branch. The Redis fail-open test (login_redisCheckFails_failsOpen_andContinuesToUserLookup) passes the litmus test — removing the onErrorResume in checkBruteForce makes verify(userRepository).findByEmail fail. The X-Forwarded-For fallback test isolates the remoteAddress branch via a key-specific verify. The email canonicalization test catches the case-variant bypass via verify(findByEmail(lowercase)) and verify(get(lowercased-key)). The login_failed event verifications added to existing failure-path tests strengthen them from 'returns 401' into 'returns 401 AND emits the audit event with the correct reason'. Two minor weaknesses remain that did not exist before round 1 (a filter-isolation gap in me_unauthenticatedToken and only one of the three Decision-4 onErrorResume blocks is explicitly tested), but neither rises to blocking severity given the deferral plan. The four IT-level deferrals (sessionFixation, rememberMe TTL, noRememberMe TTL, login_success event in DB), the AuthControllerIT naming, and RETURNS_DEEP_STUBS are accepted per the user-stated scope. Recommend documenting the deferred IT tests in decisions.md as committed.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServiceTest.java:443-453 (me_unauthenticatedToken_returns401)",
+      "issue": "Test does not isolate the isAuthenticated() branch. The principal passed to UsernamePasswordAuthenticationToken is the String 'x', which is also caught by the instanceof AppUserDetails filter. Litmus test: if the predicate 'a.isAuthenticated()' were silently dropped from AuthService.me() line 96, the principal-type check 'instanceof AppUserDetails' would still filter the token out, the switchIfEmpty would still fire, and the test would still pass. So this test does not actually protect the isAuthenticated() guard against regression. The other three me() tests are fine.",
+      "recommendation": "Use an AppUserDetails principal so only the isAuthenticated() flag distinguishes this test from me_validAppUserDetails: \n  AppUserDetails principal = new AppUserDetails(\"u-1\", \"x@y.z\", \"X\", \"active\"); \n  Authentication unauth = new UsernamePasswordAuthenticationToken(principal, null); \n  // constructor without authorities defaults isAuthenticated=true; explicit setAuthenticated(false) is mandatory: \n  unauth.setAuthenticated(false); \n  ... StepVerifier ... expectError(AppException.class) ... \nNow the only thing keeping the test green is the isAuthenticated() check; remove that predicate and the test fails. Two-line change."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServiceTest.java:241-258 (login_redisCheckFails_failsOpen_andContinuesToUserLookup)",
+      "issue": "Round 1 finding called for three Decision-4 fail-open tests, one per onErrorResume block: (a) checkBruteForce, (b) registerFailure, (c) resetBruteCounters. Round 2 added one test that exercises (a) directly and (b) as a side effect (because the same stub also makes increment error). (c) — resetBruteCounters fail-open on a successful login — is not tested. Litmus check: if AuthService.java:219-222 onErrorResume on redisTemplate.delete(...) is replaced with a propagating .doOnError, no existing test fails. A future refactor of the success path could turn a Redis DEL outage into a 5xx and ship without a failing test.",
+      "recommendation": "Add one focused test (≈12 lines): \n  @Test void login_success_redisDeleteFails_loginStillCompletes() { \n      stubBruteCounters(null, null); \n      User user = activeUser(); \n      when(userRepository.findByEmail(EMAIL)).thenReturn(Mono.just(user)); \n      when(passwordEncoder.matches(\"rightpass\", user.getPasswordHash())).thenReturn(true); \n      when(redisTemplate.delete(EMAIL_KEY, IP_KEY)).thenReturn(Mono.error(new RuntimeException(\"redis down\"))); \n      when(securityContextRepository.save(any(), any(SecurityContext.class))).thenReturn(Mono.empty()); \n      WebSession s1 = mock(WebSession.class); WebSession s2 = mock(WebSession.class); \n      when(s1.invalidate()).thenReturn(Mono.empty()); \n      ServerWebExchange exchange = mockExchangeWithSessions(s1, s2); \n      StepVerifier.create(authService.login(new LoginRequest(EMAIL, \"rightpass\", false), exchange)) \n              .assertNext(r -> assertThat(r.id()).isEqualTo(\"user-id-1\")) \n              .verifyComplete(); \n      verify(eventService).logEvent(eq(\"user-id-1\"), eq(\"login_success\"), any(), any(), isNull()); \n  } \nLitmus: replace the onErrorResume on redisTemplate.delete with .doOnError(...) → this test fails."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java (whole file — unchanged in round 1)",
+      "issue": "Carried over from round 1 (acknowledged-as-deferred): file is named *IT but is a @WebFluxTest slice with @MockitoBean AuthService, and the four real-IT TDD anchors (session fixation, rememberMe TTL persistence, noRememberMe TTL persistence, login_success event in events collection) are not present. The user has explicitly deferred this to the AbstractIntegrationTest task. Listed here only so it is not lost in the round 2 report — not a blocker for round 2.",
+      "recommendation": "Per user's stated plan: (a) commit the deferral note to work/02-auth/decisions.md naming the four anchors and the future task that owns them, and (b) add a single class-level Javadoc on AuthControllerIT.java pointing at decisions.md. Any subsequent reviewer/maintainer reading just the test file then knows where the missing IT lives. No code change in tests required this round."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 7,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 27,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "unbalanced"
+    }
+  }
+}

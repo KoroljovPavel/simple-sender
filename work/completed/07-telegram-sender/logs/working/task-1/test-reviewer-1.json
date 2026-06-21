@@ -1,0 +1,107 @@
+{
+  "summary": "Task 1 is a visibility-only refactor of TelegramApiClient (private→public on four members) with byte-identical bodies, signatures, and values. Declining to add new tests is the correct call: behavior is unchanged, the four members are already exercised by the existing TelegramApiClientTest suite, and the public-surface contract will be pinned at compile time by Task 4 when TelegramSender (a different package consumer) starts calling these symbols. The three TDD anchor tests cited by the task remain meaningful coverage anchors. One pre-existing, out-of-scope gap (no negative test for requireValidTokenShape's IllegalArgumentException branch) is noted as minor.",
+  "findings": [
+    {
+      "severity": "minor",
+      "area": "missing_coverage",
+      "finding": "No negative test exists for requireValidTokenShape's failure branch (the IllegalArgumentException thrown when the token doesn't match TOKEN_SHAPE). The happy-path test getMe_happyPath_returnsPopulatedTelegramUser passes a well-formed token, so if the entire body of requireValidTokenShape were deleted the suite would still go green for that path. This is a pre-existing gap (not introduced by Task 1) but is now slightly more relevant because the method is part of the public contract that TelegramSender will rely on.",
+      "suggestion": "Out of scope for Task 1 (visibility-only, AC explicitly forbids test changes). Capture as a TelegramSenderTest anchor in Task 4: when the sender invokes TelegramApiClient.requireValidTokenShape(tamperedToken) post-decrypt, it must surface IllegalArgumentException and be mapped to the appropriate AppException. Concrete assertions: StepVerifier.create(sender.send(botWithTamperedToken, ...)).expectErrorSatisfies(err -> assertThat(err).isInstanceOf(AppException.class); assertThat(((AppException) err).getCode()).isEqualTo(\"<expected_code>\")).verify(). That single Task-4 test simultaneously pins the negative branch of requireValidTokenShape and proves the cross-class consumer wires it correctly.",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java (whole file — gap, not a present-test defect)"
+    },
+    {
+      "severity": "minor",
+      "area": "missing_coverage",
+      "finding": "CONNECT_TIMEOUT (5s, TCP-connect) has no direct behavioral test in TelegramApiClientTest. The constant is wired into HttpClient.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, ...) at line 58 of TelegramApiClient.java, but no test forces a TCP-connect timeout (would require a non-routable address or a deliberately stalled listener). The Netty read-timeout test (getMe_nettyReadTimeout_retriesThenReturns502TelegramUnavailable) only exercises DEFAULT_RESPONSE_TIMEOUT via the package-private constructor's responseTimeout parameter — it does not touch CONNECT_TIMEOUT. This is a pre-existing gap, not caused by Task 1.",
+      "suggestion": "Out of scope for Task 1. Do not add a connect-timeout unit test here — it would be slow and flaky (depends on socket behavior). Instead, the value's reuse-correctness is verified structurally: Task 4's TelegramSender must read CONNECT_TIMEOUT directly (per Decision 12) and a static assertion in TelegramSenderTest can pin equality, e.g. assertThat(TelegramApiClient.CONNECT_TIMEOUT).isEqualTo(Duration.ofSeconds(5)) combined with a reflection/structural check that TelegramSender's HttpClient option uses the same constant. That gives behavioral confidence without a slow socket test.",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java (whole file — gap, not a present-test defect)"
+    }
+  ],
+  "verdict": "passed",
+  "metrics": {
+    "filesReviewed": 4,
+    "filesReviewedList": [
+      "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java (after edit)",
+      "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java",
+      "work/07-telegram-sender/tasks/1.md",
+      "work/07-telegram-sender/tech-spec.md (Decision 12)"
+    ],
+    "newTestsAdded": 0,
+    "newTestsExpected": 0,
+    "newTestsJustification": "Visibility-only refactor: signatures, bodies, and values unchanged. The four promoted members continue to be exercised by the existing suite, and the public-contract pin will be enforced at compile time by Task 4's TelegramSender consumer (cross-package call site cannot compile if visibility regresses).",
+    "litmusTest": {
+      "checked": 3,
+      "passed": 2,
+      "failed": 1,
+      "details": [
+        {
+          "test": "getMe_happyPath_returnsPopulatedTelegramUser (TelegramApiClientTest.java:57)",
+          "anchorFor": "requireValidTokenShape",
+          "litmusPassed": false,
+          "reasoning": "If the body of requireValidTokenShape is deleted, the test still passes (token is well-formed; the deleted check would have done nothing on this happy path anyway). The test exercises the call site, but does not pin the validator's logic. This is a known pre-existing gap, surfaced as a minor finding above."
+        },
+        {
+          "test": "getMe_5xxRetryExhausted_returns502TelegramUnavailable (TelegramApiClientTest.java:96)",
+          "anchorFor": "isTransient",
+          "litmusPassed": true,
+          "reasoning": "If isTransient is gutted to always return false, the Retry.filter rejects every signal, the very first 503 propagates immediately, and mockServer.getRequestCount() == 4 fails (would be 1). The assertion on request count and on the BAD_GATEWAY/telegram_unavailable mapping both depend on isTransient correctly recognizing 5xx as transient."
+        },
+        {
+          "test": "getMe_nettyReadTimeout_retriesThenReturns502TelegramUnavailable (TelegramApiClientTest.java:278)",
+          "anchorFor": "isTransient (ReadTimeoutException branch) + DEFAULT_RESPONSE_TIMEOUT wiring",
+          "litmusPassed": true,
+          "reasoning": "If the ReadTimeoutException branch in isTransient is removed, retry never engages on the read-timeout and request count is 1 instead of 4 — test fails. Also confirms the response-timeout plumbing path (custom 200ms override via the package-private constructor exercises the same wiring code that DEFAULT_RESPONSE_TIMEOUT flows through in the public constructor)."
+        }
+      ]
+    },
+    "coverageAssessment": "adequate",
+    "promotedMembersCoverageMap": {
+      "requireValidTokenShape(String)": {
+        "coveredBy": [
+          "getMe_happyPath_returnsPopulatedTelegramUser (positive path only — passes well-formed token through getMe→requireValidTokenShape)",
+          "setWebhook_passesSecretTokenAndUrlInBody (positive path via setWebhook)",
+          "deleteWebhook_happyPath_returnsTrueAndHitsCorrectPath (positive path via deleteWebhook)",
+          "setWebhook_4xxConfigError_mapsTo500WebhookConfigError (positive shape check before HTTP)",
+          "setWebhook_4xxConfigError_scrubsTokenInWarnLog (positive shape check before HTTP)",
+          "getMe_4xxBlankDescription_fallsBackToBadRequest (positive shape check before HTTP)",
+          "getMe_4xxNonJsonBody_fallsBackToBadRequest (positive shape check before HTTP)"
+        ],
+        "gap": "No negative test asserting IllegalArgumentException for a malformed token. Surfaced as a minor finding above; appropriate fix is in Task 4's TelegramSenderTest."
+      },
+      "isTransient(Throwable)": {
+        "coveredBy": [
+          "getMe_5xxRetryExhausted_returns502TelegramUnavailable (WebClientResponseException 5xx branch, retry-exhausted path)",
+          "deleteWebhook_5xxRetryExhausted_returns502TelegramUnavailable (WebClientResponseException 5xx branch, retry-exhausted path)",
+          "getMe_nettyReadTimeout_retriesThenReturns502TelegramUnavailable (ReadTimeoutException branch, cause-chain walk)"
+        ],
+        "gap": "No direct test for the IOException branch or the TimeoutException (java.util.concurrent) branch in isolation. Acceptable: those branches are reached via the WebClient/Netty stack and are already shaken by the retry-exhausted scenarios above. Not a Task-1 concern."
+      },
+      "DEFAULT_RESPONSE_TIMEOUT": {
+        "coveredBy": [
+          "getMe_nettyReadTimeout_retriesThenReturns502TelegramUnavailable (exercises the responseTimeout wiring path via the package-private constructor — same code path the public constructor uses to thread DEFAULT_RESPONSE_TIMEOUT into HttpClient)",
+          "All other tests (use the public constructor at TelegramApiClientTest:41, which threads DEFAULT_RESPONSE_TIMEOUT implicitly)"
+        ],
+        "gap": "Value (10s) is not asserted directly (no assertThat(DEFAULT_RESPONSE_TIMEOUT).isEqualTo(Duration.ofSeconds(10))). Acceptable for Task 1 — the value is a compile-time constant and the timeout-wiring code path is exercised. Task 4 can add a structural assertion if useful."
+      },
+      "CONNECT_TIMEOUT": {
+        "coveredBy": [
+          "All tests (constant is wired into HttpClient at construction time for every test)"
+        ],
+        "gap": "No behavioral test forces a TCP-connect timeout. Surfaced as a minor finding; not appropriate to fix in Task 1 (would be slow/flaky). Best addressed structurally in Task 4 via equality assertion + verification that TelegramSender reads the same constant."
+      }
+    },
+    "pyramidBalance": {
+      "unit": 12,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy",
+      "note": "TelegramApiClientTest uses MockWebServer for HTTP-layer fidelity, making these effectively narrow integration tests against a fake server. Distribution is appropriate for the SUT (a thin reactive HTTP client). Integration/E2E coverage for the connect/disconnect flow lives outside this file (BotService tests, controller tests) and is unaffected by Task 1."
+    },
+    "scopeAlignment": {
+      "taskAcSummary": "AC 1-6: four members declared public + comments. AC 7: bodies/signatures byte-identical. AC 8: existing TelegramApiClientTest passes unchanged. AC 9: compileJava clean. AC 10: no other file touched.",
+      "diffMatchesScope": true,
+      "diffMatchesScopeEvidence": "git show HEAD: single file changed (TelegramApiClient.java), +12/-4. The 12 added lines = 4 modifier swaps (private→public) + 8 lines of two-line promotion comments. Bodies, signatures, return types, and constant values are unchanged. Other private members (MONO_TIMEOUT, CAUSE_CHAIN_MAX_HOPS, TOKEN_PATTERN, TOKEN_SHAPE) untouched, as required.",
+      "noTestChanges": true,
+      "noTestChangesEvidence": "TelegramApiClientTest.java is not in the diff. AC 8 satisfied at the diff level; runtime green status to be confirmed by the verification step in the task."
+    }
+  }
+}

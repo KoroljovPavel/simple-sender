@@ -1,0 +1,107 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task",
+  "iteration": "cross-task",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "resource-sharing",
+      "task": 7,
+      "section": "Frontmatter / depends_on",
+      "issue": "Task 7 depends_on [1, 6] but is missing dependency on Task 4. Task 7's fire() resolves the subscriber via SubscriberService.lookupByChat (injected in constructor, explicitly listed in 'What to do' step 2 and 'Context Files — Code'). The public lookupByChat method on the SubscriberService interface is created in Task 4 (SubscriberCustomFieldsService + lookup-by-chat). Without Task 4, Task 7 cannot compile. Per the Shared Resources check: Task 4 is the owner of the lookup-by-chat interface addition; Task 7 is a consumer but does not declare the dependency.",
+      "fix": "Change Task 7 frontmatter to: depends_on: [1, 4, 6]. Task 4 must complete before Task 7 because it exposes the public SubscriberService.lookupByChat interface method that Task 7's implementation requires."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 9,
+      "section": "Frontmatter / wave",
+      "issue": "Task 9 frontmatter has wave: 3, but the tech-spec Implementation Tasks section labels it 'Wave 4 (фронтенд — залежить від Task 5 API-контракту)'. The other wave-3 tasks are Task 7 and Task 8 (backend). Wave 3 is logically valid (Task 9 depends on Task 5 which is wave 2, so wave >= 3 is required), but the mismatch between task file (wave: 3) and tech-spec annotation ('Wave 4') may cause confusion during parallel execution scheduling. No actual file conflict exists between Task 9 and Tasks 7/8.",
+      "fix": "Either update Task 9 frontmatter to wave: 4 to match the tech-spec wave label, or add a comment in the task file clarifying the intentional wave compression. Preferred: align to wave: 4 as stated in tech-spec to preserve the intended execution ordering narrative."
+    }
+  ],
+  "dependency_graph": {
+    "task_1": {"wave": 1, "depends_on": []},
+    "task_2": {"wave": 1, "depends_on": []},
+    "task_3": {"wave": 1, "depends_on": []},
+    "task_4": {"wave": 1, "depends_on": []},
+    "task_5": {"wave": 2, "depends_on": [1]},
+    "task_6": {"wave": 2, "depends_on": [1, 2, 3, 4]},
+    "task_7": {"wave": 3, "depends_on": [1, 6], "issue": "missing 4"},
+    "task_8": {"wave": 3, "depends_on": [1, 6]},
+    "task_9": {"wave": 3, "depends_on": [5], "tech_spec_wave": 4},
+    "task_10": {"wave": 4, "depends_on": [5, 9]},
+    "task_11": {"wave": 5, "depends_on": [1,2,3,4,5,6,7,8,9,10]},
+    "task_12": {"wave": 5, "depends_on": [1,2,3,4,5,6,7,8,9,10]},
+    "task_13": {"wave": 5, "depends_on": [1,2,3,4,5,6,7,8,9,10]},
+    "task_14": {"wave": 6, "depends_on": [11, 12, 13]}
+  },
+  "shared_resource_audit": [
+    {
+      "resource": "Funnel domain model + FunnelRepository + FunnelExecutionRepository",
+      "owner": "Task 1",
+      "consumers": ["Task 5", "Task 6", "Task 7", "Task 8"],
+      "dependency_declared": {"task_5": true, "task_6": true, "task_7": true, "task_8": true},
+      "status": "ok"
+    },
+    {
+      "resource": "VariableTemplateRenderer",
+      "owner": "Task 2",
+      "consumers": ["Task 6"],
+      "dependency_declared": {"task_6": true},
+      "status": "ok"
+    },
+    {
+      "resource": "TelegramSender.sendPhoto",
+      "owner": "Task 3",
+      "consumers": ["Task 6"],
+      "dependency_declared": {"task_6": true},
+      "status": "ok"
+    },
+    {
+      "resource": "SubscriberCustomFieldsService + SubscriberService.lookupByChat (public interface)",
+      "owner": "Task 4",
+      "consumers": ["Task 6", "Task 7"],
+      "dependency_declared": {"task_6": true, "task_7": false},
+      "status": "MISSING — Task 7 does not declare depends_on Task 4"
+    },
+    {
+      "resource": "FunnelExecutionEngine (enum constants, FunnelExecution shape sweep expects)",
+      "owner": "Task 6",
+      "consumers": ["Task 7"],
+      "dependency_declared": {"task_7": true},
+      "status": "ok"
+    },
+    {
+      "resource": "Funnel CRUD API contract (FunnelService + FunnelController)",
+      "owner": "Task 5",
+      "consumers": ["Task 9", "Task 10"],
+      "dependency_declared": {"task_9": true, "task_10": true},
+      "status": "ok"
+    },
+    {
+      "resource": "useFunnelsStore + i18n base keys (uk.json/en.json funnels.* foundation)",
+      "owner": "Task 9",
+      "consumers": ["Task 10"],
+      "dependency_declared": {"task_10": true},
+      "status": "ok"
+    }
+  ],
+  "cycle_check": "no_cycles_detected",
+  "locale_file_collision_check": {
+    "files": ["frontend/i18n/locales/uk.json", "frontend/i18n/locales/en.json"],
+    "task_9_wave": 3,
+    "task_10_wave": 4,
+    "result": "ok — different waves, sequential execution guaranteed"
+  },
+  "competing_instances_check": "no_competing_instances_detected",
+  "stats": {
+    "tasks_checked": 14,
+    "issues_found": 2,
+    "critical": 1,
+    "major": 0,
+    "minor": 1
+  }
+}

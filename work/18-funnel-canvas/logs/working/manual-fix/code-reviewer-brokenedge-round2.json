@@ -1,0 +1,8 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-brokenedge",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "All round-1 issues resolved. The broken-edges <ul> aria-label now binds to the neutral key funnels.canvas.brokenEdgesLabel ('Broken connections' / 'Зламані з'єднання'), present and non-empty in both en and uk with full parity. The key is registered in required-keys.spec.ts; check-locales passes (exit 0). Per-<li> reason-specific messages are unchanged (missing_target → brokenEdgeMissingTarget; on_start_entry_null → brokenEdgeStartNotConnected). The intentional fallback comment is present and correctly explains the future-proofing rationale. A new test assertion validates the neutral group label and guards against regression. No regressions introduced."
+}

@@ -1,0 +1,21 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 1,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "low",
+      "test": "stopAllScopedByProjectAndFunnel",
+      "issue": "The scoping test asserts only ExecutionStatus on the protected sibling/foreign rows (still running). The cancelled rows in the sibling/foreign scope are proven untouched via status, which is sufficient, but the protected rows do not also assert stepRunStatus stayed pending. Minor — the claim-CAS contract is fully proven in stopAllCancelsActiveAndSetsStepRunDone, so this is redundant to add. Optional hardening only.",
+      "recommendation": "Optionally add assertThat(stepRunStatus(siblingRunning)).isEqualTo(StepRunStatus.pending) and same for foreignSameFunnel to prove the bulk update did not touch the field on out-of-scope rows. Not required for approval."
+    },
+    {
+      "severity": "low",
+      "test": "duplicateNameAt129TruncatedStill201",
+      "issue": "Asserts only that the resulting name length == 128 after truncation. It proves the @Size boundary is respected and 201 returned, but does not assert the suffix ' (копія)' survived truncation (i.e. that truncation trimmed the base, not the suffix). The implementation trims the base and keeps the suffix; a regression that truncated the suffix instead would still produce length 128 and pass.",
+      "recommendation": "Add assertThat(name).endsWith(\" (копія)\") to lock in that the copy suffix is preserved when the base is trimmed. Low severity — the 128-case (duplicateNameAt128NotTruncated) already asserts the exact full name with suffix."
+    }
+  ],
+  "notes": "All 10 tests pass the litmus test and assert real, observable behavior — none are tautological or mock-only (these are MockMvc integration tests against a real Mongo via AbstractIntegrationTest; nothing is mocked away). Claim-CAS dual-field contract is correctly proven: seedExecution sets stepRunStatus=pending, and stopAllCancelsActiveAndSetsStepRunDone reloads each of the three in-flight rows via a direct mongoTemplate.findById helper (stepRunStatus()) and asserts BOTH status=cancelled AND stepRunStatus=done — exactly the Decision-7 requirement that execStatus() alone cannot prove; the pending→done transition makes the assertion non-trivial. Terminal statuses (completed/failed/cancelled) are explicitly asserted untouched. Name boundary is covered at exactly ==128 (no truncation, full name asserted incl. suffix) and ==129 (truncated to 128, 201 not 400). Cross-funnel + cross-project scoping is proven by stopAllScopedByProjectAndFunnel: a sibling funnel (different funnelId, same project) and a foreign-project row sharing the SAME funnelId are both asserted to remain running, while cancelled==1 — this genuinely proves the projectId AND funnelId scope and would fail against the original delete()'s funnelId-only scope (catches the tenant-isolation bug the task warned about). Anti-IDOR 404 is covered for both endpoints via foreign-project funnels. Graph-verbatim is strongly asserted: step ids, next, timeoutTargetStepId, Button.targetStepId, size, plus keywords/allowReEnter/description, and the original is reloaded from DB and asserted unchanged. Empty/draft funnel reset and copyOf-over-empty-list (no NPE) are covered. No coverage gaps relative to the TDD anchor or AC. Both findings are low-severity optional hardening; verdict approved."
+}

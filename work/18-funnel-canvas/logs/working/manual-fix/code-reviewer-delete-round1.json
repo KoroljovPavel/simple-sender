@@ -1,0 +1,30 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-node-delete",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "frontend/tests/components/funnels/FunnelCanvas.spec.ts",
+      "line": 940,
+      "issue": "Keydown guard: only Delete key + input element tested; Backspace key and contenteditable/textarea variants not covered",
+      "detail": "The guard test (line 957) uses 'Delete' dispatched on a native <input>. The isEditableTarget guard also handles Backspace and uses node.closest('[contenteditable=\"true\"]'). Missing coverage: (1) Backspace key fires requestDelete path, (2) delete is suppressed when focus is in a contenteditable element. Neither is a production defect — the guard itself is correct — but coverage leaves these code paths unexercised by tests.",
+      "recommendation": "Add two low-cost cases: one with key:'Backspace' verifying warning appears; one with a contenteditable div focused verifying warning does NOT appear. Optional for this round given the guard code is visually correct."
+    },
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "frontend/tests/components/funnels/FunnelCanvas.spec.ts",
+      "line": 864,
+      "issue": "No test for trigger/start node deletion via side-panel button (only step + note covered in FunnelCanvas integration tests)",
+      "detail": "FunnelCanvasSidePanel.spec.ts confirms the delete event is emitted for trigger/start kinds. FunnelCanvas.spec.ts tests the full flow only for step (disconnect count, cleaned edges) and note (notes[] filtered). The confirmDelete handler for 'trigger' (filter by index) and 'start' (filter on_start) is untested at the canvas integration level. Not a blocker since the mapping paths are trivial and covered at unit level in FunnelCanvasSidePanel, but there is a gap in canvas-level integration test coverage.",
+      "recommendation": "Optional: add one integration test selecting a trigger node and confirming delete, asserting update:triggers emitted without that entry."
+    }
+  ],
+  "summary": "The node-delete affordance is correctly implemented. The side-panel Delete button is present for all four node kinds (step/trigger/start/note) with v-if='node.nodeId' guard; it emits 'delete' with nodeId which FunnelCanvas binds via @delete='requestDelete' — routing directly into the pre-existing warning→confirm→confirmDelete flow with no duplicated logic. The keydown listener is added on onMounted and removed symmetrically on onBeforeUnmount (no leak). The isEditableTarget guard correctly checks node.isContentEditable (catches the element itself) and node.closest('input, textarea, select, [contenteditable=\"true\"]') (catches focus within a field), preventing hijack during text editing. Read-only surfaces (FunnelStepsList readonly prop, FunnelTriggersPanel) have no delete affordance in this commit. The i18n key funnels.canvas.delete.button resolves to 'Видалити' in uk.json. Two minor test-coverage gaps found (Backspace path, contenteditable guard variant, trigger/start canvas-level flow); no production bugs or blockers.",
+  "criticalIssuesCount": 0,
+  "majorIssuesCount": 0,
+  "minorIssuesCount": 2
+}

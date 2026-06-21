@@ -1,0 +1,32 @@
+{
+  "summary": "Frontend bot store correctly upholds the write-only-token invariant (D17, AC17, R1). The `connect(projectId, token)` action passes the raw Telegram bot token solely inside the `body` of a POST request: never interpolated into the URL, never assigned to a ref, never re-thrown in a wrapped error, never logged, never persisted to localStorage. The persisted `Bot.tokenSuffix` field on `current` is by design (D17/AC18 UI mask, last 3 chars only) and is not a leak. `inFlight` is correctly module-scoped (outside the Pinia factory) so it does not appear in `$state` / devtools snapshots. No hardcoded secrets, no console output, no XSS sinks, no insecure deserialization, no dependency changes. Two minor residual exposures worth flagging for downstream tasks (Task 9 consumer + Pinia action-trace devtools surface) and one minor defense-in-depth gap on path-segment validation for `projectId`. Status: approved (zero critical, zero major).",
+  "findings": [
+    {
+      "id": "SEC-T7-001",
+      "severity": "minor",
+      "owasp": "A09:2021 Security Logging and Monitoring Failures",
+      "file": "frontend/stores/bot.ts",
+      "line": 38,
+      "description": "`connect(projectId, token)` lets the raw ofetch FetchError propagate untouched to the caller. ofetch attaches the full request context to the error object (err.request, err.options including `options.body`, err.response). The store itself does not log the error, which is correct, but the error object — including the `{ token }` body — is now reachable by any upstream handler. Today the only consumer will be Task 9's `useApiError(err, 'bot.connect')`, which maps to an i18n key and does not log the body. However, future code paths (a global Vue error handler, Sentry/Bugsnag instrumentation, a `try/catch` in the page that logs `err` for debugging) could inadvertently expose the token. The risk is structural to the way ofetch surfaces errors, not specific to this store, but Task 7 is the choke point where it gets created.",
+      "recommendation": "Wrap `connect` in a try/catch that strips the body from the error before re-throwing, e.g.\n\n  try {\n    const data = await useApi()<Bot>(`/api/v1/projects/${projectId}/bot/connect`, { method: 'POST', body: { token } })\n    current.value = data\n    return data\n  } catch (err: unknown) {\n    if (err && typeof err === 'object' && 'options' in err) {\n      const opts = (err as { options?: { body?: unknown } }).options\n      if (opts && 'body' in opts) opts.body = '[REDACTED]'\n    }\n    throw err\n  }\n\nAlternatively, document this contract loudly in the JSDoc on `connect` so reviewers reject any future caller that logs the raw error."
+    },
+    {
+      "id": "SEC-T7-002",
+      "severity": "minor",
+      "owasp": "A09:2021 Security Logging and Monitoring Failures",
+      "file": "frontend/stores/bot.ts",
+      "line": 34,
+      "description": "Pinia devtools record action invocations in the action-trace timeline with their full argument list. Because `connect(projectId, token)` declares the token as a named action argument on a Pinia-returned function, anyone with browser devtools open during a Connect operation can see the raw token in the Pinia devtools 'Actions' panel for the lifetime of the devtools session. This is exposed to: developers debugging on staging with a real production token, support staff doing screen-share sessions with end users, and any browser extension with devtools access. The task description (line 56–57 of 7.md and line 250 of the Details block) explicitly anticipates pinia-devtools snapshotting of state but does not address devtools' action-call panel. The implementation comment on line 35–37 of bot.ts asserts the token 'lives only on this call stack and inside the $fetch request body' — which is true for runtime semantics, but Pinia devtools observes the function-call boundary itself.",
+      "recommendation": "Two viable options:\n\n1. **Direct call from the component (preferred for highest-secrecy path)**: in Task 9's `settings/bot.vue`, perform the POST directly via `useApi()` for the Connect path only, then call `botStore.fetch(projectId)` to populate `current`. This removes `token` from the Pinia action surface entirely. Other actions stay on the store.\n\n2. **Keep the store action but document the residual**: add a comment in `bot.ts` clarifying that anyone with devtools access during Connect can read the token, mirror the warning in the user-facing security section of the spec, and ensure no environment ships with `__VUE_PROD_DEVTOOLS__` enabled in production (verify in nuxt.config).\n\nEither is acceptable; option 1 closes the residual cleanly."
+    },
+    {
+      "id": "SEC-T7-003",
+      "severity": "minor",
+      "owasp": "A03:2021 Injection",
+      "file": "frontend/stores/bot.ts",
+      "line": 16,
+      "description": "`projectId` is interpolated raw into four URL paths (lines 16, 38, 47, 52) without `encodeURIComponent` or shape validation. The value originates from `useProjectsStore().currentProjectId`, which the projects store loads from either the backend `/api/v1/projects` response or from `localStorage` (key `bot-funnel.currentProjectId`). The projects store does gate localStorage-rehydrated values against the active projects list (projects.ts:71 `active.some((p) => p.id === persisted)`), which is an effective mitigation today. But the bot store itself accepts any string `projectId` — a future code path or test harness invoking `botStore.fetch('../admin')` or `botStore.connect('p1?foo=bar', token)` would emit a malformed URL. ofetch resolves the URL via `URL` semantics and does not encode path segments, so `../` could escape the intended path scope. Defense-in-depth: the bot store should not rely solely on the projects store's gate.",
+      "recommendation": "Encode the projectId at the call site to neutralize any path-segment manipulation:\n\n  const pid = encodeURIComponent(projectId)\n  await useApi()<Bot>(`/api/v1/projects/${pid}/bot/connect`, { method: 'POST', body: { token } })\n\nApply the same to all four URLs in this file. Backend route resolution is unchanged for normal UUID-shaped ids; malformed ids now produce a 404 from a well-formed URL instead of routing to an unintended endpoint."
+    }
+  ]
+}

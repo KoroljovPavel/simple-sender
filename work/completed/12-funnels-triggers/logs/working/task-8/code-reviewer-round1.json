@@ -1,0 +1,26 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 8,
+  "round": 1,
+  "commit": "9f031a4",
+  "verdict": "approved",
+  "summary": "Thin session-authed ApiKeyController over ApiKeyService, mirroring ProjectController. Ownership via requireOwned, mask logic extracted, DTOs separate, cross-file signatures verified. No critical/major findings.",
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "minor",
+      "dimension": "3-readability / DRY",
+      "finding": "currentUserId() duplicates ProjectController.currentUserId() (SecurityContext -> AppUserDetails.id()).",
+      "action": "skip",
+      "reason": "Task 8 explicitly instructs 'не усложнять' (do not introduce a shared helper). Duplication is a single 4-line guard intentionally kept local; matches the project's current convention (BotController also resolves locally)."
+    },
+    {
+      "id": "CR-2",
+      "severity": "minor",
+      "dimension": "1-architecture / API style",
+      "finding": "POST returns 200, while ProjectController.create returns 201.",
+      "action": "skip",
+      "reason": "This endpoint is generate-OR-regenerate (idempotent overwrite of a single per-project row), not a pure create-a-new-resource. 200 is semantically correct and the task left the 200-vs-201 choice to the implementer."
+    }
+  ]
+}

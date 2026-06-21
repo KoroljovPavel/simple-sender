@@ -1,0 +1,85 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 1,
+      "issue": "Details section for RememberMeWebSessionIdResolver (lines 265-289 of task 1.md) still contains the full builder chain with attribute-by-attribute mapping: .path(...), .domain(...), .httpOnly(Boolean.TRUE.equals(...)), .secure(Boolean.TRUE.equals(...)), .sameSite(... != null ? ...attributeValue() : \"Lax\"), the conditional maxAge branch, and the explicit exchange.getResponse().getCookies().set(cookieName, cookie) call. This is a nearly complete implementation prescription, not a hint. Iter 1 finding 'major/hints' was not fully resolved — the code-block form was removed but the full logic chain remains as a bulleted spec. Per validation checklist: hints should point to patterns and approaches, not prescribe the solution.",
+      "fix": "Reduce to pattern references: 'Mirror Boot's WebSessionIdResolverAutoConfiguration mapping for cookie attributes. Conditionally add .maxAge() only in the Boolean.TRUE branch; omit the call entirely in the false/absent branch. See CookieWebSessionIdResolver source for how it builds ResponseCookie from scratch (that is the pattern to follow).'"
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 1,
+      "issue": "Details section for AuthServiceTest register test (lines 346-372) lists every stub with exact Mockito return values and exact call forms: userRepository.findByEmail → Mono.empty(), passwordEncoder.encode → string, userRepository.save(any()) → Mono.just(savedUser) with id set, redisTemplate.opsForValue().increment → Mono.just(1L), redisTemplate.expire → Mono.just(true), securityContextRepository.save → Mono.empty(). It also prescribes exact assertion form and even the invocation pattern (authService.register(req, exchange).block() or StepVerifier). This is a full test implementation, not a hint. Iter 1 finding 'major/hints' for AuthServiceTest was not fully resolved.",
+      "fix": "Replace with a pattern reference: 'Copy the stub setup from AuthServiceRegistrationTest.setUp() — it already has the canonical lenient stubs for all three infrastructure calls. Use MockServerWebExchange (not a Mockito mock) so getAttributes() returns a real ConcurrentHashMap without additional stubbing.'"
+    }
+  ],
+  "iter1_findings_resolved": [
+    {
+      "original_severity": "critical",
+      "category": "hallucination",
+      "task": 1,
+      "issue_summary": ".maxAge(null) causes IllegalArgumentException",
+      "status": "resolved",
+      "evidence": "Task 1.md lines 279-284 and lines 411-418 (Implementation hints) now explicitly state: 'НЕ передавати null — Assert.notNull кидає IllegalArgumentException. Гілка session cookie реалізується через відсутність виклику .maxAge()'. The null hint is gone."
+    },
+    {
+      "original_severity": "critical",
+      "category": "feasibility",
+      "task": 1,
+      "issue_summary": "Pre-existing broken AuthServiceTest assertions not mentioned in task",
+      "status": "resolved",
+      "evidence": "Task 1.md What-to-do step 2 (lines 80-109) now explicitly instructs: remove verify(preAuth).invalidate(), change verify(fresh).setMaxIdleTime to verify(preAuth).setMaxIdleTime, explains why (Mono.cache returns preAuth on every getSession() call). TDD Anchor section (lines 133-141) repeats the pre-existing breakage note and fix order. Both locations correctly front-load the fixture fix before attribute assertions."
+    },
+    {
+      "original_severity": "major",
+      "category": "feasibility",
+      "task": 1,
+      "issue_summary": "RegisterRequest called with non-existent all-args constructor",
+      "status": "resolved",
+      "evidence": "Task 1.md Details lines 348-350 now state: 'RegisterRequest створюється через new RegisterRequest() + setEmail(...) + setPassword(...) (немає all-args-конструктора у DTO)'. Verified against RegisterRequest.java: only no-arg constructor + setEmail/setPassword exist."
+    },
+    {
+      "original_severity": "major",
+      "category": "feasibility",
+      "task": 1,
+      "issue_summary": "Missing redisTemplate.expire stub in register test",
+      "status": "resolved",
+      "evidence": "Task 1.md Details lines 355-359 now explicitly lists 'redisTemplate.expire(anyString(), any(Duration.class)) → Mono.just(true)' with explanation that checkRegisterRate() calls expire on first increment. Lines 369-372 point to AuthServiceRegistrationTest.setUp() as the canonical pattern for these stubs."
+    },
+    {
+      "original_severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue_summary": "TDD step 2 did not mention pre-existing test failures causing implementer confusion",
+      "status": "resolved",
+      "evidence": "Task 1.md TDD Anchor (lines 133-141) now starts with an explicit 'Note про pre-existing breakage in AuthServiceTest' block explaining both broken assertions and directing to 'What to do step 2' for the fix sequence."
+    },
+    {
+      "original_severity": "minor",
+      "category": "missing_file",
+      "task": 2,
+      "issue_summary": "Task 2 Required Skills link pointed to code-writing/SKILL.md instead of code-reviewing/SKILL.md",
+      "status": "resolved",
+      "evidence": "Task 2.md line 5: skills: [code-reviewing]. Line 16: '/skill:code-reviewing — skills/code-reviewing/SKILL.md'. Both the frontmatter and the Required Skills section now correctly reference code-reviewing."
+    }
+  ],
+  "task_verdicts": {
+    "task_1": "changes_required",
+    "task_2": "pass",
+    "task_3": "pass"
+  },
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 18,
+    "issues_found": 2,
+    "iter1_findings_total": 8,
+    "iter1_findings_resolved": 6,
+    "iter1_findings_remaining": 2
+  }
+}

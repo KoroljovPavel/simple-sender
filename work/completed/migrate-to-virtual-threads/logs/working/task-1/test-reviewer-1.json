@@ -1,0 +1,20 @@
+{
+  "summary": "Pure constant-relocation refactor at commit 77118c4. All 10 test references to REMEMBER_ME_ATTR were mechanically migrated from RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR to SessionAttributes.REMEMBER_ME_ATTR with no change to assertion shape, mocking strategy, AssertJ/StepVerifier patterns, or test bodies. The writer/reader contract (AuthService.openSession publishes Boolean.TRUE/FALSE under exactly the key the resolver reads) is preserved by construction: both sides now resolve through a single constant identifier, so divergence is structurally impossible. Litmus test passes for all 10 sites — if the resolver read a different key or openSession stopped writing the attribute, every assertion would fail. Verified: zero stale references to the old constant, exactly one occurrence of the literal \"com.botfunnel.auth.rememberMe\" in the codebase (SessionAttributes.java:21), no @Disabled/@Ignore added, no assertions weakened, no imports broadened. Test pyramid unchanged (unit tests in both files, mocking strategy identical pre- and post-refactor). The user's flagged concern — literal value never asserted directly — is a pre-existing property of the codebase, not introduced or closed by this refactor; for a pure relocation, this is acceptable and the task's explicit \"no new tests\" contract makes a literal-pin test out of scope.",
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthServiceTest.java",
+      "line": 514,
+      "issue": "Comment on line 514 still spells the attribute name as bare REMEMBER_ME_ATTR rather than SessionAttributes.REMEMBER_ME_ATTR. The task spec (point 4, last sub-bullet) explicitly permits leaving test comments untouched, so this is purely cosmetic. Flagging for future consistency, not as a defect.",
+      "suggestion": "Optional one-line edit: replace `REMEMBER_ME_ATTR` with `SessionAttributes.REMEMBER_ME_ATTR` in the inline comment for readability. No behavior impact. Skip if rebasing churn outweighs the readability gain."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/common/SessionAttributes.java",
+      "line": 21,
+      "issue": "The literal value \"com.botfunnel.auth.rememberMe\" is now the single source of truth, but no test pins the literal directly — both writer and reader resolve through the same constant identifier, so a refactor that silently changes the literal would not be caught by any existing test. This is a pre-existing property of the codebase (the same was true before the refactor, when the constant lived in RememberMeWebSessionIdResolver). The task's TDD Anchor section explicitly defers new tests; flagging here only so the team can decide separately whether to add a literal-value pin in a follow-up. Acceptable for the scope of this commit.",
+      "suggestion": "If desired in a follow-up task (NOT this one): add a single assertion in either test class — e.g. `assertThat(SessionAttributes.REMEMBER_ME_ATTR).isEqualTo(\"com.botfunnel.auth.rememberMe\")` — to lock the wire-format literal against accidental rename. Out of scope for Task 1."
+    }
+  ]
+}

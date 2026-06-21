@@ -1,0 +1,71 @@
+{
+  "summary": "Round 2 re-review of Task 10 confirms the security-auditor major (token leakage via Referer / search-engine indexing) is correctly addressed by the nuxt.config.ts routeRules block, and the previously-flagged inline settle() duplication is cleaned up via tests/helpers/settle.ts. The expanded login/register/verify-email and new forgot-password/reset-password test files materially close the round 1 minor about uncovered error-status branches: 401/429 (login), 409 (register), 400 + missing-token + valid-token + expired-and-resend (verify-email), 400 + missing-token + valid-flow (reset-password), and the anti-enumeration invariant (forgot-password). Production page files were intentionally untouched; the round 1 deferred minors against them are unchanged and remain acceptable as deferred-with-justification.",
+  "verdict": "approved_with_suggestions",
+  "status": "approved_with_suggestions",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/tests/pages/auth/verify-email.spec.ts",
+      "line": 17,
+      "description": "`useRouteMock` is `vi.fn()` initialised in `vi.hoisted` and re-seeded via `mockReturnValue({ query: { token: 'sometoken' } })` in beforeEach, but is never `.mockReset()`d the way `apiMock` is. Today this is safe because every test either inherits the beforeEach default or overrides via `mockReturnValue` (which replaces the return list). It becomes unsafe the first time a future test does `mockReturnValueOnce(...)` or `mockImplementation(...)` and relies on a clean slate — leftover queue entries would survive across tests. Same pattern applies to the equivalent `useRouteMock` in reset-password.spec.ts (which is fine for the same reason).",
+      "fix": "Optional. Add `useRouteMock.mockReset()` immediately before `useRouteMock.mockReturnValue(...)` in beforeEach (both verify-email.spec.ts and reset-password.spec.ts). One-line, eliminates a future foot-gun and matches the apiMock/navigateToMock convention already in the same files."
+    },
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/tests/helpers/settle.ts",
+      "line": 8,
+      "description": "The 50ms `setTimeout` is a magic literal with no named constant. The shared helper is now imported by 5 spec files, so any timing tweak (CI flake, vee-validate version bump) becomes a single-file edit but the value itself is opaque. Comment explains the *why* of needing a macrotask but not the *why* of 50 specifically (vs 0 / 10 / 100). Acceptable for first ship — flagged so a future contributor doesn't blindly copy the literal into a sixth helper.",
+      "fix": "Optional. Either extract `const VEE_VALIDATE_SETTLE_MS = 50` at module scope with a one-line note (`/* one event-loop tick is enough for vee-validate's debounced zod resolve */`), or — if profiling later shows 0ms or `vi.advanceTimersByTime` works — drop the macrotask entirely. No functional impact today."
+    },
+    {
+      "severity": "minor",
+      "category": "best-practices",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/nuxt.config.ts",
+      "line": 22,
+      "description": "`X-Robots-Tag: noindex, nofollow` and `Referrer-Policy: no-referrer` are correct defenses for the token-leak vector flagged by the round 1 security-auditor. Two adjacent hardenings to consider — neither blocking, but worth noting now that this routeRules block exists: (1) The `/auth/**` glob applies to verify-email/reset-password (which carry tokens) AND to login/register/forgot-password (which do not). For the no-token pages, `Referrer-Policy: no-referrer` strips the Referer header on every outbound link click — including the legitimate `<NuxtLink to=\"/auth/forgot-password\">` and the post-login `/dashboard` navigation. Internal navigations don't need the header stripped; consider scoping the rule to the two token-bearing routes only (`/auth/verify-email` and `/auth/reset-password`) or accepting the broader scope as defense-in-depth. (2) The page meta `<meta name=\"robots\" content=\"noindex, nofollow\">` is a stronger same-page indexer signal than just the response header (some crawlers honor only one). Adding `useHead({ meta: [{ name: 'robots', content: 'noindex, nofollow' }] })` in each of the two token pages would be redundant-but-belt-and-suspenders.",
+      "fix": "Optional. Either narrow the rule (`'/auth/verify-email': { headers: ... }, '/auth/reset-password': { headers: ... }`) and/or add an in-page `useHead` meta robots tag on those two pages. Document the choice in decisions.md so the security trade-off is auditable."
+    },
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/tests/pages/auth/login.spec.ts",
+      "line": 84,
+      "description": "The 429 error-branch test pins the cooldown copy to `/15 хв/` and the 401 test pins `/невірний/i`. Both production strings live as inline literals in login.vue:43-45 (`'Забагато спроб. Спробуйте через 15 хв'` and `'Невірний email або пароль'`). When the user-spec evolves and the copy changes, the test will fail in a way that doesn't immediately point at the spec mismatch — the error text becomes its own duplicated source of truth. Consistent with how register.spec, reset-password.spec etc. now pin copy fragments — flagged as a class-wide observation, not specific to this file.",
+      "fix": "Optional. Either (a) extract the user-facing error strings into a single `frontend/lib/auth-errors.ts` module that both pages and tests import — then test asserts `expect(submitError.text()).toBe(AuthErrors.LOGIN_COOLDOWN)`, or (b) leave as-is and accept that copy churn is caught by failing tests. Option (a) sets up i18n-readiness for free."
+    },
+    {
+      "severity": "minor",
+      "category": "best-practices",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/frontend/tests/pages/auth/forgot-password.spec.ts",
+      "line": 34,
+      "description": "The anti-enumeration test asserts the success message renders even on `{ statusCode: 500 }`. The production code in forgot-password.vue (per round 1 review at line 9 / 26-32) catches the error and shows the same banner — the test correctly locks in this privacy invariant. Worth strengthening: the test only covers `statusCode: 500`. The contract holds for ALL non-2xx responses including 404 (account does not exist — the prime enumeration vector) and network-level failures (no statusCode at all). Adding a parameterized test or two more cases (404 and a thrown `TypeError('network')`) would tighten the coverage of the privacy contract that the inline comment already documents as 'critical anti-enumeration invariant'.",
+      "fix": "Optional. Use `it.each([{ statusCode: 404 }, { statusCode: 500 }, new TypeError('Failed to fetch')])('forgotPassword_anyError_stillShowsSuccessMessage', ...)` to express the universal-quantifier nature of the invariant. Cheap, makes the privacy contract explicit in the test list."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 7,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 5,
+    "nitpickIssuesCount": 0,
+    "testCoverageAssessment": "adequate",
+    "round1IssuesAddressed": {
+      "resolved": [
+        "Token leakage hardening — X-Robots-Tag + Referrer-Policy on /auth/** (security-auditor major from round 1)",
+        "Inline settle() duplication across 3 spec files extracted to tests/helpers/settle.ts (round 1 testing minor)",
+        "Error-status branch coverage — 401/429 on login, 409 on register, 400 + missing-token + valid-token + expired-and-resend on verify-email, 400 + missing-token on reset-password (round 1 minor #6: status-code mapping not exercised)",
+        "Test assertions now pin error text via regex (e.g. /15 хв/, /невірний/i, /вже існує/i) instead of mere element existence (round 1 implicit testing concern)",
+        "New forgot-password.spec.ts (3 tests) and reset-password.spec.ts (4 tests) cover branches that had no tests in round 1 — including the anti-enumeration invariant for forgot-password and the missing-token block for reset-password",
+        "Body assertion in login.spec.ts tightened from expect.objectContaining to exact body shape (catches accidental extra fields)"
+      ],
+      "deferred_with_justification": [
+        "Shared FetchError-shape extraction helper across 4 pages (round 1 minor #1) — production page files intentionally untouched in round 2; helper extraction can land alongside future ofetch/Nuxt upgrade work without risking ship gate today.",
+        "register.vue / reset-password.vue → /auth/login query-flag banner on login.vue (round 1 minor #2) — UX gap acknowledged; deferred. Recommend tracking as a follow-up in decisions.md so the redirect-with-query handshake doesn't stay dead code indefinitely.",
+        "Token-from-route duplication, email .trim(), Tailwind class strings, lazy useAuthStore(), reset-password form data-test, verify-email middleware redirect (round 1 minors #3, #5, #7, #9, #10, plus minor #4) — all marked optional in round 1, all unchanged in round 2 production code. Acceptable.",
+        "verify-email resendStatus 'sent' staying past cooldown elapsed (round 1 minor #8) — production code unchanged; UX edge case already documented as acceptable for first ship."
+      ]
+    }
+  }
+}

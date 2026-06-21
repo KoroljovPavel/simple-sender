@@ -1,0 +1,54 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 5,
+  "round": 1,
+  "verdict": "approved",
+  "status": "passed",
+  "summary": "10 new Task-5 vitest cases across funnel-editor.spec.ts and funnels-list.spec.ts cover all TDD anchors and ACs with behavioral, non-tautological assertions. All 36 tests in the two files pass; storeMock extended with duplicate/stopAllExecutions/testRun as required.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts: 'Duplicate calls the store with the funnelId and success-toasts'",
+      "issue": "Duplicate success test asserts storeMock.duplicate called with 'f1' and toast.success called, but does not assert the success toast message content (funnels.editor.duplicateResult). It is one notch weaker than the stop-all tests, which assert the interpolated count in the toast string. Still meaningful (litmus passes: removing the duplicate() call or the toast.success line fails the test), so this is a nice-to-have, not a defect.",
+      "recommendation": "Optionally assert toastMock.success was called with a non-empty, non-raw-key string (e.g. expect(msg).not.toContain('funnels.editor') and length > 0) to lock the localized message, mirroring the stop-all count assertions."
+    },
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/tests/pages/funnels-list.spec.ts: 'Stop-all confirm flow: confirm calls store, cancel does not'",
+      "issue": "The list spec folds cancel and confirm into one test, while the editor spec splits them into two. This bundles two concerns in one case (slight one-concern-per-test deviation), but it is intentional and well-commented and the coverage is complete, so no functional gap.",
+      "recommendation": "No change required. If splitting later, separate cancel-noop and confirm-count into two its for symmetry with the editor spec."
+    }
+  ],
+  "litmusTest": {
+    "checked": 10,
+    "passed": 10,
+    "failed": 0,
+    "notes": "Inline-vs-toast 422 test is non-tautological: implementation discriminates via errorCode(err) + te('errors.funnels.${code}') before choosing inline (testError ref) vs toast.error; removing that branch flips the assertion. Stop-all confirm gating (store NOT called until funnel-stop-all-confirm clicked) and cancel-noop are real state-machine checks. Toast count assertions read the actual interpolated message argument ({count}), not just toHaveBeenCalled."
+  },
+  "coverageVerification": {
+    "buttons_render_list_and_header": "PASS — list row asserts funnel-duplicate-{id} + funnel-stop-all-{id} present and funnel-test-run absent; header asserts duplicate/stop-all/test-run present and funnel-preview-toggle absent (Task 6 boundary held).",
+    "duplicate_calls_store_and_surfaces_result": "PASS — both specs assert duplicate(id) with correct arg; list asserts the copied row (funnel-row-a-copy) renders after store sync; editor asserts success toast and no error toast.",
+    "stop_all_confirm_and_cancel": "PASS — confirm path asserts stopAllExecutions(id) + count in toast; cancel path asserts store NOT called and dialog closed, both specs.",
+    "test_for_me_422_inline_not_toast": "PASS — asserts funnel-test-run-error exists, text is localized (no raw key/'errors.funnels'/'funnel_owner_not_linked'), and toast.error NOT called.",
+    "test_for_me_network_error_toasts": "PASS — 500 (no code) → toast.error called, inline error absent.",
+    "test_for_me_draft_enabled": "PASS — button present and disabled===false on draft funnel.",
+    "storeMock_actions": "PASS — both storeMocks include duplicate/stopAllExecutions/testRun plus existing fetchOne/update/activate/pause (editor) and fetch/delete (list); all reset in beforeEach."
+  },
+  "metrics": {
+    "filesReviewed": 4,
+    "newTestsAdded": 10,
+    "testsRun": 36,
+    "testsPassed": 36,
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "componentIntegration": 10,
+      "e2e": 0,
+      "assessment": "healthy",
+      "note": "UI app — component-level mounts via @nuxt/test-utils mountSuspended with store/toast mocked at the seam is the correct test type for this UI-wiring task (test-master: UI apps favor E2E/integration over unit). No business logic added, so no unit gap."
+    }
+  },
+  "notes": "Tests were written before implementation (TDD) and mirror existing patterns (mountSuspended + mockNuxtImport + vue-sonner module mock). Assertions verify real behavior: store calls with right funnelId, confirm-dialog gating, inline-vs-toast routing on 422 vs network, and interpolated count in the success toast — not mere mount. Two minor stylistic notes only; no critical or major findings. Verdict: approved."
+}

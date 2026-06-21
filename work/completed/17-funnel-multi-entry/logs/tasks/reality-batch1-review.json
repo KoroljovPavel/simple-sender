@@ -1,0 +1,47 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 2,
+      "issue": "TDD Anchor test name mismatch: Task 2 says the test to write/rewrite is `migrationDropsOldTriggerIndex`, but the existing `FunnelTriggerIndexReconciliationIT` already has a method named `migrationDropsOldBroadFilterIndex` (which it says to re-author). Using a different name creates a second test instead of replacing the existing one, leaving a stale Phase-3 test alive alongside the new one.",
+      "fix": "Name the re-authored test `migrationDropsOldBroadFilterIndex` (matching the existing Phase-3 method that must be replaced) OR explicitly note the old method should be deleted and the new one added as `migrationDropsOldTriggerIndex`."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 2,
+      "issue": "Task 2's reconciliation NO-OP detection hint is ambiguous for the Phase-8 reshape. The current `FunnelTriggerIndexReconciliation` identifies the old index by (a) name `projectId_triggerType_triggerValue_unique_active` AND (b) absence of `triggerType` in the PFE. After Task 1 the NEW index has a DIFFERENT name (e.g. `projectId_onStartTriggerValue_unique_active`) and a DIFFERENT key, so the existing name-based NO-OP guard in the reconciler no longer correctly identifies the new-shape index. The task instructs to 'drive the decision off the actual index presence/key, not a blind unconditional drop' but does not clarify that the new index's name/key is completely different from the old one — an implementer reading the existing code may try to re-use the same name constant, producing an always-NOOP reconciler that never drops the stale old index.",
+      "fix": "Add an explicit note in the Details section that `INDEX_NAME` constant must be updated to the old Phase-3 index name, and that NO-OP detection for the NEW index should check for the new key `{projectId:1, onStartTriggerValue:1}` (not the old `{projectId:1, triggerType:1, triggerValue:1}`). Confirm the exact new annotation-generated index name from Task 1 output before wiring the NO-OP branch — the task already says this but the hint about the constant update is missing."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 2,
+      "issue": "Skill path in Task 2's Required Skills section is `[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)` (relative to repo root), while Task 1 uses the relative path `../../../.claude/skills/code-writing/SKILL.md`. Both resolve correctly but are inconsistent — the Task 2 relative path would be broken if opened from the task file's own location.",
+      "fix": "Use the same relative path form as Task 1: `[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)`. Also fix the same issue in Task 3."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 3,
+      "issue": "Skill path in Task 3's Required Skills section has the same broken relative path: `.claude/skills/code-writing/SKILL.md` instead of `../../../.claude/skills/code-writing/SKILL.md`.",
+      "fix": "Fix to `../../../.claude/skills/code-writing/SKILL.md` (same as Task 1)."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 3,
+      "issue": "TDD Anchor references `*ValidatorTest` pattern for the Jackson/Validator test style. All existing `*ValidatorTest` files live under other packages (`subscriber`, `tag`, `auth/validation`, `project/validation`) — none are in the `funnel` or `funnel/dto` package. The dto test directory `backend/src/test/java/com/botfunnel/funnel/dto/` does not yet exist. This is not a blocker but the implementer may not find the `*ValidatorTest` examples easily when looking in the funnel package.",
+      "fix": "Add an explicit path to one concrete example in the Details section, e.g. `backend/src/test/java/com/botfunnel/subscriber/CustomFieldValueValidatorTest.java`, so the implementer finds it without searching."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 5
+  }
+}

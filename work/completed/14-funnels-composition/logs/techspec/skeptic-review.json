@@ -1,0 +1,45 @@
+{
+  "verdict": "pass",
+  "summary": "Checked 38 concrete claims (files, classes, methods, fields, enum members, config props, frontend symbols, claimed-absent items). All confirmed against live code. No code mirages. Two minor wording nuances noted below at low severity; neither blocks implementation.",
+  "findings": [
+    {
+      "claim": "Decision 5 / code-research: name collision with `Button.targetStepId` (described as an existing field that the generic edge-pass `requireExistingTarget` would pick up).",
+      "location": "tech-spec Decision 5; Data Models; code-research §5/§6",
+      "reality": "Confirmed-and-correct on substance, minor imprecision in phrasing. `targetStepId` lives on the Button (ButtonDto.java:15 as record accessor `targetStepId()`, validated at FunnelService.java:696). FunnelStep itself has NO `targetStepId` field (it has `timeoutTargetStepId`, FunnelStep.java:31). The generic edge-pass at FunnelService.java:666-667 only feeds `step.getNext()` and `step.getTimeoutTargetStepId()` — it does NOT feed any step-level `targetStepId`, so a new flat `targetEntryStepId` field is auto-excluded as the spec intends. The collision is a naming/semantic confusion concern, not a literal edge-pass conflict on FunnelStep. The chosen name `targetEntryStepId` is sound.",
+      "severity": "low"
+    },
+    {
+      "claim": "code-research cites `FunnelService.validateSteps` switch at `:648` and `isMessageStep` at `:386-388`; the `onSubmit` submit-case at FunnelStepForm.vue `:427`.",
+      "location": "code-research §4, §10",
+      "reality": "Line numbers drifted slightly from current HEAD but symbols are all present and correct: validateSteps switch at FunnelService.java:648 (exact match), isMessageStep at FunnelService.java:386, validateSteps signature at :633. onSubmit is `handleSubmit((values) => ...)` at FunnelStepForm.vue:424 (cited :424-491 — matches; the inner per-type case-switch is inside this handler). No functional mismatch.",
+      "severity": "low"
+    }
+  ],
+  "stats": {
+    "total_claims_checked": 38,
+    "confirmed": 38,
+    "mirages_found": 0,
+    "verified_claims": [
+      "StepType.java enum members SEND_MESSAGE..EMIT_EVENT (no SUBSCRIBE_TO_FUNNEL yet — correct)",
+      "Outcome enum = CONTINUE,DELAY,CANCEL,FAIL,WAIT_FOR_REPLY (no COMPLETE — correct, to be added)",
+      "FunnelExecutionFactory.insertExecution(projectId,funnel,subscriberId,telegramBotId,enrollDepth) @:75",
+      "insertExecution hard-codes setCurrentStepId(snapshot.get(0)) @:93",
+      "insertExecutionAt absent (to be added — correct)",
+      "FunnelEventService.dispatchForSubscriber present @:124; enrollSpecificFunnel absent (to be added)",
+      "FunnelExecutionEngine.complete(exec,now) @:518 sets status=completed; end-of-graph complete @:247",
+      "app.funnel.max-enroll-depth=10, auto-enroll-rate-per-min=20, max-fanout=50, max-steps-per-tick=100",
+      "RATE_KEY_PREFIX bf:rate:auto-enroll: @FunnelEventService:84; maxEnrollDepth/autoEnrollRatePerMin fields",
+      "StepExecutor exhaustive switch on step.getStepType() @:93; injects FunnelEventService @:71",
+      "EMIT_EVENT precedent dispatchForSubscriber(...,getEnrollDepth()+1) @:122",
+      "FunnelStep.copyOf @:82 with eventName by-ref precedent @:99",
+      "FunnelExecution.enrollDepth @:73, telegramBotId @:53, getters present",
+      "Button.targetStepId on ButtonDto record accessor @ButtonDto:15, used @FunnelService:696",
+      "FunnelService.validateSteps package-private instance method @:633 with funnelRepository injected @:104",
+      "requireExistingTarget @:710 raises CODE_BROKEN_EDGE=funnel_broken_edge @:90",
+      "toSteps @:575, toStepDto @:860, isMessageStep @:386",
+      "allowReEnter cancel-then-insert + DuplicateKeyException swallow @FunnelEventService:195-202",
+      "setCustomField skip precedent: cont()+WARN FUNNEL_STEP_CUSTOM_FIELD_SKIPPED_DELETED_DEFINITION @:54,243",
+      "Frontend: StepType union @funnel.ts:10, fetch @stores:35 + fetchOne @stores:96, STEP_TYPES @form:30, SearchableSelect (SearchableOption {value,label,hint}), resolveFunnelError @funnelId.vue:122 mapping errors.funnels.{code}; funnel_subscribe_* absent in i18n (correct)"
+    ]
+  }
+}

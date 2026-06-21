@@ -1,0 +1,61 @@
+{
+  "summary": "All 20 TDD anchors are mapped to test methods and most ACs are covered with meaningful assertions (StepVerifier on real reactive returns, ArgumentCaptors on persisted Bot and event metadata, ListAppender on the dedicated WARN fragment, verifyNoInteractions on the negative paths for AC11/D7). The Logback appender is wired correctly via @BeforeEach/@AfterEach and the AC23 token-regex check is implemented as specified. Gaps are concentrated around AC10 (no assertion on the exact webhook URL or that the secret is freshly drawn per Connect), AC11's EXPIRE-on-first-hit / INCR-every-attempt invariants (the test only stubs increment(...) without verifying the conditional expire(BRUTE_KEY, Duration.ofSeconds(900)) call), AC23 positive shape for bot_connected metadata (only the regex negative is asserted — no test pins the exact {projectId, telegramBotId, telegramUsername} keys/values), and one over-loose WARN assertion in the disconnect-telegram-down test that counts any WARN rather than the dedicated Telegram-failure message.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "major",
+      "title": "AC10 not verified: webhook URL value and per-Connect secret freshness are never asserted",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:136,266",
+      "description": "AC10 mandates that the URL passed to telegram.setWebhook equals `${app.url}/webhooks/telegram/{projectId}` and that the 16-byte secret is freshly drawn per Connect (SecureRandom, never reused, never derived from a constant). The happy-path InOrder test verifies setWebhook(eq(TOKEN), anyString(), anyString()) and the secret-hash test only captures the secret string for SHA-256 round-trip — neither asserts the URL string equals `https://app.example/webhooks/telegram/proj-1`, and no test runs Connect twice to assert that the two captured secrets differ. A regression where appUrl is concatenated wrong (missing slash, wrong path) or where the secret is derived from a constant seed would pass today.",
+      "recommendation": "Add an ArgumentCaptor<String> for the URL argument in connect_happyPath_runsSideEffectsInDocumentedOrder (or a dedicated test) and assert urlCaptor.getValue().isEqualTo(APP_URL + \"/webhooks/telegram/\" + PROJECT_ID). Add a separate test `connect_secretIsFreshPerInvocation` that runs `service.connect(...)` twice with the same inputs, captures both `secret` arguments to setWebhook, and asserts `secret1 != secret2` and both match `[0-9a-f]{32}` (16 bytes hex). This is the only way to defend AC10's 'never derived from a constant' clause."
+    },
+    {
+      "id": "T2",
+      "severity": "major",
+      "title": "AC11 not fully verified: conditional EXPIRE(900s) on first hit and the 'INCR every attempt' D14 deviation are untested",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:129-141,199-214",
+      "description": "AC11 says 'INCR every attempt, EXPIRE 900s on first hit' and D14 makes 'INCR even on success' the deliberate departure from AuthService. The happy-path InOrder asserts valueOperations.increment(BRUTE_KEY) but never asserts redisTemplate.expire(BRUTE_KEY, Duration.ofSeconds(900)). connect_rateLimitThreshold_returns429OnEleventhAttempt_noTelegramCall sets count=11 but doesn't assert expire is NOT called for non-first hits. There is no test that proves Connect INCRs even on a successful flow (the D14 anti-bypass invariant) by asserting INCR is called regardless of whether the connect later DELs the counter. A regression where the implementation calls expire on every INCR (cost: TTL refresh resets the 15-min window every attempt — counter never expires) would pass today.",
+      "recommendation": "1) In connect_happyPath_runsSideEffectsInDocumentedOrder, add `verify(redisTemplate).expire(BRUTE_KEY, Duration.ofSeconds(900));` (the helper already lenient-stubs this — just verify it). 2) Add a test `connect_secondAttemptDoesNotResetTtl` that returns count=2 from increment and asserts `verify(redisTemplate, never()).expire(eq(BRUTE_KEY), any(Duration.class));`. 3) In connect_rateLimitThreshold... add `verify(redisTemplate, never()).expire(eq(BRUTE_KEY), any(Duration.class));` so the 11-th-attempt path is pinned to no TTL refresh."
+    },
+    {
+      "id": "T3",
+      "severity": "major",
+      "title": "AC23 positive shape for bot_connected metadata is not asserted (only the token-regex negative)",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:320-341,131-141",
+      "description": "AC23 requires bot_connected metadata to carry exactly {projectId, telegramBotId, telegramUsername}. The token-regex test (connect_bot_connected_event_metadata_containsNoTokenRegex) iterates all String values but never asserts the keys, and the happy-path InOrder test uses anyMap() for the metadata argument. The disconnect_happyPath test does assert the three keys for bot_disconnected, so the asymmetry is the gap. A regression where bot_connected metadata drops telegramUsername (or adds the plaintext token under a non-string-shaped key) would pass: the regex check only inspects String-typed values, and the keys are never enumerated.",
+      "recommendation": "Extend connect_bot_connected_event_metadata_containsNoTokenRegex (or add a new test) with: `assertThat(meta).containsOnlyKeys(\"projectId\", \"telegramBotId\", \"telegramUsername\");` and `assertThat(meta).containsEntry(\"projectId\", PROJECT_ID).containsEntry(\"telegramBotId\", TELEGRAM_BOT_ID).containsEntry(\"telegramUsername\", TELEGRAM_USERNAME);`. This also defends AC17 — any future addition of a forbidden field (token, IV, ciphertext, hash) flips the test red."
+    },
+    {
+      "id": "T4",
+      "severity": "minor",
+      "title": "disconnect_telegramDown WARN assertion is too loose — counts any WARN, not the dedicated Telegram-failure line",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:383-386",
+      "description": "The test asserts `warns >= 1` over all WARN events. The production code logs a distinct message: 'Telegram deleteWebhook failed during Disconnect; proceeding to local update: {}' (BotService.java:215). If a regression replaces that log with an unrelated WARN somewhere else in the chain (or silently swallows the Telegram error with no log), the test would still pass as long as any WARN appears (e.g., a Redis fail-open WARN bleeds from another path). The TDD anchor and AC13b both call for the Telegram-failure WARN specifically.",
+      "recommendation": "Pin the substring as you do in the Redis tests: `long warns = logAppender.list.stream().filter(e -> e.getLevel() == Level.WARN).filter(e -> e.getFormattedMessage().contains(\"Telegram deleteWebhook failed during Disconnect\")).count(); assertThat(warns).isEqualTo(1);`. Extract the substring to a constant so it stays in sync with BotService.java."
+    },
+    {
+      "id": "T5",
+      "severity": "minor",
+      "title": "connect_redisDownOnIncrement does not verify the downstream pipeline actually executed (fail-open litmus)",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:217-231",
+      "description": "The test asserts the Mono completes with one element and the WARN is logged once, but never verifies that the downstream steps after the failed INCR (setWebhook, encrypt, save, bot_connected event, DEL) actually ran. A regression where the .onErrorResume short-circuits the whole pipeline but returns a stale Mono.just(savedBot) from somewhere unexpected would satisfy expectNextCount(1) plus the WARN count. Litmus: if the INCR-fail-open block accidentally swallows the upstream chain output, this test does not catch it.",
+      "recommendation": "Add `verify(telegramApiClient).setWebhook(eq(TOKEN), anyString(), anyString()); verify(botRepository).save(any(Bot.class)); verify(eventService).logEvent(eq(OWNER_ID), eq(\"bot_connected\"), eq(IP), eq(UA), anyMap());` to make the fail-open assertion explicit — the whole point of D14's fail-open is that Connect proceeds, so the test should pin that the downstream collaborators were actually called."
+    },
+    {
+      "id": "T6",
+      "severity": "minor",
+      "title": "InOrder happy path uses anyMap() for the event metadata — pipeline order assertion does not fix the metadata shape",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:139",
+      "description": "`order.verify(eventService).logEvent(eq(OWNER_ID), eq(\"bot_connected\"), eq(IP), eq(UA), anyMap());` accepts any map. Combined with T3 above, no test in this file pins the bot_connected metadata to the AC23-required keys for the happy-path/AC8 sequence. Independently this is minor (T3 is the same concern viewed from the AC23 lens) — flagging here so the fix lands in one place.",
+      "recommendation": "Either tighten this verification with an ArgumentCaptor and assert keys+values after the InOrder block, or rely on T3's fix and accept anyMap() here. Pick one; do not leave both as anyMap()."
+    },
+    {
+      "id": "T7",
+      "severity": "minor",
+      "title": "AC16 'requireOwned is the FIRST reactive step' is implicitly tested only on Connect happy path, not on the negative branches",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:199-214,431-445,471-486,509-521",
+      "description": "AC16 mandates that every public method calls ProjectService.requireOwned first. The Connect happy-path InOrder verifies it, but the rate-limit, disconnect-404, sendTestMessage-404, and getByProject-404 tests stub requireOwned and check the eventual failure code — they never assert with InOrder that requireOwned was invoked BEFORE the find/incr call. A regression where the order is reversed (find first, then requireOwned) would still surface 404/429 in these tests but break the security invariant (data leak via differential 404 vs 'foreign project' shapes).",
+      "recommendation": "In each negative-branch test, add `InOrder io = inOrder(projectService, botRepository); io.verify(projectService).requireOwned(OWNER_ID, PROJECT_ID, false); io.verify(botRepository).findByProjectIdAndStatus(PROJECT_ID, BotStatus.CONNECTED);` (or analogous for the rate-limit case which has no find call but does have valueOperations.increment after requireOwned)."
+    }
+  ]
+}

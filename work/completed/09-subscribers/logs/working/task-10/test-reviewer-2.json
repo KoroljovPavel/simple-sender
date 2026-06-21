@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review of Task 10 test quality. All four round-1 majors and the round-1 minor are resolved with behavioral, litmus-passing tests. The 503 telegram_rate_limited path is now exercised (SendPersonalMessageDialog.spec.ts), statusBadgeClass has dedicated per-status + fallback coverage (subscriberStatus.spec.ts), toListQuery/toExportFilter are directly unit-tested incl. <2-char drop and Java enum-name mapping (subscriber-filters.spec.ts), the profile page now asserts unsubscribe enabled/disabled by status AND posts the unsubscribe + flips the badge (subscribers-profile.spec.ts), and history desc-sort + limit=50 + empty state are covered (SubscriberHistoryTab.spec.ts). No NEW significant gaps found. The documented 429/503 shared errors.generic fallback is an accepted i18n-gap deviation (Task 2 owns per-code keys); both still assert toast.error, which is the AC-level behavior. Suite reported green (34 files, 290 tests).",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/components/subscribers/SendPersonalMessageDialog.vue:48-55 / tests/components/SendPersonalMessageDialog.spec.ts",
+      "issue": "The 'deleted' status branch of the send-message response handler is not directly tested. The spec covers status=sent (success toast) and status=blocked (warning toast + refresh), but not status=deleted, which shares the same else-branch as blocked (toast.warning + emit refresh). Since deleted is enumerated separately in SendMessageResponse.status and the task AC explicitly lists 'blocked / deleted → warning toast + refresh', a regression that special-cased 'deleted' would go uncaught.",
+      "recommendation": "Add a sibling case to blockedResponse_warningToast_andRefreshEmitted: mock apiMock.mockResolvedValueOnce({ status: 'deleted', message: '...' }), submit 'hello', then assert toast.warning toHaveBeenCalled() and wrapper.emitted('refresh') toBeTruthy(). One extra it() block; low cost, closes the only enumerated-branch gap remaining."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/pages/projects/[projectId]/subscribers/[subscriberId].vue:56-65 / tests/pages/subscribers-profile.spec.ts",
+      "issue": "onUnsubscribe error path (non-2xx from POST /unsubscribe → toast.error via resolveError) is not tested. unsubscribeClick_postsUnsubscribe only covers the success path (POST resolves, badge flips). The catch branch that surfaces the error toast is uncovered, so a regression dropping error handling on the destructive action would pass.",
+      "recommendation": "Add unsubscribeClick_errorTogglesToast: route the GET to active, make the /unsubscribe POST reject (e.g. { statusCode: 500 }), trigger click, await settle, assert toast.error toHaveBeenCalled() and that the badge data-status remains 'active' (no optimistic flip). Mock vue-sonner toast in this spec the same way subscribers-profile already does."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 13,
+    "litmusTest": {
+      "checked": 23,
+      "passed": 23,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 18,
+      "integration": 12,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "summary": "LangSwitcher component is small, focused, and fully Decision 12 compliant. It calls only `await setLocale(code)` with no `navigateTo`/`switchLocalePath`/`useSwitchLocalePath`, applies the documented Tailwind active-state classes (`font-semibold text-primary` vs. `text-muted-foreground hover:text-foreground`), guards the active-locale click with an early return, and exposes `data-test`, `aria-label`, `aria-current`, and `type=\"button\"` per the spec. No blocking findings; two non-blocking polish suggestions only.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "file": "frontend/components/LangSwitcher.vue",
+      "line": 7,
+      "severity": "minor",
+      "category": "type-safety",
+      "issue": "Double cast `(locales.value as unknown as LocaleEntry[])` bypasses the @nuxtjs/i18n v9 typings, which already declare `locales` as `ComputedRef<LocaleObject[] | string[]>`. The double-`unknown` cast hides any future typing drift from the module.",
+      "impact": "Minor — runtime behavior unaffected; the filter is defensive. But the pattern silently accepts a structural mismatch instead of using the module's exported `LocaleObject` type, which would catch a future contract change at compile time.",
+      "recommendation": "Optional: import `LocaleObject` from `@nuxtjs/i18n` (or `vue-i18n-routing`) and narrow with `(locales.value as LocaleObject[]).filter(l => typeof l === 'object' && (l.code === 'uk' || l.code === 'en'))`. Acceptable to keep current form given the local scope.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/LangSwitcher.vue",
+      "line": 27,
+      "severity": "minor",
+      "category": "accessibility",
+      "issue": "`aria-current=\"true\"` is valid but `aria-current=\"page\"` is the more semantically precise token for navigation-style toggles in WAI-ARIA 1.2. Not strictly required by the task (tech-spec only says `aria-current` without specifying a value).",
+      "impact": "Screen readers announce both, but `\"page\"` more accurately conveys \"this is the currently active page/locale view\". `\"true\"` is the generic fallback.",
+      "recommendation": "Optional: switch to `:aria-current=\"isActive(item.code) ? 'page' : undefined\"` if the team prefers stricter ARIA semantics. Current form satisfies the AC.",
+      "optional": true
+    }
+  ],
+  "verdict": "OK"
+}

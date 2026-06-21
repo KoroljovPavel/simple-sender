@@ -1,0 +1,104 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Download endpoint order contradiction. The Implementation Hints on line 209 say 'Run the requireOwned → Redis bucket → token verify order on the download path EXACTLY as documented in Description step 1'. But Description step 1 (and the tech-spec Decision 16 rationale) say the correct order is token verify FIRST (before any DB hit), THEN rate-limit, THEN requireOwned. The hint inverts the documented order. If an implementer follows the hint literally they break the defense-in-depth guarantee (DB hit before token check) and the cross-project substitution security property (requireOwned would hit Mongo before the token's projectId mismatch is detected).",
+      "fix": "Fix the hint to read: 'Run the token verify → Redis bucket → requireOwned order on the download path EXACTLY as documented in Description step 1'. The description text is correct; only the hint paragraph is wrong."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 9,
+      "issue": "AppException lacks a static factory for HTTP 410 GONE. The export pipeline needs to return 410 for export_purged, export_expired, export_failed, export_project_unavailable. GlobalErrorHandler delegates to AppException.getStatus(). No gone() or gone(code, message) factory exists in AppException.java. Task 9 says 'If AppException already supports (code, status) constructor (it does)' — the constructor exists, but the convenience static factories for GONE do not. The implementer must either add a gone() factory to AppException or construct the AppException directly with HttpStatus.GONE. The task gives no guidance on which approach to take, which means the implementer may resort to a throw new AppException(HttpStatus.GONE, code, msg) one-liner that bypasses the established static-factory convention (patterns.md precedent) and has no test coverage.",
+      "fix": "Add a note to Task 9 that AppException.gone(String code, String message) does not exist and must be added (or direct constructor usage must be approved). Alternatively, add the missing factory to AppException in Task 1 scope."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 7,
+      "issue": "Implementation hint states 'current state: 98 lines' for ProjectHardDeleteJob.java. The actual file is 98 lines — this is accurate. However, the hint then says 'the deletion-path INFO line at line 95 AND the zero-deletion-day INFO line at line 60 to the new field shape'. Actual line 60 is the log.info call in the zero-deletion branch; actual line 95 is the log.info call in the deletion branch. Both line numbers are verified correct. No action needed on the line numbers themselves.\n\nSeparate major issue in the same hint block: the hint says 'extend both the deletion-path INFO line at line 95 AND the zero-deletion-day INFO line at line 60'. The zero-deletion-day branch currently has the log line at line 60 but also returns early at line 62 via 'return'. The new cascade steps (GridFS, subscriber_exports, subscriber_events, subscribers, tags) only execute in the non-empty-deletedIds path. The zero-deletion-day INFO line must be extended to add the new fields ALL at zero values WITHOUT running the cascade code — the hint is silent on this distinction, which could confuse an implementer into either skipping the zero-path update or mistakenly running cascade steps on the empty path.",
+      "fix": "Add explicit hint text: 'The zero-deletion-day INFO line at line 60 must include all new fields at value 0 (literal constants, not counts from cascade operations — the cascade code is not reached on this path). Example: deletedCount=0 eventsRemovedCount=0 gridFsFilesRemoved=0 exportsRemoved=0 subscriberEventsRemoved=0 subscribersRemoved=0 tagsRemoved=0 runDurationMs={N}'"
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 9,
+      "issue": "Implementation hint for SubscriberExportController constructor lists 'StringRedisTemplate redisTemplate' as an injection parameter. The existing codebase is inconsistent: BotService and ProfileService inject StringRedisTemplate, while AuthService injects RedisTemplate<String, String>. The tech-spec Shared Resources table says 'RedisTemplate<String, String>'. The task Description says 'RedisTemplate<String, String>'. The hint contradicts both by saying StringRedisTemplate. Both types are assignable from the same bean in Spring Boot (StringRedisTemplate extends RedisTemplate<String, String>), but the convention is split in this project and the implementer gets contradictory signals. In Spring's auto-config, StringRedisTemplate is a separate named bean; RedisTemplate<String, String> auto-configures differently. Injecting by type could cause an ambiguity error if both beans are present.",
+      "fix": "Align hint to match the existing BotService convention (StringRedisTemplate), since BotService is explicitly cited as the rate-limit pattern to mirror (Decision 9 / task Description item 4). Update the tech-spec Shared Resources table to say StringRedisTemplate for consistency. Add a note that the same StringRedisTemplate bean is already auto-configured and used by BotService, ProfileService."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 9,
+      "issue": "The ExportCleanupJob hint instructs 'gridFsTemplate.delete(...)' to remove a single GridFS file by fileId, but also names the bean as 'gridFsOperations' everywhere else in the same task (constructor list, description, acceptance criteria). The SubscriberExportController constructor list explicitly says 'GridFsOperations gridFsOperations'. Mixing 'gridFsTemplate' (the older Spring Data MongoDB type — GridFsTemplate) and 'gridFsOperations' (the interface — GridFsOperations) inside the same task will confuse the implementer. In Spring Boot 3.x, GridFsTemplate implements GridFsOperations so both refer to the same bean, but the field name inconsistency in the hint is misleading and may cause a compilation error if the implementer declares the field as GridFsOperations but the hint says gridFsTemplate.",
+      "fix": "Change the ExportCleanupJob hint to use 'gridFsOperations.delete(Query.query(Criteria.where(\"_id\").is(fileId)))' to match the convention used everywhere else in the task."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 9,
+      "issue": "SubscriberExportConcurrencyIT::parallel2Posts_status202_409_oneRowOneJob asserts 'storageProvider.countJobs(StateName.ENQUEUED) == 1'. StateName.ENQUEUED does exist and is used in TelegramWebhookControllerIT (confirmed), so the import is valid. However, once JobRunr processes the job (even in the InMemoryStorageProvider without a worker running), the state transitions from ENQUEUED to SCHEDULED/AWAITING/SUCCEEDED. The existing AbstractIntegrationTest disables the background-job-server ('background-job-server is disabled in test profile'). Jobs stay ENQUEUED only until a worker picks them up. Since the test calls POST /export (HTTP request, not direct job invocation), and the worker is disabled, the job should remain ENQUEUED. BUT: the deterministic UUID enqueue from a winning POST means if the same export UUID is enqueued twice (e.g. on a retry scenario test), JobRunr deduplicates silently. The test must coordinate timing carefully — the task gives no guidance on how to ensure the count is read before any test-context cleanup of JobRunr state. This is a flake risk that the task does not document.",
+      "fix": "Add a note: 'Read storageProvider.countJobs(StateName.ENQUEUED) immediately after the parallel invocations return, before @BeforeEach cleanState runs. Ensure cleanState calls storageProvider.deleteJobsPermanently(...) for all states (mirror TelegramWebhookControllerIT.cleanState pattern at lines 72-74).' Reference the existing precedent explicitly."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "ExportCleanupJob is given the same cron slot '0 3 * * *' as ProjectHardDeleteJob ('cleanup-subscriber-exports' id). Task 9 description says 'mirrors ProjectHardDeleteJob cron slot'. The tech-spec comment at ProjectHardDeleteJob line 24 says 'same cron slot as HardDeleteJob — same cron slot 0 3 * * * UTC'. In JobRunr, multiple recurring jobs CAN share the same cron expression since they are keyed by their unique id ('hard-delete-projects' vs 'cleanup-subscriber-exports'), so this is NOT a collision. However, ExportCleanupJobIT needs to assert the recurring registration with the correct id. The task does not provide a test for this, and the ProjectHardDeleteJobIT already covers recurring-job registration for 'hard-delete-projects'. The TDD anchor for ExportCleanupJobIT only covers purge/idempotent/retention tests but NOT the recurring registration test. This gap means the cron id and expression could drift silently.",
+      "fix": "Add a TDD anchor test to ExportCleanupJobIT: 'recurringJob_registeredWithCorrectIdAndCron — assert StorageProvider.getRecurringJobs() contains a job with id=cleanup-subscriber-exports and cron=0 3 * * *'. Mirror the ProjectHardDeleteJobIT.recurringJob_registeredWithCorrectIdAndCron test."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 8,
+      "issue": "Task 8 SKILL.md path reference is incorrect. Task 8 line 16 says: '[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)'. The leading '../../../' is missing compared to all other task context file paths which correctly resolve from work/09-subscribers/tasks/. Task 7 uses '[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)' and Task 9 uses '[SKILL.md](../../../.claude/skills/code-writing/SKILL.md)'. Task 8's link (.claude/skills/code-writing/SKILL.md) would resolve to work/09-subscribers/tasks/.claude/skills/code-writing/SKILL.md which does not exist.",
+      "fix": "Fix Task 8 line 16 to: '[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)'"
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 7,
+      "issue": "Task 7 (wave 2) adds the 'ProjectSoftDeleteCascadeIT::softDeletedProject_signedExportDownload_returns410ExportProjectUnavailable' test which requires: (1) a DONE SubscriberExport with a valid signed download URL, (2) a soft-deleted project, (3) the download endpoint to return 410 export_project_unavailable. The download endpoint lives in SubscriberExportController (Task 9, wave 3). Task 7 acknowledges this and says 'fall back to asserting at the ProjectService.requireOwned(currentUserId(), projectId, false) layer (call directly, expect mapped 404)'. However, requireOwned maps to 404 (EntityNotFoundException), NOT to 410 export_project_unavailable. The 410 mapping only exists in SubscriberExportController's download handler which calls requireOwned and maps its result to 410. If Task 7 falls back to calling requireOwned directly, the test can only assert 404, but the acceptance criterion says 410 export_project_unavailable. The test criterion and the fallback are in direct conflict.",
+      "fix": "Clarify Task 7: the fallback IT for the 410 case can ONLY assert that requireOwned throws an exception (which would be mapped to 404 by GlobalErrorHandler), not 410. The 410 mapping is controller-specific (Task 9). Either (a) make the 410 assertion a TODO that Task 9 fills in, or (b) remove the 410 assertion from Task 7's AC and move it entirely to Task 9's SubscriberExportSignedUrlIT. The current text contradicts itself."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 7,
+      "issue": "Task 7 implementation hint says 'GridFsOperations.delete(Query query) removes both the fs.files and fs.chunks documents per-file.' This is correct. The hint then says: 'For GridFS count, GridFsOperations.delete does not return a count. Cheaper alternative: mongoTemplate.count(query, \"fs.files\") BEFORE the delete call'. The collection name 'fs.files' is the default GridFS bucket name but is not verified in the codebase. The implementation must use the same bucket name as the GridFsOperations bean is configured with. If a custom bucket name is ever configured, this hardcoded 'fs.files' would be wrong. The task does not note this assumption.",
+      "fix": "Add note: 'Assumes default GridFS bucket name fs.files. If the GridFsTemplate bean is configured with a custom bucket prefix, adjust accordingly. Verify via architecture.md GridFS section or Spring Boot auto-config source.'"
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 8,
+      "issue": "Task 8 hint says 'Idempotent $addToSet + conditional $inc: prefer two operations in a BulkOperations against subscribers collection + tag counter via findAndModify — atomic at the operation level, not transactional'. BulkOperations in Spring Data MongoDB does not support findAndModify operations. BulkOperations supports insert/update/delete but NOT findAndModify. The hint incorrectly implies both can be placed in a single BulkOperations. The correct pattern is two separate operations: (1) mongoTemplate.updateFirst with $addToSet and capture WriteResult.modifiedCount, (2) conditional mongoTemplate.updateFirst with $inc on Tag if modifiedCount > 0.",
+      "fix": "Fix the hint: 'Use mongoTemplate.updateFirst($addToSet on Subscriber.tags) → capture UpdateResult.getModifiedCount(); if modifiedCount > 0, call mongoTemplate.updateFirst($inc {subscriberCount:1} on Tag). Two sequential operations, not BulkOperations (findAndModify does not compose into bulk writes).'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 7,
+      "issue": "Task 7 TDD anchor test 'cron_cascadeIsIdempotent_secondRunIsNoOp' is listed but the existing ProjectHardDeleteJobIT has no cleanState that wipes subscriber-domain collections. Task 7's Details section says to 'extend cleanState to wipe all five new collections + GridFS'. However, the TDD anchor test description does not mention this as a prerequisite, and an implementer could write the idempotency test without properly extending cleanState, causing state pollution between tests. The cleanState extension is in the Details section but not surfaced as a TDD prerequisite.",
+      "fix": "Minor; add to TDD Anchor preamble: 'All new tests require cleanState() to be extended first (see Details section) — add seeds for subscriber-domain collections and extend the @BeforeEach wipe before writing any new test methods.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 SubscriberCsvWriter stores rowCount in GridFS metadata at store time: 'new Document(Map.of(\"exportId\", exportId, \"projectId\", projectId, \"rowCount\", rowCount))'. However, rowCount is only known AFTER the streaming is complete (the writer counts rows as it streams). The metadata is passed to gridFsOperations.store() at store-init time (when the InputStream is opened), before any rows are written. This is technically impossible to implement as written: you cannot pass a final rowCount to store() before the stream is exhausted. The F10 integrity probe asserts metadata.rowCount is populated, which is correct as a goal but the store() call must happen before the count is known.",
+      "fix": "Clarify that rowCount in GridFS metadata must be obtained via a post-completion update: after store() returns and the cursor is exhausted, the job has the final row count and should update the GridFS file metadata via gridFsOperations or a direct mongoTemplate update on fs.files. Alternatively, store rowCount only on the SubscriberExport entity (not GridFS metadata) and have the F10 integrity probe assert it on the entity, not on GridFS metadata. The current description creates an impossible ordering."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 12
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A09",
+      "title": "matchedEntryStepId WARN logs triggerType (low-cardinality category, not a value) — acceptable but confirm classification",
+      "description": "LOG_DISPATCH_NO_MATCHED_ELEMENT logs `funnelId={} triggerType={}`. triggerType is a fixed taxonomy value ('event'/'keyword'/'tag_added'/'custom_field_set') chosen by the funnel author at design time, NOT the runtime triggerValue/matchKey/event_name. It is a code/category, so it complies with Decision 16 (ids/codes only, never event_name/triggerValue). Flagged only so a reviewer explicitly confirms triggerType is treated as a code and not later widened to include matchKey. No PII or business-secret leakage in any of the new LOG_* statements (LOG_DISPATCH_REDIRECT, LOG_DISPATCH_FUNNEL_ERROR, LOG_REDIRECT, LOG_REDIRECT_CLAIM_LOST, LOG_REDIRECT_BROKEN_CURSOR all carry ids/codes only; LOG_DISPATCH_FUNNEL_ERROR logs exception simpleName, not message).",
+      "location": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java (matchedEntryStepId, LOG_DISPATCH_NO_MATCHED_ELEMENT)",
+      "impact": "None as written. If triggerType were ever replaced with matchKey/triggerValue it would leak business-event names to logs (Decision 16 violation).",
+      "recommendation": "Keep triggerType (category) in the WARN; never substitute matchKey/triggerValue. Current code is correct.",
+      "cwe": "CWE-532"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Redirect decision relies on two non-atomic steps (in-flight probe then CAS) — defense-in-depth holds, but document the TOCTOU window",
+      "description": "inFlightExecutionId() does a findOne, then redirectExecution() does a separate findAndModify CAS. Between the probe and the CAS the row could change (sweep claims it, or status transitions). This is NOT an IDOR/security defect because: (1) the executionId is sourced ONLY from the trusted project+funnel+subscriber-scoped probe, never from request input; (2) claimForRedirect re-checks _id AND subscriberId AND funnelId AND status-in(running,waiting,waiting_for_reply) AND stepRunStatus=pending atomically, so a stale id, a sweep-owned row, or a mismatched subscriber/funnel deterministically loses the CAS and becomes a no-op + WARN (no retry, Decision 4). The TOCTOU window is therefore benign (worst case: a redirect that the dispatcher believed would happen becomes a logged no-op). Raised only as a correctness/observability note, not a vulnerability.",
+      "location": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java (inFlightExecutionId -> redirectExecution) + FunnelExecutionEngine.claimForRedirect",
+      "impact": "No security impact. At most an occasional no-op redirect under concurrency, already covered by LOG_REDIRECT_CLAIM_LOST.",
+      "recommendation": "No change required. The atomic CAS is the authoritative anti-IDOR gate; the probe is only an optimization/id-source. Behavior is already asserted by redirect_casLost_isNoOp_andEmitsWarn.",
+      "cwe": "CWE-367"
+    }
+  ]
+}

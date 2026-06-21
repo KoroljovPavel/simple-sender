@@ -1,0 +1,81 @@
+{
+  "status": "changes_required",
+  "summary": {
+    "totalFindings": 7,
+    "critical": 1,
+    "major": 3,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "A01:2021 Broken Access Control",
+      "title": "Profile endpoints do not gate user.status — blocked/deleted users with active sessions retain full profile access",
+      "description": "ProfileService.loadUser (ProfileService.java:125-128) only does findById and emits Unauthorized only when the document is missing. It does NOT reject users whose status is `blocked` or `deleted`. AuthService gates these statuses on login (AuthService.java:556-565) and on password reset (AuthService.java:334-337), but once a session exists, profile endpoints accept it indefinitely until the cookie/TTL expires. Concrete attack paths: (1) DELETE /api/profile on device A sets status=deleted and invalidates ONLY device A's session (deleteAccount, ProfileService.java:110-123); device B's session cookie remains valid and can call GET /api/profile, PATCH /api/profile, change-password, even DELETE again — because nothing rejects the deleted user there. (2) An admin marks a user `blocked` in the database; until that user's session expires (default 24h, up to 30 days with remember-me), they retain full profile read/write/password-change ability via the existing cookie. This is a privilege/lifecycle access-control gap — a `deleted` or `blocked` account is supposed to be unable to act, but the service treats any session with a valid principal as a green light. Note this also means hijacked sessions for blocked users continue to work.",
+      "location": "backend/src/main/java/com/botfunnel/profile/ProfileService.java:125-128 (loadUser); also affects deleteAccount at lines 110-123 which invalidates only the current session, not all sessions",
+      "impact": "Account-lifecycle bypass: a deleted account remains fully usable on every other device the user is signed in on, and a blocked account remains usable for up to 30 days. Combined with the change-password endpoint, a blocked or deleted user can rotate their own password and re-acquire control. Violates the same status invariant enforced in AuthService.login and AuthService.resetPassword.",
+      "recommendation": "(1) Add a status gate inside ProfileService.loadUser: after findById, if `user.getStatus() != UserStatus.active && user.getStatus() != UserStatus.pending` (mirror AuthService's policy — pending OK for getProfile only if appropriate), return AppException.unauthorized. Choose `active` only or `active`+`pending` deliberately and document it. (2) In deleteAccount, after the soft-delete save call `terminateAllSessions(userId)` BEFORE invalidating the current session so all devices are signed out. Example: `.flatMap(saved -> terminateAllSessions(saved.getId()).then(session.invalidate())...)`. (3) Add an integration test: blocked user with valid cookie → GET /api/profile returns 401; deleted user on second device → 401 after first device deleted the account.",
+      "cwe": "CWE-285 (Improper Authorization), CWE-613 (Insufficient Session Expiration)"
+    },
+    {
+      "severity": "major",
+      "category": "A04:2021 Insecure Design",
+      "title": "deleteAccount only invalidates the current session — other devices remain authenticated for the deleted account",
+      "description": "ProfileService.deleteAccount (ProfileService.java:110-123) calls `session.invalidate()` for the WebSession that issued the request, but does not delete sibling session documents in the `sessions` collection for the same userId. The user's other browser/mobile sessions therefore keep working. Combined with finding #1 (no status gate in loadUser), a deleted account on device B can still do everything via the session cookie. Even with the status gate in place, leaving sibling sessions on disk for a soft-deleted account violates least-privilege and means hard-delete 30 days later silently abandons orphan session documents.",
+      "location": "backend/src/main/java/com/botfunnel/profile/ProfileService.java:110-123",
+      "impact": "Account-deletion intent is silently broken on multi-device users: clicking 'Delete account' on the laptop leaves the phone signed in. Also leaves orphan documents in the sessions collection that survive HardDeleteJob (HardDeleteJob removes users only).",
+      "recommendation": "Call `terminateAllSessions(userId)` (or include the current session in that call) inside deleteAccount, before/after invalidating the current WebSession. This mirrors the change-password pattern (which uses terminateAllSessionsExcept) but for delete it must be ALL sessions including the current one. Suggested chain: `.flatMap(saved -> terminateAllSessions(saved.getId()).then(session.invalidate()).doOnSuccess(v -> eventService.logEvent(...))).then();`",
+      "cwe": "CWE-613 (Insufficient Session Expiration)"
+    },
+    {
+      "severity": "major",
+      "category": "A09:2021 Security Logging and Monitoring Failures",
+      "title": "Failed change-password attempts are not audited — silent password-guess attempts on a hijacked session",
+      "description": "ProfileService.verifyAndRotate (ProfileService.java:66-89) only emits a `password_changed` event on the success path. When `passwordEncoder.matches` returns false the AppException is thrown without any audit event. An attacker who has stolen a session cookie can iteratively guess the current password to take over the account fully (so they can also change it on the legitimate user's other devices via the password-change → terminate-other-sessions flow, locking the legitimate user out). With no log entry on each wrong guess, this is invisible to ops/SIEM.",
+      "location": "backend/src/main/java/com/botfunnel/profile/ProfileService.java:72-75 (the `Boolean.FALSE.equals(matches)` branch)",
+      "impact": "Brute-force / password-guessing on an active session is undetectable. Compounds with the absence of rate limiting on this endpoint (see finding #4).",
+      "recommendation": "Log a discrete event (e.g. `password_change_failed`) in the failure branch with userId, ip, userAgent (matches the existing event schema). Alternative: include `result=failed` in metadata. This aligns with the existing audit pattern for login failures.",
+      "cwe": "CWE-778 (Insufficient Logging)"
+    },
+    {
+      "severity": "major",
+      "category": "A07:2021 Identification and Authentication Failures",
+      "title": "No rate limiting on POST /api/profile/change-password — session-based brute force possible",
+      "description": "AuthService.login implements dual-key Redis brute-force protection (per-email + per-IP, Decision 4). The same protection is absent on /api/profile/change-password, which performs an identical `passwordEncoder.matches(currentPassword, hash)` check. A stolen session cookie + slow guessing of the current password lets an attacker rotate the credentials and seize the account, with no rate-limit ceiling and no audit trail (finding #3).",
+      "location": "backend/src/main/java/com/botfunnel/profile/ProfileController.java:46-56; backend/src/main/java/com/botfunnel/profile/ProfileService.java:60-89",
+      "impact": "Session-cookie compromise + slow current-password brute force = full takeover with the attacker setting their own password and using terminateAllSessionsExcept to evict the real user. The current-password gate is supposed to be a defense-in-depth line for cookie theft; without rate limiting it provides only mild slowdown (~250 ms per guess from BCrypt cost 12).",
+      "recommendation": "Add a Redis brute-force counter on change-password keyed by userId (and/or IP). Mirror AuthService's INCR/EXPIRE with a tighter threshold (e.g. 5 wrong attempts in 15 minutes → 429 + audit event). Coupled with the audit event from finding #3, this gives both prevention and detection.",
+      "cwe": "CWE-307 (Improper Restriction of Excessive Authentication Attempts)"
+    },
+    {
+      "severity": "minor",
+      "category": "A09:2021 Security Logging and Monitoring Failures",
+      "title": "HardDeleteJob logs full user-id list at INFO level — predictable log-disclosure surface",
+      "description": "HardDeleteJob.hardDeleteSoftDeletedUsers (HardDeleteJob.java:48-50) emits `log.info(\"... ids={}, cutoff={})\", ids.size(), ids, cutoff)` with the entire ID list inline. Tech-spec line 95 explicitly mandates logging IDs for GDPR audit, so this is intentional, but two refinements harden it: (a) at scale (e.g. mass deletion event) the line can balloon to many KB and may be truncated by some shippers, losing the audit trail; (b) plain INFO writes the IDs into general application logs that may have broader retention/visibility than GDPR audit logs warrant. Note: ObjectIds are not directly PII, but they are foreign keys to deleted user records, which is sensitive in itself.",
+      "location": "backend/src/main/java/com/botfunnel/jobs/HardDeleteJob.java:49",
+      "impact": "Operational logging hygiene + minor GDPR-audit-trail durability concern. Not exploitable on its own.",
+      "recommendation": "(1) Move the per-ID record into a dedicated audit logger (e.g. `private static final Logger audit = LoggerFactory.getLogger(\"audit.gdpr.hard-delete\")`) so log routing/retention is explicit. (2) Optional: emit one event per deleted user in the events collection (the existing audit store) instead of, or in addition to, the log line — keeps the audit trail in the same backed-up store as login/password-change events.",
+      "cwe": "CWE-532 (Insertion of Sensitive Information into Log File)"
+    },
+    {
+      "severity": "minor",
+      "category": "A04:2021 Insecure Design",
+      "title": "change-password accepts the same password as new — no minimum-rotation guarantee",
+      "description": "ProfileService.verifyAndRotate (ProfileService.java:76-83) does not check whether `newPassword.equals(currentPassword)` (or, more correctly, whether `passwordEncoder.matches(newPassword, user.getPasswordHash())`). The task file explicitly notes 'new password equal to current → allowed (spec does not prohibit it)' (tasks/7.md:122), so this is conscious, but it interacts badly with Decision 14: a user who clicks 'change password' to rotate after suspecting a session compromise on another device, but reuses the same password, will sign out the other devices yet leave the credential unchanged — a hijacker who already knew the password is unaffected. From a user expectation standpoint, 'change password' implies the password actually changed.",
+      "location": "backend/src/main/java/com/botfunnel/profile/ProfileService.java:76-83",
+      "impact": "Defense-in-depth gap. Decision 14's 'limit blast radius of credential theft' is undermined when the user reuses their old password. Low impact in practice (depends on user behaviour), hence minor.",
+      "recommendation": "Either (a) reject `passwordEncoder.matches(newPassword, user.getPasswordHash())` with 400 'New password must differ from current', or (b) explicitly document this in tech-spec Decision 14 with the rationale and add a frontend warning. Option (a) is industry standard (NIST SP 800-63B leaves it implementation-optional but most password-change flows reject reuse of the immediately-previous password).",
+      "cwe": "CWE-521 (Weak Password Requirements)"
+    },
+    {
+      "severity": "minor",
+      "category": "A05:2021 Security Misconfiguration",
+      "title": "SUPER_ADMIN_PASSWORD has no default and is required at every startup — operationally fragile, may push operators to weaker workarounds",
+      "description": "application.properties:35 declares `app.super-admin.password=${SUPER_ADMIN_PASSWORD}` with no default. The seeder code already handles blank values gracefully (SuperAdminSeeder.java:50-53) — this means after first-run the env var is no longer needed, but Spring will fail to start if SUPER_ADMIN_PASSWORD is absent (placeholder cannot resolve). Operators may respond by leaving the password in process env / shell history / docker-compose files long after seeding is done, broadening the secret-exposure surface beyond what's necessary. Also: if the secret is rotated externally without re-seeding, the env var still has to be set to *something* on startup, which encourages dummy values that drift into commits.",
+      "location": "backend/src/main/resources/application.properties:35",
+      "impact": "Secrets-management hygiene. Not directly exploitable; increases probability of accidental secret leakage via logs, env dumps, or container-orchestration manifests.",
+      "recommendation": "Make the env var optional in application.properties (`app.super-admin.password=${SUPER_ADMIN_PASSWORD:}` — matches the email line and matches the @Value default in SuperAdminSeeder). The seeder already logs a warning and skips when blank, so behaviour is identical the first time and operators can unset the env var after first successful boot. Document in deployment runbook: 'set SUPER_ADMIN_EMAIL + SUPER_ADMIN_PASSWORD on first boot only; remove from environment after seeding completes.'",
+      "cwe": "CWE-798 (Use of Hard-coded Credentials) / CWE-260 (Password in Configuration File)"
+    }
+  ]
+}

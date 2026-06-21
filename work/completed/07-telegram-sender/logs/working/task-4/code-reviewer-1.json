@@ -1,0 +1,48 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 272,
+      "issue": "failedMetadata always inserts an `errorCode` key with a null value for TelegramSendException whose errorCode is null (e.g. 'transient_failure_exhausted', 'timeout', ok=false). Tech-spec lines 256-257 specify `errorCode? (Integer)` and `errorDescription? (String, scrubbed)` as optional metadata keys; a strict reading is that keys should be omitted when null rather than present-with-null.",
+      "suggestion": "Either (a) accept the present-with-null shape as a deliberate simplification and add a one-line comment to make the choice explicit (event consumers can `.containsKey('errorCode')` reliably regardless of value), or (b) guard each put with a null check (`if (tse.getErrorCode() != null) meta.put('errorCode', tse.getErrorCode());`). Option (a) is what the test `sendText_5xxRetryExhausted_throwsTelegramSendException_attemptsEqualsFour` (TelegramSenderTest.java:285) already pins, so changing to (b) would require updating that assertion; the cleaner action is to land (a) with a code comment."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 119,
+      "issue": "On the overall-timeout path, the TelegramSendException is constructed with `\"timeout\"` as the description argument. This string flows into the audit event's `errorDescription` field via failedMetadata (because the constructor stores it as the exception message). The semantic is fine, but the field is not 'a Telegram description' — it's a sentinel marker indistinguishable in shape from a real description.",
+      "suggestion": "Acceptable as-is. If you want stricter semantics, document at the call site that `errorDescription == 'timeout'` and `errorDescription == 'transient_failure_exhausted'` are internal sentinels rather than upstream Telegram strings. Not blocking."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 217,
+      "issue": "In mapBodyToSentMessage, the `ok=false || missing message_id` branch emits a WARN log AND raises TelegramSendException. The same exception will then trigger the terminal `doOnError` ERROR log at line 128. So a single ok=false response produces both a WARN and an ERROR line. This is consistent with the spec's enumeration of six scrub sites and is verified by the token-leak tests, but the doubled logging is worth a brief comment.",
+      "suggestion": "Add a one-line comment at line 216 noting that the WARN here is the 'parse-site' message and the ERROR at line 128 is the 'terminal-site' message, intentionally separate per spec scrub-site enumeration. Not blocking."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 54,
+      "issue": "MESSAGE_BOT_NOT_FOUND is duplicated as a literal in this file (line 58) and as BotService.MESSAGE_BOT_NOT_FOUND (BotService.java:57). The comment on lines 54-57 cross-references the latter, but a divergence between the two strings would silently break the anti-enumeration guarantee. Task spec line 207 explicitly permits inlining with a cross-reference comment, so this is within the agreed plan.",
+      "suggestion": "Acceptable per Task 4 spec lines 207-208. Future refactor could promote `BotService.MESSAGE_BOT_NOT_FOUND` from `private static final` to package-private `static final` and have TelegramSender reference it directly, eliminating the duplication entirely. Not blocking."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 57,
+      "issue": "SHORT_RESPONSE_TIMEOUT (200ms) is declared but only used by `sendText_readTimeout_isTransient_retriedThenTerminal` at line 580. SHORT_OVERALL_TIMEOUT (3s) is used at multiple sites. The naming is consistent but the single-use constant could be inlined; or alternatively, this is fine if you prefer the explicit named symbol for documentation.",
+      "suggestion": "Acceptable. Optional: inline SHORT_RESPONSE_TIMEOUT at its single call site to reduce file-level state; or keep it as a documentation aid. Not blocking."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 694,
+      "issue": "The `sendText_tokenInTransportErrorMessage_scrubbed` test shuts down the class-level mockServer and recreates it (lines 698, 711-712) to keep the @AfterEach teardown idempotent. The recreate-after-use pattern works but couples the test method to teardown internals; a cleaner pattern would be to scope the dead-server logic to a try-with-resources or factory method that doesn't disturb the field.",
+      "suggestion": "Acceptable as-is. The intent is documented in the inline comments. Not blocking."
+    }
+  ],
+  "summary": "TelegramSender implementation is production-ready. The 13-step sender flow matches tech-spec Architecture lines 50-66 exactly; AtomicInteger attempts is allocated at the outermost lambda scope (TelegramSender.java:111) and correctly persists across both retry loops via outer-closure capture; the token-decrypt R7 scoping is precise — only Base64 decode is caught (lines 140-146) and `tokenEncryptor.decrypt` lives outside the catch on line 150, propagating IllegalStateException as 500 per spec, with explicit unit-test coverage at TelegramSenderTest.java:514-538. The 404 anti-enumeration shape uses `AppException.notFound(MESSAGE_BOT_NOT_FOUND)` (line 115), producing `{status: 404, code: null, message: 'Bot not found'}` matching BotService precedent; Reactor retryWhen ordering is correct (5xx inner via Retry.backoff at line 173, 429 outer via Retry.from at line 174), and isTerminalAuditable correctly gates audit emission for BotTokenInvalidException and TelegramSendException only, excluding pre-HTTP AppException(404) and any leaked TelegramRateLimitException. Audit metadata shapes match Data Models spec exactly (sentMetadata at line 264, failedMetadata at line 272). All six required scrubTokens log sites are wired. Cross-file consistency verified against TelegramApiClient (constants and helpers), BotService (MESSAGE_BOT_NOT_FOUND), TokenEncryptor (decrypt signature), EventService (logEvent signature), AppException (notFound factory), and the Task 3 DTOs/exceptions. Findings: 0 blockers, 0 majors, 1 minor (failedMetadata always-present errorCode/errorDescription keys when null — documented in code-comment fix), 5 nits (logging-double cosmetic, test constant single-use, server-recreate pattern). All TDD scenarios from tech-spec are implemented; two BotService-coupled IT scenarios are correctly @Disabled per task spec Wave 2/Wave 3 Approach A."
+}

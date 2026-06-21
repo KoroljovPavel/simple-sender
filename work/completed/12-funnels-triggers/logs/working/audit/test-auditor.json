@@ -1,0 +1,42 @@
+{
+  "summary": "Full-feature test audit of 12-funnels-triggers (Phase 3). The suite is strong and broad: every trigger type, fan-out, all three loop backstops (each as an independent test, with the depth cap and fan-out ceiling exercised against genuinely-unavailable Redis), the full /events response-code matrix (incl. byte-identical uniform-401 across all three key causes, both 400 sub-paths, subscriber_id precedence, anti-IDOR 404, never-5xx, never-auto-create), both error-isolation paths (webhook 200 + JobRunr-not-failed; /events 202), both chain-isolation directions, and the index-relax migration (FunnelIndexesIT updated away from the old broad filter + reconciliation runner idempotent/never-throw) are covered with meaningful, litmus-passing assertions. Integration tests use real embedded Mongo and a spied-but-real StringRedisTemplate (no DB mocking; Redis-down simulated by stubbing one op on the live spy, never REDIS.stop()). Pyramid balance is correct: unit for arithmetic/validation, IT for endpoints/DB/security-chain/migration, Vitest for editor UI, no E2E (justified). No critical or high findings. A few minor gaps: no real-Redis IT exercises an actual over-limit volume cascade (over-limit drop is unit-only); the FunnelIndexesIT @Tag(\"slow\") migration IT is present, but the over-limit volume backstop and the keyword-precedence depth-0-exempt interplay are not re-proven at the IT layer.",
+  "findings": [
+    {
+      "severity": "low",
+      "area": "loop-backstop / volume rate-limit",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelEventServiceIT.java",
+      "line": 174,
+      "description": "The volume (per-subscriber auto-enroll 20/min) backstop has an IT only for the Redis-DOWN fail-open path (volumeLimit_redisDown_failsOpen). The actual over-limit DROP (depth>0 burst exceeding 20/min against live Redis, the 'A->B->A under 20/min' scenario the tech-spec Testing Strategy lists as one of the three separate ITs) is proven only at the unit layer (FunnelEventServiceTest.volumeLimit_depthGreaterThanZeroOverThreshold_isDroppedAndWarns, with a mocked INCR returning over-count). The depth-cap and fan-out-ceiling each have BOTH a unit and a real-Redis-down IT; the volume over-limit drop has only the unit. Acceptable (the limiter arithmetic is unit-pinned and a 21-iteration live-Redis loop would be slow/flaky), but it is the one backstop whose enforcement is not also proven against real Redis.",
+      "recommendation": "Optionally add one IT that pre-seeds the live Redis counter bf:rate:auto-enroll:{subscriberId} above the limit (or dispatches >20 depth>0 firings) and asserts zero new executions + the LOG_DROP_VOLUME WARN, to mirror the depth/fan-out IT pairs. Not blocking."
+    },
+    {
+      "severity": "low",
+      "area": "loop-backstop / depth-0 exemption",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelEventServiceTest.java",
+      "line": 235,
+      "description": "The 'volume limit exempts depth-0 (human/external) enrolls' contract (Decision 6, the reconciled auto=depth>0 definition) is asserted only as a unit test (volumeLimit_countsOnlyDepthGreaterThanZero: depth==0 -> Redis never consulted). It is litmus-correct and sufficient, but the symmetric pairing (a depth-0 burst is NOT throttled while a depth>0 burst IS) is split across two unit tests rather than one combined assertion. No IT covers it. Minor — the unit coverage is meaningful.",
+      "recommendation": "No action required; the unit pair (depth-0 skips Redis; depth>0 over-threshold drops) already pins both halves of the exemption."
+    },
+    {
+      "severity": "low",
+      "area": "persistence round-trip / enrollDepth + keywords",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionTest.java",
+      "line": 15,
+      "description": "FunnelExecutionTest only asserts the in-memory default (enrollDepth==0); the actual Mongo round-trip of enrollDepth is proven indirectly via FunnelEventServiceIT (persisted executions reload with getEnrollDepth()==0 and ==4) and keywords via FunnelServiceKeywordTest (persisted funnel.getKeywords()). Coverage exists but is implicit; there is no dedicated 'save->reload preserves enrollDepth/keywords' assertion. Acceptable — the IT side-effect assertions are real Mongo reads.",
+      "recommendation": "No action required; the round-trips are covered through the dispatcher/service ITs. Could add an explicit field round-trip if desired for documentation clarity."
+    },
+    {
+      "severity": "low",
+      "area": "chain isolation precision",
+      "file": "backend/src/test/java/com/botfunnel/security/ChainIsolationIT.java",
+      "line": 66,
+      "description": "apiKey_rejectedOn_cabinet asserts the status is in {401,403} rather than a single exact code. This is intentional (no session principal -> the session chain may answer 401 or 403 depending on filter ordering) and the sister test sessionCookie_rejectedOn_integrations pins exactly 401, so the both-directions contract holds. The looser assertion slightly weakens the negative case but does not let a real shadowing regression through (a 2xx would fail).",
+      "recommendation": "No action required; the assertion correctly rejects any 2xx. Could tighten to the project-wide convention (403) if the cabinet anonymous behavior is fully deterministic."
+    }
+  ],
+  "coverage_gaps": [
+    "No real-Redis IT for the volume backstop's over-limit DROP (only the Redis-down fail-open IT + a unit over-limit test). Tech-spec listed three separate anti-cycle ITs (volume / depth / fan-out); depth and fan-out have real-Redis-down ITs, volume's over-limit enforcement is unit-only.",
+    "enrollDepth and keywords Mongo round-trips are proven implicitly (via dispatcher/service ITs) rather than by a dedicated field-persistence assertion — covered, but not explicit."
+  ],
+  "verdict": "clean"
+}

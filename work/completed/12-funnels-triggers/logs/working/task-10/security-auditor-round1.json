@@ -1,0 +1,52 @@
+{
+  "task": "10",
+  "reviewer": "security-auditor",
+  "round": 1,
+  "scope": [
+    "frontend/pages/projects/[projectId]/settings/index.vue",
+    "frontend/tests/pages/projects/settings-apikey.spec.ts",
+    "frontend/i18n/locales/uk.json",
+    "frontend/i18n/locales/en.json"
+  ],
+  "owasp_checked": [
+    "A01-access-control", "A02-cryptographic-failures/sensitive-data",
+    "A03-injection/XSS", "A05-misconfig", "A09-logging"
+  ],
+  "findings": [
+    {
+      "id": "SEC-1",
+      "severity": "info",
+      "owasp": "A02",
+      "finding": "Plaintext API key (show-once secret) lifecycle is correctly bounded: stored only in apiKeyPlaintext ref, set from POST response, cleared to null in closeApiKeyModal(). Never written to localStorage/sessionStorage/Pinia, never logged. Masked view binds apiKeyMask only.",
+      "action": "none",
+      "reason": "Meets the show-once contract; test 'dismissing modal returns to masked state' asserts the plaintext is gone from the rendered HTML."
+    },
+    {
+      "id": "SEC-2",
+      "severity": "info",
+      "owasp": "A03",
+      "finding": "Plaintext and mask rendered via {{ }} interpolation (Vue auto-escapes); no v-html. No DOM XSS sink.",
+      "action": "none",
+      "reason": "Safe output encoding."
+    },
+    {
+      "id": "SEC-3",
+      "severity": "info",
+      "owasp": "A01",
+      "finding": "POST generate/regenerate goes through useApi() which attaches X-XSRF-TOKEN for non-safe methods + credentials:include. Authorization (requireOwned) is enforced server-side (Task 8); no client-side authz to bypass.",
+      "action": "none",
+      "reason": "CSRF protection in place; authz server-enforced."
+    },
+    {
+      "id": "SEC-4",
+      "severity": "info",
+      "owasp": "A09",
+      "finding": "console.warn on mask GET failure logs the fetch error object only; the mask GET never carries plaintext, so no secret leaks into logs.",
+      "action": "none",
+      "reason": "No PII/secret in logs."
+    }
+  ],
+  "dependency_scan": "No new dependencies introduced by this task.",
+  "summary": "No vulnerabilities found. The plaintext secret is handled per the show-once contract (state-only, cleared on close, never persisted/logged). Output is auto-escaped; CSRF and authorization are handled by existing infrastructure. Clipboard write of the secret is user-initiated and required by spec.",
+  "verdict": "approve"
+}

@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "Round-2 PASSED. All four round-1 minor coverage gaps are now closed by sound, litmus-passing tests, with zero false positives. Suites verified green: FunnelExecutionEngineIT = 14 tests / 0 skipped / 0 failures / 0 errors (build/test-results XML), FunnelStepExecutorTest = 10 / 0 / 0 / 0 (re-ran fresh, XML confirms). (1) sweepRespectsBatchCapOldestFirstAndWarnsOnSaturation genuinely proves cap + oldest-first: the engine find() does .with(Sort ASC nextRunAt).limit(batchSize=2), so only the 2 oldest rows are fetched/processed and the newest (latest nextRunAt) is the exact row the asc-sort excludes — asserting newest stays running/pending while oldest+middle complete, sentCount==2, and LOG_SWEEP_SATURATED logged. Dropping or reversing the sort, or removing the limit/WARN, breaks the test. (2) The batch-size=2 @DynamicPropertySource override does NOT create false WARNs in single-execution tests: the WARN fires only when due.size() >= batchSize, and single-exec tests yield due.size()==1 < 2; all 14 IT pass green confirming this empirically, and no other test asserts on saturation. (3) stateTransitionsEmitNamedLogConstantsWithoutPayload now attaches BOTH engine and StepExecutor loggers to one appender and uses pii + 'x'.repeat(5000) (>4096) to force the trim-WARN path, asserting LOG_CLAIM_WON / LOG_EXECUTION_COMPLETED / LOG_TEXT_TRIMMED present and noneMatch(pii) across both loggers — interpolating rendered text into any log line would fail it; appenders detached in finally. (4) removeTagDelegatesToSubscriberService and sendMessageInvalidBotTokenFails both pass the litmus test: removeTag asserts CONTINUE + verifies the delegation (which IS the behavior); invalidBotToken throws the real BotTokenInvalidException (ctor (botId, reason) matches) and asserts FAIL + reasonCode=='invalid_bot_token', exercising the catch arms at StepExecutor.java:99-100/124-125. Production signatures (BotTokenInvalidException ctor, sendText/sendPhoto, REMOVE_TAG dispatch, FunnelExecutionEngine.LOG_SWEEP_SATURATED, StepExecutor.LOG_TEXT_TRIMMED, batchSize via @Value) all match the tests. No findings.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 4,
+      "passed": 4,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 10,
+      "integration": 14,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "validator": "task-validator",
+  "batch": [16, 17],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 16,
+      "section": "Context Files",
+      "issue": "Trailing entries are plain text in backticks rather than markdown links: `.env.example` (repo root), `backend/src/main/resources/application.properties`, `.github/workflows/*.yml` (if exists), `work/09-subscribers/logs/working/task-15/`, `docs/staging-smoke/09-subscribers.md`. task-creator rule says 'Use markdown links for all paths' in Context Files.",
+      "fix": "Convert each plain-text entry to a markdown link: e.g. `- [.env.example](../../../.env.example) — must contain the six new var lines after Tasks 3 + 9`. Keep the descriptive suffix after the link."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 17,
+      "section": "Report Structure",
+      "issue": "Extra top-level section `## Report Structure` appears between `## Verification Steps` and `## Details`. Not present in `task.md.template` — the template defines exactly 11 sections and this is a 12th.",
+      "fix": "Either (a) move the report-structure markdown template into `## Details` under a new bold sub-heading like `**Report template:**`, or (b) move it into `## Acceptance Criteria` as an inline note. Keep the actual content; just fold it into an existing template section so section order matches the template."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 17,
+      "section": "Description / Context Files",
+      "issue": "Path to Task 15 QA report is inconsistent: Description references `work/09-subscribers/logs/working/qa-report.json`, but Task 16 references `work/09-subscribers/logs/working/task-15/qa-signoff-report.md`. Both cannot be the canonical pre-deploy QA report path; one is wrong or Task 15 produces two artefacts.",
+      "fix": "Cross-check with Task 15 file (`work/09-subscribers/tasks/15.md`) to confirm which path it actually writes. Then align Task 16 and Task 17 to the single canonical path, or document explicitly in both tasks that Task 15 writes two artefacts (e.g. JSON for machine, MD for humans) and which one each downstream task should read."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 17,
+      "section": "Context Files",
+      "issue": "Entry `work/09-subscribers/logs/qa/post-deploy-verification-report.md` (new) is plain text rather than a markdown link. While the file does not exist yet, the template precedent is still markdown-link format with a `(new)` suffix.",
+      "fix": "Change to `- [post-deploy-verification-report.md](../logs/qa/post-deploy-verification-report.md) (new) — the verification report this task produces`."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "issues_found": 4
+  }
+}

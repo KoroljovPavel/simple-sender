@@ -1,0 +1,35 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "Residual tech-spec leakage: surviving Mongo operator and helper references in user-spec body. Line 137 (AC10 DELETE custom-field) still says `backend $unset: {customFields.{name}: \"\"} + $pull from Project.customFieldDefinitions`. Line 158 (AC18 fallback) mentions `без $text`. Line 196 Constraints lists `$addToSet / $pull для tags — idempotent by design`. Line 199 names `nameUUIDFromBytes(exportId.bytes)`. Line 223 still pins `application.properties:9`. Line 289 Tech Decisions repeats `Delete cascades $unset на всех subscriber'ах`. Lines 156/305/376 repeat the byte-format detail '12 колонок'.",
+      "why_matters": "Round 1 cleaned the bulk of operator leakage but these survived. They still pre-empt tech-spec freedom (e.g. cascade could use bulkWrite or an aggregation pipeline; CSV column count could differ; UUID derivation method is implementation choice). Severity is now minor because the volume is small and most surviving mentions carry semantic intent ('idempotent by design' for $addToSet/$pull). Not blocking approval.",
+      "fix": "Optional polish before tech-spec: replace `$unset` with 'unset/clear field on all subscribers', `$pull` with 'remove from definitions array', `$text` with 'full-text-search component', drop `nameUUIDFromBytes(exportId.bytes)` (keep just 'deterministic UUID derived from exportId'), drop `application.properties:9` line ref (just say 'global auto-index-creation setting'), and replace '12 колонок' with 'all identity + status + dates + tags + custom fields columns'. Each individually trivial."
+    },
+    {
+      "category": "feasibility",
+      "severity": "minor",
+      "issue": "AC17 declarative vs R2 conditional mismatch. AC17 asserts: 'partial-unique compound index `(projectId, status)` filter `status IN (PENDING, RUNNING)` гарантирует. Параллельный POST → 409.' But R2 explicitly says this syntax must be verified at tech-spec time and a Redis-lock fallback is on standby. If tech-spec selects the Redis-lock fallback, AC17 becomes literally wrong (no partial-unique index will guarantee anything).",
+      "why_matters": "Acceptance criteria are contractual — they must remain true regardless of which implementation path R2 selects. As phrased, AC17 commits to a mechanism that may not exist post-verification.",
+      "fix": "Rephrase AC17 to be mechanism-agnostic: 'Concurrent POST `/subscribers/export` while a previous export for the same project is PENDING or RUNNING → 409 `export_in_flight`. Enforcement mechanism (partial-unique compound index or Redis-lock per project) selected in tech-spec per R2.' Same wording fix in Constraints line 198."
+    },
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "Constraints line 200 pre-selects a race-mitigation strategy for the 20-cap CustomFieldDefinition: 'atomic conditional push (Mongo aggregation pipeline з $size check) АБО post-write count check + rollback last-inserted'. R4 explicitly says 'Tech-spec обирає конкретну стратегію' — so the Constraints sentence contradicts the risk's own deferral.",
+      "why_matters": "Minor — but the Constraints section currently both delegates the choice (via R4) and sketches the choice (via 'post-write count check + rollback' wording). Tech-spec author may interpret the Constraints sketch as the chosen approach.",
+      "fix": "Replace Constraints line 200 with 'Race on 20-field cap requires atomic enforcement — strategy selected in tech-spec (R4).' Removes the dangling sketch."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "AC8 tag delete now says 'On partial cascade failure → JobRunr retries to consistency' but the scenario in §Как должно работать describes tag delete as a synchronous request that returns 200/204 and updates UI live. Spec doesn't reconcile: is the delete sync-handled by the request thread (with retry-loop inside the handler) or is it enqueued as a JobRunr job (returning 202 and the UI polls)? Both are valid designs, but ambiguity here leaks into UX (does the owner see 'Tag deleted' immediately or 'Deletion in progress'?).",
+      "why_matters": "AC8 contract is unclear about user-visible latency. If sync — what's the response code shape on transient partial failure (200 + warning? 500?)? If async — what status does the tag row show during cascade?",
+      "fix": "One sentence in AC8: 'Tag-delete request is synchronous and returns 200 immediately after primary tag-doc delete; cascade `pull-from-array` on subscribers is fire-and-forget via JobRunr with retry-to-success. Subscribers may briefly show stale slug; reads filter against known tag set.' OR: 'Delete is enqueued, endpoint returns 202; UI shows tag as `Deleting...` until job completes.' Pick one."
+    }
+  ],
+  "worst_category": "feasibility",
+  "summary": "Round 1 critical (YAGNI tag-rename) and majors (tech-spec leakage, dual-write, sizing via phasing, edge cases, partial-index feasibility R2) are all resolved. Remaining issues are minor polish: a handful of surviving Mongo-operator strings, an AC17/R2 wording mismatch, and AC8 sync-vs-async ambiguity for tag-delete cascade. None block tech-spec authoring — spec is ready to ratify."
+}

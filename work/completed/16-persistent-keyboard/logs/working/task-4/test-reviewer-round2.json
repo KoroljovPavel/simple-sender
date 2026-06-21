@@ -1,0 +1,43 @@
+{
+  "round": 2,
+  "status": "passed",
+  "summary": "All round-1 findings are resolved. The MAJOR (keyboard parseMode escaping untested) is now covered by previewSetKeyboardEscapesTextPerParseMode — it substitutes a hostile <script> firstName with parseMode=HTML, asserts the escaped text (&lt;script&gt;), pins renderedBlocks[0].parseMode==HTML (the exact regression guard: drop the parseMode arg and the test fails on both the text and the parseMode assertion), and adds a defense-in-depth doesNotContain('<script>') on the raw body — mirroring the proven message-branch idiom (previewEscapesHostilePayload). The 3 minors are each closed by a behavioral test: blank/null keyboardText + null keyboardRows (previewSetKeyboardBlankTextStillReturnsOneTextBlockNullRows — one TEXT block text='', keyboardRows absent, no 422/NPE), stub-subscriber fallback for an unlinked bot (previewSetKeyboardUnlinkedBotUsesStubSubscriber — renders 'Привіт Іван', sampleData=true), and the ==64 clamp boundary (previewSetKeyboardLabelAtCapNotTruncated — exactly-64 label echoed verbatim, pinning truncation as strictly >, not >=). Every assertion was cross-checked against FunnelService.previewStep / renderTextBlock / clampKeyboardLabels and VariableTemplateRenderer.render (null template -> ''); all are faithful to the implementation. Each new test passes the litmus test. No new test-quality issues.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 4,
+      "passed": 4,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 4,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "resolvedFromRound1": [
+    {
+      "severity": "major",
+      "issue": "keyboard parseMode escaping untested",
+      "resolvedBy": "previewSetKeyboardEscapesTextPerParseMode (FunnelControllerIT.java:981) — escaped text + parseMode==HTML asserted + raw-body doesNotContain('<script>')"
+    },
+    {
+      "severity": "minor",
+      "issue": "no stub-path test",
+      "resolvedBy": "previewSetKeyboardUnlinkedBotUsesStubSubscriber (FunnelControllerIT.java:1034) — renders 'Привіт Іван', sampleData=true"
+    },
+    {
+      "severity": "minor",
+      "issue": "untested defensive guards for null/blank keyboardText & null keyboardRows",
+      "resolvedBy": "previewSetKeyboardBlankTextStillReturnsOneTextBlockNullRows (FunnelControllerIT.java:1011) — one TEXT block text='', keyboardRows absent, no 422/NPE; covers null keyboardRows echoing null vs []"
+    },
+    {
+      "severity": "minor",
+      "issue": "untested ==64 clamp boundary",
+      "resolvedBy": "previewSetKeyboardLabelAtCapNotTruncated (FunnelControllerIT.java:1053) — exactly-64 label not truncated, pins strict-> boundary"
+    }
+  ]
+}

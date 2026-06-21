@@ -1,0 +1,23 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 6,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "redundant_testing",
+      "location": "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts:39 (renders backend result for a message step)",
+      "issue": "The text assertion `panel.text()).toContain('Hi Olena!')` is a mild mock-return pattern (mock returns 'Hi Olena!', test asserts 'Hi Olena!'). On its own this would be tautological. It is RESCUED by the same test asserting preview was called with the exact constructed payload {stepType, text:'Hi {user.first_name}!', parseMode:null} and the no-v-html test independently proving the rendered string reaches the DOM as text. Net: acceptable, not a real defect — just noting the rendered-text part of this case duplicates coverage already proven elsewhere.",
+      "recommendation": "Optional: assert the rendered text lands specifically inside [data-test=funnel-preview-rendered] (as the v-html test does) rather than the whole panel, to tie the value to its sink. Not blocking."
+    },
+    {
+      "severity": "low",
+      "category": "anti_pattern",
+      "location": "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts:104 (renders neutral message on preview error)",
+      "issue": "Error case only exercises a 404 reject ({statusCode:404}). The TDD anchor and AC also name the network-error path. resolveError treats both via the same candidate chain (errors.funnels.preview.<status> -> .generic -> errors.generic), so behavior is covered transitively, but a network error (no statusCode) takes a different extractStatus branch (returns null -> generic key) that is not directly asserted.",
+      "recommendation": "Add one case: previewMock.mockRejectedValueOnce(new Error('network')) and assert [data-test=funnel-preview-error] exists with non-empty text. Confirms the status-less branch resolves to a generic neutral message rather than empty string."
+    }
+  ],
+  "notes": "All five TDD-anchor cases are behavioral and pass the litmus test (remove the core logic line -> the test fails). (1) message-step case verifies the constructed preview payload incl. funnelId-from-route and previewText extraction, not just the echoed mock value. (2) non-message case asserts backend NOT called + placeholder shown -> directly guards the isMessageStep branch. (3) sample-data indicator is tested in both directions (flagged + not-flagged), guarding the v-if. (4) THE KEY no-v-html test is genuinely strong, not a weak check: it proves text-only rendering three independent ways — literal payload present via .text(), zero created DOM nodes (find('img')/find('b') false AND element.querySelector('img') null), AND a static-source guard that strips comments BEFORE regex-matching /v-html\\s*=/ and /\\.innerHTML\\s*=/ (necessary because the SFC mentions those words in comments). Flipping {{ rendered.rendered }} to v-html breaks prongs 2 and 3. (5) error case renders a neutral in-panel message from a real i18n lookup, with rendered area asserted absent. The Task-5 editor test was correctly STRENGTHENED, not weakened: the old 'no Preview toggle' negative assertion became toggle-present + panel-absent-until-toggled, plus a new click->mount test matching v-if=previewOpen. No critical/major issues; two low-severity nits (network-error path not directly asserted; one mock-return text assertion). Approved."
+}

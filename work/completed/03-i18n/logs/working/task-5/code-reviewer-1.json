@@ -1,0 +1,25 @@
+{
+  "summary": "Implementation cleanly satisfies Decision 10. Factory pattern, status extraction, and te()/t() gating chain match spec. TypeScript narrowing is strict (no any), helper extractStatus encapsulates the unknown-to-number normalization correctly, fallback chain is built defensively for empty contextKey and non-finite status. No critical or major issues found.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "file": "frontend/composables/useApiError.ts",
+      "line": 33,
+      "severity": "minor",
+      "category": "error-handling",
+      "issue": "Silent empty-string fallback when even 'errors.generic' is missing.",
+      "impact": "If the build-time locale validator (Decision 9) ever regresses, callers receive '' and render a blank UI without any signal. In practice this branch is unreachable because prebuild guarantees 'errors.generic' exists, but the silent return weakens defense-in-depth.",
+      "recommendation": "Optional: consider `return key` (last candidate, surfaces the missing-key path) or `console.warn` in dev-only branch. Not required — Decision 10 does not mandate behavior for this corner case, and build gate already prevents it."
+    },
+    {
+      "file": "frontend/composables/useApiError.ts",
+      "line": 9,
+      "severity": "minor",
+      "category": "types",
+      "issue": "`as ApiErrorShape` cast after typeof-object guard.",
+      "impact": "Cosmetic only — the cast is safe because all ApiErrorShape fields are typed `unknown` (not `any`), so further property access is still type-checked. Could be replaced by an `in`-narrowing chain but the readability win is negligible and the current form is idiomatic for shape-of-unknown.",
+      "recommendation": "No change required. Acceptable as-is."
+    }
+  ],
+  "verdict": "OK"
+}

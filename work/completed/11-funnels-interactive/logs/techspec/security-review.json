@@ -1,0 +1,64 @@
+{
+  "verdict": "pass",
+  "round": 2,
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "informational": 1
+  },
+  "previousFindingsConfirmed": [
+    {
+      "id": "R1-HIGH-IDOR",
+      "severity": "high",
+      "owasp": "A01:2021 Broken Access Control (IDOR / CWE-639)",
+      "status": "resolved",
+      "evidence": "Decision 6 (lines 166-183) now mandates exec.subscriberId == resolvedSubscriber.id AND exec.projectId == projectId before advancing, AND resumeOnCallback CAS scoped by subscriberId (predicate: _id == execId AND subscriberId == sub.id AND status==waiting_for_reply AND stepRunStatus==pending) — authorization enforced atomically at DB layer, race-safe. Rationale explicitly names the threat (ObjectId partially predictable, not a secret). Propagated consistently to Task 3 (resumeOnCallback signature now (executionId, subscriberId, targetStepId), subscriberId-scoped CAS), Task 5 (explicit owner-authorization step), Risks table (dedicated IDOR row + IDOR-IT), AC line 374, and two integration test scenarios (lines 302-303: forged executionId rejected, execution B does not advance)."
+    },
+    {
+      "id": "R1-MED-PARSE",
+      "severity": "medium",
+      "owasp": "A03:2021 Injection / Input Validation (CWE-20)",
+      "status": "resolved",
+      "evidence": "Decision 6 (lines 175-177) now requires ObjectId-hex shape check (24 hex chars) BEFORE DB lookup, non-negative bounded index, exactly one ':' delimiter (extra segments rejected), and callback-type-only button. Mirrored in Task 5 (lines 442-443). Unit test for malformed/oversized -> no-op (line 287); test scenarios for out-of-range / url-button index / snapshot mismatch (line 304)."
+    },
+    {
+      "id": "R1-MED-URLSCHEME",
+      "severity": "medium",
+      "owasp": "A10:2021 SSRF / Scheme Injection (CWE-918 / CWE-79)",
+      "status": "resolved",
+      "evidence": "Decision 10 (lines 214-217) now requires URI parse, scheme exactly 'http'|'https' (explicitly not startsWith), non-empty host; explicit reject of javascript:/data:/tg:///whitespace-obfuscated -> 422. Propagated to Task 4 (line 426 strict URI scheme parse + non-empty host), Risks (line 353), AC (line 376)."
+    },
+    {
+      "id": "R1-LOW-PII",
+      "severity": "low",
+      "owasp": "A09:2021 Logging / A02 Sensitive Data (CWE-359/532)",
+      "status": "resolved",
+      "evidence": "Decision 9 (lines 205-207) now states events (funnel_button_clicked, telegram_callback_query) carry only ids/codes, explicitly no from.first_name/username (per Phase-1 Decision 16). Task 5 (line 446) reiterates 'лише ids'."
+    },
+    {
+      "id": "R1-LOW-VHTML",
+      "severity": "low",
+      "owasp": "A03:2021 Stored XSS (CWE-79)",
+      "status": "resolved",
+      "evidence": "Task 6 (lines 460-461) now mandates button/label rendering via text interpolation, explicitly NOT v-html."
+    },
+    {
+      "id": "R1-LOW-MASSASSIGN",
+      "severity": "low",
+      "owasp": "A05:2021 Mass Assignment / A08 Data Integrity (CWE-915)",
+      "status": "resolved",
+      "evidence": "Task 4 (line 428) — toSteps mints new id or persists incoming with uniqueness check within funnel; targets validated to resolve within the same submitted step set (preventing cross-funnel target injection / id-collision navigation hijack). Data Models (line 260) retains @JsonIgnoreProperties as mass-assignment defense."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "informational",
+      "owasp": "A03:2021 Injection (defense-in-depth note, non-blocking)",
+      "issue": "answerCallbackQuery(botId, callbackQueryId, text?) is specified to be called on every path including no-op (Decision 6/8, Task 2/5). The spec does not explicitly pin that the optional `text` ack string is server-side-constant and never derived from attacker-controlled callback_data. Read holistically the text is a static no-op ack (not echoed user input), so no injection vector exists at spec level.",
+      "recommendation": "No action required at spec level. Implementer should keep answerCallbackQuery `text` server-sourced/static and never interpolate callback_data or other untrusted input into it. Token-scrub on the outbound path (already required in Task 2) covers the logging side."
+    }
+  ]
+}

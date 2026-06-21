@@ -1,0 +1,51 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 4,
+    "critical": 0,
+    "major": 0,
+    "minor": 4
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "DELETE cascade NoSQL field-path injection is gated only implicitly by the pull-match, not by an explicit slug guard on the {name} path variable",
+      "description": "In CustomFieldsController.delete the raw @PathVariable String name is concatenated into Mongo field paths in the cascade write: Criteria.where(\"customFields.\" + name).exists(true) (line 183) and new Update().unset(\"customFields.\" + name) (line 184). The {name} path variable is NOT validated against the slug regex ^[a-z0-9_-]{1,32}$ — Spring binds it verbatim. The reason this is currently safe (and why this is minor, not critical) is the preceding pull on lines 170-174: new Update().pull(\"customFieldDefinitions\", Query.query(Criteria.where(\"name\").is(name))). Criteria.is(name) binds name as a literal BSON string (NOT an operator document), so a hostile value such as 'city.foo' or '$where' cannot match any stored definition — every stored definition.name is itself a slug because the sole writer (the create push, line 107) goes through @Valid CreateCustomFieldRequest with @Pattern. A non-matching name yields modifiedCount == 0 and a 404 on line 176 BEFORE the cascade runs. So a dot/dollar in name can never reach the cascade with a populated definition. The residual risk is purely structural: the safety depends on the ordering invariant (pull-then-404-then-cascade) holding for all future edits. If a refactor ever moves the cascade ahead of the modifiedCount check, or adds a code path that reaches the cascade without first matching a stored slug, the dotted-path traversal becomes live (e.g. name='a.b' would unset customFields.a.b on every project subscriber).",
+      "location": "backend/src/main/java/com/botfunnel/project/CustomFieldsController.java:166-185",
+      "impact": "Today: none — the pull-match 404 gate fully neutralizes the vector. Latent: a future reordering of the delete flow could expose a dotted field-path traversal allowing an authenticated project owner to unset arbitrary nested keys inside their own subscribers' customFields. Confined to the caller's own project (requireOwned passes first), so blast radius is the owner's own data; not a cross-tenant issue.",
+      "recommendation": "Add an explicit, cheap defense-in-depth guard at the top of delete()/update() that validates the {name} path variable against the same slug regex before it is ever concatenated into a field path, e.g. a shared static final Pattern SLUG = Pattern.compile(\"^[a-z0-9_-]{1,32}$\"); if (!SLUG.matcher(name).matches()) throw AppException.notFound(MESSAGE_NOT_FOUND); This makes the field-path safety independent of the pull/404 ordering invariant and matches the create-path contract. A non-slug name returning a uniform 404 also preserves the anti-enumeration posture.",
+      "cwe": "CWE-943"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Subscriber custom-fields PATCH accepts an unbounded values map (no key-count cap, no per-request payload cap)",
+      "description": "SetCustomFieldsRequest carries Map<String, Object> values with no @Size constraint, and SubscriberCustomFieldsController.setCustomFields iterates every entry. Per-value STRING length is capped at 1024 chars (CustomFieldValueValidator.MAX_STRING_LENGTH) and unknown keys are silently dropped, so persisted data is bounded by the <=20 defined fields. However, the request itself is unbounded: a client may POST a values map with thousands/millions of keys. Each key triggers a HashMap allocation in the requested map (Jackson), an allowed.get(key) lookup, and a validator call before the unknown-key drop. There is no top-level request body size limit specific to this endpoint (the per-endpoint payload Filter pattern documented in patterns.md is applied to /webhooks/telegram/{projectId}, not here) — the global Tomcat maxPostSize is the only ceiling.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/dto/SetCustomFieldsRequest.java:12-14; backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:79-95",
+      "impact": "Low-grade DoS / resource-amplification by an authenticated project owner against their own request thread: a large values map forces O(n) Jackson deserialization + validation work and heap churn. Not a data-integrity issue (unknown keys never persist) and limited to authenticated owners, so abuse is per-account and self-inflicted, but it widens the CPU/heap surface beyond the documented platform posture.",
+      "recommendation": "Add a bound on the inbound map size, e.g. @Size(max = 50) on values combined with @Valid on the @RequestBody parameter (the controller currently omits @Valid on SetCustomFieldsRequest, so even if a constraint were added it would not fire — see related finding). 50 comfortably exceeds the 20-field cap while rejecting pathological payloads with a clean 400. Alternatively reject before iteration: if (requested.size() > MAX) throw AppException.badRequest(...).",
+      "cwe": "CWE-400"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "SubscriberCustomFieldsController PATCH @RequestBody is not annotated @Valid (Bean Validation on the envelope is inert)",
+      "description": "Unlike CustomFieldsController (which uses @Valid @RequestBody on create/update), SubscriberCustomFieldsController.setCustomFields declares @RequestBody SetCustomFieldsRequest request with no @Valid (line 61). Today SetCustomFieldsRequest carries no constraint annotations, so nothing is skipped — but it means any future hardening added to the DTO (e.g. @Size(max=50) on values per the DoS finding above, or @NotNull) would silently NOT be enforced. This is a latent gap: the validation contract on this entry point is effectively opt-out while its sibling controller opts in.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:58-61",
+      "impact": "No current exploit. Latent: bean-validation constraints added to SetCustomFieldsRequest later would be no-ops, giving a false sense of input hardening on the highest-volume mutating endpoint of this feature.",
+      "recommendation": "Add @Valid to the @RequestBody parameter now, even though the DTO has no constraints yet, so the entry point is wired for validation and matches the CustomFieldsController convention: public ResponseEntity<Map<String, Object>> setCustomFields(..., @Valid @RequestBody SetCustomFieldsRequest request).",
+      "cwe": "CWE-20"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Dropped mass-assignment keys are logged at DEBUG with the raw attacker-controlled key value",
+      "description": "The mass-assignment silent-drop path logs the rejected key at debug level: log.debug(\"custom-fields PATCH dropped unknown key '{}' for subscriber {}\", key, subscriberId) (line 84). The key is fully attacker-controlled (any string the client puts in the values map). At DEBUG this is benign and useful for diagnostics, and it is not an injection vector into structured Mongo events (the drop path never persists). Two observations: (1) AC11 explicitly treats unknown keys as normal (stale frontend schema), so this is correctly NON-alerting — good. (2) If the log level for this class is ever raised to DEBUG in production and a tool ingests these lines into a log pipeline that interprets control characters, a key containing newlines/ANSI could cause minor log-forging noise. SLF4J parameterized logging does not itself interpret the value, so this is low concern.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:84",
+      "impact": "Negligible in the current configuration (DEBUG, parameterized SLF4J, no persistence of dropped keys). Noted only because the value is fully untrusted and unbounded in length, so a downstream log sink that does not neutralize control chars could see forged-looking lines.",
+      "recommendation": "No change required for current posture. If this endpoint ever runs with DEBUG enabled in production, consider truncating the logged key (e.g. first 64 chars) and rely on the structured-log sink to escape control characters. Keep it at DEBUG (NOT WARN) so legitimate stale-schema clients do not generate alert noise — that aligns with AC11.",
+      "cwe": "CWE-117"
+    }
+  ]
+}

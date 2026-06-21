@@ -1,0 +1,27 @@
+{
+  "status": "APPROVED_WITH_NOTES",
+  "findings": [
+    {
+      "severity": "MEDIUM",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java",
+      "line": 112,
+      "issue": "MARKER_APPLIED string not asserted in migrationDropsOldBroadFilterIndex. The tech-spec AC explicitly states 'reconciliation logs APPLIED on the migration case' and the Smoke spec says 'assert via the IT'. The test verifies the DROP happened (old index absent after runReconciliation()) which indirectly confirms APPLIED was logged, but the greppable marker string itself — which Task 12 post-deploy verification pins — is not pinned by any IT. A rename of MARKER_APPLIED would go undetected by this test.",
+      "fix": "Add a ListAppender<ILoggingEvent> for FunnelTriggerIndexReconciliation's logger (pattern used in WebhookSecretVerifierTest, TelegramWebhookControllerIT, etc.) and assert in migrationDropsOldBroadFilterIndex that exactly one INFO event contains FunnelTriggerIndexReconciliation.MARKER_APPLIED after runReconciliation(). Similarly, assert MARKER_NOOP is emitted in reconciliationIsIdempotentNoOpOnSecondBoot and reconciliationNoOpOnFreshDatabase."
+    },
+    {
+      "severity": "LOW",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java",
+      "line": 174,
+      "issue": "reconciliationNeverThrowsOnMongoFault does not assert the returned bean is the unmodified original. The class Javadoc and production code contract state 'The returned bean is always the unmodified original' — this is a BeanPostProcessor correctness invariant (returning null from postProcessAfterInitialization removes the bean from the context). The test only asserts doesNotThrowAnyException(), leaving the return-value contract untested.",
+      "fix": "Capture the return value: Object returned = faulting.postProcessAfterInitialization(broken, \"mongoDatabaseFactory\"); and assertThat(returned).isSameAs(broken); — one line, zero overhead."
+    },
+    {
+      "severity": "LOW",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java",
+      "line": 171,
+      "issue": "findByTriggersTriggerTypeAndValueMatchesArrayElement does not cover the cross-element multikey false-positive scenario. Spring Data's two-field array derived query (triggers.triggerType + triggers.triggerValue as two separate predicates) does NOT use $elemMatch, so MongoDB evaluates each condition independently across array elements. A funnel with [{type:keyword, value:purchase}, {type:event, value:refund}] would incorrectly match a query for (event, purchase) because 'type=event' matches the second element and 'value=purchase' matches the first. The current test only proves the positive-match and a simple non-matching exclusion; Task 5's re-scan mitigates false positives at application level, but the test does not document or verify this DB behavior. The TDD anchor does not explicitly require this scenario, so this is a gap vs. ideal, not a gap vs. spec.",
+      "fix": "Add a third funnel with triggers=[{type:event, value:X}, {type:keyword, value:purchase}] (triggerType and triggerValue from different elements) and assert it does NOT appear in findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(projectId, 'event', 'purchase', active). If the query unexpectedly returns it (cross-element match), the re-scan comment in FunnelRepository's Javadoc should be expanded to explain this as a known behavior and the test should document it as expected-false-positive-that-re-scan-filters."
+    }
+  ],
+  "summary": "TDD Anchor coverage is solid. All three required invariants are verified with exact, meaningful assertions: (1) onStartTriggerValue partial-unique shape confirmed at runtime with exact key + partial-filter document equality (funnelsCollectionHasExpectedIndexes); (2) reconciliation drops the OLD flat-trio index without IndexKeySpecsConflict and the NEW shape lays down correctly (migrationDropsOldBroadFilterIndex); (3) idempotent re-boot is NO-OP with new index left byte-identical (reconciliationIsIdempotentNoOpOnSecondBoot). Repository query tests cover all three derived methods against real embedded Mongo with positive + exclusion assertions. All old Phase-3 shape assertions and flat-trio setters (setTriggerType/setTriggerValue) are fully removed — no coexistence. Correct pyramid level (all @Tag('slow') ITs on real Testcontainers Mongo). Three gaps found: one MEDIUM (MARKER_APPLIED/NOOP strings not pinned in any IT, despite tech-spec AC and post-deploy grep dependency), two LOW (BeanPostProcessor return-value contract untested in the fault case; cross-element multikey false-positive not documented/tested). None block approval given the TDD Anchor's three core cases are fully satisfied."
+}

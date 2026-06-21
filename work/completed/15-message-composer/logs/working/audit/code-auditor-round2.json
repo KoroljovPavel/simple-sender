@@ -1,0 +1,85 @@
+{
+  "task": "9 - Code Audit (round 2 — re-audit of fix commit 5656188)",
+  "feature": "15-message-composer",
+  "auditor": "code-auditor",
+  "date": "2026-06-10",
+  "methodology": "code-reviewing (11 dimensions); skeptical re-verification of the round-1 majors/minors against the final state of the touched files + compile + focused test run",
+  "scope": "git show 5656188 (10 files) + final state of StepType.java, StepTypeReadConverter.java, FunnelMongoConfig.java, StepExecutor.java, FunnelService.java, Button.java, FunnelExecutionEngine.java, e2e/funnels.spec.ts, stores/funnels.ts, types/funnel.ts; cross-checked existing Mongo config surface for shadowing.",
+  "verdict": "almost all resolved — MAJ-1, MAJ-2, MIN-2, MIN-4 fully resolved and correct; MIN-1 only PARTIALLY resolved (2 stale 'Decision 9' preview comments remain in FunnelService.java). 1 new minor + 2 info-level documentation-accuracy nits, no new functional defects, no regressions.",
+  "counts": { "critical": 0, "major": 0, "minor": 1, "info": 2 },
+
+  "verification_evidence": {
+    "compile": "cd backend && ./gradlew compileJava compileTestJava -q → exit 0. Confirms both exhaustive switches (StepExecutor.execute:109, FunnelService.validateSteps:782) still compile with the new UNKNOWN case and NO default — compiler-enforced completeness intact; new converter/config/test sources valid.",
+    "unit_test": "./gradlew test --tests com.botfunnel.funnel.StepTypeTest -q → exit 0 (removedTypesAreAbsent + existing pass).",
+    "mongo_config_shadowing": "grep across src/main: NO AbstractMongoClientConfiguration / MappingMongoConverter bean / second MongoCustomConversions / @WritingConverter / other Converter<...> exist. FunnelMongoConfig#mongoCustomConversions is the SOLE MongoCustomConversions bean; Spring Boot's MongoDataAutoConfiguration merges it into the autoconfigured MappingMongoConverter. No shadowing, no global override.",
+    "switch_inventory": "Only two switches dispatch on StepType (StepExecutor:109, FunnelService:782) — both got UNKNOWN. FunnelService:534 switches on trigger-type String, FunnelExecutionEngine:257 switches on StepResult.outcome() — neither is a StepType switch, correctly untouched.",
+    "sweep_isolation": "Confirmed FunnelExecutionEngine.sweep(): line 103 mongoTemplate.find(...) is OUTSIDE the per-execution try/catch (lines 110-116). The converter makes that find() tolerant; runExecution→execute→case UNKNOWN→StepResult.fail→FAIL→terminate(status=failed) (engine line 284-286) isolates the bad row. Exactly the gap round-1 identified.",
+    "terminal_fail": "StepResult.fail → Outcome.FAIL → engine terminate(ExecutionStatus.failed) → terminal, row not re-claimed. Both MAJ-1 (UNKNOWN) and MAJ-2 (empty blocks) self-resolve, no loop."
+  },
+
+  "resolved": [
+    {
+      "id": "MAJ-1",
+      "status": "RESOLVED — correct",
+      "notes": "StepType.UNKNOWN is a NEW distinct sentinel appended after SUBSCRIBE_TO_FUNNEL — NOT a reintroduced removed constant (StepTypeTest::removedTypesAreAbsent pins SEND_MESSAGE/SEND_IMAGE/MENU absent). StepTypeReadConverter is @ReadingConverter Converter<String,StepType>, catches IllegalArgumentException → UNKNOWN, logs only the raw discriminator value (a step-kind, no PII) at WARN. FunnelMongoConfig registers it via the single MongoCustomConversions bean correctly wired by Boot auto-config (no shadowing). UNKNOWN handled in BOTH exhaustive switches with no default. Sweep now isolates the bad doc (terminal-fail one execution, tick survives). IT exercises the real RAW-document path."
+    },
+    {
+      "id": "MAJ-2",
+      "status": "RESOLVED — correct",
+      "notes": "Guard at top of message() (StepExecutor:183) returns StepResult.fail(\"empty_message_blocks\") on null/empty blocks BEFORE any deref — terminal, consistent with the FAIL catch-matrix, no NPE loop. Placed outside the try (cannot throw). Happy path unaffected (validateMessage still rejects at save)."
+    },
+    {
+      "id": "MIN-2",
+      "status": "RESOLVED — correct",
+      "notes": "Button.java javadoc: {@link StepType#MENU} → {@link StepType#MESSAGE} and prose retargeted to 'last non-album block of a MESSAGE composer step (Decision 2)'. grep confirms NO StepType#MENU / StepType.MENU references remain anywhere in backend/src."
+    },
+    {
+      "id": "MIN-4 / F-MINOR-3",
+      "status": "RESOLVED — correct",
+      "notes": "Both stale e2e cases (funnels_goldenPath_buildAndActivate, funnels_menuGoldenPath_buildAndActivate) are test.skip'd (not deleted) with clear migration comments. They are the ONLY two top-level test() declarations in the file — both now .skip. The unused addSendMessage helper remains but is never invoked (harmless). No unskipped stale test remains."
+    },
+    {
+      "id": "F-MINOR-1 (IT) / F-MINOR-2 (negative test)",
+      "status": "RESOLVED — adequate",
+      "notes": "tolerant-read IT uses real Testcontainers Mongo + a genuine RAW $set of stepsSnapshot.0.stepType='MENU', asserts no-throw + valid sibling completes (sent 1) + legacy terminal-failed (failed/done) — genuinely red without the converter. StepTypeTest negatives pin the removed constants gone. (IT not re-run here: @Tag(slow)/Docker; fixer documented green in isolation; the path is fully verified by code inspection above.)"
+    }
+  ],
+
+  "findings": [
+    {
+      "id": "R2-MIN-1",
+      "severity": "minor",
+      "dimension": "Code Readability & Maintainability (3)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java:426 (renderBlocks javadoc tail) and :493 (stubSubscriber comment)",
+      "status": "carry-over — MIN-1 only PARTIALLY resolved",
+      "issue": "MIN-1 (normalize all preview 'Decision 9' → 'Decision 8') is NOT fully closed. The fixer fixed previewStep:390, the on-the-fly comment:411, and stores/funnels.ts:215, but TWO preview comments in FunnelService.java still cite the non-existent 'Decision 9': line 426 ('Unknown block types still render (preview is non-validating, Decision 9)') inside the renderBlocks doc-comment, and line 493 ('Sample stub for preview when the owner is not linked (Decision 9)') on stubSubscriber. Both are 15-message-composer preview helpers; the feature's preview decision is Decision 8 (verified: tech-spec has 8 decisions; PreviewStep DTOs and all of types/funnel.ts say Decision 8). The fixer's report claim 'Fixed FunnelService.java (previewStep + renderBlocks comments)' is inaccurate for the renderBlocks tail (426) and missed stubSubscriber (493) entirely. NOTE: the OTHER 'Decision 9' hits in the repo (FunnelService:1119 delay floor; webhook/trigger/rate-limit files) belong to a DIFFERENT feature's decision numbering and are correct — do not touch those.",
+      "recommendation": "Change 'Decision 9' → 'Decision 8' on FunnelService.java:426 and :493 only. Pure comment fix, no behavior change. Low priority but the fix was reported as complete and isn't."
+    },
+    {
+      "id": "R2-INFO-1",
+      "severity": "info",
+      "dimension": "Error Handling (4) / Cross-File Consistency (10)",
+      "file": "StepType.java (UNKNOWN comment) + StepTypeReadConverter.java javadoc + audit-fix/report.json self_review",
+      "issue": "Documentation-accuracy nit (not a code defect): the comments/report assert UNKNOWN is rejected at the 'Jackson DTO boundary (@NotNull StepType) with a 400 before persistence'. That is imprecise — UNKNOWN is now a VALID enum constant, so a client literally POSTing stepType:\"UNKNOWN\" deserializes fine through Jackson and PASSES @NotNull; it is actually FunnelService.validateSteps (case UNKNOWN -> throw invalidStep) that rejects it, as a 422, not a 400. The end guarantee (UNKNOWN can never be saved as a valid step) HOLDS and is sound — validateSteps runs on every create(204)/update(309)/activate(309)/test-run(384) path — but the stated mechanism (Jackson 400) is wrong; the real gate is the validateSteps 422. Worth correcting the comment for future maintainers so nobody removes the validateSteps UNKNOWN case believing Jackson already blocks it.",
+      "recommendation": "Adjust the StepType.java / StepTypeReadConverter.java wording to credit FunnelService.validateSteps (422) as the author-input gate, not Jackson/@NotNull. The validateSteps UNKNOWN case is load-bearing — keep it."
+    },
+    {
+      "id": "R2-INFO-2",
+      "severity": "info",
+      "dimension": "Architecture (1) — inherent property of tolerant-read, not a regression",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java:263-283 (duplicate)",
+      "issue": "The read converter applies to ALL StepType reads, including the funnels (definition) collection — not only funnel_executions. duplicate() copies an originally-persisted funnel's steps via copyOf and saves the copy WITHOUT calling validateSteps (line 282). So a hypothetical LEGACY funnel DEFINITION carrying a removed stepType (surviving the Decision-4 wipe) would read back as an UNKNOWN step and could be duplicated into a NEW draft containing a real UNKNOWN step. This is benign and NOT a defect introduced by the fix: (a) the copy is a draft; (b) activation re-runs validateSteps (line 309) which throws 422 on UNKNOWN, so it can never go active; (c) only active funnels enroll/execute, and the engine terminal-fails UNKNOWN anyway. The precondition is exactly the legacy-survivor population MAJ-1 exists to tolerate, and 'tolerate, never crash' is the intended posture. Flagging only for completeness — no action needed unless a future phase lets drafts execute.",
+      "recommendation": "None (acceptable residual). If duplicate() ever needs to surface a corrupt source, a validateSteps call there would catch it — but it is not required for safety today."
+    }
+  ],
+
+  "regressions_check": {
+    "global_converter_override": "NONE — read-only @ReadingConverter, single MongoCustomConversions bean, no MappingMongoConverter/MongoTemplate bean override, no @WritingConverter. Valid StepType names convert identically to default (valueOf), only unknown names diverge to UNKNOWN. Writes unaffected (no write converter), so authored steps still persist as their enum name.",
+    "swallowed_exceptions": "Scoped correctly — StepTypeReadConverter catches ONLY IllegalArgumentException (the valueOf failure) and logs at WARN before returning the sentinel; it does not swallow anything broader. No empty catch. Engine sweep's per-execution catch (RuntimeException, logs error) is pre-existing and unchanged.",
+    "pii_in_logs": "OK — converter logs only the raw stepType discriminator string (a step-kind), no rendered text/caption/field value. Consistent with the codebase's id/code-only logging rule.",
+    "exhaustiveness": "OK — both StepType switches compile with no default; an accidental future enum add would break the build (good). No default added.",
+    "test_suite": "Fixer reports 1108 default-lane green; compile + StepTypeTest re-verified green here. The 3 -PrunSlow failures (two multiBlockMessage IT + P99IT) were reproduced on a clean baseline per the fixer report — pre-existing test-ordering/hardware artifacts, not introduced by 5656188. Did not independently re-run the slow lane."
+  },
+
+  "final": "Both majors are correctly and robustly fixed; MIN-2 and MIN-4 fully resolved; F-MINOR-1/2 tests adequate. The only remaining item is R2-MIN-1: two stale 'Decision 9' preview comments in FunnelService.java (426, 493) that MIN-1 was reported to have fixed but did not. Plus two info-level doc-accuracy notes (the Jackson-vs-validateSteps rejection mechanism, and the duplicate()-of-legacy-UNKNOWN benign residual). No critical/major remain; no functional regression introduced by the converter/config."
+}

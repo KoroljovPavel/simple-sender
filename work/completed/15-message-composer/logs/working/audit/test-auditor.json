@@ -1,0 +1,138 @@
+{
+  "task": "11 — Test Audit",
+  "feature": "15-message-composer",
+  "auditor": "test-auditor",
+  "date": "2026-06-10",
+  "verdict": "passed",
+  "summary": "The test layer for the message-composer feature is strong and meaningful: load-bearing invariants (per-node at-most-once via times(K) across two ticks, snapshot isolation on List<ContentBlock> via real Mongo, callback contract + IDOR negatives, anti-SSRF, XSS-negative, album array-mapper + scrub) are all covered at the correct pyramid level with behavioral (not mock-only) assertions. Findings are confined to two real coverage gaps (no StepType absence-guard for removed types; no tolerant-read fail-safe IT for a legacy old-type document) and a stale e2e file, none blocking.",
+  "severity_counts": { "critical": 0, "major": 0, "minor": 3, "info": 4 },
+  "inventory": {
+    "backend_unit": [
+      "FunnelStepExecutorTest.java (composer MESSAGE branch: order, var-subst in text+all captions, trim+WARN per caption type, album caption-on-first + per-item element type, keyboard on last non-album → WAIT_FOR_REPLY, no-buttons → CONTINUE, crash semantics CANCEL/FAIL + step-not-advanced)",
+      "TelegramSenderTest.java (sendVideo/Audio/Document happy + inherited retry/429; sendMediaGroup array-mapper, caption-on-first, empty-array throw, ok=false-with-token scrub; single-message mapper intact)",
+      "FunnelStepTest.java (copyOf: blocks → NEW list instance, shared immutable elements, list-level mutation isolation, null-stays-null; buttons parity)",
+      "StepTypeTest.java (MESSAGE/EMIT_EVENT/SUBSCRIBE_TO_FUNNEL valueOf+name pins)",
+      "VariableTemplateRendererTest.java (23 tests — parseMode escaping; pre-existing green)",
+      "FunnelExecutionTest.java (enrollDepth default only)",
+      "FunnelServiceEmitEventTest.java (migrated to ContentBlockDto)",
+      "FunnelStatusEnumTest.java (stepType discriminator uppercase, MESSAGE pinned)"
+    ],
+    "backend_integration": [
+      "FunnelExecutionEngineIT.java (real Mongo + MockWebServer + mutable clock): at-most-once (reRunningClaimedStep, crashAfterSend, multiBlockMessage_crashMidBlocks times(3) across two ticks, multiBlockMessage_leftInProgress, atomicClaimRace); snapshot isolation (editingFunnelDuringWait, multiBlockMessage_snapshotIsolation_ignoresLiveBlockEdit → menu+2 snapshot blocks=3); keyboard-on-last park/resume; lastButtonClicked coordinate; funnel_button_clicked exactly once; stale webhook ignored; timeout-resume parity; full advanceOnCallback negative+positive matrix",
+      "FunnelTriggerServiceIT.java (callback negatives: broken format, >64 bytes, non-hex, out-of-range, url button, cursor-not-MESSAGE, IDOR cross-subscriber + cross-project; positive park+branch; lastButtonClicked m1:1; funnel_button_clicked once; snapshot deep-copy decoupled from funnel edits + identity guard)",
+      "FunnelControllerIT.java (save-validation 422: empty composer, >10 blocks, album <2/>10, caption-on-non-first, type-mixing IMAGE+AUDIO/IMAGE+FILE, missing item type, buttons-on-non-last/album, non-http(s) media → all funnel_step_invalid; over-length flagged not blocked; valid all-audio + photo+video; DTO round-trip 6-block save→fetch incl album items+type; preview multiblock array; XSS-negative; MarkdownV2 escaping; preview IDOR precedence)",
+      "FunnelTestRunSendIT.java (Test-for-me parity on composer MESSAGE)",
+      "FunnelEventServiceIT.java (migrated to composer)"
+    ],
+    "frontend": [
+      "tests/components/funnels/FunnelStepForm.composer.spec.ts (add/move/remove blocks, per-type widgets, empty composer, 10-block cap, empty TEXT, non-http(s) reject + file_id accept, album 2-10, type-mix reject, photo+video accept, over-length warn-not-block, buttons-on-last-non-album show/hide + emit + stale-row-not-blocking + empty-label, edit seeding id/next)",
+      "tests/components/funnels/FunnelMessagePreview.spec.ts (ordered mixed-block render, request shape, debounced reactive re-trigger, never v-html + static source guard, :src for IMAGE, non-http IMAGE → neutral icon, @error fallback, VIDEO/AUDIO icon, FILE href only http(s), album grid caption-on-first, buttons under last block, desync clamp, non-message placeholder, error/loading/sample-data states, heading)",
+      "tests/stores/funnels.spec.ts (preview action new request/response shape)",
+      "tests/types/funnel-blocks.spec.ts (compile-time DTO assignability fixture, all BlockTypes)",
+      "tests/i18n/required-keys.spec.ts (composer keys: blockType, previewMediaType.{IMAGE,VIDEO,AUDIO,FILE}, steps.type.MESSAGE)",
+      "tests/pages/funnel-editor.spec.ts (MESSAGE step kind, negative MENU/SEND_* absence)",
+      "e2e/funnels.spec.ts (NOT in vitest gate; stale — see finding F-MINOR-3)"
+    ]
+  },
+  "coverage_table": [
+    { "item": "Executor: block order", "level": "unit", "status": "Covered", "test": "FunnelStepExecutorTest::message_sendsBlocksInOrder (InOrder + verifyNoMoreInteractions)" },
+    { "item": "Executor: variable substitution in text + ALL captions (image/video/audio/file)", "level": "unit", "status": "Covered", "test": "FunnelStepExecutorTest::message_substitutesVariablesInTextAndAllCaptions (each caption captured + HTML-escaped)" },
+    { "item": "Executor: trim+WARN over limits per caption type (4096 text / 1024 media)", "level": "unit", "status": "Covered", "test": "FunnelStepExecutorTest::message_trimsTextOver4096AndWarns + ::message_trimsCaptionOver1024PerType (all 4 media types, no-PII)" },
+    { "item": "Executor: album caption on first only", "level": "unit", "status": "Covered", "test": "FunnelStepExecutorTest::message_albumCaptionOnlyOnFirstItem (items[1/2].caption null)" },
+    { "item": "Executor: album per-item element type (post-correction)", "level": "unit", "status": "Covered", "test": "FunnelStepExecutorTest::message_albumElementTypeDerivesFromItemKind (containsExactly photo,video)" },
+    { "item": "Executor: keyboard only on last non-album → WAIT_FOR_REPLY", "level": "unit", "status": "Covered", "test": "FunnelStepExecutorTest::message_keyboardOnlyOnLastNonAlbumBlock_waitForReply + ::message_lastBlockIsAlbum_keyboardNotAttached (markup captor on the exact send; album send markup=null)" },
+    { "item": "Executor: no buttons → CONTINUE", "level": "unit", "status": "Covered", "test": "FunnelStepExecutorTest::message_noButtons_returnsContinue" },
+    { "item": "Executor: crash send block K throws → CANCEL/FAIL per fromTerminalReason, step not advanced", "level": "unit", "status": "Covered", "test": "FunnelStepExecutorTest::message_blockKThrowsTelegramSend_returnsCancelOrFail_stepNotAdvanced (block1 sent times(1), block3 never; BLOCKED_BY_USER→CANCEL, OTHER→FAIL) + invalidBotToken/appException variants" },
+    { "item": "Sender: new senders happy + inherited retry/429", "level": "unit", "status": "Covered", "test": "TelegramSenderTest::sendVideo/sendAudio/sendDocument_success + sendVideo_rateLimited_retriesThenSucceeds + sendVideo_5xxExhausted (path assertions both attempts)" },
+    { "item": "Sender: album ARRAY mapper", "level": "unit", "status": "Covered", "test": "TelegramSenderTest::sendMediaGroup_success_mapsArrayResponse (2 SentMessage) + captionOnlyOnFirstItem + emptyArrayResponse_throws" },
+    { "item": "Sender: scrubTokens on album error path", "level": "unit", "status": "Covered", "test": "TelegramSenderTest::sendMediaGroup_okFalseWithToken_scrubbedInLog (raw token absent, [REDACTED_TOKEN] present)" },
+    { "item": "Sender: single-message mapper intact", "level": "unit", "status": "Covered", "test": "TelegramSenderTest::sendText_happyPath + full sendText/sendPhoto failure matrix" },
+    { "item": "copyOf: blocks new instance", "level": "unit", "status": "Covered", "test": "FunnelStepTest::copyOf_copiesBlocksToNewListInstance (isNotSameAs + element isSameAs) + ::copyOf_mutatingCopyBlocksDoesNotAffectSource + ::copyOf_nullBlocksStaysNull" },
+    { "item": "Validation: empty / >10 / album 2-10 / type-mixing / buttons-on-non-last / non-http(s) → 422", "level": "integration", "status": "Covered", "test": "FunnelControllerIT::updateEmptyComposer/updateOverTenBlocks/updateAlbumUnderTwo/updateAlbumOverTen/updateAlbumInvalidTypeMix/updateAlbumImageFileMix/updateAlbumMissingItemType/updateButtonsOnNonLastBlock/updateButtonsOnAlbumBlock/updateNonHttpMediaUrl/updateJavascriptMediaUrl (all funnel_step_invalid)" },
+    { "item": "Validation: over-length flagged not blocked", "level": "integration", "status": "Covered", "test": "FunnelControllerIT::updateOverLengthTextFlaggedNotBlocking (200) + FunnelStepForm.composer::warns but does not block" },
+    { "item": "Validation: DTO round-trip", "level": "integration", "status": "Covered", "test": "FunnelControllerIT::saveFetchRoundTripPreservesBlocks (6 block types incl album items+type+caption) + composerButtonsRoundTripThroughPutAndGet" },
+    { "item": "Preview: multiblock + XSS-negative", "level": "integration", "status": "Covered", "test": "FunnelControllerIT::previewMultiblockReturnsRenderedArray + previewEscapesHostilePayload (raw body asserts no <script>) + previewMarkdownV2EscapesFullSet; frontend FunnelMessagePreview::never via v-html (+static source guard)" },
+    { "item": "Callback negatives (broken/>64/non-hex/out-of-range/url/IDOR x-sub+x-proj)", "level": "integration", "status": "Covered", "test": "FunnelTriggerServiceIT::advanceOnCallback_brokenFormat/over64Bytes/nonHexExecutionId/buttonIndexOutOfRange/nonCallbackButton_url/idorCrossSubscriber/idorCrossProject/cursorNotMessageStep + FunnelExecutionEngineIT::advanceOnCallback_malformedOrOversizedData/urlButtonOrOutOfRange/foreignExecution_idorRejected" },
+    { "item": "Callback positive park+resume, lastButtonClicked coordinate, funnel_button_clicked once", "level": "integration", "status": "Covered", "test": "FunnelTriggerServiceIT::messageStepWithButtons_parksAndBranches + recordsLastButtonClickedAsCurrentStepColonIndex (m1:1) + recordsFunnelButtonClickedExactlyOnce; FunnelExecutionEngineIT::advanceOnCallback_validClick_advancesBranch_writesEvent (metadata pinned + no-PII) + doubleClick_advancesOnce" },
+    { "item": "IT: per-node at-most-once via times(K) across two ticks (not just status)", "level": "integration", "status": "Covered", "test": "FunnelExecutionEngineIT::multiBlockMessage_crashMidBlocks_doesNotResendOnReClaim (sentCount==3 after BOTH sweeps) + multiBlockMessage_leftInProgress_isNotReClaimed (sentCount==0)" },
+    { "item": "IT: snapshot isolation — mutate blocks after enroll → in-flight sends original snapshot", "level": "integration", "status": "Covered", "test": "FunnelExecutionEngineIT::multiBlockMessage_snapshotIsolation_ignoresLiveBlockEdit (snapshot 2-block s2 → menu+2 sends=3 despite live single-block edit) + FunnelTriggerServiceIT::snapshotIsDeepCopyDecoupledFromFunnelEdits (text 'original' after source mutated to 'edited' + isNotSameAs)" },
+    { "item": "IT: rewritten Phase 1-5 ITs green (no lost assertions, no live old-type refs)", "level": "integration", "status": "Covered", "test": "Engine/Trigger/Controller/TestRun/EventService ITs all migrated to MESSAGE+ContentBlock; ~40 graph ITs preserved via single-block seed helpers; grep: zero live StepType.SEND_MESSAGE/SEND_IMAGE/MENU in backend tests" },
+    { "item": "Fail-safe: tolerant-read legacy old-type document doesn't crash engine on start", "level": "integration", "status": "Missing", "test": "NO TEST — see F-MINOR-1" },
+    { "item": "StepType: removed types absent guard (negative valueOf SEND_MESSAGE/SEND_IMAGE/MENU)", "level": "unit", "status": "Missing", "test": "StepTypeTest pins MESSAGE present but has NO assertion the 3 old constants are gone — see F-MINOR-2 (task explicitly flagged this)" },
+    { "item": "E2E: none required (tech-spec)", "level": "e2e", "status": "Acceptable", "test": "tech-spec deliberately specifies E2E None; engine ITs cover golden path; real delivery via Test-for-me. Existing e2e/funnels.spec.ts is stale — see F-MINOR-3" }
+  ],
+  "findings": [
+    {
+      "id": "F-MINOR-1",
+      "severity": "minor",
+      "title": "No tolerant-read fail-safe IT for a legacy old-type funnel document",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java (missing test)",
+      "issue": "Tech-spec Testing Strategy explicitly lists: 'Fail-safe: legacy old-type document, that survived a manual wipe, must not crash the engine on start (tolerant-read).' No test inserts a raw funnel_execution / funnel document with stepType=\"SEND_MESSAGE\" (a now-removed enum constant) and asserts the sweep skips/handles it gracefully instead of throwing on enum deserialization. legacy_linear_run_drains_via_index_fallback covers a no-id legacy SHAPE but NOT an unknown-stepType VALUE.",
+      "recommendation": "Add FunnelExecutionEngineIT::legacyOldTypeDocument_doesNotCrashEngine: insert via mongoTemplate a raw org.bson.Document funnel_execution whose stepsSnapshot[0].stepType is the string \"SEND_MESSAGE\" (or \"MENU\"), run engine.sweep(), and assert the sweep completes without throwing and the row is left untouched / failed gracefully (whichever the tolerant-read contract is). If the production code has NO tolerant-read path and would actually throw on unknown enum, this finding is escalated to MAJOR and the tech-spec claim must be reconciled.",
+      "litmusTestFailed": false
+    },
+    {
+      "id": "F-MINOR-2",
+      "severity": "minor",
+      "title": "StepTypeTest lacks a negative guard that removed types are gone",
+      "file": "backend/src/test/java/com/botfunnel/funnel/StepTypeTest.java",
+      "issue": "The task body explicitly calls this out: 'if StepTypeTest is not extended with a guard check on MESSAGE — mark as coverage gap'. It IS extended with messageStep_present, but there is no negative assertion that StepType.valueOf(\"SEND_MESSAGE\")/\"SEND_IMAGE\"/\"MENU\" now throws IllegalArgumentException. A future accidental re-add of an old constant would not be caught here (it is only indirectly caught by the exhaustive switches compiling). Acceptance Criterion in tech-spec: 'StepType no longer contains SEND_MESSAGE/SEND_IMAGE/MENU'.",
+      "recommendation": "Add StepTypeTest::removedTypesAreAbsent asserting assertThatThrownBy(() -> StepType.valueOf(\"SEND_MESSAGE\")).isInstanceOf(IllegalArgumentException.class) for each of the three removed constants (and optionally assertThat(StepType.values()).extracting(Enum::name).doesNotContain(...)). Cheap, directly pins the AC.",
+      "litmusTestFailed": false
+    },
+    {
+      "id": "F-MINOR-3",
+      "severity": "minor",
+      "title": "Stale e2e/funnels.spec.ts references removed composer UI (MENU/SEND_MESSAGE selectors)",
+      "file": "frontend/e2e/funnels.spec.ts",
+      "issue": "funnels_menuGoldenPath_buildAndActivate uses selectOption('MENU') and selectors step-text-input / step-menu-text-input; the addSendMessage helper relies on the dialog defaulting to SEND_MESSAGE with step-text-input. None of these exist in the composer UI (the form now uses step-block-text-N / step-composer / MESSAGE only). If run via `pnpm test:e2e` against the live stack it would fail. It is NOT in the vitest CI gate (vitest include = tests/**; e2e runs only via the separate Playwright script with a live :3000 + :8080), so it does not break current CI.",
+      "recommendation": "ACCEPTABLE TO DEFER for THIS feature: tech-spec deliberately mandates 'E2E: None' for funnels (golden path covered by engine ITs; real delivery via Test-for-me post-deploy). The file is not a required artifact and is not exercised by the gate. However it is now dead/misleading. Recommended: either (a) migrate funnels_menuGoldenPath to the composer UI (selectOption('MESSAGE'), build a TEXT block via step-add-block + step-block-text-0, attach buttons via step-menu-add-button + step-menu-target-N) and rewrite addSendMessage accordingly, or (b) mark the menu/send-message e2e tests test.skip with a comment pointing at the composer migration, to stop them masquerading as live coverage. Not a blocker for feature sign-off.",
+      "litmusTestFailed": false
+    },
+    {
+      "id": "F-INFO-1",
+      "severity": "info",
+      "title": "FunnelExecutionEngineIT is @Tag(\"slow\") — gated behind -PrunSlow",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "issue": "The load-bearing at-most-once + snapshot-isolation ITs live in a @Tag(\"slow\") class (the 5xx-exhausted case incurs the real backoff ladder). If the default CI lane runs without -PrunSlow=true, these critical invariants are NOT exercised on every push.",
+      "recommendation": "Confirm the CI pipeline runs the slow tag at least on the merge/main lane (decisions.md Wave 2 gate reports a full `./gradlew test` with 1107 tests including the slow class, so it IS run somewhere). No code change; just verify the deploy pipeline includes -PrunSlow on the gate. Informational only."
+    },
+    {
+      "id": "F-INFO-2",
+      "severity": "info",
+      "title": "Crash-semantics terminal-write race only proven for terminate(), not complete()/scheduleDelay()",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java::concurrentCancelMidTickWinsOverTerminalWrite",
+      "issue": "The test itself documents that complete()/scheduleDelay() claim-CAS no-op is 'defense-in-depth verified by code structure' (unreachable under a synchronous race since no I/O precedes them). This is a reasonable, explicitly-reasoned gap, not an omission.",
+      "recommendation": "Accept as designed. The reasoning is sound (those paths run only with the claim already held, no interleaving I/O). No action."
+    },
+    {
+      "id": "F-INFO-3",
+      "severity": "info",
+      "title": "Album homogeneous-photo deviation fully closed by album-typer correction",
+      "file": "backend (Decision 5)",
+      "issue": "Tasks 3 and 4 originally deferred per-item album media type (model lacked the discriminator). The album-typer correction added MediaItem.type and the tests now pin per-item element type mapping (executor::message_albumElementTypeDerivesFromItemKind) and type-mixing validation (Controller::updateAlbumInvalidTypeMix/ImageFileMix/MissingItemType + valid all-audio/photo+video). No residual gap.",
+      "recommendation": "None — noted for completeness; the earlier deviation is resolved with assertions."
+    },
+    {
+      "id": "F-INFO-4",
+      "severity": "info",
+      "title": "Assertion quality is high — no mock-only / litmus failures found",
+      "file": "(suite-wide)",
+      "issue": "Spot-checked the anti-patterns the task flagged: verify(...) calls use ArgumentCaptor where arguments matter (album caption-on-first, keyboard on the exact send, callback_data 'exec-1:0'); IT assertions check Mongo state + send counts, not just HTTP status (controller validations assert the $.code business code, not bare 422); preview XSS asserts the raw response body lacks <script>; at-most-once asserts times(K) across two ticks. No empty/true==true tests, no mock-return-then-assert-same-value litmus failures observed.",
+      "recommendation": "None."
+    }
+  ],
+  "pyramid_verdict": {
+    "balance": "Correct. Heavy unit base (executor branch logic, sender wire/retry/scrub, copyOf, renderer) with MockWebServer for the sender — no over-mocking (sender unit hits a real HTTP mock, not stubbed RestClient). Integration layer uses REAL Testcontainers Mongo for the two load-bearing invariants (at-most-once, snapshot isolation) — NOT proven on mocks, exactly as the anti-pattern checklist demands. Validation is double-covered: unit (FunnelStepForm.composer client mirror) + controller-IT round-trip — justified because client and server validators are independent code paths that must agree. E2E correctly None per tech-spec. No inversion, no redundant duplication that reduces zero confidence.",
+    "load_bearing_at_correct_level": true
+  },
+  "removed_types_regression": {
+    "live_old_type_references_in_tests": 0,
+    "note": "Only comments and NEGATIVE assertions reference SEND_MESSAGE/SEND_IMAGE/MENU in backend+frontend tests (FunnelStepForm.composer asserts they are NOT in the picker; funnel-editor.spec asserts MENU absent). The single live-selector usage is in the deferred-scope e2e file (F-MINOR-3)."
+  },
+  "coverage_gaps": [
+    "Tolerant-read fail-safe IT for a legacy unknown-stepType document (F-MINOR-1) — tech-spec-listed, currently absent.",
+    "StepType negative-guard test that removed constants throw on valueOf (F-MINOR-2) — task-flagged, currently absent.",
+    "Stale e2e/funnels.spec.ts not migrated to composer UI (F-MINOR-3) — acceptable to defer (E2E None), but currently dead/misleading."
+  ]
+}

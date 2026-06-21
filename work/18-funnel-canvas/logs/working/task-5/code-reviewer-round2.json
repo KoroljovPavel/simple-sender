@@ -1,0 +1,30 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 5,
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "resolvedFromRound1": [
+    {
+      "id": "F1",
+      "description": "Double fitView path",
+      "resolution": "fit-view-on-init prop removed from <VueFlow>; single fitView call remains inside onNodesInitialized guarded by try/catch. Verified: no fit-view-on-init attribute in template."
+    },
+    {
+      "id": "F2",
+      "description": "buildEdges called twice per reactive update",
+      "resolution": "rawEdges computed<CanvasEdge[]> introduced (line 66); rawNodes consumes rawEdges.value (line 70); flowEdges consumes rawEdges.value (line 112). buildEdges runs exactly once per model change."
+    },
+    {
+      "id": "F3",
+      "description": "Note node rendered with stray input Handle",
+      "resolution": "v-if on the target Handle changed from !isEntry to !isEntry && !isNote (FunnelCanvasNode.vue line 75). Note nodes now receive no handles at all."
+    },
+    {
+      "id": "F4",
+      "description": "CSS import location",
+      "resolution": "import '@vue-flow/core/dist/style.css' added at line 6 of FunnelCanvas.client.vue (inside <script setup>). SSR safety preserved: file is *.client.vue, so it is never executed server-side."
+    }
+  ],
+  "summary": "All four round-1 findings (F1–F4) are fully resolved in commit 937bf7d. No new issues introduced. The fix also adds two missing acceptance-criterion tests (broken start node, no-start-node negative case) and tightens the exit-badge i18n assertion. Code is clean, SSR-safe, and consistent with project patterns."
+}

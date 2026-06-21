@@ -1,0 +1,68 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 7,
+      "issue": "Task 7 references the test method as 'startCommandFiresFunnelTrigger' in two places (\"What to do\" step 7 and TDD Anchor step). The actual method in ProcessTelegramUpdateJobTest.java is named 'startPrivateWithPayload_callsSubscriberAndFunnel_writesEvent'. There is no method named startCommandFiresFunnelTrigger anywhere in the file.",
+      "fix": "Replace 'startCommandFiresFunnelTrigger' with 'startPrivateWithPayload_callsSubscriberAndFunnel_writesEvent' in both occurrences (step 7 description and the final TDD Anchor bullet). The test already uses @MockitoSpyBean FunnelTriggerService funnelTriggerService on the interface — no mocking update is needed; the spy already targets the interface correctly."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task says 'if test mocked NoOpFunnelTriggerService by name — switch to interface mock'. ProcessTelegramUpdateJobTest already uses @MockitoSpyBean FunnelTriggerService (the interface, not the NoOp class). No change is needed in that test for the spy setup, only the method name reference is wrong (see finding above).",
+      "fix": "Remove the conditional instruction about switching mock target — the test already targets the interface. Keep only the method-name fix."
+    },
+    {
+      "severity": "critical",
+      "category": "regression_trap",
+      "task": 8,
+      "issue": "ProjectHardDeleteJobIT has multiple tests that assert against a hardcoded structured log pattern with a fixed set of counters: 'deletedCount=N eventsRemovedCount=N gridFsFilesRemoved=N exportsRemoved=N subscriberEventsRemoved=N subscribersRemoved=N tagsRemoved=N runDurationMs=\\d+'. Adding funnels/funnel_executions cascade counters to ProjectHardDeleteJob's log.info() line will break ALL existing containsPattern assertions in the IT (cron_deletesOldProjectsAndCascadesEvents, cron_zeroDeletionDay_emitsExtendedStructuredLineWithZeros, cron_logsStructuredInfoOnDeletionRun, cron_logsExtendedStructuredLineWithPerCollectionCounts, cron_cascadeRecoversPartialDrainThenSecondRunIsNoOp). The task description says to add log-counters 'in the same style' but does not call out that every existing IT containsPattern assertion will go red. This is a silent regression trap.",
+      "fix": "Task 8 must explicitly instruct the implementer to update ALL existing containsPattern assertions in ProjectHardDeleteJobIT to include the two new counter tokens (e.g., 'funnelsRemoved=N funnelExecutionsRemoved=N'). The TDD Anchor for Task 8 only lists the two new cascade tests but is silent about the existing test updates — add a step: 'Update all existing containsPattern assertions in ProjectHardDeleteJobIT to include the new funnel/funnel_executions counter fields'. Without this the verify-smoke step './gradlew test --tests *ProjectHardDelete*' will fail even on a correct implementation."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 8,
+      "issue": "Task 8 instructs to read 'removeByProjectId helper' from ProjectHardDeleteJob — this private method exists and sweeps subscriber-domain collections by top-level projectId. However the hint says to use 'MongoTemplate remove(Query.query(where(\"projectId\").is(...)), Collection)' as if it is an alternative — but the actual existing helper uses .in(deletedIds) (batch over multiple project IDs), not .is(). The cascade runs per-project-batch (deletedIds list), not per individual ID, so the hint's .is() form would be wrong if copy-pasted.",
+      "fix": "Update the implementation hint to say: reuse the existing removeByProjectId(List<String> deletedIds, String collection) helper (which uses Criteria.where(\"projectId\").in(deletedIds)). Do not suggest a .is() form — the cascade processes a batch of project IDs in one call."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 9,
+      "issue": "Task 9 instructs to put 'useApiError' inside useFunnelsStore Pinia actions to map error codes into localized messages. The actual pattern in this project is different: NO existing Pinia store (subscribers.ts, bot.ts, projects.ts, auth.ts) uses useApiError. The useApiError composable calls useI18n() internally, which requires a Vue component setup context. Calling it from a store action (non-component context, e.g. during SSR or in a JobRunr-style background) will throw 'getCurrentInstance() called outside of component setup'. The real pattern: stores let errors propagate; only Vue components/pages call useApiError to resolve the message for display.",
+      "fix": "Remove useApiError from useFunnelsStore. The store should throw/rethrow errors. The CreateFunnelDialog.vue component (and the index page for delete errors) should call useApiError to resolve the error message before showing it. The TDD anchor for store tests should mock useApi throw and assert the store re-throws, not that it maps to a string. The component spec should mock useApiError and assert the resolved message is displayed."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 9,
+      "issue": "Task 9 instructs to 'mirror stores/subscribers.ts exactly' for the store pattern. subscribers.ts is a cursor-paginated list store with loadFirstPage/loadMore and a filter ref — fundamentally different from a simple CRUD store that needs fetch/create/update/delete actions. Mirroring it 'exactly' would produce the wrong store shape for funnels (no pagination, no filter ref, wrong action names, no create/update/delete).",
+      "fix": "Change the hint to: mirror the ACTION SHAPE of stores/projects.ts or stores/bot.ts (simple async actions wrapping useApi, re-throwing errors) rather than subscribers.ts (which is paginated). Refer to subscribers.ts only for the useApi call pattern (how it constructs the URL from route params), not for the overall store structure."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 9,
+      "issue": "Task 9 context file paths for project.md, architecture.md, patterns.md use bare relative paths like '.claude/skills/project-knowledge/references/project.md' without the '../../../' prefix needed to reach the repo root from the tasks/ directory. Task 7 uses the correct '../../../../.claude/...' style. The broken links do not affect execution (the agent reads the note and finds the file by known location) but are inconsistent with sibling tasks.",
+      "fix": "Fix context file relative paths in Task 9 to use '../../../.claude/skills/project-knowledge/references/project.md' (same prefix as Task 7). Also fix the skill reference from '.claude/skills/code-writing/SKILL.md' to '../../../.claude/skills/code-writing/SKILL.md'."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 9,
+      "issue": "The TDD anchor spec paths listed are 'frontend/stores/funnels.spec.ts' and 'frontend/components/funnels/CreateFunnelDialog.spec.ts'. The actual project test directory convention (confirmed in vitest.config.ts: include 'tests/**/*.{spec,test}.ts') places all specs under frontend/tests/. The correct paths are 'frontend/tests/stores/funnels.spec.ts' and 'frontend/tests/components/funnels/CreateFunnelDialog.spec.ts'.",
+      "fix": "Update TDD anchor spec paths to use the 'tests/' directory prefix: 'frontend/tests/stores/funnels.spec.ts', 'frontend/tests/components/funnels/CreateFunnelDialog.spec.ts'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 8
+  }
+}

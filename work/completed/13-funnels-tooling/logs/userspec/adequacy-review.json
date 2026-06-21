@@ -1,0 +1,14 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "Acceptance criteria and the 'Технічні рішення' section name concrete backend symbols (FunnelExecutionFactory.insertExecution, depth=0, cancelExistingForPair, FunnelStep.copyOf, stopAllExecutions, VariableTemplateRenderer.render, exact endpoint paths). This is HOW-level detail that conventionally lives in the tech-spec, not the user-spec.",
+      "why_matters": "User-spec defines WHAT/WHY; pinning method names couples the spec to a specific implementation and can drift if the tech-spec chooses a different wiring. Here it is largely benign because the feature IS an extraction/wiring exercise over these exact verified primitives — the named symbols function as load-bearing reuse constraints rather than gratuitous implementation leakage.",
+      "fix": "Optional: soften AC wording to describe behavior (e.g. 'direct enroll bypassing trigger matching') and move the specific symbol names into the constraints/notes block or defer to tech-spec. No scope change required; not blocking."
+    }
+  ],
+  "worst_category": "overengineering",
+  "summary": "Round-2 re-validation: all round-1 findings resolved. The critical edge-case gap (Duplicate name truncation at 128, empty/draft duplicate trigger-reset, Stop-all best-effort count vs claim-CAS) and the major preview-NPE fallback (stub Subscriber with sample values guaranteeing 'never 500') are now pinned in acceptance criteria; both minor items (mixed linear->MENU tunnel limitation, preview split point) are stated. No critical or major findings remain; one minor non-blocking note on implementation-detail leakage into the user-spec."
+}

@@ -1,0 +1,70 @@
+{
+  "status": "needs_improvement",
+  "summary": "Task 10 frontend tests are well-constructed: nearly every TDD anchor is present, behavior-focused, and survives the litmus test (store append-vs-replace, mass-assignment bodies, debounce exactly-once, 404 redirect, status badge). Async handling (settle helper, fake-timer scoping, teleport cleanup via document.body.innerHTML='') is correct and matches the codebase's established patterns. The gaps are coverage-driven rather than quality-defects: (1) two pure mappers (toExportFilter/toListQuery) and the statusBadgeClass util are only exercised indirectly, leaving documented branches untested; (2) the 503 telegram_rate_limited acceptance criterion has no dedicated assertion and is indistinguishable from 429 in the current toast handling; (3) the manual-unsubscribe POST and the blocked-disabled button state are not asserted despite being acceptance criteria. Toast assertions verify the variant (success/warning/error) but not the message, which is acceptable since variant selection is the behavior under test. No false greens, no empty tests, no mock-only tests found.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/SendPersonalMessageDialog.spec.ts (503 path) + frontend/components/subscribers/SendPersonalMessageDialog.vue:58-64",
+      "issue": "Acceptance Criteria require distinct handling for 429 personal_message_rate_limited AND 503 telegram_rate_limited ('both map to user-friendly toasts but DIFFERENT i18n keys'). Only the 429 case is tested. In the implementation both 429 and 503 fall through the same catch into resolveError(err, 'subscribers.sendMessage'), and since no per-code i18n key was seeded by Task 2 (te('errors.subscribers.sendMessage.429') and .503 both miss), both resolve to the identical errors.generic message. The test gives false confidence that the two codes are handled distinctly when they are not. There is no test proving 503 even produces an error toast.",
+      "recommendation": "Add SendPersonalMessageDialog.spec.ts::503Response_telegramRateLimitedToast: apiMock.mockRejectedValueOnce({ statusCode: 503, data: { code: 'telegram_rate_limited' } }); fill text 'hello'; submit; assert toast.error was called. If the AC's 'DIFFERENT i18n keys' requirement is truly intended, assert the resolved message string differs from the 429 case (expect distinct toast.error args); if the deviation (both → errors.generic) is accepted, update the task/decisions deviation note and keep the assertion as toast.error.toHaveBeenCalled() so the 503→error branch is at least guarded."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "frontend/utils/subscriberStatus.ts:14-16 (no test file exists for utils)",
+      "issue": "statusBadgeClass is pure logic with a non-trivial mapping and an explicit fallback branch (STATUS_BADGE_CLASS[status] ?? STATUS_BADGE_CLASS.unsubscribed). Its own source comment says it is 'kept as a single const ... so it is unit-testable.' No direct unit test exists. The profile-page test only asserts data-status (the raw enum value), not the produced class string, so the color-mapping logic and the fallback branch have zero coverage. Removing the active/blocked/deleted entries or the fallback would not fail any test (litmus failure for the mapping logic).",
+      "recommendation": "Add frontend/tests/utils/subscriberStatus.spec.ts asserting statusBadgeClass('active') contains 'green', 'blocked'/'deleted' contain 'red', 'unsubscribed' contains 'gray', and statusBadgeClass('weird' as SubscriberStatus) falls back to the unsubscribed class (exercises the ?? branch)."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "frontend/types/subscriber.ts:100-130 (toListQuery / toExportFilter) — no dedicated mapper test",
+      "issue": "Both pure mappers carry branching the task explicitly calls out as unit-test targets ('the mapping lives here as pure functions both the store and ExportCsvDialog import + unit-test'). Current coverage is only incidental: store tests cover limit/sort/cursor/status on toListQuery, and ExportCsvDialog asserts status uppercase + sort enum on toExportFilter. Untested branches: toListQuery tag-array serialization (tagsInclude/tagsExclude repeated keys), subscribedFrom/subscribedTo passthrough, and the effectiveSearch <2-char drop inside the query; toExportFilter's effectiveSearch null, last_seen_desc→LAST_SEEN_DESC mapping, and tag/date passthrough. A regression in tag or date serialization (the exact backend-binding contract) would pass all existing tests.",
+      "recommendation": "Add frontend/tests/types/subscriber-mappers.spec.ts (pure, no mount). For toListQuery: assert {tagsInclude:['a','b']} serializes to q.tagsInclude=['a','b'], subscribedFrom/To pass through, search of 1 char is omitted, search of 2+ chars present, cursor included only when truthy. For toExportFilter: assert search null when <2 chars, status uppercased / null when absent, sort 'last_seen_desc'→'LAST_SEEN_DESC' and default→'CREATED_DESC', tagsInclude/Exclude and date fields passed verbatim, cursor:null and limit:0 constants present."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/subscribers-profile.spec.ts:70-76 (test 'activeSubscriber_unsubscribeEnabled_blockedDisabled')",
+      "issue": "The test name promises both an enabled (active) AND a disabled (blocked) assertion, but the body only mounts an active subscriber and asserts btn.disabled === false. The disabled-when-status!=ACTIVE branch — a stated acceptance criterion and the security-relevant guard preventing unsubscribe on already-inactive subscribers — is never exercised. The misleading name also masks the gap. Additionally onUnsubscribe (POST /subscribers/{id}/unsubscribe) and its 200 state-refresh / error-toast paths have no test at all, despite being an acceptance criterion action button.",
+      "recommendation": "Split into two assertions: keep the active→enabled case, and add a blocked case (routeApi(sub('blocked'))) asserting the manual-unsubscribe button element .disabled === true. Add a separate test: mount active subscriber, click [data-test=\"subscriber-manual-unsubscribe\"], assert apiMock called with ('/api/v1/projects/p1/subscribers/s1/unsubscribe', { method:'POST' }) and that the badge data-status flips to the new status returned by the mocked POST."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/SendPersonalMessageDialog.spec.ts (deleted status branch)",
+      "issue": "AC and TDD anchor cover blocked/deleted as a pair (warning toast + refresh emit). Only 'blocked' is tested. 'deleted' goes through the identical else-branch so risk is low, but the explicit pairing in the spec means the deleted variant is technically unverified.",
+      "recommendation": "Add a parameterized case or a second it() for status:'deleted' asserting toast.warning called and emitted('refresh') truthy — reuses the blocked test body with a different mocked status."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Multiple: SendPersonalMessageDialog.spec.ts:67/78/90, ExportCsvDialog.spec.ts:51/60/69, SubscriberCustomFieldsTab.spec.ts:60, SubscriberTagsTab.spec.ts (toast asserts)",
+      "issue": "Toast assertions use toast.success/warning/error.toHaveBeenCalled() without verifying the message argument. Variant selection (which of the 3 toast types fires) is correctly the behavior under test, so these are not mock-only tests. But a regression that passes the wrong i18n key (or a raw key string) to the right variant would not be caught — the tests cannot tell a correct localized message from a missing-key fallback.",
+      "recommendation": "Where a stable i18n key is expected, tighten to toHaveBeenCalledWith(expect.stringContaining(<expected substring>)) or assert the resolved message is non-empty and not equal to the raw key. At minimum for sentResponse_successToast, assert toast.success received the localized subscribers.profile.sendMessage.success value rather than just .toHaveBeenCalled()."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/components/subscribers/SubscriberHistoryTab.vue:19,36-45 (no test) and SubscribersTable.vue identity()/formatDate (no test)",
+      "issue": "SubscriberHistoryTab contains real logic: defensive desc sort by createdAt (anchor + AC: 'rendered sorted desc by createdAt'), the limit=50 query, the relative() Intl.RelativeTimeFormat unit-bucketing loop, and the empty-state branch — none are tested. SubscribersTable.identity() has 4 fallback branches (name+username / name / @username / id) and is only indirectly hit by one row-click test using a fully-populated subscriber. These are non-critical display helpers, hence minor, but the history desc-sort is an explicit acceptance criterion with zero coverage.",
+      "recommendation": "Add a SubscriberHistoryTab spec: mock GET /events returning rows in ascending order, assert rendered [data-test=\"subscriber-history-row\"] order is desc by createdAt, assert the query carried limit:50, and assert the empty-state row renders when the API returns []. Optionally add a SubscribersTable.identity unit check covering the @username-only and id-fallback branches."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 19,
+    "litmusTest": {
+      "checked": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 21,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

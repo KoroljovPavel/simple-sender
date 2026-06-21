@@ -1,0 +1,24 @@
+{
+  "reviewer": "security-auditor",
+  "task": "2",
+  "round": 1,
+  "skill": "security-auditor",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliation.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java"
+  ],
+  "summary": "Startup DB index-reconciliation migration. No user input, no auth surface, no network endpoint, no secrets. All Mongo operands (collection name, index name) are hardcoded constants — no injection vector. Logging emits only static markers + migration outcome; no PII/secrets/connection strings (grep over added lines confirms none). Fail-open on Mongo fault is the documented, intended availability tradeoff (mirrors FunnelStepIdBackfill). No new dependencies.",
+  "owasp_checks": {
+    "A01_broken_access_control": "n/a — no endpoint/authz",
+    "A02_crypto_failures": "n/a — no secrets/crypto; Mongo URI from env",
+    "A03_injection": "pass — collection + index name are constants, no user input reaches Mongo",
+    "A04_insecure_design": "pass — conditional (non-blind) drop avoids churn; fail-open is documented",
+    "A05_misconfiguration": "pass — no config exposure",
+    "A06_vulnerable_components": "pass — no new dependencies",
+    "A09_logging_failures": "pass — no PII/secrets in logs; error logged with stack trace"
+  },
+  "findings": [],
+  "verdict": "approve",
+  "blocking": false
+}

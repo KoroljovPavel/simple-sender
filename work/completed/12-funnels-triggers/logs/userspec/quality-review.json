@@ -1,0 +1,91 @@
+{
+  "status": "changes_required",
+  "checks": {
+    "completeness": "fail",
+    "edge_cases": "pass",
+    "acceptance_criteria": "fail",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "acceptance_criteria",
+      "severity": "critical",
+      "issue": "Criterion 'Усі тригер-спрацювання error-isolated (помилка воронки не валить вебхук/воркер/API)' is untestable. It describes a property ('error-isolated') without specifying what observable behavior should occur when a trigger dispatch throws. This matches the blacklist pattern 'properly handles errors'.",
+      "location": "Критерии приёмки — last bullet",
+      "fix": "Replace with a concrete observable outcome, e.g.: 'Якщо диспатч тригера кидає виняток — вебхук повертає 200 OK (не 5xx) і воркер/JobRunr не фейлиться; помилка фіксується у WARN-лозі з greppable-маркером.' Alternatively split into two testable criteria: one for the webhook path (ProcessTelegramUpdateJob still returns OK), one for the API path (POST /events still returns 202 even if funnel engine throws)."
+    },
+    {
+      "check": "completeness",
+      "severity": "critical",
+      "issue": "Interview (notes, CYCLE-1 batch 2-3 and CYCLE-2 CONFIRMED) explicitly states that the API event endpoint should also accept the internal subscriberId as an optional secondary identifier ('Also accept our subscriberId if given'). The spec only mentions telegram_user_id in Scenario 4 and in acceptance criterion 'api-event', never references subscriberId as an accepted lookup key. This discussed decision is absent from the spec.",
+      "location": "Як повинно працювати — Сценарій 4; Критерии приёмки — api-event criterion; Ограничения",
+      "fix": "Add a note in Scenario 4 and in the api-event acceptance criterion: 'Endpoint приймає telegram_user_id як основний ідентифікатор; внутрішній subscriberId також приймається (опціонально) — lookup за (projectId, subscriberId).' If this was consciously deferred after the interview, note it in Ограничення or Що делаємо with explicit deferral rationale."
+    },
+    {
+      "check": "completeness",
+      "severity": "major",
+      "issue": "The interview (Cycle 1, question batch 1 answer) raised the UI-vs-canvas question and the conclusion was documented in notes: 'config FORMS (trigger-type selector, EMIT_EVENT node form) migrate to canvas; only list-layout chrome is throwaway (cheap)'. The spec nowhere mentions this implication — that the trigger-type selector UI built now is intentionally scoped as a canvas-migration-compatible form, not a throwaway. This context is relevant for the implementer deciding how to build the frontend component.",
+      "location": "Технические решения — frontend bullet (FunnelTriggerSettings.vue); Ограничення",
+      "fix": "Add a bullet to Технічні рішення: 'Форма тригера (селектор типу + поле значення) будується як переносний компонент — при переході до canvas-редактора вона мігрує як вузел форми; list-layout обгортка вважається тимчасовою.'"
+    },
+    {
+      "check": "edge_cases",
+      "severity": "major",
+      "issue": "Risk 'Перевантаження /events зовнішнім трафіком' has a mitigation of 'фіксований глобальний rate-limit (429), fail-open щоб Redis-збій не валив прийом', but does not state what happens to the request when Redis is unavailable (fail-open means the request passes through, not rejected). This semantic gap could lead to different interpretations during implementation — is fail-open on the rate-limit check only, or does it also mean the funnel dispatch proceeds?",
+      "location": "Риски — остання точка 'Перевантаження /events'",
+      "fix": "Clarify: 'fail-open: якщо Redis недоступний — rate-limit check пропускається (запит проходить), щоб Redis-збій не блокував прийом подій.' Alternatively confirm this is already clear from context of the existing Redis idiom."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "The interview success_criteria field in interview.yml still contains the OLD decision text: 'API key is generated on project creation + backfilled for existing projects'. The spec correctly implements the revised decision (lazy, no backfill). While not a spec defect, the mismatch between the YAML success_criteria and the interview notes (CYCLE 2 CONFIRMED) could confuse a reader doing a quick YAML review. The interview.yml is not the spec, but it is used as the coverage source for this review.",
+      "location": "interview.yml — success_criteria.value (phase1_feature_overview)",
+      "fix": "Update interview.yml success_criteria.value to reflect the final CYCLE-2 decision: 'API key generated lazily on demand in project settings (no auto-gen on create, no backfill).' This is a housekeeping fix in the interview artifact, not in user-spec.md."
+    },
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "13 acceptance criteria exceed the >10 warning threshold for size_check. The declared size L is consistent with the actual scope (5 trigger types + public API foundation + anti-cycle + migration), so this is not a mismatch — but it is noted per the check rules.",
+      "location": "Критерии приёмки (13 items); frontmatter size: L",
+      "fix": "No action required — size L is correctly declared and the 13 criteria are non-redundant and each maps to a distinct feature area. The warning is informational."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "five trigger types: keyword, tag_added, custom_field_set, api-event, EMIT_EVENT",
+      "subscriber-scoped triggers (one execution per subscriber per trigger fire)",
+      "telegram_user_id as primary external identifier for API events",
+      "custom_field_set fires on any set/change, no value predicate in v1",
+      "keyword: contains, case-insensitive, multiple keywords (any-of-many), separate List<String> field",
+      "keyword precedence: waiting_for_reply wins, keyword suppressed",
+      "fan-out via index relax (N separate funnels, same trigger) — no List<Trigger>",
+      "List<Trigger> / multi-entry deferred to Epic 8",
+      "loop/cascade protection: per-subscriber auto-enroll rate-limit 20/min, Redis fail-open, WARN log",
+      "no depth-guard in v1 (rate-limit sufficient)",
+      "API key: lazy generation on demand, no auto-gen on project create, no backfill",
+      "plaintext shown once per (re)generation, hash-only in DB (SHA-256)",
+      "separate @Order(1) SecurityFilterChain for /api/integrations/**",
+      "namespace /api/integrations/v1/** (version inside namespace)",
+      "rate-limit on /events: fixed global ~300/min via Redis",
+      "per-project/admin-editable limits deferred to Epic 08",
+      "event data payload NOT mapped to funnel variables in v1",
+      "regex keyword: nice-to-have, deferred",
+      "index migration: hand-rolled idempotent ApplicationRunner (FunnelStepIdBackfill pattern)",
+      "Mongock deferred as separate task",
+      "EMIT_EVENT: new StepType, subscriber-scoped, same event_name namespace as API events",
+      "internal dispatcher named FunnelEventService (not EventService — name collision)",
+      "unknown telegram_user_id → 404 (no auto-create subscriber)",
+      "idempotent tag add does NOT fire tag_added trigger",
+      "API key authorizes /api/integrations/** only; session does not authorize /api/integrations/**",
+      "error-isolation convention: trigger fires never throw outward",
+      "UI: trigger-type selector in FunnelTriggerSettings.vue (static badge → selector)"
+    ],
+    "missing": [
+      "subscriberId as optional secondary identifier for POST /api/integrations/v1/events (interview notes CYCLE-1: 'Also accept our subscriberId if given') — present in interview notes but absent from spec Scenario 4 and acceptance criteria",
+      "UI-vs-canvas migration note: trigger config forms are intentionally canvas-migration-compatible (interview notes CYCLE-1: 'config FORMS migrate to canvas; only list-layout chrome is throwaway')"
+    ]
+  },
+  "summary": "Специфікація добре структурована, сценарії повні, ризики з митигаціями є. Два critical-знахідки блокують підтвердження: один критерій приймання є нетестовним ('error-isolated' без спостережної поведінки), і одне рішення з інтерв'ю (опційний subscriberId як ідентифікатор у POST /events) відсутнє у спеці. Після їх виправлення документ готовий до approved."
+}

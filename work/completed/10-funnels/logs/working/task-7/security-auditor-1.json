@@ -1,0 +1,17 @@
+{
+  "task": "7",
+  "reviewer": "security-auditor",
+  "round": 1,
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "low",
+      "owasp": "A01:2021 Broken Access Control (defense-in-depth)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+      "line": "151-158",
+      "issue": "cancelActiveFor() scopes its updateMulti criteria to subscriberId + status only, without an explicit projectId predicate. It is NOT an actual cross-tenant break: subscriberId is the globally-unique Mongo _id resolved via subscriberService.findByChat(projectId, telegramBotId, chatId), so it provably belongs to the calling project and each execution's subscriberId points to exactly one subscriber in one project. The isolation holds transitively. Flagged only as a defense-in-depth gap — the cancel/cancelExistingForPair queries diverge from the project-scoped convention used elsewhere (Subscriber/FunnelExecution carry a top-level projectId for exactly this reason).",
+      "fix": "Optional hardening: add .and(\"projectId\").is(projectId) to the Criteria in cancelActiveFor() (line 152) and pass projectId into cancelExistingForPair() (line 171) so the byte-match stays project-scoped even if a future refactor makes subscriberId non-unique or reused. No behavior change today."
+    }
+  ],
+  "summary": "Reviewed FunnelTriggerServiceImpl (commit de78360) against OWASP Top 10 with focus on PII-in-logs, cross-tenant isolation, error-swallow safety, Mongo injection, and re-enter abuse. No hardcoded secrets. Decision 16 honored: logs emit only projectId/funnelId/subscriberId/triggerType/executionId and exception class name — payload, triggerValue, message bodies, and subscriber PII are never logged (A09/GDPR clean). Cross-tenant isolation (A01): fire() resolves bot/subscriber/funnel strictly by projectId-scoped queries, fail-closed (null -> log+skip); the execution insert binds funnel.getId() and subscriber.getId() both proven in-project; no IDOR path to trigger/cancel another tenant. Mongo criteria (A03) use typed Criteria.is/.in with .name() enum literals; triggerValue/payload are bound query params via the derived repository method, no string concatenation, no injection. Error isolation (Decision 6, A04) is intentional and fail-closed: catch(Throwable) wraps the whole body, no auth/ownership decision can be bypassed because ownership is enforced by the scoped queries themselves, not by the swallowed branch. Re-enter guard (A04) cannot create unbounded executions: allowReEnter=false relies on the unique partial index (DuplicateKeyException swallowed); allowReEnter=true cancel-then-insert has a benign TOCTOU window where a concurrent loser's insert throws DuplicateKeyException that propagates to the outer catch (logged as FIRE_ERROR, still at-most-one active, /start rate-limited 100/min). No deserialization, SSRF, or crypto surface in this change. One low-severity defense-in-depth note on adding an explicit projectId predicate to the cancel queries. Zero critical/high/medium findings."
+}

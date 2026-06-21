@@ -1,0 +1,69 @@
+{
+  "reviewer": "security-auditor",
+  "task": 4,
+  "round": 2,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "applyAll public contract — no self-validation of keys; future callers must pre-filter via validateAndNormalize",
+      "description": "applyAll is a public @Service method that blindly applies whatever keys are in normalizedByKey to customFields.<key> in MongoDB. It performs no internal key-format check or type validation. The current sole caller (the controller) always runs validateAndNormalize in Pass 1 before reaching applyAll, so no vulnerability exists today. However, the Task 6 funnel engine will call this service without an HTTP context. If a future implementer constructs a map from partially-trusted engine data and calls applyAll directly — bypassing validateAndNormalize — they could persist unvalidated values or (if field-name constraints were ever relaxed upstream) a dotted-path key. The risk is low given the slug constraint at field definition creation, but the API surface invites misuse.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java:69",
+      "impact": "No current vulnerability. If a future Task 6 caller skips validateAndNormalize and passes raw engine-controlled keys directly to applyAll, type mismatches would be persisted silently and — if the slug constraint were ever loosened — dotted-path NoSQL injection would become possible.",
+      "recommendation": "Add a package-private or internal-use note in the Javadoc of applyAll explicitly stating that keys MUST have already been resolved from project.customFieldDefinitions (slug-constrained) and values MUST have passed through validateAndNormalize. Alternatively, rename to applyAllNormalized to signal the precondition in the method name. For additional defence, add an assertion: assert key.matches(\"^[a-z0-9_-]{1,32}$\") inside the loop — it will fire in test but not add overhead in production.",
+      "cwe": "CWE-20 (Improper Input Validation — API contract clarity)"
+    },
+    {
+      "severity": "info",
+      "category": "OWASP A01: Broken Access Control (tenant isolation)",
+      "title": "Tenant isolation in applyAll — projectId Criteria confirmed intact",
+      "description": "CONFIRMED SECURE. applyAll (line 83) uses Criteria.where('_id').is(subscriberId).and('projectId').is(projectId) in its MongoDB query. A stale or forged subscriberId from a different tenant will not match because the Criteria requires both the document _id AND the projectId to match. The projectId passed to applyAll originates from the URL path variable, which was already validated against the authenticated user via projectService.requireOwned() in the controller before applyAll is called. Defense-in-depth is preserved from Round 1.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java:82-85",
+      "impact": "N/A — no vulnerability found.",
+      "recommendation": "No action required.",
+      "cwe": "N/A"
+    },
+    {
+      "severity": "info",
+      "category": "OWASP A03: Injection (NoSQL)",
+      "title": "NoSQL field-path injection via applyAll map keys — confirmed not possible",
+      "description": "CONFIRMED SECURE. The keys in the normalizedByKey map passed to applyAll originate from the controller's allowedTypes(project) map, which is keyed by CustomFieldDefinition.name(). Field names are constrained at definition-creation time by the slug pattern ^[a-z0-9_-]{1,32}$ (enforced in CreateCustomFieldRequest). This pattern excludes dots, dollar signs, spaces, and all other MongoDB operator or path-injection characters. The concatenation 'customFields.' + entry.getKey() therefore cannot produce a malicious path.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsService.java:74-80",
+      "impact": "N/A — no vulnerability found.",
+      "recommendation": "No action required.",
+      "cwe": "N/A"
+    },
+    {
+      "severity": "info",
+      "category": "OWASP A01: Broken Access Control (mass-assignment)",
+      "title": "Mass-assignment defense — confirmed intact in two-pass design",
+      "description": "CONFIRMED SECURE. The controller loop (lines 76-88) resolves each requested key against allowedTypes(project) before passing it to validateAndNormalize. Keys not found in the project's customFieldDefinitions produce type == null and hit the continue branch (silently dropped). Only project-defined keys reach newValues, and only newValues is passed to applyAll. Unknown keys can never reach the MongoDB update. The new test patchCustomFields_onlyUnknownKeys_200_noWriteNoAudit verifies this path end-to-end.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:76-88",
+      "impact": "N/A — no vulnerability found.",
+      "recommendation": "No action required.",
+      "cwe": "N/A"
+    },
+    {
+      "severity": "info",
+      "category": "OWASP A09: Security Logging and Monitoring (audit integrity)",
+      "title": "Decision 11 sole-writer invariant — confirmed preserved, prior minor resolved",
+      "description": "CONFIRMED SECURE AND IMPROVED. The subscriberService field (Round 1 minor #2 — dead injection) has been removed from SubscriberCustomFieldsService entirely. The service now has no access to SubscriberService at all, making it structurally impossible to call recordCustomFieldsSet from within the service. The sole recordCustomFieldsSet call remains at controller line 97, invoked exactly once per PATCH with the full aggregated old/new maps. The two-pass design guarantees this call is only reached when all validations pass and applyAll has committed, so the audit event is always consistent with the persisted state.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:97",
+      "impact": "N/A — no vulnerability found. Round 1 minor #2 is resolved.",
+      "recommendation": "No action required.",
+      "cwe": "N/A"
+    },
+    {
+      "severity": "info",
+      "category": "best-practice",
+      "title": "Round 1 minor #1 (partial-write / audit gap) — RESOLVED by two-pass validate-all-then-apply design",
+      "description": "RESOLVED. The Round 1 finding flagged that per-key setOne() calls inside the loop could leave a multi-key PATCH partially written if the JVM was interrupted mid-loop, with no audit event. The refactor eliminates this: Pass 1 collects all normalized values without any DB writes; only Pass 2 (applyAll) issues a single aggregated MongoDB update after all keys have been validated. A 422 on any key aborts before applyAll is reached, leaving the subscriber document and audit log untouched. This is verified by the new integration test patchCustomFields_partialKeyOrder_422_writesNothing.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java:70-98 / SubscriberCustomFieldsService.java:69-86",
+      "impact": "N/A — prior vulnerability resolved.",
+      "recommendation": "No action required.",
+      "cwe": "N/A"
+    }
+  ],
+  "summary": "Round 2 verdict: OK. Both Round 1 minors are resolved: (1) the partial-write/audit gap is eliminated by the two-pass validate-all-then-apply-once design — a 422 on any key now leaves the document and audit log untouched, confirmed by a new integration test; (2) the dead subscriberService injection has been removed, making it structurally impossible for the service to call recordCustomFieldsSet. The four primary security objectives are confirmed intact: tenant isolation (Criteria scopes by both _id and projectId in applyAll); NoSQL key-path injection not possible (slug constraint at field-definition creation excludes dots and operators); mass-assignment defense holds (unknown keys filtered in the controller loop before reaching the service); sole-writer audit invariant (Decision 11) preserved — one recordCustomFieldsSet call per PATCH in the controller only. One new minor is raised: applyAll has no self-validation of key format or value types and relies entirely on caller discipline — the Task 6 engine integration must ensure validateAndNormalize is always called before applyAll. No critical or major findings. No hardcoded secrets introduced in this diff."
+}

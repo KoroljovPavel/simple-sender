@@ -1,0 +1,40 @@
+{
+  "task": 7,
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "scope": "FunnelStepForm.vue composer sub-editor + i18n (uk/en) + consumer fixes (FunnelStepsList summary, editor page MESSAGE_STEP_TYPES) + migrated form specs",
+  "verdict": "approved",
+  "dimensions_focus": ["Type Safety (5)", "Security (8: XSS, media-URL scheme)", "Testing (6)", "Cross-File (10)", "validation mirror vs backend validateMessage"],
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "major",
+      "title": "Stale hidden keyboard rows could block submit when the last block is an album",
+      "detail": "composerValid factored menuButtonsValid unconditionally. When the last block is an album the keyboard section is hidden and its rows are never emitted, but an invalid stale row would still block submit — diverging from backend validateMessage, which only validates buttons it would attach.",
+      "location": "components/funnels/FunnelStepForm.vue composerValid",
+      "status": "fixed",
+      "fix": "Gated keyboard validity on buttonsAllowed: `(!buttonsAllowed.value || menuButtonsValid.value)`. Added composer-spec test 'does not block submit on stale hidden button rows when the last block is an album'."
+    },
+    {
+      "id": "CR-2",
+      "severity": "minor",
+      "title": "Dead computed lastNonAlbumIndex",
+      "detail": "An unused computed (buttonsAllowed covers the Decision-2 last-block rule) — would trip an unused-var lint and adds noise.",
+      "location": "components/funnels/FunnelStepForm.vue",
+      "status": "fixed",
+      "fix": "Removed; folded the rationale comment into buttonsAllowed."
+    },
+    {
+      "id": "CR-3",
+      "severity": "info",
+      "title": "Leading-whitespace media URL: client trims before the strict check, backend rejects pre-trim",
+      "detail": "Backend looksLikeUrl treats a leading-whitespace value as a URL and requireUrl rejects it on the strip guard. mediaSourceValid trims first, so ' http://x' is accepted client-side. Not a real divergence: buildBlock emits row.mediaUrl.trim(), so the value reaching the backend is already stripped and valid. No false-accept survives the round-trip.",
+      "location": "components/funnels/FunnelStepForm.vue mediaSourceValid / buildBlock",
+      "status": "accepted",
+      "fix": "No change — client normalizes (trim) on emit; behavior is safe."
+    }
+  ],
+  "security_notes": "No v-html anywhere — all author text/labels render via {{ }} interpolation (XSS-guard, Decision 8). Media URL scheme mirrors backend anti-SSRF disambiguation (http(s) URL or opaque file_id; file://, data:, javascript: rejected). No secrets/PII. Album type-mixing predicate mirrors Decision 5 exactly.",
+  "type_safety_notes": "buildBlock returns ContentBlock; album items typed MediaItem with per-item BlockType. No new `any`. The unused Button import was removed. Stable per-row uid keys (not index) preserve component identity across reorder (fixes a teleported-keyboard nextSibling crash).",
+  "cross_file_notes": "FunnelStepsList.summary() and editor-page MESSAGE_STEP_TYPES updated to the MESSAGE shape (the removed SEND_MESSAGE/SEND_IMAGE/MENU types would not compile). FunnelMessagePreview.vue (Task 8) left untouched; preview-flow cases in funnel-editor.spec.ts updated only to Task 8's already-landed contract to keep the shared file green."
+}

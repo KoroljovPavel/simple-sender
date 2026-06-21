@@ -1,0 +1,20 @@
+{
+  "verdict": "approved",
+  "summary": "Task 2 ships frontend foundation only (TS type, Pinia store, i18n keys, vitest specs) and adds no new endpoints, no new dependencies, no DOM sinks. localStorage usage is gated by import.meta.client with try/catch on both read and write paths and stores only an opaque ObjectId per Decision 10 scope-lock; the only localStorage.setItem call site in frontend/ is stores/projects.ts:18 (AC-T12 holds). i18n strings are plain text (no markup that could feed v-html). useApi() inherits the existing CSRF and credentials posture; the store does not bypass it. Risk R6 SSR guards are present and tested. No critical, high, medium, or low-severity findings against OWASP Top 10 (2021).",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "frontend/stores/projects.ts",
+      "line": 30,
+      "issue": "Persisted currentProjectId is read from localStorage with no shape validation (e.g., 24-char hex regex). The value is never used directly in a URL (URL paths consume the `id` argument provided by callers, not the persisted ref), and runAutoSelect() overwrites stale values via the equality check on the fetched list, so today there is no exploitable surface. Logged as informational because the Decision 10 scope-lock explicitly mandates 'opaque ObjectId only' — a future epic that pipes the persisted ID into a URL or DOM sink without server validation would turn this into an injection vector. Adding a one-line guard (e.g., `/^[a-f0-9]{24}$/i.test(raw) ? raw : null` inside readPersisted) would harden the boundary at near-zero cost.",
+      "suggestion": "Inside readPersisted(), validate the loaded value matches the expected ObjectId hex shape and return null otherwise. This keeps the AC-20 fallback path correct and codifies the Decision 10 scope-lock at the read boundary, not just at the write boundary."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/stores/projects.ts",
+      "line": 20,
+      "issue": "writePersisted() swallows all localStorage errors silently (empty catch). Decision 10 expects a console.warn on QuotaExceededError per the implementation hint in tasks/2.md ('on throw, log a console.warn and continue'). Today this is purely a UX/observability concern — security posture is unaffected because in-memory state remains correct — but A09 (Security Logging and Monitoring) recommends that storage anomalies are visible to support diagnosing tampering or environment misconfiguration.",
+      "suggestion": "Replace the empty catch with `catch (err) { if (import.meta.dev) console.warn('[projects] localStorage write failed', err) }` or equivalent. Keep behaviour identical in production builds."
+    }
+  ]
+}

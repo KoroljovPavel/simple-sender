@@ -1,0 +1,514 @@
+7fe979d feat: task 2 — repository array-aware queries + index reconciliation (40 seconds ago) <johnypashka>
+.../com/botfunnel/funnel/FunnelRepository.java     |  54 +++---
+ .../funnel/FunnelTriggerIndexReconciliation.java   |  87 +++++----
+ .../java/com/botfunnel/funnel/FunnelIndexesIT.java | 198 ++++++++++++++-------
+ .../funnel/FunnelTriggerIndexReconciliationIT.java | 161 ++++++++++-------
+ 4 files changed, 312 insertions(+), 188 deletions(-)
+
+backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java
+  @@ -6,14 +6,21 @@ import java.util.List;
+  - * Narrow lookup surface for Wave 2 consumers only. {@code findByProjectId} / the status-filtered
+  - * variant back the CRUD list endpoint (Task 5); {@code findByProjectIdAndTriggerTypeAndTriggerValueAndStatus}
+  - * resolves the active funnel for a given trigger at fire() time (Task 7). Engine state mutations go
+  - * through {@code MongoTemplate.findAndModify} (Task 6), not this repository.
+  + * Narrow lookup surface for the funnel feature. {@code findByProjectId} / the status-filtered variant
+  + * back the CRUD list endpoints; the trigger-bearing queries below resolve active funnels for trigger
+  + * dispatch. Engine state mutations go through {@code MongoTemplate.findAndModify}, not this repository.
+    *
+  - * <p>Phase 3: this interface is the SOLE owner of every {@code FunnelRepository} change for the
+  - * 12-funnels-triggers feature — the Task-4 dispatcher ({@code FunnelEventService}) CONSUMES the new
+  - * list queries but adds none of its own (single owner → no merge conflict).
+  + * <p>Phase 8 (17-funnel-multi-entry / Decision 1 + 6): a funnel now carries a {@code List<Trigger>}
+  + * instead of a flat trigger trio, plus a denormalized nullable {@code onStartTriggerValue} scalar. The
+  + * trigger lookups are therefore array-aware (multikey nested-property derivation: Spring Data traverses
+  + * {@code triggers} then the element field, applying the predicate per array element and returning the
+  + * funnel if ANY element matches), except the on_start conflict pre-check, which keys on the denormalized
+  + * scalar so it can lean on the partial-unique {@code {projectId, onStartTriggerValue}} index.
+  + *
+  + * <p><b>Matched-element re-scan idiom.</b> The array-aware fan-out query narrows the candidate set to
+  + * funnels whose {@code triggers[]} contains a matching element; it does NOT tell the caller WHICH element
+  + * matched. The dispatcher (Task 5) re-scans each returned funnel's {@code triggers[]} to find the matched
+  + * element and read its {@code entryStepId} (start vs redirect routing).
+    */
+   public interface FunnelRepository extends MongoRepository<Funnel, String> {
+   
+  @@ -21,21 +28,26 @@ public interface FunnelRepository extends MongoRepository<Funnel, String> {
+  -    // on_start conflict pre-check (Decision 8 / Optional-retention policy): exactly one active funnel may
+  -    // own a given (triggerType, triggerValue). KEEP this single-result method — the List sibling below is
+  -    // ADDED alongside it for fan-out, not a replacement.
+  -    Optional<Funnel> findByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
+  -            String projectId, String triggerType, String triggerValue, FunnelStatus status);
+  -
+  -    // Phase 3 (Decision 1) — fan-out trigger lookup: all active funnels matching a (triggerType,
+  -    // triggerValue) for `event` / `tag_added` / `custom_field_set`. List sibling of the Optional method
+  -    // above (Spring Data derives single-vs-many from the return type; the distinct name avoids a clash).
+  -    List<Funnel> findAllByProjectIdAndTriggerTypeAndTriggerValueAndStatus(
+  +    // on_start conflict pre-check (Decision 6): at most one active funnel per (projectId, on_start payload).
+  +    // Keys on the DENORMALIZED onStartTriggerValue scalar — the same field the partial-unique index guards —
+  +    // so a service-level pre-check and the DB constraint agree. Used by FunnelService.checkTriggerConflict
+  +    // (Task 4) and FunnelTriggerServiceImpl.fire's on_start lookup (Task 5).
+  +    Optional<Funnel> findByProjectIdAndOnStartTriggerValueAndStatus(
+  +            String projectId, String onStartTriggerValue, FunnelStatus status);
+  +
+  +    // Fan-out trigger lookup (Decision 1) — all active funnels whose triggers[] contains an element matching
+  +    // (triggerType, triggerValue), for `event` / `tag_added` / `custom_field_set`. Multikey nested-property
+  +    // derivation over the triggers array: the predicate matches per element, returning the funnel if any
+  +    // element matches. The caller (Task 5) re-scans triggers[] to locate the matched element + its
+  +    // entryStepId. Used by FunnelEventService fan-out (Task 5).
+  +    List<Funnel> findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
+               String projectId, String triggerType, String triggerValue, FunnelStatus status);
+   
+  -    // Phase 3 (Decision 3) — keyword fan-out: all active keyword funnels for a project. The
+  -    // contains-match (case-insensitive, any-of-many) against each funnel's `keywords` runs in code,
+  -    // because the exact-match triggerValue index cannot express "contains, multiple keywords".
+  -    List<Funnel> findByProjectIdAndTriggerTypeAndStatus(
+  +    // Keyword fan-out (Decision 3) — all active funnels carrying a keyword trigger, for in-code contains-
+  +    // match (case-insensitive, any-of-many) against each matched trigger element's `keywords`. The exact-
+  +    // match index cannot express "contains, multiple keywords", so the contains-match runs in code over the
+  +    // returned candidates. Array-aware: matches funnels whose triggers[] contains a keyword-type element.
+  +    // Used by FunnelEventService keyword scan (Task 5).
+  +    List<Funnel> findByProjectIdAndTriggersTriggerTypeAndStatus(
+               String projectId, String triggerType, FunnelStatus status);
+   }
+  +33 -21
+
+backend/src/main/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliation.java
+  @@ -12,36 +12,32 @@ import java.util.ArrayList;
+  - * Phase 3 (Decision 9): idempotent startup migration that drops the OLD trigger-conflict index so
+  - * Spring Data's {@code auto-index-creation=true} recreates it from the {@link Funnel} annotation's new
+  - * {@code on_start}-only partial filter.
+  + * Phase 8 (17-funnel-multi-entry / Decision 7): idempotent startup migration that DROPS the OLD trigger
+  + * index {@code projectId_triggerType_triggerValue_unique_active} (key {@code {projectId,triggerType,
+  + * triggerValue}}) so Spring Data's {@code auto-index-creation=true} can lay down the NEW
+  + * {@code {projectId, onStartTriggerValue}} partial-unique shape (the {@link Funnel} annotation) without an
+  + * {@code IndexKeySpecsConflict}.
+    *
+    * <p><b>Why a runner is needed.</b> {@code auto-index-creation} only <i>creates</i> indexes — it never
+  - * drops or alters an index whose definition changed. Task 1 relaxed the {@code @CompoundIndex}
+  - * partialFilter from {@code {status:'active'}} to {@code {status:'active', triggerType:'on_start'}}, but
+  - * on an already-migrated DB the old broad-filter index physically survives.
+  + * drops or alters one. Task 1 swapped the {@code @CompoundIndex} from the flat trigger trio
+  + * {@code {projectId,triggerType,triggerValue}} to {@code {projectId,onStartTriggerValue}} (Decision 6,
+  + * Variant A), but on an already-populated DB the old index physically survives, indexing the now-removed
+  + * {@code triggerType}/{@code triggerValue} top-level fields — it is dead and must be retired.
+    *
+  - * <p><b>Why a {@link BeanPostProcessor}, not an {@code ApplicationRunner}.</b> The original plan
+  - * (Decision 9, {@code FunnelStepIdBackfill} pattern) was an {@code ApplicationRunner} — but a live boot
+  - * smoke (Task 2) proved that ordering fails: with {@code auto-index-creation=true}, Spring Data creates
+  - * the annotation-driven indexes <i>eagerly during {@code MongoTemplate} bean instantiation</i>, long
+  - * before any {@code ApplicationRunner} (or even {@code ContextRefreshedEvent}) runs. Because the OLD and
+  - * NEW indexes share the name {@code projectId_triggerType_triggerValue_unique_active} but differ in their
+  - * partial filter, auto-creation hits MongoDB error 86 (IndexKeySpecsConflict) and the context
+  - * <b>fails to start</b> — the runner's drop never gets a chance. So the drop MUST happen before
+  - * {@code MongoTemplate} initializes. This {@code BeanPostProcessor} hooks the {@link MongoDatabaseFactory}
+  - * bean (created and connected before {@code MongoTemplate}, which depends on it): at
+  - * {@code postProcessAfterInitialization} of the factory the DB connection is live but no Spring Data
+  - * index creation has run yet, so dropping here clears the conflict before auto-creation lays down the new
+  - * shape. (Deviation from Decision 9's mechanism, recorded in decisions.md; the intent — idempotent
+  - * startup drop, log-but-never-throw — is preserved.)
+  + * <p><b>Why a {@link BeanPostProcessor}, not an {@code ApplicationRunner}.</b> A live boot smoke (Phase 3)
+  + * proved that ordering fails: with {@code auto-index-creation=true}, Spring Data creates the
+  + * annotation-driven indexes <i>eagerly during {@code MongoTemplate} bean instantiation</i>, long before any
+  + * {@code ApplicationRunner} runs. So the stale index must be retired before {@code MongoTemplate}
+  + * initializes. This {@code BeanPostProcessor} hooks the {@link MongoDatabaseFactory} bean (created and
+  + * connected before {@code MongoTemplate}, which depends on it): at {@code postProcessAfterInitialization}
+  + * of the factory the DB connection is live but no Spring Data index creation has run yet, so dropping here
+  + * clears the conflict before auto-creation lays down the new shape.
+    *
+  - * <p><b>Idempotency.</b> The decision is driven by the actual {@code partialFilterExpression}, NOT by the
+  - * index name. The OLD shape has only a {@code status} key; the NEW shape additionally carries
+  - * {@code triggerType}. A blind unconditional drop is avoided — it would drop+recreate the correct index
+  - * on every boot, churning the index and racing auto-index-creation. So: drop only when the filter lacks
+  - * {@code triggerType}; no-op (with a distinct greppable marker) when the index is absent (fresh DB) or
+  - * already in the new shape.
+  + * <p><b>Idempotency.</b> The decision is driven by the PRESENCE of the OLD index by name, not by inspecting
+  + * a partial filter. The old and new indexes have DIFFERENT keys AND different names, so the new shape can
+  + * never be mistaken for the old one. If the OLD-named index is present → drop it (APPLIED); if it is absent
+  + * (fresh/wiped DB, or already migrated so only the new {@code onStartTriggerValue} index exists) → NO-OP.
+  + * The new index is never touched.
+    *
+    * <p><b>Never throws.</b> The whole body is {@code try/catch(Exception)} and logs-and-swallows so a
+    * transient Mongo fault never blocks app boot (mirrors {@code FunnelStepIdBackfill}). The returned bean
+  @@ -52,14 +48,20 @@ public class FunnelTriggerIndexReconciliation implements BeanPostProcessor {
+  -    // Stable, greppable startup markers (the Verify-smoke step greps these). Do not reword casually —
+  -    // the post-deploy verification task pins these strings.
+  +    // Stable, greppable startup markers (the post-deploy verification task greps these — PII-free, index/
+  +    // collection names only). Do not reword casually.
+       static final String MARKER_APPLIED =
+  -            "Funnel trigger-index reconciliation: APPLIED — dropped old broad-filter index "
+  -                    + "projectId_triggerType_triggerValue_unique_active (auto-index-creation will recreate the on_start-only shape)";
+  +            "Funnel trigger-index reconciliation: APPLIED — dropped old trigger index "
+  +                    + "projectId_triggerType_triggerValue_unique_active (auto-index-creation will lay down the "
+  +                    + "projectId_onStartTriggerValue_unique_active shape)";
+       static final String MARKER_NOOP =
+  -            "Funnel trigger-index reconciliation: NO-OP — trigger index already in the on_start-only shape (or absent on a fresh DB)";
+  +            "Funnel trigger-index reconciliation: NO-OP — old trigger index "
+  +                    + "projectId_triggerType_triggerValue_unique_active absent (fresh DB or already migrated to "
+  +                    + "the projectId_onStartTriggerValue_unique_active shape)";
+   
+  +    // The index being DROPPED — the OLD flat-trio trigger index keyed {projectId,triggerType,triggerValue}.
+  +    // INDEX_NAME intentionally points at the OLD index, NOT the new onStartTriggerValue index (pointing it
+  +    // at the new index would delete the very index auto-creation just laid down).
+       static final String INDEX_NAME = "projectId_triggerType_triggerValue_unique_active";
+       static final String COLLECTION = "funnels";
+   
+  @@ -85,27 +87,18 @@ public class FunnelTriggerIndexReconciliation implements BeanPostProcessor {
+  -            Document target = indexes.stream()
+  -                    .filter(ix -> INDEX_NAME.equals(ix.getString("name")))
+  -                    .findFirst()
+  -                    .orElse(null);
+  +            boolean oldIndexPresent = indexes.stream()
+  +                    .anyMatch(ix -> INDEX_NAME.equals(ix.getString("name")));
+   
+  -            // Fresh DB / index absent → auto-index-creation will lay down the new shape directly.
+  -            if (target == null) {
+  +            // Fresh/wiped DB, or already migrated (only the new {projectId,onStartTriggerValue} index
+  +            // exists) → nothing to retire; auto-index-creation owns laying down the new shape.
+  +            if (!oldIndexPresent) {
+                   log.info(MARKER_NOOP);
+                   return;
+               }
+   
+  -            Document partialFilter = target.get("partialFilterExpression", Document.class);
+  -
+  -            // Already in the new shape (partial filter carries triggerType) → nothing to do.
+  -            if (partialFilter != null && partialFilter.containsKey("triggerType")) {
+  -                log.info(MARKER_NOOP);
+  -                return;
+  -            }
+  -
+  -            // Old broad shape ({status:'active'} only, no triggerType clause) → drop it; auto-index-
+  -            // creation recreates the on_start-only shape from the Funnel annotation on this same boot.
+  +            // Old flat-trio index present → drop it; auto-index-creation lays down the new
+  +            // onStartTriggerValue shape from the Funnel annotation on this same boot.
+               collection.dropIndex(INDEX_NAME);
+               log.info(MARKER_APPLIED);
+           } catch (Exception ex) {
+  +40 -47
+
+backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java
+  @@ -14,6 +14,7 @@ import org.springframework.data.mongodb.core.query.Query;
+  +import java.util.Optional;
+   import java.util.UUID;
+   
+   import static org.assertj.core.api.Assertions.assertThat;
+  @@ -25,8 +26,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
+  - * Tagged "slow" because it boots the full Testcontainers context only to inspect index metadata;
+  - * run with {@code -PrunSlow=true}.
+  + * <p>Phase 8 (17-funnel-multi-entry / Decision 6): the {@code funnels} trigger guard is now the
+  + * {@code {projectId, onStartTriggerValue}} partial-unique index filtered
+  + * {@code {status:'active', onStartTriggerValue:{$exists:true}}}; the old flat-trio index is gone (the
+  + * Task-2 reconciliation dropped it at startup). This class also covers the array-aware repository derived
+  + * queries against real embedded Mongo.
+  + *
+  + * <p>Tagged "slow" because it boots the full Testcontainers context; run with {@code -PrunSlow=true}.
+    */
+   @Tag("slow")
+   class FunnelIndexesIT extends AbstractIntegrationTest {
+  @@ -34,6 +40,9 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
+  +    @Autowired
+  +    FunnelRepository funnelRepository;
+  +
+       private List<Document> indexes(String collection) {
+           List<Document> result = new ArrayList<>();
+           mongoTemplate.getCollection(collection).listIndexes().into(result);
+  @@ -48,6 +57,12 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
+  +    private Optional<Document> findByKey(List<Document> indexes, Document expectedKey) {
+  +        return indexes.stream()
+  +                .filter(ix -> expectedKey.equals(ix.get("key", Document.class)))
+  +                .findFirst();
+  +    }
+  +
+       @Test
+       void contextStartsAndCollectionsExistWithoutError() {
+           // Touch both collections so they are materialised; auto-index-creation runs on startup.
+  @@ -67,21 +82,23 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
+  -        // partial-unique (projectId, triggerType, triggerValue) filtered status=active
+  -        Document triggerUnique = byKey(idx,
+  -                new Document("projectId", 1).append("triggerType", 1).append("triggerValue", 1));
+  -        assertThat(triggerUnique.getBoolean("unique", false)).isTrue();
+  -
+  -        // Phase 3 (Decision 1 + Task 2): the partial filter now carries BOTH status='active' AND
+  -        // triggerType='on_start' — the old broad {status:'active'}-only filter is gone (the Task-2
+  -        // reconciliation runner dropped it at context startup, and auto-index-creation recreated the
+  -        // on_start-only shape from the Funnel annotation).
+  -        Document pfe = triggerUnique.get("partialFilterExpression", Document.class);
+  -        assertThat(pfe).as("triggerUnique partialFilterExpression").isNotNull();
+  +        // partial-unique (projectId, onStartTriggerValue) filtered {status:'active', onStartTriggerValue:{$exists:true}}
+  +        Document onStartUnique = byKey(idx,
+  +                new Document("projectId", 1).append("onStartTriggerValue", 1));
+  +        assertThat(onStartUnique.getBoolean("unique", false)).isTrue();
+  +
+  +        Document pfe = onStartUnique.get("partialFilterExpression", Document.class);
+  +        assertThat(pfe).as("onStartUnique partialFilterExpression").isNotNull();
+           assertThat(pfe.getString("status")).isEqualTo("active");
+  -        assertThat(pfe.getString("triggerType"))
+  -                .as("Phase 3: uniqueness is scoped to on_start only")
+  -                .isEqualTo("on_start");
+  +        assertThat(pfe.get("onStartTriggerValue", Document.class))
+  +                .as("uniqueness is scoped to funnels that HAVE an on_start payload ($exists guard)")
+  +                .isEqualTo(new Document("$exists", true));
+  +
+  +        // The old flat-trio trigger index must be gone (dropped by the Task-2 reconciliation at startup).
+  +        assertThat(findByKey(idx,
+  +                new Document("projectId", 1).append("triggerType", 1).append("triggerValue", 1)))
+  +                .as("old {projectId,triggerType,triggerValue} index must be absent")
+  +                .isEmpty();
+       }
+   
+       @Test
+  @@ -114,92 +131,153 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
+  -     * The partial-unique guard must fire even for the bare "/start" case where triggerValue is the
+  -     * empty string (""), not null — otherwise two active funnels could claim the same bare trigger.
+  -     * Also proves the guard is scoped to (projectId, triggerType, triggerValue): two active funnels
+  -     * with DIFFERENT triggerValue in the same project coexist.
+  +     * The partial-unique guard fires for two active funnels sharing the same non-null
+  +     * {@code onStartTriggerValue} (including the bare "/start" empty-string payload), but never binds
+  +     * event-only funnels whose {@code onStartTriggerValue} is null — a partial {@code {$exists:true}} index
+  +     * does not index documents whose key is absent (Decision 6, Variant A).
+        */
+       @Test
+  -    void activeFunnelTriggerUniquenessHoldsForEmptyTriggerValue() {
+  +    void onStartUniquenessHoldsAndNullDoesNotBind() {
+           String projectId = "proj-" + UUID.randomUUID();
+           try {
+  -            // First active funnel with empty-string triggerValue inserts cleanly.
+  -            mongoTemplate.insert(activeFunnel(projectId, ""));
+  +            // Two active funnels with the same non-null onStartTriggerValue → duplicate key.
+  +            mongoTemplate.insert(onStartFunnel(projectId, "promo"));
+  +            assertThatThrownBy(() -> mongoTemplate.insert(onStartFunnel(projectId, "promo")))
+  +                    .as("two active funnels with the same onStartTriggerValue must collide")
+  +                    .isInstanceOfAny(DuplicateKeyException.class, DataIntegrityViolationException.class);
+   
+  -            // Second active funnel, SAME (projectId, triggerType, triggerValue="") -> duplicate key.
+  -            assertThatThrownBy(() -> mongoTemplate.insert(activeFunnel(projectId, "")))
+  -                    .as("partial-unique guard must fire for empty-string triggerValue")
+  +            // Bare /start (empty-string onStartTriggerValue) is still indexed (not null) → uniqueness fires.
+  +            mongoTemplate.insert(onStartFunnel(projectId, ""));
+  +            assertThatThrownBy(() -> mongoTemplate.insert(onStartFunnel(projectId, "")))
+  +                    .as("empty-string onStartTriggerValue is indexed (not null) → guard fires")
+                       .isInstanceOfAny(DuplicateKeyException.class, DataIntegrityViolationException.class);
+   
+  -            // Two active funnels with DIFFERENT triggerValue in the same project both insert.
+  -            mongoTemplate.insert(activeFunnel(projectId, "promo"));
+  -            mongoTemplate.insert(activeFunnel(projectId, "vip"));
+  +            // Multiple active event-only funnels (null onStartTriggerValue) sharing an event value coexist.
+  +            mongoTemplate.insert(eventOnlyFunnel(projectId, "purchase"));
+  +            assertThatCode(() -> mongoTemplate.insert(eventOnlyFunnel(projectId, "purchase")))
+  +                    .as("event-only funnels (null onStartTriggerValue) never bind the partial-unique index")
+  +                    .doesNotThrowAnyException();
+  +        } finally {
+  +            mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
+  +        }
+  +    }
+  +
+  +    /**
+  +     * Array-aware fan-out derived query: {@code findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus}
+  +     * matches funnels whose {@code triggers[]} contains a matching {@code (triggerType, triggerValue)}
+  +     * element (multikey element-match) and excludes non-matching funnels.
+  +     */
+  +    @Test
+  +    void findByTriggersTriggerTypeAndValueMatchesArrayElement() {
+  +        String projectId = "proj-" + UUID.randomUUID();
+  +        try {
+  +            // A funnel whose triggers[] contains the event element AND an unrelated keyword element.
+  +            Funnel match = activeFunnel(projectId);
+  +            match.setTriggers(List.of(
+  +                    trigger("keyword", null, List.of("hi")),
+  +                    trigger("event", "purchase", null)));
+  +            mongoTemplate.insert(match);
+  +
+  +            // A funnel with a non-matching event value.
+  +            Funnel other = activeFunnel(projectId);
+  +            other.setTriggers(List.of(trigger("event", "refund", null)));
+  +            mongoTemplate.insert(other);
+   
+  -            long active = mongoTemplate.count(
+  -                    new Query(Criteria.where("projectId").is(projectId).and("status").is(FunnelStatus.active)),
+  -                    Funnel.class);
+  -            assertThat(active)
+  -                    .as("one empty-trigger funnel + two distinct-trigger funnels")
+  -                    .isEqualTo(3);
+  +            List<Funnel> found = funnelRepository
+  +                    .findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
+  +                            projectId, "event", "purchase", FunnelStatus.active);
+  +
+  +            assertThat(found)
+  +                    .as("only the funnel whose triggers[] contains (event, purchase) matches")
+  +                    .extracting(Funnel::getId)
+  +                    .containsExactly(match.getId());
+           } finally {
+               mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
+           }
+       }
+   
+       /**
+  -     * Phase 3 fan-out (Decision 1): two active {@code event} funnels in the same project sharing the SAME
+  -     * triggerValue must coexist — the relaxed partial filter ({@code triggerType:'on_start'}) no longer
+  -     * applies uniqueness to {@code event}. Proves the index migration unblocked fan-out.
+  +     * {@code findByProjectIdAndOnStartTriggerValueAndStatus} resolves the on_start funnel by the
+  +     * denormalized scalar (the Task-4 conflict pre-check / Task-5 fire lookup).
+        */
+       @Test
+  -    void twoActiveEventFunnelsWithSameTriggerValueCoexist() {
+  +    void findByOnStartTriggerValueResolvesScalar() {
+           String projectId = "proj-" + UUID.randomUUID();
+           try {
+  -            mongoTemplate.insert(activeFunnel(projectId, "event", "purchase"));
+  +            Funnel onStart = onStartFunnel(projectId, "promo");
+  +            mongoTemplate.insert(onStart);
+  +            // A noise funnel with a different on_start payload.
+  ... (67 lines truncated)
+  +138 -60
+
+backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java
+  @@ -21,11 +21,13 @@ import static org.assertj.core.api.Assertions.assertThatCode;
+  - * Decision 9 (mechanism revised — see {@link FunnelTriggerIndexReconciliation}): the reconciliation
+  - * {@link org.springframework.beans.factory.config.BeanPostProcessor} drops the OLD broad-filter trigger
+  - * index ({@code {status:'active'}}) so auto-index-creation recreates the Phase-3
+  - * {@code {status:'active', triggerType:'on_start'}} shape. It must be idempotent (driven by the actual
+  - * partialFilterExpression, not the index name) and log-but-never-throw.
+  + * Phase 8 (17-funnel-multi-entry / Decision 7): the reconciliation
+  + * {@link org.springframework.beans.factory.config.BeanPostProcessor} DROPS the OLD flat-trio trigger index
+  + * ({@code projectId_triggerType_triggerValue_unique_active}, key {@code {projectId,triggerType,triggerValue}})
+  + * so auto-index-creation can lay down the NEW {@code {projectId, onStartTriggerValue}} partial-unique shape
+  + * without an {@code IndexKeySpecsConflict}. It must be idempotent (driven by the PRESENCE of the OLD index
+  + * by name — the new index has a different key and name, so it is never mistaken for the old one) and
+  + * log-but-never-throw.
+    *
+    * <p>The BPP fires once during context startup against the {@link MongoDatabaseFactory}; these tests
+    * re-invoke {@link FunnelTriggerIndexReconciliation#postProcessAfterInitialization} directly (on a fresh
+  @@ -37,10 +39,19 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
+  -    private static final String INDEX_NAME = "projectId_triggerType_triggerValue_unique_active";
+  -    private static final Document KEY =
+  +    // OLD flat-trio trigger index — the one the reconciliation drops.
+  +    private static final String OLD_INDEX_NAME = "projectId_triggerType_triggerValue_unique_active";
+  +    private static final Document OLD_KEY =
+               new Document("projectId", 1).append("triggerType", 1).append("triggerValue", 1);
+   
+  +    // NEW onStartTriggerValue partial-unique index — the Task-1 annotation shape (auto-index-creation owns
+  +    // its creation at startup; the helper here only simulates that for the test branches).
+  +    private static final String NEW_INDEX_NAME = "projectId_onStartTriggerValue_unique_active";
+  +    private static final Document NEW_KEY =
+  +            new Document("projectId", 1).append("onStartTriggerValue", 1);
+  +    private static final Document NEW_PARTIAL_FILTER =
+  +            new Document("status", "active").append("onStartTriggerValue", new Document("$exists", true));
+  +
+       @Autowired
+       MongoTemplate mongoTemplate;
+   
+  @@ -59,96 +70,103 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
+  -    private Document triggerIndex() {
+  +    private Document indexByName(String name) {
+           return indexes().stream()
+  -                .filter(ix -> INDEX_NAME.equals(ix.getString("name")))
+  +                .filter(ix -> name.equals(ix.getString("name")))
+                   .findFirst()
+                   .orElse(null);
+       }
+   
+  -    private void dropTriggerIndex() {
+  -        if (triggerIndex() != null) {
+  -            mongoTemplate.getCollection("funnels").dropIndex(INDEX_NAME);
+  +    private void dropIndexIfPresent(String name) {
+  +        if (indexByName(name) != null) {
+  +            mongoTemplate.getCollection("funnels").dropIndex(name);
+           }
+       }
+   
+  -    /** Recreates the OLD broad-filter index ({status:'active'} only) to simulate an un-migrated DB. */
+  -    private void installOldBroadFilterIndex() {
+  -        dropTriggerIndex();
+  +    /** Lays the OLD flat-trio index ({projectId,triggerType,triggerValue}) — the index reconciliation drops. */
+  +    private void installOldTrioIndex() {
+  +        dropIndexIfPresent(OLD_INDEX_NAME);
+           mongoTemplate.getCollection("funnels").createIndex(
+  -                KEY,
+  +                OLD_KEY,
+                   new IndexOptions()
+  -                        .name(INDEX_NAME)
+  +                        .name(OLD_INDEX_NAME)
+                           .unique(true)
+                           .partialFilterExpression(new Document("status", "active")));
+       }
+   
+  -    /** Installs the NEW on_start-only shape directly (simulates an already-migrated DB). */
+  +    /**
+  +     * Lays the NEW {projectId,onStartTriggerValue} partial-unique shape (simulates auto-index-creation of
+  +     * the Task-1 annotation). Distinct key AND name from the old index, so the two never collide on a name.
+  +     */
+       private void installNewShapeIndex() {
+  -        dropTriggerIndex();
+  +        dropIndexIfPresent(NEW_INDEX_NAME);
+           mongoTemplate.getCollection("funnels").createIndex(
+  -                KEY,
+  +                NEW_KEY,
+                   new IndexOptions()
+  -                        .name(INDEX_NAME)
+  +                        .name(NEW_INDEX_NAME)
+                           .unique(true)
+  -                        .partialFilterExpression(
+  -                                new Document("status", "active").append("triggerType", "on_start")));
+  +                        .partialFilterExpression(NEW_PARTIAL_FILTER));
+       }
+   
+       @Test
+       void migrationDropsOldBroadFilterIndex() {
+  -        installOldBroadFilterIndex();
+  -        Document before = triggerIndex();
+  -        assertThat(before).isNotNull();
+  -        assertThat(before.get("partialFilterExpression", Document.class).containsKey("triggerType")).isFalse();
+  +        installOldTrioIndex();
+  +        assertThat(indexByName(OLD_INDEX_NAME))
+  +                .as("old flat-trio index present precondition")
+  +                .isNotNull();
+   
+           runReconciliation();
+   
+  -        // The reconciliation owns only the DROP (auto-index-creation, which recreates the new shape, runs
+  -        // only at context startup, not here). After the drop the old broad-filter index is gone.
+  -        assertThat(triggerIndex())
+  -                .as("old broad-filter index must be gone after the reconciliation drops it")
+  +        // The reconciliation owns only the DROP (auto-index-creation, which lays the new shape, runs only at
+  +        // context startup, not here). After the drop the old flat-trio index is gone.
+  +        assertThat(indexByName(OLD_INDEX_NAME))
+  +                .as("old flat-trio index must be gone after the reconciliation drops it")
+                   .isNull();
+   
+  -        // Simulate auto-index-creation recreating the annotation shape; assert it carries the new filter.
+  +        // Simulate auto-index-creation laying the annotation shape; assert its key + partial filter.
+           installNewShapeIndex();
+  -        Document recreated = triggerIndex();
+  +        Document recreated = indexByName(NEW_INDEX_NAME);
+           assertThat(recreated).isNotNull();
+  +        assertThat(recreated.get("key", Document.class)).isEqualTo(NEW_KEY);
+           Document pfe = recreated.get("partialFilterExpression", Document.class);
+           assertThat(pfe.getString("status")).isEqualTo("active");
+  -        assertThat(pfe.getString("triggerType")).isEqualTo("on_start");
+  +        assertThat(pfe.get("onStartTriggerValue", Document.class))
+  +                .as("partial filter scopes uniqueness to funnels that HAVE an on_start payload")
+  +                .isEqualTo(new Document("$exists", true));
+       }
+   
+       @Test
+       void reconciliationIsIdempotentNoOpOnSecondBoot() {
+  +        // Already migrated: only the new onStartTriggerValue index exists, old index absent.
+  +        dropIndexIfPresent(OLD_INDEX_NAME);
+           installNewShapeIndex();
+  -        Document before = triggerIndex();
+  +        Document before = indexByName(NEW_INDEX_NAME);
+           assertThat(before).isNotNull();
+  ... (26 lines truncated)
+  @@ -171,36 +189,59 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
+  -     * End-to-end fan-out proof: two active {@code event} funnels with the same triggerValue coexist;
+  -     * two active {@code on_start} funnels with the same payload still collide. Uses the new-shape index
+  -     * (the same shape auto-index-creation produces).
+  +     * End-to-end proof against the new-shape index: two active funnels with the same non-null
+  +     * {@code onStartTriggerValue} collide; two active event-only funnels (null {@code onStartTriggerValue})
+  +     * sharing an event {@code triggerValue} coexist (the partial {@code {$exists:true}} filter never binds
+  +     * a null on_start scalar). Uses the same shape auto-index-creation produces.
+        */
+
+... (more changes truncated)
+  +70 -51
+[full diff: rtk git diff --no-compact]

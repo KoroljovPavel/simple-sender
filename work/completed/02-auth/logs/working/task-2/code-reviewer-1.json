@@ -1,0 +1,71 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "critical",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": 33,
+      "issue": "Uses `new WebSessionServerSecurityContextRepository()` instead of the static `getInstance()` factory method.",
+      "suggestion": "Replace `new WebSessionServerSecurityContextRepository()` with `WebSessionServerSecurityContextRepository.getInstance()`. The task spec explicitly states: 'Do NOT call http.securityContextRepository(new WebSessionServerSecurityContextRepository()) with new — use getInstance()'. The static factory returns a shared singleton; constructing a new instance on every request (or worse, every filter chain rebuild) creates unnecessary object allocations and may cause context store inconsistencies depending on future Spring Security internals."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": 54,
+      "issue": "CORS allowed headers list is missing `X-XSRF-TOKEN`, which Spring Security requires when CSRF is enabled via `CookieCsrfTokenRepository`.",
+      "suggestion": "Add `X-XSRF-TOKEN` to the allowed headers list: `config.setAllowedHeaders(List.of(\"Content-Type\", \"X-Requested-With\", \"X-XSRF-TOKEN\"))`. Spring Security's CookieCsrfTokenRepository sets an `XSRF-TOKEN` cookie and expects the frontend to read it and send it back as the `X-XSRF-TOKEN` request header on every state-changing request (POST, PATCH, DELETE). Without this header in the CORS allowlist, the browser's preflight response will not expose the header, and every mutating request from the frontend will be rejected by CORS before CSRF even runs."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/common/GlobalErrorHandler.java",
+      "line": 29,
+      "issue": "The generic `Throwable` handler silently swallows unexpected exceptions — no logging occurs before returning the 500 response.",
+      "suggestion": "Inject a logger and log the throwable at ERROR level before returning: `log.error(\"Unhandled exception\", ex)`. Without logging, every unexpected runtime exception (NullPointerException, IllegalStateException, database driver errors, etc.) is silently discarded. Production debugging becomes impossible. Per the error-handling methodology: 'don't swallow errors — always re-throw after logging (unless explicitly handling)'. This is the explicit handling case, but the log is still mandatory."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/user/UserService.java",
+      "line": 25,
+      "issue": "`softDelete` returns `Mono.empty()` when the user is not found — callers cannot distinguish successful deletion from a missing user.",
+      "suggestion": "Chain a `switchIfEmpty` to emit an error when the user does not exist: `.switchIfEmpty(Mono.error(AppException.badRequest(\"User not found: \" + userId)))` before the `flatMap`. Without this guard, callers such as the profile delete endpoint will silently no-op if given an invalid or already-deleted userId, masking bugs and making integration test assertions on 404 vs 200 impossible."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/user/UserStatus.java",
+      "line": 3,
+      "issue": "Enum constants use lowercase names (`pending`, `active`, `blocked`, `deleted`), violating Java naming conventions for enum constants (which must be UPPER_CASE per JLS §6.4 and standard Java style guides).",
+      "suggestion": "Rename to `PENDING`, `ACTIVE`, `BLOCKED`, `DELETED`. All downstream references (`UserStatus.deleted`, `UserStatus.blocked`, etc.) must be updated accordingly. Lowercase enum constants look identical to field or variable references, causing readability confusion and deviating from Java convention expected by every static analysis tool (Checkstyle, SpotBugs). Note: MongoDB stores the name as a string — the serialized value will change from 'deleted' to 'DELETED' unless `@JsonProperty` or a custom converter is added. Either add converters to preserve the lowercase wire format, or update the data model spec to reflect UPPER_CASE stored values."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/common/AppException.java",
+      "line": 16,
+      "issue": "No static factory method that accepts a `code` parameter alongside the message, despite `code` being used meaningfully in the system (e.g., `TOKEN_EXPIRED` per tech-spec).",
+      "suggestion": "Add overloaded factory methods: `badRequest(String message, String code)`, `unauthorized(String message, String code)`, etc. Without these, callers must use the verbose three-argument constructor directly, bypassing the factory API and making call sites inconsistent. The `TOKEN_EXPIRED` use case in email verification (Task 5) will inevitably use `new AppException(HttpStatus.BAD_REQUEST, \"TOKEN_EXPIRED\", msg)` instead of a clean factory call."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/user/UserServiceTest.java",
+      "line": 33,
+      "issue": "`softDelete_setsStatusDeletedAndDeletedAt` does not assert that `updatedAt` is also set.",
+      "suggestion": "Add `assertThat(result.getUpdatedAt()).isNotNull()` to the test. The implementation sets `updatedAt` in `softDelete`, but this behavior is untested. Since Wave 2 tasks depend on `UserService` as a stable contract, all documented field mutations should be covered by assertions."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/security/SecurityConfigTest.java",
+      "line": 31,
+      "issue": "`StorageProvider` mock is present but not mentioned in the task's `@MockitoBean` guidance note, creating a hidden dependency that future test authors will not know about.",
+      "suggestion": "Add a comment above the `@MockitoBean StorageProvider storageProvider;` declaration explaining why it is needed: JobRunr auto-configuration requires a `StorageProvider` bean; without this mock the Spring context fails to start in this test slice. Update the task note in task 2.md (or patterns.md) to include `StorageProvider` in the list of required mocks alongside the three infrastructure beans already documented. This prevents future test authors from encountering a mysterious context startup failure."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/resources/application-test.properties",
+      "line": 4,
+      "issue": "`SUPER_ADMIN_PASSWORD=test-admin-password` is a plaintext password value committed to the repository.",
+      "suggestion": "This is a test-only value, so it does not constitute a secret leak in the security sense. However, the value trains developers to commit passwords in properties files. Use a clearly synthetic placeholder such as `test-only-password-not-real` and add a comment `# Test environment only — not a real credential`. This reinforces the project's convention of never committing real credentials."
+    }
+  ],
+  "summary": "The implementation is mostly well-structured and follows the spec closely, but contains one critical spec violation (`new` instead of `getInstance()` for WebSessionServerSecurityContextRepository) and three major issues that will cause production problems: CSRF token header missing from CORS allowlist (POST/PATCH/DELETE from frontend will be blocked by CORS), silent swallowing of unexpected exceptions in GlobalErrorHandler (production debugging impossible), and softDelete silently succeeding on missing users (silent no-ops on invalid IDs). The UserStatus enum convention violation is a significant Java standard deviation that will propagate to all downstream code. All findings are actionable and fixable before Wave 2 tasks build on this foundation.",
+  "approved": false
+}

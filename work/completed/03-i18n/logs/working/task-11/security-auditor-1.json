@@ -1,0 +1,34 @@
+{
+  "summary": "Security review of Task 11 (Playwright E2E i18n spec + Nuxt DevTools disable + bundle.optimizeTranslationDirective=false). Scope: frontend/e2e/i18n.spec.ts (NEW, 21 LOC) and frontend/nuxt.config.ts (additive config changes). No backend code, no auth logic, no user-input handlers, no dependency upgrades. The test exercises client-side validation only — Zod schema blocks the submit on the invalid-email fixture, so POST /api/auth/login never fires and no credentials are transmitted. The fixture value `not-an-email` is a deliberately invalid string and not a real credential. No hardcoded secrets, tokens, or real email addresses anywhere in the spec. `devtools: { enabled: false }` is a dev-only Nuxt setting; @nuxt/devtools is stripped from production builds by Nuxt's build pipeline regardless of this flag, and explicitly disabling it slightly reduces local-dev attack surface (no devtools server/inspector page exposed). `bundle.optimizeTranslationDirective: false` is a build-time perf toggle for the `v-t` directive compile step — it does not change Vue's text-interpolation escaping or any security-relevant code path; v-t and $t both produce escaped text content in Vue. The pre-existing AUTH_HEADERS routeRules (X-Robots-Tag noindex/nofollow + Referrer-Policy no-referrer for /auth/** and /{locale}/auth/**) are preserved and unaffected. No OWASP Top 10 (2021) categories triggered.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "E2E spec relies on real backend availability via webServer auto-spawn",
+      "description": "The test assumes the dev server (`pnpm dev`) is auto-spawned by playwright.config.ts and that the backend at NUXT_PUBLIC_API_BASE (default http://localhost:8080) is either reachable or irrelevant. Since the form blocks at Zod validation, no real backend call is made for THIS spec — confirmed safe. However, future E2E specs added to the same file/suite that DO submit valid emails could leak real credentials to a live backend if a developer accidentally points NUXT_PUBLIC_API_BASE at staging/prod. Not a defect in this commit; flag for future awareness only.",
+      "location": "frontend/e2e/i18n.spec.ts:18-19",
+      "impact": "None for this commit. Forward-looking risk: a future contributor adding a 'happy-path login' spec without route mocking could POST credentials to a non-local backend if env is misconfigured.",
+      "recommendation": "Consider adding `await page.route('**/api/auth/login', (r) => r.abort())` as a defense-in-depth guard, or document in playwright.config.ts that NUXT_PUBLIC_API_BASE must be local for E2E. Optional — current spec is safe as-is.",
+      "cwe": null
+    }
+  ],
+  "verdict": "OK",
+  "checks_performed": {
+    "hardcoded_secrets": "PASS — fixture `not-an-email` is intentionally invalid; no API keys, tokens, passwords, real emails, or connection strings.",
+    "credentials_transmitted": "PASS — Zod validation fails on `not-an-email` before form.submit() handler dispatches POST /api/auth/login. Verified by reading task spec (AC: 'Тест не залежить від реального backend — логін НЕ виконується') and the test flow (fill invalid → submit click → assert validation message, no network assertion or response wait).",
+    "devtools_production_impact": "PASS — devtools is a dev-only Nuxt module; production builds (`nuxt build`) strip it via Nuxt's build pipeline regardless of this flag. Explicitly disabling reduces local dev-server attack surface (no /__nuxt_devtools__ inspector route exposed).",
+    "bundle_optimizeTranslationDirective": "PASS — build-time perf toggle for v-t directive compilation only. No effect on Vue's HTML-escaping of interpolated text; v-t and $t both render escaped text content. Setting it to false reverts to runtime translation lookup for v-t (which is unused in this codebase per the comment), so XSS posture is unchanged.",
+    "owasp_a01_access_control": "N/A — no auth/route-rule changes; existing AUTH_HEADERS routeRules preserved.",
+    "owasp_a02_crypto": "N/A — no crypto code touched.",
+    "owasp_a03_injection": "PASS — no SQL/NoSQL/command/LDAP/XSS surface introduced. Test selectors use Playwright's safe locators (data-test attribute, role-based, label-based).",
+    "owasp_a04_insecure_design": "N/A — additive config + test, no design changes.",
+    "owasp_a05_misconfiguration": "PASS — devtools-disable and i18n bundle option are both safe defaults for production.",
+    "owasp_a06_vulnerable_components": "N/A — no dependency changes in this commit.",
+    "owasp_a07_auth_failures": "N/A — no auth logic touched.",
+    "owasp_a08_integrity": "N/A — no deserialization or CI/CD pipeline changes.",
+    "owasp_a09_logging": "N/A — no logging changes.",
+    "owasp_a10_ssrf": "N/A — no server-side fetch with user input.",
+    "cookie_security": "PASS (unchanged from prior task) — i18n_lang cookie still has cookieSecure tied to NODE_ENV=production and cookieCrossOrigin: false. Untouched in this commit."
+  }
+}

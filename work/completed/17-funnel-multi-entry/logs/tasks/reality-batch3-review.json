@@ -1,0 +1,96 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 7,
+      "issue": "Task 7 declares `depends_on: [6]` and treats FunnelTriggersPanel.vue as a Task-6 output it can immediately consume. The component does NOT exist yet (`frontend/components/funnels/FunnelTriggersPanel.vue` — not found on disk). If Task 6 has not been executed before Task 7 runs, the consumer will fail to import the panel.",
+      "fix": "This is expected by design (depends_on [6] is declared). Validate that Task 6 is marked done and the file exists on disk BEFORE Task 7 execution begins. The task file itself is correct — execution harness must enforce the dependency gate."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 7,
+      "issue": "Task 7 instructs 'read the FunnelTriggersPanel.vue contract before wiring' (Context Files, Implementation Hints). The file does not exist at `frontend/components/funnels/FunnelTriggersPanel.vue`. The task cannot read the actual prop/event contract of the panel before implementation because Task 6 has not yet run. This creates a real risk: Task 7 may guess the prop contract and produce an integration mismatch.",
+      "fix": "Add an explicit pre-condition note: 'Do not start this task until `frontend/components/funnels/FunnelTriggersPanel.vue` exists on disk. Read that file first to discover the exact v-model / props / events interface before writing any wiring code.' The dependency is declared but not emphasised in the What-to-do guard."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 7,
+      "issue": "Task 7 references `FunnelResponse.triggers` in `applyResponse()`/`load()` (e.g., 'populate `triggers` from `res.triggers`'). The actual `FunnelResponse` interface in `frontend/types/funnel.ts` (line 169-184) has NO `triggers` field — it still carries the flat trio `triggerType`, `triggerValue`, `keywords`. These fields must be added by Task 6 (or Task 3 frontend side). Task 7 treats `res.triggers` as already available, but if Task 6 has not been executed the type does not carry it and TypeScript will error. The task correctly states 'Task 6 updates types' but does not tell the implementer to read `types/funnel.ts` after Task 6 runs to verify the actual field name before using it.",
+      "fix": "Add a guard: 'Before writing `applyResponse()`, read `frontend/types/funnel.ts` to confirm `FunnelResponse.triggers` (or its actual field name as Task 6 defined it) exists. If the field name differs from `triggers`, adjust accordingly.' The task should not hard-code `res.triggers` as a fact — the implementer must verify."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 7,
+      "issue": "Task 7 TDD Anchor lists five test cases for `frontend/tests/pages/funnel-editor.spec.ts`, all inside a new block. The existing `draft()` factory (line 61-77 of funnel-editor.spec.ts) returns `FunnelResponse` with `triggerType`/`triggerValue`/`keywords` flat fields — NOT a `triggers: [...]` array. The task says 'Update `draft()` factory: return `triggers: [...]` instead of the flat trio', but `FunnelResponse` in `types/funnel.ts` currently has no `triggers` field. The factory update is contingent on Task 6 changing the type. If the implementer writes new tests using `draft({ triggers: [...] })` against the un-updated type, TypeScript will fail to compile the spec file. The task treats this as a simple edit but it's actually a compile-time dependency on Task 6's type changes.",
+      "fix": "Emphasise in TDD Anchor: 'The draft() factory update requires `FunnelResponse.triggers` to exist in `types/funnel.ts` (Task 6 output). Confirm the type before writing or running new tests. If types/funnel.ts still has the flat trio, Task 6 is incomplete — do not proceed.'"
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 Implementation Hints claim the `<FunnelTriggerSettings v-model:.../>` block is at 'lines ~445-451' of `[funnelId].vue`. The actual file confirms `FunnelTriggerSettings` is indeed at line 445 with the flat v-model bindings (verified). However, the hint says the replacement is `<FunnelTriggersPanel v-model=\"triggers\" :bot-username=\"botUsername\" :deep-link=\"funnel.deepLink\" :steps=\"steps\" />` — but `funnel.deepLink` is accessed as a nullable string off the `FunnelResponse` ref. Since `funnel` is `ref<FunnelResponse | null>`, the template must guard against null (`:deep-link=\"funnel?.deepLink\"` or inside the `v-else` block). The existing template is inside `<div v-else class=\"space-y-6\">` (line 332) so `funnel` is non-null in scope — this is actually fine. The hint is slightly misleading about null-safety but not wrong in context.",
+      "fix": "Minor: clarify hint as ':deep-link=\"funnel.deepLink\" (safe — this block is inside v-else where funnel is non-null)'. No code change required."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 7,
+      "issue": "The existing `trigger auto-save readiness` test block in `funnel-editor.spec.ts` (lines 176-270+) uses `data-test` selectors like `funnel-trigger-type-select`, `funnel-trigger-keyword-input`, `funnel-trigger-keyword-add`, `funnel-trigger-event-input`, `funnel-trigger-value-input` that belong to `FunnelTriggerSettings.vue`. After Task 7, these UI elements live inside `FunnelTriggersPanel.vue` (Task 6 output). The task says 'selectors will move to FunnelTriggersPanel (Task 6) — reconcile with them; do not leave dead selectors'. However, the task gives NO guidance on what the new selectors will be (since `FunnelTriggersPanel.vue` does not exist yet). The TDD Anchor tests WILL fail not just on logic but on missing `data-test` selectors if the panel uses different attribute names. There is a real risk of the tests being rewritten to stub the panel entirely (negating their value) rather than testing through actual rendered elements.",
+      "fix": "Add a note: 'After Task 6 runs, grep `FunnelTriggersPanel.vue` for `data-test` attributes and reconcile the test selectors with actual rendered elements. Do NOT stub `FunnelTriggersPanel` in these tests — they must render through the real component to catch wiring bugs. If the panel uses `data-test=\"funnel-trigger-type-select\"` etc., the existing tests may work as-is; verify before rewriting them wholesale.'"
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 7,
+      "issue": "The Implementation Hints section provides a nearly-complete template replacement block: `<FunnelTriggersPanel v-model=\"triggers\" :bot-username=\"botUsername\" :deep-link=\"funnel.deepLink\" :steps=\"steps\" />`. This prescribes the exact prop names (`v-model`, `:bot-username`, `:deep-link`, `:steps`) before the implementer has read the actual Task-6 component contract. The hint itself says 'take the exact prop form from the Task-6 component contract' — the contradiction weakens the hint and may cause the implementer to cargo-cult the hint rather than reading the actual file. This is an overspecified hint that prescribes the solution instead of pointing at the pattern.",
+      "fix": "Replace the concrete prop list with: 'Read `FunnelTriggersPanel.vue` (Task 6 output) — look for defineProps and defineEmits to discover the exact interface. Wire accordingly. The component likely expects the triggers array via v-model and a steps list for the entry-step picker.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 says 'remove the unused import `FunnelTriggerSettings`' after replacing it with `FunnelTriggersPanel`. The existing page (line 15) imports `FunnelTriggerSettings from '~/components/funnels/FunnelTriggerSettings.vue'`. However, `FunnelTriggerSettings` is internally used INSIDE `FunnelTriggersPanel.vue` (tech-spec Decision 13: 'mounts FunnelTriggerSettings.vue per trigger'). The page import can safely be removed, but the note might confuse an implementer into thinking FunnelTriggerSettings is being retired — it is not, it moves inside the panel. This is clear in the Description but the Detail hint could be more precise.",
+      "fix": "Clarify: 'Remove the `FunnelTriggerSettings` import from the PAGE (line 15) — the component is now mounted internally by FunnelTriggersPanel.vue. Do not remove FunnelTriggerSettings.vue itself.'"
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "Task 8 (Code Audit) lists `backend/src/main/java/com/botfunnel/api/EventsController.java` as a 'context read' file with a relative path comment but lists it without a verified path anchor in Context Files. This file's existence is not verified in this review, but Task 5 also lists it as a read-only dependency and uses the same path. No impact on Task 8 since it is a read-only audit task — if the file doesn't exist or is at a different path Task 8 simply cannot read it and should note that as a finding.",
+      "fix": "Acceptable as-is for an audit task. If the file is missing from disk, Task 8 should flag it as a finding rather than failing silently."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 is correctly scoped as read-only: 'Це задача-аудит: не пишемо й не правимо продакшн-код'. The single output file `work/17-funnel-multi-entry/logs/working/task-8/code-audit-1.json` is the only write artifact. This is consistent with an audit task. No issues with the audit scope boundary.",
+      "fix": "None required."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 audit report output path is `work/17-funnel-multi-entry/logs/audits/security-audit.md` (an .md file). Task 8 uses `work/17-funnel-multi-entry/logs/working/task-8/code-audit-1.json` (a .json file under `logs/working/`). Task 10 uses `work/17-funnel-multi-entry/logs/audits/test-audit.md` (an .md file under `logs/audits/`). Task 12 uses `work/17-funnel-multi-entry/logs/working/task-12/` (under `logs/working/`). There is an inconsistency: Task 8 goes to `logs/working/task-8/` (JSON format), Tasks 9 and 10 go to `logs/audits/` (Markdown format), Task 12 goes to `logs/working/task-12/`. Two different conventions coexist: `logs/working/task-N/` for operational tasks (8, 12) and `logs/audits/` for security/test audits (9, 10). The inconsistency is minor functionally but creates confusion about where to look for audit artifacts. Task 8 being JSON under `logs/working/` while Task 9/10 are Markdown under `logs/audits/` is also a format inconsistency (JSON vs MD) for similar audit outputs.",
+      "fix": "Consider standardizing: either move Task 8 output to `logs/audits/code-audit.md` (matching Task 9/10 convention) or move all audit reports to `logs/working/task-N/`. Document the chosen convention in a comment. This is a cosmetic inconsistency — both paths work, but a team reading the artifacts will need to check two different directories for audit results. The fact that Task 8 produces JSON (machine-readable findings array) while Task 9 produces Markdown (human-readable grouped report) reflects different skill outputs (code-reviewing vs security-auditor); this difference is intentional and acceptable."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 is correctly scoped as read-only. It writes one report to `work/17-funnel-multi-entry/logs/audits/security-audit.md`. The directory `logs/audits/` does not yet exist on disk (only `logs/tasks/` was verified). The task says 'create the directory if needed' — this is handled. No issue.",
+      "fix": "None required."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 12
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "summary": "Clean mechanical refactor — REMEMBER_ME_ATTR relocated from com.botfunnel.security.RememberMeWebSessionIdResolver to a new com.botfunnel.common.SessionAttributes utility class. Final class + private constructor + immutable public static final String literal; Javadoc on both class and field accurately describes the writer/reader contract and warns against renaming the wire-format literal. All five files match the task's 'What to do' list exactly: AuthService no longer imports com.botfunnel.security (auth→security import cycle severed), the literal 'com.botfunnel.auth.rememberMe' is declared in exactly one place, and both AuthServiceTest and RememberMeWebSessionIdResolverTest were updated to read the constant from the new package. Import ordering matches the project convention (com.botfunnel.* → org.* → java.*). No WebFlux/Reactor signatures touched. No behavior change. Tests green per the user's verification, and grep gates pass (0 auth→security imports; 1 literal site; 1 source-of-truth declaration).",
+  "verdict": "approve",
+  "findings": []
+}

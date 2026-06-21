@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "summary": "The rewritten 'trigger array auto-save readiness' block mounts the REAL FunnelTriggersPanel (only `teleport` is stubbed) and exercises real behavior: the per-element triggerReady gate, the triggers.every(...) array gate, and the array payload shape. Assertions are meaningful and would fail if the gate or sanitizer logic were removed (verified against [funnelId].vue and FunnelTriggersPanel.vue). Fake-timer handling is sound. All five TDD anchors are covered, plus an extra on_start valid/invalid case. Two minor observations only — no blocking issues.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:274",
+      "issue": "In 'PATCHes once every trigger is ready', the entryStepId assertion is `expect('entryStepId' in ev).toBe(true)`. This is a structural presence check, not a value check. Because the seed funnel has steps:[], firstStepId resolves to null and entryStepId is null — so the test cannot meaningfully assert the 'defaults to first step' behavior described in the anchor ('valid event slug + entry step'). The check passes as long as the key exists, which it always will after sanitizeTrigger.",
+      "recommendation": "Either (a) assert the concrete null with steps:[] — `expect(ev.entryStepId).toBeNull()` — to lock the no-steps fallback, or (b) mount with `over = { steps: [{ stepType: 'MESSAGE', id: 'm1', blocks: [...] }] }` and assert `expect(ev.entryStepId).toBe('m1')` to actually exercise the 'defaults entryStepId to the first step' branch (addEvent → entryStepId: firstStepId.value). Option (b) is preferable because it matches the anchor wording 'valid event slug + entry step' and the user-verify step (choose entry step)."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:202-213",
+      "issue": "mountLoaded() does an on-mount `tick(700)` then `storeMock.update.mockClear()` to discard the initial autosave. This silently swallows any premature PATCH that may fire during mount; if a regression made the page autosave the on_start trigger on load with the wrong (flat) payload, the mockClear would hide it. The afterEach `vi.clearAllTimers()` (correct, prevents cross-test leakage) plus this mockClear means the on-mount persist is never asserted.",
+      "recommendation": "Optional hardening: before the mockClear in mountLoaded, assert the on-mount persist (if any) carried the array shape — e.g. `if (storeMock.update.mock.calls.length) expect(Array.isArray(storeMock.update.mock.calls[0][1].triggers)).toBe(true)`. Low priority: the dedicated 'persists the trigger array (not the flat trio)' test already locks payload shape after a real edit, so coverage of the flat-trio regression exists."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 6,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

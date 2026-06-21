@@ -1,0 +1,24 @@
+{
+  "status": "approved",
+  "summary": "Round 1 fix-up is clean. All four applied fixes verified end-to-end: hoisted `timezones` const in new.vue removes the legacy-Safari TypeError asymmetry; the empty-emit guard in TimezonePicker.vue:65-67 is logically sound (single-shot, no recursive re-emit, idempotent when already empty); the listboxId switch to `useId()` is SSR-deterministic; the dropped `v-bind=\"timezoneAttrs\"` is correctly accompanied by code-comments in both new.vue and settings.vue. The `.catch()` on handleStaleCurrent in useApi.ts is a proper fire-and-forget log path. All 65 specs across TimezonePicker / new / settings / index / useApi-404-interceptor pass (12 + 11 + 18 + 19 + 5). Deferred items' reasoning is sound — none should be re-raised as critical: scrollIntoView is pure UX polish; the happy-path GET short-circuit is correctly rejected because cross-tab smoke-test 2.6 (store-active but server-deleted) is exactly the failure mode that requires the unconditional GET, now documented inline at settings.vue:44-49; test #7 reframing was addressed by splitting into two tests in the same commit (new.spec.ts:100-127 UI gate + new.spec.ts:129-147 synthetic-emit refine defense).",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "frontend/pages/projects/new.vue",
+      "line": 47,
+      "severity": "minor",
+      "category": "readability",
+      "issue": "`timezoneAttrs` is destructured from `defineField('timezone')` but never used in the template — the v-bind was deliberately removed in this commit (see code-comment at line 106-111). The unused binding is now a stale handle that a future reader has to re-derive from the comment.",
+      "suggestion": "Either drop the second array slot — `const [timezone] = defineField('timezone')` — or rename to `_timezoneAttrs` to mark it intentionally unused. Same nit applies to settings.vue:116. Not blocking — no runtime impact, tests pass.",
+      "benefit": "Removes a dead destructure that would otherwise puzzle the next reader.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 9,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 1,
+    "testCoverageAssessment": "adequate"
+  }
+}

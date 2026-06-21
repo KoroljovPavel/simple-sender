@@ -1,0 +1,53 @@
+{
+  "validator": "reality-checker",
+  "batch": [10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task says 'pnpm test -- --run' but package.json \"test\" script is bare 'vitest' with no --run baked in; this is correct. However, vitest.config.ts has no 'watch: false' override and no 'run' alias, so bare 'pnpm test' in a non-TTY CI environment will auto-exit (vitest 3.x defaults to run-mode when stdin is not a TTY). The task correctly documents the --run flag requirement and explains that bare 'pnpm test' will hang in watch mode — this is accurate and the command given ('pnpm test -- --run') is correct. Finding is informational: the watch-mode warning is valid and correctly placed.",
+      "fix": "No change needed. The task already warns about watch mode and mandates --run. Optionally add a 'test:run': 'vitest --run' npm script to avoid the double-dash awkwardness, but this is cosmetic."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "The task step 1 says 'backend IT includes FunnelControllerIT and FunnelExecutionEngineIT with MockWebServer'. build.gradle excludes @Tag('slow') from default './gradlew test' run. FunnelExecutionEngineIT likely carries slow/integration tags or relies on a running MockWebServer loop — the task does not explicitly note that './gradlew test' excludes @Tag('slow') tests via the excludeTags 'slow' block, so if any new funnel ITs are tagged 'slow' they would be silently skipped. The task text does not warn the QA runner to check whether any new test-run ITs that rely on MockWebServer are excluded by the slow-tag filter.",
+      "fix": "Add a note in the Details/Edge cases section: 'Check that none of the new FunnelControllerIT or test-run ITs are tagged @Tag(\"slow\") — if they are, ./gradlew test will exclude them silently (slow tag is excluded unless -PrunSlow=true, per build.gradle:52-55).' This prevents a false green when the critical test-run send-assertion is skipped."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "The task references 'logs/qa/pre-deploy-qa-report.md' as the output path, but the directory 'work/13-funnels-tooling/logs/qa/' does not yet exist in the repository. The task does not instruct the agent to create it. This will not block execution (mkdir -p is standard), but could cause a write failure if the agent assumes the dir exists.",
+      "fix": "Add to step 5: 'Create the directory if it does not exist: mkdir -p work/13-funnels-tooling/logs/qa'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 1,
+    "claims_verified": 18,
+    "issues_found": 3
+  },
+  "verification_details": {
+    "framing_qa_task": "PASS — status:planned, wave:7, depends_on:[7,8,9], skills:[pre-deploy-qa], reviewers:[], no TDD Anchor, no production code steps",
+    "backend_build_file": "PASS — backend/build.gradle exists",
+    "gradlew_test_command": "PASS — standard Gradle wrapper command, correct cwd documented",
+    "testcontainers_docker_noted": "PASS — task explicitly states 'Сьют поднимает Testcontainers Mongo + in-memory JobRunr + MockWebServer — нужен доступный Docker' and edge case 'Docker недоступен → backend-IT упадут; зафиксировать как блокер инфраструктуры'",
+    "frontend_test_script": "PASS — package.json 'test': 'vitest'; task correctly mandates '--run' flag and explains watch-mode risk",
+    "vitest_run_flag": "PASS — command 'pnpm test -- --run' is syntactically correct to pass --run to vitest",
+    "check_locales_mjs": "PASS — frontend/scripts/check-locales.mjs exists (2.5K)",
+    "FunnelControllerIT": "PASS — file exists at backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+    "FunnelExecutionEngineIT": "PASS — file exists at backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+    "AbstractIntegrationTest_testcontainers": "PASS — AbstractIntegrationTest imports @Testcontainers",
+    "MockWebServer_in_build": "PASS — build.gradle has 'com.squareup.okhttp3:mockwebserver:4.12.0'",
+    "no_deploy_statement": "PASS — task explicitly states no deploy/post-deploy; references deployment.md CI/CD=TBD; confirmed deployment.md lines 94-96 state TBD",
+    "telegram_deferred_to_user": "PASS — task explicitly marks real Telegram delivery as deferred-to-user, not a failure",
+    "user_spec_ac_reference": "PASS — task references user-spec 'Критерии приёмки' sections: Test for me / Дублювати / Зупинити всі активні запуски / Прев'ю / Спільне",
+    "tech_spec_ac_reference": "PASS — task references tech-spec 'Acceptance Criteria' (8 пунктів) explicitly",
+    "decisions_md_exists": "PASS — work/13-funnels-tooling/decisions.md exists",
+    "context_files_exist": "PASS — deployment.md, patterns.md context files verified to exist",
+    "slow_tag_exclusion": "NOTE — build.gradle excludes @Tag('slow') from default test run; task does not warn about this; logged as minor finding"
+  }
+}

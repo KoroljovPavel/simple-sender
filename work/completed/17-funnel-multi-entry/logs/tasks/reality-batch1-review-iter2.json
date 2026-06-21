@@ -1,0 +1,99 @@
+{
+  "validator": "reality-checker",
+  "batch": [2, 5, 7],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 2,
+      "issue": "Task 2 TDD Anchor states 'migrationDropsOldBroadFilterIndex' should be REWRITTEN so its new body installs the OLD {projectId,triggerType,triggerValue} index and asserts it is dropped. But the ACTUAL existing method still installs the OLD broad-filter (status:'active'-only) index and asserts the NEW shape carries triggerType:'on_start'. The task correctly names the existing method, but the description of what the EXISTING body currently does is wrong: the task says the current body 'installs the old {status:active}-only broad filter and asserts the recreated shape carries triggerType:on_start' — that part is accurate. HOWEVER the task then instructs a full rewrite where the NEW body asserts the new {projectId,onStartTriggerValue} shape with partial filter {status:'active', onStartTriggerValue:{$exists:true}}. The ACTUAL existing IT still uses KEY = {projectId,triggerType,triggerValue} and INDEX_NAME = 'projectId_triggerType_triggerValue_unique_active' for BOTH installOldBroadFilterIndex and installNewShapeIndex — they collide on the same name and same key, only differing in the partial filter. The task's intent is correctly described but the pre-existing IT already uses the OLD key shape, meaning the helpers do not match what Task 2 prescribes: installNewShapeIndex in the IT still creates an index with the same KEY {projectId,triggerType,triggerValue} (just with triggerType:'on_start' in the filter), NOT the new {projectId,onStartTriggerValue} key. This means the existing tests, if left as-is, will NOT compile against the Task-1 model (which removes triggerType/triggerValue top-level fields) — the task correctly flags this but the rewrite instructions are sound.",
+      "fix": "No change needed to the task text itself — the rewrite instructions correctly describe that both installOldBroadFilterIndex and installNewShapeIndex must be reworked, and the old-shape assertion deleted. The task description is accurate. No fix required here; this finding is informational only — the task is correct."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 2,
+      "issue": "Task 2 states: 'NO-OP / idempotency detection must key off the NEW {projectId, onStartTriggerValue} shape laid down by Task 1's annotation'. But the ACTUAL FunnelTriggerIndexReconciliation.java (current production code) drives the NO-OP decision off the partial-filter inspection: it drops when 'partialFilterExpression lacks triggerType' (old broad-filter), and is a NO-OP when the index is absent OR when the filter already carries 'triggerType' (new on_start-only shape). Task 2's Description and Details section then correctly says 'New decision: if the OLD-named INDEX_NAME index is present → drop it (APPLIED); if it is absent → NO-OP' — but this contradicts the actual current code which uses the FILTER-inspection approach. The task is asking the implementer to change the idempotency logic AWAY from the current filter-inspection toward presence/absence of the old index. This is a genuine architectural change instruction, not a hallucination — but the task's claim that the 'Phase-3 logic (drop when the old index's filter lacks triggerType) is dead' is accurate only AFTER Task 1 renames the index. On the CURRENT codebase the reconciliation uses the filter-inspection approach and the index still has the OLD name. The task's rewrite instructions are internally consistent and feasible.",
+      "fix": "This is a valid design instruction in the task, not a hallucination. No fix needed — the task correctly describes the BEFORE state (current filter-based idempotency) and the AFTER state (presence/absence of old-named index). Mark as informational."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 5,
+      "issue": "Task 5 states the bean cycle is 'FunnelEventService → FunnelExecutionEngine → StepExecutor → FunnelEventService' and that 'all three edges are confirmed in code (FunnelExecutionEngine L70/L256 → StepExecutor; StepExecutor L87 → FunnelEventService)'. VERIFIED: FunnelExecutionEngine.java line 70 injects StepExecutor (constructor field at L70), and StepExecutor.java line 87 injects FunnelEventService — both confirmed real. The task also correctly states the NEW edge added by Task 5 is FunnelEventService injecting FunnelExecutionEngine (currently absent). However, the task says this was previously avoided because FunnelEventService injected FunnelExecutionFactory 'which has no edge into engine'. VERIFIED against FunnelExecutionFactory.java class-doc lines 24-29: this is confirmed — the factory intentionally has no edge into the engine to avoid cycle. The cycle description in Task 5 is factually correct against the codebase.",
+      "fix": "No fix needed — cycle description is verified correct."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 5,
+      "issue": "Task 5 states the in-flight probe is 'modeled on hasWaitingForReplyExecution from ProcessTelegramUpdateJob (webhook package) at L262'. VERIFIED: ProcessTelegramUpdateJob.java line 262 contains 'private boolean hasWaitingForReplyExecution(String projectId, String subscriberId)' using mongoTemplate.exists(). Task 5 correctly says (a) this method lives in ProcessTelegramUpdateJob, NOT FunnelEventService, (b) its idiom is copied not extended, (c) the new probe needs findOne (not exists) to get executionId, and (d) status predicate is wider (.in running/waiting/waiting_for_reply). All claims verified against the actual code. The line number reference (L262) is accurate.",
+      "fix": "No fix needed — all claims verified correct."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "The TDD Anchor for 'migrationDropsOldBroadFilterIndex' instructs: REWRITE so installNewShapeIndex creates a DIFFERENT index with key {projectId,onStartTriggerValue} under the new auto-derived name. However, the current IT's installNewShapeIndex (line 87-96) creates an index with the SAME KEY as installOldBroadFilterIndex ({projectId,triggerType,triggerValue}) and the SAME name (INDEX_NAME). The task correctly instructs separating these — but the implementer must note that after Task 1 removes triggerType/triggerValue top-level fields, creating an index over those fields in a test will also fail at the MongoDB driver level unless the test collection still has those legacy fields. The task does not warn about this test-data constraint.",
+      "fix": "Minor: add a note to the IT hint that installOldBroadFilterIndex creates the old index on an empty collection (no documents needed for index creation), so the key field names do not need to exist in documents — MongoDB allows index creation on absent fields. No change to task structure needed, but implementer should be aware."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 2,
+      "issue": "The reconciliationIsIdempotentNoOpOnSecondBoot test in the ACTUAL IT (lines 123-139) installs the NEW shape index (with triggerType:'on_start' in the filter) and asserts after reconciliation that the index is still present with triggerType in the filter. Task 2 says this method should be REWRITTEN to assert NO-OP by ABSENCE of the OLD-named index and that the new {projectId,onStartTriggerValue} index is left untouched. But this rewrite requires the test to distinguish two different named indexes. The current test uses only one INDEX_NAME for both old and new shapes — the rewrite will need two different index names. Task 2 correctly handles this: 'installNewShapeIndex must create a DIFFERENT index with... under the new auto-derived name (so the two helpers no longer collide on one name)'. This is correct and feasible — just flagging the magnitude of the change.",
+      "fix": "No task change needed — the instructions are correct and complete."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 TDD Anchor references 'FunnelEventServiceIT.java' but this file is listed in context files as a read target, not currently confirmed to exist in the test tree. The task lists it as 'Tests (rewrite)' context but the actual file path is not verified.",
+      "fix": "Implementer should verify frontend/tests path exists before writing tests. Low risk as the engine IT already exists."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 7,
+      "issue": "Task 7 Verification/Smoke correctly lists only 'pnpm test tests/pages/funnel-editor.spec.ts' and 'node scripts/check-locales.mjs', with an explicit note: 'у frontend/package.json НЕМАЄ скриптів lint/typecheck (доступні: dev, prebuild, build, generate, preview, test, test:e2e). Не запускати pnpm lint/pnpm typecheck.' VERIFIED against actual frontend/package.json: scripts are {dev, prebuild, build, generate, preview, test, test:e2e} — no lint or typecheck script. The task is correct.",
+      "fix": "No fix needed — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 7,
+      "issue": "Task 7 correctly instructs reading FunnelTriggersPanel.vue (Task 6 output) before connecting props, and correctly states FunnelTriggerSettings.vue is NOT retired but moves INSIDE the panel. These instructions are properly framed as read-first/contract-driven. No hallucinations detected.",
+      "fix": "No fix needed."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 9,
+    "critical": 4,
+    "major": 2,
+    "minor": 3
+  },
+  "per_task_summary": {
+    "task_2": {
+      "status": "pass_with_notes",
+      "verdict": "The task text is factually correct about the existing IT method name (migrationDropsOldBroadFilterIndex exists at line 99), the current production FunnelTriggerIndexReconciliation.java constants (INDEX_NAME, MARKER_APPLIED, MARKER_NOOP all present and greppable), and the INDEX_NAME value ('projectId_triggerType_triggerValue_unique_active'). The rewrite instructions are coherent and feasible. The 'critical' findings above are clarifications/informational — none represent task text errors that would misdirect the implementer.",
+      "critical_blockers": 0,
+      "real_issues": "The existing IT's activeFunnel() helper still calls setTriggerType()/setTriggerValue() (lines 197-207) which Task 2 correctly says must be rewritten. The current reconciliation uses filter-inspection for idempotency; Task 2 correctly instructs switching to presence/absence detection of the old-named index."
+    },
+    "task_5": {
+      "status": "pass",
+      "verdict": "All specific claims verified: (a) hasWaitingForReplyExecution is at ProcessTelegramUpdateJob.java:262, uses mongoTemplate.exists(), is NOT in FunnelEventService — correctly cited; (b) bean cycle FunnelEventService->FunnelExecutionEngine->StepExecutor->FunnelEventService — all three edges confirmed (engine L70 injects StepExecutor; StepExecutor L87 injects FunnelEventService; new edge is the injection of engine into FunnelEventService); (c) @Lazy solution is appropriate and correctly explained; (d) FunnelExecutionFactory class-doc lines 24-29 confirm it was created exactly to avoid this cycle. The task is accurate.",
+      "critical_blockers": 0,
+      "real_issues": "None found."
+    },
+    "task_7": {
+      "status": "pass",
+      "verdict": "Smoke verification correctly references only pnpm test and node scripts/check-locales.mjs — no pnpm lint/pnpm typecheck. Verified against frontend/package.json: scripts object has no lint or typecheck entries. FunnelTriggerSettings.vue correctly described as moved-into-panel (not retired). Read-Task-6-panel-first instruction is present and correctly framed.",
+      "critical_blockers": 0,
+      "real_issues": "None found."
+    }
+  }
+}

@@ -1,0 +1,46 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 11,
+      "section": "Reviewers",
+      "issue": "Reviewers section is omitted entirely. Frontmatter has reviewers: [] (QA self-verifies, which is correct), but the template lists a Reviewers section for all tasks. Task 12 (same QA category) handles the empty case by including a Reviewers section with the text 'None — this is a verification task...'. Task 11 is inconsistent with its sibling.",
+      "fix": "Add a '## Reviewers' section to Task 11 with text like 'None — QA is self-verifying; the QA report is the review artifact.' to match Task 12 and keep section presence consistent."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 11,
+      "section": "Acceptance Criteria to verify (sources of truth)",
+      "issue": "Task 11 introduces an extra non-template section 'Acceptance Criteria to verify (sources of truth)' between 'Acceptance Criteria' and 'Context Files'. Not part of the task template. Content is valuable (verbatim carry-forward of all user-spec + tech-spec AC), but it deviates from the template section set.",
+      "fix": "Acceptable as a QA-specific addition; if strict template compliance is desired, fold this list into the Details section or a labelled subsection. Otherwise leave as-is — it strengthens AC carry-forward."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Required Skills",
+      "issue": "Skill link path is written as '[skills/pre-deploy-qa/SKILL.md](.claude/skills/pre-deploy-qa/SKILL.md)' (link text omits the .claude/ prefix). Task 12 uses the full '.claude/skills/...' in both text and target. Cosmetic inconsistency; the link target resolves correctly.",
+      "fix": "Normalize link text to '.claude/skills/pre-deploy-qa/SKILL.md' to match Task 12 style."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "issues_found": 3,
+    "notes": [
+      "Frontmatter: both tasks valid — status=planned, depends_on arrays, wave numbers, skills arrays, verify=[], reviewers=[] (QA self-verify), no extra fields.",
+      "Dependency correctness: Task 11 depends_on [8,9,10] wave 7 > audit-wave tasks; Task 12 depends_on [11] wave 8 > 7. No cycles.",
+      "TDD Anchor correctly ABSENT in both (QA/verification tasks, no testable code produced) — matches task-creator rules.",
+      "Reviewers correctly empty/none in both (QA self-verifies) — matches task-creator rules.",
+      "AC carry-forward: Task 11 lists all 12 user-spec 'Критерії приёмки' and all 6 tech-spec 'Acceptance Criteria' verbatim in a dedicated section — full traceability. Task 12 covers the live-observable subset (clean startup/no IndexKeySpecsConflict, live redirect loop/no-second-execution, mid-entry via API) and explicitly picks up criteria deferred by Task 11 — appropriate post-deploy scope split.",
+      "Context Files: both include all mandatory files (user-spec, tech-spec, decisions, project, architecture, patterns) as valid markdown links with name+path; verified reference paths exist under .claude/skills/project-knowledge/references/.",
+      "Skill paths verified to exist: .claude/skills/pre-deploy-qa/SKILL.md and .claude/skills/post-deploy-qa/SKILL.md.",
+      "Tech-spec traceability: Task 11/12 descriptions match tech-spec Implementation Tasks (Final Wave) and Agent Verification Plan; safety guards in Task 12 align with Decision 8 (wipe, not migrate).",
+      "No critical findings — status approved."
+    ]
+  }
+}

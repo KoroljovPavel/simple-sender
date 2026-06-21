@@ -1,0 +1,31 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "fix-album-type",
+  "round": 1,
+  "scope": "Per-item media type on album items (Decision 5 type-mixing predicate). Diff across MediaItem, MediaItemDto, StepExecutor, FunnelService + tests.",
+  "verdict": "OK",
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "info",
+      "area": "StepExecutor.albumElementType",
+      "finding": "Exhaustive switch over BlockType maps IMAGE/VIDEO/AUDIO/FILE to Telegram element types; TEXT/ALBUM throw IllegalStateException. Unreachable at runtime because FunnelService.validateAlbum rejects those kinds on save, but the throw documents the invariant and keeps the switch exhaustive. Acceptable.",
+      "action": "accepted as-is"
+    },
+    {
+      "id": "CR-2",
+      "severity": "info",
+      "area": "FunnelService.validateAlbum",
+      "finding": "Type-mixing predicate collapses IMAGE+VIDEO to a single 'visual' bucket and counts distinct kinds among {visual, audio, file}; >1 distinct kind = invalid mix. Matches Decision 5 exactly (photo/video mix OK; audio and document each homogeneous-only). Clean and minimal.",
+      "action": "accepted as-is"
+    },
+    {
+      "id": "CR-3",
+      "severity": "info",
+      "area": "DTO threading",
+      "finding": "type threaded through toMediaItems (DTO->domain) and toMediaItemDtos (domain->DTO), so save->fetch round-trips the per-item type. Mirrors the existing field-by-field mapping style.",
+      "action": "accepted as-is"
+    }
+  ],
+  "notes": "No correctness, reuse, or simplicity issues. New MediaItem shape is record MediaItem(BlockType type, String mediaUrl, String caption). No behavior change outside album handling. caption-on-first invariant unchanged."
+}

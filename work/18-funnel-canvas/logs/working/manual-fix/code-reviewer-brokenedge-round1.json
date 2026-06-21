@@ -1,0 +1,40 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-brokenedge",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "line": 470,
+      "severity": "minor",
+      "category": "ux/accessibility",
+      "issue": "aria-label on the broken-edges <ul> still uses the generic funnels.canvas.brokenEdge key whose resolved value is 'Broken connection — target deleted'. When the list contains only an on_start_entry_null item, the list-level label is semantically incorrect (nothing was deleted).",
+      "impact": "Screen-reader users hear a misleading container label; does not block sighted users or any functional path.",
+      "recommendation": "Either use a locale-neutral label such as 'funnels.canvas.brokenEdgesLabel' (e.g. 'Connection issues') that does not mention deletion, or suppress the static aria-label and rely on the per-item text which is already accurate."
+    },
+    {
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "line": 98,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "The ?? fallback in brokenEdgeMessageKey to 'funnels.canvas.brokenEdge' is unreachable: BROKEN_EDGE_MESSAGE_KEYS is typed as Record<BrokenEdge['reason'], string>, which is an exhaustive mapping over the two-member union. TypeScript will enforce completeness at compile time, so the guard can never fire.",
+      "impact": "Dead code — no runtime risk, but it implies the generic key remains in use as a runtime safety net when it is not. If BrokenEdge['reason'] grows a third member the Record type will catch it at compile time, making the runtime fallback redundant.",
+      "recommendation": "Keep the fallback as a defensive measure and document why (\"future-proofing for union growth before types regenerate\"), or remove it and rely solely on the exhaustive Record type. Current state is acceptable; a brief comment would clarify intent."
+    }
+  ],
+  "checks": {
+    "reason_mapping_covers_both_reasons": "pass — BROKEN_EDGE_MESSAGE_KEYS covers missing_target and on_start_entry_null; Record<BrokenEdge['reason'], string> enforces exhaustiveness at compile time.",
+    "fallback_for_unknown_reasons": "pass — ?? 'funnels.canvas.brokenEdge' guards unknown future reasons at runtime.",
+    "detection_logic_unchanged": "pass — detectBrokenEdges in useFunnelCanvas.ts is not modified by this commit.",
+    "i18n_keys_present_en": "pass — brokenEdgeMissingTarget and brokenEdgeStartNotConnected present and non-empty in en.json.",
+    "i18n_keys_present_uk": "pass — brokenEdgeMissingTarget and brokenEdgeStartNotConnected present and non-empty in uk.json.",
+    "i18n_parity": "pass — check-locales.mjs exited 0; both locales have identical key sets.",
+    "required_keys_spec_updated": "pass — both new keys added to REQUIRED_KEYS in required-keys.spec.ts.",
+    "banner_clears_when_valid_edge_drawn": "pass — test 'clears the broken-edge banner once the on_start entry is wired' covers this path.",
+    "activation_guard_intact": "pass — existing 'renders the start node broken when on_start entryStepId is null' test and the new message-assertion tests exercise the on_start_entry_null path.",
+    "missing_target_wording_preserved": "pass — test asserts text is 'Зламане з'єднання — ціль видалено' for missing_target; en key identical.",
+    "aria_label_sensible": "minor concern — aria-label on <ul> uses generic 'target deleted' wording regardless of reason; see finding above."
+  },
+  "summary": "Presentation-only change is correct. Both broken-edge reasons map to accurate, distinct i18n keys. Detection logic is untouched. i18n parity passes check-locales. required-keys.spec.ts is updated. Three new tests cover the two reason-specific messages and the banner-clear regression. Two minor findings: the <ul> aria-label remains worded as 'target deleted' even when only an on_start_entry_null item is present (misleading for assistive tech), and the runtime fallback in brokenEdgeMessageKey is unreachable given the exhaustive Record type. Neither is a blocker."
+}

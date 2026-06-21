@@ -1,0 +1,68 @@
+{
+  "severity_counts": {
+    "critical": 0,
+    "major": 1,
+    "minor": 4,
+    "info": 2
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "33, 51-54",
+      "issue": "Path matching uses a hand-rolled regex (`^/webhooks/telegram/([^/]+)$`) on `exchange.getRequest().getPath().value()`, while SecurityConfig (line 80) and the tech-spec explicitly call for Spring's `PathPatternParserServerWebExchangeMatcher` / `PathPattern` API. Task spec (tasks/11.md line 138) is explicit: 'Use Spring's PathPattern API for the match (NOT a hand-rolled regex), so the same parsing semantics that drive SecurityConfig apply to the filter.' The two matchers can diverge on path normalization (percent-decoding, dot-segment collapse, trailing slash handling) which Spring's PathPattern applies and a raw regex on `path.value()` does not. This creates a small but real risk that a crafted request matches the SecurityConfig permitAll (and the @RequestMapping handler) yet bypasses the size filter — exactly the failure mode the filter is meant to prevent. The simplicity argument is real but the project consistency cost is the bigger driver here.",
+      "recommendation": "Replace the regex with a `PathPattern` parsed once at class-load (e.g. `private static final PathPattern PATH_PATTERN = PathPatternParser.defaultInstance.parse(\"/webhooks/telegram/{projectId}\")`). Match via `PATH_PATTERN.matches(exchange.getRequest().getPath().pathWithinApplication())` and extract the projectId via `PATH_PATTERN.matchAndExtract(...).getUriVariables().get(\"projectId\")`. This guarantees identical semantics to the SecurityConfig matcher. If you want to keep the rename of the projectId-extraction step for logging purposes, this also removes the dead `m.groupCount() >= 1` defense (see F4)."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "61",
+      "issue": "`transferEncoding.toLowerCase()` uses the JVM default locale. Project convention (AuthService.java line 117, 479; SuperAdminSeeder.java line 54) is `toLowerCase(Locale.ROOT)` — explicitly chosen to avoid Turkish-locale dotted/dotless-i folding (the AuthService comment captures the rationale). The literal 'chunked' is ASCII so the bug cannot manifest in practice, but the project-consistency miss is real and the fix is one token.",
+      "recommendation": "Change to `transferEncoding.toLowerCase(java.util.Locale.ROOT).contains(\"chunked\")` to match project convention and silence locale-folding lint."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "72-74",
+      "issue": "The `reason` string concatenates the offending Content-Length (`\"oversize_\" + contentLength`) into the log field, but `contentLength` is ALREADY emitted as its own structured key on the next line. The result is a redundant payload-size token embedded in a free-form string field, defeating structured-log slicing (operators have to parse `reason` to recover the byte count). For the missing/chunked cases the suffix is absent, so the field shape is inconsistent across rejection types.",
+      "recommendation": "Use a stable enum-shaped reason: `\"oversize\"` (not `\"oversize_\" + contentLength`). The separate `contentLength` field already carries the value. Result: `reason ∈ {chunked, missing_content_length, oversize}` — clean cardinality for log aggregation."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "75",
+      "issue": "`m.groupCount() >= 1 ? m.group(1) : \"n/a\"` is dead defensiveness. The regex `^/webhooks/telegram/([^/]+)$` has exactly one capture group; `Matcher.groupCount()` returns the count from the pattern (always 1 here), and execution reaches this line only after `m.matches()` returned true so `m.group(1)` is guaranteed non-null. The task hint at line 140 (`handle the rare case where the path didn't match but we somehow log`) describes a different failure mode (logging without a matched path), but the current code already returned early at line 53 if `!m.matches()`. The defense never trips. With F1's PathPattern migration the projectId extraction becomes `getUriVariables().get(\"projectId\")` and the dead check disappears naturally.",
+      "recommendation": "Drop the conditional. After F1 this becomes a single PathPattern URI-variable read."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "work/08-webhook-ingestion/decisions.md",
+      "line": "EOF",
+      "issue": "Task post-completion checklist (tasks/11.md line 158) requires documenting any deviation from Decisions 3/10/13 in `decisions.md`. The implementation made a meaningful deviation from Decision 13's literal API form: the spec suggested `.requireCsrfProtectionMatcher(new NegatedServerWebExchangeMatcher(new PathPatternParserServerWebExchangeMatcher(...)))` (Negated alone), while the implementation correctly added `AndServerWebExchangeMatcher(CsrfWebFilter.DEFAULT_CSRF_MATCHER, Negated(...))` to preserve the default verb gate. The deviation is captured in the commit message (9147b4a) and in the inline SecurityConfig comment (lines 69-76), so the rationale is not lost, but `decisions.md` itself has no entry. The post-completion checklist is the canonical home for this record so future readers find it via the feature's decisions log rather than `git log`.",
+      "recommendation": "Append a short entry to `work/08-webhook-ingestion/decisions.md` recording: (a) the And+Negated matcher shape used, (b) why bare Negated was insufficient (would extend CSRF to GET/HEAD/OPTIONS and break /health), (c) links to the Context7 verification source. Same entry can hold the Spring Security 6.5.x API confirmation the task asked for."
+    },
+    {
+      "id": "F6",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": "69-81",
+      "issue": "User asked whether `AND(DEFAULT_CSRF_MATCHER, NegatedPathMatcher)` is the cleanest expression. Verdict: yes — it is materially BETTER than the form suggested in tech-spec Decision 13 (bare `NegatedServerWebExchangeMatcher`). Replacing the protection matcher with ONLY the negated path would silently extend CSRF enforcement from POST/PUT/DELETE/PATCH (Spring's default) to every verb including GET/HEAD/OPTIONS, breaking /health and every read endpoint. The AND form is the idiomatic 'scope CSRF disable to a path while keeping verb gating' expression; this is how Spring Security examples model it. The 8-line code comment at lines 69-76 captures the rationale clearly. Implementer caught a real defect in the tech-spec's suggested form — flag for promotion to a decision log entry per F5.",
+      "recommendation": "No change. Cross-link to F5 — promote the rationale to decisions.md so future readers don't re-litigate the And-vs-Negated choice."
+    },
+    {
+      "id": "F7",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "27, 42-46",
+      "issue": "User asked about the counter cache pattern in @PostConstruct. Verdict: correct and consistent. Pattern mirrors TelegramWebhookController.java lines 55-59 ('Counters cached in @PostConstruct so Tag.of allocations stay off the hot path'). Filter ordering `@Order(Ordered.HIGHEST_PRECEDENCE + 10)` correctly precedes Spring Security's filter chain (which uses ordinals in the SecurityWebFiltersOrder range, all far above HIGHEST_PRECEDENCE). Decision 10's 'counter must live where the rejection happens' invariant is honored. Comment block at lines 22-25 explains the precedence rationale cleanly. No changes.",
+      "recommendation": "No change. Pattern is correct and project-consistent."
+    }
+  ],
+  "summary": "Implementation is functionally correct and aligned with Decisions 3/10/13. One major finding: path matching uses a regex while the task explicitly mandates Spring PathPattern for parser parity with SecurityConfig — same-syntax in two places eliminates a subtle divergence class. Minor findings cover locale-aware toLowerCase, reason-string cleanup, dead defensive check, and missing decisions.md entry. The implementer correctly caught and fixed a defect in tech-spec Decision 13's literal CSRF-matcher form by wrapping it in AndServerWebExchangeMatcher(DEFAULT_CSRF_MATCHER, ...) — this is superior to the suggested form and is well-commented in code.",
+  "verdict": "conditional"
+}

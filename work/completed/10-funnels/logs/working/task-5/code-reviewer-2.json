@@ -1,0 +1,4 @@
+{
+  "summary": "Round-2 re-review of Task 5 fixes. The round-1 MAJOR finding is RESOLVED: FunnelService.update() now runs checkTriggerConflict() (active-only pre-check, excluding self) and routes the write through saveHandlingTriggerConflict(), which maps the partial-unique index DuplicateKeyException to 422 funnel_trigger_conflict — mirroring activate() exactly, so a colliding trigger edit on an active funnel can no longer surface as 500. Both round-1 minor fixes are confirmed: requireFunnel() catches IllegalArgumentException on a malformed ObjectId and collapses it to the uniform 404, and CORS allowedMethods now includes PUT. New regression tests cover all three (updateActiveFunnelToCollidingTriggerReturns422, malformedFunnelIdReturns404, plus existing cross-project/missing-id 404s). Main and test sources compile clean. No new issues introduced.",
+  "findings": []
+}

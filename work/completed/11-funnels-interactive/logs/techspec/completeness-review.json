@@ -1,0 +1,99 @@
+{
+  "verdict": "pass",
+  "round": 2,
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": true
+  },
+  "requirements_total": 25,
+  "requirements_covered": 25,
+  "requirements_partial": 0,
+  "requirements_missing": 0,
+  "previous_findings_resolution": [
+    {
+      "finding": "paused-funnel drain gap",
+      "severity_was": "high",
+      "status": "resolved",
+      "evidence": "Decision 11 now explicitly states resumeOnCallback and step-loop do NOT add paused-gate; cites 'Явно фіксуємо, щоб реалізатор НЕ додав paused-gate у resume-шлях'; IT scenario 'paused-drain' added to Testing Strategy"
+    },
+    {
+      "finding": "insertExecution unassigned (seed currentStepId)",
+      "severity_was": "medium",
+      "status": "resolved",
+      "evidence": "Task 3 description explicitly: 'Seed currentStepId першого кроку в FunnelTriggerServiceImpl.insertExecution'; FunnelTriggerServiceImpl listed in Task 3 Files to modify"
+    },
+    {
+      "finding": "timeout null→completed edge case not spelled out in task",
+      "severity_was": "medium",
+      "status": "resolved",
+      "evidence": "Task 3: 'Таймаут-resume-гілка у delay-resume seam: веде по timeoutTargetStepId, а null → completed'; IT scenario 'таймаут timeoutTargetStepId==null → completed' present in Testing Strategy"
+    },
+    {
+      "finding": "blocked-bot trace not explicitly sequenced",
+      "severity_was": "medium",
+      "status": "resolved",
+      "evidence": "IT scenario explicitly: 'blocked-bot під час waiting: натиск кнопки → resume → перший send у гілці → 403 → execution cancelled (re-exercise Ф1 blocked-flow через resumeOnCallback)'"
+    },
+    {
+      "finding": "task numbering out of wave order (Task 6/7 swapped)",
+      "severity_was": "low",
+      "status": "resolved",
+      "evidence": "Wave 3 = Tasks 5+6 (advanceOnCallback + Frontend), Wave 4 = Task 7 (Webhook); numeric order now matches wave execution order"
+    },
+    {
+      "finding": "answerCallbackQuery call order not specified (null-lookup paths)",
+      "severity_was": "low",
+      "status": "resolved",
+      "evidence": "Decision 6: 'answerCallbackQuery викликається ЗАВЖДИ (включно з усіма no-op/null-шляхами)'; Task 5: 'answerCallbackQuery викликається ЗАВЖДИ (включно з null-lookup/стейл/malformed/чужий → тихий no-op), окремий try/catch, best-effort'"
+    }
+  ],
+  "forward_traceability": [
+    { "req": "US-1", "text": "Author adds MENU step; callback → step/End, URL → http(s)", "covered_by": ["Decision 1", "Decision 10", "Task 4 (validateSteps)", "Task 6 (frontend editor)"], "status": "covered" },
+    { "req": "US-2", "text": "Loop + fan-in persist and execute", "covered_by": ["Decision 2 (graph model)", "Task 3 (engine)", "Task 5 (advanceOnCallback)", "IT fan-in + legit-loop-resend"], "status": "covered" },
+    { "req": "US-3", "text": "/start → MENU with inline keyboard; {user.first_name} substituted", "covered_by": ["Architecture (TelegramSender reply_markup + VariableTemplateRenderer)", "Task 2", "Task 3", "IT {user.first_name} substitution scenario"], "status": "covered" },
+    { "req": "US-4", "text": "Callback press → spinner removed + correct branch", "covered_by": ["Decision 6 (answerCallbackQuery ALWAYS called)", "Task 2 (answerCallbackQuery method)", "Task 5 (advanceOnCallback)"], "status": "covered" },
+    { "req": "US-5", "text": "Loop branch re-sends menu; subscriber can press again (no hang)", "covered_by": ["Architecture How-it-works (petlia: надіслати меню заново)", "Task 3 + Task 5", "IT 'legit loop-resend'"], "status": "covered" },
+    { "req": "US-6", "text": "URL button does not advance funnel", "covered_by": ["Decision 10 (URL only opens link, no callback)", "Architecture"], "status": "covered" },
+    { "req": "US-7", "text": "Stale button → answerCallbackQuery + silent no-op", "covered_by": ["Decision 6 (stale → answerCallbackQuery + no-op)", "Task 5", "IT 'callback на completed/cancelled → no-op'"], "status": "covered" },
+    { "req": "US-8", "text": "Double click → branch executes exactly once", "covered_by": ["Decision 6 (claim-CAS, second loses)", "Task 3 (resumeOnCallback CAS scoped per subscriberId)", "IT 'ідемпотентний подвійний клік'"], "status": "covered" },
+    { "req": "US-9", "text": "/stop → waiting_for_reply executions cancelled", "covered_by": ["Architecture (cancelActiveFor includes waiting_for_reply)", "Task 1 (all 7 literal sites + drift assertion)", "IT 'скасування waiting_for_reply через /stop / delete / re-enter'"], "status": "covered" },
+    { "req": "US-10", "text": "Blocked bot during waiting → execution cancelled on first send in branch", "covered_by": ["IT 'blocked-bot під час waiting: натиск кнопки → resume → перший send у гілці → 403 → execution cancelled'", "Task 3 (resumeOnCallback enters step-loop which uses TelegramSender)", "Task 5"], "status": "covered" },
+    { "req": "US-11", "text": "Funnel edited while waiting → finishes on old graph (snapshot isolation)", "covered_by": ["Decision 5 (Button record + deep copy in copyOf)", "Decision 7 (in-flight snapshots backfilled)", "Task 1", "IT 'snapshot-ізоляція: edit воронки під час waiting_for_reply не змінює виконання'"], "status": "covered" },
+    { "req": "US-12", "text": "Funnel paused → in-flight waiting_for_reply still advances to completed", "covered_by": ["Decision 11 (no per-step paused-gate, explicit instruction to NOT add it)", "IT 'paused-drain'"], "status": "covered" },
+    { "req": "US-13", "text": "Timeout → target; no timeout → wait indefinitely; null target → completed", "covered_by": ["Decision 3 (nextRunAt=null never matched by sweep predicate)", "Task 3 (timeoutTargetStepId null → completed)", "IT timeout + 'timeoutTargetStepId==null → completed'"], "status": "covered" },
+    { "req": "US-14", "text": "Loop without wait → budget exceeded → failed + greppable marker", "covered_by": ["Decision 4 (max-steps-per-tick, FUNNEL_STEP_BUDGET_EXCEEDED marker)", "Task 3 (engine)", "IT 'петля + ліміт кроків за тік → failed + лог-маркер'"], "status": "covered" },
+    { "req": "US-15", "text": "Activate with broken edge → 422 funnel_broken_edge; MENU without callback → 422", "covered_by": ["Decision 10 (≥1 callback required)", "Task 4 (validateSteps, funnel_broken_edge 422)", "IT validateSteps unit tests"], "status": "covered" },
+    { "req": "US-16", "text": "Button press records funnel_button_clicked event + lastButtonClicked", "covered_by": ["Decision 9 (EventService, lastButtonClicked, no PII)", "Task 5 (advanceOnCallback)", "IT 'funnel_button_clicked + lastButtonClicked записані'"], "status": "covered" },
+    { "req": "US-17", "text": "Phase 1 funnels/in-flight executions not broken after graph-model migration", "covered_by": ["Decision 7 (FunnelStepIdBackfill ApplicationRunner, idempotent, covers definitions + snapshots + currentStepId from index)", "Task 1 (backfill)", "IT 'стара лінійна воронка/in-flight run дограє після backfill + backfill ідемпотентний'"], "status": "covered" },
+    { "req": "C-1", "text": "Reuse Phase 1 at-most-once (claim-CAS, stillClaimed, lowercase literals, static drift check, flat POJO)", "covered_by": ["Architecture Solution paragraph", "Task 3 (CAS preserved, stillClaimed unchanged)", "Task 1 (lowercase literal sites)"], "status": "covered" },
+    { "req": "C-2", "text": "waiting_for_reply in all 7 literal sites ($in/partial-filter)", "covered_by": ["Task 1 (7 sites explicit + drift-assertion + FunnelStatusEnumTest + FunnelIndexesIT)", "Architecture ExecutionStatus section"], "status": "covered" },
+    { "req": "C-3", "text": "callback_data ≤64 bytes; malformed → answerCallbackQuery + no-op", "covered_by": ["Decision 6 (strict parse: ObjectId-hex shape, bounded index, single colon, callback type; malformed/oversized/foreign → answerCallbackQuery + no-op)", "Task 5 (strict parse impl)", "Unit tests callback_data parsing"], "status": "covered" },
+    { "req": "C-4", "text": "answerCallbackQuery best-effort; 5xx doesn't block branch; WARN log only", "covered_by": ["Decision 8 (best-effort, no audit event, WARN only)", "Task 2 (answerCallbackQuery method)", "IT 'answerCallbackQuery 5xx → best-effort, просування не блокується'"], "status": "covered" },
+    { "req": "C-5", "text": "URL buttons http(s) only; free text deferred; no new secrets", "covered_by": ["Decision 10 (strict URI parse: http|https scheme, non-empty host; reject javascript:/data:/tg://)", "Task 4 (validateSteps URL check)", "Architecture Dependencies (no new packages)"], "status": "covered" },
+    { "req": "C-6", "text": "50-step limit per funnel (graph)", "covered_by": ["Architecture (50-step limit on full funnel graph stated)", "Task 4 (validateSteps enforces it)"], "status": "covered" },
+    { "req": "C-7", "text": "Snapshot isolation: deep copy of buttons list in copyOf", "covered_by": ["Decision 5 (Button immutable record + new ArrayList<>(buttons) in copyOf)", "Task 1", "Unit test Button/FunnelStep.copyOf"], "status": "covered" },
+    { "req": "C-8", "text": "Single config max-steps-per-tick; automatic migration, no manual operator action", "covered_by": ["Decision 4 (@Value config + default=100)", "Decision 7 (ApplicationRunner backfill, idempotent, no manual action)", "Task 1 (backfill) + Task 3 (config)"], "status": "covered" }
+  ],
+  "reverse_traceability": [
+    { "element": "Decision 1 — composite MENU step type", "traces_to": "US-1", "scope_creep": false },
+    { "element": "Decision 2 — graph model (id, next, currentStepId)", "traces_to": "US-2, C-8", "scope_creep": false },
+    { "element": "Decision 3 — waiting_for_reply in sweep+claim; nextRunAt=null skipped", "traces_to": "US-12, US-13, C-2", "scope_creep": false },
+    { "element": "Decision 4 — max-steps-per-tick config; default=100", "traces_to": "US-14; default value [TECHNICAL] documented in User-Spec Deviations", "scope_creep": false },
+    { "element": "Decision 5 — Button as immutable record + deep copy in copyOf", "traces_to": "US-11, C-7; [TECHNICAL] tag is implementation detail of user-spec-required snapshot isolation, not new functionality", "scope_creep": false },
+    { "element": "Decision 6 — callback_data format + IDOR guard + answerCallbackQuery ALWAYS", "traces_to": "US-4, US-7, US-8, C-3; IDOR guard is security engineering for stated constraint, not new functionality", "scope_creep": false },
+    { "element": "Decision 7 — ApplicationRunner backfill (definitions + in-flight snapshots + currentStepId seed)", "traces_to": "US-17, C-8; 'backfill охоплює і in-flight снапшоти' documented in User-Spec Deviations", "scope_creep": false },
+    { "element": "Decision 8 — answerCallbackQuery best-effort, no audit event, WARN only", "traces_to": "C-4 (user-spec explicitly states best-effort); [TECHNICAL] refers only to 'no audit event' engineering choice", "scope_creep": false },
+    { "element": "Decision 9 — minimal analytics hook (funnel_button_clicked + lastButtonClicked)", "traces_to": "US-16", "scope_creep": false },
+    { "element": "Decision 10 — URL buttons http(s) only; ≥1 callback per MENU; strict URI parse", "traces_to": "US-6, US-15, C-5; scheme-injection defense is security enforcement of stated constraint", "scope_creep": false },
+    { "element": "Decision 11 — paused-funnel: no per-step gate in resumeOnCallback", "traces_to": "US-12 (explicit AC)", "scope_creep": false },
+    { "element": "FunnelStepIdBackfill ApplicationRunner (Task 1)", "traces_to": "US-17, C-8", "scope_creep": false },
+    { "element": "Tasks 8/9/10 — audit tasks (code, security, test)", "traces_to": "Infrastructure/engineering — acceptable per methodology", "scope_creep": false },
+    { "element": "Task 11 — pre-deploy QA", "traces_to": "Infrastructure/engineering — acceptable per methodology", "scope_creep": false },
+    { "element": "IDOR anti-pattern guard in Decision 6 + Task 5", "traces_to": "Security enforcement of C-3 (callback_data must uniquely identify owned execution); engineering addition", "scope_creep": false },
+    { "element": "Scheme-injection defense in Decision 10 (URI strict parse)", "traces_to": "C-5 (URL buttons only http(s)); security enforcement of stated constraint", "scope_creep": false },
+    { "element": "PII exclusion from events in Decision 9", "traces_to": "Engineering consistency with Phase 1 Decision 16; no user-spec requirement violated; acceptable engineering addition", "scope_creep": false }
+  ],
+  "findings": [],
+  "summary": "25/25 requirements covered (17 AC + 8 constraints). All 6 previous-round findings confirmed resolved: (1) paused-funnel drain gap — Decision 11 adds explicit no-gate instruction + IT; (2) insertExecution seeding — assigned to Task 3 with FunnelTriggerServiceImpl in Files to modify; (3) timeout null→completed — spelled out in Task 3 description and IT; (4) blocked-bot trace — IT scenario explicitly sequences callback→resume→send→403→cancelled; (5) task numbering — Wave 3 Tasks 5+6, Wave 4 Task 7; (6) answerCallbackQuery call order — Decision 6 and Task 5 both say ALWAYS including all null/stale paths. Fresh bidirectional pass: no new gaps, partial coverage, scope creep, undocumented deviations, structural gaps, shallow solution, overengineering, or underengineering. User-Spec Deviations correctly documents two technical choices (max-steps-per-tick default=100; backfill scope includes in-flight snapshots). Verdict: pass."
+}

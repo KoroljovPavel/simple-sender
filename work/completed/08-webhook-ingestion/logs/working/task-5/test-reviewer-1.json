@@ -1,0 +1,48 @@
+{
+  "status": "passed",
+  "verdict": "passed",
+  "summary": "All 6 TDD anchors present and behaviourally meaningful. Tests run against real Testcontainers Mongo (no mocks), assert on actual Mongo state (DuplicateKeyException, IndexInfo metadata, persisted enum value), and pass the litmus test — removing the corresponding implementation lines (unique=true, partial filter, expireAfter, @Indexed on projectId) would each fail the matching test. F5 regression guard is structural (Document.parse → $in list containsExactlyInAnyOrder), not substring-based. projectId-standalone index test uses key-shape matching, which is robust across Spring Data MongoDB versions and tolerates the auto-generated name differing from `projectId_1`. Test isolation via @BeforeEach deleteAll().block() matches the BotIndexTest precedent. Only one minor: an unused private helper (indexNames) inherited from BotIndexTest.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "backend/src/test/java/com/botfunnel/webhook/RawUpdateRepositoryTest.java",
+      "line": 121,
+      "location": "backend/src/test/java/com/botfunnel/webhook/RawUpdateRepositoryTest.java:121",
+      "issue": "Private static helper `indexNames(List<IndexInfo>)` is declared but never referenced. It was copied from BotIndexTest where it is used in `indexes_areCreatedOnCollection`, but the RawUpdate test relies on `findByName` for every lookup, so this helper is dead code.",
+      "suggestion": "Remove the unused method to keep the file lean, or use it to add a single-line sanity assertion in one of the index tests (e.g. `assertThat(indexNames(indexes)).contains(\"projectId_updateId_unique\", \"ttl_createdAt\")`). Non-blocking — purely cleanup.",
+      "recommendation": "Delete the `indexNames` helper (lines 121-123) since it is unused; alternatively, repurpose it to add an explicit name-list assertion in one of the index tests. Non-blocking."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 6,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "tddAnchorCoverage": {
+    "duplicateProjectIdUpdateId_throwsDuplicateKey": "present (line 41) — uses StepVerifier.expectError(DuplicateKeyException.class).verify(); litmus-passes",
+    "compoundIndex_isUnique": "present (line 50) — asserts isUnique()=true AND indexFields key order ['projectId','updateId']; litmus-passes",
+    "ttlIndex_hasExpireAfter90Days": "present (line 63) — asserts Optional<Duration> resolves to Duration.ofDays(90); correct for Spring Data MongoDB 3.x+ (Spring Boot 3.5.0 ships Spring Data MongoDB 4.5.x)",
+    "ttlIndex_partialFilterIsUppercase": "present (line 76) — parses partial filter via Document.parse, extracts processingStatus subdoc, asserts $in list containsExactlyInAnyOrder('PENDING','DONE') — strong F5 regression guard, not a substring check",
+    "projectIdIndex_existsSeparately": "present (line 95) — key-shape match (single-field index on `projectId`, excluding the compound by name); robust across Spring Data MongoDB versions where the auto-name may differ from `projectId_1`",
+    "statusEnum_roundTrips": "present (line 112) — saves PENDING, reloads via findById, asserts processingStatus equals RawUpdateStatus.PENDING; guards against @Enumerated config drift"
+  },
+  "questionAnswers": {
+    "q1_allSixAnchorsPresent": "Yes — all 6 TDD-anchor method names from task 5.md are present with the exact spellings (duplicateProjectIdUpdateId_throwsDuplicateKey, compoundIndex_isUnique, ttlIndex_hasExpireAfter90Days, ttlIndex_partialFilterIsUppercase, projectIdIndex_existsSeparately, statusEnum_roundTrips).",
+    "q2_testIsolation": "Yes — @BeforeEach `clean()` calls `rawUpdateRepository.deleteAll().block()`, matching the BotIndexTest precedent. Tests that share the database (duplicate-key, statusEnum) also use disjoint projectIds (proj-A vs proj-B) for defence in depth.",
+    "q3_f5RegressionGuardStrength": "Strong. The test parses the partial filter via `Document.parse(pf)`, navigates into the `processingStatus` subdocument, extracts the `$in` array, and asserts `containsExactlyInAnyOrder(\"PENDING\", \"DONE\")`. This is a structural assertion on parsed BSON, NOT a string-contains. A lowercase `['pending','done']` filter would fail this test (assertion compares to UPPERCASE literals). containsExactlyInAnyOrder also implicitly bans extra elements (e.g. accidental inclusion of 'FAILED'), so the assertion is tight.",
+    "q4_projectIdStandaloneIndexRobustness": "Yes — robust. The test does not depend on the auto-generated name `projectId_1`. It uses key-shape matching: filter out the compound index by name (`projectId_updateId_unique`), require `getIndexFields().size() == 1`, require the single field's key equals `projectId`. This survives any Spring Data MongoDB version that renames the auto-index (e.g. `projectId`, `projectId_1`, `idx_projectId_1`) as long as the shape is preserved. Note: task acceptance criterion #8 in 5.md says `projectId_1` should appear by name — the test is more permissive than the AC, which is the correct engineering choice (shape > generated-name).",
+    "q5_durationAssertionCorrectness": "Correct. `IndexInfo.getExpireAfter()` has returned `Optional<Duration>` since Spring Data MongoDB 3.0 (Spring Boot 3.5.0 → Spring Data MongoDB 4.5.x, well past that boundary). `Duration.ofDays(90)` equals 7_776_000s, which is exactly what Spring Data resolves `expireAfter=\"90d\"` to. The `.equals(Duration.ofDays(90))` comparison via AssertJ `isEqualTo` is correct (Duration overrides equals on nanos+seconds).",
+    "q6_mockingOrBrittleCoupling": "No issues. Zero mocks — the test extends `AbstractIntegrationTest` which boots a real Testcontainers Mongo. Every assertion reads actual Mongo state (`getIndexInfo()`, real `save()` round-trip, real `DuplicateKeyException` from the server). The test is not coupled to annotation strings; it observes the runtime effect of those annotations through Mongo's own metadata, which is the correct behavioural surface."
+  }
+}

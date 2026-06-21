@@ -1,0 +1,35 @@
+{
+  "summary": {
+    "scope": "Visibility-only refactor of TelegramApiClient — promotion of requireValidTokenShape(String), isTransient(Throwable), DEFAULT_RESPONSE_TIMEOUT, CONNECT_TIMEOUT from private static to public static. Bodies, signatures, and values byte-identical. Mirrors prior scrubTokens promotion.",
+    "filesReviewed": [
+      "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java"
+    ],
+    "totalFindings": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0,
+    "informational": 0,
+    "checksPerformed": [
+      "OWASP A01 Broken Access Control — N/A (no auth surface touched; no new endpoints/RBAC)",
+      "OWASP A02 Cryptographic Failures — token-scrub regex (TOKEN_PATTERN) and token-shape regex (TOKEN_SHAPE) remain private; no crypto primitive widened",
+      "OWASP A03 Injection — requireValidTokenShape is a strict anchored regex guard (^\\d{1,20}:[A-Za-z0-9_-]{30,50}$) that throws IllegalArgumentException; widening it is non-loosening — callers can now invoke the same guard, not bypass it",
+      "OWASP A04 Insecure Design — promotion centralizes (not duplicates) the transient classifier, token-shape guard, and timeout pair; reduces drift risk for Wave-2 TelegramSender. Aligned with tech-spec Decision 12 and risk R2",
+      "OWASP A05 Security Misconfiguration — no config, no headers, no CORS, no defaults touched; timeout values (10s read / 5s connect) unchanged",
+      "OWASP A06 Vulnerable Components — no dependency change (no build.gradle diff)",
+      "OWASP A07 Authentication Failures — bot token handling unchanged; only the shape-validator's visibility widened",
+      "OWASP A08 Software & Data Integrity — no deserialization path, no dynamic class loading, no signed-artifact flow affected; pure visibility delta",
+      "OWASP A09 Logging & Monitoring — scrubTokens (the regex that redacts tokens from log strings) was already public and is unchanged; no log line modified; TOKEN_PATTERN itself stays private so the regex is not externally rebindable",
+      "OWASP A10 SSRF — setWebhook URL-handling contract unchanged; no new request sink introduced",
+      "Hardcoded secrets — none introduced (regex literals are validators, not secrets)",
+      "Information disclosure via Java reflection / serialization — no Serializable, no getter widened on the class itself, no toString added"
+    ],
+    "notes": [
+      "Concrete diff against HEAD (commit 36bef4f) confirms exactly four members widened and four (TOKEN_PATTERN, TOKEN_SHAPE, MONO_TIMEOUT, CAUSE_CHAIN_MAX_HOPS) deliberately kept private per task spec AC6.",
+      "Cross-module grep for new external consumers returned only the expected existing call sites (BotService.scrubTokens log usage at BotService.java:168 and :224, and TelegramApiClientTest assertions on scrubTokens) — no surprise widening surfaced.",
+      "Tech-spec Risk R2 is the explicit risk for this exact change and is acknowledged: signatures unchanged, recompile-clean, comment trail in place."
+    ]
+  },
+  "findings": [],
+  "verdict": "approved"
+}

@@ -1,0 +1,65 @@
+{
+  "status": "approved",
+  "round": 2,
+  "feature": "migrate-to-virtual-threads",
+  "tech_spec_path": "/Users/pavlokorolov/IdeaProjects/simple-sender/work/migrate-to-virtual-threads/tech-spec.md",
+  "round_1_closure": {
+    "MAJOR_task_count_17_over_15": {
+      "status": "CLOSED",
+      "evidence": "Implementation Tasks section opens with explicit justification (line 360): user decision X1=a, 4 of 17 are template-mandatory audit/QA tasks, Wave 2 sub-tasks enumerate the atomic-flip commit by logical chunk per D5, functional refactoring tasks total 14. Justification is documented in-spec, traceable to user clarification."
+    },
+    "CRITICAL_wave_3_patterns_md_conflict": {
+      "status": "CLOSED",
+      "evidence": "Wave 3 header (line 441) now reads 'Task 11 → Task 12 in parallel, then Task 13 sequentially'. Task 13 description (line 464) explicitly states 'Runs sequentially after Task 11 (which has already appended the \"Virtual Threads\" pinning section to patterns.md). Reads Task 11's section as input — does NOT modify it.' Single-file ownership also documented in Architecture section (line 47). File-write conflict structurally resolved via intra-wave sequencing."
+    },
+    "MAJOR_verbose_task_descriptions": {
+      "status": "CLOSED",
+      "evidence": "Tasks 3, 5, 6, 8, 9 are now 3–5 sentence scope summaries with cross-references to Decisions (D1–D15) and code-research sections rather than inline algorithmic detail. Task 7 is 6 sentences but each preserves a load-bearing invariant. Task 12 uses a structured bulleted list — acceptable for enumerated AC coverage. No task contains an inline AC heading, TDD-Anchor heading, or line-number reference."
+    },
+    "MINOR_security_auditor_omissions": {
+      "status": "CLOSED",
+      "evidence": "Task 4 (line 393) — security-auditor omission explained inline ('pure type-signature refactor; no auth/data-handling surface — Audit Wave covers cross-cutting security'). Task 10 (line 437) — same omission rationale inline. Task 12 (line 459) — security-auditor now present in reviewers list, matching the security-relevant content (session continuity, validation flow, cookie attributes including HttpOnly/Secure/SameSite + XSRF-TOKEN co-emission)."
+    },
+    "MINOR_missing_verify_smoke": {
+      "status": "CLOSED",
+      "evidence": "Task 3 has Verify-smoke (line 386: gradle compileJava + SecurityConfigTest bean assertion). Task 8 has Verify-smoke (line 422: MockWebServer-driven tests cover retry ladder + 429-wraps-5xx + scrubber assertions). Task 9 has Verify-smoke (line 430: ./gradlew test --tests com.botfunnel.webhook.*). Task 11 + Task 13 also carry Verify-smoke. Task 12 omission acceptable — covered by its own new ITs in the standard test run."
+    },
+    "MINOR_rationale_fragments": {
+      "status": "MOSTLY_CLOSED",
+      "evidence": "EmailService rationale absorbed by new D15. P99 + bot-connect race rationale absorbed by expanded D14. Deadline strategy retained in D2. One residual rationale marker remains in Task 7 description: 'Flip the three project-scoped service trees in one chunk because they share requireOwned(...) cross-call.' This is a grouping rationale (why these three flip together), not a technical decision — borderline; flagged below as a minor for awareness but not blocking."
+    }
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "issue": "Task 7 description retains a 'because' grouping rationale: 'Flip the three project-scoped service trees in one chunk because they share requireOwned(...) cross-call.' Per validator section 8c, sentences with rationale markers in task descriptions can drift from Decisions. This is a grouping/coupling rationale (not a technical-choice rationale) and is one sentence — borderline.",
+      "fix": "Either accept as task-grouping context, or rephrase to 'Flip three project-scoped service trees together; they share requireOwned(...) cross-call.' to remove the rationale marker."
+    },
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "issue": "Task 7 description is 6 sentences — at the upper boundary of the 5-sentence brevity heuristic. Content is load-bearing (each sentence preserves a distinct invariant: requireOwned signature, ProjectController.list collapse, IT migration + race-test extraction, brute-force atomicity, result), so it is not over-detailed in the sense the validator flags — but is the longest description in Wave 2.",
+      "fix": "No action required; flagged for awareness. If desired, the 'Brute-force INCR+EXPIRE+DEL atomicity preserved via sync Lettuce primitives.' sentence could move into D14 or a new decision about Lettuce sync primitives — but Task 7 stays atomic either way."
+    }
+  ],
+  "checks_passed": [
+    "Frontmatter (created 2026-05-23, status draft, branch dev, size L) — valid",
+    "All template sections present and non-empty (Solution, Architecture w/ subsections, Decisions, Data Models, Dependencies w/ New + Existing, Testing Strategy w/ size L, Agent Verification Plan w/ approach + tools, Risks table, Acceptance Criteria, Implementation Tasks)",
+    "Decisions: 15 decisions, each with Decision + Rationale + Alternatives considered + Serves links",
+    "Risks: 9 risks in table format with concrete mitigations — no generic placeholders",
+    "Agent Verification Plan exists with Verification approach + Tools required (bash, mongosh, Browser DevTools; Telegram/Playwright MCP explicitly marked not-required with justification)",
+    "Tasks organized by Waves: Wave 1 (Tasks 1–2), Wave 2 (Tasks 3–10 atomic-flip enumeration), Wave 3 (Tasks 11–13 with intra-wave sequencing 11/12 parallel then 13), Audit Wave (Tasks 14–16), Final Wave (Task 17)",
+    "Wave 3 file conflict on patterns.md resolved via explicit intra-wave sequencing — Task 11 writes Virtual Threads section first, Task 13 reads then appends the rest sequentially; documented in Architecture (line 47), Wave 3 header (line 441), and Task 13 description (line 464)",
+    "All reviewers reference existing agents in .claude/agents/ (code-reviewer.md, security-auditor.md, test-reviewer.md verified present)",
+    "All skill values match the Execution Skills table (code-writing, documentation-writing, code-reviewing, security-auditor, test-master, pre-deploy-qa)",
+    "No time-based estimates (no hours/days/weeks/sprints in tasks or waves)",
+    "No AC or TDD-Anchor headings embedded in tasks (grep confirms 0 matches in Implementation Tasks range)",
+    "No line-number references in task descriptions (grep confirms 0 matches)",
+    "No file-modification conflicts within Wave 1 (Task 1 + Task 2 modify disjoint sets); Wave 2 documented as ONE physical commit per D5 so intra-wave conflicts are immaterial; Wave 3 conflict resolved by intra-wave sequencing",
+    "Task descriptions match scope-summary granularity (3–6 sentences, cross-references to Decisions instead of inline algorithmic detail)",
+    "Per-task Verify-smoke present where appropriate (Tasks 3, 8, 9, 11, 13) — covers gradle compile, MockWebServer-driven retry tests, webhook test scope, VT pinning probe, doc grep gate",
+    "All file paths in 'Files to modify' / 'Files to read' are concrete (absolute project-relative paths, e.g., backend/src/main/java/com/botfunnel/...)"
+  ],
+  "summary": "Round 2 status: APPROVED. All Round 1 findings closed or resolved with documented user decisions. One residual minor (Task 7 'because' grouping rationale, 1 sentence) is borderline and non-blocking. Tech-spec is structurally complete, free of time estimates, has documented user-spec deviations, all 9 risks have concrete mitigations, and the previously-critical Wave 3 patterns.md conflict is structurally resolved via intra-wave sequencing with single-file-ownership documented in three places. Status field can flip from 'draft' to 'approved' after user confirms PENDING USER APPROVAL items in the User-Spec Deviations section."
+}

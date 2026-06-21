@@ -1,0 +1,21 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "The depth-cap is sound but the spec does not state the seeding rule for the human-initiated entrypoints. Scenario 7 says 'depth = parent.depth + 1' for auto-triggers, but does not assert that on_start / keyword / manual-UI / api-event (the chain ROOTS) start at depth 0. code-research §1 confirms insertExecution is the single creation path and is reused verbatim; a root that does not explicitly seed depth=0 would read a Mongo-missing int as 0 anyway (acceptable), but the spec leaves the root value implicit.",
+      "why_matters": "The cap only bounds runaways correctly if every chain root is anchored at a known depth. If a future entrypoint accidentally inherits a non-zero depth (or the field defaults inconsistently), the 'hard cap 10' becomes off-by-N. This is a one-line contract, not a redesign — and the default-to-0 behavior of a missing int makes it low-risk today.",
+      "fix": "Add one clause to the depth AC (or Scenario 7): 'human/root enrolls (on_start, keyword, manual-UI tag/field, api-event) start at depth 0; only auto-enrolls from a step increment parent.depth + 1.' This makes the chain-root invariant explicit without adding implementation detail."
+    },
+    {
+      "category": "sizing",
+      "severity": "minor",
+      "issue": "Carried over from round 1 and consciously accepted by the author: the feature bundles the four event-source triggers (keyword/tag/field/EMIT_EVENT + index relax) with the greenfield public-API foundation (api_keys collection, @Order(1) key chain, settings UI, /events endpoint). Only api-event is a hard dependency on the public-API foundation; the other four ship without it. The spec now notes the bundling is deliberate (shared event_name namespace cohesion).",
+      "why_matters": "The public-API foundation is the highest-risk net-new surface (security chain, new collection, new auth model, frontend card) and is independently shippable. Bundling raises single-iteration blast radius and coarsens review/rollback. Not a blocker — the roadmap scoped Phase 3 as one phase and the author justified keeping it together — but it remains the natural split line if the iteration overruns.",
+      "fix": "No spec change required. If the iteration overruns, split along the api-event / public-API-foundation seam first (the four state/keyword triggers form a self-contained increment)."
+    }
+  ],
+  "worst_category": "underengineering",
+  "summary": "Re-validation passes. All three round-1 issues with spec-content impact are resolved: (1) the cascade guard is now genuinely defense-in-depth — a Redis-independent enroll-chain depth-cap (hard 10) backs up the fail-open volume rate-limit, and the design is feasible (a top-level int on FunnelExecution, sibling to currentStepIndex, set at insertExecution as parent.depth + 1; it is NOT routed through stepsSnapshot/copyOf, which the spec correctly keeps reserved for EMIT_EVENT's eventName step field); (2) the tech-spec leak is trimmed — Технічні рішення now reads as plain-language decisions with only module/class anchor names retained, matching the project's own spec convention (architecture.md/patterns.md reference class anchors throughout), so necessary grounding was preserved, not stripped; (3) the uniform-401 anti-enumeration criterion and the @Order(1)/namespace rationale are added. No critical or major findings remain. Two minor residuals: an implicit chain-root depth-seeding contract (default-to-0 makes it low-risk) and the consciously-accepted bundled sizing."
+}

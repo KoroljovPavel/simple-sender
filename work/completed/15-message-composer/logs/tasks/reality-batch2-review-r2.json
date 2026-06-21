@@ -1,0 +1,76 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 instructs to add case MESSAGE to validateSteps (which currently has SEND_MESSAGE/SEND_IMAGE/MENU) and delete old cases. This is correct. However, the task says 'переюзати наявну button-валідацію (requireTimeout)' for the composer step. requireTimeout() (line ~878) currently hard-codes the string 'MENU timeout requires ...' in both of its error messages. Task 4 round-1 fix was supposed to mandate extraction of a generic validator. The task text at step 4 ('Media-URL strict-scheme хелпер') correctly mandates this extraction for requireHttpUrl. But for requireTimeout the task does NOT mandate a parallel generic extraction — it only says 'переюзати наявну button/timeout-валідацію'. This means an implementer will call requireTimeout() as-is for composer timeout, producing 'MENU timeout requires ...' errors on a MESSAGE step. Round-1 found this; the fix addressed requireHttpUrl but left requireTimeout's hard-coded 'MENU timeout requires ...' strings un-addressed.",
+      "fix": "In step 4 of 'What to do', explicitly add: requireTimeout() must also be parametrised or wrapped (e.g. requireTimeout(value, unit, contextLabel)) so that when called from validateMessage the error reads 'MESSAGE timeout requires ...' not 'MENU timeout requires ...'. Mirror the same generic-extraction mandate already written for requireHttpUrl."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "previewStep() at line ~393-396 currently calls VariableTemplateRenderer.render(request.text(), request.parseMode(), subscriber) — single-text rendering. Task 4 says to expand this to multi-block (iterate blocks, render each text+caption). PreviewStepRequest is currently 'record PreviewStepRequest(String stepType, String text, String parseMode)' — it has no blocks field. PreviewStepResponse is 'record PreviewStepResponse(String rendered, boolean sampleData, String kind)' — it has no renderedBlocks field. Task 4 correctly lists both DTOs in 'Files to modify'. The concern is the task also says to update isMessageStep() to 'type == StepType.MESSAGE' — but StepType.SEND_MESSAGE/SEND_IMAGE/MENU still exist in the codebase (Task 1 hasn't run yet at the time Task 4 runs). This is a valid sequencing dependency (depends_on: [1]) and is correctly declared. No additional finding here — already covered.",
+      "fix": "No fix needed for this specific sub-point — dependency on Task 1 is correctly declared."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 4,
+      "issue": "Task 4 Details section says: 'toStepDto (~954–975): ... ВАЖЛИВО: цей метод викликає конструктор record-а FunnelStepDto з ~20 позиційними аргументами, серед яких чотири плоскі поля text/parseMode/imageUrl/caption (рядки ~963–966)'. The actual FunnelStepDto record (read from source) has exactly 20 positional arguments: stepType, id, next, buttons, timeoutValue, timeoutUnit, timeoutTargetStepId, text, parseMode, imageUrl, caption, delayValue, delayUnit, tagSlug, customFieldKey, customFieldValue, eventName, targetFunnelId, targetEntryStepId, endParentAfter. The line numbers in toStepDto are stated as ~954–975 in the task. Actual code shows toStepDto at line 954 and it ends at line 976. The four flat fields are at lines 963–966 (text, parseMode, imageUrl, caption). These line references match and the count ('~20') is correct. This finding is RESOLVED — the task's description of the record arity and line references are accurate.",
+      "fix": "No fix needed — verified correct."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 5,
+      "issue": "Task 5 'What to do' step 6 says: 'FunnelTriggerServiceIT.java (рядок ~363) сідує крок StepType.SEND_MESSAGE'. Verified: line 363 in FunnelTriggerServiceIT.java is exactly 's.setStepType(StepType.SEND_MESSAGE)' inside a sendMessage() helper. This is confirmed unresolved — the seed method uses the deleted type. Task 5 owns the rewrite, which is correct. However, the ALSO confirms the round-1 finding about this is still an issue in the source (the file has not been modified yet since the tasks are planned). This is expected — the task owns the fix. No additional finding beyond verifying the seed still references SEND_MESSAGE (StepType.SEND_MESSAGE at line 363 confirmed).",
+      "fix": "No change to task 5 needed — ownership and description of the required fix are correct. The seed rewrite is the implementer's responsibility per the task's step 6."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 implementation hints reference 'Decision 8' in FunnelTriggerServiceImpl Javadoc (answerCallbackQuery invariant) with the note 'НЕ плутати з tech-spec Decision 8 «Preview multiblock»'. The actual source file Javadoc at line ~311 does say 'Decision 8' for answerCallbackQuery: 'answerCallbackQuery is called on EVERY exit path where the bot resolved (Decision 8)'. Tech-spec Decision 8 is about Preview multiblock. This in-file reference to 'Decision 8' refers to an internal Javadoc decision numbering inside FunnelTriggerServiceImpl that is different from the tech-spec Decision 8. The task correctly warns 'НЕ плутати' but the disambiguation wording ('internal Decision 8 from Javadoc') is still potentially confusing. This is the same round-1 finding, and the task's resolution was adding the disambiguation note. The note is now present in the hints. This finding is RESOLVED.",
+      "fix": "No fix needed — disambiguation note confirmed present."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 6,
+      "issue": "Task 6 TDD Anchor states: 'subscriber-filters.spec.ts — НЕ прецедент для цього патерну; той файл тестує runtime-функції (assignability через виклики), а не чисту type-сумісність. Тут потрібен мінімальний vitest type-assignability fixture — інший, простіший патерн (самі присвоєння типів + тривіальний expect).' Verified: frontend/tests/types/subscriber-filters.spec.ts DOES test runtime functions (toListQuery, toExportFilter, defaultFilter) — it is not a pure type-assignability test. The directory frontend/tests/types/ exists. The task correctly characterises this as 'not a precedent' for the proposed funnel-blocks.spec.ts fixture pattern. This is RESOLVED — the note is correct.",
+      "fix": "No fix needed — verified accurate."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 6,
+      "issue": "Task 6 Details states 'FunnelStep (рядки ~51–81) має плоскі text/parseMode/imageUrl/caption'. Verified against actual frontend/types/funnel.ts: FunnelStep interface IS at lines 51–81 and DOES have text, parseMode, imageUrl, caption as optional fields. StepType (lines 10–20) DOES contain SEND_MESSAGE, SEND_IMAGE, MENU. PreviewStepRequest (lines 142–146) DOES have {stepType, text, parseMode?}. PreviewStepResponse (lines 152–156) DOES have {rendered, sampleData, kind}. All stated line references and field descriptions are accurate. This is RESOLVED.",
+      "fix": "No fix needed — verified accurate."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 6,
+      "issue": "Task 6 'Test ownership (не скоуп цього таска)' says existing funnels.spec.ts and FunnelMessagePreview.spec.ts are 'built on OLD PreviewStepRequest{stepType, text, parseMode} / PreviewStepResponse{rendered}' shapes. Verified: funnels.spec.ts line 236–244 uses PreviewStepRequest with {stepType:'SEND_MESSAGE', text:'...', parseMode:'HTML'} and PreviewStepResponse with {rendered:'Hi John'}. FunnelMessagePreview.spec.ts line 24 seeds stepType:'SEND_MESSAGE' and line 39 uses {rendered:'Hi Olena!'}. Both test files reference the old types. Task 6 correctly delegates their rewrite to Task 8. However, Task 6 also instructs running 'pnpm test -- tests/types/' as a verification step. This will pass. But the task does NOT instruct running the full 'pnpm test' suite, which would fail on funnels.spec.ts and FunnelMessagePreview.spec.ts when types change (SEND_MESSAGE removed from StepType will cause TypeScript errors in these tests). The task's note about 'known-handoff for Task 8' covers this — but the Verification Steps section should explicitly call out that the full suite will have TS errors in Wave-4 files and that this is expected. Currently the Verification Steps only say 'npx nuxi typecheck' (without clarifying that failures in Wave-4 files are known-handoff, not new breakage).",
+      "fix": "In Task 6 Verification Steps add a note: 'pnpm test may show TypeScript compile errors in frontend/tests/stores/funnels.spec.ts and frontend/tests/components/funnels/FunnelMessagePreview.spec.ts after StepType changes (SEND_MESSAGE/MENU removed) — these are known handoff to Task 8 and should be documented as such, not fixed here.'"
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 4,
+      "issue": "Task 4 implementation hint says: 'over-length warning: позначити (напр. поле/прапор у відповіді або лог), але НЕ кидати — підтвердити механізм за tech-spec («позначено, не блокує»); якщо немає каналу для warning у відповіді — лишити no-op + лог і покрити тестом «save проходить»'. The current FunnelControllerIT test name 'updateOverLengthTextFlaggedNotBlocking' implies there IS a flag in the response. But if the implementation choice is 'log only', that test name is misleading. This is a minor spec ambiguity — the hint correctly acknowledges uncertainty but the test name presupposes a response flag that may not exist.",
+      "fix": "Rename the TDD Anchor test to 'updateOverLengthTextDoesNotReturn422' or similar to decouple from the 'flagged' semantics, keeping it behaviorally accurate regardless of whether the response carries an explicit warning field."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 6
+  }
+}

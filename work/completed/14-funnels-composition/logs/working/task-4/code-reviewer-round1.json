@@ -1,0 +1,38 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "4",
+  "round": 1,
+  "commit": "84f9aa3",
+  "scope": "frontend SUBSCRIBE_TO_FUNNEL step form (types/funnel.ts, FunnelStepForm.vue, i18n uk/en, funnel-editor.spec.ts)",
+  "summary": "Implementation is clean, mirrors the established MENU/EMIT_EVENT idioms (sentinel for null, lazy loader with a request-guard, SearchableSelect with show-value=false for internal ids). Cross-file usage verified: store.fetch('all')/fetchOne(id).steps signatures and FunnelSummaryResponse.status all match. The targetEntryStepId naming (Decision 5) and the four funnel_subscribe_* error codes are byte-correct and locale-symmetric (check-locales.mjs green). One minor UX finding on the target picker loading state.",
+  "findings": [
+    {
+      "id": "CR1",
+      "severity": "minor",
+      "dimension": "Code Readability & Maintainability / Performance",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "location": "target SearchableSelect :loading binding",
+      "finding": "The target picker binds :loading=\"storeFunnels.length === 0\". For a project that legitimately has no other funnels, fetch('all') resolves to an empty array and the picker shows the loading spinner indefinitely instead of the empty-state text (subscribeTargetEmpty). Other pickers in this file (tag/cf) use an explicit *Loading ref that flips false after the fetch settles.",
+      "recommendation": "Track an explicit subscribeFunnelsLoading ref (set true in ensureFunnelsLoaded, false in finally) and bind :loading to it, so the empty-state shows once the fetch completes. Low impact (cosmetic, only the genuinely-empty-project case), but it diverges from the file's own loader pattern.",
+      "status": "open"
+    },
+    {
+      "id": "CR2",
+      "severity": "info",
+      "dimension": "Architecture / Separation of Concerns",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "finding": "store.fetch('all') overwrites the shared funnels.value (the list page's filtered slice) — a deliberate side-effect, documented inline with a fallback path (local useApi fetch). Acknowledged trade-off per task spec, not a defect.",
+      "status": "acknowledged"
+    },
+    {
+      "id": "CR3",
+      "severity": "info",
+      "dimension": "Type Safety / Submit correctness",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "finding": "The onSubmit switch still has no default/assertNever guard; the new case 'SUBSCRIBE_TO_FUNNEL' is present and exercised by the 'SUBSCRIBE submit shape' tests, so the silent-no-emit risk called out in the task is covered. Adding assertNever was optional and skipped to keep the diff minimal.",
+      "status": "acknowledged"
+    }
+  ],
+  "verdict": "approve_with_minor",
+  "tests": "vitest 458 passed (44 in funnel-editor.spec.ts incl. 5 new SUBSCRIBE), check-locales.mjs green"
+}

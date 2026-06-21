@@ -1,0 +1,31 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Candidate hash is hex-encoded then immediately re-parsed back to bytes",
+      "description": "WebhookSecretVerifier.verify computes candidateBytes via `HexFormat.of().parseHex(Sha256Hex.hex(headerSecret))`. Sha256Hex.hex internally produces the digest bytes via `md.digest(...)` and then formats them to lowercase hex; the verifier then parses those hex chars right back to the same 32-byte array. This is functionally correct and not insecure (the catch on IllegalArgumentException is unreachable for the candidate path because Sha256Hex.hex always emits well-formed 64-char lowercase hex), but it allocates two extra objects (the 64-char String and a fresh byte[]) per webhook request and obscures the intent. A small `Sha256Hex.bytes(String)` helper (or making the verifier compute `md.digest(...)` directly via Sha256Hex) would be cleaner and slightly cheaper on a hot path.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/WebhookSecretVerifier.java:31",
+      "impact": "No security impact. Minor allocation overhead per webhook request and reduced code clarity.",
+      "recommendation": "Optional: expose `public static byte[] Sha256Hex.digest(String input)` (or rename) returning the raw 32-byte digest, and have WebhookSecretVerifier call that for the candidate side: `candidateBytes = Sha256Hex.digest(headerSecret);` — only the stored hex needs `parseHex`. Algorithm parity is preserved because `Sha256Hex.hex` is just `HexFormat.of().formatHex(digest(...))`. Keep both APIs to avoid breaking BotService / TokenService call sites.",
+      "cwe": "CWE-1041"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring Failures",
+      "title": "Verifier emits no audit signal on failed verification",
+      "description": "WebhookSecretVerifier.verify silently returns `false` for every failure mode (null/empty header, null stored hash, malformed-hex stored hash, mismatched secret). The verifier itself MUST NOT log the header or the stored hash (correct per AC), but it also currently emits no observable signal — no counter increment, no debug-level outcome log, no metric. When the controller wiring lands in T10 the responsibility for emitting an `auth.webhook.invalid_secret` audit event / counter must be in the caller, otherwise a brute-force sweep against the secret endpoint becomes unobservable. Today this is borderline-acceptable because this task delivers only the primitive, but it is worth pinning the expectation now so the gap is closed in T10 rather than dropped on the floor.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/WebhookSecretVerifier.java:20",
+      "impact": "Without an audit signal at the controller layer, an attacker spraying random secrets at `/webhooks/telegram/{projectId}` produces no operationally visible trace. Telegram caps webhook secret length at 256 chars, making brute-force impractical against SHA-256-of-128-bit-secret, but missing signal is still a deficit relative to OWASP A09.",
+      "recommendation": "When T10 wires WebhookSecretVerifier into TelegramWebhookController, ensure the controller emits a structured audit log line (e.g. `log.warn(\"webhook secret verification failed projectId={} ip={}\", ...)` — never the header value or the hash) and a Micrometer counter, so failed verification attempts are observable. Optionally, add a debug-level log inside the verifier on the comparison outcome (boolean only, no operands) per the task's own acceptance criterion language. No change required for this task's scope.",
+      "cwe": "CWE-778"
+    }
+  ]
+}

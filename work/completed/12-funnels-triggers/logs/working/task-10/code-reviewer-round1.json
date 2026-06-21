@@ -1,0 +1,37 @@
+{
+  "task": "10",
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "scope": [
+    "frontend/pages/projects/[projectId]/settings/index.vue",
+    "frontend/tests/pages/projects/settings-apikey.spec.ts",
+    "frontend/i18n/locales/uk.json",
+    "frontend/i18n/locales/en.json"
+  ],
+  "dimensions_reviewed": [
+    "architecture", "separation-of-concerns", "readability", "error-handling",
+    "type-safety", "testing", "cross-file-consistency", "security", "performance"
+  ],
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "minor",
+      "dimension": "readability",
+      "file": "frontend/pages/projects/[projectId]/settings/index.vue",
+      "finding": "A second onMounted hook is added alongside the existing one. Valid Vue 3 (multiple onMounted run in order), but two onMounted blocks in one component can confuse future readers.",
+      "action": "keep",
+      "reason": "Splitting concerns (project-resolution redirect vs api-key load) is intentional and the comment explains it. Merging into the existing async onMounted would entangle the redirect/await flow with the fire-and-forget mask load. Acceptable trade-off."
+    },
+    {
+      "id": "CR-2",
+      "severity": "info",
+      "dimension": "cross-file-consistency",
+      "file": "frontend/pages/projects/[projectId]/settings/index.vue",
+      "finding": "GET response {present, mask} and POST response {apiKey, mask} match ApiKeyMaskResponse / ApiKeyGeneratedResponse exactly. apiError(e, 'projects.apiKey') resolves errors.projects.apiKey.{status}|generic, both present in uk/en.",
+      "action": "none",
+      "reason": "Verified against backend DTOs and locale files. No issue."
+    }
+  ],
+  "summary": "Clean, scoped implementation following the page's existing patterns (saveError inline error, isSubmitting-style disabled button, delete-modal markup for the show-once modal). Type-safe (no any), no plaintext persistence/logging, GET degrades gracefully. No blocking issues.",
+  "verdict": "approve"
+}

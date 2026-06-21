@@ -1,0 +1,60 @@
+{
+  "task": 7,
+  "feature": "07-telegram-sender",
+  "auditor": "code-reviewer",
+  "verdict": "pass",
+  "summary": "Full-feature audit walked the 7 cross-component dimensions plus the explicit edge-case probes (AtomicInteger placement, pre-wire token guards, Bot.ownerChatId field shape, TelegramApiClient helper promotion). Every dimension passes. No BLOCKER or MAJOR findings. Two NIT-level observations are recorded for transparency; neither implies a fix is required.",
+  "dimensions": {
+    "shared_resources": {
+      "checked": "TelegramSender constructor (lines 71-105) builds exactly one WebClient via the injected WebClient.Builder using app.telegram.base-url. Reuses TelegramApiClient.DEFAULT_RESPONSE_TIMEOUT (line 76) and TelegramApiClient.CONNECT_TIMEOUT (line 94) — no local redeclarations. TelegramApiClient's own WebClient construction (TelegramApiClient.java:55-65) is untouched; its 200ms/400ms/2s retry policy is preserved. No third WebClient anywhere in the bot/ package. TokenEncryptor, BotRepository, EventService are constructor-injected singletons; no per-call re-creation.",
+      "verdict": "pass",
+      "findings": []
+    },
+    "retry_timeout": {
+      "checked": "buildTransientRetry (TelegramSender.java:229-238) uses Retry.backoff(3, Duration.ofSeconds(1)).maxBackoff(Duration.ofSeconds(4)) — matches Decision 13 exactly. Retry-loop ordering at lines 173-174: .retryWhen(transient) chained BEFORE .retryWhen(rateLimit), so the 429 outer loop wraps the 5xx inner loop per Decision 10. .timeout(overallTimeout) at line 117 is the outermost operator above both retries, satisfying Decision 8. Math.max(0, Math.min(tr.getRetryAfterSeconds(), RATE_LIMIT_DELAY_CAP_SECONDS)) clamp at line 245 prevents negative or oversized retry_after spinning. TelegramApiClient's Retry.backoff(3, 200ms).maxBackoff(2s) at line 151-152 unchanged.",
+      "verdict": "pass",
+      "findings": []
+    },
+    "audit_metadata": {
+      "checked": "sentMetadata (lines 264-269) emits {botId, chatId, messageId} for telegram_message_sent. failedMetadata (lines 272-286) emits {botId, chatId, attempts} always; adds {errorCode, errorDescription} only for TelegramSendException (BotTokenInvalidException intentionally omits both, per spec line 281-282). testMessageMetadata in BotService (lines 320-329) emits {projectId, telegramBotId, chatId, messageId}. attempts parameter is declared as primitive int (failedMetadata signature line 272), sourced from the outermost-closure AtomicInteger (line 111) via attempts.get() at the audit-emission site (line 131) — survives both retry loops because the AtomicInteger is allocated BEFORE the Mono pipeline.",
+      "verdict": "pass",
+      "findings": []
+    },
+    "scrubber_coverage": {
+      "checked": "Walked every WARN/ERROR site in TelegramSender.java. (1) map4xx WARN at line 202 uses scrubbed (line 189); (2) 429-from-4xx WARN at line 199 uses scrubbed; (3) ok=false WARN at line 216 wraps via TelegramApiClient.scrubTokens; (4) 5xx retry WARN inside doBeforeRetry at line 233-235 wraps rs.failure().getMessage() via scrubTokens; (5) rate-limit-retry WARN at line 247 emits only numeric delaySeconds/jitterMs — no external string, no scrubbing needed; (6) terminal-failure ERROR inside doOnError at lines 128-129 wraps ex.getMessage() via scrubTokens; (7) overall-timeout reaches the same doOnError ERROR site after onErrorMap (line 118-119) — same scrubber site; (8) transport-error transient exceptions flow through the 5xx retry observer scrubber at line 233-235 and through the terminal scrubber. Per-site ListAppender assertions in TelegramSenderTest.java cover sites 1, 4, 5, 6 explicitly (sendText_tokenIn4xxDescription_scrubbed_warnLevel, sendText_tokenIn5xxRetryLog_scrubbed_warnLevel, sendText_tokenIn429RetryLog_scrubbed_warnLevel, sendText_tokenInTerminalFailureLog_scrubbed_errorLevel) plus the transport-error site (sendText_tokenInTransportErrorMessage_scrubbed).",
+      "verdict": "pass",
+      "findings": []
+    },
+    "exception_hierarchy": {
+      "checked": "BotTokenInvalidException.java extends AppException with HttpStatus.UNPROCESSABLE_ENTITY + code \"invalid_bot_token\" (lines 6-16). TelegramSendException.java extends AppException with HttpStatus.BAD_REQUEST + code \"telegram_send_failed\" (lines 6-21). TelegramRateLimitException.java is package-private (no public modifier on the class declaration at line 6), extends RuntimeException, no HTTP mapping, and is referenced only inside TelegramSender (lines 200, 242) at the 429 detection site and the rate-limit retry filter — never escapes via a public API surface or GlobalErrorHandler.",
+      "verdict": "pass",
+      "findings": []
+    },
+    "anti_enumeration": {
+      "checked": "TelegramSender.sendText (lines 113-115) chains filter(status==CONNECTED).switchIfEmpty(AppException.notFound(MESSAGE_BOT_NOT_FOUND)) — both \"bot doc not found\" and \"bot exists but status != CONNECTED\" emit the same 404 with message \"Bot not found\" (MESSAGE_BOT_NOT_FOUND, line 58). AppException.notFound(String) sets only message, not code (AppException.java:36), so the wire shape is {status: 404, code: null, message: \"Bot not found\"} — uniform across both branches. The unit tests sendText_botNotFound_throwsNotFound_noHttp and sendText_botDisconnected_throwsNotFound_noHttp pin this with identical assertions (TelegramSenderTest.java:578-612). BotService.sendTestMessage at lines 124-128 preserves the verbatim 422 stub string \"Send /start to your bot in Telegram first, then try again\" for the null-ownerChatId branch.",
+      "verdict": "pass",
+      "findings": []
+    },
+    "runbook": {
+      "checked": "docs/staging-smoke/07-telegram-sender.md mirrors 06-bot-connection.md structure: title with manual/~time annotation, intro referencing user-spec, Prerequisites, Steps (numbered checkboxes), Sign-off, Notes. Documents the 04b dependency explicitly in the intro (lines 8-14) and in Notes (lines 129-133). mongosh seeding steps are precise — step 1 (locate bot _id), step 3 (NumberLong wrapper for ownerChatId), step 4 (verify wrapper), step 9 (cleanup $unset). Dual-event verification in step 8 (lines 90-105) lists both telegram_message_sent {botId, chatId, messageId} and bot_test_message_sent {projectId, telegramBotId, chatId, messageId} with full metadata-shape expectations, and flags a third telegram_send_failed document as a delivery-failure indicator citing AC14.",
+      "verdict": "pass",
+      "findings": []
+    }
+  },
+  "findings": [
+    {
+      "severity": "NIT",
+      "dimension": "scrubber_coverage",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java:247",
+      "issue": "The rate-limit-retry WARN log emits only the numeric delaySeconds + jitterMs and does not echo any Telegram-originated string at THIS site (the external description was already logged and scrubbed at line 199 inside map4xx → toThrowable). The task-description checklist names this site as a required scrubber site, but the implementation has no external-string parameter to scrub here. The behavior is correct; this is a documentation/checklist alignment note, not a code defect.",
+      "fix": "No code change required. If the checklist is ever revised, mark this site as 'numeric-only — no external string, no scrubbing needed' to avoid future confusion."
+    },
+    {
+      "severity": "NIT",
+      "dimension": "audit_metadata",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java:276",
+      "issue": "The attempts parameter is declared as primitive int (line 272) per spec, but Map.put autoboxes to Integer at line 276 because Map<String, Object> cannot hold primitives. The spec phrasing 'attempts is int (not Integer)' is satisfied by the parameter type and the AtomicInteger source; the boxed Integer in the map is the only representation the JVM allows for a heterogeneous Map value. No behavioral consequence — JSON serialization renders the same numeric value either way.",
+      "fix": "No code change required. The constraint is honored as far as the type system permits."
+    }
+  ]
+}

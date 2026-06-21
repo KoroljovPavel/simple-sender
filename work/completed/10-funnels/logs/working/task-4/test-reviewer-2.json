@@ -1,0 +1,31 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 4,
+  "round": 2,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "SubscriberCustomFieldsServiceTest.java — applyAll scenarios",
+      "issue": "No unit test for a mixed $set+$unset applyAll call (e.g., {city: null, age: 42.0}). The existing tests cover the pure-$set and pure-$unset paths in isolation but not the combined case where the produced UpdateDefinition must contain both operators simultaneously.",
+      "recommendation": "Add applyAll_mixedNullAndNonNull_setAndUnset() that passes a map with one null and one non-null value, then asserts both '$set' document contains the non-null key and '$unset' document contains the null key on the same UpdateDefinition. This is low-risk given controller integration coverage but the unit-level gap is worth pinning."
+    }
+  ],
+  "summary": "All four round-1 findings are resolved. patchCustomFields_partialKeyOrder_422_writesNothing genuinely pins the all-or-nothing regression: if writes were per-key the city doesNotContainKey assertion would fail. patchCustomFields_behaviourUnchanged seeds prior values and asserts both oldValues and newValues maps in the audit event. patchCustomFields_onlyUnknownKeys_200_noWriteNoAudit covers the all-unknown-keys path. Service test now uses Document.get($set/$unset) instead of toString and verifies the terminal .first() DB call. One minor gap remains: no unit test for a mixed $set+$unset applyAll invocation, though this is covered implicitly at the integration level.",
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 5,
+      "integration": 6,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

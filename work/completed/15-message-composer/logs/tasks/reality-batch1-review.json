@@ -1,0 +1,82 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 1,
+      "issue": "FunnelStep.java currently does NOT have a getBlocks()/setBlocks() accessor or a `blocks` field. The task correctly describes adding it, but the Details section says 'ArrayList уже імпортований, рядок 3' — that is accurate (line 3 is `import java.util.ArrayList`). However, the Details section also says the flat msg-field getters/setters are at 'рядки 135–145' and copy lines 'рядки 103–106'. Actual file: getter/setters for text/parseMode/imageUrl/caption are at lines 135–145 (correct), and copyOf copying those fields is at lines 102–105 (close). These line-number references are essentially correct and not a bug, but task says 'рядки 103–106' while actual copy lines are 102–105. Minor inaccuracy, not blocking.",
+      "fix": "No change required to the task — line numbers are close enough to serve as hints, not prescriptions."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 1,
+      "issue": "FunnelStepTest.java already EXISTS at backend/src/test/java/com/botfunnel/funnel/FunnelStepTest.java and contains tests that reference REMOVED fields/types: StepType.SEND_MESSAGE (line 21, 42, 77), StepType.SEND_IMAGE (line 60, 107), StepType.DELAY (line 95), getText()/setText() (lines 24, 42, etc.), getImageUrl()/setImageUrl() (lines 26, 81), getCaption()/setCaption() (lines 27, 83), getParseMode()/setParseMode() (lines 24, 44, etc.), getButtons() with StepType.MENU (line 161). After Task 1 removes these fields and enum values, FunnelStepTest.java will NOT compile. Task 1 only says 'If file FunnelStepTest.java already exists — add methods to it' but does NOT mandate rewriting/removing the existing tests that will break. This is a critical gap: the task will leave the test suite uncompilable unless the implementer also rewrites all existing tests in FunnelStepTest.java.",
+      "fix": "Add a step to Task 1: 'Rewrite FunnelStepTest.java — remove all existing tests referencing removed fields/enums (SEND_MESSAGE, SEND_IMAGE, MENU, getText, getParseMode, getImageUrl, getCaption) and add the three new copyOf_blocks* tests from the TDD Anchor.' Otherwise Task 1's Acceptance Criteria 'unit-test copyOf зелений' is unachievable because the file won't compile."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 3,
+      "issue": "FunnelStepExecutorTest.java has existing helper methods sendMessageStep() (line 447), sendImageStep() (line 455), menuStep() (line 479) that call setText(), setImageUrl(), setCaption(), setParseMode() on FunnelStep and set StepType.SEND_MESSAGE / SEND_IMAGE / MENU — all of which will be deleted by Task 1. Existing test methods sendMessageOver4096TrimsAndContinues (line 95), sendImageCaptionEscapedAndTrimmedTo1024 (line 112), sendMessageBlockedByUserCancels (line 320), sendMessageOtherTerminalFails (line 333), sendMessageInvalidBotTokenFails (line 422), menu_sends_text_with_reply_markup (line 247), menu_with_timeout_returns_deadline (line 264), menu_callbackButtons_encodeCorrectCallbackData (line 286) — all use these helpers and WILL NOT compile after Task 1. Task 3 correctly says to rewrite these, but does NOT declare Task 1 as a dependency for the EXISTING test rewrite (the existing tests are already broken by Task 1, not Task 3). The depends_on: [1, 2] is correctly declared, so this is not a missing dependency — the compileability issue is a consequence of Task 1's blast-radius being broader than just compilation of target files.",
+      "fix": "This is handled by Task 3's depends_on: [1,2] and its instruction to rewrite the helpers. No structural change needed, but the implementer must be aware that ALL existing SEND_MESSAGE/SEND_IMAGE/MENU tests in FunnelStepExecutorTest.java must be rewritten, not just the new MESSAGE ones."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 Details section says sendMediaGroup 'не може просто викликати send(...) бо send зашитий на mapBodyToSentMessage (single message_id)' and suggests either (a) extract audit/retry seam or (b) parallel private sendGroup(...). The actual send() private method signature is `send(String botId, Long chatId, String endpoint, Map<String,Object> contentFields, String ownerId)` and is indeed hardwired to call mapBodyToSentMessage inside. However, sendWithRateLimitRetry IS accessible within the class (private). The task hint says 'переюзай наявний seam (sendWithRateLimitRetry + audit-обгортку)' — this is feasible. BUT the sendWithRateLimitRetry signature is `sendWithRateLimitRetry(Bot bot, String botId, Long chatId, String endpoint, Map<String,Object> contentFields, AtomicInteger attempts, Instant deadline)`. The task does not mention that sendMediaGroup will need to replicate the bot-lookup, CONNECTED-filter, AtomicInteger, Instant deadline setup, and the audit call from send() — this is substantial boilerplate that must be duplicated or refactored. The hint is directionally correct but understates complexity. Not a hallucination, but the 'sendMediaGroup inherits audit/subscriber-hook' claim in the TDD Anchor test sendMediaGroup_okFalseWithToken_scrubbedInLog may be hard to test because the scrub path in the album-mapper is custom code, not the shared path.",
+      "fix": "Clarify in the Details section that sendMediaGroup needs its own bot-lookup + CONNECTED-filter block (mirroring send()), and that the audit/hook calls need to be explicitly replicated. This is a hint-accuracy issue, not a hallucination."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 1,
+      "issue": "The TDD Anchor for Task 1 says to write tests in FunnelStepTest.java: copyOf_copiesBlocksToNewListInstance, copyOf_nullBlocksStaysNull, copyOf_mutatingCopyBlocksDoesNotAffectSource. These tests are genuinely net-new and correct. However, the TDD Anchor says 'Якщо файл FunnelStepTest.java вже існує — додати методи в нього' without flagging that the existing tests (deepCopyProducesIndependentStep, deepCopyButtonsAreIndependent, copyOfNullButtonsStaysNull, copyOf_preservesEventName) reference fields and enum values that will be deleted in this same task. The file will be in an uncompilable state after adding new tests alongside old ones until old ones are rewritten. This means TDD (write test first, run, see red) is not possible without first removing the breaking tests.",
+      "fix": "Prepend to TDD Anchor: 'Спершу видали або адаптуй наявні тести в FunnelStepTest.java, що посилаються на видалені поля/enum (SEND_MESSAGE, SEND_IMAGE, MENU, getText, getImageUrl, getCaption, setParseMode тощо) — інакше файл не скомпілюється і не дасть побачити нові тести red.'"
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 2,
+      "issue": "The Implementation hints section says 'Для альбому подивись sendWithRateLimitRetry/sendOnce як retry-seam і mapBodyToSentMessage (рядки 425–443) + extractChatId як шаблон маппера. result.result() для альбому — JsonNode array (isArray()); ітеруй елементи, читай message_id/chat.id.' This is a prescriptive algorithm / pseudocode describing exactly HOW to implement the array mapper. Per the validation checklist, implementation hints that contain step-by-step algorithms or logic prescriptions (not just pattern pointers) should be flagged. The lines also cite exact line numbers (425-443) in TelegramSender.java which is acceptable as a pointer, but the JsonNode array iteration logic is implementation-level detail.",
+      "fix": "Replace the JsonNode traversal detail with: 'Album mapper — pattern: same as mapBodyToSentMessage but result.result() is an array; verify with isArray(), iterate elements, scrub on error.' Avoid dictating the iteration code."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 2,
+      "issue": "Task 2 TDD Anchor test sendMediaGroup_rateLimited_retriesThenSucceeds asserts '429→retry на /sendMediaGroup (успадкований 429-loop)'. However, for sendMediaGroup to inherit the 429-loop it must use sendWithRateLimitRetry (or the shared send path). If the implementer creates a separate sendGroup() that calls sendWithRateLimitRetry directly, this works. But if they call send() (impossible since send() hardcodes mapBodyToSentMessage), or create a fully separate HTTP path, the retry will NOT be inherited. The test assumes retry is inherited, which is only true if sendWithRateLimitRetry is reused — the task makes this clear in the description, but the TDD test implicitly assumes a specific implementation choice that must be documented as a prerequisite.",
+      "fix": "Add a note: 'sendMediaGroup MUST reuse sendWithRateLimitRetry — otherwise the 429-retry tests will not pass without duplicating the retry loop.'"
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 says 'parseMode береться з кожного блоку окремо (block.parseMode())' in Edge cases. However, the new sendText 6-arg signature used by the MESSAGE branch for a text block takes parseMode as a parameter. The existing sendText(botId, chatId, text, parseMode, ownerId, replyMarkup) is already defined correctly. But for sendVideo/sendAudio/sendDocument (added in Task 2), Task 3 assumes these methods exist with signatures matching 'sendPhoto' pattern (URL, caption, parseMode, ownerId, replyMarkup). Task 3's Details section says 'Сигнатури взяти з фактичного коду після Task 2 (паритет із наявними sendText(6-arg)/sendPhoto)' — this is correct guidance. However, since Task 2 has not been run yet, Task 3 cannot validate exact signatures. The depends_on: [1, 2] handles this correctly.",
+      "fix": "No change needed; depends_on is correct. The implementer must read TelegramSender.java after Task 2 is complete to get exact signatures."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 Details section says 'FunnelExecutionFactory.deepCopySteps (рядки 130–138) уже викликає FunnelStep.copyOf поелементно; структурної зміни не потрібно'. Actual deepCopySteps is at lines 130-138 of FunnelExecutionFactory.java. This is correct. The comment update mentioned is straightforward.",
+      "fix": "No action required."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 3,
+      "issue": "TDD test message_lastBlockIsAlbum_keyboardNotAttached describes: 'крок [text, album] з buttons: оскільки альбом не несе клавіатуру... перевірити, що album-send не отримує reply_markup'. The test comment says 'Сам кейс «buttons + останній альбом» відхиляється на save (Task 4)'. The test is correctly scoped for executor behavior and is a meaningful behavioral assertion. However, the test implicitly requires that text block in position 0 (last non-album = text) IS the one getting the keyboard — the test should also verify that the text block DOES receive reply_markup (not just that album doesn't). The current test spec only verifies the negative (album doesn't get it) and that result is... unspecified. It's unclear whether the test checks waitForReply or cont() when last non-album is text at index 0. This is a minor ambiguity in the TDD spec.",
+      "fix": "Add to that test case: 'result дорівнює WAIT_FOR_REPLY (buttons + last non-album text → park)' and 'перший text-блок отримує reply_markup (підтверджуємо позитивну сторону)'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 10
+  }
+}

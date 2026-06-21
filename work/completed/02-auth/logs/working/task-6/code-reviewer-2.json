@@ -1,0 +1,22 @@
+{
+  "status": "approved",
+  "summary": "Round-2 review confirms both round-1 majors are correctly resolved. forgotPassword no longer leaks user-supplied email into events.metadata for the unknown/deleted/blocked branch (now passes null with userId=null), and resetPassword now gates on user.status before the expiry/used checks so a token issued just before block/delete cannot rotate the password. The fix bundle additionally hardens the endpoint with a per-IP SET-NX-EX 60s rate limit and a calibrated 40ms timing-equalisation delay closing the user-enumeration timing oracle (CWE-208) — both well-justified, well-tested, and consistent with the resend-verification pattern from Decision 7. Author-noted deferrals (terminateAllSessions return value, logout WebSession allocation, Optional wrapping) are reasonable; none rise above minor and all carry documented rationale. One residual minor: the @Size(max=254) hardening was applied only to ForgotPasswordRequest; the other three email-bearing DTOs (RegisterRequest, LoginRequest, ResendVerificationRequest) still accept unbounded email lengths.",
+  "critical": [],
+  "major": [],
+  "minor": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/dto/RegisterRequest.java",
+      "line": 10,
+      "problem": "@Size(max=254) was added to ForgotPasswordRequest in this round but not to the three other email-bearing DTOs (RegisterRequest, LoginRequest, ResendVerificationRequest). Inconsistent payload-size hardening means an attacker can still ship multi-MB email strings into the register/login/resend pipelines (which then hit canonicalize → SHA-256 / Mongo find / BCrypt) — the very ceiling the new annotation was intended to enforce.",
+      "suggestion": "Add @Size(max=254) (RFC 5321 maximum) to email fields on RegisterRequest, LoginRequest, and ResendVerificationRequest. One-line change per file; mirrors the ForgotPasswordRequest pattern."
+    }
+  ],
+  "nitpicks": [
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java",
+      "line": 12,
+      "problem": "Import order regression: `org.mockito.Answers` is now placed before `org.junit.jupiter.api.extension.ExtendWith`, breaking the alphabetical-by-package convention used elsewhere in the file. Cosmetic only, but a future IDE optimize-imports pass will revert it and produce noise in the diff.",
+      "suggestion": "Restore alphabetical ordering: ExtendWith → Test → (mockito.* in its own block). Optional."
+    }
+  ]
+}

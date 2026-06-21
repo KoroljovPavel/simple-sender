@@ -1,0 +1,115 @@
+{
+  "status": "pass",
+  "round": 2,
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 18,
+  "requirements_covered": 18,
+  "requirements_partial": 0,
+  "requirements_missing": 0,
+  "round1_closure": {
+    "critical_emailservice_smtp_regression": {
+      "status": "closed",
+      "evidence": "Decision 15 added (tech-spec lines 220-228): explicit try/catch wrapper preserves silent fire-and-forget semantics. Task 5 description updated to reference D15. User-Spec Deviations entry added with reason [PENDING USER APPROVAL]. Previously-partial AC11/AC13 coverage is now full."
+    },
+    "major_task8_30s_ceiling_unresolved": {
+      "status": "closed",
+      "evidence": "Architecture section (TelegramSender paragraph) now reads: 'Instant deadline = Instant.now().plus(Duration.ofSeconds(30)) captured at chain start; before each sleep and before each retry-attempt the loop checks if (Instant.now().isAfter(deadline)) throw new TelegramSendException(timeout).' The open alternative is resolved as a decided design in the Architecture section. Task 8 description references D1/D2/D14 rather than re-stating the loop algorithm."
+    },
+    "major_task8_algorithmic_detail": {
+      "status": "closed",
+      "evidence": "Task 8 description now reads: 'Architecture section + D2 + D14 define the loop shape, deadline, and 429-wraps-5xx ordering — task implements them.' Loop shape is no longer inlined in the task description; it is correctly placed in the Architecture section (how it works) and Decision 2 (rationale). Task description is now scope-referential, not pseudocode."
+    },
+    "minor_tc5_no_owning_task": {
+      "status": "closed",
+      "evidence": "Task 12 description now explicitly includes: 'TC5 bean assertion: context-load test asserts the registered CookieSerializer bean is an instance of RememberMeCookieSerializer (not Spring Session auto-configured default).' Files to modify includes SecurityConfigTest.java."
+    },
+    "documented_deviations_6": {
+      "status": "unchanged",
+      "evidence": "All 6 round-1 documented_deviations remain present with reasons and [PENDING USER APPROVAL] markers. 6 additional deviations added in round 2 (D15, TelegramWebhookP99IT/BotConnectRaceIT classes, TC10/TC11/TC12 additions, AC16/AC17/AC18 strengthening, Decision 3 cookie-attribute wiring refinement) — all correctly entered with reasons and [PENDING USER APPROVAL]. Total documented_deviations: 12."
+    }
+  },
+  "findings": [
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "N/A — common/HttpRequestUtils not in user-spec",
+      "detail": "common/HttpRequestUtils (Decision 13, Task 5) is new functionality not in user-spec. Documented in User-Spec Deviations with reason (opportunistic consolidation of 4 extractIp duplicate sites during forced servlet rewrite) and user confirmation (Q2). Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "N/A — EventService API collapse not in user-spec",
+      "detail": "EventService collapse from two methods to one synchronous Event logEvent(...) (Decision 12, Task 5). Documented in User-Spec Deviations with reason (under VT direct sync is natural; fire-and-forget split exists only for Reactor chain-escape ceremony) and user confirmation (Q1). Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "N/A — ConcurrencyTestUtils not in user-spec",
+      "detail": "common/test/ConcurrencyTestUtils.parallelInvoke (Decision 10, Task 10). Documented in User-Spec Deviations with reason (CountDownLatch barrier required to preserve concurrent-race invariants at 3 sites; plain VT submit serialises under JVM scheduling) and user confirmation (Q3). Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "US-2/AC2 — P99 latency probe strategy",
+      "detail": "AC2 verification moved from slow-tagged WebTestClient test to TestRestTemplate + RANDOM_PORT class (Decision 14). Documented in User-Spec Deviations with reason (MockMvc has zero transport overhead; the threshold becomes a trivial-pass heuristic without real transport) and user confirmation (Q4). Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "N/A — Phase A scope refinement",
+      "detail": "User-spec D5 stated strangler-fig applies to service/repository before atomic flip. Code-research found service/repository cannot pre-flip (ReactiveMongoRepository locked by reactive starter). Phase A reduced to constant relocation + stub interface flip only. Documented in User-Spec Deviations with reason (classpath constraint discovered during implementation deepening). Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "N/A — R8/R9 risk additions",
+      "detail": "R8 (atomic flip PR review fatigue) and R9 (MockMvc transport gap) added to risk register. Documented in User-Spec Deviations. Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "US-11/AC11, US-13/AC13 — auth flows must not regress on SMTP failure",
+      "detail": "Decision 15: EmailService.sendAsync becomes synchronous with try/catch wrapper to preserve silent fire-and-forget semantics. New functionality (explicit error-boundary contract) added to implementation strategy vs user-spec which only says 'behaviour preserved'. Documented in User-Spec Deviations with reason (naive direct sync call without try/catch propagates MailException as 500 — behavioural regression). Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "US-1/AC1, US-2/AC2 — test infrastructure completeness",
+      "detail": "TelegramWebhookP99IT and BotConnectRaceIT extracted as dedicated @SpringBootTest(RANDOM_PORT) classes (Decision 14). Documented in User-Spec Deviations with reason (@SpringBootTest.webEnvironment is class-level; MockMvc in-process DispatcherServlet does not reliably interleave critical sections for race tests). Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "N/A — TC10/TC11/TC12 technical acceptance criteria",
+      "detail": "Three new TCs (token-scrubber preservation, XSRF-TOKEN co-emission, per-file coverage floor) added in response to security/test validator feedback. Documented in User-Spec Deviations. Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "N/A — AC16/AC17/AC18 assertion strengthening",
+      "detail": "Task 12 strengthened beyond user-spec AC definitions: AC16 adds BSON fixture continuity (pre-flip byte-shape), AC17 pins joined-error message format, AC18 asserts all cookie attributes + XSRF-TOKEN co-emission. Documented in User-Spec Deviations with reason (lifts R3/R4/R5 from manual operator steps to automated). Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "N/A — Decision 3 cookie-attribute wiring refinement",
+      "detail": "RememberMeCookieSerializer constructor wires cookie attributes via PropertyMapper.alwaysApplyingWhenNonNull() — mirrors reactive precedent in RememberMeWebSessionIdResolver ensuring SESSION_COOKIE_* env vars flow through unchanged. Documented in User-Spec Deviations. Status: [PENDING USER APPROVAL] — appropriate for draft spec.",
+      "severity": "minor"
+    }
+  ],
+  "summary": "18/18 requirements covered. All 4 round-1 findings closed: CRITICAL EmailService SMTP regression resolved by D15 + Task 5 update + User-Spec Deviations entry; MAJOR 30s deadline unresolved closed by deadline-based Instant.now().isAfter(deadline) check documented in Architecture section; MAJOR Task 8 algorithmic detail closed by moving loop shape to Architecture and making Task 8 description scope-referential; MINOR TC5 owner closed by Task 12 explicitly listing TC5 bean assertion. 11 documented_deviations remain (all minor) — all correctly entered in User-Spec Deviations with reasons and [PENDING USER APPROVAL], appropriate for draft status. Zero critical findings. Status: pass."
+}

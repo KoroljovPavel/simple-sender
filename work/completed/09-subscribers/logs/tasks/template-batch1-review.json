@@ -1,0 +1,123 @@
+{
+  "validator": "task-validator",
+  "iteration": 1,
+  "batch": 1,
+  "status": "changes_required",
+  "tasks": [
+    {
+      "task": 1,
+      "status": "approved",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "content",
+          "section": "Verification Steps / Smoke",
+          "issue": "Smoke section starts './gradlew bootRun &' in background but never explicitly tells the agent how to stop it cleanly; the final 'Stop the bootRun process after inspection.' line is informal — no kill command or pid capture.",
+          "fix": "Add an explicit cleanup step (e.g., capture the PID via `./gradlew bootRun & BOOT_PID=$!` and end with `kill $BOOT_PID`) so the smoke procedure is fully scripted and won't leave a hanging process during automated runs."
+        },
+        {
+          "severity": "minor",
+          "category": "content",
+          "section": "Acceptance Criteria",
+          "issue": "AC bullet 'NoOpSubscriberService left untouched' is essentially a negative cross-task guard — it does not assert a deliverable of Task 1 itself, but it does protect Task 3's contract. Slight overreach for a 'foundation' task.",
+          "fix": "Keep the AC (it is useful as a guard rail) but consider phrasing as 'Out of scope: NoOpSubscriberService and SubscriberService interface — owned by Task 3' so reviewers don't expect deletion in Task 1's diff."
+        }
+      ]
+    },
+    {
+      "task": 2,
+      "status": "approved",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "structure",
+          "section": "TDD Anchor",
+          "issue": "TDD Anchor section is present but the task itself states 'Foundation task — no business logic to TDD.' Per template guidance, non-code tasks should delete TDD Anchor entirely. The task does write Vue code (page shells + sidebar logic) so a code-task classification is defensible, but the anchor lists no real unit tests — it documents the build-time parity gate as 'the test', which is closer to a Verification Step than a TDD anchor.",
+          "fix": "Either move the parity-gate description into Verification Steps / Automated (where it already partly lives) and delete TDD Anchor, or add a concrete optional Vitest spec (the section already mentions `frontend/tests/i18n/subscribers-keys.spec.ts`) and elevate it from 'optional safety net' to a real TDD entry."
+        }
+      ]
+    },
+    {
+      "task": 3,
+      "status": "needs_fix",
+      "findings": [
+        {
+          "severity": "critical",
+          "category": "decomposition",
+          "section": "What to do / Files to modify",
+          "issue": "Task 5 explicitly says it needs `SubscriberService` to expose `recordCustomFieldsSet(String subscriberId, Map<String, Object> values)` so that the PATCH endpoint emits `subscriber_custom_field_set` events via the service (Decision 10 writer-ownership). Task 3 owns the `SubscriberService` interface extension but only adds three methods (`markBlockedByChatId`, `markDeletedByChatId`, `unsubscribeManual`) — `recordCustomFieldsSet` is missing. Without coordination, Task 5 will either (a) duplicate event-writing in its own controller (violating Decision 10) or (b) be blocked waiting for Task 3 to add the method. This is a cross-task contract gap.",
+          "fix": "Add `void recordCustomFieldsSet(String subscriberId, Map<String, Object> values)` to the Task 3 interface extension list (in `What to do` step 1, in Acceptance Criteria, and in the TDD Anchor if test coverage is added). Document the call shape Task 5 will use (parameters, when invoked) so both tasks compile against the same signature in Wave 2 parallel work."
+        },
+        {
+          "severity": "minor",
+          "category": "content",
+          "section": "What to do / step 2",
+          "issue": "Step 2 mentions `Clock` constructor injection and says 'if no @Bean Clock exists yet, register Clock.systemUTC() in a config class — one bean addition, no broader refactor', but does not specify WHERE the bean should be registered (BackendApplication? A new ClockConfig?). The Implementation hints later say 'BackendApplication (or wherever existing beans live)'. Two answers in two places — minor inconsistency.",
+          "fix": "Pick one location and state it: e.g. 'If no Clock bean exists, add `@Bean Clock systemClock() { return Clock.systemUTC(); }` to BackendApplication.java (single line addition).'"
+        }
+      ]
+    },
+    {
+      "task": 4,
+      "status": "needs_fix",
+      "findings": [
+        {
+          "severity": "major",
+          "category": "consistency",
+          "section": "What to do / step 1 (deleteWithCascade)",
+          "issue": "Task 4 writes a `tag_deleted` event into the `subscriber_events` collection. Tech-spec Decision 10 enumerates the CRM event taxonomy for `subscriber_events` and does NOT include `tag_deleted` in the list (Decision 10 lists: subscriber_registered, subscriber_reactivated, subscriber_unsubscribed, subscriber_blocked, subscriber_deleted, subscriber_tag_added, subscriber_tag_removed, subscriber_custom_field_set, personal_message_sent, personal_message_failed). User-spec Scenario 5 likewise writes `tag_created` and `subscriber_tag_added` — `tag_deleted` is mentioned in AC8 but does not specify which collection. The Decision 10 taxonomy is the writer-ownership source of truth, and `tag_deleted` is per-project (no subscriberId), not per-subscriber — it likely belongs in platform `events`, not `subscriber_events`.",
+          "fix": "Resolve the collection target for `tag_deleted`: either (a) write `tag_deleted` to the platform `events` collection via `EventService.logEvent(...)` (with metadata `{slug, label, subscriberCountAtDelete}`) and update Task 4's step 1.3 + acceptance criteria + tests; or (b) explicitly extend Decision 10 in tech-spec to include `tag_deleted` (with subscriberId=null marker) and document the exception. Option (a) is cleaner — `tag_deleted` is project-scoped, not subscriber-scoped."
+        },
+        {
+          "severity": "minor",
+          "category": "content",
+          "section": "What to do / step 1 (deleteWithCascade)",
+          "issue": "Step 1.3 instructs the implementer to write events 'через інжектований SubscriberEventRepository або EventService, в залежності від того, що вибере Task 3'. This defers a contract decision to Task 3 instead of fixing it here. Per Decision 10, ownership is unambiguous: SubscriberEventRepository writes `subscriber_events`; EventService writes platform `events`. The choice should be deterministic, not 'whatever Task 3 picks'.",
+          "fix": "Pick the collection deterministically based on the previous finding (likely platform `events` via EventService.logEvent). Replace the 'depending on Task 3' wording with a definite instruction."
+        }
+      ]
+    },
+    {
+      "task": 5,
+      "status": "needs_fix",
+      "findings": [
+        {
+          "severity": "critical",
+          "category": "decomposition",
+          "section": "Dependencies / What to do step 4",
+          "issue": "Task 5 acknowledges it needs to emit `subscriber_custom_field_set` via SubscriberService per Decision 10 and gives the implementer two options: '(a) add a stub method recordCustomFieldsSet(...) on NoOpSubscriberService ... OR (b) write the event directly here with a TODO marker.' Option (a) is dead-on-arrival because Task 3 deletes NoOpSubscriberService; option (b) violates Decision 10's writer-ownership invariant. The real fix is to ensure Task 3's interface extension includes `recordCustomFieldsSet` — but Task 3 currently does not (see Task 3 critical finding). Task 5 must depend on a resolved Task 3 contract, not a fork.",
+          "fix": "After Task 3's interface is extended with `recordCustomFieldsSet` (see Task 3 critical fix), remove the (a)/(b) fork from Task 5's Dependencies section. Replace with a single instruction: 'Inject SubscriberService and call subscriberService.recordCustomFieldsSet(subscriberId, persistMap) after the Mongo update succeeds.' This also removes the 'coordinate with Task 3 owner' aside."
+        },
+        {
+          "severity": "minor",
+          "category": "content",
+          "section": "Required Skills",
+          "issue": "The SKILL.md link path is `[.claude/skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)` — uses a project-rooted relative path without leading `../../../`. Other batch-1 tasks (1, 2, 3, 4) use `../../../.claude/skills/code-writing/SKILL.md`. The link will render as broken when followed from the task file at `work/09-subscribers/tasks/5.md`.",
+          "fix": "Change to `[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)` to match the other tasks in the batch and resolve correctly from the task file's location."
+        },
+        {
+          "severity": "major",
+          "category": "consistency",
+          "section": "What to do / step 4 + Context Files",
+          "issue": "Task 5 ships a NEW controller `SubscriberCustomFieldsController.java` under `backend/src/main/java/com/botfunnel/subscriber/`. Tech-spec Task 5's `Files to modify` line (tech-spec line 546) lists `subscriber/CustomFieldValueValidator.java` as the only subscriber/ file — the controller is not in the tech-spec's file list. The task self-justifies the split to avoid colliding with Task 8's SubscriberController, which is a reasonable engineering call, but the deviation should be recorded.",
+          "fix": "Add a note to Post-completion about updating tech-spec.md to reflect the PATCH endpoint ownership (Task 5 owns `SubscriberCustomFieldsController.java`; Task 8 owns `SubscriberController.java`). Either update tech-spec Task 5's `Files to modify` line to include the new controller, or document this as an intentional deviation in decisions.md."
+        },
+        {
+          "severity": "minor",
+          "category": "content",
+          "section": "What to do / step 6 (IT tests) — update_attemptToChangeType_returns422_customFieldImmutable",
+          "issue": "The 'Edge cases / Slug + type immutability' section honestly acknowledges that since `UpdateCustomFieldRequest` does not contain `name`/`type` fields, `@JsonIgnoreProperties(ignoreUnknown = true)` silently drops them — so a 422 `custom_field_immutable` is unreachable through the documented DTO. The IT test is then described as 'still write it by constructing a raw JSON body ... and asserting they have no effect (and that GET shows the original)'. That makes the test a no-op silent-drop test, not an immutability rejection test — the test name `..._returns422_customFieldImmutable` is misleading.",
+          "fix": "Either (a) rename the IT to `update_attemptToChangeType_silentlyDroppedByDtoSchema` and assert 200 + unchanged type, or (b) extend `UpdateCustomFieldRequest` to include `name`/`type` Optional fields and explicitly reject mutations with `unprocessableEntity('custom_field_immutable')`. Pick one and align test name with behavior."
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 11,
+    "critical": 2,
+    "major": 3,
+    "minor": 6
+  },
+  "summary": "Tasks 1 and 2 are approved with minor polish suggestions. Tasks 3, 4, and 5 require fixes. The two critical findings are a cross-task contract gap: Task 5 needs `SubscriberService.recordCustomFieldsSet(...)` (Decision 10 writer-ownership), but Task 3 does not declare that method in its interface extension. Task 4 has a major inconsistency: `tag_deleted` is written into `subscriber_events`, but Decision 10's enumerated taxonomy for that collection does not include `tag_deleted` (project-scoped event, no subscriberId — likely belongs in platform `events`). Task 5 also creates a controller (`SubscriberCustomFieldsController.java`) that is not in tech-spec Task 5's file list and has a broken SKILL.md link path. All frontmatter, sections, AC carry-forward, TDD carry-forward, and reviewer report paths are otherwise compliant with template and task-creator rules."
+}

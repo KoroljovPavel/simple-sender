@@ -1,0 +1,49 @@
+{
+  "status": "passed",
+  "summary": "All six Round 1 major/minor findings (F1-F6) are addressed with regression-detecting assertions that pass the litmus test, and the new security test for SEC-T7-001 (token scrub from FetchError.options.body) is meaningful. F1's 404 test now pre-seeds current via a successful fetch before the 404, so deleting `current.value = null` from the impl's 404 branch causes the test to fail (verified: the post-state would still be BOT_A). F2's dedup test adds a follow-up `store.fetch('p1')` after resolution and asserts apiMock was called 2 times — removing the `inFlight = null` reset in the finally block would cause the follow-up to reuse the cached promise and fail the count assertion. F3's new race test exercises the BOT-STORE-001 cross-project stale-write: it starts fetch('a') with a pending promise, switches to project 'b' (kept pending), late-resolves 'a', and asserts current remained null — this directly verifies the new projectId-keyed inFlight guard in stores/bot.ts:17, and removing that guard would let BOT_A stomp current. F4 split sendTestMessage into clean success and failure tests. F5's connect-failure test now asserts JSON.stringify($state) contains no TOKEN_MARKER. F6's new disconnect-failure test pre-seeds current and asserts intact-after-rejection. The bonus SEC test verifies the scrub branch in stores/bot.ts:51-54 by mocking a FetchError shape with options.body.token and asserting the thrown error has token: '[redacted]' and status preserved — removing the scrub would surface the raw TOKEN, failing the assertion. All 16 tests pass under vitest. Test pyramid remains healthy: 16 unit tests, 0 integration, 0 e2e — appropriate for a Pinia store with mocked $fetch. No critical or major issues introduced.",
+  "findings": [
+    {
+      "id": "f1",
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/bot.spec.ts",
+      "location": "frontend/tests/stores/bot.spec.ts:138-158",
+      "line": 138,
+      "description": "The new SEC token-scrub test covers the case where the ofetch FetchError carries `options.body.token` — the documented ofetch shape. It does not cover defensive shapes the impl's runtime guard at stores/bot.ts:51-54 also tolerates (e.g., err.options.body is null, err.options.body is an array, err has no options). The current guard exits cleanly in those cases (the test would also pass if the guard were `if (opts) opts.body = { token: '[redacted]' }` — a weaker form that crashes on null body). This is theoretical: ofetch's FetchError always shapes options.body as the request payload, but the guard is wider than the test verifies.",
+      "issue": "Coverage gap: the defensive branches in the scrub guard (opts undefined, opts.body null, opts.body non-object) are exercised by no test. A future tightening or loosening of the guard would not be caught.",
+      "recommendation": "Add a sibling test for the no-options error path that the connect-failure path already covers indirectly: `it('connect rethrows non-FetchError unchanged', async () => { const original = new Error('network'); apiMock.mockRejectedValueOnce(original); const store = useBotStore(); const caught = await store.connect('p1', TOKEN).catch((e) => e); expect(caught).toBe(original); expect(JSON.stringify(caught)).not.toContain(TOKEN_MARKER); });`. The `caught).toBe(original)` (identity, not equality) catches a regression where the guard wraps or replaces the error."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 16,
+      "passed": 16,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 16,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "round1Verification": {
+      "f1_404_preseed": "resolved — pre-seeds current via prior fetch; litmus test passes (removing current.value=null in 404 branch fails the test)",
+      "f2_dedup_inflight_reset": "resolved — follow-up fetch asserts apiMock called 2 times; litmus test passes (removing inFlight=null reset fails the count)",
+      "f3_late_arriving_fetch_race": "resolved — new test exercises BOT-STORE-001; litmus test passes (removing projectId-keyed guard at stores/bot.ts:17 would write BOT_A to current and fail)",
+      "f4_sendTestMessage_split": "resolved — split into two independent it blocks",
+      "f5_connect_failure_state_token_free": "resolved — asserts JSON.stringify($state) is TOKEN_MARKER-free",
+      "f6_disconnect_failure": "resolved — new test pre-seeds, rejects, asserts current intact and rejection propagates",
+      "f7_compile_time_type_guard": "skipped per task input"
+    },
+    "newTestsVerification": {
+      "connect_scrubs_token_from_fetchError": "meaningful — mocks ofetch FetchError shape with options.body.token, asserts thrown error.options.body.token === '[redacted]' and response.status === 400 preserved; litmus test passes (removing the scrub at stores/bot.ts:51-54 would expose raw TOKEN)"
+    },
+    "testsRun": {
+      "framework": "vitest 3.2.4",
+      "passed": 16,
+      "failed": 0
+    }
+  }
+}

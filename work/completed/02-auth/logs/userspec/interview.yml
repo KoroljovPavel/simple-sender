@@ -1,0 +1,227 @@
+metadata:
+  feature_name: 02-auth
+  work_type: feature
+  status: completed
+  started: "2026-05-04"
+  last_updated: "2026-05-04T13:00:00"
+  current_question_num: 22
+  feature_size: L
+  notes: |
+    Epic 02 — Authentication and user accounts.
+    KEY DECISION: HTTP-only session cookies (not JWT). Sessions stored in MongoDB via spring-session-data-mongodb.
+    Redis remains for brute-force rate limiting counters and analytics cache only.
+    "Remember me" included in MVP (30-day session TTL).
+    Email: Mailpit for local dev (Docker), real SMTP via env vars for production. Provider TBD.
+    workflow/02-автентифікація/README.md is reference — session-cookies replace JWT option.
+
+phase1_feature_overview:
+  feature_name:
+    score: 100
+    value: "02-auth — Epic 02, authentication and user accounts"
+    gaps: []
+    status: done
+  work_type:
+    score: 100
+    value: "feature — new auth system from scratch"
+    gaps: []
+    status: done
+  problem_statement:
+    score: 85
+    value: |
+      Epic 02 builds the full authentication layer for Bot Funnel Service.
+      Users (small business owners, marketers, developers) self-register via email+password.
+      Super Admin is created via seed/init script in code — does NOT use login page.
+      Other admins added via admin panel (future epic).
+      After successful login → redirect to /dashboard.
+      Multiple sessions allowed (laptop + phone = two active sessions simultaneously).
+      Without auth, no one can enter the service — prerequisite for all subsequent epics.
+    gaps: []
+    status: done
+  success_criteria:
+    score: 90
+    value: |
+      1. New user registers → receives verification email (Mailpit in dev) → activates → status active
+      2. Pending user logs in → sees banner "Підтвердіть email", cannot create projects
+      3. Login → HTTP-only session cookie → redirect /dashboard
+      4. "Remember me" → session TTL 30 days
+      5. 5 failed login attempts → IP+email blocked 15 min; 6th attempt shows block message
+      6. Forgot password → always same response → reset link works once within 1h → all sessions invalidated
+      7. Blocked user sees "Ваш акаунт заблоковано. Зверніться до підтримки: {SUPPORT_EMAIL}"
+      8. Deleted user cannot re-register for 30 days; hard delete runs via JobRunr daily at 03:00
+      9. Profile: edit name, change password (requires current), terminate all sessions, delete account
+      10. Delete account → modal with consequences (projects/bots/subscribers) → soft-delete → 30-day retention
+      11. Logout invalidates current session; "Завершити всі сесії" invalidates all user sessions
+    gaps: []
+    status: done
+  target_users:
+    score: 90
+    value: |
+      Regular users: small business owners, marketers, developers — self-register.
+      Super Admin: created via code init/seed script, not via registration form.
+      Other admins: added via admin panel (future epic, not in scope here).
+    gaps: []
+    status: done
+  feature_size:
+    score: 90
+    value: "L — full-stack: ~9 backend endpoint groups, ~6 frontend pages, email integration, session management"
+    gaps: []
+    status: done
+  tech_decisions:
+    score: 100
+    value: |
+      SESSION STORAGE: spring-session-data-mongodb (NOT JWT, NOT spring-session-data-redis)
+        - Sessions in MongoDB `sessions` collection
+        - HTTP-only cookie, SameSite=Strict
+        - Default TTL: SESSION_TTL_HOURS=24
+        - Remember me TTL: SESSION_TTL_REMEMBER_ME_DAYS=30
+        - Multiple sessions allowed (each device has independent session)
+      REDIS: brute-force counters only (atomic INCR + TTL per IP/email key) + analytics cache
+      REMOVED: jjwt dependency, JWT_SECRET/JWT_ACCESS_TTL_MINUTES/JWT_REFRESH_TTL_DAYS env vars
+      PASSWORD: bcrypt cost 12. Same rules (min 8 chars, 1 digit, 1 letter) apply to register, reset-password, AND change-password.
+      EMAIL TOKENS (verify + reset): store SHA-256 hash in DB, send raw token in URL — never store plaintext
+      EMAIL DEV: Mailpit added to infra/docker-compose.yml (port 1025 SMTP, 8025 web UI)
+      EMAIL PROD: SMTP via MAIL_HOST/PORT/USERNAME/PASSWORD env vars (provider TBD)
+      NEW ENV VARS: SUPPORT_EMAIL=support@example.com, SESSION_TTL_HOURS=24, SESSION_TTL_REMEMBER_ME_DAYS=30,
+        SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD
+      SUPER ADMIN SEED: Spring ApplicationRunner — runs at startup, skips if email already exists (idempotent).
+        Credentials from env vars SUPER_ADMIN_EMAIL + SUPER_ADMIN_PASSWORD.
+      BUG FIX (Epic 01 carryover): application.properties — bind MONGODB_URI + REDIS_URL from env vars
+      TESTCONTAINERS: add to build.gradle. Email tests use Mailpit Testcontainer (consistent with dev env).
+      SECURITY CONFIG public paths: /health, /api/auth/register, /api/auth/login,
+        /api/auth/forgot-password, /api/auth/reset-password, /api/auth/verify-email — permitAll().
+        Authenticated: /api/auth/logout, /api/auth/resend-verify, /api/users/me, /api/users/profile.
+      FRONTEND BOOTSTRAP in Epic 02: install ALL planned deps — @pinia/nuxt, @tanstack/vue-query,
+        vee-validate+zod, shadcn-vue. Create: pages/, middleware/auth.ts, composables/useAuth.ts,
+        Pinia useAuthStore, authenticated layout with topbar+sidebar shell (empty nav items ok).
+        SSR auth hydration via /api/auth/me call on app init.
+      UX GUIDELINES OVERRIDE: account deletion does NOT require current password (deliberate decision).
+        ux-guidelines.md to be updated in this epic.
+      DOCS TO UPDATE IN THIS EPIC: architecture.md (session replaces JWT, Redis scope, new deps),
+        deployment.md (remove JWT vars, add SESSION_TTL_* and SUPER_ADMIN_* vars), ux-guidelines.md.
+      NEW DEPS TO ADD: spring-boot-starter-mail, spring-session-data-mongodb, testcontainers,
+        testcontainers-mailpit (or equivalent)
+    gaps: []
+    status: done
+  testing_strategy:
+    score: 98
+    value: |
+      BACKEND INTEGRATION TESTS: Testcontainers — MongoDB + Redis (alpine) + Mailpit.
+        Endpoints: register, verify-email, resend-verify, login, logout,
+          forgot-password, reset-password, profile (GET/PATCH), change-password, delete-account, terminate-all-sessions.
+        Brute-force: real Redis via Testcontainers — test atomic INCR + 15min TTL block.
+        Email flows: Mailpit Testcontainer — assert email delivered, extract token from email body.
+        JobRunr hard-delete job: create user status=deleted with deleted_at > 30 days → trigger job → assert hard deleted.
+        Super Admin seed: ApplicationRunner idempotency — run twice → only one superadmin record.
+      FRONTEND:
+        Vitest + Vue Test Utils: form validation (email format, password rules, empty fields, password mismatch).
+        Playwright E2E: registration golden path + login golden path on running app.
+      TARGET: 80%+ coverage on backend auth module.
+    gaps: []
+    status: done
+
+phase2_user_experience:
+  user_flows:
+    score: 95
+    value: |
+      REGISTRATION:
+        Form: email + password (min 8 chars, 1 digit, 1 letter) + name.
+        Email already exists → "Користувач з таким email вже існує."
+        Email in soft-delete window → "Акаунт з таким email вже існує або був нещодавно видалений. Зверніться до підтримки."
+        Success → status pending → send verification email → show "Перевірте пошту."
+      EMAIL VERIFICATION:
+        Click link → validate token hash → status active → redirect to /login.
+        Expired link (24h) → "Посилання прострочено" + button "Надіслати новий лист."
+        Resend: rate limit 1 per 60 seconds.
+      PENDING USER BANNER:
+        After login, banner on dashboard: "Підтвердіть email."
+        Banner has link "Перейти до профілю" → /profile → resend button there.
+        (No resend action directly on banner — user goes to profile to resend.)
+      LOGIN:
+        Email+password → brute-force check → status check:
+          blocked → "Ваш акаунт заблоковано. Зверніться до підтримки: {SUPPORT_EMAIL}"
+          pending → allow login, show banner (see above)
+          active → create session (HTTP-only cookie) → redirect /dashboard
+        5 failed attempts → block IP+email 15 min.
+        "Remember me" → session TTL 30 days (vs 24h default).
+        Multiple sessions: allowed (laptop + phone = independent sessions).
+      LOGOUT:
+        Current session only — delete session from MongoDB → redirect /login.
+      FORGOT PASSWORD:
+        Email form → always "Якщо акаунт з таким email існує, ви отримаєте лист."
+        If exists: send reset link (1h TTL, one-time, store hash not plaintext).
+        Expired/used link → "Посилання недійсне або прострочено. Запросити нове" → /forgot-password.
+        Reset form → new password (same rules as registration) → invalidate ALL sessions → redirect /login.
+      PROFILE (/profile):
+        View/edit name.
+        Email read-only (change is post-MVP).
+        Resend verification button (only visible if status=pending).
+        Change password (requires current password, same rules as registration).
+        "Завершити всі сесії" — invalidates all MongoDB sessions for this user.
+        "Delete account" → modal listing consequences (N projects, bots, subscribers will be deleted) → button "Видалити акаунт" → soft-delete → redirect /login.
+      SUPER ADMIN SEED:
+        Spring ApplicationRunner at startup. Reads SUPER_ADMIN_EMAIL + SUPER_ADMIN_PASSWORD from env.
+        Idempotent: skips if user with that email already exists.
+      HARD DELETE JOB:
+        JobRunr recurring job daily at 03:00. Finds status=deleted + deleted_at > 30 days → hard delete user + cascade.
+    gaps: []
+    status: done
+  edge_cases:
+    score: 88
+    value: |
+      - Email already exists at registration → explicit error shown
+      - Email in 30-day soft-delete window → "нещодавно видалений, зверніться до підтримки"
+      - Verification link expired (24h) → "Посилання прострочено" + кнопка "Надіслати новий лист"
+      - Reset link expired (1h) or already used (one-time) → "Посилання недійсне або прострочено. Запросити нове" → /forgot-password
+      - Brute-force: 5 failed attempts → IP+email blocked 15 min
+      - Resend verification: rate limit 1/60s
+      - Blocked user login → generic message + SUPPORT_EMAIL (reason not exposed)
+      - Multiple sessions: laptop + phone coexist independently
+    gaps: []
+    status: done
+  error_scenarios:
+    score: 85
+    value: |
+      - Form validation: inline errors below fields (email format, password rules, empty name)
+      - Wrong current password when changing password → inline error
+      - Session expired → redirect to /login (with return URL to /dashboard)
+      - Token invalid (tampered or wrong format) → 400 Bad Request, user-friendly message
+      - Email delivery failure → log error, do not expose to user ("Лист надіслано" always shown)
+      - Sentry filter: never log passwords, tokens (plaintext), session IDs
+    gaps: []
+    status: done
+
+phase3_integration:
+  external_dependencies:
+    score: 85
+    value: |
+      MongoDB: sessions collection (spring-session-data-mongodb), users collection.
+      Redis: brute-force counters (atomic INCR + TTL per IP/email key).
+      Email (dev): Mailpit — Docker service in docker-compose.yml, web UI localhost:8025.
+      Email (prod): SMTP via env vars MAIL_HOST/PORT/USERNAME/PASSWORD (provider TBD).
+      Email templates (3): "Verify your email", "Reset your password", "Your account was blocked".
+      New env vars: SUPPORT_EMAIL, SESSION_TTL_HOURS (24), SESSION_TTL_REMEMBER_ME_DAYS (30).
+    gaps: []
+    status: done
+  deploy_approach:
+    score: 80
+    value: |
+      Local dev: docker compose up (adds Mailpit service alongside MongoDB + Redis).
+      Verify locally: register → check Mailpit at localhost:8025 for email.
+      CI/CD: GitHub Actions (pipeline TBD, same as project plan).
+      Post-deploy verification: registration flow + check email delivery via SMTP logs.
+    gaps: []
+    status: done
+  manual_user_actions:
+    score: 85
+    value: |
+      Before first run:
+      1. docker compose up — starts MongoDB + Redis + Mailpit
+      2. Copy .env.example → .env, fill new vars (SUPPORT_EMAIL, SESSION_TTL_*)
+      3. Run backend: ./gradlew bootRun
+      4. Run frontend: pnpm dev
+      5. Verify: open localhost:8025 (Mailpit) to see captured emails during dev
+      No external service registration needed for Epic 02 (email provider TBD for prod).
+    gaps: []
+    status: done
+
+conversation_history: []

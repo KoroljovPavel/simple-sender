@@ -1,0 +1,47 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 7,
+  "round": 1,
+  "commit": "342a994",
+  "verdict": "approve",
+  "summary": "API-key security chain + EventsController are well-structured, follow existing project patterns (WebhookSecretVerifier hash discipline, SubscriberServiceImpl rate-limit idiom, AppException/GlobalErrorHandler mapping). Response-code matrix, uniform 401, project-scoped resolution, error-isolation all implemented correctly. No critical/major issues.",
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "minor",
+      "dimension": "Error Handling",
+      "file": "api/EventsController.java",
+      "line": 104,
+      "finding": "The controller wraps dispatch in try/catch(Throwable) even though FunnelEventService.dispatchForSubscriber is itself error-isolated and never throws. The extra catch is redundant belt-and-braces.",
+      "action": "keep",
+      "reason": "Intentional defense-in-depth per Decision 12 (endpoint must NEVER 5xx); cheap and documented. Keeping it guards against a future change to the dispatcher's contract."
+    },
+    {
+      "id": "CR-2",
+      "severity": "minor",
+      "dimension": "Logging",
+      "file": "api/EventsController.java, api/ApiKeyAuthFilter.java",
+      "finding": "Logs carry projectId/subscriberId/error-class only — no event_name, no key material, no PII. Matches Decision 16 PII rule.",
+      "action": "noted",
+      "reason": "Good practice confirmed, not a defect."
+    },
+    {
+      "id": "CR-3",
+      "severity": "minor",
+      "dimension": "Cross-File Consistency",
+      "file": "api/EventsController.java",
+      "finding": "Verified dispatchForSubscriber(projectId, subscriberId, TRIGGER_EVENT, eventName, 0) matches FunnelEventService signature; findById(projectId,id) and findByTelegramUserId(projectId,uid) match SubscriberService; AppException factories map to 429/404/401; @Valid maps to 400 via GlobalErrorHandler.",
+      "action": "noted",
+      "reason": "All call sites verified against definitions."
+    },
+    {
+      "id": "CR-4",
+      "severity": "minor",
+      "dimension": "Architecture",
+      "file": "api/ApiKeyAuthFilter.java",
+      "finding": "Filter is deliberately NOT a @Component (would auto-register globally and 401 every request); instantiated inside the integrations SecurityFilterChain. Documented in class javadoc + the bean method.",
+      "action": "noted",
+      "reason": "Correct fix for the global-filter-registration pitfall; caught and resolved during implementation."
+    }
+  ]
+}

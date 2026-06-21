@@ -1,0 +1,47 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "3",
+  "feature": "17-funnel-multi-entry",
+  "commit": "184bade",
+  "round": 1,
+  "status": "APPROVED",
+  "findings": [],
+  "summary": {
+    "verdict": "All five TDD Anchor tests are present and meaningful. Pyramid level is correct (pure unit — no Spring context). Coverage of the contract this task introduces is complete.",
+    "tdd_anchor_coverage": {
+      "roundTripsTriggerArray": {
+        "present": true,
+        "quality": "GOOD — serializes UpdateFunnelRequest with 3 elements covering all shapes (on_start/event/keyword), deserializes back, and asserts triggerType, triggerValue, entryStepId, and keywords field-by-field. No vacuous assertions."
+      },
+      "deserializeIgnoresUnknownProperties": {
+        "present": true,
+        "quality": "GOOD — fires a hostile JSON body that smuggles 'status' at the top level AND 'bogus' inside TriggerDto. Asserts the deserialization succeeds and the known field is readable, which proves @JsonIgnoreProperties(ignoreUnknown=true) is wired on BOTH UpdateFunnelRequest and TriggerDto. Comment is accurate."
+      },
+      "funnelResponseRoundTrip": {
+        "present": true,
+        "quality": "GOOD — covers FunnelResponse AND FunnelSummaryResponse in one test, with entryStepId and triggerValue both verified after round-trip. Covers the two remaining DTO shapes the task spec requires."
+      },
+      "sizeCapViolationFlaggedByValidator": {
+        "present": true,
+        "quality": "GOOD — builds a list of MAX_TRIGGERS+1 elements, runs the programmatic Validator, and asserts the violation path is 'triggers'. Proves the @Size annotation is present and the Validator is wired."
+      },
+      "sizeCapBoundaryAccepted": {
+        "present": true,
+        "note": "Not listed in the TDD Anchor but present as a bonus. Exactly MAX_TRIGGERS elements must pass — this is the off-by-one boundary test that the spec says to include in the @Size cap coverage ('violation + boundary'). Its presence is correct and valuable."
+      },
+      "validCascadesIntoTriggerDto": {
+        "present": true,
+        "quality": "GOOD — creates a TriggerDto with keywords.size() == MAX_KEYWORDS+1, validates the parent UpdateFunnelRequest, and asserts the violation path starts with 'triggers[0].keywords'. Proves @Valid cascade is wired end-to-end, not just that the annotation compiles."
+      }
+    },
+    "pyramid_level": "CORRECT — pure unit tests. ObjectMapper instantiated directly; Validator built via Validation.buildDefaultValidatorFactory(). No Spring context, no mocking. Test executes in milliseconds. @BeforeAll/@AfterAll properly open/close the ValidatorFactory to avoid resource leak.",
+    "assertion_quality": "All assertions are on real values (triggerType, triggerValue, entryStepId, keywords, violation paths). No mock-call-only assertions, no trivially-true expects.",
+    "scope_compliance": "The test correctly does NOT cover: duplicate event_name rejection, entryStepId resolution, onStartTriggerValue sync — all deferred to Task 4. The javadoc states this explicitly.",
+    "findings_count_by_severity": {
+      "critical": 0,
+      "major": 0,
+      "minor": 0,
+      "nitpick": 0
+    }
+  }
+}

@@ -1,0 +1,64 @@
+{
+  "validator": "reality-checker",
+  "batch": [12, 13, 14],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 12,
+      "issue": "Required Skills line 16 display text still reads '[.claude/skills/security-auditor/SKILL.md]' (without the '../../../' prefix), while the href correctly uses '(../../../.claude/skills/security-auditor/SKILL.md)'. Iteration-1 fix instruction said to update *both* display text and href; the href was fixed but the display text was not. The link resolves correctly — this is cosmetic only.",
+      "fix": "Change display text from '[.claude/skills/security-auditor/SKILL.md]' to '[../../../.claude/skills/security-auditor/SKILL.md]' (or simply '[SKILL.md]' for brevity, matching tasks 13 and 14 style)."
+    }
+  ],
+  "iteration1_resolutions": [
+    {
+      "task": 12,
+      "original_severity": "critical",
+      "original_issue": "Context Files paths used bare '.claude/...' without '../../../' prefix",
+      "status": "RESOLVED",
+      "evidence": "Lines 105-107 now correctly use '../../../.claude/skills/project-knowledge/references/{project,architecture,patterns}.md'"
+    },
+    {
+      "task": 12,
+      "original_severity": "major",
+      "original_issue": "Required Skills href used bare '.claude/...' without '../../../' prefix",
+      "status": "RESOLVED",
+      "evidence": "Line 16 href is now '(../../../.claude/skills/security-auditor/SKILL.md)'. Display text cosmetic mismatch remains (see minor finding above)."
+    },
+    {
+      "task": 13,
+      "original_severity": "major",
+      "original_issue": "'node scripts/check-locales.mjs' in Verification Steps had no 'cd frontend &&' prefix",
+      "status": "RESOLVED",
+      "evidence": "Line 93 now reads: 'cd frontend && node scripts/check-locales.mjs (або відповідний i18n gate)'"
+    },
+    {
+      "task": 13,
+      "original_severity": "major",
+      "original_issue": "No fallback instruction when frontend/e2e/funnels.spec.ts is absent at audit time",
+      "status": "RESOLVED",
+      "evidence": "Line 28 (What to do step 1) and line 101 (Details) both explicitly state: 'Если целевой тест-файл отсутствует на момент аудита — не падать: зафиксировать как HIGH coverage-gap находку и продолжить аудит остальных файлов'"
+    },
+    {
+      "task": 14,
+      "original_severity": "critical",
+      "original_issue": "All four verification commands prefixed 'Run from the repo root' — none work from repo root",
+      "status": "RESOLVED",
+      "evidence": "All four commands carry correct 'cd' prefixes in every section: Acceptance Criteria (lines 59-62), Verification Steps code block (lines 94-97), Details (lines 116-120), and What to do (lines 39-42). Zero 'repo root' references remain."
+    },
+    {
+      "task": 14,
+      "original_severity": "minor",
+      "original_issue": "No note to verify docs/staging-smoke/10-funnels.md exists before referencing it",
+      "status": "RESOLVED",
+      "evidence": "Line 142-144: 'The runbook docs/staging-smoke/10-funnels.md is created by Task 8; the depends_on chain (11, 12, 13 → 8) guarantees it already exists. If it is missing, treat that as a blocker and report no-go.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 29,
+    "issues_found": 1
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "status": "changes_required",
+  "checks": {
+    "completeness": "fail",
+    "edge_cases": "pass",
+    "acceptance_criteria": "fail",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "completeness",
+      "severity": "critical",
+      "issue": "Three validation error scenarios documented in interview.yml error_scenarios block (lines 702-708) are absent from Критерії приёмки: (1) POST with missing/empty name → 400 `name_required`; (2) POST with description > 200 chars → 400 `description_too_long`; (3) POST with missing timezone → 400 `timezone_required`. These were confirmed by the user in Q17 (AC list confirmation) and appear in the consolidated error_scenarios section of the interview.",
+      "location": "## Критерии приёмки — Backend section (after AC-3)",
+      "fix": "Add three AC entries: AC-2b (or extend AC-2): POST with missing name → 400 `name_required`; AC-2c: POST with description > 200 chars → 400 `description_too_long`; AC-3b: POST with missing timezone → 400 `timezone_required`. Also verify that PATCH shares these validation rules."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "critical",
+      "issue": "AC-12 (PATCH) covers only the happy path (valid body → 200). There is no AC for PATCH when the new name conflicts with another active project of the same owner. The interview establishes 409 `project_name_taken` for rename conflicts (interview.yml line 550: 'rename (409 on duplicate active name)', line 851: '409 for active-name conflict on create/rename'), but this is not reflected in the Критерії приёмки. Without an explicit AC, the rename conflict path has no testable criterion.",
+      "location": "## Критерии приёмки — AC-12",
+      "fix": "Add AC-12b: PATCH /api/v1/projects/{id} with a name matching another ACTIVE project of the same owner → 409, code `project_name_taken`."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "major",
+      "issue": "AC-17 emits `project_hard_deleted` per deleted project and states the event 'НЕ видаляється в каскаді' (is not deleted in cascade). However the spec does not include an AC verifying that the hard-delete cron does NOT remove the `project_hard_deleted` event itself from the events collection. This is a non-trivial invariant (the job deletes events WHERE metadata.projectId IN deleted_set, but the hard-deleted event has userId scope, not projectId scope) that has no explicit testable criterion.",
+      "location": "## Критерии приёмки — AC-17",
+      "fix": "Extend AC-17 or add AC-17b: after cron hard-delete, query events collection — events with type `project_hard_deleted` for the deleted projectId are present; events with `metadata.projectId == deleted_id` and type != `project_hard_deleted` are absent."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "major",
+      "issue": "AC-22 lumps three distinct PATCH sub-flows (rename, description edit, timezone change) and one DELETE sub-flow into a single untestable compound criterion. 'Settings page дозволяє rename / опис / timezone через PATCH; danger zone delete вимагає ввести назву проекту дослівно' cannot be checked by a single test or manual step — each sub-flow is independently verifiable and independently failable. Compound AC reduces traceability.",
+      "location": "## Критерии приёмки — AC-22",
+      "fix": "Split AC-22 into: AC-22a: Settings page renders name/description/timezone fields pre-populated from current project; PATCH on save returns 200 + updated project. AC-22b: Danger zone 'Delete' button is disabled until user types project name verbatim (case-sensitive); on match button enables and triggers DELETE."
+    },
+    {
+      "check": "completeness",
+      "severity": "major",
+      "issue": "Q20 (minor_deferrals) confirmed specific i18n copy keys for the delete-confirm modal: `errors.projects.delete.confirmTypeName` with UA text 'Введіть «{name}» для підтвердження' and EN text 'Type «{name}» to confirm'. These are not mentioned anywhere in the user-spec (not in Ограничения, Технические решения, or Как проверить). They were explicitly captured in the interview as implementation defaults to be carried forward.",
+      "location": "## Технические решения or ## Ограничения",
+      "fix": "Add to Технические решения or a new 'Implementation defaults' subsection: i18n key `errors.projects.delete.confirmTypeName`; UA: 'Введіть «{name}» для підтвердження'; EN: 'Type «{name}» to confirm'. Or reference in AC-31 alongside other i18n keys."
+    },
+    {
+      "check": "contradictions",
+      "severity": "minor",
+      "issue": "The interview Q7 summary (lines 128, 242) states 422 for `invalid_timezone`, but the consolidated error_scenarios block (line 707-708) and AC list (line 594) in the same interview.yml use 400. The user-spec consistently uses 400 throughout (AC-3, Як проверить step 8, Тестирование). The user-spec is internally consistent and aligned with the codebase pattern (bean-validation → 400 via GlobalErrorHandler). However the discrepancy in Q7 summary vs the rest of the interview could confuse tech-spec authors reading both documents.",
+      "location": "## Критерии приёмки — AC-3",
+      "fix": "No change needed in user-spec (400 is correct per codebase patterns and the interview's own error_scenarios block). Add a note in Технические решения clarifying: '@ValidTimezone is a bean-validation annotation; validation failures surface as 400 (not 422) via GlobalErrorHandler — consistent with existing validation patterns.'"
+    },
+    {
+      "check": "template_compliance",
+      "severity": "minor",
+      "issue": "The 'Як проверить' section uses 'Користувач перевіряє' (Ukrainian) for the second subsection, while the template specifies 'Пользователь проверяет' (Russian) and the reference spec (04-remember-me-cookie) also uses Russian. All other section headers in the user-spec are correctly in Russian. This is an inconsistency with the template and reference style.",
+      "location": "## Как проверить — subsection header",
+      "fix": "Rename '### Користувач перевіряє' to '### Пользователь проверяет'."
+    },
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "31 acceptance criteria and 6 user flows exceed the warning thresholds (>10 AC, >3 flows). However size: L is declared and the scope (new backend module + REST endpoints + JobRunr cron + Pinia store + 4 new pages + i18n + PK update) genuinely warrants L. The thresholds are advisory for size-check warning, not a defect in the spec.",
+      "location": "Frontmatter — size: L",
+      "fix": "No action required. Size L is correctly declared for the scope. The warning threshold is exceeded proportionally to the declared size."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "Q1 cascade_scope: events-only cleanup, child epics own their cascade — Ограничения + Технические решения",
+      "Q2 soft_delete_and_limit: soft-deleted not counted toward limit, names not reserved, '(restored)' suffix — Сценарій 4 + Ограничення + AC-14",
+      "Q3 forbidden_status_code: 404 uniform (anti-enumeration), conscious deviation from workflow 403 — Сценарій 5 + Ограничення",
+      "Q4 testing_strategy: unit + integration + one E2E Playwright golden path, no per-locale E2E — Тестирование",
+      "Q5 primary_use_case: multi-brand small business owner primary, agencies/devs secondary — Зачем",
+      "Q6 name_uniqueness: unique per-owner among ACTIVE only, 409 project_name_taken — Ограничення + AC-5 (note: Q6 summary says 422 but later interview entries correctly say 409; spec uses 409 consistently)",
+      "Q7 timezone_validation: strict IANA via ZoneId.getAvailableZoneIds(), @ValidTimezone annotation, 400 invalid_timezone — Технические решения + AC-3",
+      "Q8 onboarding_flow: dashboard inline empty-state, no separate /onboarding page — Сценарій 1 + Технические решення",
+      "Q9 restore_ui_and_list_endpoint: single endpoint with ?include_deleted=true, 'Recently deleted' section — Сценарій 4 + AC-7 + AC-23",
+      "Q10 cross_tab_soft_delete: 404 triggers store reset + refetch + auto-select + toast, no polling — Сценарій 6 + AC-24",
+      "Q11 verification_strategy: Playwright MCP + curl + MongoDB MCP + manual JobRunr dashboard — Як проверить",
+      "Q12 concurrent_rename: last-write-wins, no @Version, no If-Match, revisit at collaboration epic — Ограничення + Технические решення",
+      "Q13 zoneid_strictness: strict gate via ZoneId.getAvailableZoneIds().contains(tz) — Технические решення",
+      "Q14 deploy_approach: PROJECTS_MAX_PER_USER env var, auto-index-creation=true dev, JobRunr auto-registers — Ограничення",
+      "Q15 risks_list: 5 risks approved (localStorage drift risk correctly removed per Q-localstorage-rework) — Риски",
+      "Q16 restore_vs_limit: option (a) — 422 on restore when active == limit, future billing epic for per-user cap — Сценарій 4 + AC-15 + Ограничення",
+      "Q-localstorage-rework: DROP localStorage for currentProjectId, Pinia in-memory only, auto-select most-recently-created — Сценарій 2 + Ограничення + Технические решення + AC-21",
+      "Q17 acceptance_criteria_validation: AC1..AC29 confirmed — all present in spec",
+      "Q18 ui_limit_acceptance_criterion: AC-30 button disabled with tooltip when projects.length >= 5 — AC-30",
+      "Q19 ux_guidelines_pk_update: ux-guidelines.md update in scope of this PR, lines 33 and 43 — AC-31 + Технические решення"
+    ],
+    "missing": [
+      "Q20 minor_deferrals: specific i18n copy keys for delete-confirm modal — `errors.projects.delete.confirmTypeName` with UA 'Введіть «{name}» для підтвердження' and EN 'Type «{name}» to confirm' — not mentioned anywhere in user-spec (confirmed as implementation default in interview, no explicit AC needed, but the copy itself should appear somewhere)",
+      "interview error_scenarios block (lines 702-708): three validation error codes `name_required`, `description_too_long`, `timezone_required` — present in interview consolidated decisions but absent from Критерії приёмки",
+      "interview technical_decisions (line 851): 409 for active-name conflict on RENAME (PATCH) — absent from AC-12 and has no explicit AC"
+    ]
+  },
+  "summary": "Специфікація добре структурована, охоплює 20 з 21 рішень інтерв'ю та містить детальні сценарії і ризики з митигаціями. Виявлено два критичних знахідки: відсутні AC для трьох валідаційних помилок (name_required, description_too_long, timezone_required), підтверджених в інтерв'ю, та відсутній AC для конфлікту імені при PATCH (rename → 409 project_name_taken). Ці прогалини потребують виправлення перед затвердженням."
+}

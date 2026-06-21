@@ -1,0 +1,84 @@
+{
+  "status": "needs_improvement",
+  "summary": "Unit tests in AuthServiceTest are strong: meaningful StepVerifier assertions, behavior-focused, every TDD anchor for AuthService is covered with state checks (Redis INCR/EXPIRE, session TTL via ArgumentCaptor, eventService.logEvent params, WebSession.invalidate). TokenServiceTest and EventServiceTest are clean. AuthControllerIT, however, is a @WebFluxTest slice — not a real Testcontainer-backed IT — and four of the six TDD-anchor IT tests are not implemented (sessionFixation_newSessionId, rememberMe_sessionTtlIs30Days, noRememberMe_sessionTtlIs24H, loginSuccessEventInDB). Two further gaps: AuthService.me() branch logic has no unit test (only a controller slice with the service mocked), and Decision 4 fail-open Redis behavior is unverified. Mock count in AuthServiceTest is 5 + per-test WebSession/exchange mocks, which is the test-pyramid trade-off the task explicitly acknowledged (AbstractIntegrationTest deferred). The deferral is fine but is not documented in AuthControllerIT.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "issue": "Four of the six TDD-anchor integration tests listed in tasks/4.md are missing: login_success_sessionFixation_newSessionId, login_rememberMe_sessionTtlIs30Days, login_noRememberMe_sessionTtlIs24H, login_success_loginSuccessEventInDB. The current file is a @WebFluxTest slice with AuthService mocked — it cannot assert on real session IDs, MongoDB sessions.maxInactiveInterval, or events collection contents because there is no real session store, no MongoDB, and no real AuthService running. Acceptance criteria 'rememberMe=true → sessions.maxInactiveInterval >= 2592000' and 'login_success event logged in events collection' are therefore not verified end-to-end anywhere.",
+      "recommendation": "Two acceptable paths: (a) Add a TODO comment at the top of AuthControllerIT explicitly stating 'True integration tests for session fixation, rememberMe TTL, and events.collection assertions are deferred until AbstractIntegrationTest is created in Task <N>. The session-fixation and TTL behavior is partially covered at unit level in AuthServiceTest::login_success_invalidatesPreAuthSession_andSetsRememberMeTtl and login_success_noRememberMe_setsTtl24Hours.' and update task-4 decisions.md noting the deferral. (b) Write a minimal local AbstractIT stub now using @SpringBootTest + Testcontainers MongoDB+Redis (deps already in build.gradle per Task 1) and implement the four anchors. Path (a) is consistent with the task hint; path (b) closes the gap immediately. If choosing (a), the 4 deferred tests must be added to a task-8 (AbstractIntegrationTest setup) backlog or to task-7's tracking list — otherwise they will silently disappear."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:86-93 (me method) — no test in AuthServiceTest.java",
+      "issue": "AuthService.me() has 4 branches (no security context, isAuthenticated=false, principal is not AppUserDetails, success), none of which are unit-tested. AuthControllerIT::me_withSession_returns200WithUserBody and me_withoutSession_returns401 mock authService.me() to return canned values, so the actual SecurityContext extraction + AppUserDetails cast + MeResponse mapping is exercised by zero tests. TDD anchor 'me_withValidSession_returnsCurrentUser' is therefore satisfied only at controller-routing level, not at service-logic level.",
+      "recommendation": "Add unit tests in AuthServiceTest using ReactiveSecurityContextHolder.withAuthentication(...) context: \n  @Test void me_withValidContext_returnsMeResponse() { ... ReactiveSecurityContextHolder.withAuthentication(token) on the Mono ... assertNext(r -> assertThat(r.id()).isEqualTo(user.getId()); assertThat(r.email()).isEqualTo(user.getEmail()); } \n  @Test void me_withoutContext_returns401() { StepVerifier.create(authService.me()).expectError(AppException.class).verify(); } \n  @Test void me_principalNotAppUserDetails_returns401() { build a UsernamePasswordAuthenticationToken with a String principal, expect AppException UNAUTHORIZED. } \nUse Mono.deferContextual + .contextWrite(ReactiveSecurityContextHolder.withAuthentication(...))."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:104-107, 137-140, 193-196 (Redis fail-open onErrorResume) — no test",
+      "issue": "Decision 4 (Redis is DoS mitigation, not auth gate — fail open) is implemented via three onErrorResume blocks: in checkBruteForce, registerFailure, and resetBruteCounters. None of these branches are tested. If a refactor accidentally turns one of them into an auth-blocking error, no test would catch it. This is a security-relevant invariant.",
+      "recommendation": "Add three tests: \n  @Test void login_redisCheckFails_failsOpen_proceedsToAuth() { when(redisTemplate.opsForValue().get(EMAIL_KEY)).thenReturn(Mono.error(new RuntimeException(\"redis down\"))); when(redisTemplate.opsForValue().get(IP_KEY)).thenReturn(Mono.empty()); // user found, password matches → expect successful login (or at least non-429 outcome). } \n  @Test void login_redisIncrementFails_doesNotMaskAuthError() { wrong password + redisTemplate.opsForValue().increment(...).thenReturn(Mono.error(...)) → still expect AppException UNAUTHORIZED, not 500. } \n  @Test void login_redisDeleteFails_loginStillSucceeds() { successful login + redisTemplate.delete(...).thenReturn(Mono.error(...)) → expect AuthResponse, not error. } \nLitmus check: replace each onErrorResume with .doOnError + rethrow — the corresponding test must fail."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:24-26 (file naming and slice scope)",
+      "issue": "File is named AuthControllerIT.java and the task labels it as an IT, but it is implemented as a @WebFluxTest slice with @MockitoBean AuthService. This is misleading — the IT suffix in this codebase normally implies @SpringBootTest with Testcontainers. A future contributor reading the file name may assume MongoDB/Redis assertions are inside, find none, and either duplicate the work or skip the gap.",
+      "recommendation": "Either (a) rename the file to AuthControllerSliceTest.java (or AuthControllerWebFluxTest.java) and create a separate empty AuthControllerIT.java with a TODO stub referencing AbstractIntegrationTest and the 4 deferred TDD anchors, or (b) keep the IT name but add a Javadoc at the class level explicitly stating 'Slice test only. Real Testcontainer-backed IT (session fixation, TTL persistence, events collection) is deferred to Task <N> when AbstractIntegrationTest is created. See work/02-auth/tasks/4.md TDD Anchor list for the deferred tests.'"
+    },
+    {
+      "severity": "minor",
+      "category": "excessive_mocking",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServiceTest.java:50-64 (5 class-level @Mock fields) and lines 202-211, 240-243, 263-270 (per-test WebSession + ServerWebExchange mocks)",
+      "issue": "AuthServiceTest mocks UserRepository, ReactiveRedisTemplate (with RETURNS_DEEP_STUBS), PasswordEncoder, ServerSecurityContextRepository, EventService — 5 collaborators. Plus each success-path test additionally mocks WebSession × 2 and ServerWebExchange. By the test-master rule (>3 mocks → consider integration test), this is wrong test type. The unit tests still produce value (they are the only place the brute-force/fail-open/dummy-bcrypt logic is verified before AbstractIntegrationTest exists), but the maintenance cost is real — the deep-stubbed redisTemplate.opsForValue() chain is fragile, and stubbing exchange.getSession() to return two different Monos in sequence (line 211, 243, 270) is order-dependent.",
+      "recommendation": "Acceptable as a stopgap given AbstractIntegrationTest deferral. When AbstractIntegrationTest lands (Task 7+), migrate the success-path tests (login_success_invalidatesPreAuthSession_andSetsRememberMeTtl, login_success_noRememberMe_setsTtl24Hours, login_success_resetsBruteForceCountersAndLogsEvent, login_pendingUser_succeedsWithEmailWarning) to integration tests against real WebTestClient + MongoDB sessions collection + events collection. Keep the unit tests for: brute-force threshold checks, dummy-bcrypt timing, fail-open Redis errors, X-Forwarded-For parsing — these remain best at unit level. Add a TODO at AuthServiceTest class-level documenting which tests will move."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServiceTest.java:53 (RETURNS_DEEP_STUBS) and :120-122 (verify on chained mock)",
+      "issue": "Use of @Mock(answer = Answers.RETURNS_DEEP_STUBS) for ReactiveRedisTemplate causes redisTemplate.opsForValue() to return a deep-stub that is reused (not a fresh stub each call) — this is an undocumented Mockito behavior that the test relies on. Verifications such as verify(redisTemplate.opsForValue()).increment(EMAIL_KEY) work because RETURNS_DEEP_STUBS caches the stub. If a future Mockito upgrade changes this caching, all verifications break silently with no failed assertion. Same risk for the verify chain on lines 129-132, 222-224, 250-251, 339-340.",
+      "recommendation": "Replace deep stubs with an explicit ReactiveValueOperations<String,String> mock: \n  @Mock ReactiveRedisTemplate<String,String> redisTemplate; \n  @Mock ReactiveValueOperations<String,String> valueOps; \n  @BeforeEach setUp() { lenient().when(redisTemplate.opsForValue()).thenReturn(valueOps); ... } \nThen verify(valueOps).increment(EMAIL_KEY) instead of verify(redisTemplate.opsForValue()).increment(...). Lower-priority refactor — current tests pass, but explicit > magic for test maintainability."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServiceTest.java — no test for the 'fallback to remoteAddress when no X-Forwarded-For' branch (AuthService.java:208-218)",
+      "issue": "extractIp has two branches: XFF present → leftmost IP; XFF absent → remoteAddress.getHostAddress(). Test login_extractsIpFromXForwardedForHeader covers branch 1. Branch 2 (no XFF, fall back to remote) is implicitly covered by all the other tests (which pass remote=10.0.0.7), but no test explicitly asserts 'when XFF absent, the IP key uses remoteAddress'. There is also no test for 'remoteAddress is null' (returns 'unknown') — a defensive branch.",
+      "recommendation": "Add: \n  @Test void login_noXForwardedFor_usesRemoteAddress() { build request without XFF, with remoteAddress=10.0.0.7 → verify(redisTemplate.opsForValue()).get(\"brute:fail:ip:10.0.0.7\"); } \n  @Test void login_xForwardedForBlank_fallsBackToRemoteAddress() { XFF=\"   \" → still uses remoteAddress; } \nThe blank-XFF case is a real-world scenario (some proxies strip header value but keep header). Optional: test 'unknown' fallback when remoteAddress is null — low value, can be skipped."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:35-50 (login_success_returns200WithBody)",
+      "issue": "Mock-return anti-pattern (mild form): when(authService.login(...)).thenReturn(Mono.just(response)) and then jsonPath assertions read back the same response fields. Litmus test: if the AuthController.login implementation were replaced with `return authService.login(req, exch).map(ResponseEntity::ok)` (which it already is) or even `return authService.login(req, exch).flatMap(r -> Mono.just(ResponseEntity.ok(r)))`, the test passes either way. The test does verify HTTP wiring (POST /api/auth/login route exists, JSON body is serialized with correct field names, status 200) — so it has some value as a routing/serialization smoke test, but the AuthResponse 'real' contract (status='active', warning=null, etc.) is not verified against a real login flow.",
+      "recommendation": "Either delete this test (the 401 + 400 tests already verify routing exists, AuthServiceTest covers the AuthResponse construction, and a future real IT will verify end-to-end), or rename it to login_route_serializesAuthResponseAsJson and add a comment 'Verifies controller-level routing and JSON serialization only. End-to-end response contract is verified in <future IT once AbstractIntegrationTest exists>.' Same applies to me_withSession_returns200WithUserBody."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/events/EventServiceTest.java",
+      "issue": "logEvent is fire-and-forget, but two implicit guarantees in AuthService (it ignores the return) are never tested at the EventService boundary: (1) logEvent returning normally even when called rapidly N times in a row, and (2) the event has 'createdAt' set close to Instant.now() — only that it is non-null is checked. These are minor; the persisted-fields test is sufficient for the core contract.",
+      "recommendation": "Add (optional): \n  @Test void logEvent_setsCreatedAtCloseToNow() { ... assertThat(saved.getCreatedAt()).isCloseTo(Instant.now(), within(1, ChronoUnit.SECONDS)); } \nLow priority — current tests are sufficient for the task."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 22,
+      "passed": 18,
+      "failed": 4
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 20,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "unbalanced"
+    }
+  }
+}

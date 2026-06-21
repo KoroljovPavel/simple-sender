@@ -1,0 +1,148 @@
+{
+  "verdict": "warn",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 30,
+  "requirements_covered": 26,
+  "requirements_partial": 3,
+  "requirements_missing": 1,
+  "findings": [
+    {
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "US-10: Brute-force lock is per IP/email — user-spec says '5 невдалих спроб з одного IP/email'",
+      "detail": "Tech-spec brute-force key is 'brute:fail:{email}' only. There is no IP-based counter. A single attacker hitting multiple accounts from one IP is not blocked. The user-spec constraint 'з одного IP/email' requires a compound or dual-key strategy (email key AND ip key). Tech-spec addresses only the email dimension.",
+      "severity": "major"
+    },
+    {
+      "type": "partial",
+      "source": "user-spec",
+      "requirement": "US-7/US-8: Expired verification token → 'Посилання прострочено' page with resend button; invalid token → 'Посилання недійсне' page",
+      "detail": "Tech-spec correctly returns 400 with TOKEN_EXPIRED code and Task 10 handles the resend trigger. However, tech-spec does not distinguish invalid vs expired at the frontend page level in its Architecture section — the How-it-works covers the backend codes but the frontend page descriptions in Task 10 mention 'shows loading → success/error state' without specifying separate rendered pages for 'invalid' vs 'expired'. The acceptance criteria do cover both states at the HTTP level. Partial: frontend page separation is implied but not explicitly architected.",
+      "severity": "minor"
+    },
+    {
+      "type": "partial",
+      "source": "user-spec",
+      "requirement": "US-18: Expired or already-used reset link → 'Посилання недійсне або прострочено' + link to /forgot-password",
+      "detail": "Tech-spec backend correctly returns 400 for expired, already-used, and invalid tokens (all three paths covered in AC and integration tests). However, tech-spec does not address the frontend rendering of the link to /forgot-password on the reset-password error state. Task 10 describes the reset-password page but does not specify the error branch UX with the /forgot-password redirect link that user-spec requires.",
+      "severity": "minor"
+    },
+    {
+      "type": "partial",
+      "source": "user-spec",
+      "requirement": "US-25: Security event logging — 'account_blocked' and 'account_unblocked' events required",
+      "detail": "The events collection schema in Data Models includes 'account_blocked' and 'account_unblocked' event types. However, neither the How-it-works section nor the task descriptions explain when account_blocked is triggered — the brute-force flow (5 fails → 429) does not trigger a user status change to 'blocked', it just rate-limits via Redis. User-spec treats 'blocked' as an admin action distinct from brute-force lockout (see Login flow: blocked→'Ваш акаунт заблоковано. Зверніться до підтримки'). There is no mechanism in tech-spec for an admin to block/unblock a user, and no task covers this flow. The event types are declared but their trigger path is missing for account_blocked/account_unblocked.",
+      "severity": "major"
+    },
+    {
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "US-3: Soft-deleted email during 30-day window → specific message 'Акаунт з таким email вже існує або був нещодавно видалений. Зверніться до підтримки: {SUPPORT_EMAIL}'",
+      "detail": "Tech-spec How-it-works for registration mentions 'pending-delete window check' in step 1 and the integration test covers 'soft-deleted email (30d window) → 409'. The Acceptance Criteria also list this case. However, the response body format is not specified anywhere in the tech-spec — the user-spec requires the specific message to include SUPPORT_EMAIL variable substitution. Tech-spec does not document how SUPPORT_EMAIL is injected into the 409 response body, nor which DTO field carries it. This is a gap at the response contract level.",
+      "severity": "minor"
+    },
+    {
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "US-11: Blocked user login → message must reference {SUPPORT_EMAIL}",
+      "detail": "Tech-spec AC states '403 + message containing SUPPORT_EMAIL value' but the How-it-works section does not specify how SUPPORT_EMAIL env var is injected into the 403 response. No configuration binding or DTO field is defined for SUPPORT_EMAIL in the Architecture section. Deployment.md update (Task 9) lists SUPPORT_EMAIL as a new env var, but the mechanism for using it in error responses is undocumented in the architecture.",
+      "severity": "minor"
+    },
+    {
+      "type": "scope_creep",
+      "source": "tech-spec",
+      "requirement": "N/A",
+      "detail": "Decision 10 removes Thymeleaf from the dependency list despite Task 3 description referencing 'Thymeleaf/plain HTML templates' in the Architecture 'What we're building' section (line 27: '3 Thymeleaf/plain HTML templates under resources/templates/email/'). Decision 10 then overrides this to plain HTML with no Thymeleaf. This internal inconsistency creates confusion: the Architecture section lists build.gradle adding 'spring-boot-starter-thymeleaf' in the dependency changes but Decision 10 explicitly states it does NOT add Thymeleaf. Not scope creep per se, but an internal contradiction that will cause implementation confusion.",
+      "severity": "major"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "US-13: Multiple concurrent sessions allowed — session invalidation on password reset must invalidate ALL sessions",
+      "detail": "Tech-spec describes password reset invalidating all sessions via 'query sessions by principal name, delete each' in the How-it-works. However, the sessions collection is managed by spring-session-data-mongodb with principal name stored as session attributes. The tech-spec does not document what field in the sessions collection represents the principal name, nor how to query it reactively. For the logout flow, `exchange.getSession().flatMap(WebSession::invalidate)` is correct for single session. For terminate-all and reset-password, the query mechanism against spring-session's internal schema is not specified — this is a non-trivial reactive operation that can fail silently if the session schema is misunderstood.",
+      "severity": "major"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "US-1: Password validation — min 8 chars, one digit, one letter",
+      "detail": "Tech-spec mentions BCrypt cost 12 for password hashing but never specifies where password validation rules are enforced on the backend. The Architecture and How-it-works describe 'validate body' on registration but do not specify the validation mechanism (Bean Validation annotations, custom validator, regex). Frontend validation via zod is covered (Task 8, 10), but backend validation is unspecified. For an L-size security feature, backend validation independent of frontend is required — a client bypassing the frontend must still get a 400.",
+      "severity": "major"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "US-24: JobRunr hard-delete job — cascade implications",
+      "detail": "User-spec explicitly notes in Обмеження: 'при delete account у цьому epic видаляється тільки user-запис. Каскад (проекти, боти, підписники) — у відповідних epic.' Tech-spec HardDeleteJob description in Task 7 and How-it-works only says 'hard delete matching records' without documenting what happens to orphaned related documents. Given this is an L feature with explicit cascade risk acknowledged in user-spec, tech-spec should specify what the hard-delete job does NOT delete and that this creates orphaned data intentionally, so future epic authors know what to clean up. The omission of this documentation creates technical debt without traceability.",
+      "severity": "minor"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "US-5: Email service unavailable → 201 returned, error logged, details not exposed",
+      "detail": "Tech-spec says 'fire-and-forget, errors logged, never propagated to caller' in the EmailService description and registration flow. However, in a Spring WebFlux reactive chain, fire-and-forget with proper error isolation requires explicit use of `subscribeOn`/`subscribe` with error handler or `onErrorResume`. The tech-spec does not specify the reactive operator pattern for this isolation. If EmailService throws synchronously or the Mono is not properly subscribed, the error WILL propagate. This is an implementation trap for an L-size feature.",
+      "severity": "major"
+    },
+    {
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "US-22: Terminate all sessions; US-19: Invalidate all sessions on password reset",
+      "detail": "The User model does not include a 'sessionVersion' or equivalent mechanism. The tech-spec relies on direct MongoDB queries against the sessions collection by principal name. In a reactive context with spring-session-data-mongodb, this is fragile: the principal name field in the sessions collection may not be directly queryable via a standard ReactiveMongoRepository. Tech-spec does not address this known complexity — no custom query is specified, no repository for the sessions collection is declared, and no consideration of the sessions schema layout is provided.",
+      "severity": "major"
+    },
+    {
+      "type": "overengineering",
+      "source": "tech-spec",
+      "requirement": "N/A",
+      "detail": "The EventService/EventRepository is a separate package with its own @Document and repository purely for logging 8 security event types. For the current scope (no event querying UI, no audit log page in this epic), a simpler approach — logging to structured application logs (which feed into monitoring) with a background async write — would satisfy the user-spec requirement without the overhead of a separate MongoDB collection, repository, and service. The events collection adds schema migration concerns, index management, and storage growth without any consumer in this epic. This is not a blocking finding since the user-spec explicitly requires 'колекцію events', but the separate service abstraction layer (EventService wrapping EventRepository) is YAGNI when all callers will call EventService.log(type, ...) in the same thread.",
+      "severity": "minor"
+    },
+    {
+      "type": "overengineering",
+      "source": "tech-spec",
+      "requirement": "N/A",
+      "detail": "AbstractIntegrationTest base class with singleton Testcontainers pattern (MongoDB 8.0 + Redis 7.4 + Mailpit) starting all three containers for every test class is appropriate for integration tests. However, Task 7 groups ProfileController, SuperAdminSeeder, AND HardDeleteJob into a single task. This creates a very large task with three distinct functional areas that should ideally be separate for parallel execution. This is task-level overengineering in reverse — under-decomposition that concentrates risk in one task execution.",
+      "severity": "minor"
+    },
+    {
+      "type": "undocumented_deviation",
+      "source": "tech-spec",
+      "requirement": "Decision 10: Email templates as plain HTML (no Thymeleaf)",
+      "detail": "Decision 10 is marked [TECHNICAL] and states Thymeleaf is not added. This is a technical deviation from the Architecture 'What we're building' section which lists 'spring-boot-starter-thymeleaf' in build.gradle changes and '3 Thymeleaf/plain HTML templates'. This internal inconsistency is not documented in the User-Spec Deviations section. The Deviations section only covers user-spec vs tech-spec deviations, not internal tech-spec contradictions — but this contradiction will directly cause the implementing agent to receive conflicting signals. A note in Deviations or a clarifying edit to the Architecture section is needed.",
+      "severity": "major"
+    },
+    {
+      "type": "undocumented_deviation",
+      "source": "tech-spec",
+      "requirement": "Decision 7: Resend verification is public endpoint accepting email in body",
+      "detail": "Decision 7 is marked [TECHNICAL] and describes a public endpoint that accepts any email in body and returns 200 always (anti-enumeration). This is a technical decision not derived from user-spec. It is not listed in the User-Spec Deviations section. Per the validation rules, every [TECHNICAL] decision not in Deviations and not a pure infrastructure concern must be flagged. The anti-enumeration behavior on resend-verification (returning 200 even for unknown emails) is a security-behavior decision that affects observable API contract — it is not infrastructure.",
+      "severity": "critical"
+    },
+    {
+      "type": "undocumented_deviation",
+      "source": "tech-spec",
+      "requirement": "Decision 8: CORS configuration for local dev",
+      "detail": "Decision 8 is marked [TECHNICAL] and covers CORS configuration. This is pure infrastructure/deployment configuration — not new functionality. Per validation rules, infrastructure additions do not require Deviations entries. This finding is informational only.",
+      "severity": "minor"
+    },
+    {
+      "type": "undocumented_deviation",
+      "source": "tech-spec",
+      "requirement": "Decision 11: ReactiveAuthenticationManager wired for programmatic use; Spring Security filter does NOT auto-authenticate",
+      "detail": "Decision 11 is marked [TECHNICAL] and describes the Spring Security wiring approach. This is an architectural implementation choice with observable effects (login endpoint must call AuthManager explicitly). It is not documented in User-Spec Deviations. However, this is an internal implementation concern with no user-visible behavior difference — classifiable as infrastructure. Borderline case — logged as minor.",
+      "severity": "minor"
+    },
+    {
+      "type": "shallow_solution",
+      "source": "tech-spec",
+      "requirement": "L-size feature — Solution section depth",
+      "detail": "The Solution section provides good technical grounding on the two hardest problems (WebFlux session wiring and Nuxt SSR hydration). However, it does not address: (1) the reactive chain composition strategy across the full auth flow — when and how Mono/Flux chains are assembled in AuthService vs AuthController; (2) the SecurityConfig filter chain order and how paths are protected; (3) the data access patterns for sessions collection (direct MongoTemplate vs ReactiveMongoRepository). For an L-size feature with acknowledged complexity around spring-session-data-mongodb in WebFlux, the Solution section covers approximately 30% of the architectural complexity. The remaining decisions are scattered across individual Decisions entries, making the Solution act primarily as a list rather than an integrated architectural narrative.",
+      "severity": "major"
+    }
+  ],
+  "summary": "26/30 requirements covered, 3 partial, 1 missing (IP-dimension of brute-force). Status: WARN (no critical gaps in user requirements, but one critical undocumented deviation — Decision 7 resend-verification anti-enumeration behavior is [TECHNICAL] but absent from Deviations section). Key risks: (1) brute-force only tracks per-email, not per-IP as user-spec requires; (2) session invalidation mechanism for terminate-all and password-reset is architecturally underspecified for spring-session-data-mongodb reactive context; (3) backend password validation rules not specified; (4) fire-and-forget email pattern not specified at reactive operator level; (5) internal contradiction between Architecture section (lists Thymeleaf) and Decision 10 (explicitly rejects Thymeleaf). Solution section depth is adequate for the two hardest problems but shallow on reactive chain composition strategy overall. The feature is implementable but the implementing agent will encounter several decision points not resolved in the spec."
+}

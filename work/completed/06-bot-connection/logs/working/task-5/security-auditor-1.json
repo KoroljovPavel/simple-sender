@@ -1,0 +1,21 @@
+{
+  "summary": "Task 5 is a UI scaffolding change: extract settings into a folder route, add a sub-nav component, add a placeholder bot.vue page, and escape literal '@' in two locale strings to satisfy vue-i18n's linked-message parser. No new API surface, no new data flows, no new auth-relevant boundaries. The global auth middleware (auth.global.ts) is unchanged and continues to fail-closed for unauthenticated users on the new /projects/[projectId]/settings/ and /projects/[projectId]/settings/bot routes. ProjectId is interpolated only into internal vue-router paths and template mustaches, both of which auto-escape — no XSS, no open-redirect. The bot.vue placeholder renders only i18n text and the subnav (no project data), so the absence of a per-project 404 redirect there is not an information-disclosure issue at this stage but is worth flagging for the next task when that page starts loading bot state. The {'@'} locale escape is a static literal in source code with no user-input pathway. No critical or high findings.",
+  "findings": [
+    {
+      "severity": "low",
+      "owasp": "A01",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 1,
+      "issue": "Placeholder page renders for any value of route.params.projectId without verifying that the project exists or belongs to the current user. settings/index.vue performs a GET /api/v1/projects/{id} on mount and redirects to /projects with a banner on 404; bot.vue performs no such check. Today this leaks no data (the page only renders i18n placeholder text), so the impact is purely confusing UX for users who land on a stale or foreign id. The risk becomes real in the next task, when this page starts loading bot connection state.",
+      "suggestion": "When this page is wired up to the bot connection API in a later task, mirror the index.vue onMounted pattern: fetch the project (or the bot resource), and on 404 set projectsStore.pendingBannerKey and navigateTo(localePath('/projects')). Track this as a follow-up so the placeholder doesn't ship to production without the guard."
+    },
+    {
+      "severity": "info",
+      "owasp": null,
+      "file": "frontend/components/SettingsSubnav.vue",
+      "line": 17,
+      "issue": "The locale-prefix stripper hardcodes the list of supported locales (/^\\/(en|uk)(?=\\/|$)/). If the project adds a third locale to nuxt.config without updating this regex, the new locale's prefix will not be stripped and the active-state matcher will silently stop working on routes under that locale. This is not a security issue in itself but is a maintainability/regression risk that could mask a future routing bug.",
+      "suggestion": "Derive the locale list from the @nuxtjs/i18n runtime config (e.g. useI18n().availableLocales) or from a single shared constant, instead of duplicating it inline. Alternatively, use route.name comparison (which is locale-agnostic via useRouteBaseName) rather than path comparison."
+    }
+  ]
+}

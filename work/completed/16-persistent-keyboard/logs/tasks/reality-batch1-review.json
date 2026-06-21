@@ -1,0 +1,75 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 Details section says FunnelService.validateSteps switch is at 'lines ~781-800'. Actual line is 782-799 (switch body). The 'lines ~117-126' reference for the limits block is also slightly off — actual constants live at lines 115-130, and no MAX_KEYBOARD_TEXT / MAX_KEYBOARD_ROWS constants exist yet (they are new). These are approximate hints ('~'), so not wrong, but the reader may be confused by the reference to an existing limits block that currently has no keyboard constants to look at.",
+      "fix": "No code change needed. Optionally clarify the hint: 'add new constants near lines 117-130' rather than implying they are already there."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 Details says 'toStepDto (lines ~1203-1222)'. Actual toStepDto spans lines 1203-1222 — correct. But it also references 'toButtonDtos lines 1224-1231'. Actual: toButtonDtos is at 1224-1231 — matches. 'toBlocks lines 717-732' — actual toBlocks is at 717-730. 'toButtons lines 700-709' — actual is 700-708. Close enough for hints, but the task refers to a non-existent 'validateAlbum null-item check' to justify the null-item guard pattern (Step 6). validateAlbum does NOT null-check individual items — it checks the items list for null elements (line 893: 'ALBUM item must not be null') but only when type is ALBUM. This is a fine precedent reference, but the task wording ('guard like validateAlbum's null-item check') is slightly misleading about what that guard does.",
+      "fix": "Minor: the precedent is still valid. No code change needed."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 says 'FunnelStepDto positional record, currently 17 components ending in endParentAfter'. Count matches the file (17 fields). However the task also references updating 'the positional-order comment in emitStep' in FunnelServiceEmitEventTest. The actual comment at line 72-73 lists the positional order explicitly — this is accurate and the update is necessary. No false claim, but the task is correct here.",
+      "fix": "No action needed — confirmed accurate."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 2,
+      "issue": "Task 2 Details says 'ALBUM block's items array with per-item add/remove (172-179, template 960-1018)' as the closest precedent for nested rows-of-buttons sub-editor. Lines 172-179 exist in FunnelStepForm.vue (items mutations for albums). The template range 960-1018 is plausible given the 1412-line file but cannot be precisely verified without full read. This is a pattern hint, not a load-bearing claim — minor.",
+      "fix": "No change needed. If the agent cannot find those exact lines, the ALBUM block's template section is an easily greppable reference."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 TDD Anchor says to clone 'markup ArgumentCaptor<Object> from message_keyboardOnlyOnLastNonAlbumBlock_waitForReply (lines 399-405)'. The actual test is at lines 378-406 and the captor is at lines 399-401 — correct. The error-mapping trio references are accurate (lines 449, 481, 494 in FunnelStepExecutorTest). These line references are load-bearing for navigating the file and are correct.",
+      "fix": "No action needed."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 TDD Anchor uses the term 'RETRIES_EXHAUSTED' as an example TerminalReason (in the test name 'setKeyboard_otherTelegramError_fails' body hint: 'other terminal reason (e.g. RETRIES_EXHAUSTED/OTHER per TerminalReason enum)'). The actual TerminalReason enum has only three values: BLOCKED_BY_USER, CHAT_NOT_FOUND, OTHER. There is no RETRIES_EXHAUSTED constant. The existing test at line 472 uses the 3-arg TelegramSendException constructor (which defaults to OTHER), confirming the correct pattern. The mention of RETRIES_EXHAUSTED is an invented enum value.",
+      "fix": "Use TerminalReason.OTHER instead of the non-existent RETRIES_EXHAUSTED when writing the test. The 3-arg TelegramSendException(null, \"reason\", attempts) constructor defaults to OTHER — follow the pattern at FunnelStepExecutorTest line 472."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 states 'FunnelStepForm.vue (1413 lines)'. Actual line count is 1412. Off by one — negligible, but worth noting if the agent uses exact line numbers for patching.",
+      "fix": "Use wc -l to get the current line count before editing."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 describes the keyword hint as a mirror of backend 'containsAnyKeyword'. The actual backend method (FunnelEventService line 375) lowercases the incoming text before calling contains() and stores keywords already lowercase. Task 2 correctly describes mirroring this with 'lowercase the trimmed button text ... keywords arrive already lowercase-normalized'. This is accurate. No issue — confirming correctness.",
+      "fix": "No action needed."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 2,
+      "issue": "Task 2 Details reference 'FunnelTriggerSettings.vue addKeyword, line 75' for the keyword lowercase-normalization pattern. The actual addKeyword function starts at line 74 (not 75). The toLowerCase() call is at line 75 inside the function. Functionally correct; the one-line discrepancy is trivial.",
+      "fix": "No action needed."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 52,
+    "issues_found": 9
+  }
+}

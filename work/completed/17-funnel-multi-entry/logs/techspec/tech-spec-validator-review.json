@@ -1,0 +1,18 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "tasks",
+      "issue": "Within-wave soft read dependency persists after the merge. Task 6 (Wave 4) creates frontend/components/funnels/FunnelTriggersPanel.vue; Task 7 (same Wave 4) lists that file under 'Files to read'. No file-modify conflict (Task 7 only modifies [funnelId].vue), so this is NOT a merge conflict, but Task 7 cannot meaningfully complete its mount/wiring before Task 6 produces the panel. Task 7 is positioned after Task 6 in the wave, which expresses the intended ordering, but the two are nominally parallel.",
+      "fix": "Optional: move Task 7 to a Wave 5, or add an explicit 'depends on Task 6' note so the executor sequences the panel creation before the page wiring. Acceptable as-is since it is a read (not modify) dependency and the in-wave ordering hints at it."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "issue": "Decision numbering is non-monotonic: the list runs 1-9, then 14 [TECHNICAL], then 10, 11, 12, 13. All numbers 1-14 are present exactly once (no duplicates, no gaps), but Decision 14 is physically inserted between Decision 9 and Decision 10, which reads oddly.",
+      "fix": "Optional: relocate Decision 14 to the end of the Decisions section (after Decision 13) so numbering reads in order. Not a compliance violation - every decision has Decision + Rationale and is either anchored with 'Serves:' or marked [TECHNICAL]."
+    }
+  ],
+  "summary": "PASS (approved) - zero critical findings. Round-2 re-validation confirms all three round-1 findings are resolved: (#2) merged Task 6 now carries the full code-writing reviewer set incl. security-auditor [code-reviewer, security-auditor, test-reviewer]; (#3) Decision 9 now has an explicit 'Alternatives considered' line; (#1) the within-wave read dependency is downgraded to minor (read, not modify; in-wave ordering expresses intent). Task numbering 1-12 is sequential with no duplicates/skips (1-5 backend, 6-7 frontend, 8-10 audit, 11-12 final). No within-wave file-modify conflict in any of the 4 build waves. Audit Wave has 3 auditors (code-reviewing/Task8, security-auditor/Task9, test-master/Task10); Final Wave has mandatory QA (pre-deploy-qa/Task11, post-deploy-qa/Task12). Task count = 12 (<=15). All skills match the catalog; all reviewers (code-reviewer, security-auditor, test-reviewer) exist as agents. All Decisions are anchored ('Serves:') or marked [TECHNICAL], including the new Decision 14 [TECHNICAL]. Two minor cosmetic findings remain (read-ordering note, decision-numbering order); both informational."
+}

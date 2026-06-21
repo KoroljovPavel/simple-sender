@@ -1,0 +1,132 @@
+{
+  "status": "passed",
+  "summary": "Six new tests added in commit ab2c518 cover all six TDD anchors named in tasks/12.md with matching method names. AC16 three-way contract, AC17 $.code-null + joined-message regex, AC18 Max-Age + HttpOnly/Secure/SameSite for both rememberMe branches, and TC5 bean-type assertion are all pinned with strong assertions that would fail on regression of the named invariants. The deviation on TC11 XSRF-TOKEN co-emission is structurally justified (Spring Security TestCsrfTokenRepository substitution + CookieCsrfTokenRepository skip-when-present behaviour), documented in javadoc, and compensated by SecurityConfigTest.csrfCookie_writtenOnSafeVerbRequest on the cookie-write path. Helpers (parseSetCookie / parseSetCookieHeaderFor / assertCookieAttributesMatchConfig) are correctly scoped, case-insensitive, and config-driven so tests track application(-test).properties drift. Isolation is sound (cleanState/cleanAndSeed wipe users / events / sessions / Redis / Mailpit per test). Two minor findings: (1) the rememberMeTrue test method name advertises XSRF co-emission that the body intentionally does not assert — rename to remove the false advertisement; (2) parseSetCookieHeaderFor returns the first matching Set-Cookie header, which could mask a session-fixation rotation flow that emits a clear-old cookie before the new one — defense-in-depth to assert exactly one matching SESSION header would harden the test.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:586",
+      "issue": "Method name login_rememberMeTrue_setsAllSessionCookieAttributes_andCoEmitsXsrfToken advertises XSRF co-emission verification that the test body intentionally does NOT perform (per the javadoc on lines 597-609, TC11 is shifted to SecurityConfigTest.csrfCookie_writtenOnSafeVerbRequest). A reader scanning test method names sees coverage that the implementation does not actually provide — this is a false-coverage signal a future maintainer could miss.",
+      "recommendation": "Rename the method to drop the `_andCoEmitsXsrfToken` suffix so the name reflects what is asserted, e.g. `login_rememberMeTrue_setsAllSessionCookieAttributes` (matching the rememberMeFalse counterpart on line 635). Keep the existing javadoc intact — it correctly documents why TC11 is covered elsewhere. Alternatively, add a single `andExpect(cookie().exists(\"XSRF-TOKEN\"))` style probe to attempt the assertion and let it confirm or refute the structural-impossibility claim. Method name and test surface should agree."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:709-717",
+      "issue": "parseSetCookieHeaderFor returns the FIRST Set-Cookie header whose value starts with `cookieName + \"=\"`. AuthService.openSession() calls httpRequest.changeSessionId() (line 609 of AuthService), and the Spring Session servlet flow can emit a clear-old-SESSION-cookie (`SESSION=; Max-Age=0; ...`) immediately followed by the new SESSION cookie. If this ever happens, the AC18 Max-Age assertions would be made against the wrong (clear) cookie — Max-Age=0 string would not match Long.toString(2592000), so the test would fail loudly rather than silently pass; but if the order ever flips, the test could pass against a stale cookie and miss the regression. This is a defense-in-depth concern, not an active bug — the current login flow on this stack appears to emit a single SESSION cookie per response.",
+      "recommendation": "Either: (a) change parseSetCookieHeaderFor to collect ALL Set-Cookie headers matching the name and assert exactly one, picking that one explicitly; or (b) add a precondition in both AC18 tests counting `response.getHeaders(\"Set-Cookie\").stream().filter(h -> h.startsWith(\"SESSION=\")).count()` and asserting it equals 1 before parsing. Concrete shape: `long sessionCookieCount = response.getHeaders(\"Set-Cookie\").stream().filter(h -> h.startsWith(\"SESSION=\")).count(); assertThat(sessionCookieCount).as(\"exactly one SESSION Set-Cookie header expected\").isEqualTo(1L);` placed before the parseSetCookieHeaderFor call."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 6,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "anchorCoverage": {
+    "expected": 6,
+    "matched": 6,
+    "details": [
+      {"anchor": "ProfileControllerIT::changePassword_sessionContinuity_principalLookupTerminatesOtherSessions", "found": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java:272", "matches": true},
+      {"anchor": "ProfileControllerIT::changePassword_preFlipBsonFixture_isReadCorrectlyByPostFlipRepository", "found": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java:354", "matches": true},
+      {"anchor": "AuthControllerIT::register_emptyEmail_400_codeNull_messageJoinedFormat", "found": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:564", "matches": true},
+      {"anchor": "AuthControllerIT::login_rememberMeTrue_setsAllSessionCookieAttributes_andCoEmitsXsrfToken", "found": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:586", "matches": true, "note": "name pins co-emission claim but body intentionally does not assert it — see finding #1"},
+      {"anchor": "AuthControllerIT::login_rememberMeFalse_omitsMaxAgeOnSessionCookie", "found": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:635", "matches": true},
+      {"anchor": "SecurityConfigTest::cookieSerializerBean_isRememberMeCookieSerializer_notDefault", "found": "backend/src/test/java/com/botfunnel/security/SecurityConfigTest.java:26", "matches": true}
+    ]
+  },
+  "acPinningEvaluation": {
+    "AC16_a_siblingDeletedByPrincipalKeyedQuery": {"pinned": true, "location": "ProfileControllerIT.java:330-334", "note": "asserts sess-B count is zero via principal+_id query path the live code uses"},
+    "AC16_b_currentDeviceSurvives": {"pinned": true, "location": "ProfileControllerIT.java:338-342", "note": "asserts current session document at captured currentSessionId still has count==1 — this is the invariant the existing changePassword_correctCurrent_... test cannot prove (no real cookie flow under @WithMockAppUser); the new test fills that gap correctly"},
+    "AC16_c_otherUserSessionUntouched": {"pinned": true, "location": "ProfileControllerIT.java:345-349"},
+    "AC16_R5_preFlipBsonShape": {"pinned": true, "location": "ProfileControllerIT.java:370-396", "note": "minimal _id+principal+created+expireAt doc inserted via raw getCollection().insertOne — proves post-flip MongoIndexedSessionRepository reads top-level principal field. Pre-assertion at line 380-384 makes a schema-drift failure clearer than relying solely on the post-delete assertion."},
+    "AC17_codeIsNullNotAbsent": {"pinned": true, "location": "AuthControllerIT.java:579", "note": "uses Hamcrest nullValue() — distinguishes null from absent/string, matching the useApiError frontend contract"},
+    "AC17_messageJoinedFormatRegex": {"pinned": true, "location": "AuthControllerIT.java:580", "note": "regex ^email: .+(, .+: .+)*$ pins joiner shape while tolerating locale-dependent Hibernate Validator default messages"},
+    "AC18_rememberMeTrue_MaxAge": {"pinned": true, "location": "AuthControllerIT.java:627-630", "note": "expected value derived as cfgRememberMeDays * 86400 = 30*86400 = 2592000; binds against @Value so config drift surfaces explicitly"},
+    "AC18_rememberMeTrue_HttpOnlySecureSameSite": {"pinned": true, "location": "AuthControllerIT.java:680-694 via assertCookieAttributesMatchConfig", "note": "asserted via configured @Value bindings; SameSite compared case-insensitively per RFC 6265bis. Default values (httpOnly=true, secure=false, sameSite=lax) match application.properties — test env does not override."},
+    "AC18_rememberMeFalse_noMaxAge": {"pinned": true, "location": "AuthControllerIT.java:659-666", "note": "asserts BOTH containsKey(\"max-age\")==false AND containsKey(\"expires\")==false — defense-in-depth catches a regression where DefaultCookieSerializer emits Expires alongside Max-Age"},
+    "AC18_rememberMeFalse_retainsAttributes": {"pinned": true, "location": "AuthControllerIT.java:667", "note": "shared assertCookieAttributesMatchConfig keeps the invariant uniform across both branches"},
+    "TC5_autowiredCookieSerializer_isRememberMeCookieSerializer": {"pinned": true, "location": "SecurityConfigTest.java:31", "note": "isInstanceOf check catches a regression that drops the @Bean and lets Spring Session's @ConditionalOnMissingBean default win"}
+  },
+  "isolationAssessment": {
+    "verdict": "clean",
+    "notes": [
+      "AuthControllerIT.cleanState (line 90-101) wipes users, events, Redis keys (all *), sessions collection, and Mailpit messages — covers every cross-test surface the new tests touch.",
+      "ProfileControllerIT.cleanAndSeed (line 53-69) wipes users, events, sessions and reseeds the canonical USER_ID user. The new tests use the same seeded user (profile@test.com) for login or operate under @WithMockAppUser — no extra teardown needed.",
+      "New tests use distinct user emails (rmt@, rmf@, sess-B/sess-other-user as session IDs, pre-flip-session as session ID) — no email/sessionId collisions with pre-existing tests in either file.",
+      "AC18 tests' configured-attribute assertions are read-only (no mutation) so they cannot leak state."
+    ]
+  },
+  "deviationEvaluation": {
+    "deviation": "AC18 XSRF-TOKEN co-emission on the same login response is NOT asserted in login_rememberMeTrue_... test",
+    "acceptable": true,
+    "rationale": "The javadoc at AuthControllerIT.java:597-609 lists three structural reasons: (1) without .with(csrf()) the POST returns 403; (2) with .with(csrf()) the SecurityMockMvc post-processor swaps the real CookieCsrfTokenRepository for a TestCsrfTokenRepository, so the production save path never runs; (3) on a real round-trip CookieCsrfTokenRepository.RepositoryDeferredCsrfToken only saves when loadToken returned null — once a valid XSRF-TOKEN cookie is present in the request, saveToken is correctly skipped. These constraints are real and rooted in Spring Security test infrastructure design. Coverage of the cookie-write path is preserved by SecurityConfigTest.csrfCookie_writtenOnSafeVerbRequest on a fresh anonymous GET /health, which exercises the same CookieCsrfTokenRepository.saveToken branch. The deviation is documented in javadoc and decisions.md per the task post-completion checklist. This matches test-master Category 5 / 6 principles: avoid excessive test ceremony to assert against a stubbed surface; assert against the real code path where it actually fires.",
+    "concern": "The method name still advertises the assertion that the body skips (see finding #1) — separate from the deviation being technically sound."
+  },
+  "flakinessAssessment": {
+    "verdict": "low-risk",
+    "concerns": [
+      {
+        "severity": "minor",
+        "location": "ProfileControllerIT.java:311-315",
+        "concern": "findFirst() on principal-matching sessions document assumes the login created exactly one document for USER_ID. Spring Session uses 32+ char UUIDs as session ids — collision with the literal 'sess-B' or 'sess-other-user' seeded later is astronomically unlikely. The seedSession(sess-B) call happens AFTER currentSessionId is captured, so even a (vanishingly improbable) UUID-vs-literal collision would surface as a test failure rather than a silent pass.",
+        "mitigation": "No change needed — current shape is correct. A pedantic hardening would be `assertThat(sessions).hasSize(1)` before findFirst, but the existing orElseThrow lambda effectively performs that check."
+      },
+      {
+        "severity": "minor",
+        "location": "AuthControllerIT.java:709-717",
+        "concern": "parseSetCookieHeaderFor returns first matching Set-Cookie header — see finding #2 for the session-fixation rotation edge case."
+      }
+    ],
+    "evidence": "Task post-completion checklist (lines 184 of tasks/12.md) requires 3x sequential passing runs and the commit log states this was performed. The cookie-shape assertions are deterministic (DefaultCookieSerializer source path is single-branch per Max-Age value); BSON fixture insert is deterministic via insertOne; Spring Session session id generation is per-request, not order-dependent."
+  },
+  "helperCodeQuality": {
+    "parseSetCookie": {
+      "location": "AuthControllerIT.java:719-732",
+      "verdict": "correct",
+      "notes": [
+        "Splits on `;`, trims segments, skips empty segments — handles trailing semicolons defensively.",
+        "Lowercases keys for case-insensitive lookup — correctly handles SameSite vs samesite header-attribute case variation.",
+        "Stores name and value under reserved __name/__value keys so flag attributes (HttpOnly, Secure) parsed as empty strings cannot collide with the cookie name/value. Reasonable defensive design.",
+        "Scoped private static — testable in isolation if needed but not over-exposed."
+      ]
+    },
+    "parseSetCookieHeaderFor": {
+      "location": "AuthControllerIT.java:709-717",
+      "verdict": "correct-with-minor-concern",
+      "notes": [
+        "Iterates response.getHeaders(\"Set-Cookie\") and returns first match by cookieName + \"=\" prefix.",
+        "See finding #2 — first-match semantics could mask a clear-then-set rotation. Not currently a defect because the live flow appears to emit one SESSION cookie per response."
+      ]
+    },
+    "assertCookieAttributesMatchConfig": {
+      "location": "AuthControllerIT.java:680-694",
+      "verdict": "correct",
+      "notes": [
+        "Shared between both AC18 tests so the configured-value invariant is checked uniformly.",
+        "Reads @Value-bound cfgCookieHttpOnly / cfgCookieSecure / cfgCookieSameSite — assertions track application(-test).properties drift automatically, satisfying the tech-spec guidance.",
+        "SameSite compared case-insensitively per RFC 6265bis — correct.",
+        "Distinguishes 'absent' from 'present' for flag attributes via containsKey — correct."
+      ]
+    }
+  },
+  "assertionStrengthAssessment": {
+    "verdict": "strong",
+    "notes": [
+      "AC17 message regex `^email: .+(, .+: .+)*$` allows locale variation in default-message text but pins the joiner shape — the right balance between brittleness and regression detection.",
+      "AC18 Max-Age expected value is computed from @Value-bound rememberMeDays * 86400 rather than hardcoded 2592000 — config drift surfaces explicitly without breaking the assertion. Comparison uses Long.toString to match the raw header byte-shape.",
+      "AC16(b) currentSessionId is captured from the live sessions collection AFTER login, then asserted post-change-password — this is the litmus-test-strong shape: if ProfileService.terminateAllSessionsExcept were to omit the `_id != currentSessionId` clause, currentCount would be 0 and the test would fail loudly.",
+      "TC5 isInstanceOf is the right granularity — equals(...) on RememberMeCookieSerializer.class would be wrong (subclass identity), instanceof handles future subclasses correctly while still catching DefaultCookieSerializer regression.",
+      "Litmus test passed for all six tests: removing the core production-side line (terminate-by-principal delete; MethodArgumentNotValidException handler; RememberMeCookieSerializer.writeCookieValue Max-Age branch; RememberMeCookieSerializer @Bean registration) would cause the corresponding test to fail."
+    ]
+  }
+}

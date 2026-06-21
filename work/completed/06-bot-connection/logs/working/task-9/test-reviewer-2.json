@@ -1,0 +1,43 @@
+{
+  "verdict": "approved",
+  "status": "passed",
+  "summary": "Round-2 fixes correctly address all three actionable round-1 minors and add the requested watcher-lifecycle test. (1) AC19 modal-copy assertion now uses toContain on the full canonical uk.json body 'Відключити бота @SmokeBot? Вхідні повідомлення припиняться, а вебхук буде видалено. Підключити знову можна будь-коли.' — byte-for-byte match with bot.disconnect.modal.body after {username} interpolation (verified against uk.json:241). A regression that drops the second clause would now fail. (2) AC17 token-regex negative assertion is added on line 382 inside the 'renders Connected view from initial fetch' test (`expect(wrapper.text()).not.toMatch(TOKEN_REGEX)`), closing the Connected-view leak gap that previously relied solely on the AC18 literal-string check. (3) Teleport stub is fully migrated off vue-test-utils' shared config object — the module-level `config.global.stubs` mutation is removed, the import of `config` is dropped, and a local `mountOptions` object is threaded through every single `mountSuspended(BotPage, mountOptions)` call (verified: all 21 mount sites pass `mountOptions`, zero leakage path remains). (4) The new 'modal closes when bot.current goes null mid-modal' test correctly exercises the full lifecycle: seeds `reactiveStore.current = BOT_FIXTURE`, opens the modal via click, asserts confirm button is present (modal-open invariant), mutates `reactiveStore.current = null`, settles, and asserts confirm button no longer exists (modal-closed invariant). It maps directly onto the new watcher in bot.vue (lines 30-35) that fires `showDisconnectModal.value = false` when `botStore.current` becomes null. Litmus test passes — removing the watcher body would leave the modal open and the assertion `.exists()).toBe(false)` would fail. Round-1 minor #4 (assertion-shape inconsistency in connect-error matrix) is intentionally not re-flagged per instructions.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 3,
+    "testsAnalyzed": 22,
+    "litmusTest": {
+      "checked": 22,
+      "passed": 22,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 22,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "round1MinorResolution": {
+      "minor1_ac19ModalCopySubstring": {
+        "status": "resolved",
+        "evidence": "bot.spec.ts:282-284 — toContain with full canonical body string; matches uk.json:241 verbatim after {username} interpolation"
+      },
+      "minor2_ac17TokenRegexConnectedView": {
+        "status": "resolved",
+        "evidence": "bot.spec.ts:382 — `expect(wrapper.text()).not.toMatch(TOKEN_REGEX)` added inside 'renders Connected view from initial fetch' test"
+      },
+      "minor3_teleportGlobalStubLeak": {
+        "status": "resolved",
+        "evidence": "bot.spec.ts:1 — `import { config }` removed; bot.spec.ts:14-20 — local `mountOptions` object; bot.spec.ts: all 21 prior mountSuspended sites + 1 new test now pass `mountOptions` as second arg (verified via grep — zero bare `mountSuspended(BotPage)` calls remain)"
+      },
+      "newTestModalClosesOnCurrentNull": {
+        "status": "added_and_correct",
+        "evidence": "bot.spec.ts:385-401 — full lifecycle: seed BOT_FIXTURE -> mount -> click disconnect -> assert confirm exists (pre-condition) -> set reactiveStore.current = null -> settle -> assert confirm no longer exists. Pairs with bot.vue:30-35 watcher. Litmus: removing the watcher body breaks the post-condition assertion."
+      }
+    },
+    "round1AcceptedStylistic": {
+      "minor4_connectErrorAssertionShape": "accepted as stylistic per orchestrator note; not re-flagged"
+    }
+  }
+}

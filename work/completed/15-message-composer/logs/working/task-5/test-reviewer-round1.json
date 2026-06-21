@@ -1,0 +1,31 @@
+{
+  "task": 5,
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "mode": "self-applied (nested sub-agent spawn restricted)",
+  "scope": [
+    "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerServiceIT.java"
+  ],
+  "test_type": "integration (Testcontainers Mongo + real FunnelTriggerServiceImpl/Engine beans) — correct type for a DB-write callback path; no over-mocking (only the pre-existing FunnelRepository spy in the error-isolation test).",
+  "pyramid_fit": "Appropriate. The callback branch is a service+DB interaction; unit-level mocking would not exercise the claim-CAS / event-write contract.",
+  "coverage": {
+    "negative_matrix": "broken format (no ':' / extra segment 'a:b:b' / empty), >64 bytes, non-hex executionId, out-of-range buttonIndex, non-callback URL button, not waiting_for_reply, IDOR cross-subscriber, IDOR cross-project, cursor-not-MESSAGE — all present and assert reject + no advance + zero events.",
+    "positive": "messageStepWithButtons parks + branches via resumeOnCallback to button.targetStepId (DELAY target => waiting, currentStepId advanced).",
+    "invariants": "lastButtonClicked == currentStepId:buttonIndex ('m1:1'); funnel_button_clicked recorded exactly once (double-click loses CAS => no extra event).",
+    "regression": "fire()/cancel() snapshot + re-enter + error-isolation tests migrated to composer (StepType.MESSAGE + blocks) and stay green."
+  },
+  "findings": [],
+  "good_practices": [
+    "Assertions on real DB state and the events collection, never on mock invocations",
+    "cleanAndSeed wipes Event collection too, keeping event-count assertions deterministic",
+    "Each callback test isolates one rejection/acceptance branch — no redundant coverage",
+    "Snapshot deep-copy test rewritten to swap a blocks element on the source and prove snapshot isolation",
+    "IDOR tests assert zero funnel_button_clicked events for BOTH owner and attacker subscriber ids"
+  ],
+  "notes": [
+    "brokenFormat_rejected iterates 3 malformed payloads under one logical concern (parse rejects) and asserts the end-state once — acceptable since each iteration is a no-op; could be split into parameterized sub-cases for finer failure attribution (optional, non-blocking).",
+    "No StepType.MENU/SEND_MESSAGE/SEND_IMAGE references remain in the file."
+  ],
+  "verification": "25 tests, 0 failures (build/test-results). Compiled + run in isolation with sibling Task3/4 test files temporarily stashed then restored.",
+  "result": "pass"
+}

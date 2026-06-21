@@ -1,0 +1,42 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 3,
+  "round": 1,
+  "mode": "self-review (nested sub-agent spawning restricted in this environment)",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java"
+  ],
+  "summary": "MESSAGE composer branch is well-structured: single outer try/catch preserves per-node at-most-once + lost-forward semantics, shared renderTrimmed helper removes the 6x trim duplication, per-block dispatch is exhaustive over BlockType (no default), keyboard anchored to last non-album block via a single reverse scan. Catch-arm order/mapping matches the former flat branches exactly. Cross-file signatures verified against Task 2 TelegramSender (sendVideo/Audio/Document 6-arg, sendMediaGroup 4-arg) and Task 1 model (ContentBlock/MediaItem/BlockType).",
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "minor",
+      "dimension": "Code Readability (3)",
+      "file": "StepExecutor.java",
+      "finding": "buildAlbum javadoc referenced a removed helper name 'albumElementType' after it was inlined to the ALBUM_ELEMENT_TYPE constant.",
+      "action": "fixed",
+      "resolution": "Updated the comment to reference the ALBUM_ELEMENT_TYPE constant + its declared rationale."
+    },
+    {
+      "id": "CR-2",
+      "severity": "minor",
+      "dimension": "Error Handling / Edge cases (4)",
+      "file": "StepExecutor.java",
+      "finding": "If a step has buttons but every block is an album (lastNonAlbumIndex == -1), no block receives the keyboard yet the branch still returns WAIT_FOR_REPLY, parking on a reply that can never arrive (until timeout). This is an invalid step shape.",
+      "action": "skip",
+      "reason": "Task 3 spec explicitly says NOT to invent runtime behavior for 'buttons + last block album' — that shape is rejected at save (422) by Task 4 validation, so the executor never sees it in practice. Keeping park/cont anchored to the last non-album block matches the spec's stated contract. Documented as a known validation-enforced precondition."
+    },
+    {
+      "id": "CR-3",
+      "severity": "info",
+      "dimension": "Architecture (1)",
+      "file": "StepExecutor.java",
+      "finding": "ALBUM_ELEMENT_TYPE hardcoded to 'photo' because the Task 1 model carries no per-item media type (MediaItem is url+caption only, ContentBlock.type is the single ALBUM discriminator).",
+      "action": "documented-deviation",
+      "reason": "Model limitation from Task 1 — photo+video album mixing (Decision 5) is not expressible until the model carries an element-type hint. Recorded in decisions.md Deviations."
+    }
+  ],
+  "verification": "Isolated javac of all main sources (StepExecutor + Task1 model + Task2 sender) = 0 errors; FunnelStepExecutorTest 24/24 green via JUnit launcher; both test files compile in isolation against the test classpath."
+}

@@ -1,0 +1,86 @@
+{
+  "summary": "Round 2 re-review of Task 7 confirms all critical and major findings from round 1 are either resolved or reasonably mitigated. The status gate in loadActiveUser, the @Size(max=200) caps on ChangePasswordRequest, the deleteAccount terminate-all-then-invalidate ordering, the change-password Redis brute-force counter, and the HardDeleteJob +1ns cutoff bump are all correctly implemented. The two round 1 majors that were not strictly fixed (terminateAllSessions duplication and the missing end-to-end current-session-survives IT) are now defensibly mitigated: a Query.toJson() unit assertion pins the `_id != currentSessionId` clause, the IT proves sibling deletion runs end-to-end, and the duplication trade-off is documented. Test pollution risk on Redis state and a missing currentSession-id IT assertion remain as minors.",
+  "verdict": "approved_with_suggestions",
+  "status": "approved_with_suggestions",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+      "line": 225,
+      "description": "The change-password IT proves sibling sessions are deleted (sess-laptop, sess-phone) but does not assert the current-session document survives. Under @WithMockAppUser there is no real session cookie persisted in the sessions collection, so a true end-to-end survival check would require seeding a session with `_id == webTestClient's WebSession id` — which the test cannot easily reach. The unit test ProfileServiceTest.changePassword_correctPassword_excludesCurrentSession_andResetsCounter pins `_id != currentSessionId` via Query.toJson(), so the invariant IS protected. Acceptable, but the gap between unit-level structural pinning and the full integration proof remains: a regression that wrong-encoded the WebSession id (e.g. used getName() instead of getId()) would not be caught by either layer.",
+      "fix": "Optional. Either (a) seed a session with `_id` matching the request's WebSession id by capturing it via a ServerHttpResponse cookie inspection, or (b) reuse the seedSession helper after a real login flow (similar to AuthControllerIT). For round 2 I recommend leaving as-is — the unit test covers the structural clause and the IT covers the delete path. Document this as a known coverage gap in decisions.md so future maintainers don't assume Decision 14's current-session-survives is end-to-end protected."
+    },
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+      "line": 39,
+      "description": "Test setUp does not flush Redis state. The brute-force counter `change-pwd:fail:test-user-fixed-id` may persist across the IT's change-password tests within a single JVM run because Redis is a singleton testcontainer. Currently the wrong-current test produces 1 failure (threshold 5), the correct-current test resets the counter on success, and total failures stay below threshold even on retry — so tests pass. But future additions of negative-path tests (e.g. multiple wrong-current attempts, reorderings) would silently start sharing counter state. Same pattern AuthService brute-force counters use across AuthControllerIT and ProfileControllerIT; the user-id-keyed counter mostly isolates tests but does not eliminate the risk.",
+      "fix": "Add a @BeforeEach hook that clears Redis: e.g. `redisTemplate.execute((RedisCallback<Void>) c -> { c.serverCommands().flushDb(); return null; }).block();` (or use `redisTemplate.delete(redisTemplate.keys(\"*\")).block();` reactively). Cheap and removes a class of future flakes. Optional for this task — recommend adding to AbstractIntegrationTest as a cross-cutting convention."
+    },
+    {
+      "severity": "minor",
+      "category": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 108,
+      "description": "Round 1 major #1 (duplicated terminateAllSessions logic between AuthService and ProfileService) was left as duplication with a comment explaining the trade-off. The argument is defensible: extracting a SessionTerminationService would pull AuthService into ProfileService's dependency graph for one query, and the Task 6 IT (sessionsCollection_principalFieldPath_isAtTopLevel) already pins the field path against the live Mongo schema. However, the comment claims a shared helper would force AuthService dependency — that's not strictly true. A static helper class (e.g. `com.botfunnel.session.SessionTerminator`) with a single static method `removeAllByPrincipal(ReactiveMongoTemplate, String)` would not introduce service-level coupling; it would just deduplicate the field-path knowledge. The current duplication means: if Spring Session ever bumps the `principal` field path, two production files AND two test files (AuthServiceTest, ProfileServiceTest) need updating, and the Task 6 IT covers only one of them at runtime.",
+      "fix": "Optional. Extract `SessionTerminator.removeAllByPrincipal(ReactiveMongoTemplate template, String userId)` and `removeAllByPrincipalExcept(ReactiveMongoTemplate template, String userId, String exceptSessionId)` into a session-package utility. Both AuthService.terminateAllSessions and ProfileService.terminateAllSessions* delegate. The Task 6 IT then naturally protects all callers. If left as-is, the comment should be tightened to acknowledge the static-helper option exists."
+    },
+    {
+      "severity": "minor",
+      "category": "error-handling",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 100,
+      "description": "Round 1 minor #5 (audit event wired via doOnSuccess only fires if downstream session-cleanup completes) is unchanged. After the password is rotated and saved, if terminateAllSessionsExcept errors (Mongo blip on sessions collection) the user's password IS rotated but no `password_changed` event is logged. Same partial-failure window applies to deleteAccount (line 141). Defensible — EventService is already fire-and-forget — but the asymmetry with AuthService.resetPassword (which has the same shape) means the audit trail can drop on Mongo session-collection failures.",
+      "fix": "Optional. Move `eventService.logEvent` to immediately after `userRepository.save(...)` succeeds — capture the state change irrespective of session-cleanup outcome. Or wrap in `doFinally` to fire on cancel/error too. Consistent treatment across AuthService.resetPassword, ProfileService.changePassword, and ProfileService.deleteAccount."
+    },
+    {
+      "severity": "nitpick",
+      "category": "readability",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 88,
+      "description": "`Boolean.FALSE.equals(matches)` defensive null-equality check is preserved from round 1. The Mono is built from a Callable returning primitive boolean (auto-boxed) so null is not actually possible. The previous round nitpick suggested `if (!matches)` after binding the unboxed value. Remains as-is — purely cosmetic.",
+      "fix": "Optional. No functional impact."
+    },
+    {
+      "severity": "nitpick",
+      "category": "readability",
+      "file": "backend/src/main/java/com/botfunnel/jobs/HardDeleteJob.java",
+      "line": 40,
+      "description": "The +1ns cutoff bump is explained in a comment but the boundary semantics are subtle: `findByStatusAndDeletedAtBefore` is strict-less-than, so cutoff=now-30d+1ns admits deletedAt values up to and including now-30d (when truncated to ns precision). The HardDeleteJobTest.hardDelete_exactly30DaysAgo_isRemoved test uses `Instant.now().minus(Duration.ofDays(30))` — but between the seed call and the job invocation, Instant.now() has already advanced by some milliseconds, so the job's internal `now` is strictly greater than the seed's `now`, and the +1ns is not strictly necessary for the test to pass (it would pass even with `Instant.now().minus(RETENTION)` directly). The test asserts the inclusion direction at the boundary, which is what matters operationally — flagging only that the test does not isolate the +1ns mechanism specifically.",
+      "fix": "Optional. To pin the +1ns mechanism: in HardDeleteJob, accept a `Supplier<Instant> clock` (or use Spring's Clock bean), inject a fixed-time test clock in the boundary test, and seed `deletedAt` exactly equal to the fixed `now.minus(RETENTION)`. Without that, the test does prove inclusion at the daily-job cadence — which is the user-visible AC."
+    },
+    {
+      "severity": "nitpick",
+      "category": "readability",
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileServiceTest.java",
+      "line": 69,
+      "description": "Round 1 nitpick on the literal `$2a$12$existing-hash` (not a valid bcrypt hash) is unchanged. PasswordEncoder is mocked, so the test passes — but the literal can mislead readers about real BCrypt hash structure. Cosmetic.",
+      "fix": "Optional. Rename the constant to `OLD_HASH_PLACEHOLDER` or use a real `passwordEncoder.encode(\"...\")` once in setUp."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 4,
+    "nitpickIssuesCount": 3,
+    "testCoverageAssessment": "adequate",
+    "round1IssuesAddressed": {
+      "resolved": [
+        "@Size(max=200) on ChangePasswordRequest currentPassword/newPassword (round 1 minor)",
+        "Misleading 'session id is hashed' comment removed from terminateAllSessionsExcept (round 1 minor)",
+        "Status gate added in ProfileService.loadActiveUser (security-auditor critical)",
+        "deleteAccount now calls terminateAllSessions before session.invalidate (security-auditor major)",
+        "Brute-force counter on change-password (security-auditor major)",
+        "HardDeleteJob cutoff bumped by 1ns + boundary test (test-reviewer major)",
+        "Sibling-sessions removal IT for change-password and delete-account (test-reviewer major)"
+      ],
+      "deferred_with_justification": [
+        "terminateAllSessions duplication between ProfileService and AuthService — comment documents trade-off; field path locked by Task 6 IT. Acceptable; flagged as minor in round 2.",
+        "End-to-end current-session-survives IT for change-password — unit test pins clause structurally; IT proves delete path. Acceptable; flagged as minor in round 2."
+      ]
+    }
+  }
+}

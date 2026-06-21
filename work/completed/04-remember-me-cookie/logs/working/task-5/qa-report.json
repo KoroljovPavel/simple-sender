@@ -1,0 +1,79 @@
+{
+  "feature": "04-remember-me-cookie",
+  "commit": "b50f7b4cbd7cfdd98c9003ec7c3dc86b8179d412",
+  "date": "2026-05-09",
+  "status": "passed",
+  "summary": {
+    "totalChecks": 10,
+    "passed": 10,
+    "failed": 0,
+    "notVerifiable": 0,
+    "criticals": 0,
+    "majors": 0,
+    "minors": 0
+  },
+  "testSuite": {
+    "status": "passed",
+    "command": "./gradlew :backend:test",
+    "details": "174 tests, 0 failures, 0 skipped, 100% successful (20.744s). Includes new RememberMeWebSessionIdResolverTest (10 tests, Scenarios A-H + cookie-name pass-through + bonus regression) and extended AuthServiceTest cases (login true/false attribute writes) and AuthServiceRegistrationTest (register auto-login attribute=false)."
+  },
+  "acceptanceCriteria": [
+    {
+      "criterion": "AC-1: POST /api/auth/login {rememberMe:true} → Set-Cookie with Max-Age=2592000 and Expires ~+30 days; other flags from config preserved",
+      "status": "passed",
+      "evidence": "smoke.log: Set-Cookie: SESSION=...; Max-Age=2592000; Expires=Mon, 08 Jun 2026 13:26:15 GMT; Path=/; HTTPOnly; SameSite=Lax (today=2026-05-09, +30 days = 2026-06-08)"
+    },
+    {
+      "criterion": "AC-2: POST /api/auth/login {rememberMe:false} → Set-Cookie WITHOUT Max-Age and WITHOUT Expires (session cookie)",
+      "status": "passed",
+      "evidence": "smoke.log: Set-Cookie: SESSION=cc32e3ad-...; Path=/; HTTPOnly; SameSite=Lax (no Max-Age, no Expires)"
+    },
+    {
+      "criterion": "AC-3: server-side TTL in Mongo stays in sync with cookie (24h vs 30d)",
+      "status": "passed",
+      "evidence": "Covered by RememberMeWebSessionIdResolverTest Scenario E (parameterized over app.session.ttl-remember-me-days) + AuthServiceTest verifies WebSession.maxIdleTime. All passed in test suite (./gradlew :backend:test → 174/174)."
+    },
+    {
+      "criterion": "AC-4: pre-fix cookie (no Max-Age) with valid id in Mongo sessions still authorizes /api/auth/me → 200 OK",
+      "status": "passed",
+      "evidence": "smoke.log: GET /api/auth/me with header `Cookie: SESSION=cc32e3ad-...` (raw name=value, no attributes) → HTTP/1.1 200 OK, body {id, email, name, status} returned. Existing sessions are not invalidated by deploy."
+    },
+    {
+      "criterion": "AC-5: POST /api/auth/logout → Set-Cookie with Max-Age=0 regardless of rememberMe state",
+      "status": "passed",
+      "evidence": "smoke.log: POST /api/auth/logout (CSRF-protected, used XSRF-TOKEN cookie jar) → Set-Cookie: SESSION=; Max-Age=0; Expires=Sat, 09 May 2026 13:26:55 GMT; Path=/; HTTPOnly; SameSite=Lax"
+    },
+    {
+      "criterion": "AC-6: POST /api/auth/register (auto-login) → session-only cookie (no Max-Age)",
+      "status": "passed",
+      "evidence": "Inline during fresh-user registration: POST /api/auth/register {email:qa-task5@example.com, password:...} → 201 Created with Set-Cookie: SESSION=6d637f98-...; Path=/; HTTPOnly; SameSite=Lax (no Max-Age, no Expires)."
+    },
+    {
+      "criterion": "AC-7: re-login flipping rememberMe (true → false or vice versa) rewrites cookie attributes without manual action",
+      "status": "passed",
+      "evidence": "smoke.log: same cookie jar, first login {rememberMe:true} → Max-Age=2592000; second login {rememberMe:false} on the same jar → Set-Cookie: SESSION=d20e9d2a-...; Path=/; HTTPOnly; SameSite=Lax (new session id, no Max-Age — cookie rewritten)."
+    },
+    {
+      "criterion": "AC-8: SERVER_REACTIVE_SESSION_COOKIE_NAME=ALT env var + restart → Set-Cookie writes cookie with name ALT; fix code unchanged",
+      "status": "passed",
+      "evidence": "Backend restarted with `SERVER_REACTIVE_SESSION_COOKIE_NAME=ALT ./gradlew bootRun`. smoke.log: POST /api/auth/login {rememberMe:true} → Set-Cookie: ALT=78831631-...; Max-Age=2592000; Expires=Mon, 08 Jun 2026 13:28:59 GMT; Path=/; HTTPOnly; SameSite=Lax. Cookie name flipped from SESSION to ALT via env alone, no code changes."
+    },
+    {
+      "criterion": "Manual browser smoke (user-spec 'Пользователь проверяет'): persist via browser restart with checkbox, session-only without checkbox, logout clears cookie",
+      "status": "passed",
+      "evidence": "User-confirmed on 2026-05-09 against http://localhost:3000 (Nuxt dev) + http://localhost:8080 (backend default config). All three scenarios verified: persist via browser restart with checkbox; session-only behavior without checkbox; logout removes SESSION cookie from DevTools list."
+    },
+    {
+      "criterion": "Tech-spec acceptance: ./gradlew :backend:build SUCCESSFUL, no new ERROR-level logs at startup, no new dependencies",
+      "status": "passed",
+      "evidence": "BUILD SUCCESSFUL in 38s; bootRun startup logs show only INFO/DEBUG; backend/build.gradle unchanged in this feature."
+    }
+  ],
+  "findings": [],
+  "deferredToPostDeploy": [],
+  "verificationArtifacts": {
+    "smokeLog": "logs/working/task-5/smoke.log",
+    "backendStartupLogs": "/tmp/bootrun-default.log (transient — moved to gradle daemon-cache by end of session)",
+    "testReport": "backend/build/reports/tests/test/index.html"
+  }
+}

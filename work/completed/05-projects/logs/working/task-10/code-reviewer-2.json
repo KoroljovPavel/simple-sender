@@ -1,0 +1,61 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Round 2 hydration-gate fix is functionally correct and minimally scoped: only frontend/e2e/projects.spec.ts changed (AC-T7 zero-touch + AC-T3 no-deps both hold). The `#__nuxt → __vue_app__._instance.isMounted` probe is grounded in Vue 3.5.33 internals (runtime-core.esm-bundler.js:4251 sets __vue_app__, :6159 sets isMounted, :4253 sets _instance) and the Nuxt 4.4.4 default rootAttrs.id='__nuxt' (verified in @nuxt/schema@4.4.4 dist/index.mjs:107; this project does not override app.rootAttrs in nuxt.config.ts). Comment block is excellent — explains the AC-28 race, why networkidle is rejected, and why subsequent in-spec navigations need no additional gate. No critical or major findings. Three minor and one nit worth recording before merge.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 42,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "The probe relies on `app._instance` — a Vue-internal field that, per runtime-core.esm-bundler.js:4252-4254, is only assigned when `process.env.NODE_ENV !== 'production'` OR `__VUE_PROD_DEVTOOLS__` is true. Under `pnpm dev` (playwright.config.ts:16) this is fine. Under `pnpm build && pnpm preview` (the very fallback the QA report deferredToPostDeploy item #4 recommends for AC-28 production-build verification), `app._instance` is undefined and `waitForFunction` will time out at the Playwright default (~30s) before failing. The probe should either (a) fall back to `instance.isMounted` via a different reachable path — e.g. check `__vue_app__._container.firstElementChild?.__vueParentComponent?.isMounted` (also internal, also brittle), or (b) include an OR condition that accepts the prod-mode signal — e.g. wait for `!!window.__NUXT__?.serverRendered && !!root.__vue_app__` (the `__vue_app__` host is assigned in both modes at line 4251, before the dev-only `_instance` assignment), or (c) document this dev-mode-only constraint in the spec comment and in decisions.md so anyone running against `pnpm preview` does not regress AC-28 silently. Option (b) is cheapest: presence of `__vue_app__` alone is sufficient because Vue assigns it synchronously inside `mount()` right after `render()` (runtime-core.esm-bundler.js:4247-4251), which means the root component tree has rendered and event handlers including `@submit.prevent` are wired by the time __vue_app__ is observable.",
+      "benefit": "Spec stays green under the production-build verification path the QA team will exercise post-deploy; no dev/prod-mode drift in the gate.",
+      "optional": true
+    },
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 41,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The inline type cast `Element & { __vue_app__?: { _instance?: { isMounted?: boolean } } }` reads at 130+ columns and mixes a structural augmentation with the runtime probe. Two cheap improvements: (1) lift the augmentation into a local `type NuxtRoot = Element & { __vue_app__?: { _instance?: { isMounted?: boolean } } }` declared just above the test body (still in-file — task spec forbids helper FILES, not local types), or (2) drop the cast entirely by using `(root as any)?.__vue_app__?._instance?.isMounted === true`. Inside a `page.waitForFunction` body the cast is purely a TypeScript exercise — Playwright serializes the function and runs it in browser context where the type information is erased. Trading 70 columns of inline type for a brief `any` here is the kind of place ESLint `no-explicit-any` overrides are commonly accepted (test-only files).",
+      "benefit": "Lower cognitive load for the next reader; aligns with the rest of the spec's stylistic terseness (none of the other locators are typed).",
+      "optional": true
+    },
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 40,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Style parity with `e2e/i18n.spec.ts` is partial: that spec gates hydration with `page.waitForLoadState('networkidle')` (i18n.spec.ts:11) while this spec uses a Vue-internal probe and explicitly rejects networkidle in the comment. The comment captures the divergence well but a future reader landing on i18n.spec.ts first may wonder why two specs in the same suite use different hydration strategies. Consider a one-line back-reference comment in i18n.spec.ts (next code-writing pass — not in this round to keep AC-T7 scope clean): `// Note: projects.spec.ts uses a Vue-app-mounted probe instead of networkidle; see comment there.` Alternatively, capture the trade-off in `work/05-projects/decisions.md` Task 10 entry so the choice survives outside the file.",
+      "benefit": "Keeps the e2e suite coherent for future test authors who copy-paste patterns.",
+      "optional": true
+    },
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 40,
+      "severity": "nit",
+      "category": "readability",
+      "suggestion": "Item #6 in the review request: subsequent forms (projects/new submit, settings rename, delete-confirm) — verified safe. Both pages/projects/new.vue and pages/projects/[projectId]/settings.vue use fully synchronous `<script setup>` (no top-level await, no async useFetch — confirmed at pages/projects/new.vue:1-39 and pages/projects/[projectId]/settings.vue:1-40). Vue Router client-side navigations between the initial register page and these pages render synchronously once the root app is mounted, so no additional hydration gate is needed in this spec. The comment at lines 37-38 ('Subsequent navigations are client-side (Vue Router), so no further gate is needed in this spec.') already documents this correctly. If a future page adds an async setup (e.g., `const { data } = await useFetch(...)` at top-level), the same race will re-appear; consider adding a `// IF you add async setup to a downstream form, re-introduce the hydration gate here` note. Pure documentation hint, optional.",
+      "benefit": "Future-proofs the spec against silent regression when downstream pages adopt async setup.",
+      "optional": true
+    }
+  ],
+  "verification": {
+    "ac_t7_zero_touch": "git diff 4121daf..HEAD --stat → only `frontend/e2e/projects.spec.ts | 14 ++++++++++++++` (1 file, 14 insertions, 0 deletions). No edits to frontend/playwright.config.ts, frontend/package.json, frontend/middleware/auth.global.ts, backend/.../SecurityConfig.java, backend/.../JobRunrMongoConfig.java — verified by `git diff 4121daf..HEAD -- <each file>` empty.",
+    "ac_t3_no_new_deps": "git diff 4121daf..HEAD -- frontend/package.json → empty.",
+    "probe_grounding": {
+      "nuxt_root_id": "@nuxt/schema@4.4.4 dist/index.mjs:107 defaults rootAttrs.id to '__nuxt' when app.rootId is unset; this project's nuxt.config.ts has no `app.rootAttrs`/`app.rootId` override → vueAppRootContainer === '#__nuxt' confirmed (nuxt@4.4.4 dist/index.mjs:8091 selects '#${rootAttrs.id}').",
+      "vue_app_marker": "@vue/runtime-core@3.5.33 runtime-core.esm-bundler.js:4251 assigns `rootContainer.__vue_app__ = app` inside `mount()`, immediately after the synchronous `render()` call (line 4247). This means the marker is observable only after the root component tree has rendered and v-on directives (including @submit.prevent on register.vue:68) are wired.",
+      "isMounted_timing": "@vue/runtime-core@3.5.33 runtime-core.esm-bundler.js:6159 sets `instance.isMounted = true` at the end of the root component's mount flush. This is later than `__vue_app__` assignment but still inside the same mount() synchronous chain.",
+      "instance_dev_only_caveat": "@vue/runtime-core@3.5.33 runtime-core.esm-bundler.js:4252-4254: `app._instance = vnode.component` is gated on `NODE_ENV !== 'production' || __VUE_PROD_DEVTOOLS__`. Under playwright.config.ts webServer `pnpm dev`, this is fine. See suggestion #1 for the prod-build edge case."
+    },
+    "subsequent_forms_safety": "pages/projects/new.vue:1-39 and pages/projects/[projectId]/settings.vue:1-40 both have synchronous <script setup> (no top-level await). Vue Router renders these synchronously after initial mount → no further hydration gate required in this spec."
+  },
+  "metrics": {
+    "filesReviewed": 1,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "adequate"
+  }
+}

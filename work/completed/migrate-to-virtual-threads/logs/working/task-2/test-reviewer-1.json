@@ -1,0 +1,20 @@
+{
+  "summary": "Task 2 test rewrite preserves the same surface 1:1. All seven NoOp* scenarios (3 subscriber + 4 funnel) translate cleanly from StepVerifier.expectComplete() to AssertJ assertThatCode(...).doesNotThrowAnyException(); both forms assert the same semantic — a side-effect-free invocation completes normally for the given inputs. The null-tolerance test in upsertFromTelegramUpdate_acceptsNullOptionalFields remains a meaningful contract pin: it documents that the method must remain null-safe for firstName/lastName/username/languageCode, so any future real implementation (Epic 05) that dereferences those fields without a null guard would break the test. The @MockitoSpyBean worker test (ProcessTelegramUpdateJobTest) is fully compatible with the void flip — Mockito's verify(...) and doThrow(...).when(...) APIs work identically on void methods, and the test never used when(...).thenReturn(Mono.empty()), so nothing needed to change there. No side-effect assertion implied by the old reactive flow was lost (Mono.empty() carries no side effect). One minor finding: a stale comment in ProcessTelegramUpdateJobTest still references Mono.empty().",
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java",
+      "line": 47,
+      "issue": "Stale comment: 'wraps the real no-op stubs so call-counts can be asserted while the real Mono.empty() returns flow through.' After the void flip there is no Mono.empty() — the spied bean's real methods are now void no-ops. Comment drifts from current contract and may confuse a future reader who greps for Mono in test files expecting to find a reactive surface.",
+      "suggestion": "Replace with: '@MockitoSpyBean wraps the real no-op stubs so call-counts can be asserted while the real void no-op bodies execute (Mockito spy default delegates to the real method for void).' Keeps the intent (call-count assertions via spy) and removes the now-incorrect Mono reference."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/NoOpSubscriberServiceTest.java",
+      "line": 26,
+      "issue": "upsertFromTelegramUpdate_acceptsNullOptionalFields passes by definition today because the method body is // no-op — there is literally no code that could touch the null parameters. The test still has value as a contract pin (it would break the moment a future Epic 05 impl dereferences a null field without a guard), but its current pass condition is structurally vacuous. This is acceptable for a stub but worth flagging so the test is not deleted as 'meaningless' during a future cleanup pass. The same observation applies to fire_acceptsNullPayload and fire_acceptsEmptyPayload in NoOpFunnelTriggerServiceTest.",
+      "suggestion": "Leave as-is for now (matches task spec which explicitly preserves these cases). When Epic 05/06 lands the real impl, these tests will start exercising actual null-handling branches; until then they document the input contract. Optionally add a one-line comment above each: '// Contract pin: real impl (Epic 05) must remain null-safe for this field combination.' to make the intent obvious to a future reader."
+    }
+  ]
+}

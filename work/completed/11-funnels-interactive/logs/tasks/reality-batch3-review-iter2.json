@@ -1,0 +1,66 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 10],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "Task 7 instructs verifying `advanceOnCallback` signature from `FunnelTriggerService.java` after Task 5 lands, and declares `depends_on: [5]`. However Task 5 has NOT yet landed: `FunnelTriggerService` (backend/src/main/java/com/botfunnel/funnel/FunnelTriggerService.java) currently has only two methods — `fire(...)` and `cancelActiveFor(...)` — and `advanceOnCallback` is absent entirely. The task's TDD Anchor section now includes a compile-gate note explaining this, which is correct. This finding is informational about the current repo state: the task is not executable until Task 5 is done. The `depends_on: [5]` declaration is present and correct, so the dependency is properly declared. This is NOT a task-file defect — the file correctly documents the gate. Flagging as informational-critical only if Task 7 would be attempted out of order.",
+      "fix": "No fix needed in the task file — the compile-gate note and `depends_on: [5]` are correct. Ensure Task 5 is fully merged before attempting Task 7."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "The iteration-1 critical finding — `\"callback_query\"` must be removed from `jsonNodeSlots()` stream — has NOT been resolved in the actual codebase. The file `backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java` line 350 still reads: `return Stream.of(\"callback_query\", \"my_chat_member\", \"chat_member\", ...)`. This is expected because Task 7 is `status: planned` (not yet executed), but the task file itself DOES now contain the correct instruction (step 7, AC bullet, Details section all explicitly say to remove `\"callback_query\"` from the stream). The task file fix was correctly applied in iteration 1 — the codebase not yet reflecting it is expected pre-execution. No task-file defect remains.",
+      "fix": "Task file is correct. When Task 7 is executed, the implementor must remove `\"callback_query\"` from the `jsonNodeSlots()` stream at line 350 of ProcessTelegramUpdateJobTest.java."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "Task 7 Details section (line ~164) references `resolveUpdateKind` at 'рядок 297' and reads `update.callback_query()` as `JsonNode` via `!n.isNull()`. This is accurate against the current codebase (ProcessTelegramUpdateJob.java line 297: `if ((n = update.callback_query()) != null && !n.isNull()) return \"callback_query\";`). The instruction to change this to a null-check on the typed record is correct. However, `TelegramUpdate.java` currently still declares `JsonNode callback_query` (line 23) — the task correctly instructs replacing this. No defect in the task file; the described current state matches reality.",
+      "fix": "No fix needed. Task description accurately reflects current code state and correct migration path."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 Verification Steps use `./gradlew :backend:test` (root-relative with `:backend:` subproject prefix). The repo has no root-level `gradlew` — only `backend/gradlew`. The correct invocation is `cd backend && ./gradlew test --tests ...` (matching Task 10's fixed pattern). This discrepancy in Task 7's Verification Steps could confuse the implementor.",
+      "fix": "In Task 7 Verification Steps, change `./gradlew :backend:test --tests \"com.botfunnel.webhook.ProcessTelegramUpdateJobTest\"` to `cd backend && ./gradlew test --tests \"com.botfunnel.webhook.ProcessTelegramUpdateJobTest\"` and similarly for the second command."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 Verification Steps (iteration-1 fix confirmed): `cd backend && ./gradlew test -PrunSlow=true` is correct — `backend/gradlew` exists, and `build.gradle` confirms `-PrunSlow=true` is the correct flag to include `@Tag(\"slow\")` tests. `cd frontend && pnpm test` and `cd frontend && pnpm test:e2e` are correct — `packageManager` is `pnpm@10.33.2`, and `package.json` scripts define `\"test\": \"vitest\"` and `\"test:e2e\": \"playwright test\"`. The \"(опційно)\" qualifier removal is confirmed — commands appear without it. All iteration-1 critical findings for Task 10 are resolved.",
+      "fix": "No fix needed for Task 10."
+    }
+  ],
+  "iteration_1_resolution_check": {
+    "task_7_callback_query_removal_in_task_file": "RESOLVED — task file now explicitly instructs removing `\"callback_query\"` from `jsonNodeSlots()` stream in step 7, AC bullet, and Details section",
+    "task_7_compile_gate_note": "RESOLVED — TDD Anchor now contains explicit compile-gate note about `advanceOnCallback` dependency on Task 5",
+    "task_7_ac_updated": "RESOLVED — AC now includes bullet: `\"callback_query\"` removed from `jsonNodeSlots()` stream",
+    "task_10_gradle_command": "RESOLVED — `cd backend && ./gradlew test -PrunSlow=true` (verified: backend/gradlew exists, no root gradlew)",
+    "task_10_package_manager": "RESOLVED — `pnpm test` / `pnpm test:e2e` (verified: packageManager=pnpm@10.33.2, scripts test/test:e2e defined)",
+    "task_10_optional_qualifier_removed": "RESOLVED — no `(опційно)` qualifier in Verification Steps"
+  },
+  "residual_issues": {
+    "task_7_gradlew_in_verification_steps": "MINOR — Task 7 Verification Steps still use `./gradlew :backend:test` (root-relative) which won't work; should be `cd backend && ./gradlew test`. This was not part of iteration-1 scope but is a real usability issue.",
+    "task_7_advanceOnCallback_not_in_interface": "EXPECTED — FunnelTriggerService does not yet have advanceOnCallback; Task 5 must land first. Task file correctly gates this via depends_on: [5] and compile-gate note."
+  },
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 18,
+    "issues_found": 2,
+    "critical_blocking": 0,
+    "critical_informational": 1,
+    "major": 1,
+    "minor": 2,
+    "iteration_1_criticals_resolved": 4,
+    "iteration_1_majors_resolved": 1
+  }
+}

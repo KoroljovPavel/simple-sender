@@ -1,0 +1,102 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Existing test login_success_invalidatesPreAuthSession_andSetsRememberMeTtl (AuthServiceTest.java:327) currently FAILS with WantedButNotInvoked on preAuth.invalidate(). The test asserts verify(preAuth).invalidate() but openSession() (lines 590-606) explicitly does NOT call invalidate() — the comment at lines 598-602 explains why. The task description says 'tests must fail because openSession does not write the attribute yet', but the test fails for a completely different reason. Task 1 step 2 says to 'extend' this test by adding attribute assertions, but the test is already broken and must be fixed first (the spurious verify(preAuth).invalidate() + verify(fresh).setMaxIdleTime() must be corrected — the code only calls getSession() once, getting preAuth, so fresh.setMaxIdleTime is never called either). Proceeding with the task as described will produce green tests only if the broken assertions are removed, which the task does not mention.",
+      "fix": "Before adding the REMEMBER_ME_ATTR assertions to login_success_invalidatesPreAuthSession_andSetsRememberMeTtl, remove the broken verify(preAuth).invalidate() at line 327 and change verify(fresh).setMaxIdleTime() to verify(preAuth).setMaxIdleTime() (the real session used). The task description must explicitly mention this pre-existing broken test fixture, otherwise the implementer will be confused by a test that fails for the wrong reason."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 1,
+      "issue": "Implementation hint in Task 1 Details states: 'ResponseCookie.ResponseCookieBuilder.maxAge(Duration) — якщо передати null, cookie буде session cookie'. This is factually wrong. ResponseCookie constructor contains Assert.notNull(maxAge, \"Max age must not be null\") (verified in spring-web 6.1.x sources). Calling .maxAge(null) will throw IllegalArgumentException at runtime. The hint points the implementer toward a runtime crash in the rememberMe=false/absent branch.",
+      "fix": "Remove the sentence about passing null. The correct approach is to NOT call .maxAge() at all when rememberMe is false/absent — the DefaultResponseCookieBuilder initializes maxAge = Duration.ofSeconds(-1) by default, which produces a session cookie. Keep only: 'Альтернатива — просто не викликати .maxAge()' which is the correct hint."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 Details section for the new register test says to call: authService.register(new RegisterRequest(\"new@x.com\", \"Strong1Pass\"), exchange). But RegisterRequest has no all-args constructor — only a no-arg public RegisterRequest(). This code will not compile.",
+      "fix": "Replace with: RegisterRequest req = new RegisterRequest(); req.setEmail(\"new@x.com\"); req.setPassword(\"Strong1Pass\"); authService.register(req, exchange). Or add an all-args constructor to RegisterRequest (preferred for test readability, but it is a source code change not mentioned in the task's files-to-modify list)."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 Details for the new register test lists stubs to set up but omits redisTemplate.expire(key, REGISTER_RATE_TTL). The checkRegisterRate() method calls opsForValue().increment(key) and then, if count == 1L, calls redisTemplate.expire(key, REGISTER_RATE_TTL). With RETURNS_DEEP_STUBS the un-stubbed expire() returns a mock that may or may not chain correctly. The safe practice is to explicitly stub it: when(redisTemplate.expire(anyString(), any())).thenReturn(Mono.just(true)).",
+      "fix": "Add to the register test setup: when(redisTemplate.expire(anyString(), any(Duration.class))).thenReturn(Mono.just(true))."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 1,
+      "issue": "The Details section for RememberMeWebSessionIdResolver contains a nearly complete implementation (full method body of setSessionId with builder chain, all field names, null-safety logic, exact .set() call). This crosses from 'hint' into prescribed implementation — it is pseudocode/algorithm in code-block form. Per validation checklist category 'hints': implementation hints that contain step-by-step algorithms or code blocks with full logic are severity major.",
+      "fix": "Trim the Details for RememberMeWebSessionIdResolver to point at patterns (e.g., 'mirror WebSessionIdResolverAutoConfiguration; read each cookie attribute via the getter chain; conditionally add maxAge') without the full builder chain code block."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 1,
+      "issue": "The Details section for AuthServiceTest includes a full Java code block for assertThat(exchange.getAttributes()).containsEntry(...) and a full stub recipe for the register test with explicit field-by-field stub setup. This is a full implementation prescription rather than a hint about approach.",
+      "fix": "Reduce to pattern-level guidance: 'use MockServerWebExchange (not a mock) so getAttributes() returns a real ConcurrentHashMap; assert via containsEntry on the resulting map'."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 2,
+      "issue": "Task 2 Required Skills link is broken: the href points to .claude/skills/code-writing/SKILL.md but the skill being loaded is code-reviewing. Correct path is .claude/skills/code-reviewing/SKILL.md. The file does exist at the correct path; only the markdown link is wrong.",
+      "fix": "Change the link in Task 2 Required Skills to [skills/code-reviewing/SKILL.md](.claude/skills/code-reviewing/SKILL.md)."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 TDD step 2 says 'Тести мають падати — openSession ще не пише атрибут' but the two existing login tests currently fail for a different, pre-existing reason (WantedButNotInvoked on invalidate). An implementer following TDD instructions will see test failures they did not create and may not understand that the test fixture itself is wrong, not their new code.",
+      "fix": "Clarify in step 2: 'NOTE: existing login tests may fail for an additional pre-existing reason (spurious invalidate() assertions) — fix those assertions first (see Details), then the only remaining failures should be the missing REMEMBER_ME_ATTR attribute writes'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 8
+  },
+  "verified_claims": [
+    "AuthService.java exists at backend/src/main/java/com/botfunnel/auth/AuthService.java",
+    "openSession() method exists at lines 590-606 exactly as claimed",
+    "register() calls openSession(saved, false, exchange) at line 167 exactly as claimed",
+    "SecurityConfig.java exists at backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+    "SecurityConfig registers CSRF via CookieServerCsrfTokenRepository.withHttpOnlyFalse() + ServerCsrfTokenRequestAttributeHandler at lines 44-53",
+    "csrfCookieMaterializer WebFilter is at lines 69-79 in SecurityConfig",
+    "AuthServiceTest.java exists with login_success_invalidatesPreAuthSession_andSetsRememberMeTtl at line 306",
+    "AuthServiceTest.java exists with login_success_noRememberMe_setsTtl24Hours at line 343",
+    "AuthServiceTest has no register tests — new register test must be created from scratch",
+    "AuthControllerIT.java comment about bindToApplicationContext dropping Set-Cookie at lines 326-329 confirmed",
+    "LoginRequest.java has isRememberMe() method",
+    "RegisterRequest.java has NO all-args constructor (only no-arg)",
+    "application.properties has app.session.ttl-default-hours and app.session.ttl-remember-me-days",
+    "application.properties has server.reactive.session.cookie.http-only, secure, same-site — no cookie name property set",
+    "serverProperties.getReactive().getSession().getCookie() returns org.springframework.boot.web.server.Cookie — verified via javap on spring-boot-autoconfigure-3.5.0.jar",
+    "Cookie class has getName(), getDomain(), getPath(), getHttpOnly(), getSecure(), getSameSite(), getPartitioned() in Boot 3.5.0",
+    "Cookie.SameSite.attributeValue() method exists",
+    "ResponseCookie.from() builder has maxAge(Duration) method",
+    "ResponseCookie constructor throws Assert.notNull for null maxAge — passing null causes IllegalArgumentException",
+    "ResponseCookieBuilder default maxAge is Duration.ofSeconds(-1) (session cookie) when .maxAge() not called",
+    "MockServerWebExchange is already imported and used in AuthServiceTest",
+    "redisTemplate is mocked with RETURNS_DEEP_STUBS in AuthServiceTest",
+    "infra/docker-compose.yml exists",
+    "ProfileControllerIT.java exists",
+    "All project-knowledge reference files exist (project.md, architecture.md, patterns.md, deployment.md)",
+    "code-reviewing/SKILL.md exists at .claude/skills/code-reviewing/SKILL.md",
+    "security-auditor/SKILL.md exists at .claude/skills/security-auditor/SKILL.md",
+    "decisions.md and code-research.md exist in feature folder",
+    "Task 2 depends_on: [1] is correct (audit wave after implementation wave)",
+    "Task 3 depends_on: [1] is correct",
+    "Spring Boot 3.5.0 is the actual version used (matches '3.5.x' claim)"
+  ]
+}

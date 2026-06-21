@@ -1,0 +1,42 @@
+{
+  "reviewer": "security-auditor",
+  "task": 7,
+  "round": 1,
+  "verdict": "pass",
+  "summary": "No critical or major security findings. The primary XSS guard (stored note text rendered exclusively via {{ }} interpolation, never v-html) is correctly implemented in FunnelCanvasNode.vue and the component test verifies it adequately. Removed dialogs (AddStepDialog, EditStepDialog) carried no auth/ownership logic — ownership is enforced server-side and the global auth.global.ts middleware is untouched. No hardcoded secrets, no unsafe sinks, no new SSRF surface introduced. Two minor observations flagged below (NaN index parsing, missing v-html grep in test body).",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "NaN-producing index parse in onNodeDragStop not explicitly guarded",
+      "description": "In onNodeDragStop (funnelId.vue:251, 255), the index suffix is extracted with Number(nodeId.slice('trigger:'.length)) and Number(nodeId.slice('note:'.length)). A malformed nodeId such as 'trigger:abc' produces NaN. JavaScript's array[NaN] returns undefined, so the existing falsy guard (if (!triggers.value[idx]) return) silently no-ops, making this safe in practice. However the intent is not obvious and a future refactor could miss the implicit NaN guard. An explicit Number.isInteger(idx) check after the Number() call would make the invariant self-documenting and prevent any future regression if the guard structure changes.",
+      "location": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue:251-256",
+      "impact": "None at present — NaN access is safely undefined, triggering the return guard. Risk is purely theoretical: a future refactor that restructures the guard could introduce an off-by-one or array corruption if the NaN handling is not understood.",
+      "recommendation": "Add an explicit integer guard after the Number() call:\n  const idx = Number(nodeId.slice('trigger:'.length))\n  if (!Number.isInteger(idx) || !triggers.value[idx]) return\nMirror the same pattern for the note: branch.",
+      "cwe": "CWE-20"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "XSS component test asserts on text() and img absence but not on textContent === payload",
+      "description": "The test 'renders a note containing an injection payload ESCAPED (no v-html, no img element)' (funnel-editor.spec.ts:787-802) uses noteNode.text().toContain(payload) and checks noteNode.find('img').exists() === false plus wrapper.findAll('img').some(i => i.attributes('onerror')) === false. These assertions are correct and sufficient for the Vue test-utils JSDOM environment — {{ }} interpolation sets textContent, not innerHTML, so the markup is never parsed as HTML. However, the test does NOT explicitly assert that noteNode.element.innerHTML does NOT contain an unescaped '<' character (i.e., that '<img' never appears raw in the inner HTML). This is a belt-and-suspenders gap: if someone accidentally introduced v-html in the future, innerHTML would contain the raw markup and text() might still surface the same string through JSDOM's text extraction. Adding an assertion such as expect(noteNode.element.innerHTML).not.toContain('<img') would make the test a true negative proof, not just a positive text check.",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:787-802",
+      "impact": "If the rendering method ever switches to v-html, the current test would still pass (text() would still contain the payload string) and the XSS would go undetected by automation. This is a test-coverage gap, not an active vulnerability.",
+      "recommendation": "Add to the XSS test:\n  // Stronger guard: raw markup must not appear in innerHTML (would indicate v-html was used).\n  expect(noteNode.element.innerHTML).not.toContain('<img')\nThis makes any accidental future use of v-html fail this test immediately.",
+      "cwe": "CWE-79"
+    }
+  ],
+  "owasp_coverage": {
+    "A01_broken_access_control": "pass — ownership and auth are enforced server-side (per architecture). The removed dialogs (AddStepDialog, EditStepDialog) contained no client-side auth/ownership logic. The global auth.global.ts middleware (redirects unauthenticated users) is unmodified. The canvas wiring emits are prop-in/emit-out with no privilege escalation surface.",
+    "A02_cryptographic_failures": "pass — no new crypto usage introduced. No plaintext credential storage.",
+    "A03_injection_xss": "pass — note text is rendered exclusively via {{ }} interpolation in FunnelCanvasNode.vue:90. No v-html directive exists anywhere in the modified or existing funnel components. Component test covers the injection payload. Minor gap in test strength noted above (minor finding #2).",
+    "A04_insecure_design": "pass — single save path (persist()) preserved with re-entrancy guard. Canvas is props-in/emits-out by design.",
+    "A05_security_misconfiguration": "pass — no new server configuration, headers, or CORS changes introduced.",
+    "A06_vulnerable_components": "pass — no new dependencies introduced by this task.",
+    "A07_auth_failures": "pass — global auth middleware intact. No session management changes.",
+    "A08_software_data_integrity": "pass — no deserialization, no insecure JSON.parse of untrusted input. Notes array is mapped with spread (safe clone).",
+    "A09_security_logging": "pass — no regression of existing error handling in persist(); saveError ref preserved.",
+    "A10_ssrf": "pass — no user-controlled URLs passed to server-side fetch. All API calls use funnelsStore.update with funnelId from route params (server validates ownership).",
+    "hardcoded_secrets": "pass — no secrets, API keys, tokens, or credentials found in any modified file."
+  }
+}

@@ -1,0 +1,101 @@
+=== AC-1: login rememberMe=true ===
+HTTP/1.1 200 OK
+Vary: Origin
+Vary: Access-Control-Request-Method
+Vary: Access-Control-Request-Headers
+Content-Type: application/json
+Content-Length: 126
+Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+Pragma: no-cache
+Expires: 0
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 0
+Referrer-Policy: no-referrer
+set-cookie: SESSION=7c784295-aee9-480b-9f93-3826a2424f2b; Max-Age=2592000; Expires=Mon, 08 Jun 2026 13:26:15 GMT; Path=/; HTTPOnly; SameSite=Lax
+
+{"id":"69ff35b7da67e4bf5eee7da2","email":"qa-task5@example.com","name":null,"status":"pending","warning":"email_not_verified"}
+=== AC-7 (flip true->false on existing session) ===
+HTTP/1.1 200 OK
+Vary: Origin
+Vary: Access-Control-Request-Method
+Vary: Access-Control-Request-Headers
+Content-Type: application/json
+Content-Length: 126
+Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+Pragma: no-cache
+Expires: 0
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 0
+Referrer-Policy: no-referrer
+set-cookie: SESSION=d20e9d2a-9da4-410a-ae2c-018429483d2f; Path=/; HTTPOnly; SameSite=Lax
+
+{"id":"69ff35b7da67e4bf5eee7da2","email":"qa-task5@example.com","name":null,"status":"pending","warning":"email_not_verified"}
+=== AC-2: login rememberMe=false (fresh jar) ===
+HTTP/1.1 200 OK
+Vary: Origin
+Vary: Access-Control-Request-Method
+Vary: Access-Control-Request-Headers
+Content-Type: application/json
+Content-Length: 126
+Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+Pragma: no-cache
+Expires: 0
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 0
+Referrer-Policy: no-referrer
+set-cookie: SESSION=cc32e3ad-98b4-46b2-9080-bde9d4400383; Path=/; HTTPOnly; SameSite=Lax
+
+{"id":"69ff35b7da67e4bf5eee7da2","email":"qa-task5@example.com","name":null,"status":"pending","warning":"email_not_verified"}
+=== AC-4: pre-fix-style cookie (name=value only, no Max-Age) on /api/auth/me ===
+HTTP/1.1 200 OK
+Vary: Origin
+Vary: Access-Control-Request-Method
+Vary: Access-Control-Request-Headers
+Content-Type: application/json
+Content-Length: 95
+Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+Pragma: no-cache
+Expires: 0
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 0
+Referrer-Policy: no-referrer
+set-cookie: XSRF-TOKEN=795faa4b-f7fb-45b9-8ea6-d3e804b9d6c1; Path=/
+
+{"id":"69ff35b7da67e4bf5eee7da2","email":"qa-task5@example.com","name":null,"status":"pending"}{"id":"69ff35b7da67e4bf5eee7da2","email":"qa-task5@example.com","name":null,"status":"pending"}
+=== AC-5: logout clears cookie (Max-Age=0) ===
+HTTP/1.1 200 OK
+Vary: Origin
+Vary: Access-Control-Request-Method
+Vary: Access-Control-Request-Headers
+Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+Pragma: no-cache
+Expires: 0
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 0
+Referrer-Policy: no-referrer
+set-cookie: SESSION=; Max-Age=0; Expires=Sat, 09 May 2026 13:26:55 GMT; Path=/; HTTPOnly; SameSite=Lax
+content-length: 0
+
+
+=== AC-8: cookie name override (SERVER_REACTIVE_SESSION_COOKIE_NAME=ALT) ===
+HTTP/1.1 200 OK
+Vary: Origin
+Vary: Access-Control-Request-Method
+Vary: Access-Control-Request-Headers
+Content-Type: application/json
+Content-Length: 126
+Cache-Control: no-cache, no-store, max-age=0, must-revalidate
+Pragma: no-cache
+Expires: 0
+X-Content-Type-Options: nosniff
+X-Frame-Options: DENY
+X-XSS-Protection: 0
+Referrer-Policy: no-referrer
+set-cookie: ALT=78831631-b851-4cff-9b78-af534ebb0134; Max-Age=2592000; Expires=Mon, 08 Jun 2026 13:28:59 GMT; Path=/; HTTPOnly; SameSite=Lax
+
+{"id":"69ff35b7da67e4bf5eee7da2","email":"qa-task5@example.com","name":null,"status":"pending","warning":"email_not_verified"}

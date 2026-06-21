@@ -1,0 +1,16 @@
+{
+  "reviewer": "security-auditor",
+  "task": 5,
+  "round": 1,
+  "commit": "7f3cf50",
+  "verdict": "approve",
+  "summary": "No vulnerabilities introduced. The trigger dispatch reuses (projectId, subscriberId) already authorized by the calling controller (requireOwned + project-scoped lookup) or the trusted engine path; FunnelEventService re-validates project scope via findById (anti-IDOR). matchKey flows into a parameterized Spring Data exact-match query (no string-built Mongo query). Depth threading preserves the manual=0 (volume-exempt) vs auto=depth>0 (rate-limited) classification — the three loop backstops remain solely in FunnelEventService and are not bypassable from the new call sites. No PII added to logs; no secrets; no new error-swallowing.",
+  "findings": [],
+  "verified_owasp": [
+    "A01 Broken Access Control / IDOR: no new surface — addTag/recordCustomFieldsSet operate on a caller-authorized project-scoped subscriber; dispatcher re-scopes by projectId (Optional.empty on mismatch)",
+    "A03 Injection: matchKey (slug/field-key/eventName) reaches Mongo via findAllByProjectIdAndTriggerTypeAndTriggerValueAndStatus (parameterized repository method), no concatenation",
+    "A04 Insecure Design / loop DoS: depth=0 from manual controllers keeps human roots exempt from the auto-enroll volume limit as designed; depth=enrollDepth+1 from steps counts auto children toward volume + depth-cap backstops; no backstop logic added or bypassed outside FunnelEventService",
+    "A09 Logging: no event payload / slug / field-key / eventName logged (Decision 16 PII preserved); no new log lines in the changed paths",
+    "Secrets: none introduced"
+  ]
+}

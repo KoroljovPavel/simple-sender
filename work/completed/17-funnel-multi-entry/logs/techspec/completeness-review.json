@@ -1,0 +1,49 @@
+{
+  "verdict": "pass",
+  "round": 2,
+  "meta": {
+    "feature": "17-funnel-multi-entry",
+    "reviewed": "2026-06-13",
+    "user_spec_status": "approved",
+    "tech_spec_status": "draft",
+    "size": "L",
+    "requirements_total": 16,
+    "requirements_covered": 16,
+    "requirements_partial": 0,
+    "requirements_missing": 0
+  },
+  "round1_findings_resolution": {
+    "F-1": {
+      "status": "resolved",
+      "detail": "Architecture 'Loop bound under redirect' paragraph now explicitly proves: (a) redirect does not call insertExecutionAt so enrollDepth is unchanged and the depth cap still bounds enroll-driven expansion; (b) the same drive loop is invoked, so the per-tick max-steps-per-tick budget (FUNNEL_STEP_BUDGET_EXCEEDED) terminates any budget-blowing loop; (c) the human-press gate (every EMIT_EVENT→trigger turn requires a menu press which parks the execution and ends the tick). The proof the user-spec required is present."
+    },
+    "F-2": {
+      "status": "resolved",
+      "detail": "The same 'Loop bound under redirect' paragraph now names app.funnel.max-steps-per-tick and FUNNEL_STEP_BUDGET_EXCEEDED explicitly in the redirect path context, confirming the per-tick budget is active during redirect-driven drive."
+    },
+    "F-3": {
+      "status": "resolved",
+      "detail": "Task 4 description explicitly states 'update duplicate to reset triggers to a single on_start + clear onStartTriggerValue (Phase-4 precedent)'. The Testing Strategy Unit tests section adds a dedicated duplicate(funnel) unit test entry. The conflict regression is directly addressed."
+    },
+    "F-4": {
+      "status": "resolved",
+      "detail": "Task 5 'Files to modify' now lists FunnelTriggerServiceImpl.java. The fire() lookup change from findByProjectIdAndTriggerTypeAndTriggerValueAndStatus to the onStartTriggerValue-based lookup is explicitly owned by Task 5."
+    },
+    "F-5": {
+      "status": "resolved",
+      "detail": "Architecture §5 (How it works, step 5) now reads: 'The on_start path (FunnelTriggerServiceImpl.fire) keeps its semantics … but its lookup must change: the old findByProjectIdAndTriggerTypeAndTriggerValueAndStatus over the removed top-level fields is replaced by a lookup on onStartTriggerValue (Decision 6).' The previous ambiguous 'unchanged' statement is replaced with an unambiguous 'business logic unchanged, lookup must change' formulation."
+    },
+    "F-6": {
+      "status": "resolved",
+      "detail": "Testing Strategy Integration tests 'Entry points' section now explicitly lists ProcessTelegramUpdateJobTest and covers: 'handleStart→fire still enrolls via the new onStartTriggerValue lookup; EMIT_EVENT → trigger-node loop drives end-to-end and respects the depth/budget backstops.' Task 5 owns FunnelTriggerServiceImpl.java, which is the file the handleStart→fire path goes through."
+    }
+  },
+  "findings": [],
+  "notes": {
+    "decision_14": "Decision 14 (trigger array size cap + per-trigger keyword caps) is new in round 2 and marked [TECHNICAL]. It is a purely defensive DoS/A04 constraint with no user-visible functionality change — correctly omitted from User-Spec Deviations per the infrastructure-concern exemption. Risks table row 'Unbounded List<Trigger> / keyword growth' traces to it. No finding raised.",
+    "solution_depth": "The 'Loop bound under redirect' paragraph adds genuine technical substance: names the config knob (app.funnel.max-steps-per-tick), the exception type (FUNNEL_STEP_BUDGET_EXCEEDED), and the park mechanic (waiting_for_reply ends the tick). No longer shallow.",
+    "structural_integrity": "All decision-level content (including Decision 14) lives in the Decisions section. No task descriptions contain scattered architectural choices.",
+    "error_isolation": "Risks table row 'fire()/dispatch error-isolation regression' + Task 5 description cover error isolation on the new redirect path."
+  },
+  "summary": "All 6 round-1 findings are resolved. No new findings. 16/16 requirements covered. The tech-spec is ready for task decomposition."
+}

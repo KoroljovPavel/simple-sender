@@ -1,0 +1,33 @@
+{
+  "summary": "All 4 TDD anchors from Task 5 are present in the spec, plus two additional well-justified cases (General-active-on-root regression guard, locale-prefix matcher). Every test passes the litmus test: removing the corresponding logic line in SettingsSubnav.vue (link rendering, active-state computeds, or locale-prefix stripping regex) causes a specific test to fail. Mock setup for `useRoute`/`useI18n`/`useLocalePath` is intentional and documented in-file (the comment at lines 10-15 explains why active state is computed in the component rather than relying on Vue Router's exact-active-class). The bot page test is an acknowledged smoke per task design (Task 9 will rewrite). Findings are minor: i18n-key text rendering is not asserted (hardcoded English would silently pass), the locale-prefix coverage is asymmetric (only Bot-active path tested under /uk/, not General-active), the bot page does not assert that `project-id` is correctly forwarded to SettingsSubnav, and the test-side pin on the custom class `subnav-link-active` could additionally be reinforced with `aria-current` for accessibility/contract robustness. None of these block; status is passed.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/SettingsSubnav.spec.ts",
+      "line": 45,
+      "issue": "Tests never assert on the rendered link text. If a future refactor replaces `{{ t('bot.subnav.general') }}` with a hardcoded `General` literal, the i18n contract silently breaks but every test still passes. The `tSpy` is wired and mockResetable but its return value is never observed by an assertion.",
+      "suggestion": "Add `expect(general.text()).toBe('bot.subnav.general')` and `expect(bot.text()).toBe('bot.subnav.bot')` in the 'renders two tabs' case (identity tSpy returns the key, so this is a one-liner). Optionally also `expect(tSpy).toHaveBeenCalledWith('bot.subnav.general')` to pin the exact key used."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/SettingsSubnav.spec.ts",
+      "line": 99,
+      "issue": "Locale-prefix coverage is asymmetric. Only the path `/uk/projects/p1/settings/bot` is tested (Bot-active under /uk). The symmetric General-active case (`/uk/projects/p1/settings` → General active, Bot not) is not exercised, so a regex regression that breaks General matching under /uk specifically (e.g., a trailing-slash mishandle) would not be caught.",
+      "suggestion": "Add a 5th case: set `routeRef.value = { path: '/uk/projects/p1/settings', fullPath: '/uk/projects/p1/settings' }` and assert `general.classes()` contains `subnav-link-active` while `bot.classes()` does not. Reuses the same setup pattern; ~6 lines."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/pages/projects/bot.spec.ts",
+      "line": 40,
+      "issue": "Smoke test never asserts that `projectId` from the route is forwarded into SettingsSubnav. If the binding `:project-id=\"projectId\"` is dropped or renamed, the subnav would render with an empty/undefined id and emit `/projects//settings` links, but this test still passes because it only checks for the existence of `data-test=\"settings-subnav\"` (which is on the nav root, unaffected by the prop).",
+      "suggestion": "Add `expect(wrapper.find('[data-test=\"settings-subnav-general\"]').attributes('href')).toBe('/projects/p1/settings')` to verify the prop actually propagated through to the rendered href. This converts the smoke test into a real wiring check without changing its character."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/SettingsSubnav.spec.ts",
+      "line": 64,
+      "issue": "Active state is asserted exclusively via the custom Tailwind class `subnav-link-active`. The class name is a private implementation choice — a refactor that switches to `aria-current=\"page\"` (more accessible, more idiomatic) would force a test rewrite even though user-observable behaviour is preserved. The behavioural contract is 'this link is marked active', not 'this exact class string is present'.",
+      "suggestion": "Either (a) augment the component to also emit `aria-current=\"page\"` on the active link and assert on that as the primary contract, falling back to class only as a secondary check, or (b) extract the active-class name into a shared constant exported from the component module and import it in the spec to make the coupling explicit. (a) is preferred — accessibility wins for free."
+    }
+  ]
+}

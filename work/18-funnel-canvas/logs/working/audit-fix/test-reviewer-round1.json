@@ -1,0 +1,34 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "audit-fix",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts",
+      "issue": "The 7→2 replacement correctly removed tests that exercised editable-panel affordances (funnel-trigger-add button, setValue on funnel-trigger-event-input, funnel-trigger-value-input) that no longer exist in the read-only panel. However, the per-element triggerReady gate and 600ms debounce watcher (scheduleTriggerPersist / watch(triggers, ..., {deep: true})) remain in the page implementation unchanged but now have zero page-level behavioral tests exercising that code path. The comment at line 182 acknowledges this ('per-element triggerReady gate + 600ms debounce still guards the deep-watch') but none of the 2 replacement tests drive it. The on-mount autosave mentioned at line 672 incidentally exercises a partial path but is drained and cleared before assertions — it is not a deliberate gate test. The FunnelTriggersPanel.spec.ts readonly suite covers the panel side (no mutation emitted); it does not cover the page-level debounce timing. Real gap: an incomplete canvas-emitted array (e.g. an event trigger with empty triggerValue arriving via update:triggers) that bypasses onCanvasTriggers gating could arm the debounce and 422. This is low-probability given Decision A (the canvas is the sole editing surface and should only commit complete arrays), but the watch path remains live code with no test harness.",
+      "recommendation": "Add one page-level test to FunnelCanvas wiring suite: mount with a seeded on_start trigger, emit an update:triggers array that contains an event trigger with empty triggerValue (incomplete), wait 700ms with fake timers, assert storeMock.update was NOT called (the per-element gate held). This directly covers scheduleTriggerPersist's 'if (!triggers.value.every(triggerReady)) return' guard at line 293 of [funnelId].vue. Severity is minor rather than major because the canvas architecture (Decision A) structurally prevents partial arrays from arriving via this path in production, and the existing FunnelTriggersPanel readonly test covers the 'no mutation emitted from panel' side."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:672-674",
+      "issue": "The read-only list test uses `await new Promise((r) => setTimeout(r, 700))` (real timers) twice to drain the on-mount autosave. This is a timing-based workaround rather than deterministic control: it relies on 700ms being enough in the test environment, which can be flaky under load. The `settle()` helper is used elsewhere; the 700ms real-timer wait is inconsistent with the pattern in other tests in this file.",
+      "recommendation": "Restructure to use vi.useFakeTimers() + vi.advanceTimersByTimeAsync(700) for the drain, then vi.useRealTimers() after mockClear(). This is the same pattern used in the now-removed trigger suite and makes the timing deterministic. Alternatively, call storeMock.update.mockClear() at a point where the on-mount persist has already completed without needing a real timer."
+    }
+  ],
+  "summary": "The 7→2 page-test replacement is legitimate: all 7 removed tests exercised affordances (funnel-trigger-add, funnel-trigger-event-input, funnel-trigger-value-input setValue) that no longer exist in the read-only panel, so they would have failed for the wrong reason against the new architecture. The 2 replacement tests correctly assert the new invariant (read-only notice present, Add button absent, canvas-committed array persists sanitized). The fixer's claim that the removed tests were 'coupled to now-removed editable-panel controls' is accurate. MAJOR-1 (canvasPosition preserved): FunnelStepForm.keyboard.spec.ts:308 is load-bearing — it seeds a step with canvasPosition, edits a field, submits, and asserts canvasPosition equals {x:321,y:654} on the emitted step; this would fail against pre-fix onSubmit that did not carry canvasPosition through. MAJOR-2 (trigger read-only): FunnelTriggersPanel.spec.ts readonly suite asserts concrete control absence AND that mutation handlers are no-ops when readonly=true via direct vm call — load-bearing. The page-level test at line 218 additionally asserts the read-only notice and absent Add control in context. Note editor: FunnelCanvasSidePanel.spec.ts asserts textarea seeded with 'before', emits {noteIndex:0, text:'after'} on input — value-based, load-bearing. XSS guard: both the side panel test (textarea.value equals payload, no img in editor) and the page-level test (noteNode.text() contains payload, no img, innerHTML has no '<img') are thorough with the innerHTML guard. Mixed-layout assertion: the fix added not.toEqual({x:999,y:111}) AND not.toEqual(s1.position) for s2 — directly addresses the auditor's finding. Near-duplicate removal: both FunnelCanvas.spec.ts cases correctly removed with comments preserving rationale, unique coverage of the stronger case retained. One minor gap: the per-element triggerReady gate + 600ms debounce watcher in the page has no dedicated behavioral test after the replacement (the code path is structurally unlikely to be hit but remains live). One minor anti-pattern: real setTimeout used for debounce drain in the read-only list test.",
+  "filesReviewed": [
+    "work/18-funnel-canvas/tech-spec.md",
+    "work/18-funnel-canvas/logs/working/audit/test-auditor.json",
+    "frontend/tests/pages/funnel-editor.spec.ts",
+    "frontend/tests/composables/useFunnelCanvas.spec.ts (diff)",
+    "frontend/tests/components/funnels/FunnelCanvas.spec.ts (diff)",
+    "frontend/tests/components/funnels/FunnelCanvasSidePanel.spec.ts (diff)",
+    "frontend/tests/components/funnels/FunnelTriggersPanel.spec.ts (diff)",
+    "frontend/tests/components/funnels/FunnelStepForm.keyboard.spec.ts",
+    "frontend/pages/projects/[projectId]/funnels/[funnelId].vue"
+  ]
+}

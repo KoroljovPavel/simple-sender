@@ -1,0 +1,37 @@
+{
+  "summary": "Task 4 implements a build-time locale validator (check-locales.mjs) and fills uk.json/en.json with full key sets. Security posture is solid: prototype-pollution defense is correctly layered (Object.create(null) accumulator + explicit __proto__/constructor/prototype filter executed BEFORE child-value access, so unsafe keys never trigger recursion). Path resolution uses import.meta.url for CWD-independence; LOCALES_DIR env override is passed only through path.resolve and readFileSync — no shell, no exec, no command-injection surface. Locale JSON contains no secrets, hostnames, or sensitive product details. Build-gate is correctly wired via npm prebuild lifecycle. Two non-blocking observations: (a) the prototype-pollution test fixture is partially redundant because modern Node JSON.parse already converts __proto__ into an own property and does not pollute Object.prototype on its own — only the keys.polluted === undefined assertion genuinely exercises the script's filter; (b) the prebuild gate covers `pnpm build` but does not cover `pnpm generate` and would be bypassed by direct `nuxt build`/`nuxt generate` invocations in a future CI pipeline. Verdict: OK.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design / test efficacy",
+      "title": "Prototype-pollution test fixture does not genuinely exercise a pollution attack",
+      "description": "In check-locales.test.mjs:83-89, the test parses '{\"__proto__\": {\"polluted\": \"yes\"}, \"real\": \"ok\"}' and then asserts (1) ({}).polluted === undefined and (2) keys.polluted === undefined. Assertion (1) is satisfied by V8/Node JSON.parse semantics alone — JSON.parse explicitly attaches the __proto__ payload as an own data property of the resulting object rather than walking the prototype chain (per ECMA-262 24.5.1.1 / V8 implementation). So that assertion would PASS even if collectKeySet were vulnerable. Only assertion (2) — keys.polluted === undefined — actually exercises the UNSAFE_KEYS filter in collectKeySet. The implementation IS correct (filter happens before obj[key] access, so the recursion never descends into the __proto__ payload), but the test gives a false sense of coverage for the broader 'pollution' threat model. A more representative test would also (a) use a deep-merge-style payload constructed manually (since JSON.parse won't pollute, but a future maintainer adding deep-merge logic might), or (b) explicitly cover constructor and prototype keys at non-root depth (e.g. {a: {constructor: {x: 1}, real: 'ok'}}) and assert that the unsafe key is NOT present in the accumulated key-set.",
+      "location": "frontend/scripts/check-locales.test.mjs:83-89",
+      "impact": "Future regression risk: if collectKeySet is refactored (e.g. switched to a deep-merge or recursive Object.assign) the current test would not catch a real pollution bug, because the fixture passes for the wrong reason on the first assertion. Also, the suite does not cover constructor/prototype keys at all, only __proto__.",
+      "recommendation": "Add a complementary test that (a) covers nested constructor and prototype keys, e.g. `collectKeySet({a: {constructor: {leak: 1}, real: 'ok'}})` and asserts neither 'a.constructor.leak' nor 'a.constructor' appears in the result; and/or (b) leaves a comment in the existing test clarifying that JSON.parse alone does not pollute, so the load-bearing assertion is the keys.polluted check. No code change required in check-locales.mjs — the implementation itself is correct.",
+      "cwe": "CWE-1321"
+    },
+    {
+      "severity": "minor",
+      "category": "A05: Security Misconfiguration",
+      "title": "Build-gate covers `build` but not `generate`; direct nuxt invocations bypass it",
+      "description": "package.json wires the locale validator as `prebuild`, which npm/pnpm runs automatically before `build`. However, (1) `generate` (line 9) has no corresponding `pregenerate` hook, so a static-export build path (`pnpm generate`) would ship without locale validation; and (2) any CI step that calls `nuxt build` or `nuxt generate` directly (instead of through the npm script) bypasses the gate entirely. There is currently no CI workflow in the repo (.github/workflows is absent), so this is a forward-looking concern rather than an active gap, but Decision 9 frames the prebuild script as the AC19 enforcement mechanism, so the gate's coverage matters for the moment CI is wired up.",
+      "location": "frontend/package.json:7-13",
+      "impact": "If the future deploy pipeline uses `nuxt generate` (for SSG) or invokes `nuxt build` directly, a divergent dictionary or corrupted JSON could ship to production without being caught by the script — the very scenario AC19 / Decision 9 aim to prevent.",
+      "recommendation": "Add `\"pregenerate\": \"node scripts/check-locales.mjs\"` to package.json scripts so SSG path is also gated, and require CI to invoke `pnpm build` / `pnpm generate` (not bare `nuxt ...`) when the deploy pipeline is wired up. Alternatively, make the validator a separate explicit CI step that runs unconditionally before any nuxt invocation.",
+      "cwe": "CWE-1059"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring / information disclosure",
+      "title": "errors.register.409 discloses account existence at registration",
+      "description": "errors.register.409 in both uk.json (line 154) and en.json (line 154) reads 'A user with this email already exists. If this is your account, contact support.' This is a deliberate UX choice and is the standard pattern for registration flows (the alternative — silently swallowing 409 — has well-known UX cost). The forgot-password and verify-email-resend flows correctly use the ambiguous 'If an account exists, you will receive a message' pattern. This is intentional and consistent with the user-spec, but is a known account-enumeration vector at the /register endpoint that any deployment must accept as a tradeoff.",
+      "location": "frontend/i18n/locales/en.json:154 / frontend/i18n/locales/uk.json:154",
+      "impact": "Confirms email existence to anyone who tries to register with that email. Standard tradeoff; rate-limiting on the registration endpoint (errors.register.429 exists) is the compensating control.",
+      "recommendation": "No code change. Confirm with product that the registration-time enumeration tradeoff is accepted, and that the 429 cap on /register is set tight enough to prevent automated enumeration. If stricter privacy is required, replace this string with the same 'If an account with that email exists, you will receive a verification email' pattern used elsewhere — but that has UX cost.",
+      "cwe": "CWE-204"
+    }
+  ],
+  "verdict": "OK"
+}

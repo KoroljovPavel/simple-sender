@@ -1,0 +1,65 @@
+{
+  "reviewer": "security-auditor",
+  "task": 7,
+  "round": 1,
+  "commit": "342a994",
+  "standard": "OWASP Top 10 (2021)",
+  "verdict": "approve",
+  "summary": "Security spine is sound. Hash-only key lookup (no plaintext/timing oracle on the secret), uniform 401 across all three key causes (no enumeration), project-scoped subscriber resolution from the key (anti-IDOR, cross-project collapses to 404), CSRF correctly disabled on the STATELESS header-key chain, CORS uses a single explicit origin (not wildcard) with credentials, rate-limit DoS bound paired with the Redis-independent fan-out ceiling, and no key/hash/PII in logs. No critical or high findings.",
+  "findings": [
+    {
+      "id": "SEC-1",
+      "owasp": "A01 Broken Access Control / IDOR",
+      "severity": "info",
+      "file": "api/EventsController.java, subscriber/SubscriberServiceImpl.java",
+      "finding": "Project is resolved from the API key (no path projectId). subscriber_id lookup is filtered by the key's projectId (findById(projectId,id) -> filter sub.projectId==projectId); telegram_user_id lookup is keyed by (projectId, telegramUserId). A subscriber in another tenant collapses to 404. Verified by events_crossProjectSubscriberId_returns404.",
+      "action": "noted",
+      "reason": "Anti-IDOR correctly enforced and tested."
+    },
+    {
+      "id": "SEC-2",
+      "owasp": "A07 Identification & Authentication Failures",
+      "severity": "info",
+      "file": "api/ApiKeyAuthFilter.java",
+      "finding": "Every key fault (missing/blank/malformed/unknown) takes one code path -> sendError(401) with no body. lookup() does a single hashed lookup (no plaintext compare), so there is no timing oracle on the secret. Uniform 401 asserted byte-identical across all three causes.",
+      "action": "noted",
+      "reason": "Anti-enumeration + constant-time-w.r.t.-secret confirmed."
+    },
+    {
+      "id": "SEC-3",
+      "owasp": "A09 Security Logging Failures / PII",
+      "severity": "info",
+      "file": "api/ApiKeyAuthFilter.java, api/EventsController.java",
+      "finding": "No API key, key hash, event_name, or subscriber PII is logged anywhere; only projectId/subscriberId/exception-class. Matches Decision 16 PII rule.",
+      "action": "noted",
+      "reason": "No secret/PII exposure."
+    },
+    {
+      "id": "SEC-4",
+      "owasp": "A04 Insecure Design (DoS / write amplification)",
+      "severity": "low",
+      "file": "api/ApiKeyAuthFilter.java",
+      "finding": "stampLastUsedAt issues a Mongo save() on every authenticated request, an attacker with a valid key could drive a write per request. The global /events rate-limit (429) bounds it; the stamp is also after the key is already proven valid.",
+      "action": "keep",
+      "reason": "Bounded by the 300/min global rate-limit and gated on a valid key. The task explicitly requires stamping lastUsedAt per authenticated call. Acceptable; throttling/debouncing the stamp is a possible future optimization, out of scope here."
+    },
+    {
+      "id": "SEC-5",
+      "owasp": "A03 Injection",
+      "severity": "info",
+      "file": "api/EventIngressRequest.java, api/EventsController.java",
+      "finding": "event_name is slug-validated (^[A-Za-z0-9_-]{1,64}$); telegram_user_id is typed Long; subscriber_id is passed as a String _id through Spring Data findById (parameterized, no injection; a non-existent id returns empty, no exception for String @Id).",
+      "action": "noted",
+      "reason": "Inputs validated/typed at the boundary; no injection surface."
+    },
+    {
+      "id": "SEC-6",
+      "owasp": "A05 Security Misconfiguration (CSRF/CORS)",
+      "severity": "info",
+      "file": "security/SecurityConfig.java",
+      "finding": "CSRF disabled only on the STATELESS /api/integrations/** header-key chain (no ambient cookie auth to forge). CORS adds X-API-Key to allowedHeaders with a single explicit allowed origin (app.url) and allowCredentials=true — not a wildcard, so the credentialed-CORS pitfall is avoided.",
+      "action": "noted",
+      "reason": "Correct scoping; session chain CSRF unchanged."
+    }
+  ]
+}

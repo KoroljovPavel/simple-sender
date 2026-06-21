@@ -1,0 +1,43 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "pass"
+  },
+  "findings": [],
+  "interview_coverage": {
+    "covered": [
+      "Scope: 1 controller + raw_updates entity/repo + JobRunr job + 2 stub services + parser + SecurityConfig edit + metrics",
+      "Success criteria: 200 OK <100ms P99, idempotency, 401/404 on bad input, ownerChatId populate, /start payload in events",
+      "Testing strategy: unit (parser, verifier), integration (SpringBootTest + Testcontainers Mongo), E2E staging-smoke runbook, race-test via Flux.range(0,100).parallel(10)",
+      "Local dev: no polling mode, ngrok + BotFather for staging",
+      "Payload size limit: 1 MB cap scoped to /webhooks/telegram/** via WebFilter/per-route codec (NOT global ServerCodecConfigurer), 413 on overflow (AC4 + Ограничения now consistent)",
+      "Worker concurrency: JobRunr default, no per-chat ordering, deferred to Epic 05/06",
+      "DLQ: JobRunr Failed queue + raw_updates.processingStatus + processingError, no separate collection (AC14)",
+      "Metrics: 4 micrometer counters including worker outcome, no actuator endpoints (AC16)",
+      "Micrometer dependency: micrometer-core only, not actuator (AC16, Ограничения, Технические решения — with rationale)",
+      "ownerChatId trigger rule: first private /start to CONNECTED bot with ownerChatId IS NULL wins, atomic findAndModify (AC6)",
+      "ownerChatId race threat: accepted without UI mitigations (R2, Ограничения)",
+      "Edge case: /start@botname suffix stripping — AC7 (4th bullet)",
+      "Edge case: /start without payload → startPayload='' (empty string, not null) — AC7 (2nd bullet)",
+      "Edge case: multi-word payload /start ref_a b c → all after first whitespace trimmed — AC7 (3rd bullet)",
+      "Edge case: message.from absent (channel posts) → safe navigation, event telegram_update_other — AC11a",
+      "Edge case: non-message updates (callback_query, edited_message, my_chat_member, etc.) → silent ignore + event telegram_update_other, Epic 05 may distinguish my_chat_member later — AC11",
+      "Edge case: /start in group/supergroup → event without ownerChatId populate or Subscriber upsert (AC9)",
+      "Edge case: unknown command /foo → event telegram_message_received only (AC12)",
+      "Edge case: plain text → Subscriber upsert stub + event only for private chats (AC10)",
+      "Staging-smoke: ngrok + BotFather throwaway bot, docs/staging-smoke/08-webhook-ingestion.md as prerequisite in Как проверить → Пользователь проверяет",
+      "Inbound DTO: typed record TelegramUpdate with snake_case fields, @JsonIgnoreProperties(ignoreUnknown=true) (AC19)",
+      "Worker threading: .block() inside JobRunr worker per HardDeleteJob precedent",
+      "update_id monotonicity: Telegram-guaranteed, unique index (projectId, updateId) sufficient",
+      "TTL partial-filter: failed rows NOT auto-deleted (AC13)",
+      "size: L declared in frontmatter"
+    ],
+    "missing": []
+  },
+  "summary": "Обидва знахідки раунду 2 виправлено чисто. Ограничения тепер явно вказує 'scoped до /webhooks/telegram/** через WebFilter або per-route codec, НЕ глобальний bump' — протиріччя з AC4 усунуто. AC11a (окремий тип події для my_chat_member) видалено: my_chat_member переведено в generic AC11 з нотаткою 'Epic 05 може розрізняти пізніше', що відповідає консенсусу Q11. Нових проблем не виявлено. Спек готовий до затвердження."
+}

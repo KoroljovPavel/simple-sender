@@ -1,0 +1,97 @@
+{
+  "validator": "reality-checker",
+  "iteration": 1,
+  "batch": 1,
+  "tasks_checked": [1, 2, 3],
+  "tasks": [
+    {
+      "task": 1,
+      "status": "approved",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "hints",
+          "issue": "Task 1 says the class-load guard is at 'RawUpdate.java:27-37' and partial-filter at '54-57'. Actual file: class-load block starts at line 27, ends at line 37; @Indexed with partialFilter is at lines 54-57. References are accurate. However the description also cites 'Bot.java:17-40' (in tech-spec Decision 2 cross-ref) yet Bot.java class-load guard is at lines 31-40, not starting at 17. The task text itself (lines 87-88) reads 'lines 17-40' referencing Bot.java for the class-load guard — the guard actually starts at line 31 inside that range, so the range is over-inclusive but not wrong. No implementer confusion expected.",
+          "fix": "Tighten Bot.java line reference in Context Files to 'lines 31-40' for the static-block guard if desired for precision; no functional impact."
+        },
+        {
+          "severity": "minor",
+          "category": "hints",
+          "issue": "Task 1 implementation hint says 'no @Bean Clock exists yet' and suggests adding one to BackendApplication if needed. However this is a Task 3 concern (SubscriberServiceImpl uses Clock), not Task 1. Task 1 does not itself use Clock. The hint is forward-looking noise that could mislead the Task 1 implementer into registering a Clock bean prematurely.",
+          "fix": "Remove the Clock @Bean hint from Task 1; it belongs exclusively in Task 3 scope."
+        }
+      ]
+    },
+    {
+      "task": 2,
+      "status": "approved",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "feasibility",
+          "issue": "Task 2 step 3 says insert sub-nav 'between the All projects link (line 50) and the existing project-scoped Settings link (line 51-57)'. Actual default.vue: 'All projects' NuxtLinkLocale is at lines 44-50, Settings NuxtLinkLocale is at lines 51-57. The insertion point is correct but the reference says 'line 50' for the closing of All-projects — the tag closes at line 50 which is the closing of the NuxtLinkLocale element, not a standalone line. Minor off-by-one in description; no implementer impact since the structural intent is clear.",
+          "fix": "No action required; the insertion point is unambiguous from reading the file."
+        },
+        {
+          "severity": "minor",
+          "category": "hints",
+          "issue": "Task 2 says the uk.json is '17.6 KB'. Actual file is 17,989 bytes (~17.6 KB) and en.json is '12.4 KB' (actual 12,694 bytes). Both match closely. The task also correctly states existing top-level namespaces include 'brand, common, layout, timezone, validation, plus auth/profile/bot' — verified against actual uk.json keys: ['brand', 'common', 'layout', 'timezone', 'validation', 'auth', 'dashboard', 'profile', 'projects', 'bot', 'errors']. 'projects', 'dashboard', 'errors' are present but not mentioned in the size note. Not a bug but may cause confusion when looking for 'dashboard' and 'errors' namespaces.",
+          "fix": "No action required; the list was illustrative, not exhaustive."
+        },
+        {
+          "severity": "minor",
+          "category": "hints",
+          "issue": "Task 2 says add 'layout.sidebar.subscribers' key to locales 'covered in step 2'. However step 2's i18n key list uses 'subscribers.subnav.subscribers' / 'tags.subnav.tags' / 'customFields.subnav.customFields' for sub-nav labels, but the sidebar parent label in step 3 expects 't('layout.sidebar.subscribers')'. The 'layout.sidebar.subscribers' key must also be added to BOTH uk.json and en.json alongside the existing 'layout.sidebar.settings' entry — this is implicitly covered by step 2 but not called out explicitly in the subscribers.* namespace list. A careful implementer may miss adding it under the existing 'layout.sidebar' object.",
+          "fix": "Add 'layout.sidebar.subscribers' explicitly to the step 2 i18n key list or call it out in the sidebar step 3 as a required addition to the 'layout' namespace (not the 'subscribers' namespace)."
+        }
+      ]
+    },
+    {
+      "task": 3,
+      "status": "approved",
+      "findings": [
+        {
+          "severity": "major",
+          "category": "feasibility",
+          "issue": "Task 3 says to inject 'RedisTemplate<String, String>' in SubscriberServiceImpl, but BotService (the pattern to mirror) uses 'StringRedisTemplate' — a Spring-provided specialization of RedisTemplate<String, String>. AuthService uses RedisTemplate<String, String>. Both types are autowire-compatible when only the RedisTemplate<String, String> bean is registered. However, if the implementer tries to @Autowired StringRedisTemplate as Task 3 says to 'mirror BotService', they will get StringRedisTemplate; if they use RedisTemplate<String, String> as stated in the task text, they get the same logical bean but via a different type token. This is a naming inconsistency across the task that could cause confusion or an accidental type mismatch. The code will work either way but the task description should be internally consistent.",
+          "fix": "Standardize to 'StringRedisTemplate' throughout Task 3 to match BotService precedent, or explicitly note that 'RedisTemplate<String, String>' is the type used by AuthService and is equally valid."
+        },
+        {
+          "severity": "major",
+          "category": "feasibility",
+          "issue": "Task 3's SubscriberRateLimitIT Redis-down test instructs to 'stop the Redis container mid-test'. AbstractIntegrationTest exposes the Redis container as 'protected static final GenericContainer<?> REDIS'. This field IS accessible to subclasses, so REDIS.stop() is callable. However the test also requires 'restart Redis' and 'assert proceed + WARN'. Stopping a static Testcontainers singleton mid-suite will affect ALL subsequent integration tests in the JVM run that share the same Spring ApplicationContext (the Redis connection pool will be poisoned). The task does not address this inter-test contamination risk. A naive implementation would break every subsequent IT that needs Redis.",
+          "fix": "The Redis-down test must either: (a) use @DirtiesContext to tear down the ApplicationContext post-stop-restart so subsequent tests get a fresh connection pool, or (b) restart REDIS before assertions and verify the pool reconnects. Document this in the task as an edge case requiring @DirtiesContext or JUnit5 ordering isolation."
+        },
+        {
+          "severity": "minor",
+          "category": "feasibility",
+          "issue": "Task 3 says 'if no @Bean Clock exists yet, register Clock.systemUTC() in a config class'. No existing service (BotService, AuthService, EventService) uses a Clock bean — verified by grep. So the implementer WILL need to register one. The task says 'BackendApplication (or wherever existing beans live)' but the project structure may have a dedicated @Configuration class. This is minor guidance ambiguity, not a blocking issue.",
+          "fix": "Specify 'add @Bean Clock to an existing @Configuration class, or create BackendConfig.java if no suitable class exists' for clarity."
+        },
+        {
+          "severity": "minor",
+          "category": "feasibility",
+          "issue": "Task 3 says 'AppException.conflict(\"already_unsubscribed\")' — but AppException.conflict(String) sets code=null and message=the string. The tech-spec error codes table lists 'already_unsubscribed' as the CODE (not message), and BotService uses AppException.conflict(CODE, MESSAGE) two-arg form for machine-readable codes. Using single-arg conflict() will produce a response with code=null which GlobalErrorHandler will not map to the documented 'already_unsubscribed' code. Implementer should use AppException.conflict(\"already_unsubscribed\", \"<human message>\") to match the error-code contract.",
+          "fix": "Change task hint to use two-arg form: AppException.conflict(\"already_unsubscribed\", \"Subscriber is already unsubscribed\") to produce a machine-readable code field in the error response."
+        },
+        {
+          "severity": "minor",
+          "category": "tdd",
+          "issue": "Task 3 TDD anchor lists 'SubscriberRateLimitIT::parallel101DistinctUsers_persists100AndOneRateLimitEvent'. ConcurrencyTestUtils.parallelInvoke(n, Callable<T>) only accepts a single Callable — it does not accept a function of index. The test requires 101 DISTINCT telegramUserIds; to pass distinct IDs the test must generate them inside a shared AtomicInteger or pre-generate a list and index into it via a closure. The task describes this as 'parallelInvoke(101, ...)' which is accurate for the method signature, but the 'distinct user IDs' requirement requires extra setup that the task text does not describe.",
+          "fix": "Add a hint: 'Generate 101 unique telegramUserIds (e.g. via an AtomicLong counter shared across the parallel tasks via closure) before passing to parallelInvoke, since the Callable must capture the per-task ID from outside.'",
+          "category": "tdd"
+        }
+      ]
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 8,
+    "critical": 0,
+    "major": 2,
+    "minor": 6
+  },
+  "status": "approved",
+  "summary": "All three tasks are approved (zero critical findings). Task 1 is clean — file paths, line-number citations, API references (javax.crypto.Mac, MessageDigest.isEqual, Spring Data annotations, RawUpdate precedent) all verified against codebase. Task 2 is clean — shadcn-vue components.json config verified, check-locales.mjs parity gate confirmed, default.vue sidebar structure verified, SettingsSubnav.vue active-state precedent confirmed. Task 3 has two major findings: (1) StringRedisTemplate vs RedisTemplate<String,String> naming inconsistency with the BotService pattern being referenced; (2) stopping the static Redis Testcontainers singleton mid-suite will contaminate subsequent ITs — the task must document @DirtiesContext or pool-reconnect handling. Minor findings: Clock bean not yet registered anywhere and needs creation; AppException.conflict() one-arg form omits the machine-readable code field; parallelInvoke distinct-ID generation not described. No hallucinated APIs, no missing files, no security gaps in the tasks themselves."
+}

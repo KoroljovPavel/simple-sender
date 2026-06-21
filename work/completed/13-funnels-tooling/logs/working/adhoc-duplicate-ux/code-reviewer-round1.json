@@ -1,0 +1,45 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "adhoc-duplicate-ux",
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "info",
+      "category": "cross-file-consistency",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 250,
+      "issue": "duplicate() captures the returned FunnelResponse and navigates to /projects/{projectId}/funnels/{created.id}. Store contract verified: funnelsStore.duplicate() returns FunnelResponse (has .id) — created.id is type-safe and non-optional. Nav uses navigateTo(localePath(...)), identical to the existing locale-aware pattern in load() (line 133) and NuxtLink :to (line 321).",
+      "impact": "None — correct fix for BUG 1.",
+      "recommendation": "No change."
+    },
+    {
+      "severity": "info",
+      "category": "error-handling",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 252,
+      "issue": "navigateTo is awaited INSIDE the try, after toast.success. Error path = catch → toast.error with NO navigation. Test 'Duplicate failure toasts and does NOT navigate' asserts navMock not called. Async/await correct; no fire-and-forget, no double navigation, no leftover state.",
+      "impact": "None — matches required error contract.",
+      "recommendation": "No change."
+    },
+    {
+      "severity": "info",
+      "category": "cross-file-consistency",
+      "file": "frontend/pages/projects/[projectId]/funnels/index.vue",
+      "line": 93,
+      "issue": "duplicateFunnel() awaits funnelsStore.fetch(statusFilter.value) after a successful duplicate, respecting the active filter (FunnelStatusFilter, 'all' default). Refetch is inside try after success toast; error path unchanged (toast.error, no refetch). fetch() signature in store accepts FunnelStatusFilter — call is type-correct.",
+      "impact": "None — correct fix for BUG 2.",
+      "recommendation": "No change."
+    },
+    {
+      "severity": "info",
+      "category": "architecture",
+      "file": "frontend/stores/funnels.ts",
+      "line": 174,
+      "issue": "Store NOT modified. Verified contract intact: duplicate() does catch-flip-error-RETHROW, returns FunnelResponse, calls syncRow(created) which is a documented no-op for the new id (copy not in loaded list), does NOT fabricate a FunnelSummaryResponse, and never calls useApiError. Both pages map errors via useApiError in their own setup.",
+      "impact": "None.",
+      "recommendation": "No change."
+    }
+  ],
+  "notes": "Both UX fixes are minimal, idiomatic, and consistent with existing patterns in the same files. Editor navigation reuses the exact navigateTo(localePath()) idiom already present (404 redirect, back link). List refetch threads statusFilter.value through the existing store.fetch contract. No race conditions: each handler awaits sequentially within try; no leftover/stale state; no double-navigation. Store untouched, all four reviewed contracts (catch-flip-RETHROW, syncRow no-op, no fabricated summary, no useApiError-in-store) confirmed by reading stores/funnels.ts. Tests: 4 new/updated cases cover navigate-on-success, no-navigate-on-failure, refetch-with-filter, and new-row-appears; full editor+list suites pass (38 passed, 0 failed). No security/type/perf concerns in a UX-only navigation+refetch change."
+}

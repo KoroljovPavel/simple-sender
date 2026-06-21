@@ -1,0 +1,26 @@
+{
+  "validator": "reality-checker",
+  "batch": [1],
+  "iteration": 3,
+  "status": "approved",
+  "focus": "verify iter-2 findings resolved (prescriptiveness in Resolver Details and Register test Details)",
+  "findings": [],
+  "iter2_findings_resolution": [
+    {
+      "finding": "Resolver Details spelled out per-attribute builder chain instead of referencing Boot's WebSessionIdResolverAutoConfiguration",
+      "resolved": true,
+      "evidence": "Lines 270-276 now read: 'Pattern reference: mirror Boot's WebSessionIdResolverAutoConfiguration#cookieWebSessionIdResolver — copy each server.reactive.session.cookie.* attribute ... the same way auto-config does it for CookieWebSessionIdResolver.addCookieInitializer(...)'. No per-attribute builder chain is prescribed. Implementation Hints (lines 392-397) only describe available getters for orientation, not step-by-step algorithm."
+    },
+    {
+      "finding": "Register test Details enumerated every stub with exact Mockito forms instead of referencing AuthServiceRegistrationTest#setUp as pattern",
+      "resolved": true,
+      "evidence": "Lines 348-354 now point to AuthServiceRegistrationTest#setUp as 'canonical source of stubs for register-flow' and say 'mirror that stubbing scheme and that RegisterRequest creation model'. Stub names appear only as parenthetical orientation, not as Mockito code blocks. File confirmed to exist at backend/src/test/java/com/botfunnel/auth/AuthServiceRegistrationTest.java."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 1,
+    "iter2_findings_checked": 2,
+    "iter2_findings_resolved": 2,
+    "new_issues_found": 0
+  }
+}

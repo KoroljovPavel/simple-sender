@@ -1,0 +1,49 @@
+{
+  "round": 1,
+  "task": "4",
+  "reviewer": "test-reviewer",
+  "summary": "All 7 TDD-anchor cases are present with meaningful state and metadata assertions and the IT-only policy is well-justified. One major gap: the 'AC-17b ordering proof via timestamp comparison' requested by the spec is not actually a proof — comparing the survivor's createdAt (~now) against seeded events from 8-10 days ago is trivially true even if the implementation emitted the event before the sweep, so the assertion catches no real bug. Two minor concerns: the exactly-7d test does not isolate the +1ns trick (would pass without it), and the deletion-log test reuses the same assertion shape as the cascade test without adding new signal.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": "103-109",
+      "issue": "The 'ordering proof for AC-17b' is not actually a proof. The seeded events use timestamps 8-10 days in the past (baseline.minus(10, DAYS) / minus(8, DAYS)), while the surviving project_hard_deleted event is created with Instant.now() inside EventService.logEventBlocking. Any implementation — even a buggy one that emitted project_hard_deleted BEFORE the events sweep (and then somehow survived) — would still produce a createdAt strictly greater than 8-10 days ago. The assertion isAfter(oldEv1Time)/isAfter(oldEv2Time) cannot distinguish 'emitted after the sweep' from 'emitted at the same instant as anything else after seed time'. The task spec explicitly asked this assertion to prove the synchronous-save pipeline ran AFTER the events sweep, but as written it proves only 'the surviving event was created at wall-clock now', which is trivially true.",
+      "suggestion": "Capture a 'pre-sweep' wall-clock anchor close to the job call and compare against it. Concretely: (a) seed the prior events at Instant.now() (a few millis before the job call) instead of baseline.minus(8..10, DAYS) — pass the freshly-captured timestamps into seedEvent; (b) capture Instant preJob = Instant.now() immediately before job.hardDeleteSoftDeletedProjects(); (c) assert hardDeletedEvent.getCreatedAt().isAfterOrEqualTo(preJob) AND assert the seeded events' timestamps (oldEv1Time / oldEv2Time) are strictly before preJob. That combination — survivor.createdAt >= preJob > oldEv*Time — actually proves the survivor was emitted during the job run (not at seed time), and combined with the existing survival count (oldProjectRows.hasSize(1)) gives meaningful evidence the synchronous-save came after the sweep. Keep the existing 8-10d timestamps for the >7d cutoff math (the deletedAt field on Project) — only change the events' createdAt to be near-now.",
+      "litmusTestFailed": true
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": "134-144",
+      "issue": "cron_exactlySevenDaysAgo_isRemoved does not actually isolate the +1ns cutoff trick the task explicitly calls out (line 72 of task spec: 'verifies the +1ns cutoff converts the strict-< finder into an inclusive boundary'). The test seeds with deletedAt = Instant.now().minus(7, DAYS) using the test's clock, then the job internally calls Instant.now() a few millis LATER. So seed.deletedAt is naturally a few ms strictly less than job.now-7d (even WITHOUT the +1ns), and the strict-< repository finder would match anyway. Removing the .plusNanos(1) from production code would NOT cause this test to fail — same litmus issue as HardDeleteJobTest.hardDelete_exactly30DaysAgo_isRemoved (which this is meant to mirror, but inherits the same gap). The test passes for the wrong reason.",
+      "suggestion": "Pin a single 'now' for both seed and assertion path so the +1ns is the only thing keeping the finder inclusive. Either (a) introduce a Clock bean override in test config and inject Clock into ProjectHardDeleteJob, then freeze Clock.now() for the duration of the test; or (b) accept it as a known limitation and add a brief comment 'Note: this test relies on Instant.now() drift; the +1ns precision claim is not strictly exercised — see HardDeleteJobTest for the same trade-off' so the next reader is not misled. Prefer (a) if Clock injection is acceptable to the team; if not, (b) is the honest minimum.",
+      "litmusTestFailed": true
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": "190-203",
+      "issue": "cron_logsStructuredInfoOnDeletionRun overlaps almost entirely with cron_deletesOldProjectsAndCascadesEvents (line 111-112): both seed a >7d project + 2 prior events, run the job, and assert containsPattern('deletedCount=1 eventsRemovedCount=2 runDurationMs=\\\\d+'). The deletion-path log assertion is already exercised by the cascade test; the only added signal is that the log line appears in isolation (without the survival/cascade assertions wrapping it). Under the 'every test earns its place' rule, this duplicates coverage with no incremental failure mode caught.",
+      "suggestion": "Either (a) merge into cron_deletesOldProjectsAndCascadesEvents (already takes CapturedOutput and asserts the same regex) and delete this method; or (b) keep it but add ONE distinct signal — e.g. assert the log occurs exactly ONCE per job invocation (assertThat(output.getOut().lines().filter(l -> l.contains('ProjectHardDeleteJob - run completed')).count()).isEqualTo(1)) to defend against accidentally double-logging on the deletion path. Option (b) is preferable — keeps the AC-17c-on-deletion-path test named explicitly, adds a real fence against regressions.",
+      "litmusTestFailed": false
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": "58-113",
+      "issue": "Test isolation against bleed-through is fine for the projects + events collections (cleanState wipes both), but the same JVM may also run the existing HardDeleteJobTest (users-job) which leaves users behind if its own cleanState ordering changes. Not a current bug — just brittleness. More importantly: recurringJob_registeredWithCorrectIdAndCron (line 205) does NOT reset StorageProvider state in @BeforeEach. If a future test calls storageProvider.deleteRecurringJob('hard-delete-projects') it would leak into this test. Low-priority defensive concern.",
+      "suggestion": "No code change required for round 1. Add a comment on cleanState (line 32-36) noting it intentionally does not touch StorageProvider because @Recurring registration is JVM-global and re-registering is non-idempotent. If StorageProvider mutations are added in future tests, revisit.",
+      "litmusTestFailed": false
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": "111-112",
+      "issue": "The log regex containsPattern('deletedCount=1 eventsRemovedCount=2 runDurationMs=\\\\d+') will match even if surrounded by hostile text on the same line — it's a substring/pattern search, not an anchor. Low risk in practice (the production log line shape is fixed) but slightly weaker than the spec's intent ('Match on the exact field shape').",
+      "suggestion": "Tighten to assertThat(output.getOut()).containsPattern('ProjectHardDeleteJob - run completed: deletedCount=1 eventsRemovedCount=2 runDurationMs=\\\\d+'). Include the literal prefix so a regression that drops the structured-log header (and forces operators to grep on a different anchor) is caught. Apply the same change to cron_zeroDeletionDay_emitsStructuredInfoLog (line 184) and cron_logsStructuredInfoOnDeletionRun (line 202).",
+      "litmusTestFailed": false
+    }
+  ],
+  "approved": false
+}

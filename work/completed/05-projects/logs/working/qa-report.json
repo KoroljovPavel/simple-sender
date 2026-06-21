@@ -1,0 +1,98 @@
+{
+  "status": "failed",
+  "summary": {
+    "totalChecks": 43,
+    "passed": 42,
+    "failed": 1,
+    "notVerifiable": 0,
+    "criticals": 0,
+    "majors": 1,
+    "minors": 0
+  },
+  "testSuite": {
+    "status": "failed",
+    "details": "Backend ./gradlew test: 250 tests, 0 failures. Frontend pnpm test: 171 tests, 0 failures. Frontend pnpm build: success (locale parity gate exit 0). Frontend pnpm test:e2e: 2 tests, 1 failed (e2e/projects.spec.ts golden path; deterministic hydration race in dev mode — form submits as native GET before Vue @submit.prevent hydrates; e2e/i18n.spec.ts passes). Retries=2 also failed."
+  },
+  "acceptanceCriteria": [
+    { "criterion": "AC-1: POST /api/v1/projects valid → 201 + body", "status": "passed", "evidence": "ProjectControllerIT.create_validBody_returns201; AVP curl smoke (5 creates → 201)" },
+    { "criterion": "AC-2: POST invalid name → 400 (message contains name)", "status": "passed", "evidence": "ProjectControllerIT.create_invalidName_returns400_*; ValidTimezoneValidatorTest" },
+    { "criterion": "AC-3: POST invalid timezone → 400 (message contains timezone)", "status": "passed", "evidence": "AVP curl smoke step 8: HTTP 400 + 'timezone: must be a valid IANA timezone identifier', code=null" },
+    { "criterion": "AC-3b: description > 200 → 400", "status": "passed", "evidence": "ProjectControllerIT.create_descriptionTooLong_returns400" },
+    { "criterion": "AC-4: POST when 5 active → 422 project_limit_reached", "status": "passed", "evidence": "AVP curl smoke step 2: 6th create → 422 + code project_limit_reached; ProjectControllerIT.create_atLimit_returns422" },
+    { "criterion": "AC-5: POST duplicate active name → 409 project_name_taken", "status": "passed", "evidence": "AVP curl smoke step 7: HTTP 409 + code project_name_taken; ProjectControllerIT.create_duplicateActiveName_returns409" },
+    { "criterion": "AC-6: GET (no query) → only active, sorted createdAt desc", "status": "passed", "evidence": "ProjectControllerIT.getProjects_defaultActiveOnly_sortedByCreatedAtDesc" },
+    { "criterion": "AC-7: GET ?include_deleted=true → active + soft-deleted", "status": "passed", "evidence": "ProjectControllerIT.getProjects_includeDeletedTrue_returnsActivePlusSoftDeleted" },
+    { "criterion": "AC-8: GET foreign id → 404", "status": "passed", "evidence": "AVP curl smoke step 4: HTTP 404 (NOT 403); ProjectControllerIT.get_foreignId_returns404" },
+    { "criterion": "AC-9: GET malformed id → 404", "status": "passed", "evidence": "AVP curl smoke step 5: HTTP 404; ProjectControllerIT.get_malformedId_returns404" },
+    { "criterion": "AC-10: GET soft-deleted own id → 404 by default", "status": "passed", "evidence": "ProjectControllerIT.get_softDeletedOwnId_returns404" },
+    { "criterion": "AC-11: any /api/v1/projects/* without session → 401", "status": "passed", "evidence": "AVP curl smoke step 6: HTTP 401; ProjectControllerIT.anyEndpoint_unauthenticatedBareClient_returns401" },
+    { "criterion": "AC-12 / AC-12b: PATCH update + name-conflict 409", "status": "passed", "evidence": "ProjectControllerIT.patch_validBody_returns200_renamedEvent / patch_duplicateActiveName_returns409" },
+    { "criterion": "AC-13: DELETE → 200, soft-delete, audit event", "status": "passed", "evidence": "ProjectControllerIT.delete_returns200_softDeletes; AVP curl smoke delete_http=200" },
+    { "criterion": "AC-14 / AC-14b: POST /restore — auto-suffix on name conflict", "status": "passed", "evidence": "ProjectControllerIT.restore_nameConflict_appendsSuffix; renamedDueToConflict flag asserted" },
+    { "criterion": "AC-15: POST /restore at limit → 422 project_limit_reached", "status": "passed", "evidence": "AVP curl smoke step 3: HTTP 422 + code project_limit_reached" },
+    { "criterion": "AC-16: JobRunr recurring 'hard-delete-projects' with cron '0 3 * * *'", "status": "passed", "evidence": "ProjectHardDeleteJobIT.recurringJob_registeredWithCorrectIdAndCron (asserted via StorageProvider.getRecurringJobs)" },
+    { "criterion": "AC-17 / AC-17b / AC-17c: cron hard-delete + event cascade + INFO log", "status": "passed", "evidence": "ProjectHardDeleteJobIT (7 cases): cron_deletesOldProjectsAndCascadesEvents, cron_logsStructuredInfoOnDeletionRun, cron_zeroDeletionDay_emitsStructuredInfoLog" },
+    { "criterion": "AC-18: 0 projects → dashboard inline empty-state with CTA", "status": "passed", "evidence": "tests/pages/dashboard.spec.ts: dashboard renders empty-state + CTA when projects.length==0; backed by data-test='dashboard-empty-state'" },
+    { "criterion": "AC-19: ≥1 project → dashboard welcome + topbar ProjectSelector", "status": "passed", "evidence": "tests/components/ProjectSelector.spec.ts; tests/pages/dashboard.spec.ts" },
+    { "criterion": "AC-20: auto-select from localStorage when present in fetched list, else projects[0]", "status": "passed", "evidence": "tests/stores/projects.spec.ts (autoSelect_*)" },
+    { "criterion": "AC-21: switch → store + localStorage write under import.meta.client; no storage event listener", "status": "passed", "evidence": "tests/stores/projects.spec.ts (selectProject_writesLocalStorage); single localStorage.setItem in stores/projects.ts:26" },
+    { "criterion": "AC-22a..d: settings rename / description / timezone / danger-zone delete", "status": "passed", "evidence": "tests/pages/projects/settings.spec.ts (13 cases): rename, partial PATCH, type-to-confirm modal disabled until exact match" },
+    { "criterion": "AC-23: /projects with Active + Recently deleted sections", "status": "passed", "evidence": "tests/pages/projects/index.spec.ts (active-section, recently-deleted-section, restore-button)" },
+    { "criterion": "AC-24: 404 interceptor scoped to /api/v1/projects/{currentId}", "status": "passed", "evidence": "tests/composables/useApi-404-interceptor.spec.ts (9 cases): GET/PATCH/DELETE exact-path triggers clear+refetch+toast; other 404s pass through" },
+    { "criterion": "AC-25: i18n parity uk + en for all new keys (renamed/unavailable/limit/typeName)", "status": "passed", "evidence": "tests/i18n/required-keys.spec.ts; pnpm build locale parity gate exit 0" },
+    { "criterion": "AC-26: ./gradlew test green", "status": "passed", "evidence": "BUILD SUCCESSFUL; 250 tests, 0 failures, 0 errors, 0 skipped" },
+    { "criterion": "AC-27: pnpm test green", "status": "passed", "evidence": "19 test files, 171 tests passed" },
+    { "criterion": "AC-28: pnpm test:e2e green", "status": "failed", "evidence": "e2e/projects.spec.ts golden path fails deterministically (hydration race: form submits as native GET before Vue @submit.prevent attaches); e2e/i18n.spec.ts passes" },
+    { "criterion": "AC-29: pnpm build green (locale parity gate enforced)", "status": "passed", "evidence": "Build complete; 4.59 MB total; check-locales.mjs exit 0" },
+    { "criterion": "AC-30: + Create button disabled + tooltip when length >= 5", "status": "passed", "evidence": "tests/components/ProjectSelector.spec.ts (limitReached_disablesCreate_showsTooltip); tests/pages/projects/index.spec.ts" },
+    { "criterion": "AC-31: ux-guidelines.md line 33 → inline empty-state on /dashboard", "status": "passed", "evidence": "grep 'full-page onboarding' .claude/skills/project-knowledge/references/ux-guidelines.md → 0 matches; line 33 now reads 'Zero projects → inline empty-state on /dashboard with \"Create your first project\" CTA'" },
+    { "criterion": "AC-T1: error bodies conform to {message, code}", "status": "passed", "evidence": "All AVP curl bodies (422, 409, 400, 404) match {message,code|null}; ProjectControllerIT.errorBodies_alwaysHaveMessageAndCode" },
+    { "criterion": "AC-T2: AppException.notFound / unprocessableEntity factories", "status": "passed", "evidence": "common/AppException.java:36 notFound(String); :40 unprocessableEntity(String code, String message)" },
+    { "criterion": "AC-T3: no new dependencies", "status": "passed", "evidence": "git diff 56598cf..HEAD -- backend/build.gradle frontend/package.json → empty" },
+    { "criterion": "AC-T4: app.projects.max-per-user + .env.example PROJECTS_MAX_PER_USER=5", "status": "passed", "evidence": "application.properties:30 app.projects.max-per-user=${PROJECTS_MAX_PER_USER:5}; .env.example:31 PROJECTS_MAX_PER_USER=5" },
+    { "criterion": "AC-T5: check-locales.mjs exit 0 after uk+en updates", "status": "passed", "evidence": "node scripts/check-locales.mjs → exit 0" },
+    { "criterion": "AC-T6: pages/dashboard.vue does NOT call localStorage", "status": "passed", "evidence": "grep localStorage frontend/pages/dashboard.vue → 0 matches" },
+    { "criterion": "AC-T7: zero-touch on auth.global.ts / SecurityConfig.java / JobRunrMongoConfig.java", "status": "passed", "evidence": "git diff 56598cf..HEAD on the 3 forbidden files → empty (wc -c 1 = newline only)" },
+    { "criterion": "AC-T8: gitleaks pre-commit hook passes", "status": "passed", "evidence": "Task 12 Security Audit verdict PASS (decisions.md): pre-commit hook executed cleanly; gitleaks not installed locally but hook gracefully skips per scripts/install-hooks.sh:9-12; no synthetic secrets in committed files" },
+    { "criterion": "AC-T9: no @CompoundIndex(unique=true, partialFilter=...)", "status": "passed", "evidence": "grep 'unique = true' backend/src/main/java/com/botfunnel/project/ → 0 matches; grep 'partialFilter' → 0 matches; uniqueness enforced at service layer" },
+    { "criterion": "AC-T10: ux-guidelines.md line 33 updated in this PR (1-line change)", "status": "passed", "evidence": "Same as AC-31" },
+    { "criterion": "AC-T11: Mongo queries use typed values (no string-concat Criteria)", "status": "passed", "evidence": "grep 'Criteria.where' backend/src/main/java/com/botfunnel/project/ → 0 matches (derived finders only); ProjectHardDeleteJob.java uses Criteria.where(field).in(List<String>) typed values" },
+    { "criterion": "AC-T12: localStorage.setItem only in stores/projects.ts", "status": "passed", "evidence": "grep -rn 'localStorage.setItem' frontend/ (excluding node_modules/tests/.nuxt/.output/e2e) → exactly 1 match: stores/projects.ts:26" }
+  ],
+  "findings": [
+    {
+      "severity": "major",
+      "title": "E2E golden path fails deterministically in dev mode (hydration race on auth/register submit)",
+      "expected": "pnpm test:e2e runs e2e/projects.spec.ts → green (AC-28)",
+      "actual": "Test times out at line 40 (page.waitForURL(/\\/dashboard.../)) because the button[type='submit'] click on /auth/register fires before Vue @submit.prevent hydrates. The form does a native HTML GET submission, navigating to /en/auth/register?email=...&password=...&confirmPassword=... instead of POSTing JSON to /api/auth/register. Reproduced 5 times in a row (initial run + 2 manual retries + Playwright --retries=2). Same hydration race for both registration form and any other VVee-validate form that uses @submit.prevent. The i18n.spec.ts test passes because it calls page.waitForLoadState('networkidle') before clicking the lang-switcher (which the projects.spec.ts deliberately removed per Task 10 fix-commit e10067d, citing 'HMR-websocket flake source').",
+      "reproduction": "1. Start backend: cd backend && ./gradlew bootRun. 2. Start Mongo+Redis+Mailpit (docker-compose up). 3. cd frontend && pnpm exec playwright test e2e/projects.spec.ts. 4. Observe deterministic timeout at /auth/register step. Verifying on production build (pnpm build && pnpm preview) not attempted under this QA pass — JS bundle in prod is materially faster to hydrate and the same race may not appear in CI.",
+      "suggestedFix": "Re-introduce a hydration gate before the register submit: either (a) await page.waitForLoadState('networkidle') with HMR muted in test env, or (b) await expect(page.locator('html')).toHaveAttribute('data-nuxt-ready', 'true') if a ready marker exists, or (c) wait for a JS-only behavior to be reactive (e.g. fill the email with an invalid value, expect the validation error to render, then re-fill with valid value before submitting). Returns Task 10 to work-loop for E2E spec hardening before merge to a production-like environment."
+    }
+  ],
+  "deferredToPostDeploy": [
+    {
+      "criterion": "Локально перед merge: cross-restart localStorage persistence, soft-delete + 404-interceptor cleanup",
+      "reason": "Requires live browser session (Chrome DevTools → Local Storage inspection) with full close/reopen cycle. Covered by unit tests at the store level (tests/stores/projects.spec.ts), but the cross-restart user-level UX behavior is not asserted in any automated test.",
+      "verificationCondition": "User opens the deployed stack manually after merge, creates 2 projects, selects B, closes browser, reopens, verifies selector still shows B; then soft-deletes B and verifies new tab falls back to A.",
+      "verificationSteps": "1. Register/login at deployed frontend. 2. Create project A and B. 3. Select B in topbar selector. 4. DevTools → Application → Local Storage: verify bot-funnel.currentProjectId === <B-id>. 5. Close browser entirely, reopen, log in: selector shows B. 6. Settings → soft-delete B. 7. Open new tab: selector shows A (404-interceptor cleared localStorage)."
+    },
+    {
+      "criterion": "i18n smoke on /en (visual key-vs-translation check on golden path)",
+      "reason": "Requires live frontend with locale switched to en and human visual inspection that no translation keys (projects.delete.confirm, errors.projects.unavailable, layout.projectSelector*) leak as placeholders.",
+      "verificationCondition": "Live stack post-deploy.",
+      "verificationSteps": "Switch locale to /en → walk golden path (create → rename → soft-delete → restore) → visually confirm no translation keys are exposed in toasts, modal titles, button labels."
+    },
+    {
+      "criterion": "JobRunr dashboard manual smoke",
+      "reason": "Per Task 14 spec: optional post-deploy smoke, not AVP-обязанность. Pre-deploy assertion (integration test) is sufficient (AC-16 PASS).",
+      "verificationCondition": "Post-deploy JobRunr dashboard accessible.",
+      "verificationSteps": "Open /jobrunr-dashboard → Recurring → confirm 'hard-delete-projects' with cron '0 3 * * *' appears alongside 'hard-delete-users'."
+    },
+    {
+      "criterion": "AC-28 production-build verification of E2E golden path",
+      "reason": "Failure under dev mode is a hydration timing race that is much less likely to manifest under a production build (bundled, minified JS hydrates faster). Verifying on prod-build is the natural next step before the spec is patched.",
+      "verificationCondition": "Either fix the spec hydration gate (returns Task 10 to work-loop) OR run pnpm build && pnpm preview + pnpm exec playwright test e2e/projects.spec.ts and confirm green.",
+      "verificationSteps": "1. cd frontend && pnpm build. 2. NUXT_PUBLIC_API_BASE pointed at running backend, pnpm preview & 3. pnpm exec playwright test e2e/projects.spec.ts --reporter=list."
+    }
+  ]
+}

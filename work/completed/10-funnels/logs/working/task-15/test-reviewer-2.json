@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review of commit 146a3e1. The round-1 MAJOR (terminate/complete/scheduleDelay CAS paths uncovered) is RESOLVED. The new concurrentCancelMidTickWinsOverTerminalWrite IT races the terminate() CAS specifically: a 400-other send (verified by the existing send-fail test at line 305-309 to map to TerminalReason.OTHER -> FAIL -> terminate(failed)) drives the engine to WANT 'failed' while the dispatcher concurrently flips the row to cancelled+done mid-send. A blind save or a dropped stillClaimed predicate would yield 'failed'; the test asserts 'cancelled'. Litmus passes. The developer's claim that complete()/scheduleDelay() are unreachable with a lost claim under a synchronous race is SOUND and verified against source: the sole test-injectable I/O in a tick is the Telegram send inside StepExecutor.execute(); a DELAY step does zero send (StepResult.delay computed in-memory, line 75) and end-of-steps complete() runs with no preceding execute() in that iteration; any cancel that could land during a PRIOR send-CONTINUE is caught by persistProgress's CAS (return at line 171) BEFORE control can reach scheduleDelay/complete. There is genuinely no interposition point between the last successful CAS gate and those two calls, so they cannot be deterministically raced into a lost-claim state - the CAS on them is legitimate defense-in-depth (guards future code that adds an I/O point, and true DB-level async concurrency that is non-deterministic to unit-test). The MINOR null-old-value gap is RESOLVED by setCustomFieldFirstTimeRecordsNullOldValue (activeSubscriber() leaves customFields null, asserts oldValues containsExactly entry(\"age\", null)) - mutation-resistant against empty-map / NPE mutants. The same-value-no-op minor is acceptably deferred to SubscriberServiceImplIT (the executor has no conditional branch of its own). The F2-discriminator minor is addressed via the cancelled-vs-failed status discriminator plus currentStepIndex==0. Both affected test classes were executed and pass (BUILD SUCCESSFUL).",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 4,
+      "integration": 2,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

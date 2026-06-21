@@ -1,0 +1,26 @@
+{
+  "task": "1",
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "skill": "code-reviewing",
+  "verdict": "pass",
+  "summary": "Backend data model for SUBSCRIBE_TO_FUNNEL. Three new FunnelStep fields (targetFunnelId, targetEntryStepId, endParentAfter) plus enum constant, DTO mirror, toSteps/toStepDto mapping, and TODO-marked temporary branches in the two exhaustive switches. The change is a faithful mirror of the existing eventName pattern and matches tech-spec Data Models exactly.",
+  "dimensions_reviewed": [
+    "Architectural patterns",
+    "Separation of concerns",
+    "Readability/maintainability",
+    "Cross-file consistency",
+    "Testing coverage",
+    "Type safety"
+  ],
+  "findings": [],
+  "positive_notes": [
+    "targetEntryStepId named correctly (NOT targetStepId) per Decision 5; avoids Button.targetStepId collision and is excluded from the generic edge-pass (requireExistingTarget only reads getNext()/getTimeoutTargetStepId()), so no false funnel_broken_edge.",
+    "endParentAfter is a primitive boolean (default false), mapped directly via dto.endParentAfter() without blankToNull — matches edge-case requirement.",
+    "String fields mapped via blankToNull, mirroring eventName.",
+    "copyOf copies all three fields field-wise (Strings by reference, boolean by value); javadoc deep-copy contract updated, snapshot isolation (Decision 3) preserved.",
+    "FunnelStepDto constructor arg order in toStepDto matches record component order; the existing FunnelServiceEmitEventTest constructor was correctly updated with the three trailing args.",
+    "isMessageStep unchanged, so SUBSCRIBE_TO_FUNNEL correctly falls through to the non_message preview placeholder.",
+    "Temporary switch branches in StepExecutor.execute and FunnelService.validateSteps are clearly TODO-marked for Task 3 / Task 2, no premature logic and no new injected dependencies."
+  ]
+}

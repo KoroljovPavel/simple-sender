@@ -1,0 +1,60 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 4,
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "status": "needs_improvement",
+  "summary": "All TDD-anchor cases are present and individually well-structured. The aggregated-audit invariant is covered at the integration level (event count = 1, changedKeys verified). However, the critical all-or-nothing invariant for multi-key PATCH — where an earlier valid key must NOT be persisted when a later key fails validation — is entirely absent. The refactored setOne applies a per-key MongoTemplate update inside the controller loop, so key A is written to the DB before key B's validation throws; this partial-write window is not pinned by any test. Additionally, the unit tests assert the sole-writer boundary (recordCustomFieldsSet never called from setOne) but do not assert the aggregated-call signature from the controller layer. Three minor issues are also noted.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsControllerTest.java",
+      "issue": "No test for a multi-key PATCH where an earlier key is valid and a later key is invalid. The refactored controller calls customFieldsService.setOne(...) per key inside a loop; setOne writes to MongoDB atomically per key. If key 'city' is processed first (valid, written), then key 'age' throws 422, the controller propagates the 422 — but 'city' is already persisted. The all-or-nothing invariant (no partial writes on a 422) is NOT pinned by any test. The existing patchCustomFields_invalidType_returns422 uses only one key, so it cannot expose this regression.",
+      "recommendation": "Add an integration test: patchCustomFields_partialKeyOrder_422_writesNothing. Seed a subscriber with no custom fields. Define two fields: 'city' (STRING) and 'age' (NUMBER). PATCH with {\"values\":{\"city\":\"Kyiv\",\"age\":\"not-a-number\"}}. Assert status is 422. Assert subscriberRepository.findById(...).getCustomFields() does NOT contain 'city' (i.e., nothing was written). Also assert customFieldSetEvents returns empty. This test will fail with the current implementation if iteration order places 'city' before 'age', exposing the partial-write gap and forcing either a transactional wrapper, pre-validation pass, or loop restructure."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsControllerTest.java",
+      "issue": "The aggregated recordCustomFieldsSet call is verified only by side-effect (event count = 1 in DB, changedKeys list). There is no assertion that the method receives the correct OLD values map. If old values are accidentally omitted or set to empty, the idempotency guard in SubscriberServiceImpl may silently swallow the audit event even when values changed (empty diff = no-op). The current test only proves one event was written, not that old/new maps are correctly populated.",
+      "recommendation": "Extend patchCustomFields_behaviourUnchanged to pre-seed the subscriber with existing values (e.g., customFields = {city: 'OldCity', age: 25.0}) rather than an empty map. Then after PATCH, assert: (1) event metadata 'oldValues' contains {city: 'OldCity', age: 25.0}; (2) event metadata 'newValues' contains {city: 'Kyiv', age: 42.0}. This pins that old snapshot is captured before the setOne loop and passed correctly to recordCustomFieldsSet."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsServiceTest.java:55",
+      "issue": "setOne_validValue_updatesAndReturnsNormalized asserts the UpdateDefinition by calling captor.getValue().getUpdateObject().toString() and checking string containment. toString() of a Spring Data MongoDB Update object is implementation-specific and may change across library versions without a semantics change, making the test fragile.",
+      "recommendation": "Replace the toString() containment check with a direct assertion on the UpdateDefinition document. Cast to org.springframework.data.mongodb.core.query.Update, call getUpdateObject(), then assert: assertThat(updateObject.get(\"$set\", Document.class)).containsEntry(\"customFields.city\", \"Kyiv\"). This is version-stable and tests the exact MongoDB operation rather than a string representation."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsControllerTest.java:125",
+      "issue": "patchCustomFields_foreignOwner_returns404 saves a project with OTHER_USER_ID as ownerId but never seeds a User document for OTHER_USER_ID in cleanAndSeed. The test works today because requireOwned compares ownerId strings in memory without a DB User lookup. If a future change introduces a User existence check in requireOwned, this test would break for the wrong reason (missing User) rather than the intended reason (foreign ownership).",
+      "recommendation": "Seed a minimal User entity for OTHER_USER_ID in cleanAndSeed (same pattern as USER_ID, distinct email e.g. 'other@test.com'). This makes the test self-contained and resilient to future User-validation changes in ProjectService."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberCustomFieldsControllerTest.java",
+      "issue": "No test for PATCH where ALL submitted keys are unknown (mass-assignment-defense: every key is dropped). Expected behaviour: 200, customFields unchanged, zero audit events written. The existing patchCustomFields_behaviourUnchanged mixes known and unknown keys so the 200+no-write case for pure unknown input is not explicitly covered.",
+      "recommendation": "Add a test: patchCustomFields_allUnknownKeys_returns200NoChange. Define no custom fields on the project (or define 'city' but PATCH with only 'ghost'). Assert: status 200, customFields unchanged, customFieldSetEvents empty. This pins that the newValues.isEmpty() guard suppresses both the DB write and the audit call."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 7,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 4,
+      "integration": 5,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

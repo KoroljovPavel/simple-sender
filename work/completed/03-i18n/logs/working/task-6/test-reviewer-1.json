@@ -1,0 +1,28 @@
+{
+  "summary": "All 5 TDD-anchor cases from task 6 are present in frontend/tests/components/LangSwitcher.spec.ts and each maps 1:1 to the anchor list. Mocks are at the correct boundary (mockNuxtImport for useI18n + useCookie), only vi.fn() spy is hoisted via vi.hoisted while refs are module-level — matching the verified pattern from frontend/tests/pages/auth/login.spec.ts and the task's implementation hints. beforeEach mutates ref.value rather than recreating refs, so the spy's closure-bound ref identity stays stable across tests. Litmus test passes for every case: removing the corresponding production line (v-for, active class binding, click handler, await setLocale, early-return guard) makes the relevant test fail. AC15 anchor (cookie value after click) is asserted explicitly via expect(cookieRef.value).toBe('en'). The regression scenarios called out in the focus (swap setLocale → navigateTo+switchLocalePath, remove if (isActive(code)) return) are both caught — the spy-call test and the cookie-value test both rely on setLocale executing the mockImplementation side-effect, and the idempotency test depends on the early-return guard. Verdict: OK.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/LangSwitcher.spec.ts:54-61 (active locale has highlight class)",
+      "issue": "Active-highlight assertion only checks the presence of 'font-semibold' on the active button. The component also applies 'text-primary' to the active button and 'text-muted-foreground' to the inactive one (LangSwitcher.vue:35-36). If a future refactor drops 'text-primary' but keeps 'font-semibold', the test still passes — partial coverage of the active-state contract.",
+      "recommendation": "Tighten the assertion to cover both classes that define the active visual contract, e.g. expect(ukBtn.classes()).toEqual(expect.arrayContaining(['font-semibold', 'text-primary'])) and expect(enBtn.classes()).toEqual(expect.arrayContaining(['text-muted-foreground'])). This locks the visual contract end-to-end without becoming a snapshot of every Tailwind utility."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/LangSwitcher.spec.ts (whole file)",
+      "issue": "No test asserts the aria-current='true' attribute on the active button, even though the component sets it (LangSwitcher.vue:27) and the task Details section calls it out as a semantic indicator. Accessibility regression (e.g., dropping aria-current binding) would not be caught.",
+      "recommendation": "Add a single assertion to the existing 'active locale has highlight class' case: expect(ukBtn.attributes('aria-current')).toBe('true') and expect(enBtn.attributes('aria-current')).toBeUndefined(). One extra line, no new test needed."
+    },
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/tests/components/LangSwitcher.spec.ts:63-76 (click EN calls setLocale + click EN updates cookie)",
+      "issue": "Test 4 (cookie update) passes if and only if setLocaleSpy was called with 'en' — the cookie change is produced entirely by the spy's mockImplementation side-effect, not by component code. So tests 3 and 4 share a single observable failure mode (setLocale not called). The duplication is acceptable because AC15 explicitly requires asserting cookie value, but a reviewer should be aware that test 4 does NOT independently verify atomic cookie write — it verifies that we awaited setLocale long enough for the side-effect to flush.",
+      "recommendation": "Keep both tests (AC15 contract is explicit), but consider adding a comment in test 4 noting that cookie value is driven by the mock setLocale implementation modeling the atomic module behavior per Decision 12 — so reviewers don't mistake it for a direct cookie-write assertion against component code."
+    }
+  ],
+  "verdict": "OK"
+}

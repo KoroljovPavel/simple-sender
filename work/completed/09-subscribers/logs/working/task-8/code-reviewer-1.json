@@ -1,0 +1,65 @@
+{
+  "verdict": "approved_with_suggestions",
+  "summary": "Task 8 (SubscriberController + SegmentFilter/Builder + DTOs) is correct, well-structured, and faithful to the task spec and project conventions. All 7 endpoints mount under the versioned path with requireOwned as the first statement (AC21); the cursor codec is strict and fail-closed (security F6); the AC5 personal-message mapping matches the deliberate frozen-TelegramSender decision (errorCode==null -> 503 telegram_rate_limited, concrete 4xx -> 400 telegram_send_failed); Decision-10 event ownership is respected with no double-write. All cross-file signatures verified against their definitions. The full TDD-anchor test set is present and the suite is green. Findings are minor only.",
+  "metrics": {
+    "filesReviewed": 18,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 4,
+    "testCoverageAssessment": "excellent"
+  },
+  "findings": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java",
+      "line": 180,
+      "severity": "minor",
+      "category": "security",
+      "description": "The history-feed query in events() scopes only by subscriberId (Criteria.where(\"subscriberId\").is(id)) and does not also constrain projectId. It is safe today because requireOwnedSubscriber(project.getId(), id) on line 177 already proves the subscriber belongs to the owned project before the feed query runs, so no cross-tenant leak is possible. However, the controller's own stated philosophy (line 301-302) is project-scoped defense-in-depth on every subscriber read; the events feed is the one read that relies solely on the upstream guard. subscriber_events documents do carry projectId.",
+      "suggestion": "Add .and(\"projectId\").is(project.getId()) to the feed Criteria so the query is self-defending and consistent with requireOwnedSubscriber's documented anti-IDOR rationale. It also matches the (subscriberId, createdAt desc) index without harming index usage (projectId is an equality filter on a small result set). Optional — purely defense-in-depth."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java",
+      "line": 179,
+      "severity": "minor",
+      "category": "best-practices",
+      "description": "events() clamps limit with Math.min(Math.max(limit, 1), MAX_EVENTS_LIMIT). The task/tech-spec describe the events feed as 'default limit 50, max 200'. The @RequestParam(defaultValue = \"50\") supplies 50 only when the param is absent; an explicitly supplied limit=0 or negative value is silently coerced to 1 rather than to the documented default of 50. Behaviour is harmless (returns 1 row), but it diverges from 'default 50' for the edge input and is asymmetric with the list endpoint where clampLimit treats <=0 as the default 50.",
+      "suggestion": "Either coerce non-positive limits to DEFAULT_EVENTS_LIMIT (mirroring SegmentFilterBuilder.clampLimit) or document explicitly that the events feed floors at 1. Low impact; no test currently exercises limit<=0 so this is undefined-by-test behaviour."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java",
+      "line": 141,
+      "severity": "minor",
+      "category": "maintainability",
+      "description": "There are two overlapping guards for short search input with slightly different semantics: SubscriberListQuery.search carries @Size(min=2) (counts the raw, untrimmed string length) and the controller additionally rejects query.search().trim().length() < MIN_SEARCH_CHARS. For an input like \"a \" (one visible char + trailing space) the @Size(min=2) bean-validation passes but the controller-level trim() guard then rejects it with 400 'search must be at least 2 characters'. The net outcome is correct (reject), but the two layers measure length differently, so which guard fires depends on whitespace. SegmentFilterBuilder.build() applies the same trim()+MIN_SEARCH_CHARS check a third time before adding the TextCriteria.",
+      "suggestion": "This is acceptable as an explicit server-side guard (the task explicitly asks for a deterministic controller-level 400, and the comment documents the intent). Consider a one-line comment noting that @Size counts raw length while the controller counts trimmed length, so the trimmed guard is the authoritative one — prevents a future reader from assuming the two are redundant."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java",
+      "line": 97,
+      "severity": "minor",
+      "category": "readability",
+      "description": "StringRedisTemplate is referenced via its fully-qualified name org.springframework.data.redis.core.StringRedisTemplate in both the field declaration (line 97) and the constructor parameter (line 111) instead of a top-of-file import, unlike every other dependency in the class. This is a cosmetic inconsistency with the surrounding import style.",
+      "suggestion": "Add `import org.springframework.data.redis.core.StringRedisTemplate;` and use the short name in the field and constructor. No behavioural impact."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java",
+      "line": 257,
+      "severity": "minor",
+      "category": "correctness",
+      "description": "POSITIVE NOTE (not a defect): the AC5 mapping in handleSendFailure deliberately diverges from the literal wording in tasks/8.md item 3 (which said OTHER -> 422/502). The shipped TelegramSender (Task 6, frozen) masks 429-retry-exhaustion as a TelegramSendException with terminalReason=OTHER and errorCode=null, so the controller's null-errorCode -> 503 telegram_rate_limited / concrete-4xx -> 400 telegram_send_failed branch is the correct adaptation. Verified against TelegramSendException (status 400, code telegram_send_failed) + GlobalErrorHandler.handleAppException (status(ex.getStatus()).body(message, code)): re-throwing the exception yields 400 telegram_send_failed and the constructed AppException yields 503 telegram_rate_limited. Both branches are covered by SubscriberPersonalMessageIT.send_400otherReason_* and send_429AfterRetryExhausted_*. The inline comment (lines 264-269) documents the rationale. No change required.",
+      "suggestion": "No action. Recorded so a future reviewer reconciling task text vs implementation sees the deviation was intentional and validated end-to-end by the IT suite."
+    }
+  ],
+  "positives": [
+    "Every handler's first statement is `Project project = projectService.requireOwned(currentUserId(), projectId, false)` — AC21 anti-IDOR/anti-enumeration is uniform across all 7 endpoints; foreign/soft-deleted/malformed projectIds all collapse to 404 (covered by SubscriberControllerIT access-guard tests).",
+    "currentUserId() is an exact byte-for-byte duplicate of the ProjectController/BotController idiom (intentional per task item 5 + patterns.md controller idiom).",
+    "Cursor codec (SegmentFilterBuilder.decodeCursor) enforces all 5 Decision-5 rules: base64url decode, JSON object, exactly {v,id} keys, recursive $-prefixed-key rejection at any depth, v integral-number, id ^[a-f0-9]{24}$ — all failures map to a uniform 400 invalid_cursor (never 500, never a leaked row). Fully covered by unit + IT negative cases.",
+    "SegmentFilterBuilder is a pure translator with no Mongo I/O; tie-break criterion is exactly (field < v) OR (field == v AND _id < lastId) and is asserted document-shape-exact in SegmentFilterBuilderTest.",
+    "Personal-message rate limit mirrors the BotService INCR-then-EXPIRE-on-first-bucket pattern, counts BEFORE the send so the (limit+1)th request never reaches Telegram (asserted by rate_limited_returns429_andNoSenderCalled with an exact 60-send delta), and fails open with the greppable PERSONAL_MESSAGE_RATE_REDIS_FAIL_OPEN WARN constant.",
+    "Decision-10 event ownership is correct: controller writes personal_message_sent (2xx) and personal_message_failed{terminalReason:OTHER}; it does NOT write personal_message_failed for BLOCKED_BY_USER / CHAT_NOT_FOUND (the sender hook owns subscriber_blocked/subscriber_deleted). The no-double-write invariant is explicitly asserted in the IT.",
+    "Tag attach correctly calls TagService.findOrCreate then SubscriberService.addTag (which owns the atomic $addToSet + conditional counter $inc), avoiding double-count on idempotent re-attach.",
+    "All DTOs carry @JsonIgnoreProperties(ignoreUnknown = true); mass-assignment is exercised by create_hostileBodyMassAssignment_dropped.",
+    "All cross-file call sites verified against their definitions: TelegramSender.sendText(String,Long,String,String,String), BotRepository.findByProjectIdAndStatus, TagService.findOrCreate, SubscriberService.unsubscribeManual/addTag/removeTag, SubscriberEvent setters, Subscriber getters, AppException constructor — no signature mismatches.",
+    "Test coverage is excellent: the entire TDD-anchor list (SegmentFilterBuilderTest, TelegramTextValidatorTest, SubscriberControllerIT, SubscriberProfileIT, SubscriberPersonalMessageIT, SubscriberManualUnsubscribeIT) is present with the named methods, including the cursor security cases and the reactivation cross-check via the Task 3 worker flow."
+  ]
+}

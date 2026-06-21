@@ -1,0 +1,85 @@
+{
+  "task": "11 — Test Audit (round 2 re-audit)",
+  "feature": "15-message-composer",
+  "auditor": "test-auditor",
+  "date": "2026-06-10",
+  "scope": "Round-2 re-audit of fix commit 5656188 — verify the three round-1 minor findings (F-MINOR-1 tolerant-read IT, F-MINOR-2 StepTypeTest negatives, F-MINOR-3 stale e2e skip) are genuinely resolved and the new/changed tests prove what they claim. Special focus per task brief: does the new tolerant-read IT run in ANY CI lane, and is the slow-lane crash-IT failure a real test-isolation defect.",
+  "verdict": "partially-resolved — F-MINOR-1, F-MINOR-2, F-MINOR-3 are all meaningfully resolved as written, BUT a new, more serious concern is confirmed: the tolerant-read IT (and the entire FunnelExecutionEngineIT class) is NOT exercised by ANY automated lane, and the slow lane it lives in is RED with two pre-existing failures that reproduce even when run STANDALONE (not an ordering dependency).",
+  "severity_counts": { "critical": 0, "major": 1, "minor": 0, "info": 2 },
+  "round1_findings_status": [
+    {
+      "id": "F-MINOR-1",
+      "title": "Tolerant-read fail-safe IT for a legacy removed-stepType document",
+      "test": "FunnelExecutionEngineIT::legacyRemovedStepType_doesNotCrashSweep_andOtherExecutionsStillProcess",
+      "status": "RESOLVED — test is meaningful and non-tautological",
+      "evidence": {
+        "raw_insert_not_typed_model": "CONFIRMED. The test seeds a valid execution via seedExecution(), then RAW-mutates the persisted document via mongoTemplate.getCollection(\"funnel_executions\").updateOne(_id, $set stepsSnapshot.0.stepType=\"MENU\"). The typed FunnelExecution/StepType model cannot express \"MENU\" (constant removed), so the raw collection path is the only way to construct the bad document — correct technique. A guard assertion (matchedCount==1) proves the raw mutation actually hit the legacy doc.",
+        "assertions": "CONFIRMED all three claimed invariants: (1) assertThatCode(engine.sweep()).doesNotThrowAnyException(); (2) sibling VALID execution completes (status=completed, sentCount==1 — tick was NOT aborted); (3) legacy/unknown execution loaded tolerantly and was terminal-FAILED (status=failed, stepRunStatus=done) — not stuck in_progress, not re-claimed.",
+        "red_without_fix": "INDEPENDENTLY VERIFIED RED-WITHOUT-FIX. I temporarily emptied FunnelMongoConfig#mongoCustomConversions (converter list -> List.of()) and re-ran the IT: BUILD FAILED with 'java.lang.IllegalArgumentException: No enum constant com.botfunnel.funnel.StepType.MENU' thrown during sweep()'s find(...). Restored the converter; IT passes again. This proves the test exercises the real tolerant-read path and is not a mock-shallow tautology.",
+        "passes_in_isolation": "CONFIRMED. ./gradlew test --tests '*FunnelExecutionEngineIT.legacyRemovedStepType*' -PrunSlow=true -> BUILD SUCCESSFUL."
+      }
+    },
+    {
+      "id": "F-MINOR-2",
+      "title": "StepTypeTest negative guard for removed constants",
+      "test": "StepTypeTest::removedTypesAreAbsent",
+      "status": "RESOLVED — meaningful and pins the AC",
+      "evidence": "Asserts assertThatThrownBy(StepType.valueOf(\"SEND_MESSAGE\"/\"SEND_IMAGE\"/\"MENU\")).isInstanceOf(IllegalArgumentException.class) for all three removed names, plus values().extracting(name).doesNotContain(...). Runs in the DEFAULT lane (unit test, no @Tag). Independently ran: ./gradlew test --tests 'com.botfunnel.funnel.StepTypeTest' -> BUILD SUCCESSFUL. An accidental re-add of any old constant flips it red. Note the assertion correctly survives the new StepType.UNKNOWN sentinel (UNKNOWN is a distinct, non-author-selectable constant, not a re-introduction)."
+    },
+    {
+      "id": "F-MINOR-3",
+      "title": "Stale composer-incompatible e2e cases",
+      "test": "frontend/e2e/funnels.spec.ts",
+      "status": "RESOLVED — skipped with migration comments, not deleted",
+      "evidence": "Both (and the ONLY two) test() blocks in the file — funnels_goldenPath_buildAndActivate and funnels_menuGoldenPath_buildAndActivate — are test.skip()'d, each with a clear comment explaining the composer migration requirement (needs live :3000+:8080 stack). The removed-selector references (SEND_MESSAGE default, step-text-input, step-menu-*, addSendMessage helper) now live ONLY inside the skipped tests' helper and the comment prose — no ACTIVE test references them. vitest gate (include: tests/**/*.{spec,test}.ts) excludes e2e/, so this never broke and never masquerades as live coverage now that it is skipped. Acceptable per tech-spec E2E:None."
+    }
+  ],
+  "findings": [
+    {
+      "id": "R2-MAJ-1",
+      "severity": "major",
+      "title": "The tolerant-read IT is not exercised by any automated lane, and the slow lane it lives in is RED with two STANDALONE-reproducible pre-existing failures",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java (@Tag(\"slow\") at class level, line 59) + backend/build.gradle (lines 46-56) + repo (no CI config exists)",
+      "issue": "Three compounding facts, all independently verified in this re-audit:\n\n(A) THE ENTIRE FunnelExecutionEngineIT CLASS IS @Tag(\"slow\"). build.gradle excludeTags 'slow' unless -PrunSlow=true. I ran the DEFAULT lane filtered to this class: `./gradlew test --tests 'com.botfunnel.funnel.FunnelExecutionEngineIT'` -> 'No tests found for given includes'. The full default `./gradlew test` produces 1108 tests with FunnelExecutionEngineIT ABSENT from the report (verified: build/reports/tests/test/classes/ has zero FunnelExecutionEngineIT entry). So the new tolerant-read IT — plus ALL the load-bearing at-most-once / snapshot-isolation / callback-matrix ITs — never run on the default gate. (This was flagged informationally as F-INFO-1 in round 1; round 2 confirms it is materially worse than 'informational'.)\n\n(B) THERE IS NO CI CONFIGURATION IN THE REPO AT ALL. No .github/workflows, no .gitlab-ci.yml, no Jenkinsfile, no .circleci (only node_modules artifacts match). Project memory: 'deployment TBD'. Therefore NO automated lane runs -PrunSlow=true anywhere. The new IT runs only if a human manually types the slow-lane command. The fixer report's premise (F-INFO-1 round 1: 'it IS run somewhere ... just verify the deploy pipeline includes -PrunSlow') is FALSE — there is no pipeline.\n\n(C) THE SLOW LANE IS CURRENTLY RED, AND THE FAILURES ARE NOT AN 'INTRA-SUITE ORDERING DEPENDENCY'. The fixer reported multiBlockMessage_crashMidBlocks_doesNotResendOnReClaim and multiBlockMessage_runsAllBlocksInOneTickAndCompletes fail with sends=0 due to 'intra-suite ordering dependency'. I reproduced and DISPROVED the ordering-dependency claim: `./gradlew test --tests 'com.botfunnel.funnel.FunnelExecutionEngineIT.multiBlockMessage_crashMidBlocks_doesNotResendOnReClaim' -PrunSlow=true` (the test run COMPLETELY ALONE, no siblings) -> BUILD FAILED, 'expected: failed but was: completed' at line 236. It fails by itself, so it cannot be an ordering/sibling-state artifact. I further confirmed it is PRE-EXISTING (not introduced by 5656188) by running the identical standalone command on the parent commit ded51f7 (git worktree) -> identical failure 'expected: failed but was: completed' at line 235. The real symptom (status completed instead of failed; the enqueued 400 for block-3 was not consumed) points to a MockWebServer QueueDispatcher / send-count interaction that does not hold when the class is run via the slow lane — a genuine TEST-ISOLATION / harness defect in this IT class, independent of the audit fix.",
+      "why_major": "The tech-spec lists the tolerant-read fail-safe as a required Testing-Strategy item. The fixer added a correct, red-without-fix test for it — but parked it in a tag that no gate runs, in a class whose slow lane is currently broken. Net effect: the invariant is NOT protected by any green automated lane today. The same gap silently de-gates the feature's most load-bearing engine invariants (at-most-once across two ticks, snapshot isolation) which round 1 rated as the strongest part of the suite. A regression in any of these would NOT be caught by `./gradlew test`. The fixer's 'green on canonical lanes' claim is technically true only because the canonical default lane does not contain these tests at all.",
+      "recommendation": "Two separate actions, neither in audit scope: (1) Establish a CI lane (or document the manual pre-merge gate) that runs -PrunSlow=true so FunnelExecutionEngineIT actually executes before merge/deploy. Until then the new tolerant-read IT and the engine invariants are dead green-on-paper. (2) Fix the genuine isolation defect in multiBlockMessage_crashMidBlocks_doesNotResendOnReClaim and multiBlockMessage_runsAllBlocksInOneTickAndCompletes — they fail standalone in the slow lane (status completed instead of failed; the 400 response for block-3 is not consumed), which means the slow lane can never go green and would mask any real engine regression behind a 'known failing' class. The fixer's 'intra-suite ordering dependency' diagnosis is incorrect (reproduced standalone, and on the clean parent commit).",
+      "litmusTestFailed": false
+    },
+    {
+      "id": "R2-INFO-1",
+      "severity": "info",
+      "title": "Fixer report mischaracterised the crash-IT failures as an ordering dependency",
+      "file": "work/15-message-composer/logs/working/audit-fix/report.json (verification.preexisting_unrelated_failures) + decisions.md 'Audit fixes (Wave 5)' Verification bullet",
+      "issue": "The fixer wrote the two crash-IT failures are a 'test-ordering залежність' / 'intra-suite ordering dependency'. This re-audit reproduced both failures with EACH test run completely alone (single --tests filter), and on the clean parent commit ded51f7, with the identical assertion ('expected: failed but was: completed'). It is therefore a standalone, deterministic, pre-existing failure in the slow lane — a real test-harness/isolation defect, NOT an ordering artifact. The fixer's other two claims in the same bullet ARE accurate: the failures are genuinely pre-existing (reproduced on baseline) and the TelegramWebhookP99IT timing flake is documented in build.gradle.",
+      "recommendation": "Correct the characterisation when the underlying defect is triaged (see R2-MAJ-1 action 2). Informational — does not change the audit verdict on the round-1 fixes themselves."
+    },
+    {
+      "id": "R2-INFO-2",
+      "severity": "info",
+      "title": "Tolerant-read IT correctly avoids the broken siblings, so its green-in-isolation result is trustworthy",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java::legacyRemovedStepType_*",
+      "issue": "When the full FunnelExecutionEngineIT class is run in the slow lane (57 tests), exactly 2 fail (the multiBlock crash + happy-path tests); the new tolerant-read IT is NOT among the failures. The new test uses its own seedExecution + enqueueOk(1) and asserts a delta sentCount, sharing the same per-test baseline/drain @BeforeEach/@AfterEach as the rest of the class. Its red-without-fix proof and standalone pass were both verified directly, so its correctness is established independent of the broken siblings. No action.",
+      "recommendation": "None — noted so the green-in-isolation evidence is not conflated with the slow-lane class failure."
+    }
+  ],
+  "ci_lane_assessment": {
+    "does_tolerant_read_IT_run_in_any_automated_lane": "NO. The IT class is @Tag(\"slow\"); the default `./gradlew test` excludes it (verified: 'No tests found' when filtered to the class; 1108-test default report contains no FunnelExecutionEngineIT). No CI configuration exists in the repo (no .github/.gitlab/Jenkins/.circleci), so no automated job passes -PrunSlow=true. The IT runs ONLY on a manual developer invocation.",
+    "is_tag_slow_hiding_it_from_the_gate": "YES. Because the gate is the default lane and the whole class is slow-tagged, the new tolerant-read IT — and the feature's strongest engine invariants (at-most-once across two ticks, snapshot isolation, callback matrix) — are not on any green gate.",
+    "is_the_slow_lane_ordering_dependency_a_real_concern": "It is a real concern, but it is NOT an ordering dependency. The two failing crash-ITs fail STANDALONE (reproduced with each test run alone, and on the clean parent commit ded51f7 — identical 'expected: failed but was: completed'). It is a deterministic, pre-existing test-isolation/harness defect (the enqueued 400 for block-3 is not consumed -> status completes instead of failing). It means the slow lane cannot currently go green, so even if a CI slow lane were added today it would be red and would mask real engine regressions behind a permanently-failing class.",
+    "severity": "MAJOR (combined): a required tech-spec invariant has a correct test that no green lane runs, and the only lane that runs it is broken by a pre-existing standalone defect."
+  },
+  "verification_commands_run": [
+    "./gradlew test --tests 'com.botfunnel.funnel.StepTypeTest' -> BUILD SUCCESSFUL (F-MINOR-2 green, default lane)",
+    "./gradlew test --tests 'com.botfunnel.funnel.FunnelExecutionEngineIT' (default lane) -> 'No tests found for given includes' (proves whole class is slow-excluded)",
+    "./gradlew test (full default gate) -> BUILD SUCCESSFUL, 1108 tests / 0 fail / 2 skipped; FunnelExecutionEngineIT ABSENT from report",
+    "./gradlew test --tests 'com.botfunnel.funnel.FunnelExecutionEngineIT' -PrunSlow=true -> BUILD FAILED, 57 tests / 2 failed (multiBlockMessage_crashMidBlocks + runsAllBlocksInOneTickAndCompletes); new tolerant-read IT PASSES",
+    "./gradlew test --tests '...multiBlockMessage_crashMidBlocks_doesNotResendOnReClaim' -PrunSlow=true (ALONE) -> BUILD FAILED ('expected: failed but was: completed' line 236) — disproves ordering-dependency claim",
+    "git worktree @ ded51f7 (parent): same standalone command -> BUILD FAILED, identical assertion (line 235) — confirms PRE-EXISTING",
+    "./gradlew test --tests '*legacyRemovedStepType*' -PrunSlow=true -> BUILD SUCCESSFUL (new IT green in isolation)",
+    "RED-WITHOUT-FIX probe: emptied FunnelMongoConfig converter list, re-ran new IT -> BUILD FAILED ('No enum constant StepType.MENU'); restored converter -> green again",
+    "grep across repo for CI config -> only node_modules .github artifacts; no project CI exists",
+    "frontend/e2e/funnels.spec.ts -> both (and only) test() blocks are test.skip()'d with migration comments; vitest include=tests/** excludes e2e/"
+  ],
+  "working_tree_state": "Clean. The temporary FunnelMongoConfig edit (red-without-fix probe) was reverted; git diff --stat shows no changes. Parent-commit worktree removed.",
+  "final_verdict": "The three round-1 minor findings (F-MINOR-1/2/3) are RESOLVED with meaningful, non-tautological tests — the tolerant-read IT is genuinely red-without-fix (IllegalArgumentException on sweep), the StepType negatives pin the AC, the e2e cases are skipped not deleted. However the re-audit surfaced one MAJOR concern that supersedes the round-1 'informational' note: the tolerant-read IT (and the whole load-bearing FunnelExecutionEngineIT class) runs on NO automated lane (slow-tagged, no CI exists), and the only lane that would run it is currently RED with two pre-existing, STANDALONE-reproducible failures that the fixer mischaracterised as an ordering dependency. Tests are good; gating is broken."
+}

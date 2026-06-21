@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "summary": "20 JUnit 5 tests for TelegramCommandParser, all with meaningful behavioral assertions. Every TDD anchor from task 3.md maps to a @Test method, and every case from the 'What to do' step 3 matrix (including all edge pins from Details section: /start@ empty bot suffix, /start@@x multiple @, tab splitter, 4 KB long payload, embedded newline regression, null input) is covered. Pure unit tests on a static utility — no mocks, no timing, no shared state, no Spring context. Litmus test passes for every test: removing the corresponding core line in TelegramCommandParser (the @ strip, the whitespace-splitter loop, the leading-payload-whitespace skip, the null/empty/slash-only guards, the case-preserving substring) flips at least one assertion. Naming follows project convention parse_<scenario>_<expectedOutcome>. Single primary assertion per test (full-record equality), with a justified two-assertion split only in the 4 KB long-payload test for readability.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/webhook/TelegramCommandParserTest.java:134-146",
+      "issue": "parse_longPayload_roundTripsIntact uses two separate assertions on result.command() and result.payload() while the rest of the file consistently asserts full-record equality with new ParsedCommand(...). Minor stylistic inconsistency — not a behavioural defect. The two assertions still individually fail if the parser truncates or drops the payload.",
+      "recommendation": "Optional: replace with assertThat(result).isEqualTo(new ParsedCommand(\"start\", expected)); for consistency with the other 19 tests. No functional change."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ParsedCommand.java:4-9",
+      "issue": "Javadoc on ParsedCommand says command is 'lowercased-or-original-case' which contradicts both the tests (parse_caseSensitivity_preservesCase asserts /Start -> 'Start') and the parser javadoc (which correctly states 'Case is PRESERVED'). Documentation drift only, no test impact, but a future reader could be misled into adding a wrong test.",
+      "recommendation": "Edit ParsedCommand.java javadoc line 5 to: 'command is the command name (original case preserved) WITHOUT the leading / and WITHOUT the @botname suffix.' Out of scope of the test review but worth flagging for the code-reviewer."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 20,
+      "passed": 20,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 20,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

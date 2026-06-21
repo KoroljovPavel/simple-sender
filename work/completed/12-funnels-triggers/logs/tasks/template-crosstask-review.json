@@ -1,0 +1,35 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task-integration",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "resource-sharing",
+      "task": 2,
+      "section": "frontmatter.depends_on / Details:Dependencies",
+      "issue": "The Mongo funnels partial-unique index is split-owned: Task 1 ships the @CompoundIndex annotation (new partial filter {status:'active', triggerType:'on_start'}) and Task 2 ships the migration runner PLUS owns FunnelIndexesIT, whose updated assertion verifies that exact new-shape partial filter. Task 2 sits in Wave 1 alongside Task 1 with depends_on: []. Task 2 itself documents 'Logically depends on Task 1 ... but depends_on: [] per the tech-spec (both Wave 1 ... no file overlap)'. File-overlap analysis is insufficient here: FunnelIndexesIT and the event-coexist / on_start-collide @Tag(slow) ITs assert the new on_start-only-unique shape, which only materializes from Task 1's annotation at Testcontainers context startup. If Task 2 runs (or is verified) before Task 1's annotation is in place, auto-index-creation lays down the OLD broad-filter shape and Task 2's IT assertions fail. This is a consumer-verifies-producer dependency that the depends_on graph does not encode.",
+      "fix": "Set Task 2 depends_on: [1] (preferred) so Task 1's @CompoundIndex change is guaranteed present before Task 2's runner + FunnelIndexesIT verify the new shape; alternatively move Task 2 to Wave 2. Keep Task 1 as the sole owner of the annotation and Task 2 as sole owner of the runner + FunnelIndexesIT (that single-ownership split is otherwise correct)."
+    }
+  ],
+  "verified_clean": [
+    "FunnelEventService: exactly one owner (Task 4, @Service singleton). All four consumers declare depends_on on the owner: Task 5 (tag/field+EMIT_EVENT) depends_on [1,4]; Task 6 (keyword webhook) depends_on [4]; Task 7 (EventsController) depends_on [3,4]. No consumer creates a competing instance.",
+    "FunnelRepository: single owner Task 1 (wave 1). Task 4 explicitly marked DO NOT MODIFY and lists FunnelRepository under read-only consumers; Task 4 AC asserts it does not modify the repository. No competing modification.",
+    "FunnelIndexesIT: single owner Task 2 (no other task touches it).",
+    "SubscriberService project-scoped lookup-by-id: coordinated to be added EXACTLY ONCE between Task 4 (wave 2) and Task 7 (wave 4). Task 7 depends_on [3,4], so Task 4 runs first and adds the method; Task 7 reuses it. Both tasks document the 'whichever runs first adds it, the other reuses' contract. Serialized by the wave/dependency ordering -> no competing instances. (Note: the method name differs across tasks -- Task 4 calls it findById(projectId, subscriberId), Task 7 suggests findByIdScoped(...) -- a minor naming inconsistency, but since Task 4 runs first it sets the canonical name and Task 7 reuses; not flagged as it does not break single-ownership.)",
+    "StringRedisTemplate: existing Spring singleton, no task creates it. Consumers (Task 4 auto-enroll rate-limit bf:rate:auto-enroll:{subscriberId}; Task 7 /events global limit bf:rate:events) use distinct key prefixes -> no key collision.",
+    "Sha256Hex: existing static util in common.crypto, no creation. Sole consumer ApiKeyService (Task 3).",
+    "i18n locale files (uk.json/en.json): Task 9 (wave 5) and Task 10 (wave 6) both append. Task 10 depends_on [8,9] serializes it after Task 9, avoiding the same-file merge collision. Namespaces are disjoint (funnels.trigger.* / funnels.steps.* vs projects.settings.apiKey.*). Single-owner-per-wave satisfied.",
+    "frontend/types/funnel.ts: single owner Task 9 (Task 10 does not modify it).",
+    "Dependency graph: no cycles. Every depends_on target resides in a strictly earlier wave (4->1: 1<2; 5->1,4: <3; 6->4: 2<3; 7->3,4: <4; 8->3: 1<4; 9->1: 1<5; 10->8,9: <6; 11/12/13->1..10: <7; 14->11,12,13: 7<8; 15->14: 8<9).",
+    "Bean-cycle risk (FunnelEventService -> FunnelTriggerServiceImpl -> ... -> StepExecutor -> FunnelEventService) is handled within Task 4 via the extracted FunnelExecutionFactory (no edge back into the engine) with @Lazy as documented alternative -- contained inside the owner task, not a cross-task resource conflict."
+  ],
+  "stats": {
+    "tasks_checked": 15,
+    "issues_found": 1,
+    "critical": 0,
+    "major": 1,
+    "minor": 0
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "frontend/assets/css/tailwind.css",
+      "line": 0,
+      "issue": "Round-1 major resolved. The `@layer base { * { @apply border-border } body { @apply bg-background text-foreground } }` block was deleted entirely (8 lines removed). `:root` and `.dark` CSS variables remain intact, so all utility classes that reference them (`bg-background` in DialogContent.vue line 32, `bg-background` + `border-border` in DialogScrollContent.vue line 31, `text-foreground` in LangSwitcher.vue line 36) continue to resolve correctly via the tailwind config theme. Body now falls back to browser defaults (white bg / black text), which matches the prior pre-shadcn-vue baseline. No new CSS issues introduced.",
+      "recommendation": "None — fix is clean."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 129,
+      "issue": "Round-1 minor resolved. Input `type` changed from `text` to `password`. `v-model=\"tokenInput\"` continues to work — password is purely a rendering/UX concern; HTMLInputElement.value semantics are identical. `autocomplete=\"off\"` and `spellcheck=\"false\"` are retained, so the token still bypasses browser autofill/spellcheck.",
+      "recommendation": "None — fix is clean."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 87,
+      "issue": "Round-1 minor (modal stays open on disconnect error) — not fixed, documented stance is to mirror the page-level error banner pattern. Verified consistency across the page: connect-error (line 60), disconnect-error (line 88), and testMessage-error (line 102) all set `errorMessage.value` which is surfaced by the `<p data-test=\"bot-error\">` banner at line 187. The disconnect path additionally closes the modal at line 89, which is consistent with the documented \"page-level banner is the single error surface\" decision. No regression.",
+      "recommendation": "None — stance is documented and consistent."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts",
+      "line": 14,
+      "issue": "Round-1 minor resolved. The global `config.global.stubs` mutation was removed (the `import { config } from '@vue/test-utils'` line is gone — verified). The teleport stub now lives in a per-mount `mountOptions` constant at lines 14–20 and is passed to every `mountSuspended(BotPage, mountOptions)` call. Verified 22 mount sites total (lines 77, 85, 94, 105, 118, 135, 159, 177, 186, 202, 216, 230, 244, 258, 272, 290, 311, 329, 344, 356, 373, 388) — all 22 pass `mountOptions`. Zero bare `mountSuspended(BotPage)` calls remain. No worker leak vector.",
+      "recommendation": "None — fix is clean."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 32,
+      "issue": "New `watch(() => botStore.current, ...)` block analyzed. Defaults are non-immediate, so the initial reactive read does not fire on mount (no spurious `null → null` close). The callback closes the modal only when `next === null`, which is correct: a non-null → non-null transition (e.g., bot id swap on project switch) keeps the modal open with the new bot's username, and a non-null → null transition (cross-tab disconnect, project deletion, store reset) closes the modal so the AC19 body string never renders with an empty `{username}` substitution. New test `modal closes when bot.current goes null mid-modal` at lines 385–401 covers this case. No regression.",
+      "recommendation": "None — watch semantics are correct."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts",
+      "line": 282,
+      "issue": "AC19 substring matcher upgraded to a full-body exact-string check (lines 282–284). This is a meaningful tightening — a translator dropping any sentence in the modal body would now fail the test instead of silently passing. New AC17 negative assertion added at line 382 (`expect(wrapper.text()).not.toMatch(TOKEN_REGEX)` on the Connected view path) closes a previously uncovered regression vector. No regression.",
+      "recommendation": "None — test improvements are solid."
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 3,
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": "158-195",
+      "finding": "The private `send()` orchestrator receives `contentFields` by reference and passes it down through `sendWithRateLimitRetry → sendWith5xxRetry → sendOnce`. The defensive copy `new HashMap<>(contentFields)` is correctly placed in `sendOnce` (line 297), so the shared instance is never mutated across retry attempts. This is correct. However, the comment at line 295-296 says 'Copy into a fresh map so the shared contentFields instance is never mutated across retry attempts' — this is evidence the implementer was aware of the risk. Worth noting: because `contentFields` is built fresh per `sendText`/`sendPhoto` call (not a shared singleton), the copy in `sendOnce` is defensively correct but would only matter if `sendOnce` were called concurrently on the same instance. Under the current single-call-per-send flow this is safe regardless. No bug, but the layering (copy only at `sendOnce`, not at `send()` entry) means a future reader adding a second call to `sendOnce` within the retry chain from a different entry point must remember this invariant. This is a clarity observation, not a defect.",
+      "recommendation": "No change required. The existing comment at line 295 documents the intent precisely. If desired, add a one-line note in the `send()` Javadoc that contentFields must be treated as read-only by callers."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": "930-948",
+      "finding": "`sendPhoto_failure_doesNotLeakDecryptedToken` embeds the raw TOKEN constant directly in the Telegram 400 response description to validate `scrubTokens` coverage. The assertion `noneMatch(m -> m.contains(TOKEN))` plus `anyMatch(m -> m.contains('[REDACTED_TOKEN]'))` is correct and mirrors the analogous `sendText_failure_doesNotLeakDecryptedToken` test. One subtle point: the test only verifies WARN and ERROR log lines, not INFO. The `sendOnce` log path currently produces no INFO-level output on the 4xx path, so this is not a gap today. Good coverage.",
+      "recommendation": "No change required. Coverage is adequate."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderSubscriberHookIT.java",
+      "line": "208-238",
+      "finding": "The two new IT tests (`sendPhoto_403_marksBlockedByChat`, `sendPhoto_chatNotFound_marksDeletedByChat`) mirror the existing `sendText` IT tests precisely and verify InOrder audit-before-hook semantics. Both tests share the same `connectedBot()` setup via `when(botRepository.findById(BOT_ID))` at line 82, which is set up in `@BeforeEach`. This is correct and consistent with the existing IT pattern. No issues.",
+      "recommendation": "No change required."
+    }
+  ],
+  "summary": "The refactor correctly threads `(endpoint, Map<String,Object> contentFields)` through the existing private chain `sendWithRateLimitRetry → sendWith5xxRetry → sendOnce` by renaming/replacing the `text`+`parseMode` parameters with the generic pair. `sendText`'s observable behavior is unchanged: endpoint is still `/bot{token}/sendMessage`, body shape is `{text, chat_id, parse_mode?}` (parse_mode omitted when null), and the `contentFields` map is built fresh per call so no sharing exists between calls. The defensive copy `new HashMap<>(contentFields)` in `sendOnce` prevents mutation of the shared map across per-attempt retries. All failure-matrix paths (429 backoff, 403→BLOCKED_BY_USER, 400-chat-not-found→CHAT_NOT_FOUND, other 400→OTHER, 5xx-exhausted) flow through the identical `map4xx`/`toThrowable`/`terminalReasonFor` chain as before — no new code path for photo. The `dispatchSubscriberHook` and audit emission (`telegram_message_sent` / `telegram_send_failed`) are in the shared `send()` orchestrator and fire identically for both methods. Token redaction: `scrubTokens` is applied at all WARN/ERROR log sites in `sendOnce` / `sendWith5xxRetry`; the decrypted token lives only as a local variable in `sendOnce`. Test coverage is complete: all 7 TDD-anchor scenarios from the task spec are present plus an extra null-caption/parse_mode omission test. IT tests mirror the sendText hook IT exactly with InOrder audit-before-mark ordering verified. Three minor observations (all informational, none blocking) recorded above."
+}

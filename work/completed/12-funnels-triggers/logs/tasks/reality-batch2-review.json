@@ -1,0 +1,93 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 step 1 says 'promote [insertExecution / cancelExistingForPair] to package-visible'. Both methods are currently `private` in FunnelTriggerServiceImpl (lines 408, 426). FunnelEventService (same package com.botfunnel.funnel) cannot call private methods even within the same package — they must be changed to package-private (no modifier) or the logic must be extracted. The task description is directionally correct but the concrete instruction says 'package-visible suffices' without noting that `private` in Java is NOT accessible by same-package peers, only by the declaring class. Executing agent must know that changing `private void` to `void` (package-private) is the required change, not just 'make visible'.",
+      "fix": "Explicitly state in step 1 that the access modifier change is `private` → (package-private, i.e., remove `private`). Current wording 'promote to package-visible' is technically correct but may mislead an agent that conflates 'package-visible' with protected. Alternatively, extract to a package-private helper class. No code change needed before execution — the task direction is right, just the wording is imprecise."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 step 3 says FunnelEventService should 'resolve the subscriber by id via the service boundary (load the Subscriber to confirm project scope)'. However, SubscriberService interface (confirmed in file) has NO `findById(projectId, subscriberId)` method — only `findByChat(projectId, telegramBotId, chatId)`. The Edge Cases section acknowledges this and says 'add a minimal Optional<Subscriber> findById(String projectId, String subscriberId) if absent'. This is correct guidance, but the TDD anchors and Acceptance Criteria do NOT mention this method addition, meaning a test-first agent might hit a compilation error without realising a new interface method is needed. The task DOES acknowledge this in Edge Cases but the primary step description omits it.",
+      "fix": "Add an explicit sub-step to step 1 or step 3: 'If SubscriberService.findById(projectId, subscriberId) does not exist, add it to the interface and implement it in SubscriberServiceImpl as Optional<Subscriber> findById(String projectId, String subscriberId) { return subscriberRepository.findById(subscriberId).filter(s -> projectId.equals(s.getProjectId())); }'. Update TDD Anchor to include a test for the new boundary method. Record the addition in decisions.md (already instructed in Post-completion)."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 states FunnelEventService should inject `FunnelTriggerServiceImpl` (the concrete class) to reuse its `insertExecution` / `cancelExistingForPair` methods. This creates a circular Spring dependency risk: FunnelTriggerServiceImpl already injects FunnelExecutionEngine, and if FunnelEventService injects FunnelTriggerServiceImpl while FunnelTriggerServiceImpl is injected back transitively through StepExecutor (Task 5 adds FunnelEventService to StepExecutor, which FunnelExecutionEngine owns, which FunnelTriggerServiceImpl owns), the injection graph becomes: FunnelEventService → FunnelTriggerServiceImpl → FunnelExecutionEngine → StepExecutor → FunnelEventService (after Task 5). This circular dependency will cause Spring context startup failure. The tech-spec does not flag this.",
+      "fix": "Extract the reusable insert/cancel logic into a new package-private class (e.g. FunnelExecutionFactory) that both FunnelTriggerServiceImpl and FunnelEventService inject, breaking the cycle. Alternatively, document that StepExecutor injects FunnelEventService (Task 5) while FunnelExecutionEngine injects StepExecutor, and verify the full dependency graph before implementation. This finding needs resolution before Task 4 or Task 5 is executed."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 TDD anchor includes `FunnelRepositoryTest::listVariant_returnsAllActiveMatching` as a new test class. No `FunnelRepositoryTest.java` currently exists in the test directory (confirmed by file search). The task text says 'sibling to FunnelTriggerServiceIT', implying it should be an IT. Naming it `FunnelRepositoryTest` without the `IT` suffix may miss the Spring Data embedded-Mongo test setup conventions used in this project (which uses `AbstractIntegrationTest`). The actual pattern in the project is `*IT` for integration tests with embedded Mongo.",
+      "fix": "Rename the TDD anchor to `FunnelRepositoryIT::listVariant_returnsAllActiveMatching` to match the project's `*IT` naming convention for embedded-Mongo tests. The task body refers to embedded Mongo for ITs."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 step 6 references 'FunnelExecutionEngine line ~256, stepExecutor.execute(step, exec, ctx.subscriber(), ctx.bot())' as the engine call site that needs no change. The actual line is exactly 256 — the 'line ~256' claim is accurate. However, the task says 'exec already carries enrollDepth so depth reads off execution inside StepExecutor'. This is contingent on Task 1 adding `enrollDepth` to FunnelExecution and adding `getEnrollDepth()`. The current FunnelExecution has no `enrollDepth` field or getter. This is correctly declared as depends_on: [4] (which depends_on: [1]), so the dependency chain is correct. Noting as minor because the verification instruction ('confirm the engine call site needs no change') is technically incomplete without confirming Task 1 ran first.",
+      "fix": "No change required — dependency chain (Task 5 depends_on Task 4, Task 4 depends_on Task 1) correctly ensures Task 1 runs first. Add a comment in step 6: 'Verify execution.getEnrollDepth() compiles — Task 1 must have added this getter to FunnelExecution before this task runs.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 modifies `SubscriberService.addTag` signature to add `int originDepth`, but also notes that `StepExecutor` currently calls `subscriberService.addTag(execution.getProjectId(), execution.getSubscriberId(), step.getTagSlug())` (3-arg). After the signature change, the existing `StepExecutor.java` line 95 (`ADD_TAG` case) will fail to compile until Task 5 updates it. Task 5 owns StepExecutor so it does update that call — but the task does not explicitly warn the agent that the `ADD_TAG` call site in StepExecutor (line 95) must be updated simultaneously with the interface change to avoid a compile break mid-task.",
+      "fix": "Add an explicit note in step 4: 'The ADD_TAG case in StepExecutor.java (line 95) already calls subscriberService.addTag with 3 args — update it to 4 args in this same step, not after the interface change, to avoid a mid-task compile break.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "Task 6 implementation hints reference 'FunnelTriggerServiceImpl cancelActiveFor, lines ~175-205' for the subscriber-resolve + waiting_for_reply query pattern. Actual `cancelActiveFor` in FunnelTriggerServiceImpl starts at line 174. The suggested pattern uses `mongoTemplate.updateMulti(...)` which cancels executions rather than just checking existence. Task 6 correctly says 'for precedence check, mongoTemplate.exists(query, FunnelExecution.class) suffices' — but the hint to look at `cancelActiveFor` lines 175-205 may mislead the agent into copying the `updateMulti` pattern instead of `exists`. The subscriber resolution pattern there (`subscriberService.findByChat(...)`) IS correct and reusable.",
+      "fix": "Clarify the hint: 'In cancelActiveFor (lines ~175-205) use only the subscriber resolution pattern (subscriberService.findByChat); for the waiting_for_reply check use mongoTemplate.exists(...) not updateMulti — exists returns boolean without modifying documents.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 7
+  },
+  "notes": {
+    "expected_missing_symbols": [
+      "FunnelExecution.enrollDepth / getEnrollDepth() — not in FunnelExecution.java (Task 1 dependency, correctly declared)",
+      "FunnelStep.eventName / getEventName() — not in FunnelStep.java (Task 1 dependency, correctly declared)",
+      "StepType.EMIT_EVENT — not in StepType.java (Task 1 dependency, correctly declared)",
+      "Funnel.keywords — not in Funnel.java (Task 1 dependency, correctly declared)",
+      "FunnelEventService — does not exist yet (Task 4 creates it, Tasks 5+6 depend_on Task 4, correctly declared)",
+      "FunnelRepository list variants — not yet present (Task 4 adds them, correctly declared)"
+    ],
+    "verified_existing": [
+      "FunnelTriggerServiceImpl.insertExecution() — exists at line 426, currently private",
+      "FunnelTriggerServiceImpl.cancelExistingForPair() — exists at line 408, currently private",
+      "SubscriberServiceImpl.startRateLimitExceeded() — exists at line 270, correct INCR/EXPIRE/fail-open pattern, key prefix bf:rate:start: (auto-enroll will use bf:rate:auto-enroll:)",
+      "SubscriberServiceImpl.addTag(projectId, subscriberId, slug) — exists at line 243, 3 args (no depth param yet)",
+      "SubscriberServiceImpl.recordCustomFieldsSet(projectId, subscriberId, oldValues, newValues) — exists at line 229, no depth param",
+      "SubscriberService.findByChat(projectId, telegramBotId, chatId) — exists at line 88",
+      "StepExecutor.execute(step, execution, subscriber, bot) — exists at line 89; ADD_TAG case at line 94-97, SET_CUSTOM_FIELD at line 102",
+      "ProcessTelegramUpdateJob.dispatch() plain-text branch — exists at lines 192-208; no FunnelEventService injection yet",
+      "FunnelExecutionEngine.stepExecutor.execute call — exactly at line 256, signature matches Task 5 claim",
+      "FunnelRepository.findByProjectIdAndTriggerTypeAndTriggerValueAndStatus() — returns Optional<Funnel> (single-result); no list variant yet",
+      "application.properties app.funnel.* block exists (max-steps, sweep-batch-size, max-steps-per-tick); max-fanout-per-event not yet present",
+      "ProcessTelegramUpdateJobTest — exists, currently tests plainTextPrivate and plainTextGroup; no keyword or waiting_for_reply tests yet",
+      "FunnelStepExecutorTest — exists in com.botfunnel.funnel package",
+      "SubscriberServiceImplIT — exists in com.botfunnel.subscriber package",
+      "FunnelExecutionEngineIT — exists in com.botfunnel.funnel package",
+      "FunnelTriggerServiceIT — exists (sibling pattern for FunnelEventServiceIT is valid)",
+      "common.crypto.Sha256Hex — exists at backend/src/main/java/com/botfunnel/common/crypto/Sha256Hex.java",
+      "BotRepository.findByProjectIdAndStatus(projectId, BotStatus) — exists",
+      "FunnelTriggerServiceImpl is public class — FunnelEventService (same package) can inject it as a concrete type once methods are package-private"
+    ]
+  }
+}

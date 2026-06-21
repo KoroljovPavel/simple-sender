@@ -1,0 +1,29 @@
+{
+  "summary": "FunnelControllerIT is a high-quality integration suite: 22 tests, 0 skipped, 0 failures against Testcontainers Mongo. Every TDD anchor is present and meaningful; assertions verify real behavior (DB state, response codes, business error codes, deepLink generation) rather than mock wiring. The trigger-conflict race test genuinely exercises the DuplicateKeyException partial-unique index branch (verified: index defined on Funnel, auto-index-creation=true in tests, barrier-synchronized virtual-thread parallelism, and assertions distinguish exactly-one-active from exactly-one-422-conflict). All TDD-anchor litmus tests pass — removing the corresponding production logic line would fail the test. No false positives, no mock-only tests, edge cases well covered. Status: passed. Findings are minor/non-blocking.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "test": "activateValidatesRequiredFields / activateSucceedsAndReturnsDeepLink",
+      "finding": "The TDD anchor `activateTriggerConflictReturns422` was split into two tests in the suite: `activateTriggerConflictReturns422` (service pre-check branch, line 220) and `activateTriggerConflictRaceMapsIndexDuplicateKeyTo422` (DuplicateKeyException index branch, line 233). This is an improvement over the spec (the anchor asked both branches be covered), but `activateTriggerConflictRaceMapsIndexDuplicateKeyTo422` is the ONLY test in the file without `@WithMockAppUser` — it intentionally drives the service layer directly via `activateCatching` to isolate the index branch deterministically. This is justified and documented, but it means the controller-to-service wiring for the race-mapped 422 is not exercised over HTTP. Acceptable trade-off; flagged only for visibility.",
+      "recommendation": "No change required. The pre-check branch already verifies the HTTP 422 path end-to-end via `activateTriggerConflictReturns422`, and the GlobalErrorHandler mapping of AppException(422) is exercised by every other 422 HTTP test. The service-layer race test correctly isolates the otherwise-nondeterministic index branch. Leave as-is."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "test": "pause (line 181)",
+      "finding": "`pause` has only the happy-path test `pauseTransitionsActiveToPaused`. The invalid-state guard at FunnelService.java:183-186 (pausing a non-active funnel -> 422 `funnel_invalid_state`, code CODE_INVALID_STATE) has no test. This branch and the entire `funnel_invalid_state` error code are uncovered. Not in the TDD anchors, but it is a decision branch with a distinct business error code.",
+      "recommendation": "Add `pauseDraftReturns422InvalidState`: seed a draft funnel, POST .../pause, assert status().isUnprocessableEntity() and jsonPath('$.code').value('funnel_invalid_state'). One small test closes the only untested decision branch in the service."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "test": "update name/description/allowReEnter conditional setters (lines 114-124)",
+      "finding": "`update` has conditional logic for name (skip if null/blank), description (set when non-null, blankToNull), and allowReEnter (set when non-null). `updateRewritesStepOrderByIndex` always passes the same name and never exercises the null/blank-name-skip branch (line 114) or the allowReEnter/description toggles. These are minor metadata branches, not core behavior, but the order-rewrite test could assert them cheaply.",
+      "recommendation": "Optional: extend `updateRewritesStepOrderByIndex` (or add a focused test) to PUT with name='' (blank) and verify the persisted name is unchanged, and PUT with allowReEnter=true and verify it persists. Low priority — the spec did not call these out as anchors."
+    }
+  ]
+}

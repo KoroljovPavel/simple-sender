@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": "Round 2 changes (brute-force 429 audit event, Locale.ROOT canonicalization, two new tests, and unused-import cleanup) are clean and introduce no code-quality regressions. The new audit-event call site, the threading of email/ip/userAgent into checkBruteForce, and the litmus-isolation refactor of me_unauthenticatedToken are all internally consistent, type-correct, and match the existing patterns used elsewhere in AuthService.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 111,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Brute-force audit metadata is `Map.of(\"reason\", \"brute_force\", \"email\", email)`, but the user_not_found audit at line 140 uses `Map.of(\"reason\", \"user_not_found\")` — no email. Both branches share the same forensic context (no userId resolved yet, only an email attempt). Either both should carry the attempted email, or neither should. Picking one rule and applying it consistently makes the events collection easier to query (e.g. \"find all login_failed for email X across reasons\"). Defensible either way; the brute_force-only inclusion is the higher-signal case so adding email to user_not_found is the lower-risk normalization.",
+      "benefit": "Makes the metadata schema self-consistent across login_failed reasons; simplifies forensic queries.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 104,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`checkBruteForce` now takes five parameters (emailKey, ipKey, email, ip, userAgent). This reinforces the round-2 suggestion about extracting a `LoginCtx` record — `email`/`ip`/`userAgent` are now threaded through `login` → `checkBruteForce` → (separately) `handleUserNotFound` → `authenticate` → `checkStatusAndAuthorize`. Five-arg signatures on private helpers are still readable, but the trend-line is unambiguous: more failure branches will keep adding metadata fields to these signatures. Still optional; deferring is reasonable.",
+      "benefit": "Stops the parameter-list growth before Tasks 5/6 add password-reset/verification flows that share the same context shape.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 109,
+      "severity": "minor",
+      "category": "performance",
+      "suggestion": "The brute-force audit uses `Mono.fromRunnable(() -> eventService.logEvent(...))` on the request thread, then chains `.then(Mono.error(...))`. This is the same pattern used elsewhere in the file (consistent — good), but it inherits the same latency-coupling concern raised in round 2 about logEvent running on the request flow before the response is emitted. Since logEvent is fire-and-forget internally, the runtime cost is small, but for the brute-force path specifically — where the goal is to reject fast — even the synchronous serialization step is worth detaching via `.doOnError` or a side-effect scheduler. Same suggestion as round 2; carried forward for the new call site.",
+      "benefit": "Keeps the rate-limit response fast; matches the documented fire-and-forget intent of EventService.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "adequate"
+  }
+}

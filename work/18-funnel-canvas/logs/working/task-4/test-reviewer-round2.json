@@ -1,0 +1,8 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 4,
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "All 5 round-1 findings are resolved with value-based assertions. (1) Event-trigger source id pinned: `expect(evtEntry.source).toBe('trigger:1')` added at line 128. (2) connectEdge rejection: new test at lines 243-252 asserts `toThrow()` for both 'ghost' and '' ids, and verifies original is untouched. (3) Sibling-unchanged assertions: afterTimeout now checks `next` and `buttons[0].targetStepId` unchanged (lines 228-229); afterBtn checks `next` and `timeoutTargetStepId` unchanged (lines 235-236). (4) Fallback test: old orphan-forest test renamed and clarified; new test at lines 351-375 uses `vi.spyOn(dagre, 'layout').mockImplementation(() => { throw ... })` to actually trigger the catch branch, then asserts deterministic grid coords (s0.position={x:0,y:0}, s4.position={x:0,y:160}) with afterEach vi.restoreAllMocks(). (5) Notes isolation: replaced `every(s => s.stepType !== undefined)` presence check with `map(s => s.id)).toEqual(['s1'])` concrete id-list assertion at line 483. No count-only or presence-only assertions introduced; no test weakened."
+}

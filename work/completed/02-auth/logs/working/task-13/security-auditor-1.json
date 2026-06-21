@@ -1,0 +1,107 @@
+[
+  {
+    "severity": "medium",
+    "category": "OWASP A04 — Insecure Design / DoS",
+    "file": "backend/src/main/java/com/botfunnel/auth/dto/LoginRequest.java",
+    "issue": "LoginRequest.password has no @Size upper bound. An unauthenticated attacker can submit a multi-megabyte password string. The login flow forwards it through Bean Validation, JSON deserialization, brute-force check, and finally BCrypt cost-12 hashing on a boundedElastic worker. BCrypt itself truncates inputs to 72 bytes, but the JSON parsing, request memory, and dispatcher cost are all unbounded — this is a useful amplification vector for slow-loris-style abuse against the unauthenticated /api/auth/login endpoint, especially since the per-IP brute-force gate is set to 20 (high enough that an attacker can sustain heavy traffic without tripping it).",
+    "recommendation": "Add @Size(max = 200) to LoginRequest.password (mirror the existing cap on ChangePasswordRequest.currentPassword and ChangePasswordRequest.newPassword)."
+  },
+  {
+    "severity": "medium",
+    "category": "OWASP A04 — Insecure Design / DoS",
+    "file": "backend/src/main/java/com/botfunnel/auth/dto/RegisterRequest.java",
+    "issue": "RegisterRequest.password has no @Size upper bound. The registration endpoint runs BCrypt cost-12 on the supplied value (AuthService.applyRegistrationAsync). The per-IP register rate limit (REGISTER_IP_THRESHOLD=10/min) gates frequency but not per-request payload size — an attacker hitting that limit with megabyte payloads can still consume gigabytes of dispatcher memory and CPU through JSON deserialization. RegisterRequest.email and RegisterRequest.name are also uncapped; name is persisted to the users collection without a server-side length cap (the corresponding @Size(max = 200) on UpdateProfileRequest.name only applies to PATCH, not initial registration).",
+    "recommendation": "Add @Size(max = 200) to password, @Size(max = 254) to email (RFC 5321 SMTP path limit), and @Size(max = 200) to name on RegisterRequest. Mirror the same cap on ResetPasswordRequest.newPassword and ResendVerificationRequest.email for consistency with ForgotPasswordRequest."
+  },
+  {
+    "severity": "low",
+    "category": "OWASP A09 — Security Logging Failures / PII",
+    "file": "backend/src/main/java/com/botfunnel/email/EmailService.java:95",
+    "issue": "Mail-send error handler logs the full recipient email address at ERROR level: `log.error(\"Email send failed to {}: {}\", to, err.toString())`. Recipient email is PII; ERROR-level logs are typically forwarded to centralized log aggregators with broader access than the application database. This is the same PII-in-logs pattern that was deliberately closed in AuthService for the verification/reset/blocked dispatch paths (where userId is logged instead of email — see AuthService:159, :234, :309).",
+    "recommendation": "EmailService does not have a userId in scope at the call site. Either (a) replace `to` in the log line with a hashed/truncated form (e.g., first 3 chars + domain), or (b) accept the userId as an argument to sendVerificationEmail/sendPasswordResetEmail/sendAccountBlockedEmail and log that instead. Option (b) is the structural fix already applied elsewhere."
+  },
+  {
+    "severity": "low",
+    "category": "OWASP A09 — Security Logging Failures / PII",
+    "file": "backend/src/main/java/com/botfunnel/admin/SuperAdminSeeder.java:68,78",
+    "issue": "SuperAdminSeeder logs the super-admin email at INFO level on every container start (`log.info(\"Super admin created: {}\", email)`, `log.info(\"Existing user promoted to super admin: {}\", email)`). The address is operator-controlled configuration rather than user-supplied PII, but it still ends up in centralized logs with broader audit reach than necessary. It also amplifies the privileged-account signal — a log search for \"super admin\" cleanly identifies the highest-value account in the system.",
+    "recommendation": "Drop the email from the log message: `log.info(\"Super admin created\")` / `log.info(\"Existing user promoted to super admin\")`. The configured value is already in the environment for anyone with deploy access; logging it adds no recoverable signal but expands the audit surface."
+  },
+  {
+    "severity": "low",
+    "category": "OWASP A09 — Security Logging Failures / Internal enumeration",
+    "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java:487-488",
+    "issue": "Brute-force trip event persists the user-supplied email to events.metadata: `Map.of(\"reason\", \"brute_force\", \"email\", email)`. Anti-enumeration is otherwise carefully maintained — doForgotPassword logs userId=null with null metadata for unknown/blocked/deleted accounts (AuthService:293-294), and the user-not-found login path logs `Map.of(\"reason\", \"user_not_found\")` without the email (AuthService:517). The brute-force branch breaks that invariant. While the metadata is internal-only and intentional for incident response, it does mean an attacker who later gains read access to events can enumerate every email a brute-force burst was directed at — including emails the system never confirmed exist.",
+    "recommendation": "Either (a) document explicitly that brute-force trip metadata is the one accepted exception to the no-email-in-events invariant (link the design decision so future code-reviewers do not regress to logging email on the success/failure branches), or (b) replace `email` with a SHA-256 prefix of the email so incident-response correlation still works without the raw value being recoverable."
+  },
+  {
+    "severity": "info",
+    "category": "OWASP A05 — Security Misconfiguration / Deployment",
+    "file": "backend/src/main/resources/application.properties:16",
+    "issue": "SESSION_COOKIE_SAME_SITE defaults to `lax`. The tech-spec requires `Strict` in production. The default is correct for development (where the SPA may run on a different port and SameSite=Strict would block cross-port form posts), but a production deployment that forgets to set `SESSION_COOKIE_SAME_SITE=strict` will silently ship a weaker cookie policy. Same is true for `SESSION_COOKIE_SECURE` (defaults to `false`). Both are externalized correctly; the gap is operational, not architectural.",
+    "recommendation": "Add a deploy-time check (CI or a Spring `@PostConstruct` Environment validator) that fails fast when `SESSION_COOKIE_SECURE=false` or `SESSION_COOKIE_SAME_SITE!=strict` in a production profile. Alternatively, document both flags in the deployment checklist."
+  },
+  {
+    "severity": "info",
+    "category": "OWASP A05 — Security Misconfiguration / IP spoofing",
+    "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java:621-635 and ProfileController.java:88-98",
+    "issue": "extractIp honours X-Forwarded-For unconditionally and takes the leftmost entry. Without a reverse proxy that rewrites this header, a client can forge it and bypass the per-IP brute-force counter (per-email counter still applies, but the deliberate per-IP defense-in-depth layer is defeated). The AuthService source comment acknowledges this; ProfileController duplicates the same logic and the same trust assumption.",
+    "recommendation": "(1) Document the trust requirement in the README/operations doc — production must front the backend with nginx/traefik that overwrites X-Forwarded-For. (2) Optionally accept a configurable list of trusted-proxy CIDRs and only honour XFF when the immediate peer is in that list; fall through to RemoteAddress otherwise. (3) Extract extractIp into a single shared helper rather than duplicating in AuthService and ProfileController so any future hardening is applied once."
+  },
+  {
+    "severity": "info",
+    "category": "OWASP A07 — Identification and Authentication / Race",
+    "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java:545-556 and ProfileService.java:183-197",
+    "issue": "incrementWithTtl / registerChangePwdFailure use the documented INCR-then-EXPIRE-only-on-first-hit pattern. If the process crashes between INCR and EXPIRE (or Redis returns success on INCR but fails on EXPIRE), the counter remains without TTL. The next failed attempt re-runs the same conditional (count==1 only on first), so the EXPIRE is never set on the orphaned key — it will only be cleared on a successful login (resetBruteCounters) or evicted by Redis MEMORY policy. Practical impact is bounded (Redis maxmemory-policy still caps memory) and the source comment accepts this. Lua-scripted INCR+EXPIRE would close the race fully.",
+    "recommendation": "Track as accepted deferred risk. If hardening is later requested, replace the pair with `EVAL \"local v = redis.call('INCR', KEYS[1]); if v == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end; return v\"` for atomic increment-and-expire."
+  },
+  {
+    "severity": "info",
+    "category": "Verified — no finding",
+    "file": "backend/src/main/java/com/botfunnel/auth/TokenService.java",
+    "issue": "Token entropy + hash storage verified: SecureRandom (not java.util.Random), 32 bytes / 256 bits of entropy, URL-safe Base64 without padding for transport, SHA-256 hex hash stored in DB (User.emailVerificationTokenHash / passwordResetTokenHash). Raw token never persisted. AuthService.DUMMY_HASH is a syntactically valid bcrypt hash starting with $2a$12$, 60 chars long — BCryptPasswordEncoder.matches will return false instead of throwing, preserving the timing-equalisation defence and avoiding a 500 on user-not-found.",
+    "recommendation": "No action."
+  },
+  {
+    "severity": "info",
+    "category": "Verified — no finding",
+    "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java:40-45",
+    "issue": "CSRF verified not disabled. CookieServerCsrfTokenRepository.withHttpOnlyFalse() is used (required so the SPA JavaScript can read the XSRF-TOKEN cookie and echo it in the X-XSRF-TOKEN header — double-submit cookie pattern). XorServerCsrfTokenRequestAttributeHandler is wired so the token is committed to the cookie on the first GET. Combined with SameSite=Lax/Strict on the SESSION cookie, this is correct defense-in-depth for the SPA architecture.",
+    "recommendation": "No action."
+  },
+  {
+    "severity": "info",
+    "category": "Verified — no finding",
+    "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java:64-74",
+    "issue": "CORS verified safe with credentials. setAllowedOrigins is List.of(appUrl) — exact origin string from configuration, not a regex/prefix/wildcard. allowCredentials=true is paired with explicit origins (Spring's CorsConfiguration would reject `*` with credentials anyway). Allowed methods and headers are limited to the set the SPA actually uses.",
+    "recommendation": "No action."
+  },
+  {
+    "severity": "info",
+    "category": "Verified — no finding",
+    "file": "backend/src/main/java/com/botfunnel/profile/dto/UpdateProfileRequest.java",
+    "issue": "Mass assignment verified blocked. UpdateProfileRequest exposes only `name` (with @NotBlank @Size(max = 200)). @JsonIgnoreProperties(ignoreUnknown=true) silently discards extra JSON fields, so a client posting `{\"name\": \"x\", \"isSuperAdmin\": true}` cannot elevate themselves. The User entity's `superAdmin` field is set only by SuperAdminSeeder on startup; ProfileService.updateProfile copies only `name` from the request.",
+    "recommendation": "No action."
+  },
+  {
+    "severity": "info",
+    "category": "Verified — no finding",
+    "file": "backend/src/main/java/com/botfunnel/email/EmailService.java:111-119",
+    "issue": "HTML escaping in email templates verified. htmlEscape is applied to {NAME}, {TOKEN}, and {APP_URL} in all three template builders before placeholder substitution. Tokens are URL-safe Base64 (alphabet A-Z a-z 0-9 - _) so html-escaping is a no-op for them, which is expected — it acts as defense-in-depth against any future token-format change. {NAME} is the user-controlled field where the escape actually matters; tested escapes cover & < > \" '.",
+    "recommendation": "No action."
+  },
+  {
+    "severity": "info",
+    "category": "Verified — no finding",
+    "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java:582-597",
+    "issue": "Session fixation prevention verified. openSession explicitly invalidates the current WebSession, then re-fetches a fresh session from the exchange, sets maxIdleTime, and writes the SecurityContext to that new session via securityContextRepository.save(exchange, context). The order is correct — the SecurityContext is never written to the pre-login session.",
+    "recommendation": "No action."
+  },
+  {
+    "severity": "info",
+    "category": "Verified — no finding",
+    "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java (login + forgotPassword + resendVerification paths)",
+    "issue": "Email enumeration prevention verified across all three unauthenticated branches. (1) login: handleUserNotFound runs DUMMY_HASH bcrypt on boundedElastic so non-existent-email response time matches wrong-password response time, and the brute-force counters are still incremented so the response code never becomes an oracle. (2) forgotPassword: SET NX EX 60 on the IP rate-limit key runs BEFORE the user lookup; doForgotPassword applies a calibrated 40ms delay on the unknown/deleted/blocked branch to equalise wall-clock with the known-user save path; events.metadata is null for the no-match branch. (3) resendVerification: SET NX EX 60 on the email rate-limit key runs BEFORE findByEmail so the rate-limit timing cannot be used as an oracle, and pending-only gating with silent no-op for active/blocked/deleted accounts produces an identical response.",
+    "recommendation": "No action."
+  }
+]

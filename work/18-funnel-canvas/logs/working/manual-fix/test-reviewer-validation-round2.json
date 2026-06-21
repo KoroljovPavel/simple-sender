@@ -1,0 +1,71 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-validation-defer",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "All 5 new backend integration tests and 2 frontend test changes are value-based and load-bearing. Three negative/regression tests (malformed trigger key, malformed step key, two-null-event-name dedupe) were verified pre-fix failing and post-fix green. Valid-slug round-trip and null-absent draft+activate tests assert real HTTP status codes and response body values via jsonPath. Frontend: ConnectionMode.Strict assertion uses the enum (not a 'strict' literal), guarding against implementation drift. DELAY draft body assertion now checks the actual steps payload (not just call count), eliminating the prior mock-only pattern. No existing coverage weakened. All suites green.",
+  "suites": {
+    "backend": "PASS — 1220 tests, 0 failures, 0 errors. All 5 new IT methods present and green in cached XML report (com.botfunnel.funnel.FunnelControllerIT, tests=115, skipped=0, failures=0). Gradle UP-TO-DATE reflects no source changes since last full run; XML reports confirmed to include the 5 new test names.",
+    "frontend": "PASS — 638 tests across 59 files, 0 failures (pnpm test --run, 24.82s). FunnelCanvas.spec.ts and funnel-editor.spec.ts both green.",
+    "build": "PASS — pnpm build clean (Nuxt/Nitro, 8.51 MB output, no errors).",
+    "locales": "PASS — node scripts/check-locales.mjs exited 0, no output (no locale issues)."
+  },
+  "litmusAnalysis": {
+    "patch_customFieldSetTrigger_malformedKey_returns422_onDraftSave": {
+      "preFixOutcome": "FAIL — pre-fix code stores triggerValue verbatim (no format check), returns 200; test asserts 422",
+      "postFixOutcome": "PASS — formatFieldKeyIfPresent rejects x.$where → 422 + CODE_INVALID_TRIGGER_VALUE",
+      "loadBearing": true
+    },
+    "patch_setCustomFieldStep_malformedKey_returns422_onDraftSave": {
+      "preFixOutcome": "FAIL — pre-fix draft-save path had no SET_CUSTOM_FIELD key format check; returns 200; test asserts 422",
+      "postFixOutcome": "PASS — requireCustomFieldKeyFormatIfPresent rejects a.b → 422 + funnel_step_invalid",
+      "loadBearing": true
+    },
+    "patch_twoNullEventNames_noFalseDuplicate_onDraftSave": {
+      "preFixOutcome": "FAIL — pre-fix dedupe collapses null→\"\" for both triggers, throws CODE_DUPLICATE_EVENT_NAME → 422; test asserts 200",
+      "postFixOutcome": "PASS — null eventNames skip the dedupe set; 200 returned",
+      "loadBearing": true
+    },
+    "patch_customFieldKey_validSlug_savesAsDraft": {
+      "preFixOutcome": "Would pass pre-fix (no format check existed, valid slug accepted)",
+      "postFixOutcome": "PASS — 200 + jsonPath assertions on triggers[1].triggerValue and steps[0].customFieldKey round-trip correctly",
+      "loadBearing": true,
+      "note": "Primary value: guards against the new format check over-rejecting valid inputs"
+    },
+    "patch_customFieldKey_absent_savesAsDraft_but422sOnActivate": {
+      "preFixOutcome": "Would pass pre-fix (null key accepted on draft; activate also 422s for missing key)",
+      "postFixOutcome": "PASS — two real HTTP responses asserted; documents the draft=200/activate=422 invariant",
+      "loadBearing": true
+    },
+    "frontend_connectionMode_strict": {
+      "assertion": "expect(cfg.mode).toBe(ConnectionMode.Strict)",
+      "preFixAssertion": "expect(cfg.mode).toBe('strict')",
+      "loadBearing": true,
+      "note": "ConnectionMode.Strict === 'strict' at runtime, so behaviorally equivalent pre-fix; the enum form is strictly stronger (catches drift from Strict to another enum value)"
+    },
+    "frontend_delay_draft_body": {
+      "assertion": "expect(body.steps).toEqual([{ stepType: 'DELAY', id: null }])",
+      "preFixAssertion": "toHaveBeenCalledTimes(1) only — mock-only pattern",
+      "loadBearing": true,
+      "note": "Promotes the test from mock-only (category 2 bad test) to a value-based body assertion"
+    }
+  },
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 7,
+      "passed": 7,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 5,
+      "e2e": 0,
+      "assessment": "healthy",
+      "note": "New tests are all integration (full HTTP stack via MockMvc + real embedded Mongo). Appropriate test type for validating API-layer security constraints. Frontend changes are component-level mount tests (vitest/nuxt), correctly scoped."
+    }
+  },
+  "status": "passed"
+}

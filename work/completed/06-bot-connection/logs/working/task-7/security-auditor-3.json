@@ -1,0 +1,46 @@
+{
+  "status": "approved",
+  "summary": "approved",
+  "summaryDetails": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "scope": "Round 3 narrow verification of SEC-T7-002 round-2 fix (commit 5b2839c) in frontend/stores/bot.ts connect() error-path redaction. Did not re-litigate skipped findings (SEC-T7-002 devtools-trace residual, SEC-T7-003 URL encoding).",
+  "verification": {
+    "finding": "SEC-T7-002 round-2 (Major) — typeof opts.body === 'object' guard was a no-op in production because ofetch JSON-stringifies the body before dispatch.",
+    "fixCommit": "5b2839c",
+    "fixLocation": "frontend/stores/bot.ts:59-60",
+    "fixCode": "const opts = (err as { options?: { body?: unknown } })?.options; if (opts) opts.body = '[redacted]'",
+    "resolved": true,
+    "checks": [
+      {
+        "check": "Unconditional redaction handles JSON-string body (realistic ofetch production shape)",
+        "result": "pass",
+        "evidence": "tests/stores/bot.spec.ts:138-161 mocks options.body as JSON.stringify({token: TOKEN}); asserts errOpts?.body === '[redacted]' and JSON.stringify(caught) does not contain TOKEN_MARKER."
+      },
+      {
+        "check": "Unconditional redaction handles original object body (defensive)",
+        "result": "pass",
+        "evidence": "tests/stores/bot.spec.ts:163-180 mocks options.body as {token: TOKEN}; asserts JSON.stringify(caught) does not contain TOKEN_MARKER."
+      },
+      {
+        "check": "response.status preserved for downstream consumers (404 interceptor, useApiError)",
+        "result": "pass",
+        "evidence": "Fix mutates only opts.body; err.response.status sits on a separate property and is untouched. tests/stores/bot.spec.ts:160 explicitly asserts response.status === 400 after redaction."
+      },
+      {
+        "check": "No new leak surface introduced by removing the type guard",
+        "result": "pass",
+        "evidence": "Redaction is broader, not narrower. err.message, err.stack, err.response, err.request (URL) are untouched. URL is verified token-free by AC17 test at lines 103-115. FetchError.data is server-side response, not client outbound body."
+      },
+      {
+        "check": "Previous bypass eliminated",
+        "result": "pass",
+        "evidence": "No typeof narrowing remains; any non-null/non-undefined opts has body overwritten with the string '[redacted]' regardless of original type."
+      }
+    ]
+  },
+  "findings": []
+}

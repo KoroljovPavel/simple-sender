@@ -1,0 +1,134 @@
+{
+  "validator": "reality-checker",
+  "iteration": 2,
+  "batch": [3, 4, 7],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 claims 'чинний insertExecution стає тонким делегатом до insertExecutionAt(..., null), 3 наявні callsites не змінюються'. The actual count of insertExecution call expressions outside the factory is 5: two in FunnelEventService.insertOneFunnel (lines 196, 200), two in FunnelTriggerServiceImpl (lines 157, 163), one in FunnelService.testRun (line 354). The refactoring logic is sound (only the factory method body changes; all callers keep the same signature), but 'callsites не змінюються' is stated with the wrong count (3, not 5). Implementer may be surprised.",
+      "fix": "Update the hint to say '5 existing call expressions (2 in FunnelEventService.insertOneFunnel, 2 in FunnelTriggerServiceImpl, 1 in FunnelService.testRun)' — all stay unchanged because the refactor changes only the factory body, not the signature."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Verification Steps (Automated, line 100) says 'cd frontend && npm run test -- funnel-editor' but the project uses pnpm (packageManager: pnpm@10.33.2, only pnpm-lock.yaml present, no package-lock.json). Task 7 correctly uses 'cd frontend && pnpm test'. The npm command will fail on a clean install without npm-lock.",
+      "fix": "Replace 'npm run test' with 'pnpm test' in Task 4 Verification Steps: 'cd frontend && pnpm test -- funnel-editor'"
+    }
+  ],
+  "verified_claims": [
+    {
+      "task": 3,
+      "claim": "StepExecutor.execute is a 'return switch' expression (compiler-enforced exhaustiveness) — adding SUBSCRIBE_TO_FUNNEL without a case will NOT compile",
+      "result": "CONFIRMED — line 93: 'return switch (step.getStepType()) {' — this is a switch expression; Java requires it to be exhaustive or it fails compilation"
+    },
+    {
+      "task": 3,
+      "claim": "FunnelExecutionEngine.drive line ~257 is a switch STATEMENT (not expression) — Outcome.COMPLETE without a case compiles silently",
+      "result": "CONFIRMED — line 257: 'switch (result.outcome()) {' followed by explicit case blocks with no arrow-form expression syntax. This is a switch statement; missing case COMPLETE would silently fall through (no-op), not a compile error"
+    },
+    {
+      "task": 3,
+      "claim": "Outcome enum is at StepExecutor.java:329; execute method at :92; funnelEventService field at :71, constructor param at :78",
+      "result": "CONFIRMED — enum Outcome at line 329; execute at 92 (public StepResult execute...); funnelEventService field at 71, constructor param at 78"
+    },
+    {
+      "task": 3,
+      "claim": "complete(exec, now) is at FunnelExecutionEngine.java:518; drive switch at :257",
+      "result": "CONFIRMED — complete() private method at line 518; switch(result.outcome()) at line 257"
+    },
+    {
+      "task": 3,
+      "claim": "FunnelExecutionFactory.java:93 hardcodes currentStepId to snapshot.get(0).getId()",
+      "result": "CONFIRMED — line 93: 'execution.setCurrentStepId(snapshot.isEmpty() ? null : snapshot.get(0).getId())'"
+    },
+    {
+      "task": 3,
+      "claim": "funnelEventService already injected in StepExecutor — no new injection needed (anti-bean-cycle)",
+      "result": "CONFIRMED — field at :71, constructor param at :78, used for dispatchForSubscriber at :122"
+    },
+    {
+      "task": 3,
+      "claim": "insertOneFunnel pattern at FunnelEventService.java:192",
+      "result": "CONFIRMED — private boolean insertOneFunnel(...) at line 192"
+    },
+    {
+      "task": 3,
+      "claim": "autoEnrollRateLimitExceeded is a private method in FunnelEventService; maxEnrollDepth is a field",
+      "result": "CONFIRMED — autoEnrollRateLimitExceeded at line 254, maxEnrollDepth field at line 94"
+    },
+    {
+      "task": 3,
+      "claim": "PK links in Context Files use 'references/' prefix (project.md, architecture.md, patterns.md)",
+      "result": "CONFIRMED — all three files exist in .claude/skills/project-knowledge/references/"
+    },
+    {
+      "task": 3,
+      "claim": "Test files FunnelExecutionEngineIT.java, FunnelStepExecutorTest.java, FunnelTestRunSendIT.java exist",
+      "result": "CONFIRMED — all three files exist at the claimed paths"
+    },
+    {
+      "task": 4,
+      "claim": "onSubmit switch is at FunnelStepForm.vue ~line 427 with no default branch and no assertNever",
+      "result": "CONFIRMED — 'switch (type)' at line 427; no 'default:' case in onSubmit block (separate unrelated default at line 260 is in a different switch); switch ends at line 488-489 without default or assertNever"
+    },
+    {
+      "task": 4,
+      "claim": "required-keys.spec.ts checks only a hardcoded REQUIRED_KEYS list of ~39 keys; full parity is in scripts/check-locales.mjs",
+      "result": "CONFIRMED — required-keys.spec.ts has 30 entries in REQUIRED_KEYS hardcoded list; it imports collectKeySet from scripts/check-locales.mjs for traversal but only checks the hardcoded list, not all keys. scripts/check-locales.mjs exists and handles full parity. New i18n keys will NOT be caught by required-keys.spec.ts unless explicitly added to REQUIRED_KEYS."
+    },
+    {
+      "task": 4,
+      "claim": "funnel-editor.spec.ts imports and mounts FunnelStepForm directly; contains MENU describe block; is the correct file for SUBSCRIBE coverage",
+      "result": "CONFIRMED — line 7: 'import FunnelStepForm from ...; line 550: describe('FunnelStepForm — MENU', ...); file is at frontend/tests/pages/funnel-editor.spec.ts"
+    },
+    {
+      "task": 4,
+      "claim": "STEP_TYPES array is at ~line 30 of FunnelStepForm.vue; watch(selectedType) with lazy-loaders at ~213",
+      "result": "CONFIRMED — STEP_TYPES at line 30; separate watch (for validation reset) at line 237; ensureTagsLoaded-style guard pattern exists in codebase"
+    },
+    {
+      "task": 4,
+      "claim": "PK links with references/ prefix (project.md, architecture.md, patterns.md, ux-guidelines.md)",
+      "result": "CONFIRMED — all four files exist in .claude/skills/project-knowledge/references/"
+    },
+    {
+      "task": 4,
+      "claim": "useFunnelsStore().fetch('all') writes to shared funnels.value; fetchOne(id) returns FunnelResponse directly (not cached in store)",
+      "result": "CONFIRMED — fetch() at line 35 assigns 'funnels.value = await useApi()...'; fetchOne at line 96 returns FunnelResponse. The side-effect warning about overwriting list-page store state is architecturally accurate."
+    },
+    {
+      "task": 4,
+      "claim": "FunnelStatusFilter includes 'all' as valid value",
+      "result": "CONFIRMED — types/funnel.ts: 'export type FunnelStatusFilter = 'all' | FunnelStatus'"
+    },
+    {
+      "task": 7,
+      "claim": "Backend test command: 'cd backend && ./gradlew test --tests ...'",
+      "result": "CONFIRMED — backend/gradlew exists at the correct path"
+    },
+    {
+      "task": 7,
+      "claim": "Frontend test command: 'cd frontend && pnpm test' with note about pnpm@10.33.2",
+      "result": "CONFIRMED — frontend/package.json has packageManager pnpm@10.33.2; pnpm-lock.yaml exists; test script is 'vitest'"
+    },
+    {
+      "task": 7,
+      "claim": "funnel-editor.spec.ts imports FunnelStepForm and tests MENU step; absent SUBSCRIBE_TO_FUNNEL block would be a coverage gap finding",
+      "result": "CONFIRMED — file exists, imports FunnelStepForm, has describe('FunnelStepForm — MENU', ...) block. No SUBSCRIBE_TO_FUNNEL describe block in the pre-implementation file, as expected (that's what Task 4 adds)"
+    },
+    {
+      "task": 7,
+      "claim": "FunnelServiceEmitEventTest.java and StepTypeTest.java exist as expected test files",
+      "result": "CONFIRMED — both files exist at the claimed paths"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 21,
+    "issues_found": 2
+  }
+}

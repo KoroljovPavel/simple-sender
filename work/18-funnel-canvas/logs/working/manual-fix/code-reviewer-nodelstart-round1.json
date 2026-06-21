@@ -1,0 +1,64 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-no-delete-start",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "line": 407,
+      "severity": "informational",
+      "category": "maintainability",
+      "issue": "The confirmDelete 'start' branch (lines 407-412) is now UI-unreachable: both the side-panel button (v-if gates it) and the keyboard handler (kind==='start' early-return) are blocked. The branch remains live code but can never be triggered from the UI.",
+      "impact": "No runtime risk — pendingDelete is only set through requestDelete, which is only reachable from the side-panel delete button or the keyboard handler, both of which now skip the start node. The branch is inert from the user's perspective. However, it represents a divergence between the documented intent ('start node is not deletable') and the code's apparent capability, which can confuse future maintainers.",
+      "recommendation": "Acceptable as-is. The comment at line 408 ('Removing the start node removes the on_start trigger entry entirely — Decision 11') provides historical context for why the branch existed. If the team wants to be more explicit, a TODO comment can note that this branch is UI-unreachable since no-delete-start was introduced in 1f32df5, pending a future decision on whether to remove it. Not a blocker or major issue."
+    }
+  ],
+  "checks": {
+    "delete_button_hidden_for_start": {
+      "result": "pass",
+      "detail": "FunnelCanvasSidePanel.vue line 200: v-if='node.nodeId && node.kind !== \\'start\\''. Button is absent when kind==='start', present for step/trigger/note."
+    },
+    "delete_button_present_for_non_start": {
+      "result": "pass",
+      "detail": "Existing tests in FunnelCanvasSidePanel.spec.ts (line 209) cover trigger and note kinds explicitly; step is covered by earlier delete-button click tests. The start case was removed from the 'all kinds' loop and gets its own negative-assertion test."
+    },
+    "keydown_skips_start_only": {
+      "result": "pass",
+      "detail": "FunnelCanvas.client.vue line 448: guard inserted before pendingDelete check and isEditableTarget check. Order is correct: kind guard fires before editable-target guard, which is still intact (line 450)."
+    },
+    "keydown_still_works_for_step_trigger_note": {
+      "result": "pass",
+      "detail": "Existing 'Delete key on a selected node' and 'Backspace key' tests (lines 1075-1109) use step nodes and remain unmodified. They prove the non-start path is still functional."
+    },
+    "editable_target_guard_intact": {
+      "result": "pass",
+      "detail": "isEditableTarget check at line 450 is still in place, after the new kind guard. Guard order (kind → pendingDelete → isEditableTarget) is correct and does not disrupt the existing contenteditable / input suppression tests."
+    },
+    "no_regression_other_delete_paths": {
+      "result": "pass",
+      "detail": "confirmDelete branches for step, trigger, note are untouched. The start branch in confirmDelete is unreachable from UI but code is otherwise unchanged."
+    },
+    "side_panel_trigger_settings_still_mount_for_start": {
+      "result": "pass",
+      "detail": "FunnelCanvasSidePanel.vue line 107 renders trigger settings when kind==='trigger' || kind==='start'. The new v-if on the footer button does not affect the editor body. FunnelCanvasSidePanel.spec.ts line 235 asserts '[data-test=\"funnel-trigger\"]' is present for the start node."
+    },
+    "reactivity": {
+      "result": "pass",
+      "detail": "The v-if change is a simple computed expression on a prop field — no reactivity concern. The keydown handler reads selectedNode.value.kind which is a reactive ref updated by selectNode; standard Vue 3 reactivity, no issue."
+    },
+    "ssr": {
+      "result": "pass",
+      "detail": "FunnelCanvas is a .client.vue component (Nuxt client-only). FunnelCanvasSidePanel.vue is rendered inside it. No SSR execution path for either file."
+    },
+    "unreachable_confirmDelete_start_branch": {
+      "result": "acceptable",
+      "detail": "Branch at lines 407-412 is now UI-unreachable. It is not misleading dead-code in the dangerous sense: the comment explains Decision 11 and the logic is correct. The no-delete-start design decision effectively orphaned it. Flagged as informational only."
+    },
+    "test_coverage": {
+      "result": "pass",
+      "detail": "Four targeted tests added/updated: (1) FunnelCanvasSidePanel.spec.ts negative-assertion for start node button absence; (2) FunnelCanvasSidePanel.spec.ts updated loop removes start from affirmative cases; (3) FunnelCanvas.spec.ts rewritten test verifies panel open + no button + no warning; (4) FunnelCanvas.spec.ts new keydown test for Delete and Backspace on start node. All four are load-bearing (comments explain what regression they catch)."
+    }
+  },
+  "summary": "Change is correct and minimal. The v-if condition in FunnelCanvasSidePanel.vue and the kind guard in FunnelCanvas.client.vue onKeydown both gate exclusively on kind==='start', leaving step/trigger/note paths untouched. Guard order in onKeydown is correct and the isEditableTarget guard remains intact. Trigger settings editor continues to mount for the start node. Test coverage is thorough: both negative-assertion (no button, no warning) and positive-regression (step Delete key still works) cases are present. The only informational note is the now-unreachable confirmDelete start branch — acceptable, not a blocker."
+}

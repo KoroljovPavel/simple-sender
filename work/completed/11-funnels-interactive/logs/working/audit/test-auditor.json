@@ -1,0 +1,88 @@
+{
+  "auditor": "test-auditor",
+  "verdict": "ISSUES_FOUND",
+  "overallAssessment": "PASS-with-gaps. The feature test set is strong: deterministic engine ITs (MutableClock + direct sweep(), no Thread.sleep), real end-state assertions on Mongo/events/MockWebServer bodies, claim-CAS/IDOR/double-click/timeout/loop all covered behaviorally, and a healthy pyramid (unit-heavy, IT for engine/edge, minimal e2e). No critical or high-severity findings; no assertion-light or flaky tests detected. Gaps are minor-to-major: e2e exceeds the spec's 'exactly 1 happy-path' (3 tests), and two strategy IT scenarios (runtime snapshot-isolation, behavioral cancel of waiting_for_reply via /stop/delete) are asserted only indirectly (unit copyOf + code-level $in literal) rather than via a behavioral IT.",
+  "automatedVerification": {
+    "backendSlow": "GREEN — ./gradlew test -PrunSlow=true for funnel.*, ProcessTelegramUpdateJobTest, TelegramUpdateDeserializationTest, TelegramSenderIT → BUILD SUCCESSFUL (41s).",
+    "frontendVitest": "GREEN — funnel-editor.spec.ts 14/14 passed.",
+    "frontendE2E": "3 skipped gracefully (backend not running) — no failures, matches Task 11 graceful-skip AC.",
+    "flakiness": "No nondeterministic patterns found. Engine timing is MutableClock-driven; race ITs use ConcurrencyTestUtils.parallelInvoke (deterministic barrier) + dispatcher-injected cancel, not wall-clock."
+  },
+  "invariantCoverage": [
+    {"invariant": "park-on-reply (MENU → waiting_for_reply, sweep does not resume untimed menu)", "tests": ["FunnelExecutionEngineIT.menu_parks_on_reply", "sweep_does_not_resume_menu_without_timeout"], "status": "covered"},
+    {"invariant": "loop + per-tick step budget → failed + log marker", "tests": ["FunnelExecutionEngineIT.loop_without_wait_trips_step_budget"], "status": "covered"},
+    {"invariant": "fan-in (multiple buttons → one target)", "tests": ["FunnelExecutionEngineIT.fan_in_multiple_buttons_one_target", "FunnelControllerIT.menuFanInAndLoopTargetsValidate"], "status": "covered"},
+    {"invariant": "timeout sweep follows timeoutTargetStepId / null→completed", "tests": ["FunnelExecutionEngineIT.timeout_resume_follows_target", "timeout_null_target_completes"], "status": "covered"},
+    {"invariant": "idempotent double-click (claim-CAS, second loses → one event)", "tests": ["FunnelExecutionEngineIT.resumeOnCallback_double_click_advances_once", "advanceOnCallback_doubleClick_advancesOnce"], "status": "covered"},
+    {"invariant": "callback-vs-cancel race (cancel wins over engine in-tick & terminal write)", "tests": ["FunnelExecutionEngineIT.concurrentCancelMidTickWinsOverEngineWrite", "concurrentCancelMidTickWinsOverTerminalWrite"], "status": "covered"},
+    {"invariant": "anti-IDOR (foreign subscriber rejected, victim execution unchanged)", "tests": ["FunnelExecutionEngineIT.resumeOnCallback_rejects_foreign_subscriber", "advanceOnCallback_foreignExecution_idorRejected_noAdvance"], "status": "covered"},
+    {"invariant": "currentStepId-mismatch → no-op", "tests": ["FunnelExecutionEngineIT.advanceOnCallback_currentStepIdMismatch_noOp"], "status": "covered"},
+    {"invariant": "in-range-but-invalid button (URL button click, out-of-range index) → no-op", "tests": ["FunnelExecutionEngineIT.advanceOnCallback_urlButtonOrOutOfRange_noOp"], "status": "covered"},
+    {"invariant": "stale/malformed/oversized callback_data → no-op + answerCallbackQuery still issued", "tests": ["FunnelExecutionEngineIT.advanceOnCallback_malformedOrOversizedData_noOp", "advanceOnCallback_staleOnCompleted_noOp"], "status": "covered"},
+    {"invariant": "funnel_button_clicked event written + lastButtonClicked + no-PII", "tests": ["FunnelExecutionEngineIT.advanceOnCallback_validClick_advancesBranch_writesEvent"], "status": "covered"},
+    {"invariant": "callback_query webhook ingest + event-before-flip + no-PII", "tests": ["ProcessTelegramUpdateJobTest.callbackQuery_callsAdvanceOnCallback_writesEvent", "callbackQuery_eventBeforeStatusFlip_orderingInvariant", "callbackQuery_eventCarriesNoPii", "callbackQuery_botMissing_degradesNoAdvance", "callbackQuery_nullMessage_advancesWithNullChatId", "callbackQuery_reentryGuardDone_noOp"], "status": "covered"},
+    {"invariant": "paused-drain (Decision 11: in-flight waiting_for_reply drains even on paused funnel)", "tests": ["FunnelExecutionEngineIT.paused_funnel_in_flight_resumes_to_completed", "advanceOnCallback_pausedFunnel_drainsToCompleted"], "status": "covered"},
+    {"invariant": "blocked-bot during waiting → resume → branch send 403 → cancelled", "tests": ["FunnelExecutionEngineIT.blocked_bot_during_wait_cancels_on_resume"], "status": "covered"},
+    {"invariant": "legit loop-resend (button → same menu re-sends + re-parks, next click works)", "tests": ["FunnelExecutionEngineIT.loop_resend_menu_works"], "status": "covered"},
+    {"invariant": "answerCallbackQuery 5xx best-effort → advance not blocked", "tests": ["FunnelExecutionEngineIT.advanceOnCallback_answerCallbackQuery5xx_advanceNotBlocked", "TelegramSenderIT.answerCallbackQuery_telegram5xx_bestEffortDoesNotThrow"], "status": "covered"},
+    {"invariant": "reply_markup in body + answerCallbackQuery endpoint via MockWebServer", "tests": ["TelegramSenderIT.sendText_withReplyMarkup_includesInlineKeyboardInBody", "sendText_nullReplyMarkup_omitsKeyField", "answerCallbackQuery_postsToAnswerCallbackQueryEndpoint", "answerCallbackQuery_nullText_omitsTextField", "answerCallbackQuery_disconnectedBot_noTelegramCall"], "status": "covered"},
+    {"invariant": "callback_data build = {executionId}:{index}; URL button no callback_data", "tests": ["FunnelStepExecutorTest.menu_callbackButtons_encodeCorrectCallbackData", "menu_sends_text_with_reply_markup", "menu_with_timeout_returns_deadline"], "status": "covered"},
+    {"invariant": "MENU/timeout outcome + deadline at StepExecutor unit level", "tests": ["FunnelStepExecutorTest.menu_with_timeout_returns_deadline"], "status": "covered"},
+    {"invariant": "FunnelIndexesIT — waiting_for_reply in re-enter partialFilter $in", "tests": ["FunnelIndexesIT.funnelExecutionsCollectionHasExpectedIndexes (containsExactly running,waiting,waiting_for_reply)"], "status": "covered"},
+    {"invariant": "validateSteps: broken-edge (button target + next), MENU no-callback, too-many-buttons, label limits", "tests": ["FunnelControllerIT.activateBrokenEdgeReturns422", "activateBrokenNextEdgeReturns422", "activateMenuWithoutCallbackReturns422", "activateMenuRejectsTooManyButtons", "activateMenuLabelTooLongReturns422", "activateMenuLabelExactly64IsAccepted", "duplicateStepIdReturns422"], "status": "covered"},
+    {"invariant": "URL-scheme reject negatives (javascript:, leading-whitespace, empty-host, ftp)", "tests": ["FunnelControllerIT.activateMenuUrlButtonRejectsNonHttpScheme", "activateMenuUrlButtonRejectsLeadingWhitespace", "activateMenuUrlButtonRejectsEmptyHost", "invalidImageUrlReturns422"], "status": "covered", "note": "data: and tg:// schemes named in tech-spec line 288 are not asserted explicitly; javascript:+empty-host+leading-ws cover the same strict-URI branch, so the gap is cosmetic."},
+    {"invariant": "DTO round-trip (MENU buttons through PATCH+GET, id minting, target preservation, reorder)", "tests": ["FunnelControllerIT.menuButtonsRoundTripThroughPatchAndGet", "reorderPreservesButtonTargetsById"], "status": "covered"},
+    {"invariant": "FunnelStep.copyOf deep-copy of step scalars + buttons list independence", "tests": ["FunnelStepTest.deepCopyProducesIndependentStep", "deepCopyButtonsAreIndependent", "copyOfNullButtonsStaysNull", "copyOfNullIsNull"], "status": "covered"},
+    {"invariant": "ExecutionStatus.waiting_for_reply.name() drift assertion + StepType.MENU", "tests": ["FunnelStatusEnumTest.statusEnumsArePersistedLowercase", "stepTypeDiscriminatorIsUppercase"], "status": "covered"},
+    {"invariant": "migration/backfill id stamping + idempotency + currentStepId seed + edge tolerance", "tests": ["FunnelStepIdBackfillTest.backfillStampsIdsOnFunnelSteps", "backfillStampsIdsAndCurrentStepIdOnInFlightExecution", "backfillIsIdempotentAndNeverOverwritesExistingIds", "backfillLeavesAlreadySeededExecutionUntouched", "backfillToleratesEmptyAndMissingStepArrays", "backfillToleratesCurrentStepIndexOutOfBounds"], "status": "covered"},
+    {"invariant": "legacy linear Phase-1 run drains via currentStepIndex fallback", "tests": ["FunnelExecutionEngineIT.legacy_linear_run_drains_via_index_fallback"], "status": "covered"},
+    {"invariant": "callback_query typed DTO deserialization (no-PII, nested message.chat)", "tests": ["TelegramUpdateDeserializationTest.deserialize_callbackQuerySlot_populatedAsTypedRecord"], "status": "covered"},
+    {"invariant": "e2e MENU editor happy-path (add menu + 2 callback buttons + target via SearchableSelect, save, activate)", "tests": ["frontend/e2e/funnels.spec.ts: funnels_menuGoldenPath_buildAndActivate"], "status": "covered"},
+    {"invariant": "snapshot-isolation at RUNTIME (edit funnel during waiting_for_reply does not change in-flight execution)", "tests": ["FunnelStepTest.deepCopyButtonsAreIndependent (unit mechanism only)"], "status": "weak"},
+    {"invariant": "cancel of waiting_for_reply via /stop (cancelActiveFor) and funnel delete — behavioral", "tests": ["FunnelStatusEnumTest + code-level $in literal at FunnelTriggerServiceImpl:195 (indirect)"], "status": "weak"}
+  ],
+  "findings": [
+    {
+      "severity": "major",
+      "file": "frontend/e2e/funnels.spec.ts",
+      "area": "test-pyramid / e2e bloat",
+      "issue": "Three Playwright tests (funnels_goldenPath_buildAndActivate, funnels_menuGoldenPath_buildAndActivate, funnels_activation422_showsInlineError) exist where the tech-spec AC (line 322-325, 'рівно 1 Playwright happy-path') and Task 10 AC mandate EXACTLY ONE e2e happy-path, with the rest of frontend logic on vitest. The Phase-2 net-new requirement is the single MENU happy-path. The Phase-1 linear golden path and the activation-422 case are redundant at the e2e level: activation-422 inline error is already fully covered by vitest (funnel-editor.spec.ts 'maps a 422 activation code to an inline error', 'maps a funnel_broken_edge 422'). Edge case 118 of the task ('Frontend-валідація продубльована (vitest + Playwright) — позначити надлишок e2e, рекомендувати знести на vitest') applies directly.",
+      "recommendation": "Keep funnels_menuGoldenPath_buildAndActivate as THE single Phase-2 e2e happy-path. Delete funnels_activation422_showsInlineError (duplicated by vitest 422-inline-error specs). The Phase-1 linear funnels_goldenPath predates this feature and is out of Phase-2 scope, but if retained, document the deviation in tech-spec Testing Strategy. Net target: 1 (or at most 1 Phase-2) Playwright happy-path."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "area": "missing IT — runtime snapshot-isolation",
+      "issue": "tech-spec Testing Strategy line 307 ('snapshot-ізоляція: edit воронки під час waiting_for_reply не змінює виконання') is asserted only at the unit level (FunnelStepTest.deepCopyButtonsAreIndependent proves copyOf deep-copies). No behavioral IT seeds a parked waiting_for_reply execution, mutates the source Funnel's steps/buttons in the funnels collection, then resumes and asserts the in-flight execution navigated the ORIGINAL snapshot. The risk is mitigated (engine reads only stepsSnapshot, never re-reads the live Funnel mid-flight; copyOf is unit-proven) so this is minor, not major.",
+      "recommendation": "Add FunnelExecutionEngineIT.editingFunnelDuringWait_doesNotChangeInFlightExecution: seed a graph funnel + parked execution (snapshot of menu m1 --Yes--> s2), then update the Funnel document so m1's button now targets a DIFFERENT step (or delete s2 from the live funnel), then resumeOnCallback and assert the execution still advances to the snapshot's s2 (status completed, currentStepId path follows the snapshot, not the edited live graph)."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "area": "missing IT — cancel of waiting_for_reply",
+      "issue": "tech-spec line 308 lists cancellation of waiting_for_reply via /stop / delete / re-enter. FunnelControllerIT.deleteReturns204AndCancelsActiveExecutions seeds executions in 'running' and 'waiting' only — never 'waiting_for_reply'. No behavioral test proves that a parked waiting_for_reply execution is actually flipped to cancelled by funnel delete or by FunnelTriggerService.cancelActiveFor (/stop). The $in literal does include waiting_for_reply (FunnelTriggerServiceImpl:195) and FunnelStatusEnumTest pins the name, so a regression would likely surface, but no test asserts the end-state behaviorally.",
+      "recommendation": "Extend FunnelControllerIT.deleteReturns204AndCancelsActiveExecutions to also seed a waiting_for_reply execution and assert execStatus == cancelled after delete. Separately, add an IT for FunnelTriggerService.cancelActiveFor (or a ProcessTelegramUpdateJob /stop path test) that seeds a waiting_for_reply execution and asserts it is cancelled — closing the /stop branch of line 308."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "area": "URL-scheme negatives — naming completeness",
+      "issue": "tech-spec line 288 explicitly enumerates javascript:, data:, tg://, leading-whitespace, empty-host as reject cases. Tests cover javascript:, leading-whitespace, empty-host, and ftp:// (via image-url) but NOT data: and tg:// by name. All four route through the same strict-URI scheme check, so behavior is covered by equivalence, but the two named schemes have no dedicated assertion.",
+      "recommendation": "Add two cheap parameterized cases to the existing scheme-reject family: urlButton with 'data:text/html,...' and 'tg://resolve?domain=x' → 422 funnel_step_invalid. Low effort, closes the explicit enumeration in the spec."
+    }
+  ],
+  "assertionLightTests": [],
+  "flakinessRisks": [],
+  "pyramidAssessment": {
+    "unit": "Strong. FunnelStepExecutorTest (pure per-type side effects, callback_data build, reply_markup, MENU outcome/deadline — all mocked collaborators, real renderer), FunnelStepTest (copyOf deep-copy), FunnelStatusEnumTest (drift), TelegramUpdateDeserializationTest (typed DTO). Pure logic lives at the unit level as required.",
+    "integration": "Strong and correctly placed. Engine park/resume/timeout/loop/IDOR/double-click/race/paused-drain/blocked-bot/loop-resend on Testcontainers Mongo + in-memory JobRunr + MockWebServer + MutableClock. Controller validation (broken-edge, scheme, limits, round-trip) at MockMvc IT. Indexes + backfill at full-context IT. No pure logic wrongly pushed into IT.",
+    "e2e": "OVER the budget. Spec demands exactly 1 Playwright happy-path; 3 exist (one is the net-new MENU happy-path, two are redundant — Phase-1 linear path + 422-inline already covered by vitest). See major finding.",
+    "redundancy": "Only the e2e layer carries redundancy (422-inline duplicated vitest+Playwright). Backend layers show no redundant tests; each earns its place."
+  },
+  "coverageGaps": [
+    "Runtime snapshot-isolation IT (edit funnel mid-waiting_for_reply does not change in-flight execution) — only unit-level copyOf proof exists (minor).",
+    "Behavioral cancel of a waiting_for_reply execution via funnel delete and via /stop (cancelActiveFor) — only the $in literal + enum-drift test cover it indirectly (minor).",
+    "data: and tg:// URL-scheme reject cases not asserted by name (covered by equivalence through the same scheme check) (minor).",
+    "E2E exceeds the 'exactly 1 happy-path' AC by 2 tests; the 422-inline e2e duplicates vitest coverage and should be removed (major)."
+  ]
+}

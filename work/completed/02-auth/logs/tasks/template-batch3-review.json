@@ -1,0 +1,123 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14, 15],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 11,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is mandatory for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 11,
+      "section": "Context Files",
+      "issue": "architecture.md is missing from Context Files. It is mandatory for all tasks.",
+      "fix": "Add `- [architecture.md](../../.claude/skills/project-knowledge/references/architecture.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 12,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is mandatory for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 13,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is mandatory for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "consistency",
+      "task": 14,
+      "section": "Required Skills",
+      "issue": "Frontmatter declares `skills: [test-reviewing]` but Required Skills section loads `/skill:test-master`. The skill name in frontmatter and in the body must match.",
+      "fix": "Either change frontmatter to `skills: [test-master]` to match the skill loaded in Required Skills, or change the Required Skills section to load `/skill:test-reviewing`. The tech-spec lists this task skill as `test-master`, so frontmatter should be `skills: [test-master]`."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 14,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is mandatory for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 15,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is mandatory for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Details",
+      "issue": "Details section is missing the `**Dependencies:**` subsection. The template requires explicitly labeled subsections: Files, Dependencies, Edge cases, Implementation hints. The current section replaces Dependencies with `**shadcn-vue components to use:**` which is a hint, not a dependency declaration.",
+      "fix": "Add a `**Dependencies:**` subsection listing task dependencies (depends on tasks 8, 9; uses shadcn-vue components listed in task 8). The components list can remain under a renamed `**Implementation hints:**` subsection or inline."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Details",
+      "issue": "Details section does not use the template's required subsection labels: Files, Dependencies, Edge cases, Implementation hints. The section has a single 'Known risk areas to focus on' block instead.",
+      "fix": "Restructure Details into: `**Files:**` (list all backend packages and frontend dirs to read), `**Dependencies:**` (depends on tasks 1-11), `**Edge cases:**` (edge cases to pay attention to during review), `**Implementation hints:**` (move 'Known risk areas' here)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 13,
+      "section": "Details",
+      "issue": "Details section does not use the template's required subsection labels: Files, Dependencies, Edge cases, Implementation hints. The section has 'OWASP mapping' and 'Critical checks' blocks instead.",
+      "fix": "Restructure Details into: `**Files:**` (files to audit), `**Dependencies:**` (depends on tasks 1-11), `**Edge cases:**` (move 'Critical checks' here), `**Implementation hints:**` (move 'OWASP mapping' here)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 14,
+      "section": "Details",
+      "issue": "Details section does not use the template's required subsection labels: Files, Dependencies, Edge cases, Implementation hints. The section uses custom headings (assertion quality scale, Testcontainers pattern, Mailpit pattern, output file path).",
+      "fix": "Restructure Details into: `**Files:**` (test files to audit), `**Dependencies:**` (depends on tasks 1-11, Testcontainers suite), `**Edge cases:**` (timing test flakiness, singleton pattern requirement), `**Implementation hints:**` (move code snippets and patterns here)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 15,
+      "section": "Details",
+      "issue": "Details section does not use the template's required subsection labels: Files, Dependencies, Edge cases, Implementation hints. The section uses custom headings (test suite structure, brute-force edge cases, session TTL verification, etc.).",
+      "fix": "Restructure Details into: `**Files:**` (files to verify), `**Dependencies:**` (depends on tasks 12-14), `**Edge cases:**` (dummy BCrypt DUMMY_HASH malformation, auto-index-creation=false risk, per-IP test IP control), `**Implementation hints:**` (session collection field path, JobRunr trigger method, frontend manual fallback)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "TDD Anchor",
+      "issue": "Test paths use `src/test/frontend/pages/` which is not a standard Vitest/Nuxt test directory convention. Nuxt frontend tests are typically under `frontend/tests/` or `frontend/src/__tests__/`. The path should match the actual test directory structure set up in Task 8.",
+      "fix": "Confirm the test directory structure from Task 8 setup and align test paths accordingly. Example: `frontend/tests/pages/dashboard.spec.ts::dashboard_pendingUser_showsBanner`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Verification Steps",
+      "issue": "Verification Steps section has only an 'Automated' subsection with `./gradlew test`. This is technically valid for an audit task, but the audit's primary output is a JSON report — the Verification Steps should also include verifying the report was written.",
+      "fix": "Add a step: check that `work/02-auth/logs/working/task-12/code-reviewer-1.json` exists and contains findings."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 14
+  }
+}

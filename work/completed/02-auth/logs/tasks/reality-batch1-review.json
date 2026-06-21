@@ -1,0 +1,75 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 2,
+      "issue": "Task 2 references `patterns.md` as a context file at `../../.claude/skills/project-knowledge/references/patterns.md`. The file EXISTS at that path, but the current `patterns.md` contains a rule that CONTRADICTS what Task 2 must implement. The patterns.md entry 'Spring Security WebFlux' says 'CSRF must be explicitly disabled for stateless REST APIs: `.csrf(csrf -> csrf.disable())`'. Task 2 must remove this disable() call and enable CSRF. The patterns.md file will be out of sync with what Task 2 implements, and any agent reading patterns.md before implementing will receive conflicting instructions from the official project reference.",
+      "fix": "Add a step to Task 2 (or Task 9) to update patterns.md to reflect that CSRF is now ENABLED with CookieCsrfTokenRepository (not disabled), and remove the outdated 'CSRF must be explicitly disabled for stateless REST APIs' line. Alternatively, note in Task 2 that patterns.md is outdated for this section and should be ignored."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 2,
+      "issue": "Task 2 instructs SecurityConfig to 'permit `/actuator/health`' in the authorize exchange rules. The project has NO spring-boot-starter-actuator dependency in build.gradle and NO actuator configuration anywhere in the codebase. The existing health endpoint is at `/health` (a plain @RestController in HealthController.java), not at `/actuator/health`. Adding a permitAll() for `/actuator/health` is a no-op at best; at worst it misleads about the health check URL and could cause the agent to use the wrong path in smoke tests.",
+      "fix": "Replace the `/actuator/health` reference in Task 2 step 8 SecurityConfig with `/health` (the actual health endpoint path used by HealthController.java). Do not add actuator unless it is planned as a dependency."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 step 1 says 'Fix `application.properties`: bind `MONGODB_URI` → `spring.data.mongodb.uri=${MONGODB_URI}` and `REDIS_URL` → `spring.data.redis.url=${REDIS_URL}`'. The current application.properties has neither binding — confirmed by inspection. The task description says these are 'broken env var bindings that have existed since Epic 01'. They are not broken bindings — they are MISSING bindings. The distinction matters: the agent must ADD new lines, not FIX existing ones (which implies the lines exist but are wrong).",
+      "fix": "Update task description to say 'Add missing MongoDB and Redis URI bindings' instead of 'Fix broken bindings'. The implementation step itself is correct — add the properties."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 2,
+      "issue": "Task 2 states in 'SecurityConfig current state': 'permits `/actuator/health`'. Actual SecurityConfig.java permits `/health` (line 19: `.pathMatchers(\"/health\").permitAll()`), not `/actuator/health`. The task carries a false description of the current file state, which could mislead the agent into a wrong diff — e.g. removing `/actuator/health` instead of `/health`, breaking the health check.",
+      "fix": "Correct the 'SecurityConfig current state' description in Task 2 Details section: replace 'permits `/actuator/health`' with 'permits `/health`'."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 implementation hint for fire-and-forget provides a full code block with the complete implementation: `Mono.fromCallable(() -> { sendMsg(); return null; }).subscribeOn(Schedulers.boundedElastic()).subscribe(null, err -> log.error(...))`. This prescribes the exact code rather than pointing to a pattern or approach. Per validation rules, hints containing full logic blocks with complete implementation are major findings in the 'hints' category.",
+      "fix": "Rewrite the hint to reference the approach: 'Use Mono.fromCallable wrapping the blocking SMTP call, subscribed on Schedulers.boundedElastic(). Subscribe with a null success consumer and error logger so failures do not propagate.' Remove the full inline code block."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 TDD anchor suggests unit tests need `Thread.sleep()` or `CountDownLatch` to verify async fire-and-forget behavior. This is an anti-pattern in Spring/Reactor testing — `StepVerifier` and `Mono.block()` with timeout, or using an `ExecutorService` with an `await()`, are the correct reactive test patterns. `Thread.sleep()` in unit tests is fragile and timing-dependent. Also, the task's TDD test `sendVerificationEmail_callsJavaMailSenderWithCorrectRecipient` cannot reliably assert on an async operation using `Thread.sleep`.",
+      "fix": "Update the hint to suggest using Awaitility or CountDownLatch with a reasonable timeout (not Thread.sleep) for verifying the async call, or restructure the test to block on the internal Mono completion. Document this as a known test complexity for fire-and-forget patterns."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 1,
+      "issue": "Task 1 acceptance criteria includes `backend/src/test/resources/application-test.properties` (new file). The `backend/src/test/resources/` directory does not exist yet. The task correctly marks this as a new file, but does not mention creating the parent directory. Most agents will create the file and the directory automatically, but it is worth noting explicitly.",
+      "fix": "Add a note that the task must create the `backend/src/test/resources/` directory as it does not exist in the codebase."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 'Edge cases' note says: 'Index creation: `@Indexed(unique=true)` on email requires `spring.data.mongodb.auto-index-creation=true` in prod, OR manual index. Since auto-creation is false globally, document that manual index creation is needed.' However, `spring-session-data-mongodb` creates its own TTL index on `sessions.expireAt` independently (confirmed in tech-spec Decision 6 notes). The user-facing concern is correct, but the hint may confuse the agent about whether to temporarily toggle auto-index-creation. Clarification is needed: the `users` email index must be created via a `MongoConfig @PostConstruct` or Atlas UI in production — the task should reference which mechanism to use.",
+      "fix": "Add a concrete recommendation in the edge case: create a `MongoConfig` with `@PostConstruct` that uses `ReactiveMongoTemplate` to ensure the unique index on `users.email` and the status index, rather than relying on `auto-index-creation=true`."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 2,
+      "issue": "TDD anchor test `SecurityConfigTest.java::unauthenticated_protectedEndpoint_returns401` tests `/api/profile` for 401. However, the existing test `SecurityBlockTest.java` already tests `GET /api/nonexistent` for 401 and confirms the security baseline works. Task 2 does not declare a dependency on removing or merging with the existing test. The new test is not redundant (it tests the new path), but the agent should be aware that existing tests mock the three infrastructure beans (`MongoClient`, `RedisConnectionFactory`, `ReactiveRedisConnectionFactory`) — the new `SecurityConfigTest` will need the same three mocks or will fail to start.",
+      "fix": "Add a note in the TDD anchor that `SecurityConfigTest` must `@MockitoBean` the same three infrastructure beans as in the existing `SecurityBlockTest.java` and `HealthSecurityTest.java` to prevent Spring context startup failure."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 9
+  }
+}

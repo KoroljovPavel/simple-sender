@@ -1,0 +1,54 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 requires 409 responses with `code: \"project_name_taken\"` (AC-5, AC-12b), but the existing `AppException.conflict(String message)` factory sets `code = null` always. Task 1 does NOT add a 2-arg `conflict(String code, String message)` factory — only `notFound(String)` and `unprocessableEntity(String, String)` are added. Task 3 never mentions using the raw constructor `new AppException(HttpStatus.CONFLICT, \"project_name_taken\", message)` which is the only way to emit a coded 409 with the existing + Task-1-extended API surface. An implementer following the task literally will write `AppException.conflict(\"...\")` and produce `code: null` in the 409 body, failing AC-5 and AC-12b assertions.",
+      "fix": "Either (a) add a `conflict(String code, String message)` factory in Task 1 alongside `notFound` and `unprocessableEntity`, or (b) add an explicit instruction in Task 3 to use `new AppException(HttpStatus.CONFLICT, \"project_name_taken\", \"Project name already in use\")` directly. Option (a) is cleaner and consistent with the factory pattern."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 implementation hint says `@CompoundIndexes({ @CompoundIndex(...), @CompoundIndex(...) })` is needed to express two compound indexes. While this is valid Spring Data MongoDB API, the `@CompoundIndexes` container annotation is not used anywhere in the current codebase (only `@CompoundIndex` singular on `Event.java`). The hint is correct but creates a first use of `@CompoundIndexes` without calling it out. Minor risk of implementer using `@CompoundIndex` twice directly on the class and getting 'duplicate annotation' error without understanding why.",
+      "fix": "Add a note in the hint clarifying that `@CompoundIndexes` is the container/repeatable form: 'Since Java does not allow two `@CompoundIndex` annotations directly on a class without the container, use `@CompoundIndexes({...})` wrapper — this is the first use in this codebase.'"
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 states the production-index note comment should mirror `User.java:10-11` and `Event.java:10-11` which say 'manual index creation in production when `spring.data.mongodb.auto-index-creation=false`'. However, `application.properties` currently has `spring.data.mongodb.auto-index-creation=true`. The existing comments in `User.java` and `Event.java` are already inconsistent with the actual setting. Mirroring them perpetuates the inconsistency.",
+      "fix": "Acceptable to mirror the existing comment verbatim for style consistency. No code change needed; document the discrepancy in decisions.md."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 2,
+      "issue": "Task 2 says `useApi.ts` uses both `import.meta.server` and `import.meta.client`. Checking the actual file: `useApi.ts` uses only `import.meta.server` (lines 5, 33, 36) — there is no `import.meta.client` in it. The claim is technically wrong. The `import.meta.client` idiom IS valid Nuxt 4 (e.g., used in `plugins/vue-query.ts:20`) and is the right approach for `stores/projects.ts`, but the hint that `useApi.ts` already uses it to validate the pattern is inaccurate.",
+      "fix": "Update the hint to reference `plugins/vue-query.ts` as the precedent for `import.meta.client` usage rather than `useApi.ts`."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 2,
+      "issue": "Task 2 instructs creating `frontend/tests/i18n/required-keys.spec.ts`. The `frontend/tests/i18n/` directory does not exist. The task does not explicitly instruct the implementer to create the directory. While most test runners and `fs` operations create parent directories automatically, this could cause confusion if the implementer forgets.",
+      "fix": "Add a note: 'Create the `frontend/tests/i18n/` directory if it does not exist (it is new for this task).'"
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 says `ProjectControllerSliceTest` needs three connection factory mocks (`MongoClient`, `RedisConnectionFactory`, `ReactiveRedisConnectionFactory`) citing patterns.md. However, the existing `AuthControllerSliceTest` (`@WebFluxTest`) does NOT mock these three factories and still compiles and passes — it only mocks `AuthService`. This means either: (a) the patterns.md note is overly conservative and these mocks are not always required for `@WebFluxTest`, or (b) `AuthControllerSliceTest` was written before this requirement solidified. Implementer might add mocks unnecessarily or be confused about when they are required.",
+      "fix": "Verify at implementation time whether the three connection factory mocks are actually needed for `@WebFluxTest(ProjectController.class)` by running the test without them first. The task instruction is safe (adding the mocks won't break anything) but may be unnecessary."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 6
+  }
+}

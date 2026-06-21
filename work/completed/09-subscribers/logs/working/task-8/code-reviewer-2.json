@@ -1,0 +1,46 @@
+{
+  "verdict": "approved",
+  "summary": "Round-2 re-review of Task 8 (09-subscribers) after commit 71cfece. All four round-1 minor findings are resolved exactly as described and verified in context against backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java and its collaborators. No regressions or new issues were introduced; the changes are scoped, the modified main + test sources compile cleanly (./gradlew compileTestJava — no errors), and the diff additionally strengthens the IT suite (multi-token search, full keyset-pagination continuity, isolated NoSQL operator-injection cursor case, hostile mass-assignment side-effect assertions, and a new SubscriberTagAssignmentIT covering the tag endpoints plus the 10x concurrent-attach counter==1 invariant). Status upgraded from approved_with_suggestions to approved.",
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 0,
+    "testCoverageAssessment": "excellent"
+  },
+  "findings": [],
+  "round1Resolution": [
+    {
+      "round1Finding": "events() query scoped only by subscriberId (defense-in-depth gap)",
+      "status": "resolved",
+      "evidence": "SubscriberController.java:186 — Criteria.where(\"subscriberId\").is(id).and(\"projectId\").is(project.getId()). SubscriberEvent carries a projectId field (SubscriberEvent.java:26) so the predicate is satisfiable. The (subscriberId, createdAt desc) compound index (subscriber_recent) still serves the feed: Mongo uses it for the subscriberId equality + createdAt sort and applies projectId as a residual equality filter over the already-small, limit-bounded candidate set — correct and non-degrading. Inline comment at :184-185 documents the self-defending rationale."
+    },
+    {
+      "round1Finding": "events() limit coerced non-positive input to 1 instead of the documented default 50",
+      "status": "resolved",
+      "evidence": "SubscriberController.java:183 — limit <= 0 ? DEFAULT_EVENTS_LIMIT : Math.min(limit, MAX_EVENTS_LIMIT), with DEFAULT_EVENTS_LIMIT=50 and MAX_EVENTS_LIMIT=200 (lines 87-88). Now symmetric with SegmentFilterBuilder.clampLimit (SegmentFilterBuilder.java:101-106, DEFAULT_LIMIT=50 / MAX_LIMIT=200). Comment at :182 states the intent."
+    },
+    {
+      "round1Finding": "Short-search guard overlap with @Size(min=2) not explained",
+      "status": "resolved",
+      "evidence": "SubscriberController.java:140-143 — comment now states the handler guard counts TRIMMED length while the DTO @Size(min=2) counts raw length, that the two layers overlap but are not redundant (it also rejects \"  a  \" which @Size accepts), and that bean-validation fires first with this as the deterministic fallback. References SegmentFilterBuilder.MIN_SEARCH_CHARS (=2, SegmentFilterBuilder.java:30); SegmentFilterBuilder.build() applies the same trimmed guard before adding TextCriteria (line 90)."
+    },
+    {
+      "round1Finding": "StringRedisTemplate referenced via fully-qualified name instead of an import",
+      "status": "resolved",
+      "evidence": "import org.springframework.data.redis.core.StringRedisTemplate; added at SubscriberController.java:30; the short name is used in the field (:98) and constructor parameter (:112). No remaining inline FQN."
+    },
+    {
+      "round1Finding": "AC5 personal-message mapping deviation (recorded positive note, no change required)",
+      "status": "unchanged-by-design",
+      "evidence": "handleSendFailure mapping at SubscriberController.java:260-286 is unchanged: errorCode==null → 503 telegram_rate_limited; concrete 4xx → re-throw → 400 telegram_send_failed. Matches the frozen Task-6 TelegramSender behaviour and remains covered by SubscriberPersonalMessageIT. No action was needed and none was taken — correct."
+    }
+  ],
+  "regressionChecks": [
+    "Cross-file signatures used by the new SubscriberTagAssignmentIT all resolve: ConcurrencyTestUtils.parallelInvoke(int, Callable<T>) (ConcurrencyTestUtils.java:22), TagRepository.findByProjectIdAndSlug(String,String) (TagRepository.java:16), SubscriberRepository.findByProjectIdAndTelegramUserId(String,Long) (SubscriberRepository.java:14), WithMockAppUser present (profile/WithMockAppUser.java), SubscriberEventRepository.findAll() (MongoRepository).",
+    "./gradlew compileTestJava completed with no errors — modified main source + all modified/added test sources compile.",
+    "events() response shape unchanged (SubscriberEventResponse(id, eventType, metadata, createdAt)); only the query Criteria and limit-clamping logic changed.",
+    "No new dependencies, no new heavy-resource instantiations, no error-handling or logging regressions; the Redis fail-open WARN constant and event-ownership (Decision 10) invariants are untouched.",
+    "Test changes are additive/strengthening: multi-token search (firstName/lastName/username), full-set keyset pagination continuity + reverse-order assertion, isolated $-operator cursor injection case, hostile mass-assignment now asserts zero side effects (request count delta, single event, status stays ACTIVE)."
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "All three round-1 findings are correctly addressed in commit 8a7b369. The hard-coded SHA-256/UTF-8 hex vectors for `test-webhook-secret-deadbeef` (95d0a775...) and `кіт` (01c405a4...) were independently re-verified with Python hashlib and match byte-for-byte — they are true external parity vectors, not self-reimplementations. A constant-return stub of Sha256Hex.hex would now fail both parity tests. The new verify_anyOutcome_neverLogsHeaderOrStoredHash test attaches a Logback ListAppender to the ROOT logger at TRACE level via @BeforeEach, exercises all six branches (match / mismatch / empty / null header / null stored / malformed hex) with sentinel plaintexts, and asserts no captured log event contains the operands. The @AfterEach detaches the appender. MockedStatic verify now carries explicit times(1) — clearer about cardinality. Tests pass under ./gradlew test --rerun-tasks. One low-severity observation below about root-logger level restoration; not blocking.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/webhook/WebhookSecretVerifierTest.java:36-51",
+      "issue": "@BeforeEach attachRootLogAppender mutates the ROOT logger level to TRACE but @AfterEach only detaches the appender — the level change is not restored. Logback's root level is a JVM-global mutable, so subsequent tests in the same Gradle test JVM (parallel forks aside) inherit TRACE level until another test class overrides it. Today there is no observable failure because Sha256HexTest and the rest of this class do not assert on log output, but it leaks state across the test class boundary.",
+      "recommendation": "Capture the original level in @BeforeEach (`Level original = rootLogger.getLevel();`) and restore it in @AfterEach (`rootLogger.setLevel(original);`). Two extra lines, eliminates the leak, no behavior change for the no-logging assertion."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 13,
+      "passed": 13,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 13,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

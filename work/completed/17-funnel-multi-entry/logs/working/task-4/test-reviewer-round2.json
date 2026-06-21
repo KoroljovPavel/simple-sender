@@ -1,0 +1,69 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "4",
+  "feature": "17-funnel-multi-entry",
+  "round": 2,
+  "commit": "df1ddbf",
+  "status": "APPROVED",
+  "summary": "All three round-1 findings are resolved. F-1 (HIGH): `invalidTriggerValueWithSpaceReturns422` now sends the bad value inside a proper triggers array element — `List.of(onStartTriggerMap(\"has space\"))` — and still asserts `status().isUnprocessableEntity()` + `$.code == \"funnel_invalid_trigger_value\"`. The test is no longer a false green. F-2 (MEDIUM): `patch_multipleOnStartReturns422` has been added to FunnelControllerIT in the Phase 8 section. It PATCHes with two on_start elements (`onStartTriggerMap(\"\")` and `onStartTriggerMap(\"x\")`) and asserts 422 + `FunnelService.CODE_MULTIPLE_ON_START`, exercising the intra-funnel guard at the HTTP stack level exactly as requested. F-3 (LOW): `exceedingMaxStepsReturns422` has had its stale `\"triggerValue\", \"\"` flat field replaced by `\"triggers\", List.of(onStartTriggerMap(\"\"))`. No assertions were weakened anywhere in the diff. Additionally, the boundary test `triggers_arraySizeCapBoundaryAccepted` (exactly 50 triggers accepted) was added to FunnelServiceTriggerTypeTest with a correct persistence assertion. No new issues found.",
+  "round1_findings_resolution": [
+    {
+      "id": "F-1",
+      "severity": "HIGH",
+      "original": "invalidTriggerValueWithSpaceReturns422 sent flat `\"triggerValue\", \"has space\"` which was silently ignored, making the test a false green (200 returned, 422 expected).",
+      "resolution": "FIXED — body now uses `\"triggers\", List.of(onStartTriggerMap(\"has space\"))` (lines 1372-1374 of FunnelControllerIT.java). `onStartTriggerMap` sets `triggerType=on_start` and `triggerValue=has space` inside the triggers array. The on_start value `\"has space\"` is rejected by `normalizeOnStartValue` → 422 + `funnel_invalid_trigger_value`. Both assertions (`isUnprocessableEntity()` + `$.code == \"funnel_invalid_trigger_value\"`) are unchanged and now test real behavior.",
+      "verified": true
+    },
+    {
+      "id": "F-2",
+      "severity": "MEDIUM",
+      "original": "No HTTP-level test in FunnelControllerIT for intra-funnel 'at most one on_start' (CODE_MULTIPLE_ON_START). Only covered at service level in FunnelServiceTriggerTypeTest.",
+      "resolution": "FIXED — `patch_multipleOnStartReturns422` added at lines 1267-1283 of FunnelControllerIT.java, placed correctly in the Phase 8 section. Test seeds a draft funnel, PATCHes with `triggers = [onStartTriggerMap(\"\"), onStartTriggerMap(\"x\")]`, asserts `status().isUnprocessableEntity()` and `$.code == FunnelService.CODE_MULTIPLE_ON_START`. Uses `put()` (not `mockMvc.perform(put...)` with a stray method), has `@WithMockAppUser` and `csrf()`. Structurally mirrors `patch_duplicateEventNameReturns422` as requested.",
+      "verified": true
+    },
+    {
+      "id": "F-3",
+      "severity": "LOW",
+      "original": "`exceedingMaxStepsReturns422` still carried stale flat `\"triggerValue\", \"\"` field.",
+      "resolution": "FIXED — replaced with `\"triggers\", List.of(onStartTriggerMap(\"\"))` (line 1392 of FunnelControllerIT.java). Test correctness is unchanged; stale field is gone.",
+      "verified": true
+    }
+  ],
+  "additional_checks": {
+    "no_assertions_weakened": {
+      "verdict": "PASS",
+      "notes": "Reviewed the full diff. Every migrated request body change is purely a field rename from `triggerValue` (flat, silently ignored) to `triggers` (array, active). Status assertions and `$.code` assertions on all affected tests are identical to round 1. No assertion was removed, relaxed, or replaced with a looser matcher."
+    },
+    "boundary_test": {
+      "verdict": "PRESENT",
+      "test": "triggers_arraySizeCapBoundaryAccepted in FunnelServiceTriggerTypeTest",
+      "description": "Exercises exactly MAX_TRIGGERS=50 (1 on_start + 49 distinct events). Asserts `doesNotThrowAnyException()` and `funnelRepository.findById(id).orElseThrow().getTriggers()).hasSize(50)` — a persistence assertion, not just a no-exception guard. The cap-exceeded test (`triggers_arraySizeCapRejected`) uses 51 elements (1+50) and was already present in round 1."
+    },
+    "legacy_bodies_migrated": {
+      "verdict": "PASS",
+      "notes": "The diff migrates 25+ request bodies from flat `triggerValue` to `triggers` array. Spot-checked: `updateRewritesStepOrderByIndex` (line 128), `keyboardStepsRoundTripThroughUpdateAndGet` (line 160), `invalidKeyboardStepReturns422` (line 202), `emptyTextInTextBlockReturns422` (line 1358), `exceedingMaxStepsReturns422` (line 1392), and all album/media tests. All use `List.of(onStartTriggerMap(\"\"))` which correctly goes through the triggers validation path."
+    },
+    "helper_correctness": {
+      "verdict": "PASS",
+      "notes": "`onStartTriggerMap(String value)` (lines 2123-2128) produces `{triggerType: on_start, triggerValue: <value>}` inside a Map — correctly structured so the DTO deserializer picks up `triggerType` and `triggerValue` inside the triggers array element. `eventTriggerMap(String value, String entryStepId)` (lines 2130-2138) conditionally includes `entryStepId` only when non-null. Both helpers are used consistently throughout the file."
+    }
+  },
+  "tdd_anchor_coverage_delta": {
+    "added_since_round1": [
+      {
+        "anchor": "triggers_arraySizeCapBoundaryAccepted",
+        "file": "FunnelServiceTriggerTypeTest",
+        "assertion_quality": "GOOD — asserts accepted (no exception) and DB persistence of exactly 50 triggers"
+      },
+      {
+        "anchor": "patch_multipleOnStartReturns422",
+        "file": "FunnelControllerIT",
+        "assertion_quality": "GOOD — HTTP-level 422 + CODE_MULTIPLE_ON_START, intra-funnel, distinct from cross-funnel conflict"
+      }
+    ]
+  },
+  "deferred_known": {
+    "run_deferred": "Test run deferred to Task 11 (module compiles after Task 5). Not a finding."
+  },
+  "findings": []
+}

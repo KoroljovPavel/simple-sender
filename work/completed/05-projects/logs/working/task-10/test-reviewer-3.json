@@ -1,0 +1,56 @@
+{
+  "status": "passed",
+  "summary": "Round-3 fix (commit 032f846) closes round-2 major #2 cleanly. The hydration probe now reads `__vue_app__` directly, which Vue 3.5.33 assigns to the mount-host element on line 4251 (runtime-core.esm-bundler.js, dev) AND line 4243 (runtime-core.cjs.prod.js, prod) — unconditionally in both modes, synchronously after `render()` returns inside `app.mount()`. Verified in this project's resolved deps (@vue+runtime-core@3.5.33 via pnpm). The deferred QA-28 production-build path (`pnpm build && pnpm preview` + `pnpm exec playwright test e2e/projects.spec.ts`) will no longer hang on this probe — the marker is observable in the bundled prod build the same way it is in dev. Round-2 major #1 (Suspense vs root-mount): re-confirmed that /auth/register.vue has fully synchronous `<script setup>` (the only `await` keywords are inside the `onSubmit` handler, not at top level), so the narrow practical risk holds — the Nuxt outer Suspense resolves synchronously with the inner page tree for this specific page, and the root-mount probe is a sufficient gate in practice. Round-2 major #3 (Vue-private API): the round-3 fix narrows the surface from two private fields (`__vue_app__._instance.isMounted`) to one (`__vue_app__`). `__vue_app__` is still internal but is the same single property Vue sets via `app.mount()` in both modes and has been stable across 3.x — the assignment line is byte-identical in dev and prod bundles. Acceptable trade-off given the alternatives (5-line client plugin per round-2 recommendation, or behavior-driven gate) are out-of-scope for a hotfix on a single spec. Round-2 minor findings (#1-5: dashboard-welcome positive assertion, Escape-keypress coupling, single-test-block / no test.step, URL regex over-permissiveness, subsequent-form hydration documentation) are all unchanged by the round-3 diff — neither improved nor regressed, and none rise to a re-block. Comment block is now even more informative (explicitly names both the dev `pnpm dev` and the deferred `pnpm preview` paths it covers, references the prior fix-commit e10067d for context). No critical or major findings remain. Approving.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:44-47",
+      "issue": "Inherited from round 1/2: `__vue_app__` is still a Vue-internal property and not part of any documented public testing surface. Round-3 narrows the risk to a single property (vs two in round 2) and verifies it survives the dev/prod split, but a Nuxt 4-major or Vue 3.6+ upgrade could in principle rename or hide it. Probability is much lower than for `_instance`, but the test-master 'test behavior, not implementation' principle is still partially compromised. Not a blocker — the behavior-driven alternative (fill invalid email → expect validation error → refill) is a strictly better long-term gate but is a feature-level refactor, not a hotfix.",
+      "recommendation": "No change required for this round. When the next e2e spec needs hydration gating (or when an async plugin/middleware lands and widens the Suspense race window), revisit and either (a) ship a 5-line client plugin that sets `document.documentElement.dataset.nuxtReady = 'true'` on `app:suspense:resolve` and gate on `await expect(page.locator('html')).toHaveAttribute('data-nuxt-ready', 'true')`, or (b) use a behavior-driven gate (`page.locator('#email').fill('not-an-email'); await page.locator('button[type=\"submit\"]').click(); await expect(page.locator('[data-test=\"email-error\"]')).toBeVisible(); await page.locator('#email').fill(email);`). Record this trade-off in `work/05-projects/decisions.md` for the Task 10 entry so the next maintainer has the context."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:17",
+      "issue": "Inherited from round 1/2 (untouched by round-3 diff): the entire ~135-line golden-path lives inside a single `test()` block with no `test.step()` wrappers. With the hydration probe now actively gating, a CI timeout on `waitForFunction` (e.g. if `__vue_app__` is renamed in a future Vue major and the probe starts returning undefined) will surface as 'waitForFunction timeout' without logical-step attribution. test.step adds zero behavioral cost and is the standard Playwright pattern.",
+      "recommendation": "Optional follow-up (not blocking): wrap each of the 11 commented `// Step N:` sections in `await test.step('register fresh user', async () => { ... })`. Same recommendation as rounds 1 and 2. Can be batched with other minor nits in a single cleanup commit; not necessary to block merge."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:54,67,75,84,87,102,130",
+      "issue": "Inherited from round 1/2 (untouched by round-3 diff): URL regexes `/\\/dashboard(?:\\?.*)?$/` and similar match `/dashboard` and `/en/dashboard` (locale-tolerant) but also `/api/billing/dashboard` or any path ending in `/dashboard` (over-permissive). In practice the spec stays correct because the SPA does not navigate to such paths in this flow, but the regex is looser than the contract.",
+      "recommendation": "Optional tightening: `/^\\/(?:en\\/)?dashboard(?:\\/?\\?.*)?$/` and apply the same shape to /projects, /projects/new, /projects/[id]/settings. Not blocking — can be batched with the test.step refactor above."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:142",
+      "issue": "Inherited from round 1/2 (untouched by round-3 diff): manual `page.keyboard.press('Escape')` to close the dropdown couples the test to the ProjectSelector's keyboard-handling implementation. A future refactor to Headless UI Menu (or click-outside-only close) would break this line without a user-visible behavior change.",
+      "recommendation": "Optional: try removing the line — Playwright's auto-scroll + retry on the subsequent restore-button click may already work. If not, click an outside locator: `await page.locator('[data-test=\"recently-deleted-section\"]').click({ position: { x: 5, y: 5 } });`. Not blocking."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/e2e/projects.spec.ts:74-77",
+      "issue": "Inherited from round 1/2 (untouched by round-3 diff): the post-create dashboard assertion is `await expect(emptyState).toBeHidden()` (negative) and `await expect(selectorTrigger).toContainText(project1Name)` (positive on topbar). There is no positive assertion on welcome content (`data-test=\"dashboard-welcome\"`). The negative assertion alone is acceptable but does not catch a regression that hides empty-state without rendering welcome (e.g. a stuck loading spinner).",
+      "recommendation": "Optional follow-up: either (a) add `data-test=\"dashboard-welcome\"` to the welcome block in `pages/dashboard.vue` (Wave 3 fix, outside Task 10 scope) and assert visibility here, or (b) record in `work/05-projects/decisions.md` that the negative `dashboard-empty-state` hidden assertion is the chosen golden-path proxy for AC-19 and the positive welcome assertion is intentionally not in MVP. Not blocking."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 7,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

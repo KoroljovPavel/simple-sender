@@ -1,0 +1,57 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-card-preview",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F-01",
+      "severity": "minor",
+      "category": "dead-i18n-key",
+      "file": "frontend/i18n/locales/en.json",
+      "line": 765,
+      "description": "The key `funnels.canvas.preview.imageUnavailable` is defined in both locale files and validated by `required-keys.spec.ts`, but is never called via `t()` in `FunnelCanvasNode.vue`. The component uses only `funnels.canvas.preview.mediaType.*` and `funnels.canvas.preview.urlButton`. The key is dead code: it inflates the i18n bundle and the parity gate without serving any runtime purpose.",
+      "impact": "No functional impact. The required-keys gate guards it against the wrong locale, so there is no risk of a missing-translation fallback. Pure maintenance noise.",
+      "recommendation": "Either remove `imageUnavailable` from both locale files and from the `REQUIRED_KEYS` list in `required-keys.spec.ts`, or wire it up in the component (e.g. as the `<img alt>` text for IMAGE blocks when the thumb is available). The simplest fix is removal."
+    },
+    {
+      "id": "F-02",
+      "severity": "minor",
+      "category": "latent-orphaned-edge-risk",
+      "file": "frontend/composables/useFunnelCanvas.ts",
+      "line": 248,
+      "description": "`buildEdges` emits a `timeout` edge for ANY step type whose `timeoutTargetStepId` is non-null/non-empty, with no `stepType === 'MESSAGE'` guard. `hasTimeoutHandle` in `FunnelCanvasNode.vue` (line 82-84) DOES guard on `isMessageStep`, so a non-MESSAGE step with `timeoutTargetStepId` set would produce a drawn edge with no visible source handle — a dangling edge. The `FunnelStep` type comment (line 180-181 of funnel.ts) states `timeoutTargetStepId` is a MESSAGE-only field, and the server never produces this combination, so there is no current observable failure. The invariant is maintained by a domain constraint not enforced in TypeScript or in `buildEdges`, making it latent.",
+      "impact": "Not reachable in practice: the server-side `FunnelService.validateSteps` rejects `timeoutTargetStepId` on non-MESSAGE types. Only a corrupted or manually crafted `FunnelResponse` could trigger this. However, the two places disagree in their gating, which could mislead a future maintainer who adds or relaxes the server-side check.",
+      "recommendation": "Add a `step.stepType === 'MESSAGE'` guard to the timeout branch in `buildEdges` (after the `if (step.timeoutTargetStepId ...)` condition). This would make the two layers symmetric and self-documenting. Alternatively, add a TypeScript discriminated union or a runtime assertion in `buildEdges` for the timeout path. No change is strictly required for correctness given current server behaviour."
+    }
+  ],
+  "orphaned_edge_assessment": {
+    "verdict": "SAFE — no orphaned edge is possible for valid server data",
+    "reasoning": [
+      "buildEdges emits e:next only when step.next is non-null and non-empty. hasNextHandle = !hasCallbackButtons || step.next != null. Since buildEdges requires step.next != null to emit the edge, and hasNextHandle is true whenever step.next != null (keep-if-set), every drawn next edge has a visible source handle.",
+      "buildEdges emits e:button:sid:i only for callback buttons with non-null targetStepId. The node's callbackButtons computed uses the identical filter (type === 'callback') with the same array order, so btn:i indices are perfectly aligned and every drawn button edge has a visible handle.",
+      "buildEdges emits e:timeout only for non-null/non-empty timeoutTargetStepId. hasTimeoutHandle = isMessageStep && (hasCallbackButtons || timeoutTargetStepId != null). For a MESSAGE step with timeoutTargetStepId set (the only case buildEdges emits the edge), hasCallbackButtons may be false, but the timeoutTargetStepId != null clause keeps the handle visible. This is the keep-if-set safety mechanism, and it works correctly.",
+      "The only theoretical gap (F-02) is a non-MESSAGE step with timeoutTargetStepId set, which is impossible from the server and blocked by server-side validation."
+    ]
+  },
+  "btn_index_assessment": {
+    "verdict": "CORRECT — indices match exactly",
+    "reasoning": "Both useFunnelCanvas.callbackButtons (line 116-118) and FunnelCanvasNode.callbackButtons computed (line 66-68) filter step.buttons with the identical predicate b.type === 'callback' in declaration order. URL buttons are excluded from both. The computed array index in the node component forEach (i) maps to the same position as btnIndex in buildEdges forEach, ensuring btn:0/btn:1/... always refers to the same button object. URL buttons appearing between callback buttons do not shift indices because both sides apply the same filter before indexing."
+  },
+  "other_checks": {
+    "handle_ids_unchanged": "CONFIRMED — next/btn:i/timeout/entry IDs are identical to pre-change. The outputs[] array still uses the same id values; only the visibility conditions changed.",
+    "connect_logic_unchanged": "CONFIRMED — resolveEdgeRef, connectEdge, and the saved-node-only gate are untouched. diff shows zero changes to useFunnelCanvas.ts.",
+    "whole_card_input_unchanged": "CONFIRMED — the card-target Handle markup, pointer-events:none logic, and droppable affordance are identical.",
+    "monochrome_unchanged": "CONFIRMED — funnel-handle--output class still applied; no new per-kind color classes added.",
+    "no_jitter_hover_unchanged": "CONFIRMED — CSS hover rule still uses transform: scale() + box-shadow only, no geometry changes.",
+    "arrows": "CONFIRMED — MarkerType imported from @vue-flow/core; :default-edge-options set with markerEnd: { type: MarkerType.ArrowClosed } on the VueFlow component.",
+    "media_src_safety": "CONFIRMED — previewThumbUrl computes null for any non-http(s) URL (regex /^https?:\\/\\//i); the img element only appears in the template when previewThumbUrl is truthy; no :src binding for file_id tokens, javascript: URIs, or data: URIs. Scheme guard mirrors FunnelMessagePreview.",
+    "ssr_safety": "CONFIRMED — the preview section uses only props.step (passed as a prop, available on SSR) and t() for i18n. No window/document access, no client-only imports.",
+    "xss_safety": "CONFIRMED — all user content (previewText, previewCaption, button labels) rendered via {{ }} (escaped). No v-html anywhere in the diff.",
+    "non_message_regression": "CONFIRMED — non-MESSAGE steps: hasCallbackButtons is always false (no buttons property set), so hasNextHandle is always true (correct); hasTimeoutHandle requires isMessageStep which is false, so no timeout handle shown (correct); previewText/previewMediaBlock/urlButtons all return null for non-MESSAGE, so the preview section is not rendered.",
+    "i18n_parity": "CONFIRMED — en.json and uk.json both have identical key sets under funnels.canvas.preview: urlButton, imageUnavailable (see F-01 for dead-key note), mediaType.IMAGE/VIDEO/AUDIO/FILE/ALBUM.",
+    "required_keys_coverage": "CONFIRMED — all 7 new keys added to required-keys.spec.ts. The imageUnavailable key is covered (see F-01).",
+    "broken_edge_messaging_unchanged": "CONFIRMED — detectBrokenEdges, BrokenEdge interface, and brokenEdgesLabel/brokenEdge i18n keys untouched."
+  },
+  "summary": "The change is safe. The core invariant — it is impossible for buildEdges/detectBrokenEdges to emit an edge whose source handle is hidden — holds for all server-produced data. The handle visibility logic correctly implements keep-if-set safety for both next and timeout handles, and btn:i indices are identical between the mapping layer and the node component. Two minor findings: (1) the imageUnavailable i18n key is dead (defined and gated but never called by t()); (2) buildEdges has no stepType guard on the timeout branch while the node component does, creating a latent mismatch that is currently unreachable from valid server data. Neither is a blocker."
+}

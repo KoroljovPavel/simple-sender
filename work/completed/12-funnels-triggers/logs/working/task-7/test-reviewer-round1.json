@@ -1,0 +1,38 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 7,
+  "round": 1,
+  "commit": "342a994",
+  "verdict": "approve",
+  "summary": "All 18 TDD-anchor tests are present and meaningful, plus a bonus redisDown-fail-open IT. Pyramid balance is correct: ApiKeyAuthFilterTest is a true unit test (no Spring context), EventsControllerIT/ChainIsolationIT/IntegrationsCorsIT are real integration tests on embedded Mongo/Redis with only FunnelEventService mocked (1 mock — within the 3-mock limit). Assertions check real status/body/DB state, not just mock invocation. No critical/major issues.",
+  "findings": [
+    {
+      "id": "TEST-1",
+      "severity": "minor",
+      "category": "Layering / near-duplicate",
+      "file": "api/EventsControllerIT.java",
+      "test": "events_validKey_knownUser_listener_returns202 / events_validKey_knownUser_noListener_returns202",
+      "finding": "Both tests mock FunnelEventService, so at the controller layer they are near-identical (both assert 202 + dispatch invoked). The listener-vs-no-op distinction (execution created vs none) cannot be asserted here because the dispatcher is mocked; that distinction is covered by the real FunnelEventServiceIT.",
+      "action": "keep",
+      "reason": "Correct layering per the task (the IT comment delegates the wiring to FunnelEventServiceIT). Both tests document the response matrix intent at the controller boundary and cost nothing. The execution-creation/no-op behavior is genuinely covered one layer down."
+    },
+    {
+      "id": "TEST-2",
+      "severity": "minor",
+      "category": "Coverage completeness",
+      "file": "api/EventsControllerIT.java",
+      "finding": "Added events_redisDown_failsOpen_returns202 beyond the anchor list — asserts the rate-limiter fails open (Redis INCR throws -> 202, dispatch still invoked), closing the AC 'rate-limit is fail-open'. unknownSubscriber + crossProjectSubscriberId both also assert verifyNoInteractions(dispatcher) and subscriber count unchanged (no auto-create).",
+      "action": "noted",
+      "reason": "Strengthens the fail-open + no-auto-create ACs."
+    },
+    {
+      "id": "TEST-3",
+      "severity": "minor",
+      "category": "Assertion quality",
+      "file": "api/ApiKeyAuthFilterTest.java, api/EventsControllerIT.java",
+      "finding": "Uniform-401 is asserted both at the unit level (filter maps null/blank/malformed/unknown to 401, empty body, no context, chain never advanced, no stamp) and at the IT level (byte-identical status+body across the three causes). stampLastUsedAt verified via real DB read (null before -> non-null after).",
+      "action": "noted",
+      "reason": "Real-behavior assertions; the security invariants are double-covered at the right layers without wasteful duplication."
+    }
+  ]
+}

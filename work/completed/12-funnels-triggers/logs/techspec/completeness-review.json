@@ -1,0 +1,134 @@
+{
+  "validator": "completeness",
+  "meta": {
+    "feature": "12-funnels-triggers",
+    "size": "L",
+    "user_spec_status": "approved",
+    "tech_spec_status": "draft",
+    "reviewed_at": "2026-06-07"
+  },
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": true
+  },
+  "requirements_total": 21,
+  "requirements_covered": 18,
+  "requirements_partial": 2,
+  "requirements_missing": 1,
+  "findings": [
+    {
+      "id": "F-01",
+      "type": "gap",
+      "severity": "high",
+      "requirement": "US-AC-13 / Scenario 7: error-isolation (webhook) — dispatch exception must not fail the JobRunr job or return 5xx",
+      "detail": "The user-spec acceptance criterion explicitly requires that if trigger dispatch throws during webhook processing, ProcessTelegramUpdateJob still returns 200 OK and the JobRunr job does not fail (WARN log with greppable marker). The tech-spec Architecture and How-it-works sections describe FunnelEventService as 'error-isolated', but this is stated only once in a parenthetical in Task 4's description ('Error-isolated, greppable WARN'). No Decision captures this requirement; no IT is listed that proves the webhook worker survives a dispatch exception. The existing code-research confirms FunnelTriggerServiceImpl uses try/catch(Throwable) — the tech-spec must require the same wrapper in the keyword path of ProcessTelegramUpdateJob and confirm it is tested.",
+      "recommendation": "Add an explicit statement in the Architecture section (under 'ProcessTelegramUpdateJob') that keyword dispatch is wrapped in try/catch with WARN logging and does not propagate. Add an IT asserting: when FunnelEventService throws inside the webhook plain-text branch, the update is still processed successfully (no exception to JobRunr). Cross-reference Decision 6 or add a new decision."
+    },
+    {
+      "id": "F-02",
+      "type": "gap",
+      "severity": "high",
+      "requirement": "US-AC-14 / Scenario 4: error-isolation (API) — engine exception inside POST /api/integrations/v1/events must return 202, not 5xx",
+      "detail": "The user-spec acceptance criterion states: 'якщо engine кидає виняток усередині, POST /api/integrations/v1/events усе одно повертає 202 (подію прийнято), без 5xx.' The tech-spec Architecture section mentions the endpoint 'never returns 5xx (engine faults are swallowed → 202)' in one line under 'External event', and Task 8 says 'never 5xx'. However no IT scenario specifically covers the engine-throws-202-still case, and the Acceptance Criteria table only lists the normal response code matrix (202/404/401/429). The error-isolation guarantee is load-bearing; it needs an explicit IT.",
+      "recommendation": "Add to Integration tests: 'EventsController — when FunnelEventService.dispatchForSubscriber throws, POST /api/integrations/v1/events returns 202 (not 5xx)'. Add to tech-spec Acceptance Criteria checklist."
+    },
+    {
+      "id": "F-03",
+      "type": "partial",
+      "severity": "high",
+      "requirement": "US-Scenario 3 / US-AC-4: tag_added idempotency — no-op tag add must NOT fire the trigger",
+      "detail": "The Architecture section correctly states the hook fires 'after the idempotency guard and writeSubscriberEvent call'. Decision 5 references this. However, the depth-origin propagation for the tag/field path is deferred with a critical ambiguity: Decision 6 states 'Origin depth reaches addTag/recordCustomFieldsSet via an ambient per-tick enroll context set by the execution engine (implementation — ThreadLocal or explicit param — left to task-decomposition).' This means the mechanism for passing depth into the sole writers is not decided in the tech-spec, only that it will be decided later. For an L feature with a critical cascade-safety requirement, leaving the core propagation mechanism unresolved creates implementation risk: if ThreadLocal is chosen incorrectly (e.g., not cleared between ticks), auto-enroll depth will be wrong, breaking the depth-cap backstop silently.",
+      "recommendation": "Decide ThreadLocal vs explicit-param in the tech-spec. If ThreadLocal: specify lifecycle (set before tick, clear in finally). If explicit param: show the call-chain signature change through StepExecutor → SubscriberServiceImpl. The decision is material to the cascade-safety guarantee."
+    },
+    {
+      "id": "F-04",
+      "type": "partial",
+      "severity": "medium",
+      "requirement": "US-Scenario 6 / US-AC-12: API-key mutual isolation — key must NOT authorize session routes; session must NOT authorize /integrations",
+      "detail": "The tech-spec correctly defines two independent filter chains (@Order(1) for /api/integrations/**, @Order(2) for session). Decision 7 covers this. However Task 8's Verify-smoke only checks the positive case (curl with key → 202). Neither the IT section nor the Acceptance Criteria table explicitly enumerate the cross-isolation checks: (a) valid session cookie → 401 on /api/integrations/v1/events; (b) valid api-key header → 401 on /api/v1/projects/**. The user-spec acceptance criterion is specific: 'ключ авторизує /api/integrations/** і НЕ авторизує сесійні /api/v1/projects/**, а сесія НЕ авторизує /api/integrations/**'.",
+      "recommendation": "The IT list already mentions mutual isolation, but add explicit test names to the Integration tests section: (a) session_does_not_authenticate_integrations_endpoint and (b) api_key_does_not_authenticate_session_endpoints. Confirm Task 8's Verify-smoke covers both directions."
+    },
+    {
+      "id": "F-05",
+      "type": "scope_creep",
+      "severity": "medium",
+      "requirement": "N/A — code-research §7 (api-key backfill for existing projects) vs user-spec Constraints",
+      "detail": "The code-research document (§7) explicitly suggests an 'API-key backfill' ApplicationRunner as a second startup runner alongside the index reconciliation runner. The tech-spec Decision 8 correctly rejects this: 'Generate-on-create + backfill runner — rejected, contradicts user-spec.' However, code-research §7's concrete file inventory (Backend new section) still lists 'api-key backfill ApplicationRunner' as a file to create. This contradicts Decision 8 and the user-spec constraint ('бекфілу наявних проєктів нема'). The contradiction between the code-research suggestions and the decided approach is not fully resolved in the task files — Task 3 (ApiKey domain) does not explicitly call out the absence of a backfill runner.",
+      "recommendation": "This is a documentation/clarity issue, not an actual implementation problem (Decision 8 is correct). Ensure Task 3 explicitly states: 'No backfill runner — on-demand only.' Low risk since the decision is clear, but implementors reading code-research may be confused."
+    },
+    {
+      "id": "F-06",
+      "type": "gap",
+      "severity": "medium",
+      "requirement": "US-Scenario 2 / US-AC-2: keyword fan-out — two active keyword funnels with the same keyword both start",
+      "detail": "The IT list says 'Fan-out: one event/word/tag/field → N executions.' The index-relax correctly enables keyword funnels to coexist (no uniqueness on keyword funnels). However, the tech-spec does not specify what happens when the keyword list of funnel A contains 'bonus' and the keyword list of funnel B also contains 'bonus' — does the code-side contains-match scan ALL active keyword funnels and fire all matches? This is implied by the architecture ('query the LIST of active matching funnels, loop insertExecution per match') but keyword funnels are scanned differently from event/tag/field funnels (code-side scan vs index lookup). The IT coverage for keyword fan-out specifically should be listed explicitly alongside the general fan-out case.",
+      "recommendation": "Minor: explicitly add 'keyword fan-out (two funnels with same keyword → two executions)' as a named IT scenario. Currently only the general fan-out IT is listed."
+    },
+    {
+      "id": "F-07",
+      "type": "underengineering",
+      "severity": "medium",
+      "requirement": "US-Scenario 7: two loop backstops — depth-cap must be Redis-independent",
+      "detail": "Decision 6 acknowledges the ThreadLocal/explicit-param choice is deferred to task-decomposition. But the depth propagation path through the call chain is the ONLY mechanism that makes the depth-cap Redis-independent. If the implementation thread (task author) selects ThreadLocal incorrectly — e.g., does not propagate it across async JobRunr boundaries (JobRunr runs jobs in thread-pool workers, not the same thread that received the webhook) — the depth-cap will silently fail to propagate, and the Redis-independent backstop collapses to just the rate-limit (Redis-dependent). The tech-spec should warn about this JobRunr threading boundary.",
+      "recommendation": "Add a note in Decision 6 or Task 4/5: 'JobRunr executes each tick in a pool thread. If ThreadLocal is chosen for origin-depth propagation, it must be seeded at the start of each FunnelExecutionEngine tick and cleared in a finally block — it cannot rely on the calling thread's value.' Alternatively, mandate explicit-param passing to eliminate the threading ambiguity."
+    },
+    {
+      "id": "F-08",
+      "type": "underengineering",
+      "severity": "medium",
+      "requirement": "US-Constraints: 'event_name slug ^[A-Za-z0-9_-]{1,64}$' validated at API boundary",
+      "detail": "The Data Models section defines the DTO field as 'event_name: string (^[A-Za-z0-9_-]{1,64}$)'. Task 8 (EventsController) does not list FunnelService or a dedicated validator in Files to read/modify. The validation of event_name at the API boundary is mentioned in the DTO definition but no task explicitly owns the input-validation logic for the external POST endpoint. The existing FunnelService.validateSteps handles eventName for EMIT_EVENT steps (Task 1), but the external API endpoint has its own validation boundary. If Task 8 doesn't add @Valid + constraint on the DTO or explicit checks, malformed event_names will reach the dispatcher.",
+      "recommendation": "Explicitly assign event_name validation (pattern, length) to Task 8's EventsController/DTO. Add a unit test: invalid event_name slug → 400 Bad Request (not 202 or NPE)."
+    },
+    {
+      "id": "F-09",
+      "type": "underengineering",
+      "severity": "medium",
+      "requirement": "US-Scenario 4: subscriber_id optional field — lookup by (projectId, subscriber_id) must be correct",
+      "detail": "The user-spec states: 'опційно замість нього приймається наш внутрішній subscriber_id (lookup по (projectId, subscriber_id)) — для систем, що вже зберегли наш id.' The tech-spec Architecture section mentions 'subscriber resolves by (projectId, telegram_user_id) (or (projectId, subscriber_id) if supplied)' but the DTO lists subscriber_id as optional. There is no explicit specification of what happens when BOTH telegram_user_id and subscriber_id are provided (which takes precedence?), or what happens when telegram_user_id is 0/null (is it required if subscriber_id is present?). Code-research notes that findById-equivalent for subscriberId may need to be added to the service boundary. Task 8's Files to read does not include the subscriber repository to confirm whether findById exists at the service layer.",
+      "recommendation": "Specify precedence rule: if subscriber_id is provided, use it (skip telegram_user_id lookup); else use telegram_user_id. Specify that at least one of the two must be non-null (else 400). Confirm SubscriberService exposes a findById method (or add it). Add to Task 8's Files to read."
+    },
+    {
+      "id": "F-10",
+      "type": "underengineering",
+      "severity": "low",
+      "requirement": "US-Scenario 8 / US-AC-13: index migration — log-but-never-throw, boots even if Mongo is transiently down",
+      "detail": "Task 2 correctly models on FunnelStepIdBackfill (log-but-never-throw). The unit test coverage for the migration runner is listed in the Testing Strategy ('Index-reconciliation runner: idempotent (no-op when already new shape), log-but-never-throw'). However, the 'boots even if Mongo is transiently down' scenario is not explicitly in the IT list — only the idempotency case is. The FunnelStepIdBackfill pattern handles this via try/catch(Exception), but the test should verify the runner does not propagate an exception when mongoTemplate throws.",
+      "recommendation": "Add a unit test case for the new runner: 'when mongoTemplate.getCollection throws, runner logs WARN and returns normally (does not rethrow)'. This mirrors the existing FunnelStepIdBackfillTest pattern."
+    },
+    {
+      "id": "F-11",
+      "type": "scope_creep",
+      "severity": "low",
+      "requirement": "US-Constraints: 'no auto-gen on project create' — code-research §7 suggests hooking ProjectService.create",
+      "detail": "Code-research §7 explicitly suggests: 'Hook API-key generation here (after save, generate + persist 1 primary key for saved.getId())' in ProjectService.create. The tech-spec Decision 8 rejects this. However, code-research §5 under 'Project creation flow' describes this as a recommended action, and since code-research is listed as context for implementors, there is a risk that Task 3 or Task 9 implementors will add generate-on-create. The tech-spec does not explicitly name ProjectService.create as a file NOT to modify.",
+      "recommendation": "In Task 3 or Task 9, explicitly state: 'Do NOT hook ApiKeyService into ProjectService.create — key is on-demand only (user-spec constraint).' This prevents a well-intentioned implementor from following code-research §5's suggestion."
+    },
+    {
+      "id": "F-12",
+      "type": "overengineering",
+      "severity": "low",
+      "requirement": "US-Constraints: 'rate-limit — фіксований глобальний (~300/хв)' — no per-project rate limit now",
+      "detail": "The tech-spec correctly specifies a fixed global rate-limit for /events and defers per-project limits to Epic 08. Decision 10 reuses the Redis fail-open INCR/EXPIRE idiom. This is well-scoped. However, Task 4 lists FunnelEventService as also enforcing the per-subscriber auto-enroll rate-limit. The auto-enroll limit uses a per-subscriber Redis key (keyed by subscriberId), while the /events global limit uses a fixed key. The tech-spec should clarify these are two distinct Redis keys with different semantics. If an implementor conflates them, the auto-enroll limit will not be per-subscriber.",
+      "recommendation": "In Task 4 description, explicitly name the two Redis key shapes: (1) 'bf:rate:auto-enroll:{subscriberId}' (TTL 60s, limit 20) and (2) 'bf:rate:events' or 'bf:rate:events:{projectId}' (TTL 60s, limit ~300). This prevents key collision and clarifies scope."
+    },
+    {
+      "id": "F-13",
+      "type": "gap",
+      "severity": "low",
+      "requirement": "US-Constraints / Scenario 2: 'keyword — нормалізуються в lowercase' at save time",
+      "detail": "The tech-spec Data Models section states 'keywords: List<String> (lowercase; only for triggerType=keyword)' and Decision 3 mentions 'lowercase-normalized'. However, normalization responsibility is not explicitly assigned. Task 1 (FunnelService) is listed as extending validation/normalization of the keyword list, but the Acceptance Criteria and testing sections do not include a test case: 'save funnel with keywords [\"Bonus\", \"SALE\"] → stored as [\"bonus\", \"sale\"]'. Without an explicit test, a case-sensitive storage bug could pass undetected.",
+      "recommendation": "Add to unit tests: 'keyword normalization — mixed-case input stored as lowercase'. This is a one-liner addition to the testing strategy."
+    },
+    {
+      "id": "F-14",
+      "type": "documented_deviation",
+      "severity": "low",
+      "requirement": "US-Constraints / User-Spec Deviations: 'auto-enroll' definition reconciliation",
+      "detail": "User-Spec Deviations section correctly captures the ambiguity between the rate-limit description ('рахуються лише авто-старти (з кроку/тегу/поля/події)') and the depth-cap description ('api-event is depth 0'). The deviation is marked [PENDING USER APPROVAL]. Since user-spec status is 'approved' and the deviation is still pending, this requires user sign-off before implementation proceeds. The reconciliation chosen (auto = depth > 0) is reasonable and internally consistent, but it changes the behavior of keyword triggers: keyword triggers (from webhook plain-text) are treated as human roots (depth 0) and are NOT counted in the 20/min auto-enroll limit. The user-spec says 'людські (manual/start/keyword) — ні' which matches, so the deviation is minor.",
+      "recommendation": "Get user approval on the deviation before implementation begins (tech-spec is in draft; this is the right time). The reconciliation is correct — just needs sign-off."
+    }
+  ],
+  "summary": "18/21 requirements covered (2 partial, 1 missing). 2 critical gaps (error-isolation not tested in IT/AC for webhook and API paths), 2 medium gaps (depth-propagation mechanism unresolved — threading risk for the Redis-independent backstop; event_name validation ownership unclear at API boundary). 2 medium underengineering findings (subscriber_id precedence unspecified; ThreadLocal/JobRunr threading boundary warning missing). 1 pending user approval on auto-enroll definition deviation. No overengineering or YAGNI violations — the tech-spec correctly defers List<Trigger>, key rotation, regex, Mongock, backfill, and generate-on-create. Solution depth is good: adds architectural substance (dual backstop design, subscriber-keyed vs chatId-keyed entrypoints, index-relax rationale, chain ordering). No shallow-solution findings."
+}

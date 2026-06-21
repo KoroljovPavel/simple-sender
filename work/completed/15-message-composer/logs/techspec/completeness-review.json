@@ -1,0 +1,68 @@
+{
+  "round": 2,
+  "status": "pass",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 20,
+  "requirements_covered": 20,
+  "requirements_partial": 0,
+  "requirements_missing": 0,
+  "round1_fixes_verified": [
+    {
+      "fix": "advanceOnCallback MENU→MESSAGE positive guard",
+      "location": "Decision 2 ('Важливо' paragraph) + Task 5 description",
+      "status": "resolved"
+    },
+    {
+      "fix": "mid-block TelegramSendException semantics",
+      "location": "Decision 3 ('Семантика помилки посеред блоків' paragraph) + Testing/Unit FunnelStepExecutorTest crash-semantics bullet",
+      "status": "resolved"
+    },
+    {
+      "fix": "album type-mixing predicate",
+      "location": "Decision 5 ('Type-mixing предикат' paragraph) + Task 4 description + Testing/Unit vitest + Testing/Integration FunnelControllerIT",
+      "status": "resolved"
+    },
+    {
+      "fix": "Decision 6 [TECHNICAL] marker removed",
+      "location": "Decision 6 now traces to explicit user-spec constraint; no [TECHNICAL] marker present",
+      "status": "resolved"
+    },
+    {
+      "fix": "FunnelSummaryResponse in Data Models",
+      "location": "Data Models section: 'FunnelResponse/FunnelSummaryResponse: провести blocks усюди...'",
+      "status": "resolved"
+    },
+    {
+      "fix": "stores/funnels.ts in Task 8",
+      "location": "Task 8 Files to modify + description explicitly names stores/funnels.ts and preview action update",
+      "status": "resolved"
+    },
+    {
+      "fix": "snapshot-isolation IT: explicit mutation + copyOf distinct-instance",
+      "location": "Testing/Integration 'snapshot-ізоляція (load-bearing): enroll → змінити blocks воронки після enroll'; Testing/Unit 'FunnelStep.copyOf unit: blocks копіюється в новий інстанс списку (не той самий reference)'",
+      "status": "resolved"
+    }
+  ],
+  "findings": [
+    {
+      "type": "gap",
+      "source": "tech-spec",
+      "requirement": "Task 4 files completeness",
+      "detail": "Task 4 'Files to modify' lists FunnelResponse.java but omits FunnelSummaryResponse.java as a separate file. The task description explicitly mentions 'FunnelResponse/FunnelSummaryResponse' needing the blocks field threaded through. If FunnelSummaryResponse is a distinct Java file (code-research §6 lists it separately in the DTO blast-radius), the implementer executing Task 4 in isolation will scan their Files list, not find it, and may silently skip it. The Data Models note '(summary може лишати блоки згорнутими, але не повинен посилатися на видалені поля)' confirms it needs touching.",
+      "severity": "minor"
+    },
+    {
+      "type": "gap",
+      "source": "tech-spec",
+      "requirement": "Task 3 / Decision 3 — error handling completeness for MESSAGE branch",
+      "detail": "Task 3 description and Decision 3 specify that TelegramSendException is mapped via fromTerminalReason (cancel/fail). However, code-research §2 shows the existing SEND_MESSAGE/SEND_IMAGE/MENU branches also handle two additional exception types: BotTokenInvalidException → fail('invalid_bot_token') and AppException → fail(codeOrStatus(ex)). Neither is mentioned in Task 3 nor Decision 3 for the new MESSAGE branch. An implementer reading only the tech-spec may produce a branch that handles TelegramSendException but lets BotTokenInvalidException/AppException propagate uncaught.",
+      "severity": "minor"
+    }
+  ],
+  "summary": "All 7 round-1 findings are confirmed resolved. Tech-spec now covers all 20 user-spec requirements with no gaps, no partial coverage, and no missing items. Two minor new findings were introduced by the restructure: (1) FunnelSummaryResponse.java is absent from Task 4's Files to modify list despite being mentioned in the description; (2) Task 3/Decision 3 cover TelegramSendException semantics but do not mention the BotTokenInvalidException + AppException catch arms present in the existing branches being deleted. Both are minor — no critical findings remain. Verdict: pass.",
+  "verdict": "pass"
+}

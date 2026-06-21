@@ -1,0 +1,19 @@
+{
+  "validator": "task-validator",
+  "batch": [11],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Reviewers",
+      "issue": "Reviewers section body is the single word \"Нет\" plus an explanatory sentence rather than an explicit list. Frontmatter reviewers: [] is correctly empty and consistent, so this is acceptable for a self-verifying QA task, but the section deviates from the template's bullet-list format.",
+      "fix": "Optional: keep as-is (valid for empty-reviewer QA tasks) or state explicitly e.g. \"- none (pre-deploy QA self-verifies)\" for format consistency."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 1,
+    "issues_found": 1
+  }
+}

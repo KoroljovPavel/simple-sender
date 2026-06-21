@@ -1,0 +1,70 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 6,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use absolute machine-specific paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/migrate-to-virtual-threads/logs/working/task-6/...`). While functional on the current developer's machine, the absolute paths are non-portable across machines/CI and inconsistent with sibling tasks (Tasks 7, 9 use the relative feature-anchored form `work/migrate-to-virtual-threads/logs/working/...`).",
+      "fix": "Change all three reviewer paths to feature-anchored relative form: `work/migrate-to-virtual-threads/logs/working/task-6/{name}-{round}.json` to match Tasks 7 and 9 and the task-creator rule that paths anchor on feature_path (not CWD-relative, not machine-absolute)."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 8,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use absolute machine-specific paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/migrate-to-virtual-threads/logs/working/task-8/...`), inconsistent with Tasks 7 and 9 which use the feature-anchored relative form.",
+      "fix": "Replace absolute paths with `work/migrate-to-virtual-threads/logs/working/task-8/{name}-{round}.json` for code-reviewer, security-auditor, test-reviewer entries."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 10,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use absolute machine-specific paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/migrate-to-virtual-threads/logs/working/task-10/...`), inconsistent with Tasks 7 and 9.",
+      "fix": "Replace absolute paths with `work/migrate-to-virtual-threads/logs/working/task-10/{name}-{round}.json` for code-reviewer and test-reviewer entries."
+    },
+    {
+      "severity": "minor",
+      "category": "atomicity",
+      "task": 7,
+      "section": "What to do / Details",
+      "issue": "Task 7 modifies 6 production files (ProjectService, ProjectController, BotService, BotController, ProfileService, ProfileController) plus ~13 test files = ~19 files total. This is well above the 1-3 files atomicity heuristic. The task is justified by the explicit cross-module `requireOwned(...)` coupling (ProjectService is consumed by BotService.connect/etc) and by the Wave 2 atomic-flip per D5/D9. Splitting it further would require temporary Mono-wrapping shims that deliver zero value (and cannot exist since WebFlux symbols leave the classpath in the same commit). The aggregation is the lesser evil but it stretches the atomicity rule.",
+      "fix": "Acceptable as-is given D5/D9 atomic-flip rationale documented in tech-spec. If a future split is desired (e.g. profile/ vs project+bot/), it would require a coordination doc but is not blocking. No change required for this batch."
+    },
+    {
+      "severity": "minor",
+      "category": "atomicity",
+      "task": 9,
+      "section": "What to do / Details",
+      "issue": "Task 9 modifies 6 production files (TelegramWebhookController, WebhookPayloadSizeFilter, ProcessTelegramUpdateJob, HardDeleteJob, ProjectHardDeleteJob, SuperAdminSeeder) plus 6 test files, and creates 1 new test class (TelegramWebhookP99IT) = 13 files total. Above the 1-3 atomicity heuristic. Justified by Wave 2 atomic-flip (D5) and by the shared invariants (event-write-before-status-flip, CAS, scrubber sites, JobRunr idempotency-at-UUID) that span webhook + JobRunr + admin surfaces. Splitting would either break the build mid-commit or require temporary Mono shims.",
+      "fix": "Acceptable as-is given atomic-flip rationale. No change required."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "Mandatory PK file `patterns.md` is included; `testing.md` is not present as a separate file in this project (testing guidance lives inside patterns.md). No fix required — this is a project-specific PK layout note rather than a defect.",
+      "fix": "No change needed. Project's PK folder has no standalone `testing.md`; the `patterns.md` reference covers testing patterns (Testing Requirements section)."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 6,
+      "section": "Required Skills",
+      "issue": "Required Skills uses `[SKILL.md](../../../.claude/skills/code-writing/SKILL.md)` as link text, while sibling tasks 7, 8, 9, 10 use `[skills/code-writing/SKILL.md]` or `[.claude/skills/code-writing/SKILL.md]` — minor stylistic inconsistency across the batch.",
+      "fix": "Stylistic only — all links resolve. Consider standardising link text format across the batch in a follow-up; not a correctness issue."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 7,
+    "critical": 0,
+    "major": 0,
+    "minor": 7
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "status": "passed",
+  "summary": "All 5 round-1 findings are properly addressed. The two major SSR-context findings are fixed via a small test-only seam (__setClientGuardForTests) that genuinely flips the early-return branch in readPersisted/writePersisted — verified by spying on the real localStorage and asserting not.toHaveBeenCalled(). Removing `if (!isClientGuard()) return` from either function would now cause the spies to be called and the new assertions to fail, so Risk R6 is finally pinned down. The defensive sortByCreatedAtDesc test passes [P1,P2] (ascending) and asserts currentProjectId === P2.id — deleting the sort line in the store flips selection to P1 and the test fails (litmus holds). The QuotaExceededError test asserts behavior (in-memory currentProjectId still set) plus the side effect (console.warn called); the implementation grew a console.warn in the catch to make this contract observable, which is reasonable production behavior. The __dirname → process.cwd() change in required-keys.spec.ts removes the implicit vitest dependency on a non-standard ESM global. No new regressions: afterEach correctly restores the guard via __setClientGuardForTests(() => import.meta.client) and vi.restoreAllMocks(), so no shared state leaks between SSR tests and the rest of the suite. Mocking remains at the I/O boundary (useApi, localStorage spies); assertions verify real Pinia state. All 111 tests pass locally per the submitter (vitest 3.2.4, env: nuxt) — node not available in this sandbox so I could not re-run.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/stores/projects.ts:9-12",
+      "issue": "The __setClientGuardForTests escape hatch is a test-only export living in production source. It is well-commented and the default closure preserves production behavior, but it is mutable module-level state that any caller (test or not) could swap. A small risk if a future test forgets the afterEach reset — the guard would leak across files and silently disable persistence in unrelated tests.",
+      "recommendation": "Acceptable as-is for now (the trade-off is justified: Nuxt vitest fixes import.meta.client at compile time, so without a seam Risk R6 cannot be verified). Two optional hardening moves: (a) name the export with a more aggressive prefix like `__unsafe_setClientGuardForTests` to discourage accidental use; (b) guard the setter behind `if (process.env.NODE_ENV !== 'production')` so a tree-shaker / runtime check makes it a no-op in prod builds. Neither is blocking."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/stores/projects.spec.ts:271,277",
+      "issue": "QuotaExceededError test asserts `warnSpy.toHaveBeenCalled()` without checking the message or that the error object was forwarded. If a future refactor changes the warn call to log a generic 'storage error' with no context, the test still passes but the operator-visible signal degrades silently.",
+      "recommendation": "Tighten to `expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('localStorage'), expect.any(DOMException))` so the contract locks both that a warning is emitted AND that it carries the underlying error for diagnostics. One-line change, no new test needed."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 23,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "round1FollowUp": {
+      "totalFindings": 5,
+      "addressed": 5,
+      "remaining": 0,
+      "details": [
+        "F1 (major, SSR import.meta.client not flipped) — FIXED via __setClientGuardForTests seam; readPersisted/writePersisted early-return branch is now genuinely exercised.",
+        "F2 (major, only not.toThrow assertions) — FIXED; both SSR tests now spy on localStorage.getItem/setItem/removeItem and assert not.toHaveBeenCalled() plus state assertions.",
+        "F3 (minor, sortByCreatedAtDesc not exercised) — FIXED; new test at line 280 passes [P1,P2] asc and asserts currentProjectId === P2.id, removing the sort would fail.",
+        "F4 (minor, QuotaExceededError catch not tested) — FIXED; new test at line 267 throws QuotaExceededError, asserts in-memory state preserved and console.warn called; implementation now emits console.warn.",
+        "F5 (minor, __dirname ESM inconsistency) — FIXED; replaced with resolve(process.cwd(), 'i18n/locales')."
+      ]
+    },
+    "testRunResult": "submitter reports all 111 tests pass (vitest 3.2.4, env: nuxt); not re-run in this review (no node in sandbox)"
+  }
+}

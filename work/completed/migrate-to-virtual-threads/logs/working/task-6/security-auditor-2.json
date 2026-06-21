@@ -1,0 +1,86 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "round1Disposition": {
+    "verified": true,
+    "notes": [
+      {
+        "round1Id": 1,
+        "title": "openSession does not invalidate a pre-existing anonymous session before changeSessionId",
+        "verdict": "documentation note (option a) adequately addresses the residual-attribute concern",
+        "evidence": "AuthService.java lines 602-607 add an explicit comment block stating no current writer puts state into an anonymous session pre-login (verified across SecurityConfig + filter chain + controllers), and instructs future maintainers to switch to `existing.invalidate(); getSession(true)` if that assumption ever changes. Grep-confirmed: only one setAttribute call on HttpServletRequest exists in main source (AuthService.java:594) and it writes to the REQUEST scope (read back by RememberMeCookieSerializer.writeCookieValue via request.getAttribute), NOT the HttpSession. No HttpSession.setAttribute calls exist anywhere in main source. The documentation note's invariant therefore holds and the guidance for future maintainers is precise and actionable."
+      },
+      {
+        "round1Id": 2,
+        "title": "forgotPassword rate-limit trip does not emit an audit event",
+        "verdict": "accepted as parity / deferred — no regression introduced",
+        "evidence": "AuthService.forgotPassword lines 287-289 still silently return on over-limit. Out of Wave 2 scope per orchestrator note."
+      },
+      {
+        "round1Id": 3,
+        "title": "Brute-force events.metadata email PII",
+        "verdict": "accepted as parity / deferred — no regression introduced",
+        "evidence": "checkBruteForce email-in-metadata behaviour unchanged in the fix commit."
+      },
+      {
+        "round1Id": 4,
+        "title": "verify/reset per-IP rate limit gap",
+        "verdict": "accepted as parity / deferred — no regression introduced",
+        "evidence": "verifyEmail (lines 183-209) and resetPassword (lines 332-359) still have no per-IP token-consumption rate limit. Out of Wave 2 scope."
+      },
+      {
+        "round1Id": 5,
+        "title": "register rate-limit INCR-before-check",
+        "verdict": "accepted as efficiency note, not security — no regression",
+        "evidence": "checkRegisterRate unchanged in the fix commit."
+      }
+    ]
+  },
+  "regressionScan": {
+    "scope": "all fix-commit edits (8abc428)",
+    "items": [
+      {
+        "area": "List import addition (AuthService.java line 38)",
+        "verdict": "no security impact",
+        "rationale": "Replaces inline java.util.List FQN at the redisTemplate.delete call site (line 616) with a clean import. Identical bytecode; no behavioural change."
+      },
+      {
+        "area": "forgotKey() reposition (moved from line ~320 to line 630, bottom of class)",
+        "verdict": "no security impact",
+        "rationale": "Pure source-position refactor. Method signature, visibility (private static), implementation, and single call site (line 282) all unchanged. Key format `forgot:rate:ip:<ip>` preserved — no Redis-key namespace drift, no rate-limiter bypass risk."
+      },
+      {
+        "area": "me() Javadoc expansion (lines 133-142)",
+        "verdict": "no security impact — documentation strengthens the invariant",
+        "rationale": "The four-clause unauthenticated guard (null check, isAuthenticated, AnonymousAuthenticationToken instanceof, AppUserDetails principal type check) at lines 143-149 is byte-for-byte unchanged. The new comment block accurately enumerates why each clause is load-bearing and warns future maintainers not to remove any — strengthens the anti-enumeration posture without altering runtime behaviour."
+      },
+      {
+        "area": "rotatePasswordAndTerminateSessions ordering comment (lines 363-375)",
+        "verdict": "no security impact — documentation only",
+        "rationale": "Ordering (encode → save → terminateAllSessions → logEvent) at lines 376-388 is unchanged. The new comment block correctly identifies the load-bearing property: a successful event with a failed password write would corrupt the audit trail. No reordering, no swallowed exceptions, no security-relevant behaviour change."
+      },
+      {
+        "area": "Dropped Awaitility polls in AuthControllerIT (lines 179-189 and 527-535)",
+        "verdict": "no security impact — test reliability tightened",
+        "rationale": "Both assertions previously polled for `email_verified` and `password_changed` events under a 5s timeout. Post-Task-5 EventService.logEvent is synchronous on the request thread, so by the time mockMvc.perform() returns the row is already committed. Direct assertion with userId-equality filter (added to the .filter() predicate) is now MORE precise than the old anyMatch — eliminates the risk of a stray event from a parallel test polluting the assertion. Strictly tighter."
+      },
+      {
+        "area": "AuthServicePasswordResetTest dummy-delay upper bound (line 261-265)",
+        "verdict": "no security impact — test strengthened",
+        "rationale": "Added `.isLessThanOrEqualTo(Duration.ofMillis(500))` upper bound on the unknown-email branch wall-clock. This catches future regressions that would pad the no-op path (which would itself become a timing oracle). 500ms ceiling is well above the 40ms FORGOT_DUMMY_DELAY target and well below the ~250ms BCrypt path — correctly chosen. Defense for security-auditor #2 / CWE-208 is now bidirectional."
+      },
+      {
+        "area": "AuthServiceRegistrationTest rename `register_emailDispatchFailure_doesNotPropagate_returns201` → `_swallowedByService_callerReceivesNormalResponse`",
+        "verdict": "no security impact — rename only",
+        "rationale": "Test body unchanged. The new name better describes the actual behaviour (register() returns RegisterResponse, not a 201 HTTP code — the latter is the controller's concern). No security regression."
+      }
+    ]
+  },
+  "auditNotes": "Round-2 re-audit confirms: (1) the openSession documentation note (option a) is accurate and adequately closes round-1 #1, because no HttpSession.setAttribute call exists in main source and the single httpRequest.setAttribute writer is request-scoped; (2) round-1 #2–#5 remain parity/deferred per orchestrator disposition with no regression; (3) every other change in the fix commit (import cleanup, method reposition, Javadoc/comment expansions, test polling removal, upper-bound assertion, test rename) is either pure documentation or strictly tightens the security posture. No new findings."
+}

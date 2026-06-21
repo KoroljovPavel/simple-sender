@@ -1,0 +1,36 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "1",
+  "round": 1,
+  "verdict": "approve",
+  "summary": "Task 1 funnel-domain changes are well-structured, follow existing project patterns (per-type requireXxx validators, business-code 422s, Decision-referencing comments, defensive class-load assertions). Switch exhaustiveness handled in both StepExecutor and FunnelService. No blocking issues. A few minor observations, none requiring a fix.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "329-335",
+      "dimension": "Error Handling / Readability",
+      "finding": "requireNoKeywords(...) delegates to normalizeKeywords(...), which throws CODE_INVALID_KEYWORDS 'keyword exceeds the maximum of N characters' for an over-long entry even on a non-keyword trigger. The expected message there would be 'keywords are only allowed for the keyword trigger type'. Both are correct 422s with the same business code, so the outcome (reject) is right; only the message is slightly less precise in this edge case.",
+      "suggested_fix": "Acceptable as-is (still a 422 CODE_INVALID_KEYWORDS reject). If tightening is desired, check for any non-null/non-blank entry before normalizing in requireNoKeywords. Left as-is — not worth added branching.",
+      "action": "no-fix (accepted)"
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/Funnel.java",
+      "line": "58-69",
+      "dimension": "Architecture / Cross-File",
+      "finding": "The entity's static block now references FunnelService.TRIGGER_ON_START, adding a class-load coupling from the domain entity to the service. Same package, no compile cycle, and FunnelService has no static init depending on Funnel, so this is benign and is the explicit defense-in-depth the task asked for (mirrors the existing 'active' assertion).",
+      "suggested_fix": "No change. Documented intent; the assertion guards the partial-filter literal against drift.",
+      "action": "no-fix (accepted)"
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+      "line": "104-107",
+      "dimension": "Architecture",
+      "finding": "EMIT_EVENT case throws UnsupportedOperationException as a placeholder until Task 5 wires the dispatcher. This is the minimal change required to keep the exhaustive returning switch compiling once StepType.EMIT_EVENT exists. No funnel can reach this branch before Task 5 (no EMIT_EVENT funnel can be authored+run in the same wave), so the loud guard is safe and correct.",
+      "suggested_fix": "No change. Clear marker references Task 5; fails loud if wave ordering is violated.",
+      "action": "no-fix (accepted)"
+    }
+  ]
+}

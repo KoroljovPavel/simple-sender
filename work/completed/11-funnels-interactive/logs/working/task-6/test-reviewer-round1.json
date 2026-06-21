@@ -1,0 +1,35 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "approve",
+  "summary": "Vitest covers the MENU form, button add/remove, target picker options (steps + End), and all validation branches (empty label, no-callback, non-http url), plus End->null encoding, id/next preservation, edit pre-fill, and inline funnel_broken_edge mapping. One Playwright happy-path added with the graceful-skip pattern. Test pyramid is balanced; assertions are behavioral, not implementation-coupled.",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "info",
+      "dimension": "Coverage",
+      "file": "frontend/tests/pages/funnel-editor.spec.ts",
+      "finding": "All TDD anchors from task 6 are covered: renders MENU in picker, add/remove rows, picker lists steps+End, blocks empty label, blocks no-callback menu, blocks non-http url, maps funnel_broken_edge 422 inline. Extra coverage: End->null + id preservation, and edit pre-fill of existing buttons.",
+      "action": "accepted",
+      "resolution": "No change."
+    },
+    {
+      "id": "T2",
+      "severity": "info",
+      "dimension": "E2E balance",
+      "file": "frontend/e2e/funnels.spec.ts",
+      "finding": "funnels_menuGoldenPath_buildAndActivate builds a MENU with 2 callback buttons (one -> step via SearchableSelect, one -> End), saves and activates. Reuses login/openDraftEditor/addSendMessage helpers and the test.skip(!backendUp/!seedReady) guard so it never fails the suite without a backend (verified: 3 skipped).",
+      "action": "accepted",
+      "resolution": "No change."
+    },
+    {
+      "id": "T3",
+      "severity": "info",
+      "dimension": "Regression",
+      "file": "frontend/tests/**",
+      "finding": "Full vitest suite (387 tests) green after changes; no Phase-1 regressions.",
+      "action": "accepted",
+      "resolution": "No change."
+    }
+  ]
+}

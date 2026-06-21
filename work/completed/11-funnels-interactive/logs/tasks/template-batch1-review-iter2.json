@@ -1,0 +1,66 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [1, 3, 4, 9],
+  "status": "changes_required",
+  "link_convention": {
+    "resolved": "file-relative",
+    "rationale": "Task files live at work/11-funnels-interactive/tasks/N.md. Markdown links in these files resolve relative to the file's own directory, so reaching the repo root requires the ../../../ prefix. Verified on disk: '../../../.claude/skills/project-knowledge/references/patterns.md' resolves; bare '.claude/skills/project-knowledge/references/patterns.md' does NOT resolve from the task dir.",
+    "canonical_form": "../../../.claude/skills/project-knowledge/references/<file>.md",
+    "note": "The task.md.template uses bare '.claude/skills/project-knowledge/<file>.md' (no 'references/' subdir and no ../../../ prefix). The template is doubly wrong for this repo's task location: (1) it omits the file-relative prefix, (2) the real PK files live under a 'references/' subdirectory. The canonical correct form is established by sibling tasks 2 and 5 in this same feature, which use the ../../../ + references/ form. Tasks 1, 3, 4 now match that canonical form."
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "PK link [project.md](.claude/skills/project-knowledge/references/project.md) (line 115) uses a bare repo-root-relative path that does NOT resolve from the task file's directory. Verified on disk: the bare form fails, only '../../../.claude/...' resolves. This is a leftover the iteration-1 fix missed.",
+      "fix": "Change to [project.md](../../../.claude/skills/project-knowledge/references/project.md)"
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "PK link [architecture.md](.claude/skills/project-knowledge/references/architecture.md) (line 116) uses a bare path that does not resolve from the task file's directory.",
+      "fix": "Change to [architecture.md](../../../.claude/skills/project-knowledge/references/architecture.md)"
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "PK link [patterns.md](.claude/skills/project-knowledge/references/patterns.md) (line 117) uses a bare path that does not resolve from the task file's directory.",
+      "fix": "Change to [patterns.md](../../../.claude/skills/project-knowledge/references/patterns.md)"
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Details (Implementation hints)",
+      "issue": "PK link [patterns.md](.claude/skills/project-knowledge/references/patterns.md) (line 107, inside Implementation hints) uses a bare path that does not resolve from the task file's directory. Same defect as the Context Files links; the iteration-1 fix only corrected the SKILL.md links and left these four bare PK links untouched.",
+      "fix": "Change to [patterns.md](../../../.claude/skills/project-knowledge/references/patterns.md)"
+    }
+  ],
+  "confirmations": {
+    "task_1": "All PK Context Files links use ../../../.claude/skills/project-knowledge/references/<file>.md (lines 84-86); all resolve on disk. Required Skills SKILL.md (line 16) resolves. FIXED.",
+    "task_3": "All PK Context Files links use ../../../.claude/skills/project-knowledge/references/<file>.md (lines 89-91); all resolve. Required Skills SKILL.md (line 16) resolves. FIXED.",
+    "task_4": "All PK Context Files links use ../../../.claude/skills/project-knowledge/references/<file>.md (lines 77-79); all resolve. Required Skills SKILL.md (line 16) resolves. FIXED.",
+    "task_9_skill_link": "Required Skills (line 16) and Context Files SKILL.md (line 118) both point to ../../../.claude/skills/security-auditor/SKILL.md, which resolves on disk (NOT agents/security-auditor.md). The specific iteration-1 critical finding for the skill link is FIXED.",
+    "task_9_remaining": "However the iteration-1 fix was incomplete: 4 PK links in Task 9 (lines 107, 115, 116, 117) still use bare .claude/... paths that do not resolve. These are NEW criticals carried over, not introduced regressions in the fixed sections."
+  },
+  "no_regressions": {
+    "frontmatter": "All four tasks: status=planned, depends_on is array, wave is number, skills is array, verify is array, reviewers is array. No type or field regressions. Task 9 reviewers=[] is correct (self-reviewing audit task). Task 1/3/4 reviewers=[code-reviewer, security-auditor, test-reviewer] match Reviewers section.",
+    "skills_content_match": "Task 9 skills=[security-auditor] matches Required Skills /skill:security-auditor and the audit content (correct skill, not code-writing). Tasks 1/3/4 skills=[code-writing] match content and Reviewers section (code-reviewer + test-reviewer present per skill-reviewer mapping).",
+    "dependency_waves": "Task 3 depends_on [1,2] wave 2 (>1); Task 4 depends_on [1] wave 2 (>1); Task 9 depends_on [1..7] wave 5 (>2..4). No cycles. Valid.",
+    "structure": "All required sections present and ordered. No template placeholders ([Task Name], {reviewer-name}, {round} in section text) remain. {round} appears only inside reviewer report path templates, which is the canonical template form."
+  },
+  "stats": {
+    "tasks_checked": 4,
+    "issues_found": 4,
+    "critical": 4,
+    "major": 0,
+    "minor": 0
+  }
+}

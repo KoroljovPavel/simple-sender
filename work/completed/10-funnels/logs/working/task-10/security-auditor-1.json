@@ -1,0 +1,20 @@
+{
+  "summary": "Security audit of Task 10 funnel-editor frontend (commit 571782b): editor page, FunnelStepForm/FunnelStepsList/FunnelTriggerSettings/Add+EditStepDialog components, funnels store actions, types, i18n. Scope is client-side; backend (FunnelService.validateSteps, anti-IDOR uniform 404, trigger pattern, activate/pause state checks) is the real enforcement gate and was not re-audited. No critical/high/medium client-introduced risks found. The deep-link and all user-controlled step content are rendered via Vue text interpolation (auto-escaped) with no v-html/innerHTML/eval anywhere in the diff; the deep-link is never used as an href, so there is no XSS or open-redirect via the t.me link. The 404 redirect targets a hardcoded internal path template (projectId is a route param spliced mid-path), so no open redirect. The client correctly treats the backend's uniform 404 as a graceful list redirect without distinguishing not-found vs forbidden, so it does not leak funnel existence (no client-side IDOR leak). Client validation mirrors server rules but the code/comments and 422-inline handling confirm the server re-validates and is authoritative. No secrets/tokens are referenced (bot tokenSuffix is not touched by this code). Two low/info hygiene notes only. Verdict: approve.",
+  "findings": [
+    {
+      "severity": "low",
+      "owasp": "A03:2021 Injection (defense-in-depth, not exploitable here)",
+      "file": "frontend/components/funnels/FunnelTriggerSettings.vue:21-27,73-85",
+      "finding": "The deep-link preview `computed` concatenates `triggerValue.value` (and the server `deepLink`/`botUsername`) into the displayed link WITHOUT re-applying TRIGGER_VALUE_RE in the link composition itself — the regex only gates the inline validation message and the parent's debounced persist. Because the link is rendered as text inside <code>{{ link }}</code> (Vue auto-escapes) and is NEVER bound to an href/:to, this is not an XSS or open-redirect vector. The realistic downside is purely functional: while the value is in an invalid transient state, the user can still click Copy and copy a malformed t.me link to the clipboard.",
+      "recommendation": "Optional hardening: gate the `link` computed (or the Copy button's disabled state) on `valueError === null` so the preview/clipboard only ever reflects a syntactically valid trigger value. This keeps the displayed/copyable artifact consistent with what the backend will accept. No security fix required."
+    },
+    {
+      "severity": "info",
+      "owasp": "A04:2021 Insecure Design (informational)",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue:139-166",
+      "finding": "Client-side validation (FunnelStepForm zod schemas, TRIGGER_VALUE_RE) intentionally mirrors backend FunnelService.validateSteps and is treated as UX only — the page flushes pending edits then relies on the server's 422 (mapped to inline errors.funnels.* codes) as the real gate. This is the correct posture. Noted only to confirm the audit checked it: there is NO trust-client-validation-only flaw, since persist()/activate() surface backend 422s as inline errors and never bypass the server. Ensure backend keeps enforcing every mirrored rule (empty text, http(s) imageUrl, delay>=1, tagSlug ^[a-z0-9_-]{1,32}$, trigger_value ^[A-Za-z0-9_-]{0,64}$, max steps, trigger conflict) so the client mirror can never become the only line of defense.",
+      "recommendation": "No action needed for this task. Keep the backend validateSteps + trigger-pattern + anti-IDOR-404 enforcement as the authoritative gate (out of scope here, but the prerequisite for these client mirrors to remain safe)."
+    }
+  ],
+  "verdict": "approve"
+}

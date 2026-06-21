@@ -1,0 +1,8 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-validation-defer",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "All four round-1 items are correctly resolved. The custom-field-key helpers (formatFieldKeyIfPresent / requireCustomFieldKeyFormatIfPresent / hardened requireFieldKeyValue + requireCustomFieldKey) follow the established format-if-present pattern exactly, are applied in the correct phase (format-if-present on every save; presence deferred to activate via validateTriggersContent / content=true branch), and use sensible error codes (funnel_invalid_trigger_value for the trigger path, funnel_step_invalid for the step path). The CUSTOM_FIELD_KEY_PATTERN regex ^[a-z0-9_-]{1,32}$ mirrors the documented SubscriberCustomFieldsService precondition and closes the Mongo field-path injection vector. The event-name dedupe guard now gates on `eventName != null && !eventName.isBlank()` before the HashSet add, correctly skipping null/blank drafts; a present duplicate still throws CODE_DUPLICATE_EVENT_NAME. The frontend connectionConfig.mode uses ConnectionMode.Strict (imported from @vue-flow/core) instead of the 'strict' literal, and the test asserts against the same enum value — no literal drift. The DELAY draft test now extracts the body via `storeMock.update.mock.calls[0][1]` and asserts `body.steps` deep-equal rather than only checking call count. Four integration tests cover the key scenarios: malformed trigger key on draft save, malformed step key on draft save, valid slug accepts, null key saves as draft but 422s on activate, and two-null event names do not false-duplicate. No regressions, no double-validation, no structural or security gaps introduced."
+}

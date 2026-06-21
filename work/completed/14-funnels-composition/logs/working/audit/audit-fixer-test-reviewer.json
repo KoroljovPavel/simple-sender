@@ -1,0 +1,20 @@
+{
+  "reviewer": "test-reviewer",
+  "agent": "audit-fixer",
+  "feature": "14-funnels-composition",
+  "scope": "Audit fixes — re-enter WARN assertion tighten + SUBSCRIBE non_message preview test",
+  "commit": "f1c6512d7824937cfbf72180051e30269836767a",
+  "round": 1,
+  "files_reviewed": [
+    "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java"
+  ],
+  "findings": [],
+  "notes": [
+    "subscribeReEnterNoOpWhenTargetInflight: assertion tightened from infoAndWarn() to warn() — now pins the no-op specifically at WARN level (spec requirement), catching a regression to INFO. Tests captured log level (real behavior), not implementation. Unused infoAndWarn helper removed.",
+    "previewSubscribeToFunnelStepReturnsNonMessagePlaceholder: integration test via controller, real DB seeding, no excessive mocking, asserts actual response (kind=non_message, rendered=''). One concern, clear name, independent setup.",
+    "Redundancy check: earns its place vs the generic DELAY test — isMessageStep is an explicit allowlist (SEND_MESSAGE/SEND_IMAGE/MENU); a regression adding SUBSCRIBE_TO_FUNNEL to that allowlist would break this test but not the DELAY one. Pins the composition-step preview behavior the auditor flagged as only generically covered."
+  ],
+  "verdict": "approved",
+  "summary": "No findings. Test assertion tighten and the new SUBSCRIBE_TO_FUNNEL preview test are both well-formed, non-redundant, and assert real behavior."
+}

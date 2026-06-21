@@ -1,0 +1,105 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-savenoop",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "category": "staleness-risk-acknowledged",
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "line": 294,
+      "title": "Index-staleness: theoretically possible but unexercisable in practice",
+      "detail": "onPanelStepSubmit reads sel.stepIndex which was captured in selectedNode at click time (selectNode call). If another step is deleted WHILE the side panel is open (shifting array indices), sel.stepIndex could point at the wrong record. Assessment: NOT a real risk in the current flow. The delete flow goes through requestDelete → confirmDelete on the canvas itself. confirmDelete at line 383 explicitly calls clearSelection() when the deleted node was the selected one. More importantly, deleting a DIFFERENT step (not the open one) would emit update:steps to the page, which would re-render FunnelCanvas with new props.steps — but selectedNode is internal canvas state and does NOT get reset by a props change. This is the one genuine staleness path: (1) open step A at index 0, (2) delete step B at index 0 which shifts A to a new index, (3) confirm save — sel.stepIndex=0 now points at the wrong step. However: the guard `!(props.steps ?? [])[idx]` only checks that the slot is non-empty, not that it still contains the intended step. The slot would be non-empty (shifted A is now there), so the overwrite would corrupt A with B's form state. This is a real logical gap but extremely low-probability in the single-user editor context (requires deleting a different node while the panel is open on another, then immediately submitting the open panel). Non-blocking for this fix; worth a follow-up guard (e.g. also validate that props.steps[idx].id matches sel.step.id when both are non-null).",
+      "blocking": false,
+      "recommendation": "Follow-up: add an id-consistency cross-check as a secondary guard in onPanelStepSubmit: after the index check, if both sel.step?.id and props.steps[idx]?.id are non-null and they differ, bail (return). This covers the shift-by-delete race without breaking the null-id fresh-node path that this fix targets."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "category": "sequencing-observation",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 306,
+      "title": "onCanvasStepSave checks steps AFTER update:steps has already fired, which is correct — but relies on emit ordering",
+      "detail": "The canvas always emits update:steps before step-save (line 300-301 in FunnelCanvas.client.vue). The page handles update:steps via onCanvasSteps which mutates steps.value synchronously, then calls persistSteps(). onCanvasStepSave then runs against the already-updated steps.value — so the readiness check in onCanvasStepSave sees the committed (new) step content, not the stale seed. This ordering is load-bearing and correct as implemented. Vue event handlers execute synchronously in order, so this is stable.",
+      "blocking": false,
+      "recommendation": "No code change needed. Consider a brief comment in onCanvasStepSave noting the dependency on update:steps firing first (already handled by onCanvasSteps above it in the template binding order)."
+    }
+  ],
+  "passed_checks": [
+    {
+      "check": "index-based routing correctness",
+      "result": "PASS — onPanelStepSubmit uses sel.stepIndex (set from node.data.stepIndex in selectNode). buildNodes() sets stepIndex=index for step nodes and stepIndex=null for trigger/start/note nodes. The guard `sel.kind !== 'step' || sel.stepIndex == null` prevents accidental routing on non-step nodes. The integer guard `Number.isInteger(idx)` correctly rejects NaN from malformed inputs."
+    },
+    {
+      "check": "stepIndex populated only for STEP nodes, not confused with trigger/note indices",
+      "result": "PASS — useFunnelCanvas buildNodes() sets data.kind='start'|'trigger'|'note' with stepIndex:null for all non-step nodes. The selectNode() function copies kind+stepIndex verbatim. onPanelStepSubmit guards on kind==='step' before touching stepIndex."
+    },
+    {
+      "check": "regression: saved nodes (id non-null) still route correctly via index",
+      "result": "PASS — index-based routing works identically for saved and unsaved nodes. The regression test 'a side-panel submit on a SAVED MESSAGE node still routes the edit' verifies this."
+    },
+    {
+      "check": "explicit Save feedback — incomplete step shows banner, no PATCH fires",
+      "result": "PASS — when steps.value is not all-ready, onCanvasStepSave sets stepSaveFeedback to the localized message and returns without calling persist(). The banner uses data-test='funnel-step-save-feedback'. The page test 'an explicit save on a still-incomplete step surfaces feedback' verifies this including that storeMock.update is not called."
+    },
+    {
+      "check": "explicit Save feedback — complete step clears banner, PATCH fires exactly once",
+      "result": "PASS — update:steps fires first (onCanvasSteps → persistSteps → persist()), then step-save fires (onCanvasStepSave). When all steps are ready, onCanvasStepSave hits the early-return branch (stepSaveFeedback=null) without calling persist() again. persist() itself clears stepSaveFeedback on success. No double PATCH."
+    },
+    {
+      "check": "implicit autosave (drag/notes/triggers) still silently withholds for incomplete steps",
+      "result": "PASS — onCanvasNotes, onCanvasTriggers, and onNodeDragStop all call persistSteps() which silently returns when !steps.value.every(stepReady). None of these paths emit step-save or call onCanvasStepSave. The regression test 'a truly empty new node is NOT PATCHed via implicit autosave' verifies this."
+    },
+    {
+      "check": "add-node gate unaffected (empty freshly-added node still not PATCHed via autosave)",
+      "result": "PASS — addStep emits update:steps with newStep(type) which has empty required fields; stepReady() returns false; persistSteps() withholds. Verified by page test."
+    },
+    {
+      "check": "read-only surfaces unaffected (FunnelStepsList, FunnelTriggersPanel)",
+      "result": "PASS — both mounted with :readonly='true', no mutation emits wired. No changes in this diff touch these components."
+    },
+    {
+      "check": "note XSS path unaffected",
+      "result": "PASS — noteText textarea uses :value binding and {{ }} interpolation only, never v-html. No changes in this diff modify the note path."
+    },
+    {
+      "check": "i18n parity — stepSaveIncomplete key present and non-empty in BOTH en and uk",
+      "result": "PASS — en.json line 765: 'Step {number} is incomplete — fill in its required content before saving.' uk.json line 765: 'Крок {number} незавершений — заповніть обов'язковий вміст перед збереженням.' Both non-empty, both include {number} interpolation parameter."
+    },
+    {
+      "check": "reactivity — no prop mutation without emit",
+      "result": "PASS — onPanelStepSubmit creates a new array via .map() and emits it; never mutates props.steps directly. selectedNode is internal ref, not a prop. stepSaveFeedback is a local ref on the page."
+    },
+    {
+      "check": "defineExpose addition of onPanelStepSubmit",
+      "result": "PASS — needed for the new canvas unit tests to drive the explicit-save relay path directly. Does not leak unsafe surface (it is already a canvas-internal relay function)."
+    },
+    {
+      "check": "test coverage — fresh node (id:null) path",
+      "result": "PASS — FunnelCanvas.spec.ts: 'a side-panel submit on a freshly-added (id:null) MESSAGE node emits update:steps with the new text'"
+    },
+    {
+      "check": "test coverage — saved node regression",
+      "result": "PASS — FunnelCanvas.spec.ts: 'a side-panel submit on a SAVED MESSAGE node still routes the edit (index match, no regression)'"
+    },
+    {
+      "check": "test coverage — exact repro end-to-end on page",
+      "result": "PASS — funnel-editor.spec.ts: 'the exact repro: filling a fresh MESSAGE node and saving fires ONE PATCH carrying the new text'"
+    },
+    {
+      "check": "test coverage — explicit save feedback for incomplete step",
+      "result": "PASS — funnel-editor.spec.ts: 'an explicit save on a still-incomplete step surfaces feedback (does not silently no-op)'"
+    },
+    {
+      "check": "test coverage — dangling on_start trigger does not block saving a complete step",
+      "result": "PASS — funnel-editor.spec.ts: 'an on_start trigger with null entryStepId does NOT block saving an otherwise-valid step'"
+    },
+    {
+      "check": "test coverage — autosave gate for truly empty node",
+      "result": "PASS — funnel-editor.spec.ts: 'regression: a truly empty new node is NOT PATCHed via implicit autosave'"
+    }
+  ],
+  "summary": "The fix is correct and robust. The core change — routing side-panel step edits by array index instead of id — correctly addresses the silent no-op bug for id:null (freshly-added) nodes, and the index-guard chain (kind==='step' + stepIndex!=null + Number.isInteger + slot-exists) is solid. One theoretical staleness scenario exists: selecting step A at index N, then deleting a different step that shifts A's index, then submitting the panel — the index guard would not catch this because the slot is non-empty (it now contains A shifted). This is a non-blocking follow-up (the comment in F1 recommends adding an id-consistency cross-check). All other checks — explicit Save feedback, PATCH count, implicit autosave gate, i18n parity, no prop mutation, test coverage across 6 scenarios — pass cleanly. Verdict: PASS, 0 blockers, 2 minor informational findings."
+}

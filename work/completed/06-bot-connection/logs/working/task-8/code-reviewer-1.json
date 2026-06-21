@@ -1,0 +1,48 @@
+{
+  "summary": "BotController + DTOs are a clean, idiomatic thin HTTP layer over BotService. Controller signatures, helper-trio (currentUserId/extractIp/capUserAgent), USER_AGENT_MAX, toResponse mapping, ConnectBotRequest @Pattern (D16), BotResponse field set (D17), and @JsonIgnoreProperties all match tech-spec lines 304-316 and the ProjectController/ProfileController pattern verbatim. No critical or major findings; only stylistic / consistency notes.",
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotController.java",
+      "line": 57,
+      "issue": "Mono.fromCallable(() -> ResponseEntity.ok().<Void>build()) on disconnect (line 57) and testMessage (line 67) deviates from the project-wide pattern. AuthController.java:61/67/74/81 and ProfileController.java:55/62/72 all use .then(Mono.just(ResponseEntity.ok().<Void>build())). Both produce the same ResponseEntity but Mono.fromCallable wraps a pure value in a lazy supplier (and a Callable allowed to throw checked exceptions) for no benefit, while breaking the consistency a future refactor or grep would rely on.",
+      "suggested_fix": "Replace `.then(Mono.fromCallable(() -> ResponseEntity.ok().<Void>build()))` with `.then(Mono.just(ResponseEntity.ok().<Void>build()))` on lines 57 and 67 to match the rest of the controllers in the codebase."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotController.java",
+      "line": 43,
+      "issue": "The three POST endpoints (connect L43-44, disconnect L53-54, testMessage L63-64) each repeat the identical pair `String ip = extractIp(exchange); String userAgent = capUserAgent(exchange.getRequest().getHeaders().getFirst(\"User-Agent\"));`. Same duplication exists in ProjectController, so this is not a regression — but with the verbatim helper trio (currentUserId/extractIp/capUserAgent) now copy-pasted into a third controller (Profile, Project, Bot), the deferred-shared-util note on L80 is reaching the point where extraction is justified. Pure DRY signal; not blocking.",
+      "suggested_fix": "Optional follow-up (not required by task spec, which mandates the verbatim comment): extract a shared `BaseAuditedController` superclass or a `RequestAudit.capture(ServerWebExchange)` static helper carrying ip+userAgent (a small `record AuditContext(String ip, String userAgent)`) and update Profile/Project/Bot in one pass. Out of scope for task 8."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotController.java",
+      "line": 80,
+      "issue": "The comment `// Copied verbatim from ProfileController. A shared util is deferred (no other consumer yet).` is now factually inconsistent — three controllers (Profile, Project, Bot) copy these helpers, so the parenthetical \"(no other consumer yet)\" no longer holds. Task spec explicitly requires preserving the verbatim line, so this is by design. Flagging only as documentation drift.",
+      "suggested_fix": "No change required for task 8 (spec mandates verbatim). For the post-feature cleanup recommended in the existing decisions log, drop the parenthetical or replace with `// Copied verbatim from ProfileController; extraction is tracked as tech debt — see ProjectController.java:124.`"
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 395,
+      "issue": "postConnect_setWebhook4xxConfigError_returns500WithCodeWebhookConfigError asserts the response status + code but does NOT assert `botRepository.findByProjectIdAndStatus(...).block()` is null. Every neighbouring failure-path test (telegramGetMe401, telegram5xxExhausted) does this no-Bot-persisted assertion. Small coverage gap on AC5 — the per-task AC says \"no document persisted\" only for AC3/AC4, but the same invariant holds for AC5 by construction (Mongo save() never runs when setWebhook errors out before reaching the persist step).",
+      "suggested_fix": "Append `assertThat(botRepository.findByProjectIdAndStatus(project.getId(), BotStatus.CONNECTED).block()).isNull();` at the end of the AC5 test to lock the no-orphan-Bot invariant explicitly."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotTokenLeakTest.java",
+      "line": 55,
+      "issue": "`Bot.class.getDeclaredMethods()` only inspects methods declared directly on Bot. The reflective check would miss a toString inherited from a future Bot superclass. Currently Bot extends Object, so this is a hypothetical hole. Acceptable — the field-level @JsonIgnore on the four sensitive fields in Bot.java and the BotResponse-shape assertion together cover the realistic regression vectors.",
+      "suggested_fix": "If hardening is desired in a follow-up: also assert that Bot.class.getSuperclass() == Object.class (locks the inheritance shape), or walk the inheritance chain and assert no toString exposes the forbidden field names. Not required for task 8."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 462,
+      "issue": "postConnect_persistFails_compensatingDeleteWebhookFires_returns500 uses `expectStatus().is5xxServerError()` rather than `isEqualTo(500)`. The GlobalErrorHandler default branch maps an unhandled Throwable to 500; pinning to 500 explicitly would catch a future regression where the error is mapped to 502 or 503. Looser than necessary.",
+      "suggested_fix": "Tighten to `.expectStatus().isEqualTo(500)` to match the GlobalErrorHandler contract for unhandled Throwable. Same suggestion applies to setWebhook4xx (line 392) which already targets `webhook_config_error` — that one is correctly 5xx because AppException maps to its declared HttpStatus."
+    }
+  ]
+}

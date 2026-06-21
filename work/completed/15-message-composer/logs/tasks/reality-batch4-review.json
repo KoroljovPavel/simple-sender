@@ -1,0 +1,76 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 depends_on [1,2,3,4,5,6,7,8] and its first step is 'Read decisions.md to get the list of files created/modified in tasks 1–8'. However decisions.md is empty (only the template comment block, 34 lines, zero task entries). None of tasks 1–8 have been executed yet — StepType still has SEND_MESSAGE/SEND_IMAGE/MENU; ContentBlock/BlockType/MediaItem classes do not exist; FunnelStepExecutorTest has no MESSAGE branch; TelegramSender has no sendVideo/sendAudio/sendDocument/sendMediaGroup. The auditor will find no feature files to audit and the four invariants cannot be verified against implementation that does not exist.",
+      "fix": "Task 10 must not run until tasks 1–8 are done and decisions.md contains their entries. The depends_on field is correct ([1..8]); the issue is the task file does not mention that decisions.md must be non-empty as a precondition check. Add an explicit gate: if decisions.md has no task entries, abort and report 'dependencies not complete' instead of proceeding with the audit."
+    },
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Same root cause as Task 10: Task 11 depends on tasks 1–8 being done. The codebase is in pre-implementation state. All test files referenced in the audit checklist (FunnelStepExecutorTest MESSAGE branch, TelegramSenderTest new methods, FunnelStepTest blocks deep-copy, StepTypeTest MESSAGE enum) do not yet contain the feature tests — they still reference SEND_MESSAGE/SEND_IMAGE/MENU. FunnelMessagePreview.spec.ts tests SEND_MESSAGE-based preview. The funnels store spec uses 'SEND_MESSAGE' shape. An audit run now would correctly flag everything as missing, but that is not the intended behavior: the audit should run post-implementation.",
+      "fix": "Same mitigation: enforce that decisions.md contains task 1–8 entries before proceeding. The depends_on is already correct; document the explicit gate."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 10,
+      "issue": "Task 10 step 1 says 'Read decisions.md (task 1–8 entries) + tech-spec to collect file list'. The net-new classes ContentBlock, BlockType, MediaItem are not listed by explicit path in any task's 'Files to modify' — the task relies on decisions.md entries to discover their final paths. Since decisions.md is empty, there is no reliable way to locate these files. The hint says 'find via decisions.md or glob in backend/src/main/java/com/botfunnel/funnel/' — the glob fallback is correct, but the glob could miss files placed outside the funnel package (e.g., in a shared model package).",
+      "fix": "The glob fallback in the Details section is adequate. No structural fix needed to the task itself, but this reinforces the dependency on tasks 1–8 being done first. The glob path 'backend/src/main/java/com/botfunnel/funnel/' is the correct location given the tech-spec architecture."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 11,
+      "issue": "StepTypeTest.java exists but currently has zero tests for MESSAGE, SEND_MESSAGE, SEND_IMAGE, or MENU enums — it only guards EMIT_EVENT and SUBSCRIBE_TO_FUNNEL. The task's Details checklist says 'StepTypeTest — enum без старих типів, з MESSAGE'. After tasks 1–8, the auditor must verify this file has been extended. If the implementation task (Task 1) did not add MESSAGE-guard tests, this is a coverage gap. The task description does not instruct the auditor to flag StepTypeTest as potentially untouched by Task 1 — it assumes Task 1 updated it.",
+      "fix": "In Task 11 Details section, add a note: 'StepTypeTest — verify it has been extended with a MESSAGE guard and that SEND_MESSAGE/SEND_IMAGE/MENU no longer appear as valueOf-resolvable constants. If only EMIT_EVENT and SUBSCRIBE_TO_FUNNEL guards exist and MESSAGE was never added, flag as blocker gap.'"
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 12,
+      "issue": "Task 12 step 3 says 'Read audit reports from Task 9/10/11 in logs/working/'. The logs/working/ directory is currently empty. The task references paths: logs/working/task-9/, logs/working/task-10/, logs/working/task-11/. These directories do not exist yet (they are created when tasks 9/10/11 run). The task depends_on [9,10,11] which is correct, but if any audit task writes its report to a different path or skips writing a file (Tasks 10 and 11 explicitly say 'return as final message, do NOT write to a file'), then step 3 cannot be executed.",
+      "fix": "Tasks 10 and 11 explicitly state the audit report is returned as agent final message only, not saved to a file. Task 12 step 3 ('Read audit reports from logs/working/task-10/ and logs/working/task-11/') is infeasible as written — those files will not exist. Either: (a) change Tasks 10/11 to also save a summary to logs/working/task-N/summary.md, or (b) change Task 12 step 3 to say 'If audit reports exist in logs/working/, read them; otherwise rely on decisions.md entries written by Tasks 10/11 (Post-completion section)'. The decisions.md post-completion entries for Tasks 10/11 are the actual persistent artifact."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 verification step says 'cd backend && ./gradlew test' to confirm suite is green before auditing. This is correct methodology, but the task places this as an automated step inside the audit task itself — meaning the audit agent runs the full suite. For a feature of size L with many ITs (real Mongo required), this can take significant time and may fail if the Mongo test infrastructure is not available in the agent's environment. The task does not mention any environment prerequisite check.",
+      "fix": "Minor: add a note that if the test runner is unavailable or suite fails with infrastructure errors (not test failures), the agent should note this and proceed with static code audit only, flagging the inability to confirm green suite. This is an execution guidance gap, not a structural task defect."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 10,
+      "issue": "Implementation hints for Task 10 describe a per-finding report structure with specific sections (severity → issue → location → OWASP cat → Decision → fix, plus positive findings section). This is prescriptive enough to be a reporting template rather than a hint — appropriate for audit methodology. No pseudocode or algorithms present. This is acceptable.",
+      "fix": "No change needed."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 step 6 says to match each AC against 'a specific passing test/code'. For the 'Composition delivers N sequential messages in order' AC, there is no existing test that verifies per-block send ORDER (FunnelStepExecutorTest has no MESSAGE branch yet). After implementation this test should exist in FunnelStepExecutorTest. The QA task correctly expects the full suite to be green, but if the implementation left a gap (no order-verification test), the QA pass-through would silently miss it. Task 12 does not instruct the agent to flag a passing suite that lacks order-verification.",
+      "fix": "Add to Task 12 Verification Steps: 'Confirm FunnelStepExecutorTest has an explicit assertion on block send ORDER (not just that all K sends happened but that they happened in sequence).'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 11,
+      "issue": "Task 11 references 'frontend/tests/components/EditStepDialog.spec.ts', 'AddStepDialog.spec.ts', and 'FunnelStepsList.spec.ts' as test files for the block editor (add/move/remove, per-type, validation mirror). These files exist. However, there is no 'FunnelStepForm.spec.ts' referenced — the actual block editor component is FunnelStepForm.vue (Task 7). The dialog specs test the dialog wrappers, not the composer sub-editor directly. If Task 7 added vitest coverage for FunnelStepForm.vue, the auditor needs to check for that file specifically.",
+      "fix": "Add to Task 11 Context Files (frontend): 'frontend/tests/components/funnels/FunnelStepForm.spec.ts (if created by Task 7 — check via decisions.md). The dialog specs (EditStepDialog, AddStepDialog) wrap FunnelStepForm but may not exercise per-type block widgets directly.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 9
+  }
+}

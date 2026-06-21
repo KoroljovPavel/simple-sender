@@ -1,0 +1,104 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 10,
+      "issue": "Task 10 references shadcn-vue components `table`, `select`, `badge`, `input`, `sonner`, `combobox`, `tabs`, `card`, `sheet`, `tooltip`, `checkbox` as already produced by Task 2. These components are NOT present in `frontend/components/ui/` — only `dialog/` exists. The 11 shadcn-vue scaffolds are the primary hard dependency; if Task 2 has not run, every `<Table>`, `<Badge>`, `<Combobox>`, `<Tabs>`, `<Card>`, `<Sheet>`, `<Tooltip>`, `<Checkbox>` import will fail compilation.",
+      "fix": "Enforce that Task 2 completes (and its AC of `cd frontend && pnpm prebuild` passing) before Task 10 begins. The task already declares `depends_on: [2, 8, 9]` — ensure CI gates on Task 2 completion, not just declaration."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 11,
+      "issue": "Task 11 line 38 specifies slug regex `^[a-z][a-z0-9_]*$` for `CreateTagDialog` vee-validate+zod schema. This contradicts the authoritative regex in tech-spec Decision 11, the `Tag.slug` data model comment, and every backend DTO: `^[a-z0-9_-]{1,32}$`. The Task 11 regex (a) forbids hyphens (`-`), (b) forbids leading digits (e.g. `2024-campaign` is valid per tech-spec but rejected by Task 11's regex), and (c) lacks the `{1,32}` length cap. The frontend validation will reject slugs that the backend accepts, creating false-negative UX and test failures when the backend IT seeds slugs like `paid-2024`.",
+      "fix": "Replace `^[a-z][a-z0-9_]*$` in Task 11 line 38 with `^[a-z0-9_-]{1,32}$` to match tech-spec Decision 11 and the backend `@Pattern` annotation."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 10,
+      "issue": "`sonner` is not installed in `frontend/package.json` and there is no `frontend/components/ui/sonner/` scaffold (only `dialog/` exists). Task 10 implementation hints reference `useSonner()` and state Task 2 scaffolded shadcn `sonner`. If Task 2 does not install the package or there is no `vue-sonner` equivalent in the project, all toast calls in Task 10 components will fail at runtime. There is no `sonner` key in `package.json` dependencies or devDependencies.",
+      "fix": "Verify that Task 2 explicitly adds `vue-sonner` (or equivalent) to `package.json` and scaffolds `frontend/components/ui/sonner/`. If Task 2 spec does not do this, add it. The implementation hint in Task 10 (`check for any composables/useToast.ts precedent before importing the raw lib`) is correct defensive advice — but it should be followed: confirm via grep that the wrapper exists before Task 10 executes."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 Verification Steps include `cd frontend && pnpm typecheck` (or `pnpm nuxi typecheck` if no script alias). There is no `typecheck` script in `frontend/package.json`. The package.json only defines `dev`, `prebuild`, `build`, `generate`, `preview`, `test`, `test:e2e`. `pnpm typecheck` will fail with 'Missing script'. The parenthetical `if no script alias` implies the implementer should run `pnpm nuxi typecheck` instead, but this is stated as a fallback rather than the canonical command, which is confusing.",
+      "fix": "Either add `\"typecheck\": \"nuxi typecheck\"` to `frontend/package.json` scripts (preferred — consistent with the project's pnpm-script convention), or update the Verification Steps to use `cd frontend && pnpm nuxi typecheck` as the primary command without ambiguity."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 10,
+      "issue": "Implementation hint at line 188 references `inFlight: Promise<void> | null` pattern from `projects.ts:46`. Inspecting the actual file, the variable is `let inFlight: Promise<void> | null = null` (a module-scope variable, not a `ref`). The hint says 'single in-flight guard for `loadMore` to prevent double-click races (mirror `inFlight: Promise<void> | null` from `projects.ts:46`)'. However, `projects.ts` uses `inFlight` only for `fetchAll`, not for `loadMore`. A subscribers store has a different shape (`loadMore` appends while `loadFirstPage` replaces). The hint should clarify that `inFlight` in the subscribers store must guard `loadMore` specifically (not the same pattern as `fetchAll`), and that `loading: boolean` state (also required) already serves a similar purpose — the hint risks the implementer introducing a redundant guard that conflicts with the `loading` ref.",
+      "fix": "Clarify the hint: use `loading` ref (already part of the store state) as the double-click guard for `loadMore` — check `if (loading.value || !nextCursor.value) return`. Only a separate `inFlight` variable is needed if `loadFirstPage` itself needs a dedup guard (same as `fetchAll`). Remove the misleading cross-reference to `projects.ts:46` which guards a different operation."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 11,
+      "issue": "Task 11 Vitest `SubscribersFilterBar.spec.ts` spec (line 98) says 'multi-select two tags → emit payload contains both slugs'. The component lives in Task 10. However, Task 10 already declares a `SubscribersFilterBar.spec.ts` with overlapping cases (search debounce, tag include/exclude). There are now TWO separate tasks authoring specs for the same component: Task 10 TDD Anchor lines 63-65 includes `tagInclude_andExclude_independentMultiSelect` and `search_debounced300ms`, and Task 11 TDD Anchor lines 97-99 includes `SubscribersFilterBar_statusSelect_emitsFilterUpdate`, `SubscribersFilterBar_tagsCombobox_emitsAllSelectedSlugs`, `SubscribersFilterBar_search_debounces300ms`. The search-debounce case is duplicated across both tasks for the same spec file. This will cause 'duplicate describe/test name' collisions or confusing spec organization.",
+      "fix": "Consolidate all `SubscribersFilterBar.spec.ts` test cases into Task 10 (which owns the component). Task 11 should reference the spec as 'already covered by Task 10 TDD Anchor — this task adds no new cases for SubscribersFilterBar'. Alternatively, define a clear split (Task 10 covers unit-level schema tests; Task 11 covers integration-level emit tests) with explicit case names that do not overlap."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 11,
+      "issue": "Task 11 Vitest anchor for `SendPersonalMessageDialog.spec.ts` (line 95-96) adds `SendPersonalMessageDialog_happyPath_emitsSent` and `SendPersonalMessageDialog_rateLimit429_rendersSubmitError`. Task 10 TDD Anchor for the same spec file includes `sentResponse_successToast` and `429Response_rateLimitedToast`. These are functionally identical test scenarios with different names for the same spec file. An implementer of Task 11 who has not read Task 10's anchor will create duplicate tests or merge incorrectly.",
+      "fix": "Task 11 should explicitly state 'these are ADDITIONAL test cases for the spec file initiated by Task 10' and use test names that do not conflict with Task 10's anchor names. The case `_happyPath_emitsSent` should note it is testing the `emitted('sent')` event (Task 11's concern) while Task 10's `sentResponse_successToast` tests the toast variant — these are different assertions and both are valid if clearly distinguished."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 10,
+      "issue": "TDD Anchor test `store_doesNotWriteLocalStorage` (line 56) asserts `localStorage.setItem` is never called. This is tested via the assertion `assert localStorage.setItem is never called`. However, there is no indication of HOW to set up the spy — `vi.spyOn(localStorage, 'setItem')` in happy-dom may not behave identically to the browser. The existing `projects.spec.ts` (the pattern this should mirror) does NOT test for `localStorage.setItem` absence — it tests `localStorage.getItem` reads. The test as described may be brittle under Vitest + happy-dom if `localStorage` is not the global `window.localStorage`. Consider whether this is actually testable via `vi.spyOn(window, 'localStorage', 'get')` or via checking the store module source with grep (the AC already prescribes `grep -n localStorage frontend/stores/subscribers.ts`). The unit test adds little on top of the grep AC.",
+      "fix": "Either confirm the Vitest + happy-dom setup mocks `localStorage` in a way that `vi.spyOn(localStorage, 'setItem')` works, or replace the unit test with a simpler approach: `expect(Object.keys(localStorage)).not.toContain('bot-funnel.*')` after calling `loadFirstPage`. The grep-based AC (`grep -n localStorage frontend/stores/subscribers.ts → empty`) is the more reliable gate; the test should complement it, not duplicate it."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 line 190 hint for the tag combobox says: 'if input value doesn't match an existing tag, the submit creates a new tag via `POST /tags` first, then `POST /subscribers/{id}/tags {slug}`. The backend may also accept the slug directly and create the tag implicitly via `TagService` find-or-create — confirm by reading Task 4's `TagService`.' This is a deferred decision left to the implementer. Task 4 (TagService) is not in this batch to verify, but the tech-spec and Task 8 both show `POST /subscribers/{id}/tags {slug}` as the subscriber-tag association endpoint, and `TagService` from Task 4 would provide find-or-create. The hint is reasonable but leaves the implementer to make an architectural call mid-task. The task should clarify the expected call path.",
+      "fix": "Read Task 4's TagService spec and pre-decide: if `POST /subscribers/{id}/tags` calls `TagService.findOrCreate(slug)` internally (backend handles creation), the frontend only needs one call. If the frontend must do two calls, make that explicit. Clarify in the task to avoid mid-task ambiguity."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 line 51: 'Triggered from `/subscribers` toolbar (button next to `Export CSV` — wire-in inside `frontend/pages/projects/[projectId]/subscribers/index.vue` if Task 10's page exposes a slot; otherwise add the button here and emit upward).' This conditional wiring is vague: it depends on Task 10's implementation choices (slot vs. no slot). The Description says Task 11 owns `RecentExportsDialog` and Task 10 owns `ExportCsvDialog`. But who owns the actual button that opens `RecentExportsDialog` is unresolved — it may require editing Task 10's page file in Task 11. If Task 10's index.vue is already reviewed and merged, re-opening it in Task 11 creates a merge conflict window.",
+      "fix": "Task 11 should explicitly state: 'Task 11 adds a \"Recent exports\" button to `frontend/pages/projects/[projectId]/subscribers/index.vue` alongside the Export CSV button. This is a planned modification of a Task 10 file.' Add the page file to Task 11's Files to CREATE/MODIFY list with a note that it is also modified by Task 10 (but only a button addition is needed here). This avoids the ambiguous 'if slot' logic."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 Playwright spec step 7 (line 62) says to poll 'Recent exports' dialog 'until first row shows status=DONE (timeout 30s)'. However, the export job must complete in the test environment. The spec assumes the backend is running and `ExportSubscribersJob` processes within 30s for a 2-row dataset. In CI without a running backend, the Playwright spec will hang or fail. The task does not specify whether there is a test backend setup (e.g. docker-compose) or a mock for CI. The tech-spec E2E test note says '~10 min' runtime which implies a real backend.",
+      "fix": "Add a prerequisite note: 'Playwright spec requires the full backend + Mongo + Redis stack running (docker-compose up). Document in the spec file header that it is integration-level E2E, not unit-level. The `pnpm playwright test` CI step requires a running backend instance.' This is consistent with the `frontend/e2e/projects.spec.ts` which references `reuseExistingServer: !CI` in playwright.config.ts."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 (Code Audit) `depends_on: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]` — correct. The description says it runs in Wave 5 parallel with Tasks 13 and 14. However, the file inventory in the Context Files section lists source files that will only exist after all previous tasks complete. The audit task is designed to run against completed code, which is correct. However, the task says 'if Task N is incomplete (status: planned or in_progress) when this audit runs, mark the corresponding inventory rows as not audited'. This is properly handled in the edge cases. No issue with the dependency declaration itself.",
+      "fix": "No fix needed for this item. Informational: the dependency declaration is correct and the edge case handling is robust."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 12,
+      "issue": "Task 12 file inventory Context Files section links to `frontend/stores/subscribers.ts` as `[frontend/stores/subscribers.ts](../../../frontend/stores/subscribers.ts)`. This file does not exist yet (it will be created by Task 10). The link will be a dead link until Task 10 completes. The audit task correctly handles this via the 'not audited — Task N incomplete' edge case, but the dead link may confuse the implementer.",
+      "fix": "Minor UX issue only. The edge case handling in Task 12 already covers this. No code change needed."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 13
+  }
+}

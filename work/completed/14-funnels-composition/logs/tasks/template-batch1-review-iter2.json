@@ -1,0 +1,54 @@
+{
+  "validator": "task-validator",
+  "batch": [2, 3, 4, 7, 8],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [],
+  "fixes_confirmed": [
+    {
+      "task": 2,
+      "issue": "iter1 minor — machine-specific absolute PK/reviewer paths",
+      "status": "fixed",
+      "evidence": "No '/Users/pavlokorolov' occurrences remain; PK links use repo-relative '../../../.claude/skills/project-knowledge/references/...' and all resolve on disk; reviewer report paths use repo-relative 'work/14-funnels-composition/logs/working/task-2/...'."
+    },
+    {
+      "task": 3,
+      "issue": "iter1 critical — PK links missing 'references/' segment and '../../../' prefix; misleading exhaustive-switch AC wording",
+      "status": "fixed",
+      "evidence": "project.md/architecture.md/patterns.md now use '../../../.claude/skills/project-knowledge/references/...' and resolve on disk. AC now correctly distinguishes StepExecutor.execute (return-switch expression — compiler-enforced) from FunnelExecutionEngine.drive (switch statement — NOT compiler-caught, case COMPLETE must be added deliberately)."
+    },
+    {
+      "task": 4,
+      "issue": "iter1 critical — PK links missing 'references/' segment; onSubmit switch exhaustiveness, i18n parity-claim, store-fetch side-effect",
+      "status": "fixed",
+      "evidence": "All four PK links (project/architecture/patterns/ux-guidelines) now use '../../../.claude/skills/project-knowledge/references/...' and resolve. onSubmit switch documented as NOT exhaustiveness-guarded (silent no-emit, TS won't catch) with 'SUBSCRIBE submit shape' test as guard. i18n parity correctly states required-keys.spec.ts covers only hardcoded REQUIRED_KEYS, full parity via scripts/check-locales.mjs. store-fetch('all') side-effect (overwrites list-page funnels.value) explicitly flagged with local-useApi fallback."
+    },
+    {
+      "task": 7,
+      "issue": "iter1 — gradlew/pnpm command paths",
+      "status": "fixed",
+      "evidence": "Commands use 'cd backend && ./gradlew ...' (notes gradlew lives in backend/, not repo root) and 'cd frontend && pnpm test' (notes project on pnpm@10.33.2 / pnpm-lock.yaml). Non-code audit task — TDD Anchor correctly absent."
+    },
+    {
+      "task": 8,
+      "issue": "iter1 — AC count 16 vs 15",
+      "status": "fixed",
+      "evidence": "Task references user-spec 'Критерии приёмки — 15 пунктів' consistently (lines 29, 42, 99); verified user-spec AC section has exactly 15 checklist items. tech-spec '7 технічних пунктів' verified — tech-spec AC section has exactly 7 items. Non-code QA task — TDD Anchor correctly absent."
+    }
+  ],
+  "verification_notes": [
+    "PK references dir contains: project.md, architecture.md, patterns.md, ux-guidelines.md, deployment.md (no testing.md — not referenced by these 5 tasks).",
+    "All feature-relative files (user-spec.md, tech-spec.md, decisions.md, code-research.md) resolve.",
+    "Required Skills SKILL.md links resolve: code-writing, test-master, pre-deploy-qa.",
+    "Frontmatter status=planned for all five tasks.",
+    "Frontmatter<->body parity: tasks 2/3 skills [code-writing] + reviewers (3) match sections; task 4 reviewers [code-reviewer, test-reviewer] (2) match section; tasks 7/8 reviewers [] match 'None' audit/QA sections.",
+    "Skill<->reviewer mapping: code-writing tasks include code-reviewer+test-reviewer; task 4 omits security-auditor (frontend-only Vue/i18n, no security surface) — acceptable.",
+    "Dependency graph acyclic; all depends_on reference lower waves (2/3/4->wave2 dep on wave1; 7->wave3 dep on wave2; 8->wave4 dep on wave3).",
+    "TDD Anchor present for code tasks 2/3/4, correctly absent for non-code audit (7) and QA (8) tasks.",
+    "No template placeholders or TODO/FIXME/TBD markers (reviewer-path {round} tokens are legitimate template syntax)."
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 0
+  }
+}

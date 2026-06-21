@@ -1,0 +1,24 @@
+{
+  "verdict": "approved",
+  "summary": "smoke.md is a complete, well-structured manual checklist that covers the full user-spec «Пользователь проверяет» chain in order (bot connected → activate SET_KEYBOARD menu funnel → keyboard visible AND survives `completed` → button tap starts keyword funnel → bonus scenario end-to-end with child keyboard, several moves and return-to-main-menu in BOTH branches → CLEAR_KEYBOARD removes the keyboard). It follows the 09-subscribers format precedent (intro, Передумови, numbered Кроки with expected results, Чек-ліст результатів mapped to user-spec, Troubleshooting, Cleanup, Sign-off, Notes), documents all six consciously-accepted keyword-mechanism properties as NOT-bugs, uses only real UI labels (verified against uk.json), is consistent with the implemented runtime behavior in decisions.md (fire-and-forget CONTINUE, keyboard survives completion, CLEAR_KEYBOARD sends mandatory text WITH remove_keyboard), is fully Ukrainian, and leaks no secrets (bot token is a `<token>` placeholder throughout). Only two minor wording observations, neither blocking.",
+  "findings": [
+    {
+      "severity": "info",
+      "location": "All UI labels (Передумови / Підготовка воронок / Кроки 1-5 / Troubleshooting)",
+      "issue": "Terminology cross-check passed. Every UI label used matches uk.json exactly: «Встановити клавіатуру»/«Прибрати клавіатуру» (funnels.steps.type.SET_KEYBOARD/CLEAR_KEYBOARD), «Постійна»/«Сховати після натискання» (keyboardPersistent/keyboardOneTime), «Текст повідомлення» (keyboardText), «Кнопки клавіатури» (keyboardRows), «Текст кнопки» (keyboardButton), «Активувати» (editor.activate), «Прев'ю» (editor.preview), «Активна»/«Чернетка» (status), «Ключові слова» (trigger.keywordLabel), «Створити воронку» (createButton). The amber-hint quote «Жодна активна воронка з ключовим словом не матчить цей текст…» is a verbatim prefix of funnels.step.keyboardKeywordHint. No invented labels or flows. No action needed.",
+      "suggestion": "None — recorded as positive confirmation."
+    },
+    {
+      "severity": "minor",
+      "location": "Передумови, line 24 / Кроки intro",
+      "issue": "Prerequisites assert the instance is up via `GET {APP_URL}/health → HTTP 200` but never define `{APP_URL}` before its first use in that same bullet. The ngrok bullet (lines 28-30) later equates the ngrok HTTPS-URL with `APP_URL`, but a reader on a non-ngrok local run (plain localhost) is left to infer that `{APP_URL}` is their backend base URL. The 09-subscribers precedent has the same minor gap, so this is consistent with the precedent — flagged only for polish.",
+      "suggestion": "Optionally add a half-sentence on first use, e.g. «`{APP_URL}` — базовий URL вашого бекенда (для локального прогону — HTTPS-URL від ngrok, див. нижче)», so the health-check bullet is self-contained for both local and ngrok runs."
+    },
+    {
+      "severity": "minor",
+      "location": "Step 3 (line 117-123) and Troubleshooting «Menu precedence» (line 174-176)",
+      "issue": "Step 3 instructs tapping a keyboard button immediately after the SET_KEYBOARD funnel reaches `completed`, which is correct (fire-and-forget never parks, so keyword-dispatch is live). The «menu precedence» troubleshooting note correctly warns that taps are suppressed while parked on an inline menu (`waiting_for_reply`). These two are mutually consistent, but a first-time operator could conflate them if their hand-built bonus funnel happens to include an inline-menu step that parks before the keyboard-restore SET_KEYBOARD. The doc already advises «Не змішуйте inline-парковку з постійним меню в одному флоу», so the guidance exists — this is a readability nudge only.",
+      "suggestion": "Optionally, in the bonus-setup (B.3) or Step 4, add one sentence reminding the author that the keyword-restoring SET_KEYBOARD must not sit behind an un-resolved inline-menu park in the same branch, tying the B-setup back to the menu-precedence gotcha. Purely advisory."
+    }
+  ]
+}

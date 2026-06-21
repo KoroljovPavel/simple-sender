@@ -1,0 +1,8 @@
+{
+  "reviewer": "security-auditor",
+  "task": 1,
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "Both round-1 findings are fully resolved. (1) Echoed note id is now validated against NOTE_ID_PATTERN ('^[0-9a-f]{24}$') at FunnelService.java:813 and rejected with 422 if it does not match — arbitrary client strings are never persisted. (2) A seenIds HashSet is initialised at line 802 and checked before appending each note; a duplicate id within the same request body is rejected with 422 at line 817-819. Neither new error message echoes user-supplied content (no information-leakage risk). The fixes introduce no new security issues: the pattern is anchored and case-sensitive (lowercase-only), preventing bypass via uppercase hex; the duplicate guard is positioned after the format check so an invalid id fails on shape before reaching the dedupe path; new ObjectId() mint at line 821 is unchanged from the original and generates cryptographically random identifiers via the BSON library. Tests notes_echoedIdMustMatchObjectIdHexShape and notes_duplicateIdWithinFunnelRejected provide direct coverage of both mitigations."
+}

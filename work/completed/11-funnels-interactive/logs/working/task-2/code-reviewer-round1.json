@@ -1,0 +1,35 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "info",
+      "dimension": "Architecture / DRY",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "finding": "Retry seam (sendWithRateLimitRetry/sendWith5xxRetry/sendOnce) refactored to return raw TelegramSendResult<JsonNode>; SentMessage mapping moved into send(). Lets answerCallbackQuery reuse the exact retry/deadline/429 loop without duplicating it. mapBodyToSentMessage stays on the content path only. Behavior-preserving — TelegramSenderTest and TelegramSenderSubscriberHookIT pass unchanged.",
+      "action": "none — clean reuse"
+    },
+    {
+      "severity": "info",
+      "dimension": "Cross-File Consistency",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "finding": "sendOnce now omits chat_id body key when chatId==null (ack path). Content sends always pass non-null chatId, so /sendMessage and /sendPhoto bodies are unchanged.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "dimension": "Error Handling",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "finding": "answerCallbackQuery wraps the whole ack path (findById + CONNECTED filter + decrypt + retry) in catch(RuntimeException) → scrub + WARN with greppable TELEGRAM_ANSWER_CALLBACK_FAILED. No audit event, no subscriber hook. Matches Decision 8 best-effort and the existing TELEGRAM_SENDER_SUBSCRIBER_HOOK_FAILED swallow-and-warn convention.",
+      "action": "none"
+    },
+    {
+      "severity": "minor",
+      "dimension": "Separation of Concerns",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "finding": "answerCallbackQuery re-derives attempts/deadline + repeats the findById+CONNECTED filter inline instead of going through send(). Intentional and documented in Javadoc: ack must bypass the audit/subscriber-hook pipeline that send() applies. Acceptable per task Details (\"answerCallbackQuery is NOT content-send\").",
+      "action": "accepted as-is (deliberate)"
+    }
+  ]
+}

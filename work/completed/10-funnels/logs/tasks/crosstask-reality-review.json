@@ -1,0 +1,62 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+  "iteration": "cross-task",
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 7,
+      "issue": "Task 7 declares depends_on: [1, 6] but its own implementation hint at line 223 states: 'Lookup-by-chat підписника — через SubscriberService (метод, доданий у Task 4) або наявний findByProjectIdAndTelegramBotIdAndTelegramChatId у SubscriberRepository.' The tech-spec (Architecture → How it works → Тригер, step 2) mandates the clean path goes through the SubscriberService lookup-by-chat method ADDED IN TASK 4: 'Резолвить підписника за (projectId, telegramBotId, chatId)'. Task 4 exposes this as a new public interface method on SubscriberService. The 'або SubscriberRepository directly' wording in the hint is an unsafe escape hatch: if Task 7 is implemented with the direct repo call, it bypasses the public service interface contract that Task 4 establishes, breaking the intended abstraction boundary between subscriber/ module and funnel/ module. More critically, calling the repo directly without Task 4 being done first is only safe if SubscriberService.findByChat is not actually needed — but the Acceptance Criteria of Task 7 says 'fire() резолвить CONNECTED-бота + підписника' and the canonical path in tech-spec goes through SubscriberService. Since Task 4 is Wave 1 and Task 7 is Wave 3, the dependency is always satisfied by execution order — but the DECLARED depends_on is missing Task 4, meaning a task executor running dependency analysis could skip Task 4 or consider Task 7 runnable in parallel with Task 4. The missing declaration is the bug.",
+      "fix": "Add Task 4 to Task 7 depends_on: change 'depends_on: [1, 6]' to 'depends_on: [1, 4, 6]'. Also tighten the implementation hint to remove the 'або findByProjectIdAndTelegramBotIdAndTelegramChatId у SubscriberRepository' escape hatch and mandate exclusively the SubscriberService.findByChat path from Task 4, preserving the module boundary."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 7,
+      "issue": "Task 7 constructor dependency list (line 51) lists 'SubscriberService/SubscriberRepository' as a dual option for subscriber lookup. The tech-spec Shared Resources table establishes SubscriberServiceImpl as the sole consumer-facing interface for subscriber data access in the funnel module. Listing SubscriberRepository as a direct dependency of FunnelTriggerServiceImpl would violate the module boundary (funnel/ directly accessing subscriber/ repository, bypassing SubscriberService). Task 6 (engine) correctly declares only SubscriberService/SubscriberServiceImpl. Task 7 should follow the same pattern and list only SubscriberService as the dependency for lookup-by-chat.",
+      "fix": "Remove 'SubscriberRepository' from the constructor dependency list in Task 7 Details. Keep only 'SubscriberService' for subscriber lookup. The 'або наявний findByProjectIdAndTelegramBotIdAndTelegramChatId у SubscriberRepository' hint is the second form of the same issue — remove it."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 6,
+      "issue": "Task 6 (FunnelExecutionEngine) ADD_TAG/REMOVE_TAG executors are specified to call 'SubscriberServiceImpl.addTag/removeTag(...)' (line 84) by naming the concrete implementation class directly, rather than the interface SubscriberService. This is inconsistent with the project pattern: SubscriberService is the public interface, and SubscriberServiceImpl is injected as the interface type throughout the codebase. Injecting/referencing the concrete class in FunnelExecutionEngine would tightly couple the funnel module to the implementation class rather than the contract interface. Task 6 line 217-218 further lists both 'SubscriberServiceImpl/SubscriberService' as dual constructor-inject options, adding ambiguity. All other modules use SubscriberService (interface), not SubscriberServiceImpl directly.",
+      "fix": "Change Task 6 references from 'SubscriberServiceImpl.addTag/removeTag' to 'SubscriberService.addTag/removeTag'. The injection type in FunnelExecutionEngine should be SubscriberService (interface), not SubscriberServiceImpl. The sole-writer guarantee is upheld by the runtime bean being SubscriberServiceImpl — no need to reference the impl class in funnel module code."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "Task 8 depends_on: [1, 6] but also validates property key alignment with Task 5 (app.funnel.max-steps). The task's Details section explicitly warns: 'ПЕРЕВІР, що ключі в коді Task 6 та тут ідентичні — головне джерело багів цього таска. Task 5 аналогічно для app.funnel.max-steps.' Task 5 is in Wave 2 (depends_on: [1]) and Task 8 is in Wave 3 (depends_on: [1, 6]). Since Task 8 is in Wave 3 and Task 5 is in Wave 2, execution order guarantees Task 5 completes before Task 8. However Task 5 is not in Task 8's depends_on, making the dependency implicit. This is lower severity because the wave ordering is correct, but an executor doing fine-grained dependency checks could miss it.",
+      "fix": "Add Task 5 to Task 8 depends_on for explicitness: 'depends_on: [1, 5, 6]'. Alternatively document the implicit wave ordering explicitly in Task 8's Dependencies section."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 defines SubscriberCustomFieldsService.setOne() with two acceptable audit patterns: (a) setOne() only validates+updates and returns old/normalized, controller aggregates and calls recordCustomFieldsSet once; or (b) a service method accepting the full map and calling recordCustomFieldsSet once. However Task 6 (engine) calls setOne() for SET_CUSTOM_FIELD on a single key per step. The aggregated-audit form required by the controller path (one recordCustomFieldsSet call for all keys in a PATCH) is architecturally incompatible with a per-key call from the engine (each step operates on exactly one key). The task text acknowledges this: 'Per-key виклик recordCustomFieldsSet зсередини setOne ЗАБОРОНЕНО для контролерного шляху.' This means the implementation must support two calling conventions, which creates a subtle design risk: if setOne() is implemented to call recordCustomFieldsSet internally (the forbidden form for the controller path), the engine path would work correctly but the controller path would emit multiple audit events. The task does describe the resolution but the cross-task implication for Task 6's calling contract is not surfaced in Task 6 itself.",
+      "fix": "In Task 6, explicitly document that SET_CUSTOM_FIELD executor calls SubscriberCustomFieldsService.setOne() which handles its own single-key audit internally (one recordCustomFieldsSet per step call is acceptable in the engine context). This clarifies the dual-calling-convention for future implementors and auditors."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 14,
+    "claims_verified": 31,
+    "issues_found": 5
+  },
+  "cross_task_checks": {
+    "task7_lookup_by_chat_analysis": {
+      "question": "Should Task 7's FunnelTriggerService.fire() use SubscriberService.findByChat (added in Task 4) vs. SubscriberRepository.findByProjectIdAndTelegramBotIdAndTelegramChatId directly?",
+      "finding": "The tech-spec mandates the SubscriberService path (public interface, module boundary). Task 7's hint allows either option ('або'), which is the problem. The direct repo call bypasses Task 4's contribution. Task 4 is the owner/creator of the public SubscriberService.findByChat method; Task 7 consumes it without declaring depends_on Task 4.",
+      "verdict": "Task 7 MUST declare depends_on [1, 4, 6]. The direct SubscriberRepository call should be disallowed in the hint to enforce the module boundary.",
+      "severity": "critical"
+    },
+    "shared_resources_duplicate_init": "No duplicate heavy resource initialization found. MongoTemplate: singleton Spring bean, all tasks inject same instance. JobRunr: single @Recurring registration in Task 6 (FunnelExecutionEngine). Clock: ClockConfig.systemClock() singleton, Task 6 uses it correctly. TelegramSender: singleton @Component extended in Task 3. SubscriberServiceImpl: singleton, all tasks route through it or SubscriberService interface.",
+    "atomic_claim_idiom_consistency": "Tasks 1, 5, 6, 7, 8 all use findAndModify CAS with .name() literals for enum status values. Consistent across all tasks. No conflicts found.",
+    "name_literals_consistency": "All tasks referencing findAndModify Criteria explicitly mandate .name() literals. Decision 14 (lowercase enums) + Decision 4 (.name() in findAndModify) is consistently referenced in Tasks 1, 5, 6, 7, 8. No inconsistency.",
+    "sole_writer_rule": "Task 4 correctly routes audit events through SubscriberServiceImpl.recordCustomFieldsSet. Task 6 correctly routes addTag/removeTag through SubscriberService (though mentions SubscriberServiceImpl by concrete name — major finding). Task 7 has no subscriber mutation calls (only lookup + FunnelExecution insert/cancel), so sole-writer is not at risk in Task 7 itself. SubscriberCustomFieldsService (Task 4) routes through subscriberService.recordCustomFieldsSet — correct.",
+    "variable_template_renderer_escaping": "Task 2 creates VariableTemplateRenderer as a pure static utility. Task 6 uses it for SEND_MESSAGE (text) and SEND_IMAGE (caption). Escaping is applied to substituted values only, not author markup. Consistent across Task 2, 6 descriptions. Decision 10 escaping contract is referenced in both tasks.",
+    "wave_ordering_gaps": "Task 7 wave 3 depends_on [1,6] — missing Task 4 (critical). Task 8 wave 3 depends_on [1,6] — missing Task 5 (minor, wave ordering saves it). All other depends_on declarations appear correct for their wave."
+  }
+}

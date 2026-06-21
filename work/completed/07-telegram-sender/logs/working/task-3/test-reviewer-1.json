@@ -1,0 +1,28 @@
+{
+  "summary": "Task 3 is pure additive scaffolding: six new types (3 exceptions, 3 records) with zero behaviour, zero Spring wiring, zero consumers. The task spec, tech-spec Implementation Plan, and Testing Strategy explicitly defer all behavioural coverage to Tasks 4 (TelegramSenderTest / TelegramSenderIT) and Task 5 (BotServiceTest / BotControllerIT updates). Verification was correctly limited to compileJava + the existing test suite, both green per the main agent. Jackson deserialisation of the snake_case TelegramSendResult / TelegramSendParameters records is exercised end-to-end by every Task 4 unit test that enqueues a Telegram-shaped response on MockWebServer (lines 297-306 of tech-spec — 5xx-with-ok-false, 429-with-retry_after, missing/negative retry_after) and by the Task 4 integration test sendText_endToEndViaBotService_emitsBothEvents which enqueues a real {ok:true, result:{message_id,chat:{id}}} body. The wire-shape contract is therefore covered structurally now and behaviourally next wave. No new tests are warranted in this task. One marginally-cheap optional addition (a reflective visibility check on TelegramRateLimitException mirroring the BotTokenLeakTest pattern) is discussed below as a minor finding — strictly opt-in, no quality gap if skipped.",
+  "findings": [
+    {
+      "severity": "minor",
+      "area": "optional defensive test",
+      "finding": "TelegramRateLimitException is intentionally package-private to prevent cross-package use (Decision 5, Architecture step 11). A future contributor could trivially add the `public` modifier without realising it crosses the design boundary, and only Task 4's compile-time call sites would catch it — and only because they happen to live in the same package. There is no test enforcing the invariant the way BotTokenLeakTest enforces 'Bot must not declare toString'. Cost is one ~5 line reflective test in bot/; value is a guardrail that survives future refactors that move the .retryWhen filter or add convenience constructors.",
+      "suggestion": "Optional, not required to land this task. If added, place in backend/src/test/java/com/botfunnel/bot/TelegramRateLimitExceptionVisibilityTest.java: one @Test asserting `assertThat(Modifier.isPublic(TelegramRateLimitException.class.getModifiers())).isFalse()` plus a second assertion that the getter method `getRetryAfterSeconds` exists and is not public. Mirrors the spirit of BotTokenLeakTest. Recommend deferring to Task 4 if added at all — the test only becomes load-bearing once the .retryWhen consumer exists.",
+      "location": "backend/src/main/java/com/botfunnel/bot/TelegramRateLimitException.java:6"
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 9,
+    "litmusTest": {
+      "checked": 0,
+      "passed": 0,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "verdict": "passed"
+}

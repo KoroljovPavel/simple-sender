@@ -1,0 +1,43 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14, 15],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Context Files",
+      "issue": "PK references use a `../../../.claude/skills/project-knowledge/references/...` prefix while tasks 11, 13, 14, 15 use the bare `.claude/skills/project-knowledge/references/...` style that matches the template literally. Both resolve, but the two styles are inconsistent across the batch.",
+      "fix": "Pick one convention for PK links across the batch. The template uses the bare `.claude/...` form; align task 12 to it (or document the root-relative form as the intended convention) for consistency."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 14,
+      "section": "Verification Steps",
+      "issue": "Subsection headers (`### Test Suite`, `### Acceptance Criteria Review`, `### Report`) diverge from the template's named subsections (`### Automated` / `### Smoke` / `### User`). The content is appropriate for a QA task, but the headings are ad-hoc.",
+      "fix": "Either keep an `### Automated` heading for the test-suite run or add a brief note that this QA task adapts the Verification Steps subsections to its nature (consistent with task-creator guidance for non-code tasks)."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 15,
+      "section": "Verification Steps",
+      "issue": "Subsection headers (`### Setup`, `### Live checks`, `### User`) partly diverge from the template's `### Automated` / `### Smoke` / `### User`. `### User` is present and correct; the others are adapted to the live-verification nature.",
+      "fix": "Acceptable adaptation for a live-verification task; optionally note the adaptation in a comment for consistency with the template's subsection naming."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Required Skills",
+      "issue": "Skill link text is `/skill:code-reviewing` pointing at `.claude/skills/code-reviewing/SKILL.md` — correct — but the intro line uses the Russian/Ukrainian-mixed phrasing while task 12 uses English (`Before starting, load:`). Cosmetic language inconsistency across the batch.",
+      "fix": "No action required; language mix across tasks is cosmetic. Optionally standardize the 'load skill' intro line."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 4
+  }
+}

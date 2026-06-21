@@ -1,0 +1,37 @@
+{
+  "status": "passed",
+  "summary": "Three meaningful slow-lane wire-format ITs that pin the exact /sendMessage body. All three pass the litmus test: each would fail if the StepExecutor produced the wrong wire shape (bare-string buttons, missing/false resize_keyboard, swapped is_persistent/one_time_keyboard, transposed rows, a park instead of complete, or a no-op keyword dispatch). Assertions cover every AC field by name, idioms are borrowed verbatim from the two pinned sources, one assertion theme per test, and the cumulative MockWebServer request log is drained correctly so no bleed occurs. No blocking or major findings.",
+  "findings": [
+    {
+      "severity": "info",
+      "category": "anti_pattern",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": 1405,
+      "description": "SET_KEYBOARD test asserts is_persistent=true and one_time_keyboard=false against a seed of (true, false). Because these are the same as the production NULL-fallback defaults (is_persistent defaults true, one_time_keyboard defaults false in buildReplyKeyboardMarkup lines 410-412), the test would still pass if the builder dropped the step's scalar values entirely and always emitted the defaults. The litmus test for 'are the seeded booleans wired through?' is therefore weaker than it looks — the assertions confirm the WIRE shape (keys present, correct types) but not that the step's stored values drive them.",
+      "recommendation": "Seed the NON-default combination is_persistent=false / one_time_keyboard=true (i.e. setKeyboard(..., false, true)) so a builder that ignores the step fields and emits the hardcoded defaults (true/false) fails loudly. This costs nothing — the existing object-form/row/label/resize_keyboard assertions still hold — and closes the one remaining 'value not actually read from the step' gap. Optionally keep a second case for the (true,false) combo if both branches matter, but at minimum one test must pin the non-default values."
+    },
+    {
+      "severity": "info",
+      "category": "missing_coverage",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": 1410,
+      "description": "resize_keyboard is hardcoded true in production (StepExecutor line 411) and the test asserts it is true. This correctly catches a dropped key (path() returns missing-node → asBoolean() yields false → assertion fails), so the assertion earns its place. No gap in the happy path. Noting only that there is no negative/omission coverage proving resize_keyboard is ALWAYS present regardless of step config — but since it is a compile-time constant with no input branch, such a test would be redundant. No action needed.",
+      "recommendation": "No change required. The assertThat(markup.path(\"resize_keyboard\").asBoolean()).isTrue() correctly fails if the key is absent (missing node asBoolean()==false) or set false, which is the meaningful regression to guard. Recorded as info for completeness only."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 3,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

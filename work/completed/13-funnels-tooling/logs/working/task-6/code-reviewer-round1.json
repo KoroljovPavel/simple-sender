@@ -1,0 +1,27 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 6,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "error-handling",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "line": 57,
+      "issue": "Error mapping uses contextKey 'funnels.preview' but no i18n keys 'errors.funnels.preview.{404|generic}' exist in either locale. useApiError falls back to 'errors.generic' (\"Something went wrong. Try again later\"), so the neutral in-panel message still renders non-empty and the AC is met — but the message is fully generic, not preview-specific.",
+      "impact": "Cosmetic only. Behavior is correct (neutral, non-blank, no throw); just a less specific message. Test asserts non-empty text, which passes via the generic fallback.",
+      "recommendation": "Optional: add errors.funnels.preview.generic (and optionally .404) in both locales, or confirm with Task 4 owner whether a preview-specific error string is desired. Not blocking."
+    },
+    {
+      "severity": "minor",
+      "category": "performance",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "line": 49,
+      "issue": "No stale-response guard: when the focused step switches rapidly, an earlier preview() promise could resolve after a later one and overwrite rendered.value. The 600ms debounce makes this unlikely in practice, but it is not strictly prevented.",
+      "impact": "Low — out-of-order resolution would briefly show the wrong rendered string until the next watch tick. Debounce coalesces most keystroke bursts.",
+      "recommendation": "Optional: capture a per-call sequence token (or the step id) and ignore a resolution whose token != latest. Not blocking for a read-only preview panel."
+    }
+  ],
+  "notes": "Strong implementation, fully aligned with the task spec and Decision 9. XSS guard correct: rendered string is output exclusively via {{ }} interpolation in a whitespace-pre-wrap div (no v-html / innerHTML anywhere); explicit vitest source-scan + DOM assert both present and passing. Cross-file consistency verified: store preview(funnelId, stepId, {stepType,text,parseMode}) signature, PreviewStepRequest/Response types, FunnelStep fields (caption/text/parseMode), useApiError(error, contextKey), and editStep/steps in [funnelId].vue all match call sites. Message vs non-message branching correct (MESSAGE_TYPES gate; no backend call for non-message or null step; empty MENU body handled via ?? ''). sampleData indicator wired to flat canonical i18n keys (funnels.editor.preview/previewPlaceholder/previewSampleData) — keys exist in both uk.json and en.json; no locale files modified in this commit. Debounce mirrors scheduleTriggerPersist idiom with primed-flag for immediate first render; timer cleared in onBeforeUnmount (no leak). Header toggle added to the Task-5 action group without disturbing test-run/duplicate/stop-all buttons; starts OFF; desktop-first two-column layout (lg:grid lg:grid-cols-[1fr_360px]) gated on previewOpen, stacks below lg. Ran vitest: FunnelMessagePreview.spec.ts + funnel-editor.spec.ts = 41/41 pass, no regressions. Both findings are non-blocking minor suggestions."
+}

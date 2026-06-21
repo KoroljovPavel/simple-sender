@@ -1,0 +1,41 @@
+{
+  "summary": "Architecture-level security review of tech-spec 15-message-composer against OWASP Top 10. The design preserves the core security invariants well: anti-SSRF (media is URL/file_id only, backend never dereferences; Telegram and the browser fetch), XSS-guard in preview (backend-side parseMode escaping, frontend text-only {{ }}, never v-html, media via :src), callback wire-format strict parsing ({executionId}:{buttonIndex}, <=64 bytes, exactly one separator, ObjectId-hex + ranged int), IDOR/owner checks in advanceOnCallback (subscriberId + projectId match), and token scrubbing inherited for free by the new TelegramSender methods (they route through the shared send(...) -> scrubTokens path). Rejecting the sealed-hierarchy/_class alternative (Decision 1) also removes a polymorphic-deserialization (A08) risk surface, which is a security positive. No critical security weakening is introduced by this design. The findings below are completeness/hardening gaps the implementation tasks should pin down explicitly so they are not silently dropped during refactor; none are blockers.",
+  "findings": [
+    {
+      "severity": "major",
+      "owasp_category": "A01:2021 Broken Access Control (IDOR / forced state transition)",
+      "issue": "advanceOnCallback today asserts the parked step's cursor points at a MENU step before resolving buttons (code-research L270) and reads buttons from menu.getButtons() (L277). The composer refactor (Task 5, Decision 2) retargets button resolution to the LAST block of a MESSAGE step. If the step-type guard is loosened/removed rather than precisely retargeted to 'MESSAGE step whose last non-album block carries buttons', a callback could resume a parked step that should not accept callbacks (e.g. a composer with no buttons, or one whose last block is an album), bypassing the intended state machine.",
+      "location": "Task 5: FunnelTriggerServiceImpl.advanceOnCallback; tech-spec Decision 2 + Architecture 'Callback'",
+      "recommendation": "Keep an explicit positive guard: cursor.stepType == MESSAGE AND last-non-album block exists AND step.buttons non-empty AND button index in range AND button.type == 'callback', before delegating to resumeOnCallback. Do not weaken the existing waiting_for_reply + subscriberId + projectId IDOR checks. Add an IT asserting a callback against a parked composer step that carries NO keyboard (or whose last block is an album) is rejected, not advanced."
+    },
+    {
+      "severity": "major",
+      "owasp_category": "A10:2021 SSRF (input validation on media URL scheme)",
+      "issue": "validateSteps (Task 4) must accept BOTH a Telegram file_id AND an http(s) URL for each media block / album item. The tech-spec says 'http(s)-URL для медіа' and inherits requireHttpUrl (URI scheme check) from the MENU url-button path, but does not state explicitly that the URL branch rejects non-http(s) schemes (file://, gopher://, ftp://, data:) for the new block types, nor how file_id vs URL is disambiguated. Although the runtime invariant (backend never dereferences; Telegram fetches) means a bad scheme cannot cause a backend SSRF directly, allowing arbitrary schemes through validation widens the attack surface (e.g. data:/javascript: leaking into preview :src, or unexpected schemes passed to Telegram) and weakens defense-in-depth.",
+      "location": "Task 4: FunnelService.validateSteps case MESSAGE (per-block media validation); tech-spec Decision 6 + Acceptance Criteria 'http(s)-URL для медіа'",
+      "recommendation": "For every media-bearing block (IMAGE/VIDEO/AUDIO/FILE) and every album MediaItem, validate mediaUrl as either (a) a Telegram file_id (constrained charset/length, no scheme) or (b) a URL whose scheme is strictly http or https via the existing requireHttpUrl URI-scheme check. Reject file://, data:, javascript:, gopher:, ftp: and schemeless-with-authority inputs with a 422 business code. Add a controller IT covering a media block with a non-http(s) scheme."
+    },
+    {
+      "severity": "minor",
+      "owasp_category": "A03:2021 Cross-Site Scripting (preview media binding)",
+      "issue": "The multiblock preview correctly renders text/caption as {{ }} (Vue auto-escaped) and binds media via :src. img/video :src with a javascript:/data: URL is generally inert for media elements, but if any block widget binds a user-controlled URL into an :href (e.g. a 'open file' link for FILE blocks, or a download affordance) a javascript: scheme would execute. The tech-spec states 'never v-html' and ':src for media' but does not address :href sanitization for file/document blocks.",
+      "location": "Task 9: FunnelMessagePreview.vue (multiblock render); Task 8: FunnelStepForm.vue media widgets",
+      "recommendation": "If any preview/editor element binds mediaUrl into :href (links, download buttons), restrict the rendered scheme to http(s) (and Telegram file_id should not be rendered as a clickable link at all). Rely on the backend scheme validation (finding 2) as the primary control and treat the frontend as defense-in-depth. Keep media strictly on :src for img/video; never v-html."
+    },
+    {
+      "severity": "minor",
+      "owasp_category": "A04:2021 Insecure Design (resource amplification / DoS)",
+      "issue": "One composer node now fires up to N sequential Telegram sends (up to 10 blocks; album up to 10 items each), versus a single send today. The design explicitly has no inter-block pacing and relies on the existing per-send 429 loop (US 'Немає inter-block pacing', Risk 4). This is an availability/liveness tradeoff (amplified 429 window, longer in_progress stranding on mid-node crash), bounded by the >10-blocks save validation. Not a confidentiality/integrity vulnerability, but worth recording as an accepted amplification.",
+      "location": "tech-spec Decision 3 + Risks (429 burst); StepExecutor MESSAGE branch (Task 3)",
+      "recommendation": "Keep the hard save-time caps (<=10 blocks, album 2-10) as the amplification bound — they are the real DoS control here. No code change required for this phase; if 429 stranding becomes observable in practice, add inter-block pacing as noted in the spec. Ensure the per-node at-most-once stranding behavior is logged (WARN) so a stuck in_progress node is observable (A09)."
+    },
+    {
+      "severity": "minor",
+      "owasp_category": "A09:2021 Security Logging and Monitoring",
+      "issue": "Token scrubbing is correctly inherited by the new sender methods (shared send -> TelegramApiClient.scrubTokens), and audit events fire per send. The album path (Task 2) uses a SEPARATE array-response mapper instead of the shared mapBodyToSentMessage. The review should confirm the album mapper's error/log paths also route raw Telegram responses (which can echo back the bot token in error descriptions/URLs) through scrubTokens, since it diverges from the shared mapping that already does so.",
+      "location": "Task 2: TelegramSender.sendMediaGroup album array-mapper; tech-spec Decision 5",
+      "recommendation": "Ensure the sendMediaGroup array-mapper and any of its error branches wrap logged messages/error descriptions with TelegramApiClient.scrubTokens, matching the shared single-message mapper. Add a TelegramSenderTest assertion (MockWebServer) that a sendMediaGroup error response containing a token-like string is scrubbed in the logged/thrown text."
+    }
+  ],
+  "verdict": "pass"
+}

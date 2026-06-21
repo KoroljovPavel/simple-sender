@@ -1,0 +1,85 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "Interview (ui_ux_requirements) specifies 'Inline hint if the referenced target is not currently active' in the editor form. Neither 'Як повинно працювати' nor the acceptance criteria mention this UX element.",
+      "location": "Як повинно працювати / Критерії приёмки",
+      "fix": "Add a criterion: 'Форма кроку показує inline-підказку, якщо обрана цільова воронка на момент редагування не є `active`' (або видалена), щоб автор розумів, що крок може не спрацювати."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "Interview Q2 discussed that the inline menu is NOT persistent (contrasted with Epic 7). This nuance — relevant to understanding why a separate sub-funnel makes sense — is absent from the spec. It also hints at a constraint (MENU step = inline keyboard, not persistent).",
+      "location": "Зачем",
+      "fix": "Optionally add one sentence: 'Меню — inline-клавіатура (не persistent як в Epic 7), тому під-сценарій природно виносити в окрему воронку замість нескінченного кроку очікування.'"
+    },
+    {
+      "check": "edge_cases",
+      "severity": "minor",
+      "issue": "Self-target edge case (A → A via SUBSCRIBE_TO_FUNNEL) is documented in the interview (edge_cases section) but absent from the spec. The spec handles it implicitly via the re-enter guard, but there is no explicit statement of the expected behavior.",
+      "location": "Ограничения / Критерії приёмки",
+      "fix": "Add a note in 'Ограничения' or a dedicated edge-case line: 'Самозаціклення (ціль = поточна воронка) дозволено; поведінка визначається re-enter guard: no-op при `allowReEnter=false`, перезапуск при `allowReEnter=true`.' This avoids implementors second-guessing."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "Criterion 15 ('Підписник у реальному Telegram проходить A → B → меню A') duplicates the 'Пользователь проверяет' manual check. As a formal acceptance criterion it adds no automatable signal and creates ambiguity about who verifies it and how it is tracked.",
+      "location": "Критерії приёмки, item 15",
+      "fix": "Remove from 'Критерії приёмки'; the scenario is fully covered by 'Пользователь проверяє'. If kept, clarify: mark as manual-only and reference the 'Як перевірити' section."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "Criterion 13 states Test-for-me 'enroll цілі реєструється; child-відправка спостерігається пізніше' — the second clause ('спостерігається пізніше') is vague: what is the concrete expected result the agent verifies?",
+      "location": "Критерії приёмки, item 13",
+      "fix": "Тighten the wording: '«Test for me» проходить крок `SUBSCRIBE_TO_FUNNEL` — в БД з'являється нова execution для цільової воронки з коректним `currentStepId` і `enrollDepth = 1`. Відправка повідомлень child-воронки не є частиною HTTP-відповіді (fire-and-forget), але перевіряється окремим sweep-тестом.'"
+    },
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "15 acceptance criteria exceed the >10 warning threshold for any declared size. Declared size is L, which is appropriate for the feature scope, so this is expected — but the threshold is flagged per rules.",
+      "location": "Критерії приёмки (frontmatter: size: L)",
+      "fix": "No action required if size L is intentional. Consider merging logically related criteria (e.g., items 6+7 about endParentAfter on/off) to reduce noise without losing coverage."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "scope: one SUBSCRIBE_TO_FUNNEL step, fire-and-forget",
+      "cycles are a wanted feature, no static cycle-detection at save",
+      "enrollDepth cap as the only runaway backstop",
+      "endParentAfter flag (parallel vs transfer mode)",
+      "return to specific step (not just start of target funnel)",
+      "concrete use case: main funnel inline menu → personal offer generation sub-funnel → return to menu",
+      "variant 2 (static return-to-step) chosen over dynamic call/return (C)",
+      "testing strategy: engine ITs, no E2E, vitest for frontend",
+      "target draft/paused/deleted at execution = explicit error (parent FAILS)",
+      "deleted entry step at execution → fallback to start + WARN",
+      "active-state validated at execution, not at save (chicken-and-egg authoring)",
+      "no deploy (Test-for-me local)",
+      "allowReEnter semantics: no-op vs cancel-then-insert",
+      "re-enter guard interaction with return-to-menu pattern",
+      "bean-cycle avoidance: inject FunnelExecutionFactory, not engine/FunnelService",
+      "telegramBotId reuse from parent",
+      "tenant isolation: target lookup scoped to projectId",
+      "at-most-once semantics preserved",
+      "save-time validation error codes: funnel_subscribe_target_required, funnel_subscribe_target_not_found, funnel_subscribe_target_step_not_found",
+      "SearchableSelect reuse for funnel picker and step picker",
+      "preview panel shows non-message placeholder"
+    ],
+    "missing": [
+      "Inline hint in the editor form when the referenced target funnel is not currently active (ui_ux_requirements in interview.yml) — discussed but absent from spec criteria",
+      "Self-target (A → A) edge case behavior — discussed in interview edge_cases but not documented in the spec"
+    ]
+  },
+  "summary": "Специфікація якісна і повна: всі обов'язкові розділи заповнені, рішення з інтервью відображені, критерії здебільшого верифіковані. Виявлено 6 minor-знахідок (нуль critical/major): відсутні inline-підказка про неактивну ціль та поведінка self-target, criterion 15 дублює ручну перевірку, criterion 13 розмитий, та warning про >10 критеріїв для size L. Документ може бути переданий на tech-spec без блокерів."
+}

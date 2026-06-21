@@ -1,0 +1,15 @@
+{
+  "task": "9",
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "low",
+      "test": "frontend/tests/i18n/required-keys.spec.ts",
+      "issue": "The i18n spec asserts the hardcoded REQUIRED_KEYS list exists in BOTH uk.json and en.json (presence-in-both), which does satisfy the TDD anchor for the new funnels.*/errors.funnels.* keys. But it does NOT verify the two locales have IDENTICAL full key sets — it imports collectKeySet but never calls compareKeySets/checkLocales. A drift key present in only one locale outside the required list would pass this spec. Full-set parity is currently enforced only by scripts/check-locales.mjs (run manually / in CI), not by a Vitest spec.",
+      "fix": "Add one assertion using the existing compareKeySets/checkLocales export: e.g. `const { diff } = checkLocales(localesDir); expect(diff.missingInA).toEqual([]); expect(diff.missingInB).toEqual([])` so the deterministic full uk/en parity is guarded by the test suite itself, not only the standalone script. Non-blocking."
+    }
+  ],
+  "summary": "All 10 TDD anchors are present, meaningfully asserted, and the suite passes (11/11, deterministic). Store specs verify real behavior: fetch populates funnels and asserts URL + query (omitted for 'all', {status:'active'} for filter) with loading transitions; create asserts POST body and returned id; the re-throw spec uses rejects.toMatchObject + error flag and CRUCIALLY mocks only useApi/useRoute (NOT useApiError) — proving the store does not depend on it; update asserts PATCH URL/method/body; delete asserts DELETE and list mutation to ['b']. Component specs correctly use the REAL useApiError (mocked only in store would be wrong; here it is not mocked at all in the component spec, exercising actual error mapping) and mock only the store + navigateTo: required-name blocks submit and does not call create; valid submit calls create with exact payload and navigates to /projects/p1/funnels/f99; server-error path asserts a non-empty mapped message that is not a raw 'errors.' key, no navigation, no 'created' emit. All assertions are strong (request URL/method/body, returned values, list mutation, navigation path) — no shallow toHaveBeenCalled-only or mock-return tautologies. i18n keys verified present in both locales. One low-severity gap: full uk/en set-equality is enforced by check-locales.mjs but not asserted in the spec. No regressions, no blockers."
+}

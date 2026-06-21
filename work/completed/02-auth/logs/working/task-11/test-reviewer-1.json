@@ -1,0 +1,110 @@
+{
+  "verdict": "needs_improvement",
+  "summary": "All 6 TDD anchors map to assertions and pass the litmus test (each would break if the corresponding template/handler logic were removed). However, the suite leaves four Acceptance Criteria untested: email read-only, terminate-all-sessions full flow, modal consequences list content, and the change-password error paths beyond confirm-mismatch (empty current, weak new, 400 backend). A few minor smells around mock shape (plain object vs reactive store) and cargo-culted Pinia/useState setup also worth tightening, but they do not currently cause false passes.",
+  "tdd_anchor_coverage": [
+    {
+      "anchor": "dashboard_pendingUser_showsBanner",
+      "covered": true,
+      "notes": "frontend/tests/pages/dashboard.spec.ts:34. Asserts data-test=pending-banner exists, text matches /Підтвердіть email/i, and a[href=\"/profile\"] is present. Litmus passes — removing v-if=\"authStore.isPending\" or the link breaks the test."
+    },
+    {
+      "anchor": "dashboard_activeUser_noBanner",
+      "covered": true,
+      "notes": "frontend/tests/pages/dashboard.spec.ts:46. Asserts banner not rendered and welcome name text shown. Litmus passes."
+    },
+    {
+      "anchor": "profile_pendingUser_showsResendButton",
+      "covered": true,
+      "notes": "frontend/tests/pages/profile.spec.ts:40. Asserts resend-section and resend-button both render when status=pending. Litmus passes."
+    },
+    {
+      "anchor": "profile_activeUser_hidesResendSection",
+      "covered": true,
+      "notes": "frontend/tests/pages/profile.spec.ts:50. Asserts resend-section is absent for active user. Litmus passes."
+    },
+    {
+      "anchor": "changePasswordForm_wrongConfirm_showsInlineError",
+      "covered": true,
+      "notes": "frontend/tests/pages/profile.spec.ts:59. Submits mismatched passwords, asserts confirm-password-error text and that no API call is made. Litmus passes — removing zod refine or the FormMessage breaks it."
+    },
+    {
+      "anchor": "deleteAccount_clickConfirm_callsDeleteProfile",
+      "covered": true,
+      "notes": "frontend/tests/pages/profile.spec.ts:75. Opens modal, clicks confirm, asserts apiMock called with /api/profile + objectContaining({ method: 'DELETE' }) and navigateTo('/auth/login'). Litmus passes."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "major",
+      "category": "coverage",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 38,
+      "issue": "Acceptance criterion 'Завершити всі сесії terminates sessions and navigates to login' is wholly untested. The full handler in profile.vue:170-183 (POST /api/profile/terminate-all-sessions, then authStore.user = null, then navigateTo('/auth/login')) has no spec. This is the most security-relevant action on the page: if a regression breaks the navigation or the store-clear, no test will fail.",
+      "suggestion": "Add `terminateAllSessions_clickButton_callsApiAndNavigates`. Setup: setUser(active), apiMock.mockResolvedValueOnce(undefined). Trigger: click [data-test=\"terminate-all-button\"], settle. Assert: apiMock called with '/api/profile/terminate-all-sessions' and expect.objectContaining({ method: 'POST' }); authStoreMock.user is null after the click; navigateToMock called with '/auth/login'. Add a second test `terminateAllSessions_apiError_showsError` that mocks rejection and asserts [data-test=\"terminate-error\"] renders and navigateTo NOT called."
+    },
+    {
+      "severity": "major",
+      "category": "coverage",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 75,
+      "issue": "Acceptance criterion 'Видалити акаунт shows modal with consequences list' is asserted only at the structural level — the test checks the modal element exists but never asserts the consequences list content (всі проекти / ботів / підписників). If a refactor accidentally drops the <ul> contents from the modal body, this test still passes. The modal-content guarantee is a UX promise from user-spec lines 70 and Decision 5.",
+      "suggestion": "Inside `deleteAccount_clickConfirm_callsDeleteProfile`, after asserting the modal exists, also assert: `const modal = wrapper.find('[data-test=\"delete-account-modal\"]'); expect(modal.text()).toMatch(/проекти/i); expect(modal.text()).toMatch(/ботів/i); expect(modal.text()).toMatch(/підписників/i);`. Or split into a dedicated `deleteAccount_modalShowsConsequencesList` test that opens the modal and asserts list items are rendered."
+    },
+    {
+      "severity": "major",
+      "category": "coverage",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 59,
+      "issue": "Change-password validation is tested only for confirm-mismatch. AC line 'change-password form validates current + new password; shows errors on invalid' implies multiple error paths, and the implementation has three distinct error sources: (1) empty current → `Введіть поточний пароль`, (2) weak new password (no letter / no digit / <8) → password error, (3) backend 400 → `Невірний поточний пароль`. None of these are covered. Litmus risk: if the zod schema for currentPassword.min(1) or one of the .refine rules is dropped, no test fails.",
+      "suggestion": "Add three tests: (a) `changePasswordForm_emptyCurrent_showsError` — fill new+confirm only, submit, assert [data-test=\"current-password-error\"] text matches /Введіть поточний пароль/, apiMock not called. (b) `changePasswordForm_weakNew_showsError` — fill all fields with new='abcdefgh' (no digit), assert [data-test=\"new-password-error\"] matches /цифр/i, apiMock not called. (c) `changePasswordForm_backend400_showsWrongCurrentPasswordError` — apiMock.mockRejectedValueOnce({ statusCode: 400 }); fill valid form; submit; assert [data-test=\"change-password-error\"] matches /Невірний поточний пароль/i and that apiMock was called with '/api/profile/change-password' + method POST + body containing currentPassword and newPassword (NOT confirmPassword)."
+    },
+    {
+      "severity": "major",
+      "category": "coverage",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 38,
+      "issue": "AC 'profile shows name (editable) and email (read-only)' is not exercised. Email field has no assertion at all (data-test=\"profile-email\" with readonly attribute is never checked). Read-only is a security-adjacent contract — until email-change is built (post-MVP), the input must remain readonly. No test would catch a regression that makes email editable.",
+      "suggestion": "Add `profile_emailField_isReadOnly`: setUser(active with email='u@example.com'); mount; assert wrapper.find('[data-test=\"profile-email\"]').attributes('readonly') is defined AND .element.value === 'u@example.com'. This pins both the value source and the read-only contract in one test."
+    },
+    {
+      "severity": "minor",
+      "category": "coverage",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 38,
+      "issue": "Profile name edit flow (Section 1) — toggle to edit mode, type new value, save, success message + store update — has no test. The only related code path checked anywhere is the email read-only display, which is also missing. The PATCH /api/profile contract drift is plausible without a guarding test.",
+      "suggestion": "Add `profileName_editAndSave_callsPatchAndUpdatesStore`: click [data-test=\"edit-name-button\"]; setValue on [data-test=\"name-input\"] to 'New Name'; trigger submit on the form; settle; assert apiMock called with '/api/profile' + objectContaining({ method: 'PATCH', body: { name: 'New Name' } }); authStoreMock.user.name === 'New Name'; [data-test=\"name-saved\"] visible."
+    },
+    {
+      "severity": "minor",
+      "category": "smell",
+      "file": "frontend/tests/pages/dashboard.spec.ts",
+      "line": 8,
+      "issue": "authStoreMock is a plain object with non-reactive boolean fields (isPending, isAuthenticated). The page reads them inside a Vue template; mutations after mount would not trigger re-render. Currently safe because every test calls setUser BEFORE mountSuspended, but the pattern is brittle: any new test that mutates store mid-render to assert reactive behavior would silently false-pass or false-fail. The real authStore exposes isPending as a computed, so the test-double diverges from the contract.",
+      "suggestion": "Either (a) wrap the mock in `reactive(...)` from vue and expose isPending as a computed/getter to mirror the real store, or (b) leave as-is and add a comment in the test file: `// NOTE: setUser must be called before mountSuspended — mock store is not reactive.` Option (a) is preferred since it mirrors the real store contract."
+    },
+    {
+      "severity": "minor",
+      "category": "smell",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 37,
+      "issue": "`useState<unknown>('auth-user').value = null` and `setActivePinia(createPinia())` are cargo-culted from the auth/* tests where they were needed (those tests use the real authStore composable). In dashboard.spec.ts and profile.spec.ts the store is fully mocked via mockNuxtImport, so neither line affects test behavior. Harmless, but adds noise and confuses future readers about whether reactive auth-user state matters here.",
+      "suggestion": "Remove both lines from beforeEach in dashboard.spec.ts and profile.spec.ts (lines 29-31 and 32-37 respectively). Keep `apiMock.mockReset()` and `navigateToMock.mockReset()` plus `setUser(...)`."
+    },
+    {
+      "severity": "minor",
+      "category": "coverage",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 75,
+      "issue": "Delete-account flow does not assert that authStoreMock.user is cleared after successful DELETE. Implementation does `authStore.user = null` (profile.vue:206) before navigate; this matters because the dashboard banner / middleware would otherwise still see a user. Currently a regression that drops `authStore.user = null` would not be caught.",
+      "suggestion": "After the existing `expect(navigateToMock).toHaveBeenCalledWith('/auth/login')` assertion, add: `expect(authStoreMock.user).toBeNull();`."
+    },
+    {
+      "severity": "minor",
+      "category": "brittleness",
+      "file": "frontend/tests/pages/dashboard.spec.ts",
+      "line": 42,
+      "issue": "Banner test asserts text /Підтвердіть email/i and that a link to /profile exists, but does not check the link text. The user-spec specifies the CTA text 'Перейти до профілю →'; if a future refactor changes it to a generic 'Profile →', UX contract regression slips through.",
+      "suggestion": "Add `expect(banner.find('a[href=\"/profile\"]').text()).toMatch(/Перейти до профілю/i);` to bind the test to the user-spec text contract."
+    }
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "scope_notes": {
+    "file_audited": "frontend/e2e/projects.spec.ts",
+    "round": 2,
+    "fix_commit": "4f1dc9c",
+    "baseline_commit": "4a1fa23 + e10067d (post round-1 review)",
+    "changed_loc": "+14 / -0 (commit 4f1dc9c stat); aggregate r1→r2 spec delta is +30/-9 incl. earlier 4121daf hardening (random suffix on stamp, timeout cleanups, emptyState assertion)",
+    "audit_focus": [
+      "Whether the hydration gate eliminates the password-in-query-string leak failure mode",
+      "Whether the spec fails loudly if the native HTML GET path is ever taken",
+      "Test password handling (still inline Test1234! — synthetic only)",
+      "gitleaks compatibility (AC-T8)",
+      "Zero-touch contract (AC-T7): only frontend/e2e/projects.spec.ts modified by 4f1dc9c"
+    ]
+  },
+  "review_checklist": {
+    "leak_failure_mode_closed": {
+      "result": "pass",
+      "details": "The hydration gate at lines 40-43 explicitly waits for `root.__vue_app__._instance.isMounted === true` before any input fill or submit click. This is exactly the property that gates @submit.prevent attachment: until the Vue root component has run its mounted lifecycle, the template-compiled @submit.prevent listener is not registered on the <form>, and a click on button[type='submit'] would fall through to native HTML form submission. Once `isMounted` is true on the root #__nuxt instance, the form's listener is attached and the click is intercepted by vee-validate's `handleSubmit`, which posts JSON to /api/auth/register (register.vue:42-51) — no GET, no query string, no Referer/history/access-log leak of the password literal. The gate is also the standard idiom for Vue 3 hydration readiness in Playwright (the same internal property is what @vue/test-utils' `isMounted` reads). networkidle is correctly avoided per the commit message (HMR keeps the channel busy in dev), so the gate is the cleaner signal."
+    },
+    "spec_fails_loudly_on_leak_path": {
+      "result": "pass",
+      "details": "If the gate ever times out (e.g. Vue mount silently fails), waitForFunction throws and the test fails fast — Playwright's default 30s timeout applies. If the gate spuriously resolves before @submit.prevent attaches (theoretically impossible given that template directives are wired during the same mount), the next assertion `page.waitForURL(/\\/dashboard.../)` at line 54 would still time out, because a native GET fires /auth/register?email=...&password=... and the page stays on /auth/register — no redirect to /dashboard ever happens. The spec therefore cannot pass while exercising the leaky path; the AC-28 failure mode is detectable, not maskable. The earlier removal of explicit `{ timeout: 15_000 }` (commit 4121daf) does not weaken this — Playwright's default 30s navigation timeout still fires."
+    },
+    "hardcoded_secrets": {
+      "result": "pass",
+      "details": "Only credential-like literal remains `password = 'Test1234!'` (line 23), unchanged from round 1 and matched against the `.local` reserved-suffix synthetic email. This is a well-known synthetic test password with no entropy, no provider prefix, no key shape — gitleaks default rules (high-entropy strings, AWS AKIA, GitHub ghp_, OpenAI sk-, JWT eyJ, base64 PEM blocks) do not match. The round-2 hydration gate adds no new string literals beyond the DOM-property accessor `__vue_app__._instance.isMounted`, which is a Vue internal — not a secret pattern."
+    },
+    "secret_handling_regressions": {
+      "result": "pass",
+      "details": "Round-2 diff strengthens secret-hygiene, not weakens it. The whole point of the gate is to prevent the password literal from ever appearing in a URL query string, which would otherwise land in: (1) the dev-server access log, (2) the browser history, (3) the Referer header on the next outbound navigation. With the gate in place, the password only travels in the JSON body of the POST to /api/auth/register, and the /auth/** Nuxt route rule (nuxt.config.ts:81-86) sets `Referrer-Policy: no-referrer` so even if the URL did leak via referer, it would not. Defense-in-depth on the application side; round 2 closes the test-side hole. No new env reads, no new fixture files, no new credentials hard-coded."
+    },
+    "gitleaks_compatibility_ac_t8": {
+      "result": "pass",
+      "details": "Added lines contain only: comments, a DOM querySelector for '#__nuxt', a TypeScript type-assertion to access `__vue_app__._instance.isMounted`, and a boolean compare against `true`. No high-entropy strings, no key prefixes, no base64, no PEM markers, no `password=` / `token=` / `secret=` patterns. The synthetic Test1234! literal that exists in the file is the same one approved in round 1 (security-auditor-1.json verdict_reasoning) and remained on line 23 unchanged in round 2."
+    },
+    "zero_touch_ac_t7": {
+      "result": "pass",
+      "details": "Commit 4f1dc9c stat: `frontend/e2e/projects.spec.ts | 14 ++++++++++++++ 1 file changed, 14 insertions(+)`. The forbidden files per AC-T7 (`frontend/middleware/auth.global.ts`, `backend/.../SecurityConfig.java`, `backend/.../JobRunrMongoConfig.java`) are untouched by the round-2 fix. Production code (register.vue, nuxt.config.ts auth route rules, vee-validate schema) is also untouched — the fix is test-only, which is the correct scope for a Playwright spec hardening change."
+    },
+    "owasp_relevance": {
+      "result": "n/a",
+      "details": "The fix is in a Playwright E2E test file. It does not author auth, crypto, query, deserialization, or SSRF surfaces. It exercises the real /auth/register endpoint and now exercises it more correctly (the JSON POST path that was always the intended path). OWASP categories apply to the system under test, not to the spec; the spec change actually reduces a test-environment-only secret-in-URL exposure surface."
+    }
+  },
+  "verdict_reasoning": "The round-2 hydration gate closes the AC-28 failure mode that produced password-in-query-string traffic against /auth/register?email=...&password=...&confirmPassword=... — a test-environment-only leak (synthetic Test1234! + e2e-projects-*@test.local, no real PII), but a smell worth eliminating because it would otherwise land in dev-server logs, browser history, and Referer chains. The gate is mechanically correct: it waits on the same Vue instance flag that gates @submit.prevent attachment, so the JSON POST path is now guaranteed. The spec also fails loudly if the gate is ever insufficient — page.waitForURL(/\\/dashboard.../) cannot resolve under the native-GET path. No new secrets introduced; gitleaks-clean. Only `frontend/e2e/projects.spec.ts` modified by commit 4f1dc9c — zero-touch contract honored. Approved.",
+  "preventive_recommendations": [
+    {
+      "severity": "minor",
+      "title": "Consider extracting the hydration gate into a shared helper if a third E2E spec needs it",
+      "rationale": "Currently only projects.spec.ts uses the gate; i18n.spec.ts uses networkidle for a different reason. If a future spec also needs to interact with a form on its first page-load, copy-pasting the waitForFunction body is fine for n=2 but worth promoting to e2e/utils/hydration.ts at n=3 to keep the magic property access (`__vue_app__._instance.isMounted`) in one place.",
+      "blocking": false
+    },
+    {
+      "severity": "minor",
+      "title": "Confirm production-build behavior to retire the deferred AC-28 prod-build check",
+      "rationale": "QA report (qa-report.json) lists `AC-28 production-build verification` as a deferred-to-post-deploy item. The round-2 fix targets the root cause (hydration timing) at the test-driver level, so prod-build should now also be green. Recommend running `pnpm build && pnpm preview` + `pnpm exec playwright test e2e/projects.spec.ts` once locally to retire the deferral cleanly before merge. Not a blocker, not a security finding — operational follow-up.",
+      "blocking": false
+    }
+  ]
+}

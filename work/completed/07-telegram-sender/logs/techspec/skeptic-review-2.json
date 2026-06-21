@@ -1,0 +1,49 @@
+{
+  "status": "changes_required",
+  "summary": "Round 1 fixes 1-6 all confirmed resolved. Re-scan surfaced 1 new critical mirage (sender claims to reuse TelegramApiClient timeout constants which are still private static) and 1 minor name-mismatch residue in Decision 15 title.",
+  "findings": [
+    {
+      "severity": "critical",
+      "type": "missing_pattern",
+      "claim": "Architecture line 72: 'Reuses the same `app.telegram.base-url` property and the same `CONNECT_TIMEOUT` (5s) / `DEFAULT_RESPONSE_TIMEOUT` (10s) static constants. AC5 satisfied without re-declaring constants.' Combined with line 23 narrative that sender 'mirrors TelegramApiClient construction' implies `TelegramApiClient.DEFAULT_RESPONSE_TIMEOUT` and `TelegramApiClient.CONNECT_TIMEOUT.toMillis()` are referenced by `TelegramSender`.",
+      "reality": "Both constants are still `private static final` in TelegramApiClient.java:38 and :40. Decision 12 / Task 1 only promote `requireValidTokenShape` and `isTransient` to public — the timeout constants are not in the promotion list. A literal implementation following the spec will not compile (private access) unless the implementer either (a) re-declares the constants in TelegramSender (which the spec explicitly forbids: 'without re-declaring constants') or (b) promotes the constants too (not in any task).",
+      "source": "tech-spec.md, lines 72 (How it works → WebClient construction) and 23 (Architecture → New files), cross-referenced with Decision 12 (line 162-166) and Task 1 (line 416-423)",
+      "fix": "Either (a) extend Decision 12 / Task 1 to also promote `DEFAULT_RESPONSE_TIMEOUT` and `CONNECT_TIMEOUT` to `public static final`, or (b) restate that TelegramSender re-declares its own private constants with the same values (and remove the 'without re-declaring constants' wording). Option (a) is more consistent with the existing helper-promotion pattern."
+    },
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "Decision 15 title (line 180): '`BotController.sendTestMessage` HTTP contract preserved (`Mono<ResponseEntity<Void>>`)'.",
+      "reality": "BotController method is `testMessage`, not `sendTestMessage` (BotController.java:60-68). The body of Decision 15 and the Modified-files note (line 39) now correctly clarify this, but the Decision-15 *title* still uses the wrong name. A reviewer scanning section headers will hit the same mirage round 1 flagged.",
+      "source": "tech-spec.md line 180",
+      "fix": "Rename Decision 15 title to '`BotController.testMessage` HTTP contract preserved (`Mono<ResponseEntity<Void>>`)' for full consistency with the clarification already added at line 39."
+    }
+  ],
+  "stats": {
+    "total_claims_checked": 38,
+    "confirmed": 36,
+    "mirages_found": 2,
+    "verified_claims": [
+      "BotService.java:113-115 — verbatim 422 message 'Send /start to your bot in Telegram first, then try again' matches",
+      "BotController.testMessage at BotController.java:60-68 returns Mono<ResponseEntity<Void>>",
+      "BotResponse record at BotResponse.java:9-16 has no ownerChatId field",
+      "Bot.java has fields telegramFirstName (line 50) and status (line 51) — ownerChatId insertion point valid",
+      "Bot.java line 63 has nullable Instant disconnectedAt",
+      "BotRepositoryTest.java has no prior `disconnectedAt` deserialization test (claim of 'first verification' is accurate)",
+      "TelegramApiClient.java:113-117 has private static requireValidTokenShape",
+      "TelegramApiClient.java:154-167 has private static isTransient",
+      "TelegramApiClient.java:171 has public static scrubTokens with promotion comment at line 169-170",
+      "TelegramApiClient.java:122-124 — TelegramResult<> empty fallback at correct lines",
+      "TelegramApiClient.java:51-61 — WebClient constructor mirrors as claimed",
+      "TelegramApiClient.java:144-152 — buildRetry uses Retry.backoff(3, 200ms).maxBackoff(2s)",
+      "TelegramApiClient.java:36 — TOKEN_PATTERN regex matches token shape claim",
+      "BotService.java:165-170 — transport-error scrubbing precedent for log sites",
+      "BotService.java:216-220 — closure-capture of plaintext token convention",
+      "BotService.java:233 — setDisconnectedAt(Instant.now()) write-side precedent",
+      "AuthService.java:301 — null userId in eventService.logEvent precedent confirmed",
+      "EventService.java:23 — logEvent(String userId, String eventType, String ip, String userAgent, Map metadata) signature matches",
+      "TokenEncryptor.decrypt(byte[], byte[]) at TokenEncryptor.java:45 exists",
+      "BotTokenLeakTest.botEntityDoesNotDeclareToStringExposingEncryptedTokenFields exists at line 52"
+    ]
+  }
+}

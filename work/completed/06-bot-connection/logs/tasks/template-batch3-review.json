@@ -1,0 +1,83 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 13,
+      "section": "Context Files",
+      "issue": "Mandatory PK paths point at non-existent files. Task 13 lists `[project.md](../../../.claude/skills/project-knowledge/project.md)`, `[architecture.md](../../../.claude/skills/project-knowledge/architecture.md)`, `[patterns.md](../../../.claude/skills/project-knowledge/patterns.md)`, `[deployment.md](../../../.claude/skills/project-knowledge/deployment.md)` — but the actual files live under `.claude/skills/project-knowledge/references/` (verified via filesystem: only `references/` subfolder exists, no top-level *.md files). project.md and architecture.md are mandatory context files, so broken links to them are critical.",
+      "fix": "Insert `references/` segment in all four PK links: `../../../.claude/skills/project-knowledge/references/project.md`, `.../architecture.md`, `.../patterns.md`, `.../deployment.md`. Match the path style already used correctly by Task 11."
+    },
+    {
+      "severity": "major",
+      "category": "content",
+      "task": 12,
+      "section": "Context Files",
+      "issue": "PK paths are root-relative (`.claude/skills/project-knowledge/references/project.md`) instead of feature-relative (`../../../.claude/skills/project-knowledge/references/project.md`). From the task file's location (`work/06-bot-connection/tasks/12.md`), markdown renderers that resolve links relative to the file will fail to find these paths; only renderers that resolve from CWD will work. Inconsistent with Task 11 in the same batch, which uses the `../../../` prefix correctly.",
+      "fix": "Prefix all PK paths with `../../../`: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, same for architecture.md and patterns.md."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Required Skills",
+      "issue": "Skill link is root-relative: `[skills/test-master/SKILL.md](.claude/skills/test-master/SKILL.md)`. From the task file's location this does not resolve to the actual SKILL.md. Inconsistent with Task 11 which uses `../../../.claude/skills/security-auditor/SKILL.md` (feature-relative) correctly.",
+      "fix": "Change to `../../../.claude/skills/test-master/SKILL.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 13,
+      "section": "Required Skills",
+      "issue": "Skill link `[skills/pre-deploy-qa/SKILL.md](.claude/skills/pre-deploy-qa/SKILL.md)` is root-relative and does not resolve from the file's location. Inconsistent with Task 11.",
+      "fix": "Change to `../../../.claude/skills/pre-deploy-qa/SKILL.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "frontmatter",
+      "task": 13,
+      "section": "frontmatter.verify",
+      "issue": "Frontmatter declares `verify: []` but Verification Steps has a populated `### Smoke` subsection with four concrete smoke checks (local boot with/without key, curl bean-validation 400, mongo indexes, fail-fast key check). Per task-creator rules, `verify` derives from presence of smoke/user blocks — `verify` should be `[smoke]`.",
+      "fix": "Change frontmatter to `verify: [smoke]`. Or, if the intent is that those are internal QA steps not external verification gates, drop the `### Smoke` subsection."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 13,
+      "section": "Verification Steps → User",
+      "issue": "`### User` subsection is present with text `Not applicable for this task...`. Template rule: `Omit section if no user checks`. An explicit \"not applicable\" stub is not the prescribed pattern.",
+      "fix": "Delete the `### User` subsection entirely. Move the post-deploy explanation into Details / Notes or the Description."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 11,
+      "section": "Reviewers",
+      "issue": "Reviewers body uses `_None — Audit Wave tasks have no reviewers._`, which is acceptable, but other tasks in this batch (12, 13) phrase the same idea differently. Stylistic, not a defect — flagged for awareness only.",
+      "fix": "Optional: align phrasing across audit/QA tasks if a house style is desired. No functional change required."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Acceptance Criteria",
+      "issue": "AC4 (nine focus areas) is a nested bullet list rather than nine separate `- [ ]` checklist items. Template prefers each criterion as its own `- [ ]` line so reviewers can tick them individually. Current form mixes a top-level `- [ ]` with nine sub-bullets — minor readability/checkability hit.",
+      "fix": "Either keep the nested form (and accept the minor finding) or split the nine focus areas into nine `- [ ]` checklist items at the top level. Functionality is unchanged."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Verification Steps → Automated",
+      "issue": "Automated subsection is light: only two `grep` sanity checks and a note that the audit is documentation-only. For an audit task this is reasonable, but the wording \"should reveal any sleep usage\" describes an expectation, not an executable assertion an agent can pass/fail. No file-existence check on the produced audit report.",
+      "fix": "Add an executable existence check, e.g. `test -s work/06-bot-connection/logs/working/task-12/test-audit-report.md` — mirroring Task 11's first Automated check. Keeps the existing grep hints."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "issues_found": 9
+  }
+}

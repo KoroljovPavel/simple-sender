@@ -1,0 +1,69 @@
+{
+  "validator": "reality-checker",
+  "iteration": 2,
+  "batch": [1, 2, 3],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 1,
+      "issue": "FunnelStepTest.java still references all removed symbols. The actual file (read at runtime) still contains: StepType.SEND_MESSAGE (lines 21, 42, 77, 147, 193), StepType.SEND_IMAGE (lines 60, 107, 108), StepType.MENU (line 160), setText/getText (lines 23, 44, 62, 79, 97), setParseMode/getParseMode (lines 25, 45, 63, 80, 98), setImageUrl/getImageUrl (lines 26, 46, 64, 81, 99), setCaption/getCaption (lines 27, 47, 65, 82, 100). Round 1 finding is NOT resolved — the test file was not rewritten. The task says 'СПЕРШУ полагодити наявні тести' (step 7) but the file is unchanged.",
+      "fix": "Rewrite FunnelStepTest.java before touching the model: replace SEND_MESSAGE/SEND_IMAGE with MESSAGE, replace MENU with MESSAGE in deepCopyButtonsAreIndependent, strip all setText/setImageUrl/setCaption/setParseMode accessor calls from deepCopyProducesIndependentStep. Then add the three blocks-copyOf tests from the TDD Anchor."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 1,
+      "issue": "StepType.java still contains SEND_MESSAGE, SEND_IMAGE, MENU (lines 9-10, 16) and does NOT contain MESSAGE. The model has not been modified. Round 1 finding is NOT resolved.",
+      "fix": "Remove SEND_MESSAGE, SEND_IMAGE, MENU from StepType.java; add MESSAGE with appropriate Javadoc."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 1,
+      "issue": "FunnelStep.java still has fields text/parseMode (lines 34-35), imageUrl/caption (lines 37-39) and their getters/setters (lines 135-145), and copyOf still copies those four fields (lines 103-106). The field blocks and its accessor do not exist. Round 1 finding is NOT resolved.",
+      "fix": "Remove text/parseMode/imageUrl/caption fields + accessors from FunnelStep.java; add List<ContentBlock> blocks + getter/setter; update copyOf to defensively copy blocks and remove the four old copy lines."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 1,
+      "issue": "Net-new files BlockType.java, ContentBlock.java, MediaItem.java do not exist in backend/src/main/java/com/botfunnel/funnel/. Round 1 finding is NOT resolved.",
+      "fix": "Create the three new files as specified in What to do steps 1-3."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 3,
+      "issue": "FunnelStepExecutorTest.java still has the three old-type helpers: sendMessageStep (lines 447-453) using StepType.SEND_MESSAGE + setText, sendImageStep (lines 455-462) using StepType.SEND_IMAGE + setImageUrl/setCaption, menuStep (lines 479-487) using StepType.MENU + setText. All old-type test methods remain: sendMessageOver4096TrimsAndContinues (line 95), sendImageCaptionEscapedAndTrimmedTo1024 (line 112), menu_sends_text_with_reply_markup (line 247), menu_with_timeout_returns_deadline (line 264), menu_callbackButtons_encodeCorrectCallbackData (line 286), sendMessageBlockedByUserCancels (line 320), sendMessageOtherTerminalFails (line 333), sendMessageInvalidBotTokenFails (line 422). None have been rewritten to messageStep composer builders. Round 1 finding is NOT resolved.",
+      "fix": "Create messageStep(...) builder helpers accepting List<ContentBlock>; rewrite all eight old-type test methods to operate on the MESSAGE branch using block-based steps; add the eleven new TDD Anchor test methods from the task spec."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 3,
+      "issue": "FunnelExecutionEngineIT.java still has old-type seed helpers: sendMessage (lines 1255-1260) using SEND_MESSAGE + setText, sendImage (lines 1262-1267) using SEND_IMAGE + setImageUrl, sendMessageStep (lines 1279-1286) using SEND_MESSAGE + setText, menu (lines 1297-1308) using MENU. Engine ITs around resumeOnCallback (lines 483-725) are still seeded with these old helpers. Round 1 finding is NOT resolved.",
+      "fix": "Replace sendMessage/sendImage/sendMessageStep/menu seed helpers with messageStep composer builders; re-seed all resumeOnCallback_* and timeout_* ITs to use MESSAGE steps with ContentBlock lists. Verify verify(sender, times(K)) at-most-once and snapshot-isolation ITs are added."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 3,
+      "issue": "The task's TDD Anchor test message_lastBlockIsAlbum_keyboardNotAttached requires a positive assertion: the previous non-album block RECEIVES the keyboard (reply_markup not null) and the result is WAIT_FOR_REPLY. The task text explicitly calls this out ('позитив: попередній останній не-альбомний text-блок ОТРИМУЄ клавіатуру'). This positive side of the album-keyboard assertion was flagged in round 1 and is still unimplemented since the test file has not been touched.",
+      "fix": "When writing message_lastBlockIsAlbum_keyboardNotAttached, capture the reply_markup argument on the text-block send call and assert it equals buildReplyMarkup(step, execution) (not null); assert result is WAIT_FOR_REPLY."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 2,
+      "issue": "Task 2 Details section still contains pseudocode-level boilerplate prescription in the sendGroup description (lines 135-149): it specifies exact variable names (AtomicInteger attempts, Instant deadline), the exact sendWithRateLimitRetry call signature with all six arguments, and line-by-line try/catch structure. This was flagged in round 1 as implementation hints that cross into pseudocode. The section was not trimmed.",
+      "fix": "Shorten the sendGroup description to a pattern pointer: 'Mirror the structure of send() — same bot-lookup, retry seam (sendWithRateLimitRetry), audit, and subscriber hook; replace only the mapBodyToSentMessage call with the album array mapper.' Remove the line-by-line variable prescriptions."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 8
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "status": "changes_required",
+  "round": 2,
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "fail",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "pass"
+  },
+  "findings": [
+    {
+      "check": "acceptance_criteria",
+      "severity": "critical",
+      "issue": "AC23 contains an untestable negative assertion: 'Event metadata never contains the raw or encrypted token.' There is no concrete verification mechanism described — no spy appender, no repository assertion after connect, no regex check on emitted Event documents. This is the same class of defect that was raised in Round 1 against the old AC19 and flagged as critical. The rewrite moved the negative assertion from the old AC19 into AC23 without making it verifiable. A criterion that cannot be checked off is not a criterion. The positive parts of AC23 (that the three events are emitted) are testable; the negative part is not.",
+      "location": "Критерии приёмки → AC23 (Audit)",
+      "fix": "Add a concrete verification method to AC23, e.g.: 'Integration test: after a successful Connect, query the events collection and assert that no string value in the bot_connected event metadata matches regex `\\d+:[A-Za-z0-9_-]{35}`. The same assertion runs for bot_disconnected and bot_test_message_sent.' Alternatively, reference the token-leak unit test (AC17) and note that AC23 inherits that coverage."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "major",
+      "issue": "'Агент проверяет' verification matrix (row 1) states 'integration tests cover AC1–AC15 and AC23.' AC16 (security: ProjectService.requireOwned, hostile body injection, anti-enumeration 404 for foreign/soft-deleted/malformed projectId) and AC20 (webhook secret stored as SHA-256 hash) are not mapped to any agent verification row. AC16 describes critical security behavior — the omission means there is no agent step that confirms the requireOwned gate is exercised. Row 2 covers AC17–AC19 and AC21 (frontend), but AC16 is a backend security criterion that should appear in backend integration test coverage.",
+      "location": "Як проверити → Агент проверяет, row 1",
+      "fix": "Expand row 1 to read 'integration tests cover AC1–AC16, AC20, and AC23' or add a dedicated row: '7. Security gate test | backend test runner | Integration test with a foreign projectId and a hostile ownerId body returns 404 (AC16). Webhook secret in bots document is a SHA-256 hash, not the plaintext sent to Telegram (AC20).'"
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "major",
+      "issue": "AC22 lists `errors.bot.connect.{400, 422, 500, 502, 409, 429}` — including `500` — as an i18n key. The interview Q19 (cycle2_batch4_completeness_fixes) explicitly aligned the i18n scheme and listed only {400, 422, 409, 502, 429} for the connect endpoint. The `500` key was not discussed. AC5 does reference `errors.bot.connect.500` for the webhook-config-error case, so the spec is internally self-consistent, but this is a new key not covered by interview agreement. More importantly, mapping a 500 to a user-facing i18n string is architecturally unusual: 500 signals our bug (bad APP_URL config), not a user-recoverable condition. The user-facing message 'Webhook configuration error — contact support' (from 'Як має працювати' step 7) could be delivered via a generic fallback rather than a dedicated key, avoiding user confusion from a 500 that they cannot resolve.",
+      "location": "Критерии приёмки → AC22 / AC5",
+      "fix": "Either (a) confirm the decision to add errors.bot.connect.500 as an explicit i18n key (update the interview record or add a note in decisions.md D8 that 500 gets its own key), or (b) remove errors.bot.connect.500 from AC22 and let the frontend generic 500 handler display 'Webhook configuration error — contact support'. If (a), the internal consistency between AC5 and AC22 is fine and the finding is resolved. If (b), update AC5 to not reference errors.bot.connect.500."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "The canonical env var name `BOT_TOKEN_ENCRYPTION_KEY` (per D3: 'The single env var is BOT_TOKEN_ENCRYPTION_KEY') does not appear anywhere in user-spec.md. The spec says 'one configuration property (no version suffix)' but never names it. An implementor reading only the user-spec cannot derive the exact env var name without consulting decisions.md. For an L-size feature where token encryption is security-critical, the env var name should be explicit in the spec (Ограничения or Технические решения).",
+      "location": "Технические решения → AES-256-GCM at rest / Ограничения",
+      "fix": "Add one sentence to Технические решения: 'The encryption key is read from the env var BOT_TOKEN_ENCRYPTION_KEY (no version suffix; see D3 in decisions.md). TokenEncryptor fail-fast constructor rejects missing or short keys.'"
+    }
+  ],
+  "resolved_from_round1": [
+    {
+      "finding": "Warning banner on project home missing from spec (was critical)",
+      "resolution": "Ограничения now explicitly states 'Bot not connected warning banner on project home is out of scope' with rationale. D6 in decisions.md records the decision. RESOLVED."
+    },
+    {
+      "finding": "AC13 (old) Logback appender criterion was architectural/untestable (was critical)",
+      "resolution": "AC13 (old) replaced by behavioral AC17: 'The raw bot token never leaves the backend after Connect: no endpoint response and no log line carries it. A unit test on the masking function plus a code-review checklist enforce this.' RESOLVED."
+    },
+    {
+      "finding": "AC18 (old) backend module package structure was untestable (was critical)",
+      "resolution": "Old AC18 removed. New AC18 is 'UI shows the token masked as {first id segment}:•••...{last 3 chars} — read-only display; no Show full token affordance.' Behavioral and testable. RESOLVED."
+    },
+    {
+      "finding": "AC17 i18n disconnect 502 contradiction (was critical)",
+      "resolution": "AC22 now lists only errors.bot.disconnect.{404}. The comment 'Disconnect never returns 502 (best-effort semantics in AC13)' is present and accurate. Interview.yml old AC17 that included disconnect.502 was from a pre-fix artifact. The user-spec is now internally consistent on this point. RESOLVED."
+    },
+    {
+      "finding": "Dual-key shape wording misleading for single-key bot counter (was major)",
+      "resolution": "Технические решения now reads 'Single-key per-user counter (no IP key for this endpoint — abuse vectors are per-account, not per-IP)'. No dual-key language remains. RESOLVED."
+    },
+    {
+      "finding": "Env var _V1 suffix inconsistency (was major)",
+      "resolution": "Технические решения states 'no version suffix' consistent with D3. Interview.yml artifact BOT_TOKEN_ENCRYPTION_KEY_V1 is historical (pre-D3 decision). The spec does not contradict D3. RESOLVED — though see new minor finding about the name not being stated explicitly."
+    },
+    {
+      "finding": "AC19 (old) untestable 'token never in event metadata' without verification mechanism (was critical in round 1 interview_coverage finding)",
+      "resolution": "PARTIALLY resolved: old AC19 was about event metadata and old AC18 was architectural. Both were replaced with behavioral ACs. However, the negative assertion 'Event metadata never contains the raw or encrypted token' migrated to AC23 without gaining a concrete verification mechanism. See new critical finding on AC23."
+    },
+    {
+      "finding": "Size M with 21 ACs exceeding threshold (was warning)",
+      "resolution": "Frontmatter now declares size: L. With 23 ACs and L-size, the spec is within expectations. RESOLVED."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "scope_decomposition: three sub-features (06/06b/06c) from Epic 04",
+      "testing strategy: WireMock backend + Vitest frontend + no E2E + manual smoke",
+      "rate-limit brute:bot-connect:{userId} 10 attempts / 15 min, fail-open (Q2a)",
+      "pre-getMe regex validation returning 400 before network call (Q2b)",
+      "setWebhook hard-fail with 3-retry exponential backoff 1s/2s/4s (Q5)",
+      "no avatar in MVP, show @username + first_name only (Q6)",
+      "manual user actions: BotFather /newbot, /start for test message, lazy deletion detection (Q7)",
+      "disconnect: simple confirmation modal, no type-name-to-confirm (Q8)",
+      "settings refactor to folder settings/index.vue + settings/bot.vue + horizontal sub-nav (Q9)",
+      "error taxonomy 400/422/409/502/429 for connect endpoint (Q10/Q19)",
+      "keyVersion field decision: NOT added per D3 — one-off migration acceptable (Q11 reversed by post-interview D3)",
+      "10-step manual smoke checklist on staging (Q12)",
+      "warning banner on project home: out of scope, explicitly stated in Ограничения and D6 (Q13)",
+      "bots schema: _id/projectId/telegramBotId/telegramUsername/telegramFirstName/encryptedToken/webhookSecret/status/createdAt/connectedAt/disconnectedAt (Q14, schema simplified per D3)",
+      "UI flow: Connect state → Connected state with masked token, inline hints, error UX (Q15)",
+      "env vars: BOT_TOKEN_ENCRYPTION_KEY (no _V1 per D3), APP_URL HTTPS requirement, fail-fast constructor (Q16)",
+      "risks R1-R7 all present with mitigations (Q17)",
+      "no token caching in 06, deferred to 06c (Q18)",
+      "i18n useApiError resolves by HTTP status only (Q19)",
+      "deleteWebhook best-effort on disconnect: 3 retries, WARN + proceed locally (Q20)",
+      "test-message endpoint returns 422 until 06b lands, exists from day one (Q21)",
+      "soft disconnect with disconnectedAt, encryptedToken+webhookSecret nulled (Q4)",
+      "reconnect = new bots document, old disconnected document kept for audit (Q4)",
+      "bot uniqueness: partial unique compound index (telegramBotId, status=connected) per D1 (Q14/Q17)",
+      "race condition: service pre-check + DuplicateKeyException both map to 409 (D1/AC12)",
+      "AES-256-GCM encryption: 12-byte random IV, 128-bit auth tag (Q16/Q17)",
+      "webhook secret stored as SHA-256 hash per D2 (AC20)",
+      "compensating deleteWebhook on Connect-path persist failure per D4 (AC9)",
+      "per-project pre-check on Connect per D5 (AC7)",
+      "EventService.logEvent: bot_connected, bot_disconnected, bot_test_message_sent (Q3/AC23)",
+      "Telegram 4xx on setWebhook treated separately from 5xx/timeout per D8 (AC5)"
+    ],
+    "missing": [
+      "errors.bot.connect.500 i18n key: interview Q19 aligned only {400,422,409,502,429}; the 500 key appears in AC5 and AC22 without interview coverage. Internally consistent within the spec but not discussed during interview — see major finding."
+    ]
+  },
+  "summary": "Специфікація Round 2 усунула всі 5 критичних знахідок Round 1: warning banner перенесено в Ограничення, обидва нетестовані AC (Logback appender, архітектурний опис модуля) замінено поведінковими, суперечність у i18n-ключах disconnect виправлено, size змінено на L. Залишається одна критична проблема: негативне твердження 'Event metadata never contains the raw or encrypted token' в AC23 успадковане від старого AC19 без конкретного механізму перевірки. Додатково — дві major-знахідки: AC16 (security gate) не покрито у матриці перевірки агента, та i18n-ключ errors.bot.connect.500 з'явився без підтвердження в інтерв'ю."
+}

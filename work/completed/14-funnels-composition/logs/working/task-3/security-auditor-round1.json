@@ -1,0 +1,45 @@
+{
+  "reviewer": "security-auditor",
+  "task": "3",
+  "round": 1,
+  "commit": "14c400a5d1e66a6257b879430ab21aa0900d7008",
+  "scope": "SUBSCRIBE_TO_FUNNEL enroll path — focus: fail-closed projectId at runtime, IDOR via cross-funnel reference, runaway/DoS via depth-cap + rate-limit, no user input in logs.",
+  "owasp_refs": ["A01:2021 Broken Access Control", "A04:2021 Insecure Design", "A09:2021 Security Logging Failures"],
+  "summary": "No vulnerabilities found. The enroll path resolves the target via the non-project-scoped FunnelRepository.findById and then enforces an EXPLICIT fail-closed check `projectId.equals(target.getProjectId())` before any insert — a cross-project funnel id smuggled through the step is rejected (verified by subscribeTargetWrongProjectSkipsGracefully). Runaway cascades are bounded by the reused Redis-independent depth cap AND the per-subscriber auto-enroll rate-limit (both verified to skip+WARN without failing the parent). Logs carry only ids/codes/enum status/exception-class — no matchKey, no subscriber field, no target name, no free text — so there is no PII leak or log-injection vector. The whole method is error-isolated (try/catch Throwable) so an enroll fault cannot propagate to a 5xx or crash the sweep.",
+  "findings": [
+    {
+      "id": "SEC-1",
+      "severity": "info",
+      "category": "A01 Broken Access Control / IDOR",
+      "file": "FunnelEventService.java",
+      "finding": "findById is inherited from MongoRepository and is NOT project-scoped. The code loads by id then fails closed with `!projectId.equals(target.getProjectId())` BEFORE the active-status check, the entry-step resolution, and the factory insert. A null/malformed targetFunnelId yields an empty Optional (or throws, caught by the outer try) and is skipped. This is the main IDOR guard and it is enforced at runtime, mirroring FunnelService.requireFunnel scoping.",
+      "action": "none — guard correct, IT-covered"
+    },
+    {
+      "id": "SEC-2",
+      "severity": "info",
+      "category": "A04 Insecure Design / DoS",
+      "file": "FunnelEventService.java",
+      "finding": "Depth-cap (originDepth > maxEnrollDepth) is checked first and is Redis-independent (holds during a Redis outage). The auto-enroll rate-limit is checked second and reuses the existing fail-open Redis counter; a SUBSCRIBE enroll is always depth>=1 so it always counts toward the volume limit. Both backstops skip+WARN and leave the parent to continue/complete, never failing it. A self-target A->A loop is additionally bounded by the re-enter guard (no allowReEnter) or, with allowReEnter, by the depth cap.",
+      "action": "none"
+    },
+    {
+      "id": "SEC-3",
+      "severity": "info",
+      "category": "A09 Security Logging Failures / log-injection",
+      "file": "FunnelEventService.java",
+      "finding": "All enroll WARN/INFO statements interpolate only: projectId (trusted/pinned), originDepth, cap, subscriberId, targetFunnelId (opaque id reference — consistent with the module's existing funnelId= logging), the target status enum, and the exception class name. No matchKey, message text, subscriber name, or other free-form user input is logged, so there is no log-injection or PII-leak vector (Decision 16 upheld).",
+      "action": "none"
+    },
+    {
+      "id": "SEC-4",
+      "severity": "info",
+      "category": "A04 Insecure Design / at-most-once",
+      "file": "StepExecutor.java",
+      "finding": "The enroll is a side-effect performed BEFORE the engine's claim-conditional advance/complete (like EMIT_EVENT). A crash-replay re-runs the SUBSCRIBE step, but the target's re-enter guard (unique partial index) makes the duplicate insert a benign no-op, so no duplicate child funnel is started — effective at-most-once.",
+      "action": "none"
+    }
+  ],
+  "dependency_scan": "No new dependencies introduced; no package manifest changed. npm/gradle dependency surface unchanged.",
+  "verdict": "approved — no security changes required"
+}

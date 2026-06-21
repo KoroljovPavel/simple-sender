@@ -1,0 +1,63 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "What to do / Acceptance Criteria",
+      "issue": "References 'Decision 16' twice (step 5 and AC bullet). Tech-spec only defines Decisions 1–10. Decision 16 does not exist.",
+      "fix": "Replace both 'Decision 16' references with 'tech-spec PII rule' or 'Decision 5 (PII note)' — whichever is closest in intent."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Required Skills",
+      "issue": "Skill path uses `.claude/skills/code-writing/SKILL.md` (relative to project root, no leading `../../../`). All other tasks in this batch use `../../../.claude/skills/code-writing/SKILL.md`. The link resolves differently from `work/16-persistent-keyboard/tasks/5.md` and will be a broken file link at execution time.",
+      "fix": "Change to `../../../.claude/skills/code-writing/SKILL.md` (same as tasks 1, 2, 4)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "Project-knowledge links use `.claude/skills/project-knowledge/references/project.md` and `.claude/skills/project-knowledge/references/architecture.md` (no leading `../../../`). Resolves to a broken path from `work/16-persistent-keyboard/tasks/5.md`.",
+      "fix": "Prefix all project-knowledge paths with `../../../` to match the resolution pattern used in tasks 1–4."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "Reviewers",
+      "issue": "The Reviewers section contains a prose block ('Security focus for security-auditor: …') after the reviewer bullet list. This is non-standard; the template allows only the reviewer bullet entries in this section.",
+      "fix": "Move the security-auditor focus note to the Details section (e.g. under an 'Implementation hints' or 'Security notes' sub-bullet), or to a comment in the task description. Keep Reviewers containing only the `- **name** → path` bullets."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 3,
+      "section": "Required Skills",
+      "issue": "Display text reads `skills/code-writing/SKILL.md` instead of just `SKILL.md`. Tasks 1, 2, 4, and the template use `SKILL.md` as the display name. Cosmetic inconsistency.",
+      "fix": "Change `[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)` to `[SKILL.md](../../../.claude/skills/code-writing/SKILL.md)`."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  },
+  "summary": {
+    "frontmatter": "All five tasks: status=planned, skills=[code-writing], reviewers array correct, wave/depends_on consistent with tech-spec wave structure (wave 1: tasks 1+2 independent; wave 2: tasks 3+4 depend on task 1; wave 3: task 5 depends on tasks 2+4). verify field present and typed correctly. No missing or extra fields.",
+    "structure": "All required sections present in correct order across all tasks: Required Skills, Description, What to do, TDD Anchor, Acceptance Criteria, Context Files, Verification Steps, Details, Reviewers, Post-completion. TDD Anchor correctly present for all five code tasks.",
+    "content_quality": "Descriptions are concrete and feature-specific. What-to-do sections specify files and call sites. TDD Anchors use `path::test_name — description` format with behavioral assertions. AC checklists are testable. Details sections have Files, Dependencies, Edge cases, and Implementation hints subsections.",
+    "tdd_carry_forward": "Tech-spec Testing Strategy items carried forward correctly: FunnelStepTest copyOf cases → task 1; FunnelServiceKeyboardStepTest all rejection cases → task 1; FunnelStepExecutorTest markup captor + error trio → task 3; FunnelStepForm.keyboard.spec.ts full case list → task 2; FunnelMessagePreview.spec.ts keyboard branch + no-v-html guard → task 5; FunnelControllerIT round-trip + preview cases → tasks 1 and 4.",
+    "ac_carry_forward": "Tech-spec Acceptance Criteria carried forward across tasks: round-trip (task 1), validation 422 (task 1), copyOf (task 1), preview kind=keyboard (tasks 4+5), locale parity (tasks 2+5). Engine IT wire assertions are in task 6 (outside this batch) as expected.",
+    "decomposition": "No cycles, no merge candidates, no over-decomposition. Tasks 3 and 4 correctly split (executor vs preview — different service methods and test files). Task 5 correctly depends on [2, 4] and not [3] — frontend preview has no code dependency on StepExecutor.",
+    "reviewer_paths": "All Reviewers sections use `{round}` in path — this is the correct convention (round is resolved at execution time, not at task-creation time). The template confirms `{round}` as a placeholder value to be preserved."
+  }
+}

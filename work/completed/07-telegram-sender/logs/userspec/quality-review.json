@@ -1,0 +1,73 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "AC2 says '404 (anti-enumeration)' without specifying the error code string returned in the response body (e.g. 'bot_not_found'). All other error paths specify their code string explicitly. Developers reading only AC2 will choose an arbitrary string or check the precedent themselves.",
+      "location": "Критерії приймання — AC2",
+      "fix": "Add the exact AppException.notFound code string, e.g. 'bot_not_found', matching the codebase pattern for similar 404 responses in the bot/ module."
+    },
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "23 acceptance criteria exceed the >10 warning threshold for size M. Integration points (BotRepository, TokenEncryptor, WebClient, EventService, TelegramApiClient × 3 promoted methods, Telegram Bot API) exceed the >5 threshold. The spec itself acknowledges this with a note comparing to 06-bot-connection (size L, 23 AC), which is a valid justification.",
+      "location": "Frontmatter — size: M; Технічні рішення (note at bottom)",
+      "fix": "No action required if size M is a conscious choice supported by the precedent note already present. Optionally, upgrade to size L to align with the 06-bot-connection precedent."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "scope_unblock_test_message (Q1) — stub 422 preserved, covered in Сценарій 2 and AC17",
+      "method_set (Q2) — sendText only, covered in Що робимо and Обмеження",
+      "token_decrypt_cache (Q3) — no cache, covered in Обмеження and Технічні рішення",
+      "testing_strategy (Q4) — unit + MockWebServer integration, no E2E, covered in Тестування and AC19–AC23",
+      "sender_integration_in_test_message (Q5) — nullable ownerChatId, branching, covered in AC16 and AC17",
+      "audit_events_writer (Q6) — sender writes events, covered in AC14",
+      "default_parse_mode revised (Q7→Q14) — parseMode=null default, covered in Технічні рішення and AC4",
+      "exception_scope (Q8) — 3 exceptions, covered in AC13",
+      "401_reaction_scope (Q9) — only throw BotTokenInvalidException, covered in AC10 and Обмеження",
+      "test_message_event_dedupe (Q10) — no bot_test_message_failed, covered in AC17",
+      "schema_change_bot_owner_chat_id (Q11) — nullable Long, no index, covered in AC16",
+      "retry_semantics (Q12) — Retry.backoff(3,1s), 4 total, covered in AC6",
+      "promote_helpers (Q13) — requireValidTokenShape + isTransient public static, covered in AC3 and AC6",
+      "tampered_storage_handling (Q15) — decrypt failure → BotTokenInvalidException, covered in AC3",
+      "exception_inheritance (Q16) — extends AppException, covered in AC13",
+      "ownerid_param (Q17) — optional ownerId, covered in AC1 and AC14",
+      "text_size_validation (Q18) — no pre-validation, covered in Обмеження and Технічні рішення",
+      "staging_smoke_runbook (Q19) — no new runbook, covered in Тестування and Як перевірити",
+      "overall_timeout (Q20) — 30s timeout, covered in AC8 and AC12",
+      "dto_for_429_retry_after (Q21) — TelegramSendResult record, covered in AC7",
+      "rate_limit_exception_class (Q22) — TelegramRateLimitException class, covered in AC7 and AC13",
+      "edge_cases item 11 (Telegram 200 ok=false → TelegramSendException) — now covered in AC9 and Сценарій 1 step 8"
+    ],
+    "missing": []
+  },
+  "round2_verification": {
+    "critical_1_ac13_vs_ac8_contradiction": {
+      "status": "resolved",
+      "evidence": "AC13 now lists each exception with its own explicit disposition. TelegramRateLimitException is described as 'internal-only, ловиться 429-loop'ом, ніколи не доходить до GlobalErrorHandler і не має registered HTTP mapping' — no longer grouped with TelegramSendException under '400'. AC8 and AC13 are now consistent."
+    },
+    "critical_2_ok_false_missing": {
+      "status": "resolved",
+      "evidence": "Сценарій 1 step 8 (line 31) now explicitly lists '200 OK з ok=false → TelegramSendException (description збережено, scrubbed)'. AC9 is a new dedicated criterion covering exactly this case. Interview edge_cases item 11 is now fully reflected in the spec."
+    },
+    "major_3_ac18_interleaving_assertion": {
+      "status": "resolved",
+      "evidence": "AC19 now specifies: exact scripted sequence [5xx, 429(retry_after=1), 5xx, 200], expected outcome (success), expected total attempts (4), and the invariant that both retry caps are not exhausted by each other. The assertion is concrete and machine-verifiable."
+    },
+    "major_4_ac11_attempts_counting": {
+      "status": "resolved",
+      "evidence": "AC14 now defines: 'attempts — загальна кількість HTTP-запитів до Telegram, що відбулись у межах виклику (включаючи 5xx-retry і 429-retry; перший attempt = 1)'. The counting rule is unambiguous and testable."
+    }
+  },
+  "summary": "Специфікація затверджена: всі чотири дефекти з раунду 1 усунуті. Критичне протиріччя AC13 vs AC8 щодо TelegramRateLimitException розв'язане — виняток тепер явно позначений як internal-only без HTTP-маппінгу. Сценарій ok=false доданий у Сценарій 1 кроку 8 та виділений в окремий AC9. Assertion для interleaving-тесту конкретизований (послідовність [5xx, 429, 5xx, 200], attempts=4). Семантика поля attempts визначена однозначно. Залишились два minor-знахідки: відсутній рядок error code у AC2 та перевищення порогів розміру M (усвідомлено, з обґрунтуванням у специфікації)."
+}

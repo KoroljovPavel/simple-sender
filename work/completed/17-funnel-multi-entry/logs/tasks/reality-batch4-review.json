@@ -1,0 +1,61 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 11,
+      "issue": "Task 11 Verification Steps cite `pnpm lint` and `pnpm typecheck` as mandatory automated lanes. Neither script exists in `frontend/package.json`. The available scripts are: dev, prebuild, build, generate, preview, test, test:e2e. Running `pnpm lint` or `pnpm typecheck` will fail with 'Missing script' immediately.",
+      "fix": "Remove `pnpm lint` and `pnpm typecheck` from the Automated steps and Acceptance Criteria. If lint/typecheck is truly required, add the scripts to package.json first (e.g. `nuxt typecheck` + an eslint invocation) — but that is a separate task. For now the AC must only reference scripts that exist."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 10,
+      "issue": "Task 10 optional grounding command for the frontend uses `pnpm test tests/components/funnels/FunnelTriggersPanel.spec.ts tests/pages/funnel-editor.spec.ts`. The `pnpm test` script invokes `vitest` without arguments, and passing bare file paths may work but the command is listed in the same breath as `pnpm lint` (which does not exist). Independently: the grounding command in Task 10 does NOT cite `pnpm lint`/`pnpm typecheck`, so Task 10 itself is not broken on this axis — only Task 11 is critical. Noted here for completeness only (minor).",
+      "fix": "No action needed for Task 10 on this finding; tracked here as context."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10's optional grounding command for the backend uses `-PrunSlow=true --tests '*Funnel*'`. The `build.gradle` slow-lane gate is controlled by the property `runSlow` (`project.hasProperty('runSlow')`), so `-PrunSlow=true` is correct. However the user-spec 'Як перевіряти' table (step 1) documents the flag as `-PincludeTags=slow` (`./gradlew test -PincludeTags=slow`). That property name does NOT appear anywhere in `build.gradle` — it would be silently ignored (no `project.hasProperty('includeTags')` branch), meaning the slow lane would NOT be excluded but also no custom inclusion: the result is the default run with all tags, not the slow-only run the user-spec intends. Task 10 itself uses `-PrunSlow=true` in its Verification Steps which IS correct. But the user-spec reference creates a confusing discrepancy that the audit task will surface. The discrepancy is in the user-spec, not Task 10's command — Task 10's command is correct. This finding is raised as a cross-document inconsistency: the user-spec 'step 1' command is wrong and will mislead anyone following the user-spec directly.",
+      "fix": "Update user-spec 'Як перевіряти' step 1 from `-PincludeTags=slow` to `-PrunSlow=true` to match the actual build.gradle gate. No change needed in Task 10 itself."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 Automated steps include `cd frontend && pnpm lint` and `cd frontend && pnpm typecheck` as REQUIRED lanes (Acceptance Criteria: 'Frontend `pnpm lint`, `pnpm typecheck`, `pnpm test` зелені'). These scripts do not exist in `frontend/package.json`. The task will be reported as FAIL on its own acceptance criteria by any honest pre-deploy QA agent. This is already captured as critical above; raised again as major under feasibility to flag the AC wording that must also be corrected.",
+      "fix": "Align the AC bullet with existing scripts: replace 'pnpm lint, pnpm typecheck, pnpm test зелені' with 'pnpm test зелені' (only the script that exists). Add a note that lint/typecheck are verified via `nuxt build` (the prebuild hook runs `check-locales.mjs`) if that is the intended coverage."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 11,
+      "issue": "Cross-task log-path inconsistency. Task 8 writes its code-audit report to `logs/working/task-8/code-audit...json`. Tasks 9 and 10 write their security/test-audit reports to `logs/audits/security-audit.md` and `logs/audits/test-audit.md` (a separate `logs/audits/` subtree). Tasks 11 and 12 write their QA reports back to `logs/working/task-11/qa-report.md` and `logs/working/task-12/`. This mixes two conventions within one feature: `logs/audits/` for audit tasks (9, 10) and `logs/working/task-N/` for code-audit (8) and QA tasks (11, 12). There is no functional breakage (paths are explicit), but the inconsistency makes discovery and tooling fragile.",
+      "fix": "Pick one convention for audit-wave and QA-wave artifacts and apply it consistently. Simplest: move Task 8 report to `logs/audits/code-audit.md` alongside Tasks 9 and 10. Or move Tasks 9/10 into `logs/working/task-9/` and `logs/working/task-10/`. Either way, update the affected task files and decisions.md references to match."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 Smoke step uses the URL pattern `<APP_URL>/health` but the deployment.md (referenced in Context Files) is described as showing the health endpoint as `GET /health`. The actual Spring Boot health endpoint in this project may be at `/actuator/health` (Spring Boot default) unless explicitly remapped. Task 12's Operational step also uses `curl -s <APP_URL>/health` expecting `{\"status\":\"ok\"}`. If the endpoint is not remapped in application.yml, this curl will return 404. The issue cannot be fully confirmed without reading application.yml, but the discrepancy between raw `/health` and Spring Boot's default `/actuator/health` is a known footgun.",
+      "fix": "Confirm the actual health endpoint path by reading `backend/src/main/resources/application.yml` or `application.properties`. If it is `/actuator/health`, update both Task 12's Operational step and the deployment.md reference accordingly."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 instructs the agent to 'Read it from the environment's configured secret / the project's generated API key per the env's setup' for the X-API-Key. The deployment.md is listed as a context file, but no specific env-var name for the API key is given in the task itself. The EventsController reads `app.api.events.rate-limit-per-min` but the API key is managed by `ApiKeyAuthFilter` whose configuration is not mentioned. If the agent cannot locate the key from deployment.md, the smoke curl step is blocked. This is minor because the task does include a guard ('if unavailable, request where it is stored').",
+      "fix": "Add a concrete pointer in Implementation Hints: the API key is stored at <specific env-var or config location per deployment.md>. This removes ambiguity without asking the user to paste the key in chat."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 22,
+    "issues_found": 7
+  }
+}

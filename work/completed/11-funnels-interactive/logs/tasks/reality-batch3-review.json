@@ -1,0 +1,87 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 changes TelegramUpdate.callback_query from JsonNode to typed CallbackQuery DTO, but the existing parameterized test `nonMessageJsonNodeSlot_writesUpdateOther_noStubs` includes 'callback_query' in its `jsonNodeSlots()` stream (ProcessTelegramUpdateJobTest.java line 350). After the Task 7 change, the slotPayload('callback_query') will produce a non-null typed CallbackQuery object on the update, causing dispatch() to route into the new callback branch (not logEventOther). The test expects telegram_update_other but a CONNECTED bot is seeded in @BeforeEach, so the callback branch will call advanceOnCallback instead — the test will fail. The task does not mention removing 'callback_query' from jsonNodeSlots() or migrating this case to a typed test.",
+      "fix": "In step 6 (ProcessTelegramUpdateJobTest), explicitly instruct removing 'callback_query' from the jsonNodeSlots() stream and adding a dedicated test for the case where a typed CallbackQuery payload with a missing/invalid structure results in a bot-lookup miss. Add a note in the AC: 'callback_query removed from jsonNodeSlots() stream; existing parameterized test updated'."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "FunnelTriggerService interface (the dependency from Task 5) does NOT yet have advanceOnCallback() — the current interface only declares fire() and cancelActiveFor(). The TDD Anchor instructs writing tests with `verify(funnelTriggerService, times(1)).advanceOnCallback(...)`, but for Mockito @MockitoSpyBean to work at compile time, the method must exist on the interface. The task declares depends_on:[5], which is correct, but the task description says 'Підтвердити точну сигнатуру з FunnelTriggerService.java після Task 5 (зчитати перед написанням)' — however, the TDD Anchor is written before Task 5 exists, so the test must compile only after Task 5. This is a TDD ordering issue: TDD Anchor tests cannot be written (and run red) before Task 5 adds the method.",
+      "fix": "Add an explicit note in the TDD Anchor section: 'Compile-gate — these tests require Task 5 to have added advanceOnCallback() to FunnelTriggerService first. TDD cycle starts AFTER Task 5 is done (wave ordering ensures this). Do not attempt to write tests before Task 5 is merged.' This makes the dependency constraint explicit for the implementer."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 9,
+      "issue": "Task 9 Required Skills section says '/skill:security-auditor — [agents/security-auditor.md](.claude/agents/security-auditor.md)', pointing to the agents/ directory. The security-auditor skill is actually at .claude/skills/security-auditor/SKILL.md, not .claude/agents/security-auditor.md. While both files exist (the agents/ file is a different artifact — an agent prompt, not the skill), the skill loader uses .claude/skills/<name>/SKILL.md. Task 8 uses the correct pattern: '/skill:code-reviewing — [SKILL.md](../../../.claude/skills/code-reviewing/SKILL.md)'.",
+      "fix": "Update the Required Skills path to: '/skill:security-auditor — [SKILL.md](../../../.claude/skills/security-auditor/SKILL.md)' to match the pattern used in Task 8 and other tasks in the feature."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 7,
+      "issue": "The TDD Anchor test `callbackQuery_botMissing_degradesNoAdvance` verifies that when there is no CONNECTED bot, advanceOnCallback is NOT called and telegram_update_other is written. However, the existing `nonMessageJsonNodeSlot_writesUpdateOther_noStubs` test for slot='callback_query' uses slotPayload() which creates a Document with `{id: 1, note: 'stub'}` as the callback_query body — and the cleanAndSeed() seeds a CONNECTED bot. After Task 7, this Document will deserialize into a non-null CallbackQuery record and dispatch() WILL call advanceOnCallback (bot IS present). The AC states 'no regressions in existing message tests', but this is not a message test — it is a JsonNode slot test that includes callback_query. The regression is not caught by the AC.",
+      "fix": "Update the Acceptance Criteria to: 'No regressions in existing webhook tests, including updating nonMessageJsonNodeSlot_writesUpdateOther_noStubs to remove callback_query from its stream (or extract callback_query into a dedicated typed test).' Also update the Automated Verification step to explicitly run the full ProcessTelegramUpdateJobTest suite, not just new tests."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 Details mentions 'resolveUpdateKind (рядок 297)' for the line that reads callback_query as JsonNode. The actual line in ProcessTelegramUpdateJob.java is 297 (the `if ((n = update.callback_query()) != null && !n.isNull())` check), which matches. However, dispatch() is on line 146 and the task says '(рядок 146)' — these match. The handleStart bot-lookup is on line 208 and the task says '(рядок 208)' — matches. Line numbers are accurate as of the current codebase.",
+      "fix": "No change needed — line numbers verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 lists FunnelTriggerServiceImpl.java once in the code-to-read section (under Task 3 in the scope), but Task 5 also modifies FunnelTriggerServiceImpl.java to add advanceOnCallback(). The file is listed only under the Task 3 bullet, not also under Task 5. The audit might read an incomplete view if the auditor stops at the first mention. The scope list in Details says 'Task 5: FunnelTriggerService.java, FunnelTriggerServiceImpl.java' — so the file IS listed twice implicitly, but only explicitly under Task 3 in the Code section.",
+      "fix": "Minor clarity issue only. The Details → Scope section at line 81 correctly lists FunnelTriggerServiceImpl.java under Task 5. The Context Files code section collapses it to one link. Acceptable as-is, but an explicit note '(also modified by Task 5 — read after Task 5 is done)' on the FunnelTriggerServiceImpl.java link would help the auditor."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 Context Files reference '[security-auditor.md](.claude/agents/security-auditor.md)' as a context file under the methodology section. While this file exists at /Users/pavlokorolov/IdeaProjects/simple-sender/.claude/agents/security-auditor.md, the actual skill SKILL.md is at .claude/skills/security-auditor/SKILL.md. An agent reading the context from the task file location (work/11-funnels-interactive/tasks/) would resolve the relative path '.claude/agents/security-auditor.md' incorrectly (it should be '../../../.claude/agents/security-auditor.md'). The path is missing the '../../../' prefix used consistently for all other context file links.",
+      "fix": "Change the context file reference to '../../../.claude/agents/security-auditor.md' for consistency with all other relative paths in the file. Currently the link is written as '.claude/agents/security-auditor.md' without leading '../../../'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 42,
+    "issues_found": 7
+  },
+  "notes": {
+    "task7_reality": {
+      "ProcessTelegramUpdateJob": "EXISTS at correct path; dispatch() on line 146, resolveUpdateKind on line 292 (callback_query check on line 297), handleStart on line 200 with bot-lookup on line 208 — all line references in task Details are accurate",
+      "TelegramUpdate": "EXISTS; callback_query IS JsonNode at line 23 — matches task description exactly",
+      "Message_Chat_User_DTOs": "All three exist at correct paths with @JsonIgnoreProperties; record structure matches what CallbackQuery will reference",
+      "FunnelTriggerService_interface": "EXISTS but only has fire() and cancelActiveFor() — no advanceOnCallback() yet (Task 5 dependency correctly declared via depends_on:[5])",
+      "ProcessTelegramUpdateJobTest": "EXISTS; eventWriteBeforeStatusFlip_orderingInvariant test EXISTS at line 202; @MockitoSpyBean funnelTriggerService EXISTS at line 62; callbackQueryPayload helper NOT yet present (to be added by Task 7 as instructed)",
+      "botRepository_pattern": "findByProjectIdAndStatus(projectId, BotStatus.CONNECTED) EXISTS and is used in 3 places in the job — correct reference pattern",
+      "re_entry_guard": "reentryGuard_doneStatus_noOp test EXISTS at line 113",
+      "event_before_flip": "eventWriteBeforeStatusFlip_orderingInvariant test EXISTS at line 202",
+      "error_isolation": "try/catch(Throwable) -> handleFailure pattern EXISTS at lines 98-111"
+    },
+    "task8_reality": {
+      "scope_files": "All 'Files to modify' references in tasks 1-7 that already exist are verified present. New files (Button.java, FunnelStepIdBackfill.java, ButtonDto.java, CallbackQuery.java) are not yet created — they are to be created by tasks 1-4/7 (correct, audit runs in Wave 5 after all are done)",
+      "code_reviewing_skill": "EXISTS at .claude/skills/code-reviewing/SKILL.md — correct path referenced",
+      "deliverable_path": "work/11-funnels-interactive/logs/working/task-8/code-audit-1.json — path is consistent with project logs convention",
+      "no_tdd_anchor": "Correct — audit tasks have no TDD anchor; this is expected and appropriate"
+    },
+    "task9_reality": {
+      "security_auditor_skill": "EXISTS at .claude/skills/security-auditor/SKILL.md; agents/security-auditor.md also exists but is a different artifact. Skill load reference in Required Skills section points to wrong path (agents/ instead of skills/)",
+      "deliverable_path": "work/11-funnels-interactive/logs/working/task-9/security-auditor-1.json — consistent with project logs convention",
+      "no_tdd_anchor": "Correct — security audit tasks have no TDD anchor",
+      "scope_completeness": "Scope lists all files from Tasks 1-7 correctly; git diff instruction is appropriate since audit runs post-implementation"
+    }
+  }
+}

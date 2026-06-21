@@ -1,0 +1,42 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "tasks",
+      "issue": "Task count is 17, above the >15 threshold flagged by tech-spec-planning skill. The skill instructs to propose splitting into MVP + Extension phases when exceeded.",
+      "fix": "Either acknowledge the threshold explicitly in the document (e.g., in Solution/Phases section) with a justification for keeping 17 tasks together, or split into an MVP (Phase A + B core flip) and Extension (Phase C verification + docs). NOTE: Phase B sub-tasks 3-10 are documented as a single physical commit per D5 — consider explicitly merging them into one logical Task 3 'Atomic flip (8 sub-bullets inside one task)' to bring count under 15 without losing reviewer-navigation detail."
+    },
+    {
+      "severity": "critical",
+      "category": "tasks",
+      "issue": "Wave 3 file conflict: Task 11 and Task 13 both modify `.claude/skills/project-knowledge/references/patterns.md`. Task 11 adds a new 'Virtual Threads' section (pinning probe results); Task 13 rewrites WebFlux→MVC patterns, mock-triple, Reactor retry, and requireOwned signature. Same wave = parallel execution = merge conflict.",
+      "fix": "Options: (a) Move Task 11 into Wave 3 sub-wave before Task 13 so Task 13 picks up the Virtual Threads section that Task 11 wrote, (b) Merge Task 11's patterns.md edit into Task 13's description (one writer), or (c) Split Wave 3 into Wave 3a (Task 11 + Task 12 in parallel) and Wave 3b (Task 13 reads Task 11 output)."
+    },
+    {
+      "severity": "major",
+      "category": "task_quality",
+      "issue": "Task descriptions throughout Wave 2 (Tasks 3, 5, 6, 7, 8, 9, 10) exceed 5 sentences and contain method-signature-level implementation steps (e.g., Task 6 enumerates `securityContextRepository.save(exchange, context).then(...)` → `saveContext(context, request, response)`, 11 `Mono.fromCallable` site count, etc.). Per the validator rule 'Description longer than 5 sentences → major. Detailed steps belong in task files during decomposition.'",
+      "fix": "Compress each Wave 2 sub-task to a 2-3 sentence scope summary (what + why + result), and move the method-by-method rewrite catalog into the corresponding task files during task-decomposition phase. Wave 2 sub-tasks are explicitly review-navigation aids per D5 — that purpose can be served with a shorter scope description plus pointers ('see Architecture section for full call-site list')."
+    },
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "issue": "Task 4 (Repositories) and Task 10 (Test infrastructure) and Task 12 (new ITs) use skill `code-writing` but omit `security-auditor` from the default reviewer set (code-writing default = code-reviewer + security-auditor + test-reviewer). Skipping the security reviewer is reasonable for purely test-infra / repository-signature changes, but the omission is undocumented.",
+      "fix": "Either add `security-auditor` to those three tasks' Reviewers (matching the skill default), or add a brief inline note explaining why security-auditor is intentionally skipped (e.g., 'pure type-signature refactor; no auth/data-handling surface'). Acceptable as-is for an audit-wave-covered feature, but worth flagging."
+    },
+    {
+      "severity": "minor",
+      "category": "verification",
+      "issue": "Tasks 3 (SecurityConfig + RememberMeCookieSerializer rewrite), 8 (RestClient + retry rewrite for outbound Telegram), and 9 (Webhook filter + controller + ProcessTelegramUpdateJob) involve library initialization, external API integration, and infra-equivalent surface, but none has a Verify-smoke field. Per validator rule 5b these benefit from smoke checks beyond what unit/integration tests cover.",
+      "fix": "Add concrete Verify-smoke commands. Suggestions: Task 3 — `./gradlew compileJava` plus `curl -i http://localhost:8080/api/csrf` to confirm CSRF cookie issuance; Task 8 — invoke a MockWebServer-backed integration test as a smoke or `curl` against a stubbed Telegram endpoint; Task 9 — `curl -X POST localhost:8080/webhook/telegram/{token}` with sample payload, assert 200 + Mongo `raw_updates` row. NOTE: since Wave 2 is one physical commit, a single end-of-wave smoke block in Task 10 covering all of them is also acceptable."
+    },
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "issue": "Several decision rationales are partially restated inside task descriptions ('(per VT cheapness)' in Task 5, 'because they share requireOwned cross-call' in Task 7, '30s outer ceiling via deadline-based overall timeout' in Task 8 — the latter being a decision-shape detail not currently called out in Decisions section). Cross-references to D1-D14 are present and correct, but per-task asides risk drift if a Decision is later edited.",
+      "fix": "Move any standalone rationale fragments into the relevant Decision (e.g., the deadline-based 30s ceiling pattern in Task 8 fits inside D2). Keep cross-references like 'per D2' inside tasks; remove the rationale prose alongside them."
+    }
+  ],
+  "summary": "Tech-spec passes structural and template compliance: all sections present, frontmatter correct (created/status/branch/size), Decisions section is rich with 14 decisions including [TECHNICAL] markers on D4/D12/D13 (and D14) as requested, Risks table well-formed with mitigations, Agent Verification Plan filled, 6 User-Spec Deviations correctly marked [PENDING USER APPROVAL], Audit Wave has 3 parallel tasks with reviewers:none, Final Wave has Pre-deploy QA and explicitly justifies the absence of Deploy/Post-deploy via deployment.md TBD note. Per user instruction Wave 2 (Tasks 3-10) intentional same-file overlap is acknowledged and not flagged. One critical finding: Wave 3 has a real conflict (Task 11 + Task 13 both write patterns.md in parallel) that must be addressed before execution. Major findings are advisory: task count 17 exceeds the >15 threshold (split MVP/Extension or collapse Wave 2 sub-tasks into one logical task), and Wave 2 task descriptions are verbose with implementation detail that belongs in task files during decomposition. Minor findings concern omitted security-auditor reviewer on three code-writing tasks, missing Verify-smoke fields on infra-adjacent tasks (3/8/9), and rationale fragments embedded in task descriptions. Status approved (no critical structural/template violations; the Wave 3 conflict is execution-level and must be fixed but does not block tech-spec acceptance — the document is sound, the wave assignment needs one adjustment)."
+}

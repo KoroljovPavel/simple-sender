@@ -1,0 +1,112 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14, 15],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "T15 step 6 manual smoke curl command says 'expect 401 (CSRF baseline still active)' for POST /api/v1/projects without X-XSRF-TOKEN, but the correct expected status is 403. Spring Security returns 403 Forbidden for CSRF failures, not 401. Tech-spec line 371 explicitly states 'CSRF on /api/** still active (POST without X-XSRF-TOKEN → 403)'. Tech-spec AC section line 348 says 'without X-XSRF-TOKEN still returns 403'. User-spec AC15 says '→ 403'. T13 scope 1 also correctly says '→ 403'. Only T15 step 6 says 401.",
+      "fix": "In T15 step 6, change 'expect 401 (CSRF baseline still active)' to 'expect 403 (CSRF baseline still active)'. 401 is correct only for the unauthenticated missing-auth case; 403 is Spring Security's CSRF rejection code."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "T15 step 5 gitleaks check says 're-run pre-commit run gitleaks --all-files or equivalent local invocation'. The project does NOT use the pre-commit framework — it uses a custom git hook installed via scripts/install-hooks.sh that runs 'gitleaks detect --staged --verbose'. The pre-commit CLI is not installed on the system. The 'or equivalent' qualifier partially covers this, but the primary suggested command will fail with 'command not found' if followed literally.",
+      "fix": "Replace primary suggestion with the actual hook invocation: 'gitleaks detect --staged --verbose --no-banner --redact' (or re-run via 'git commit --dry-run' equivalent). Optionally add a note: 'project uses a native git hook via scripts/install-hooks.sh, not the pre-commit framework'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "T15 step 3 says 'For each AC1..AC19' and T15 Acceptance Criteria says 'All 19 user-spec ACs'. However, user-spec contains AC11a as a separately labeled acceptance criterion (distinct from AC11), making the actual count 20 labeled ACs. T15 may skip AC11a ('Update without message OR with message.from == null → safe-navigate, no NPE') in its verification table.",
+      "fix": "Update T15 step 3 to say 'For each AC1..AC19 + AC11a' and update the Acceptance Criteria checkbox to 'All 20 user-spec ACs (AC1-AC19 including AC11a) mapped'. Alternatively, treat AC11a as covered under AC11 and add a note explaining the grouping."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 15,
+      "issue": "T15 lists docs/staging-smoke/08-webhook-ingestion.md as a context file but does not declare T8 in depends_on. T8 (wave 1, no dependencies) creates that file. Wave ordering (T8=wave1, T15=wave6) ensures T8 completes before T15 starts, so there is no runtime execution risk. However, the missing depends_on entry is inconsistent with the project's convention of making cross-task file dependencies explicit.",
+      "fix": "Add 8 to T15 depends_on list: depends_on: [8, 12, 13, 14]. This documents the intent clearly without affecting execution order."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 4
+  },
+  "verification_notes": {
+    "A_reality": {
+      "security_auditor_agent": "EXISTS at .claude/agents/security-auditor.md",
+      "test_master_skill": "EXISTS at .claude/skills/test-master/SKILL.md",
+      "pre_deploy_qa_skill": "EXISTS at .claude/skills/pre-deploy-qa/SKILL.md",
+      "user_spec": "EXISTS at work/08-webhook-ingestion/user-spec.md",
+      "tech_spec": "EXISTS at work/08-webhook-ingestion/tech-spec.md",
+      "decisions_md": "EXISTS at work/08-webhook-ingestion/decisions.md",
+      "TelegramApiClient_scrubTokens": "VERIFIED — method at line 179 of TelegramApiClient.java",
+      "Bot_webhookSecretHash": "VERIFIED — field at line 61 of Bot.java",
+      "BotService_sha256Hex": "VERIFIED — private method at line 331",
+      "existing_regression_tests": {
+        "BotControllerIT": "EXISTS at backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+        "TelegramSenderIT": "EXISTS at backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java",
+        "ProjectControllerIT": "EXISTS at backend/src/test/java/com/botfunnel/project/ProjectControllerIT.java",
+        "SecurityBlockTest": "EXISTS at backend/src/test/java/com/botfunnel/SecurityBlockTest.java"
+      },
+      "AbstractIntegrationTest": "EXISTS",
+      "JobRunrInMemoryConfig": "EXISTS",
+      "docs_staging_smoke_08": "DOES NOT EXIST YET — created by T8 (wave 1, always before wave 6)",
+      "staging_smoke_dir": "EXISTS at docs/staging-smoke/ (contains 06 and 07 runbooks)",
+      "webhook_test_dir": "DOES NOT EXIST YET — created by earlier wave 1-4 tasks (T14 audits after T11 completes)",
+      "mongodb_db_name_botfunnel": "VERIFIED — application.properties confirms botfunnel",
+      "gradlew_at_backend": "VERIFIED at backend/gradlew",
+      "mongosh_availability": "NOT INSTALLED on current system — T15 edge case note covers substitution",
+      "pre_commit_framework": "NOT INSTALLED — T15 uses 'or equivalent' qualifier"
+    },
+    "B_feasibility": {
+      "T13_scope_enumeration": "All 12 scope items are concrete grep/read checks against specific file:line targets",
+      "T13_depends_on_T11": "Correct — T11 is the sole wave-4 task; T11 chain covers all implementation",
+      "T14_scope_enumeration": "All 12 scope items are concrete grep-and-confirm checks",
+      "T14_depends_on_T11": "Correct — webhook test files created by earlier tasks before T14 runs",
+      "T15_pre_flight_short_circuit": "Feasible — read three audit reports, check for Critical findings",
+      "T15_gradlew_test": "Feasible — gradlew exists at backend/gradlew",
+      "T15_mongosh_index_check": "Feasible with caveat — mongosh not installed locally but edge case is documented",
+      "T15_grep_invariants": "All grep commands are concrete and reference valid file paths post-implementation"
+    },
+    "C_hallucinations": {
+      "NegatedServerWebExchangeMatcher": "Valid Spring Security 6.x class — referenced in tech-spec Decision and SecurityConfig section",
+      "PathPatternParserServerWebExchangeMatcher": "Valid Spring Security 6.x class",
+      "UUID_nameUUIDFromBytes": "Standard Java API — correct",
+      "MessageDigest_isEqual": "Standard Java API — correct constant-time comparison",
+      "BackgroundJob_enqueue_UUID": "Valid JobRunr API — consistent with tech-spec Decision 11",
+      "ListAppender_ILoggingEvent": "Valid Logback test utility — consistent with BotControllerIT precedent referenced in tech-spec",
+      "Awaitility": "Valid Java test library — T14's suggestion to use awaitility is appropriate",
+      "WebhookSecurityBlockTest": "T13 scope 1 references this as a NEW test class to be created by T11, not the existing SecurityBlockTest — both test classes are separately defined in tech-spec Testing Strategy and are not confused"
+    },
+    "D_security": {
+      "no_hardcoded_secrets": "None found in task files",
+      "audit_wave_before_qa": "T13 and T14 are wave 5; T15 is wave 6 — correct ordering"
+    },
+    "E_tdd": {
+      "T13_report_format": "Concrete Finding format with severity/file:line/observation/recommendation",
+      "T14_AC_mapping_table": "Explicit requirement for AC-to-test mapping covering all 19 (should be 20) ACs",
+      "T15_verification_table": "Structured report with per-AC pass/fail and tech-spec AC verification"
+    },
+    "F_cross_task": {
+      "audit_reports_produced_by_T12_T13_T14": "T12 writes logs/audits/code-audit.md, T13 writes logs/audits/security-audit.md, T14 writes logs/audits/test-audit.md — all correctly referenced by T15 pre-flight step",
+      "T15_does_not_declare_T8_dependency": "See finding: minor gap — wave ordering provides runtime guarantee"
+    },
+    "G_hints": {
+      "T13_hints": "Point to existing methodology (security-auditor agent), not full algorithm prescriptions — appropriate",
+      "T14_hints": "Provide grep commands as starting points, not implementations — appropriate",
+      "T15_hints": "Brief operational notes (report length, pre-flight first) — appropriate"
+    },
+    "Decision19_compliance": {
+      "T13": "No Deploy or post-deploy-qa reference — COMPLIANT",
+      "T14": "No Deploy or post-deploy-qa reference — COMPLIANT",
+      "T15": "Explicitly references Decision 19, confirms no Deploy task, references staging-smoke runbook as post-merge verification — COMPLIANT"
+    }
+  }
+}

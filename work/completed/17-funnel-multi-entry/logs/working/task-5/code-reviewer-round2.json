@@ -1,0 +1,59 @@
+{
+  "status": "approved",
+  "round": 2,
+  "fix_commit": "1ecf587",
+  "summary": "All four round-1 minors are correctly addressed. (1) The null/blank entryStepId guard is present in redirectExecution (Engine L235-238): fast no-op WARN before any CAS, preventing silent drift into the broken-cursor terminal-fail branch. (2) The dispatch-side duplicate success log is demoted to log.debug (FunnelEventService L263); the engine's LOG_REDIRECT info at L258 remains the single authoritative success record. (3) The findFirst()-safe comment is added in FunnelTriggerServiceImpl (L153-155), explaining uniqueness via the partial index. (4) The security guard comment is added before the LOG_DISPATCH_NO_MATCHED_ELEMENT warn (FunnelEventService L311-314). No behavioral regressions detected. The test improvements (FunnelEventServiceIT allowReEnter test strengthened with real terminal predecessor, new FunnelEventServiceTest drift-guard unit test) are correct and add coverage. One new minor observation on log-constant reuse.",
+  "round1_minors_resolved": [
+    {
+      "id": "R1-1",
+      "description": "redirectExecution null/blank entryStepId guard",
+      "status": "resolved",
+      "evidence": "FunnelExecutionEngine.java L235-238: if (entryStepId == null || entryStepId.isBlank()) { log.warn(\"{} executionId={} funnelId={}\", LOG_REDIRECT_CLAIM_LOST, executionId, funnelId); return; }"
+    },
+    {
+      "id": "R1-2",
+      "description": "Duplicate success log — dispatch-side demoted to debug",
+      "status": "resolved",
+      "evidence": "FunnelEventService.java L263: log.debug(\"{} projectId={} funnelId={}\", LOG_DISPATCH_REDIRECT, projectId, funnel.getId()); Engine LOG_REDIRECT info at L258 remains the authoritative record."
+    },
+    {
+      "id": "R1-3",
+      "description": "findFirst()-safe comment on fire",
+      "status": "resolved",
+      "evidence": "FunnelTriggerServiceImpl.java L153-155: comment explaining on_start uniqueness enforced by the onStartTriggerValue unique partial index, so the list never carries >1 row."
+    },
+    {
+      "id": "R1-4",
+      "description": "Security guard comment on LOG_DISPATCH_NO_MATCHED_ELEMENT log",
+      "status": "resolved",
+      "evidence": "FunnelEventService.java L311-314: SECURITY comment explaining triggerType is a safe taxonomy CODE but matchKey/triggerValue/event_name must never be added."
+    }
+  ],
+  "new_findings": [
+    {
+      "id": "R2-1",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": 236,
+      "category": "observability",
+      "issue": "The null/blank entryStepId guard emits LOG_REDIRECT_CLAIM_LOST (value: FUNNEL_REDIRECT_CLAIM_LOST), whose class-level comment documents it as 'lost claim-CAS no-op (sweep owns the row)'. The null/blank case fires before any CAS attempt — it is a dispatch precondition failure, not a sweep-race. An operator grepping FUNNEL_REDIRECT_CLAIM_LOST cannot distinguish the two causes. The inline comment in redirectExecution explains the distinction well, but the constant's semantic scope is now wider than its documentation.",
+      "fix": "Optionally introduce a dedicated constant such as LOG_REDIRECT_NULL_ENTRY (value: FUNNEL_REDIRECT_NULL_ENTRY_STEP) for the precondition guard, keeping LOG_REDIRECT_CLAIM_LOST strictly for the CAS-loss path. Alternatively, update the class-level LOG_REDIRECT_CLAIM_LOST comment to document both uses. Either makes the signal unambiguous in log aggregators.",
+      "optional": true,
+      "blocking": false
+    }
+  ],
+  "behavioral_regression_check": {
+    "redirect_path": "PASS — guard returns early before claimForRedirect is called; null/blank entryStepId never reaches the CAS or the broken-cursor branch",
+    "start_path": "PASS — insertOneFunnel and insertAtEntryStep are untouched",
+    "on_start_fire_path": "PASS — FunnelTriggerServiceImpl.fire unchanged except for added comment; semantics identical",
+    "log_level_change": "PASS — dispatch-side debug does not suppress any info visible to monitors; engine info log is the authoritative signal",
+    "test_changes": "PASS — IT test strengthened with real terminal predecessor row and stronger assertions; new unit test covers drift-guard WARN + step-0 fallback; no test weakened"
+  },
+  "metrics": {
+    "filesReviewed": 3,
+    "round1MinorsAddressed": 4,
+    "newCriticalIssues": 0,
+    "newMajorIssues": 0,
+    "newMinorIssues": 1
+  }
+}

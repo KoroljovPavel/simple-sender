@@ -1,0 +1,40 @@
+# Feature Execution Checkpoint
+# Written by feature-execution skill after each wave.
+# Read by SessionStart(compact) hook for context recovery.
+# Read by feature-execution Phase 1 to detect resume scenario.
+
+skill: feature-execution
+feature: 15-message-composer
+feature_dir: work/15-message-composer
+execution_plan: work/15-message-composer/logs/execution-plan.md
+team_name: 15-message-composer
+
+last_completed_wave: 6
+total_waves: 8
+
+# Format: task_number: status (planned | in_progress | done)
+# Example:
+#   1: done
+#   2: done
+#   3: in_progress
+#   4: planned
+tasks:
+  1: done
+  2: done
+  3: done
+  4: done
+  5: done
+  6: done
+  7: done
+  8: done
+  9: done
+  10: done
+  11: done
+  12: done
+  13: deferred   # deploy — no target environment yet (user decision 2026-06-10)
+  14: deferred   # post-deploy "Test for me" — blocked on deploy
+
+# Waves 1-6 complete. Final Wave (deploy/post-deploy) deferred: no infrastructure to deploy to.
+# Manual verification checklist for the epic: work/15-message-composer/smoke.md
+# 16 commits sit locally on main, UNPUSHED.
+next_wave: 7  # blocked/deferred

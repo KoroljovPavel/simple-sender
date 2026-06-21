@@ -1,0 +1,61 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 3],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 Details section references stale comment block at 'L140-143 / L166-168' in FunnelTriggerServiceImpl.fire(). The actual stale comment ('on_start enrolls always START at step 0 (entryStepId is null for on_start)') sits at L142-143 in the current file. The L166-168 range contains a different comment about the re-enter guard. The line numbers are approximate but the referenced comment text ('on_start enrolls always START at step 0') does exist at L142-143, so this is a minor precision issue, not a hallucination.",
+      "fix": "Update the comment-range hint to 'L140-143' (the block that actually contains the stale on_start wording); remove the L166-168 reference which points to a different comment."
+    }
+  ],
+  "fix_verification": {
+    "task_1": {
+      "smoke_command": {
+        "claim": "smoke uses '*FunnelControllerIT*' glob",
+        "verified": true,
+        "evidence": "Task 1 Verification Steps / Smoke reads: './gradlew test --tests \"*FunnelControllerIT*\"'. FunnelControllerIT.java exists at backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java. No FunnelServiceIT exists in the test tree (find returned 0 results). Prior critical finding is resolved."
+      },
+      "trigger_equals_hashcode": {
+        "claim": "canvasPosition stays OUT of equals/hashCode; exactly four fields retained: triggerType, triggerValue, keywords, entryStepId",
+        "verified": true,
+        "evidence": "Trigger.java L57-68: equals compares Objects.equals(triggerType, ...) && Objects.equals(triggerValue, ...) && Objects.equals(keywords, ...) && Objects.equals(entryStepId, ...); hashCode hashes the same four. canvasPosition field does not yet exist (not added — task is planned), and the task explicitly says NOT to add it to equals/hashCode with a required code comment. The description matches the four real fields exactly."
+      },
+      "finite_coordinate_tdd": {
+        "claim": "TDD anchor tests CanvasPositionDto validation by constructing a Java CanvasPositionDto with Double.NaN/Double.POSITIVE_INFINITY, NOT via a JSON bare-NaN body",
+        "verified": true,
+        "evidence": "Task 1 TDD Anchor 'rejects_non_finite_coordinates': 'a unit test that constructs a CanvasPositionDto directly in Java with a non-finite Double (Double.NaN and Double.POSITIVE_INFINITY cases) and asserts the finite-value bean validation reports a violation'. The note explicitly warns 'Do NOT assert non-finite via a JSON body in an IT: a bare NaN/Infinity token is invalid JSON, so Jackson rejects it at parse time (HTTP 400) before bean validation runs'. An optional parse-layer IT is mentioned separately. Prior critical finding is resolved."
+      }
+    },
+    "task_3": {
+      "fire_uses_executionFactory": {
+        "claim": "fire() hint uses 'executionFactory' (not funnelExecutionFactory)",
+        "verified": true,
+        "evidence": "FunnelTriggerServiceImpl.java L98: 'private final FunnelExecutionFactory executionFactory;'. Task 3 What-to-do step 3 explicitly states: 'The injected factory field in FunnelTriggerServiceImpl is named executionFactory (NOT funnelExecutionFactory — that name belongs to FunnelService); use executionFactory. here.' Details section also says: 'factory field here is **executionFactory** (verified L98/L171/L177 — distinct from FunnelService's funnelExecutionFactory)'. Correct."
+      },
+      "testRun_uses_funnelExecutionFactory": {
+        "claim": "testRun hint uses 'funnelExecutionFactory'",
+        "verified": true,
+        "evidence": "FunnelService.java L166: 'private final FunnelExecutionFactory funnelExecutionFactory;'. Task 3 What-to-do step 4 and Details section both say: 'In FunnelService the injected factory field is named funnelExecutionFactory (the longer name; distinct from FunnelTriggerServiceImpl.executionFactory); use funnelExecutionFactory. here.' Also references 'verified L166/L447-448'. L448: funnelExecutionFactory.insertExecution(...). Correct."
+      },
+      "on_start_null_tolerant_helper": {
+        "claim": "on_start entryStepId validation uses a dedicated null-tolerant helper (not requireEventEntryStep directly), is FIRM required not optional",
+        "verified": true,
+        "evidence": "Task 3 What-to-do step 2: 'a dedicated null-tolerant helper/branch is REQUIRED (not optional)... requireEventEntryStep CANNOT be called directly here: it throws 422 on a null id (verified L771-773)'. FunnelService.java L771-773 confirms: requireEventEntryStep throws on null ('if (entryStepId == null) { throw AppException.unprocessableEntity(CODE_INVALID_ENTRY_STEP, ...) }'). The task correctly identifies why direct reuse is impossible and mandates a new helper. Details section repeats: 'A dedicated private helper is REQUIRED (not optional)'. Prior major finding is resolved."
+      },
+      "on_start_current_code": {
+        "claim": "current on_start case calls requireNoEntryStep (to be replaced)",
+        "verified": true,
+        "evidence": "FunnelService.java L718: 'requireNoEntryStep(dto.entryStepId());' inside the TRIGGER_ON_START case. This is exactly what task 3 says to replace. No hallucination."
+      }
+    }
+  },
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 14,
+    "issues_found": 1
+  }
+}

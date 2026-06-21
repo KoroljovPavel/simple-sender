@@ -1,0 +1,56 @@
+{
+  "status": "approved",
+  "task": "Task 7 — ProjectHardDeleteJob cascade extension (subscriber-domain PII + GridFS export blobs)",
+  "commit": "79badcc",
+  "summary": {
+    "verdict": "approved",
+    "totalFindings": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 2,
+    "low": 1,
+    "overview": "No critical or major security findings. PII erasure coverage is complete: every project-scoped collection that holds subscriber PII (subscribers, subscriber_events, subscriber_exports pointer rows, the tags labels, and the GridFS CSV export blobs in fs.files/fs.chunks) is swept, plus embedded customFieldDefinitions ride along when the project doc is dropped. projectId scoping is correct and exploitation-safe: every remove() filters on projectId IN deletedIds where deletedIds is derived exclusively from projectRepository.findByDeletedAtBefore(cutoff) — never from user input — so there is no cross-project over-deletion and no NoSQL-injection surface. The GridFS sweep is keyed by metadata.projectId (not by exportId/fileId), which is the correct anti-orphan ordering for R11 and matches the planned export writer's metadata shape (Decision 7, Map.of(\"exportId\", id, \"projectId\", projectId)). Anti-enumeration 404 via ProjectService.requireOwned is unchanged and correctly regression-guarded. The remaining notes are minor/low: a GridFS fs.chunks orphan window if a crash lands between the fs.files delete and the fs.chunks delete inside GridFsOperations.delete, a benign TOCTOU on the pre-delete count used only for the log line, and the absence of an explicit security-audit event for the PII-erasure run."
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A09 Security Logging and Monitoring / GDPR auditability",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": 109,
+      "title": "GridFS sweep can leave orphan fs.chunks if a crash interleaves the two-collection delete",
+      "description": "GridFsOperations.delete(query) deletes the matched fs.files documents and then deletes the corresponding fs.chunks. These are two separate Mongo operations with no transaction (replica-set transactions are not configured here, as the existing comment notes). If the process dies, the Mongo connection drops, or an exception is thrown after fs.files rows are removed but before all fs.chunks are removed, the now-parentless chunks become orphaned binary fragments that the cascade can no longer find — the next daily run re-derives deletedIds from findByDeletedAtBefore and re-runs gridFsOperations.delete(metadata.projectId IN deletedIds), but the orphan chunks have NO metadata.projectId of their own (chunks carry only files_id), so the metadata.projectId query will never match them again. This is a narrow residual-PII-leak window for the R11 concern the task is specifically chartered to close: the CSV blobs contain full subscriber identity (telegram ids, names, usernames, custom fields). The risk is low-probability (delete-by-query for fs.files+fs.chunks is fast and the crash window is tiny) but the leak is permanent if it occurs because no later run can rediscover the orphans.",
+      "impact": "Permanent residual storage of subscriber PII (orphaned GridFS chunks) that survives the GDPR-style erasure and cannot be re-swept by the idempotent retry path, because chunks are keyed by files_id and the project doc / pointer rows are gone.",
+      "suggested_fix": "Either (a) accept and document this as an acknowledged residual window in a code comment plus a periodic orphan-chunk reaper that deletes fs.chunks whose files_id has no matching fs.files row (covers all orphan sources, not just this one), or (b) make the cascade resolve file ids first and delete chunks-then-files in an order that lets a re-run rediscover survivors: e.g. read fs.files ids for metadata.projectId IN deletedIds, delete fs.chunks by files_id, then delete fs.files. With (b) a crash leaves fs.files rows present (still carrying metadata.projectId), so the next daily run rediscovers and finishes them. Given the cron is daily and low-volume, option (a) with an orphan-chunk reaper is the more robust GDPR-completeness guarantee. CWE-459 (Incomplete Cleanup)."
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice / observability accuracy",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": 107,
+      "title": "TOCTOU between the pre-delete fs.files count and the GridFS delete makes gridFsFilesRemoved advisory, not authoritative",
+      "description": "gridFsFilesRemoved is computed by template.count(gridFsByProject, \"fs.files\") immediately BEFORE gridFsOperations.delete(gridFsByProject). Between the count and the delete a concurrent ExportSubscribersJob could (in principle) store a new GridFS file for one of the deletedIds projects, or the count and delete could observe slightly different snapshots. The logged count would then under- or over-report what was actually erased. This is an operational-truth concern for a log line that operators grep to confirm PII erasure happened — it is not an erasure-correctness bug (the delete itself is a fresh query and still removes everything matching at delete time). In practice a soft-deleted project past the 7-day grace window will not have an in-flight export, so the race is largely theoretical, but the field is presented as an authoritative erasure count.",
+      "impact": "Audit log line gridFsFilesRemoved={N} may not exactly match the number of blobs actually erased in edge cases, weakening the value of the line as a GDPR-erasure receipt. No data-leak or over-deletion impact.",
+      "suggested_fix": "Document in the comment that gridFsFilesRemoved is a best-effort pre-delete snapshot count, not a transactional erasure receipt. If an authoritative count is later required, switch to resolving the matching fs.files ids into a list, delete by those ids, and log the list size. Acceptable as-is for an MVP daily cron. CWE-367 (TOCTOU)."
+    },
+    {
+      "severity": "low",
+      "category": "A09 Security Logging and Monitoring",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": 116,
+      "title": "No per-project security/audit event recording that PII erasure (subscriber-domain + GridFS) was performed",
+      "description": "The cascade emits one project_hard_deleted event per project (metadata {projectId, name}) and a single structured INFO log line with per-collection counts. There is no per-project audit event capturing that the subscriber-domain PII and GridFS export blobs were erased (e.g. counts of subscribers/exports/blobs removed for that specific project). For a GDPR-style erasure operation the durable, queryable audit trail today is only the project_hard_deleted event (which omits the PII-erasure counts) plus a transient log line. If a data subject or regulator later asks for proof that subscriber data tied to a given project was erased on a given date, the project-level event does not carry that evidence and the log line is per-run (all projects aggregated), not per-project.",
+      "impact": "Weaker GDPR Art. 17 (right to erasure) defensibility — limited durable, per-project evidence that the PII cascade ran. Low severity because the project_hard_deleted event plus the structured run log together provide reasonable (if coarse) traceability, and the events collection is the intended platform audit store.",
+      "suggested_fix": "Optional hardening: enrich the per-project project_hard_deleted event metadata with the cascade counts for that project (or emit a dedicated project_pii_erased event), so the durable audit row itself records that subscriber PII + export blobs were purged. Out of strict scope for Task 7's stated ACs but worth a follow-up note for the GDPR/Epic-12 work referenced in the user-spec out-of-scope list."
+    }
+  ],
+  "verifiedControls": [
+    "projectId scoping: all four subscriber-domain removes filter on Criteria.where(\"projectId\").in(deletedIds); deletedIds sourced only from projectRepository.findByDeletedAtBefore(cutoff) — no user input, no cross-project over-deletion, no under-deletion (field names verified top-level on Subscriber/Tag/SubscriberEvent/SubscriberExport).",
+    "No NoSQL injection surface: deletedIds are DB-derived String _id values, not request-controlled; no operator-bearing user input reaches any Criteria.",
+    "GridFS filter correctness: metadata.projectId matches the planned export writer metadata (Decision 7); default bucket fs => fs.files/fs.chunks are the correct collections (no custom spring.data.mongodb.gridfs.bucket configured).",
+    "R11 anti-orphan ordering: GridFS deleted BEFORE subscriber_exports, keyed by metadata.projectId (not exportId/fileId) so a file whose pointer row was already removed is still swept.",
+    "PII coverage completeness: subscribers, subscriber_events, subscriber_exports, tags, GridFS CSV blobs all swept; embedded customFieldDefinitions ride along with the project doc drop; retained platform events are by-design (Decision 16) and not subscriber-identity-joined.",
+    "Idempotency / partial-cascade recovery: remove-on-empty is a no-op; project doc dropped last (step 8) so survivors are re-selected by the next daily run.",
+    "Anti-enumeration 404 preserved: ProjectService.requireOwned unchanged (foreign/soft-deleted/missing/malformed-id all collapse to identical 404); ProjectSoftDeleteCascadeIT correctly asserts the 404 contract and explicitly stays out of the Task-9 410 territory.",
+    "Grace-window safety: 7-day RETENTION + 1ns cutoff trick unchanged; young soft-deleted projects keep all rows + blobs (cron_doesNotTouchSubscriberDomainRowsForYoungProjects)."
+  ]
+}

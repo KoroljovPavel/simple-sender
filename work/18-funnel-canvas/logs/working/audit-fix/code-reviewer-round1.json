@@ -1,0 +1,55 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "audit-fix",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [],
+  "verification": {
+    "MAJOR-1": {
+      "status": "fixed",
+      "evidence": "FunnelStepForm.vue:1020 — a single trailing guard `if (props.initial?.canvasPosition != null) step.canvasPosition = props.initial.canvasPosition` is appended AFTER every stepType branch in onSubmit (lines 1016-1020). The guard is additive: it fires only when canvasPosition is present on the initial prop, so the emitted step is byte-identical for list/dialog callers that pass no canvasPosition (Decision 10). id and next were already carried through per branch. Regression test added: FunnelStepForm.keyboard.spec.ts:308-332 — mounts a SET_KEYBOARD step with canvasPosition {x:321,y:654}, edits keyboardText, submits, and asserts step.canvasPosition equals the original value alongside step.id and step.next. Test is in an existing spec file (keyboard) for the audit step type; the assertion is value-based (toEqual), not existence-only. No logic defects found in the fix."
+    },
+    "MAJOR-2": {
+      "status": "fixed",
+      "evidence": "FunnelTriggersPanel.vue — additive readonly prop added via withDefaults (default false), unchanged for non-canvas callers. All four mutation paths (replaceAt, addEvent, requestDelete, confirmDelete) are individually gated with `if (props.readonly) return` early guards at lines 109/115/129/133. Template gates: add button hidden by `v-if='!props.readonly'` (line 202), delete controls replaced with `<template v-if='props.readonly' />` (line 240), per-row FunnelTriggerSettings/SearchableSelect conditionally replaced with a static `<p>` summary when readonly (lines 275/290). on_start section similarly gated with a static `<p>` summary (line 178) instead of the interactive FunnelTriggerSettings. Editor page ([funnelId].vue:526-532) drops v-model:triggers, passes :triggers='triggers' (one-way) and :readonly='true'; canvas update:triggers goes through onCanvasTriggers (line 236-239) which writes triggers.value and calls persist() directly. No mutation path through FunnelTriggersPanel remains wired. Two tests in FunnelTriggersPanel.spec.ts:175-214 cover: (1) hidden controls + readonly notice visible + no emission on idle render; (2) belt-and-suspenders direct vm method calls do not emit update:triggers. Both tests mount with readonly:true using a dedicated mountReadonly helper."
+    },
+    "MINOR-1": {
+      "status": "fixed",
+      "evidence": "useFunnelCanvas.ts: buildPatchPayload removed (entire section deleted, lines 542-563 of old file gone). modelToGraph removed (lines 356-362 of old file gone). disconnectEdge removed (lines 498-503 of old file gone). applyEdgeValue de-exported: changed from `export function applyEdgeValue` to `function applyEdgeValue`; it remains used internally by connectEdge (line 498 of new file: `return applyEdgeValue(funnel, ref, targetStepId)`). The CanvasGraph interface that was only used by modelToGraph was also removed (lines 70-73 of old file). App-used exports intact: buildNodes, buildEdges, layoutNodes, detectBrokenEdges, connectEdge, deleteStepNode — confirmed still exported and referenced in production code. The .nuxt/imports.d.ts references to the removed symbols are stale generated files not in source control and regenerated on next build. No test file imports any of the removed exports (grep confirms zero matches)."
+    },
+    "MINOR-2-note-editor": {
+      "status": "implemented",
+      "evidence": "FunnelCanvasSidePanel.vue: isNote computed (line 57), const NOTE_TEXT_MAX=2000 mirroring the backend @Size cap (line 36), a ref noteText (line 63), a watch seeded on node change (lines 64-70), onNoteInput emitting update:note-text with {noteIndex,text} (lines 72-78). Template (line 165-185): a <div data-test='funnel-canvas-note-editor'> with a <textarea :maxlength='NOTE_TEXT_MAX' @input='onNoteInput' /> gated by v-else-if='isNote'. FunnelCanvas.client.vue: selectNode populates noteIndex and noteText from props.notes (lines 265-276); onPanelNoteText (lines 292-297) maps the note by index and emits update:notes. Editor page ([funnelId].vue:503-504): @update:notes='onCanvasNotes' is wired alongside @update:triggers — onCanvasNotes (lines 240-243) writes notes.value and calls persist(). Two tests in FunnelCanvasSidePanel.spec.ts:158+: (1) textarea seeded, maxlength=2000, emits correct payload on input; (2) injection payload renders as inert textarea value, no <img> created (XSS guard). Note text rendered exclusively via {{ }} interpolation (confirmed: no v-html in the component). i18n keys funnels.canvas.noteEditor.label and funnels.canvas.noteEditor.placeholder added to both en.json and uk.json with non-empty values."
+    },
+    "reactivity": {
+      "status": "clean",
+      "note": "FunnelCanvasSidePanel: noteText ref is a local ref updated by the watch on props.node — no prop mutation. onNoteInput reads (event.target as HTMLTextAreaElement).value, updates local ref and emits — no v-model on the textarea, no direct prop write. Reactivity chain: user types → @input → onNoteInput → emit update:note-text → FunnelCanvas.onPanelNoteText → emit update:notes → page onCanvasNotes → notes.value = next, persist()."
+    },
+    "ssr-safety": {
+      "status": "unaffected",
+      "note": "All changes are in .vue components and composables already rendered client-only (FunnelCanvas.client.vue, FunnelCanvasSidePanel.vue). FunnelStepForm and FunnelTriggersPanel changes are pure logic additions with no DOM or window access."
+    },
+    "single-save-path": {
+      "status": "preserved",
+      "note": "The single persist() call path on the editor page is unchanged. The canvas triggers edit path now goes: canvas side panel emit → onCanvasTriggers → triggers.value = next, persist(). No second save path was introduced. The FunnelTriggersPanel readonly mode guarantees it emits nothing, so the old panel-driven 600ms debounce path is silently dead for trigger edits on the editor page."
+    },
+    "re-entrancy": {
+      "status": "clean",
+      "note": "persist() is an async function called with void. No new await chains were added around it. The existing re-entrancy protection (if any) in persist() is unchanged."
+    },
+    "i18n-parity": {
+      "status": "confirmed",
+      "keys_added": [
+        "funnels.canvas.triggersReadOnly",
+        "funnels.canvas.noteEditor.label",
+        "funnels.canvas.noteEditor.placeholder"
+      ],
+      "note": "Both en.json and uk.json received the same three keys with non-empty string values. UK values are proper Ukrainian translations, not placeholder copies."
+    },
+    "dead-exports-nuxt-types": {
+      "status": "informational",
+      "note": "The .nuxt/imports.d.ts and .nuxt/imports.d.ts stale type references to buildPatchPayload, disconnectEdge, modelToGraph are generated files (not committed source). They will be regenerated on the next `pnpm build` or `nuxi prepare` and will no longer include these symbols. No action required."
+    }
+  },
+  "summary": "All three audit findings are correctly addressed. MAJOR-1: FunnelStepForm.onSubmit now carries canvasPosition from props.initial unchanged via a single additive post-branch guard; emitted step is byte-identical for non-canvas callers (Decision 10 preserved). Regression test in FunnelStepForm.keyboard.spec.ts is value-based and specifically fails against the pre-fix code. MAJOR-2: FunnelTriggersPanel received an additive readonly prop (default false) that gates ALL four mutation functions individually and hides all editing affordances in the template; editor page drops v-model:triggers and passes :readonly=true; two tests cover both UI control hiding and belt-and-suspenders vm-level emission guard. MINOR-1: buildPatchPayload, modelToGraph, and disconnectEdge are fully removed from useFunnelCanvas.ts; applyEdgeValue is correctly de-exported but still used internally by connectEdge; no app code or test file references the removed symbols. The user-requested addition (note text editor) is correctly implemented with proper reactivity (no prop mutation), maxlength=NOTE_TEXT_MAX matching the backend @Size cap, escaped render via {{ }} only, and two component tests covering the edit emit and XSS guard. No regressions to the single-save-path, re-entrancy, or SSR-safety observed."
+}

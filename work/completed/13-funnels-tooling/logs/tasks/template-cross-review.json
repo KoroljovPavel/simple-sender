@@ -1,0 +1,43 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task",
+  "batch": "cross",
+  "iteration": 2,
+  "status": "needs_fix",
+  "cross_task_findings": [
+    {
+      "tasks": [4, 6],
+      "category": "i18n-contract",
+      "severity": "high",
+      "issue": "i18n preview-key shape mismatch between producer (Task 4) and consumer (Task 6). Task 4 — the authoritative canonical contract — defines `funnels.editor.preview` as a FLAT string (toggle label \"Прев'ю\") plus two separate FLAT siblings `funnels.editor.previewPlaceholder` and `funnels.editor.previewSampleData`. Task 6 instead references a NESTED namespace `funnels.editor.preview.*` for the non-message placeholder (line 33: «плейсхолдер з i18n-ключа (Task 4 додає `funnels.editor.preview.*` / плейсхолдер)»; line 103: «i18n-ключі `funnels.editor.preview.*`»). A flat string and a nested object cannot coexist at the same JSON key `funnels.editor.preview` — the consumer's referenced shape contradicts the producer's canonical shape. Task 6 must consume the flat keys `funnels.editor.previewPlaceholder` / `funnels.editor.previewSampleData` exactly as Task 4 emits them, not a `preview.*` sub-object.",
+      "fix": "Edit Task 6 (lines 33 and 103) to reference the canonical FLAT keys `funnels.editor.previewPlaceholder` (non-message placeholder) and `funnels.editor.previewSampleData` (sample-data indicator), removing every `funnels.editor.preview.*` nested reference. Keep `funnels.editor.preview` as the flat toggle-label only."
+    }
+  ],
+  "verified_ok": [
+    {
+      "area": "shared-resource-ownership",
+      "detail": "tech-spec Shared Resources table (lines 56-62) lists FunnelExecutionFactory (Spring singleton — consumed by Task 2 test-run, not re-created), VariableTemplateRenderer (stateless static — used by Task 2 preview), MockWebServer (JVM test-singleton owned by FunnelExecutionEngineIT harness, consumed by Task 2 send-assertion IT). Each shared resource has a single owner; no consumer re-instantiates. No competing instances in the same wave."
+    },
+    {
+      "area": "same-wave-file-conflicts",
+      "detail": "Wave 3: T3 (stores/funnels.ts + types/funnel.ts + store spec) and T4 (i18n uk.json/en.json) touch disjoint files — no conflict. Wave 6: T7/T8/T9 are analysis-only audits, no writes. T1(w1)->T2(w2) correctly sequenced on shared FunnelController.java/FunnelService.java. T5(w4)->T6(w5) correctly sequenced on shared [funnelId].vue."
+    },
+    {
+      "area": "i18n-contract-stopAll-and-errors",
+      "detail": "stopAll keys are consistently NESTED `funnels.editor.stopAll.{button,title,message,confirm,cancel,result}` in both producer (Task 4) and consumer (Task 5). NO flat `stopAllConfirm` anywhere; both T4 and T5 explicitly forbid it. errors.funnels.{funnel_owner_not_linked,funnel_invalid_trigger_type,funnel_invalid_keywords} canonical in T4, consumed via resolveFunnelError in T5. T5 uses only stopAll.* + duplicate/duplicateResult/testForMe/testForMeResult and explicitly does NOT touch preview keys (deferred to T6)."
+    },
+    {
+      "area": "fixes-landed",
+      "detail": "T1 stop-all now scopes updateMulti by projectId AND funnelId via shared cancelInFlightExecutions helper (not a verbatim delete() mirror) and asserts stepRunStatus=done explicitly via direct DB field reload (lines 43-49, 71, 90-93). T5 storeMock now lists duplicate/stopAllExecutions/testRun extending the existing {fetchOne,update,activate,pause} (line 63). T7 now has a Reviewers section (lines 119-121, explicit 'none' for an audit task)."
+    },
+    {
+      "area": "frontmatter-wave-depends",
+      "detail": "Dependency graph acyclic and wave-consistent across all 10: T1(w1,[]) T2(w2,[1]) T3(w3,[2]) T4(w3,[2]) T5(w4,[3,4]) T6(w5,[3,5]) T7(w6,[1-6]) T8(w6,[1-6]) T9(w6,[1-6]) T10(w7,[7,8,9]). Every depends_on target sits in a strictly lower wave. No cycles."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 10,
+    "cross_task_issues_found": 1
+  },
+  "notes": "Single cross-task defect: i18n preview-key shape mismatch between Task 4 (flat previewPlaceholder/previewSampleData) and Task 6 (references nested funnels.editor.preview.*). All other cross-task integrity dimensions verified clean: shared-resource ownership single-owner, no same-wave file collisions, stopAll/errors i18n contract identical between T4/T5, all three iteration-1 fixes landed (T1 scoped stop-all + stepRunStatus=done assert, T5 extended storeMock, T7 Reviewers section), dependency graph acyclic and wave-consistent. Severity high (not critical) because Task 6 already defers to Task 4 as authoritative and instructs 'do not duplicate keys' — the fix is a wording correction in the consumer task, not a structural redesign; left uncorrected it would surface as a runtime missing-key / parity confusion when Task 6 is implemented."
+}

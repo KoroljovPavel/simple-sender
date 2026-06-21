@@ -1,0 +1,36 @@
+{
+  "reviewer": "security-auditor",
+  "round": 1,
+  "verdict": "OK",
+  "summary": "Adversarial audit of the callback path focused on IDOR, callback_data injection, and PII leakage. All three primary threats are closed: owner authorization (exec.subscriberId AND exec.projectId must match the project-scoped resolved subscriber) plus the subscriberId-scoped CAS in resumeOnCallback gives defense-in-depth against forged executionIds; strict shape validation rejects malformed/oversized/non-hex callback_data before any DB hit, and findById parameterizes the id so no Mongo operator injection is possible; events and logs carry ids/codes only (no first_name/username/text). No SSRF (no user URL dereferenced; URL buttons no-op), no secret handling (token stays inside TelegramSender, scrubbed), no unbounded work (O(1) parse, indexed findById, <=50-step loop).",
+  "findings": [
+    {
+      "severity": "info",
+      "owasp": "A01:2021 Broken Access Control",
+      "finding": "IDOR closed at two layers: (1) advanceOnCallback Step 5 requires subscriber.getId().equals(exec.getSubscriberId()) && projectId.equals(exec.getProjectId()); cross-tenant forgery fails because findByChat resolves the subscriber within projectId while exec.projectId would be the victim's project. (2) resumeOnCallback's claim-CAS is scoped by subscriberId (verified in FunnelExecutionEngine.claimForCallback). IT advanceOnCallback_foreignExecution_idorRejected_noAdvance proves the same-project case: B forges A's executionId -> no-op, A's execution stays waiting_for_reply, no event, ack still issued.",
+      "action": "No change.",
+      "blocking": false
+    },
+    {
+      "severity": "info",
+      "owasp": "A03:2021 Injection",
+      "finding": "parseCallbackData rejects before any DB lookup: UTF-8 byte length > 64 -> reject; split(\":\", -1) so missing/extra/empty segments yield length != 2 -> reject; anchored regex ^[0-9a-fA-F]{24}$ on the left segment; Integer.parseInt guarded by NumberFormatException; index bounded 0..7. The validated id reaches mongoTemplate.findById as a String _id (parameterized — no operator/document injection). IT advanceOnCallback_malformedOrOversizedData_noOp exercises no-colon, extra-segment, non-hex, negative, non-numeric, and oversized inputs.",
+      "action": "No change.",
+      "blocking": false
+    },
+    {
+      "severity": "info",
+      "owasp": "A09:2021 Logging/Monitoring Failures (PII)",
+      "finding": "funnel_button_clicked metadata = {projectId, funnelId, executionId, subscriberId, currentStepId, buttonIndex}; all LOG_* sites log only projectId/funnelId/executionId/buttonIndex/exception-class. No subscriber display fields or callback payload. IT asserts metadata values do not contain the subscriber's firstName.",
+      "action": "No change.",
+      "blocking": false
+    },
+    {
+      "severity": "info",
+      "owasp": "A04:2021 Insecure Design",
+      "finding": "answerCallbackQuery best-effort (Decision 8) cannot be abused to block advance — it runs in finally after the engine CAS committed; a 5xx ack does not roll back the advance (IT advanceOnCallback_answerCallbackQuery5xx_advanceNotBlocked). The whole method is error-isolated (try/catch(Throwable)) so a callback fault never poisons the webhook dispatch.",
+      "action": "No change.",
+      "blocking": false
+    }
+  ]
+}

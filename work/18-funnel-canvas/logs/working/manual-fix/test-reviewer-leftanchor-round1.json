@@ -1,0 +1,38 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-left-anchor",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:363",
+      "issue": "Test 'the whole-card target handle carries the stable \"in\" id' is now a strict subset of the new anchor-vs-overlay test (lines 373–412). Both use data-test=\"funnel-canvas-handle-target\" and assert data-handle-id === \"in\". The standalone test adds zero unique regression coverage after the split.",
+      "recommendation": "The test is harmless but redundant. Consider removing it in a follow-up cleanup pass so the anchor-vs-overlay test is the single canonical source."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:174",
+      "issue": "The inline comment on line 174 ('Whole-card drop target (handles-redesign): the step is connectable as a target via a single node-covering target handle') is stale: there are now TWO target handles (anchor + drop overlay). The assertion itself (handle-target exists) is still valid, but the comment incorrectly describes the new dual-handle design.",
+      "recommendation": "Update the comment to reflect that data-test=\"funnel-canvas-handle-target\" now marks the left-border ANCHOR, and a separate drop overlay (data-test=\"funnel-canvas-handle-drop\") also exists. Purely a documentation fix — no assertion change needed."
+    }
+  ],
+  "summary": "All five checklist areas pass. The anchor-vs-overlay test (lines 373–412) is fully value-based and load-bearing: it asserts id=\"in\", class --target-anchor, data-handlepos===Position.Left, NOT --card-target on the anchor; id=\"in-drop\", class --card-target on the drop overlay; and exactly one of each. The positioned-ancestor structural guard (lines 414–430) correctly asserts funnel-canvas-node class membership and both handles as descendants. handleConnect resolution is covered by two dedicated tests that drive targetHandle=\"in\" and assert the emitted step/trigger payload by value. The output-handle selector at line 208 correctly excludes both handle-target and handle-drop without dropping real output coverage. No existing connect/drop/handle coverage was silently dropped. Two minor findings: one redundant legacy test and one stale comment — neither affects test efficacy.",
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 40,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

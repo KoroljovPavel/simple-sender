@@ -1,0 +1,34 @@
+{
+  "reviewer": "security-auditor",
+  "task": 8,
+  "round": 1,
+  "commit": "9f031a4",
+  "verdict": "approved",
+  "summary": "OWASP review of the session-authed API-key endpoint. Access control (requireOwned, uniform 404 anti-enumeration), hash-only storage (plaintext surfaced once via POST only, never persisted/logged), session-chain auth (403 anonymous, not shadowed by the key chain), and CSRF (session chain active) all verified. No findings requiring a fix.",
+  "findings": [
+    {
+      "id": "SA-1",
+      "severity": "info",
+      "owasp": "A01-Broken Access Control",
+      "finding": "Both GET and POST gate on requireOwned(ownerId, projectId, false) before any key read/write; foreign/missing/soft-deleted/malformed -> uniform 404; tests assert no key is created or exposed for non-owned projects.",
+      "action": "none",
+      "reason": "Correct anti-IDOR / anti-enumeration. No change needed."
+    },
+    {
+      "id": "SA-2",
+      "severity": "info",
+      "owasp": "A02-Cryptographic Failures",
+      "finding": "Plaintext key surfaced only in the POST response (ApiKeyGeneratedResponse); GET returns only the prefix mask; controller never logs plaintext/hash/prefix; hash-only at rest is enforced by ApiKeyService (Task 3) and asserted by the IT.",
+      "action": "none",
+      "reason": "Meets Decision 8 security spine."
+    },
+    {
+      "id": "SA-3",
+      "severity": "info",
+      "owasp": "A07-Identification & Authentication Failures",
+      "finding": "Endpoint on /api/v1/projects/** is served by the session chain (@Order(2)), not the /api/integrations/** key chain (@Order(1)); anonymous -> 403; currentUserId() fails closed on a malformed/absent principal. CSRF active on the session chain; POST IT uses csrf().",
+      "action": "none",
+      "reason": "Chain isolation and auth correct."
+    }
+  ]
+}

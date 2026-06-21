@@ -1,0 +1,33 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 10,
+      "issue": "Implementation hints reference 'bot.connected.copied' as an existing locale key precedent, but that key does not exist in uk.json or en.json. The actual existing key for the copy-to-clipboard 'Copied' string is 'funnels.trigger.copied' (uk.json line 807, inside funnels.trigger.* namespace).",
+      "fix": "Replace 'bot.connected.copied' with 'funnels.trigger.copied' in the hint text. The suggestion to add an apiKey-scoped equivalent is still correct; only the precedent key name is wrong."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 11,
+      "issue": "Context Files section uses bare relative paths for PK references: '.claude/skills/project-knowledge/references/project.md', '.claude/skills/project-knowledge/references/architecture.md', '.claude/skills/project-knowledge/references/patterns.md'. Resolved from the task file location (tasks/), these paths would be missing (work/12-funnels-triggers/tasks/.claude/ does not exist). The correct prefix is '../../../.claude/...' as used in Task 9 and Task 12 (Context Files). The Required Skills link also uses '.claude/skills/code-reviewing/SKILL.md' (no leading prefix) for the same reason.",
+      "fix": "Prepend '../../../' to all .claude/... paths in Task 11 Context Files and Required Skills sections so they resolve correctly from the tasks/ directory, matching the pattern in Tasks 9 and 12."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 12,
+      "issue": "Required Skills section (line 16) uses the path '.claude/skills/security-auditor/SKILL.md' (missing leading prefix) for the inline skill load hint. However, the Context Files section at line 133 correctly uses '../../../.claude/skills/security-auditor/SKILL.md'. The two references are inconsistent within the same task.",
+      "fix": "Align the Required Skills path to match the Context Files path: '../../../.claude/skills/security-auditor/SKILL.md'. Low impact — agents typically use the /skill: command to load skills, not the markdown link directly."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 3
+  }
+}

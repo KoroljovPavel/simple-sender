@@ -1,0 +1,67 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "PK file links `project.md`, `architecture.md`, `patterns.md` use path `.claude/skills/project-knowledge/references/project.md` (no `../../../` prefix). From the task file at `tasks/02-…md`, the path resolves to `tasks/.claude/…` which does not exist. Compare Task 1 which correctly uses `../../../.claude/skills/project-knowledge/references/project.md`.",
+      "fix": "Prefix all three PK links with `../../../`: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, etc."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "PK file links `project.md`, `architecture.md`, `patterns.md` use path `.claude/skills/project-knowledge/references/project.md` (no `../../../` prefix). Same broken path as Task 2 — resolves to `tasks/.claude/…`.",
+      "fix": "Prefix all three PK links with `../../../`: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, etc."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 4,
+      "section": "Context Files",
+      "issue": "PK file links `project.md`, `architecture.md`, `patterns.md` use `.claude/skills/project-knowledge/project.md` — two errors: (1) missing `../../../` prefix, (2) missing `references/` directory segment. Correct path is `.claude/skills/project-knowledge/references/project.md`. From `tasks/04-…md` the link is completely unresolvable.",
+      "fix": "Replace with: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, `[architecture.md](../../../.claude/skills/project-knowledge/references/architecture.md)`, `[patterns.md](../../../.claude/skills/project-knowledge/references/patterns.md)`."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "PK file links `project.md`, `architecture.md`, `patterns.md` use `.claude/skills/project-knowledge/project.md` — same double error as Task 4: missing `../../../` prefix and missing `references/` directory segment.",
+      "fix": "Replace with: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, `[architecture.md](../../../.claude/skills/project-knowledge/references/architecture.md)`, `[patterns.md](../../../.claude/skills/project-knowledge/references/patterns.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor entries list test names as `VariableTemplateRendererTest::methodName` without a full file path prefix. The preamble sentence mentions the file path, but individual bullet entries should follow the format `\\`path/to/TestFile.java::test_name\\` — description` so the implementing agent can locate each test unambiguously.",
+      "fix": "Prefix each bullet with the full path: `` `backend/src/test/java/com/botfunnel/funnel/VariableTemplateRendererTest.java::substitutesUserFields` — description``."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Verification Steps",
+      "issue": "The Automated subsection and the Smoke subsection contain the identical command: `cd backend && ./gradlew test --tests '*TelegramSender*'`. The Smoke step adds no distinct check beyond what Automated already runs, making it redundant. The tech-spec Verify-smoke for Task 3 mentions checking block/delete-flip, terminal exceptions, and token no-leak — these are already covered by the TDD Anchor tests, but the Smoke section should describe how to verify them (e.g. which test class to look at), not repeat the exact same shell command.",
+      "fix": "Keep Automated as-is. Rewrite Smoke to reference the specific MockWebServer scenarios from TDD Anchor that verify the failure matrix (403 flip, 400-chat-not-found flip, token no-leak assertion) and note which test method names confirm each property, so a reviewer can target them explicitly."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 5,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use project-root-relative form `work/10-funnels/logs/working/task-5/code-reviewer-{round}.json` while Tasks 1–4 use absolute paths `/Users/pavlokorolov/IdeaProjects/simple-sender/work/10-funnels/logs/working/task-N/…`. The task-creator rule states paths must be anchored to feature_path to avoid CWD-ambiguity; bare `work/…` paths are better than bare `logs/…` paths but inconsistent with the rest of the batch.",
+      "fix": "Use the same absolute path prefix as Tasks 1–4: `/Users/pavlokorolov/IdeaProjects/simple-sender/work/10-funnels/logs/working/task-5/code-reviewer-{round}.json`."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 7
+  }
+}

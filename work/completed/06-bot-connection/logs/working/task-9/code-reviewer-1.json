@@ -1,0 +1,54 @@
+{
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "frontend/assets/css/tailwind.css",
+      "line": 60,
+      "issue": "shadcn-vue init wrote a global `* { @apply border-border }` rule that paints a 1px border on every element across the entire app (not just the dialog primitive). Before this commit the file was just `@tailwind base/components/utilities;`, so existing pages (auth, profile, projects list, dashboard, settings/index) now silently inherit a universal border on every DOM node. This is a load-bearing init side effect, not a dialog-scoped style.",
+      "suggestion": "Either (a) remove the global `*` block and apply `border-border` per-component in the dialog primitives that need it (DialogScrollContent already uses `border border-border` explicitly so removing the global is safe), or (b) constrain the selector to a shadcn-scoped class. Then visually smoke the auth/projects/profile pages on staging before deploy. The decisions.md note about reka-ui/@vueuse/core deviating from radix-vue is documented; this CSS side effect is not."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 37,
+      "issue": "Unlike `settings/index.vue` (which redirects to /projects with a banner key when the project GET returns 404), this page silently treats a stale projectId 404 the same as the happy 'no bot connected yet' path because the bot store's fetch swallows 404 → null. A user navigating to /projects/{deleted-id}/settings/bot will see a Connect form for a project that no longer exists. The task description noted this as a deferred gap from Task 5, and it is outside Task 9's listed ACs, but the user-visible bug ships.",
+      "suggestion": "Either (a) accept the deferral and add a TODO/issue tracker note, or (b) reuse the same explicit-GET / pendingBannerKey / navigateTo('/projects') pattern from settings/index.vue lines 33-60 against `/api/v1/projects/{id}` (not the bot endpoint, since /bot 404 is ambiguous). Not blocking — same gap existed in the Task 5 placeholder."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 76,
+      "issue": "On disconnect failure the modal is closed (line 76) at the same time the page-level error banner is set (line 75). This is a UX call rather than a bug — the user loses the modal context (their pending action) immediately on error. Other destructive-action modals in the codebase (settings/index.vue delete project) keep the modal open on error so the user can retry without re-clicking Disconnect.",
+      "suggestion": "Consider keeping `showDisconnectModal.value = true` on the error branch and rendering the error inside the modal footer, mirroring the delete-project pattern at settings/index.vue. Not blocking; the current behavior still satisfies AC19."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts",
+      "line": 13,
+      "issue": "The teleport stub workaround is sound (built-in `teleport: true` does drop slot content in vue-test-utils against reka-ui's DialogPortal — this is a known behavior). However, mutating the global `config.global.stubs` at module load leaks into any other spec that runs in the same vitest worker after this one, because the global config is not reset in afterAll/afterEach.",
+      "suggestion": "Restore the prior stubs in an `afterAll` hook: `const prior = { ...config.global.stubs }; afterAll(() => { config.global.stubs = prior })`. Or, narrower, set the stub via the `mountSuspended(BotPage, { global: { stubs: { teleport: ... } } })` per-call option so it's scoped to this suite. Vitest's default isolation usually re-imports the module per file, so worker bleed is rare in practice but still worth pinning."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/ui/dialog/Dialog.vue",
+      "line": 2,
+      "issue": "The CLI-generated dialog primitives import from `reka-ui`, but the repo also still ships `radix-vue@^1.9.13` as a direct dependency. The task explicitly called out that this is shadcn-vue 1.x territory and the CLI should reuse radix-vue, not add reka-ui. Tech-spec mentioned reusing radix-vue; decisions.md documents the reka-ui deviation. The cost is a duplicated bundle (reka-ui ~30kb + radix-vue still present), and any future shadcn-vue add operation will keep pulling reka-ui because components.json is now pinned to the new-york style which targets shadcn-vue 2.x.",
+      "suggestion": "Either (a) accept reka-ui going forward and drop radix-vue from package.json once the existing radix-vue call sites (if any) are migrated, or (b) revisit the components.json `style` / shadcn-vue CLI version next time a primitive is added. Decisions.md already documents the choice — just confirm no remaining radix-vue imports anywhere before removing the dep."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tsconfig.json",
+      "line": 1,
+      "issue": "New file at repo root extends `./.nuxt/tsconfig.json` and re-declares `paths` for `@/*` and `~/*`. The .nuxt/tsconfig.json (Nuxt-generated) already declares these paths. Re-declaring at the wrapper level is harmless but creates two sources of truth — if a future Nuxt version changes the path convention, the wrapper will silently override.",
+      "suggestion": "Either drop the `paths` override (Nuxt's generated tsconfig already covers `@/*` and `~/*`) or add a comment explaining why the override is needed (e.g., to satisfy the shadcn-vue CLI which writes imports as `@/components/ui/...` and `@/lib/utils`). Probably the latter — the CLI imports are the load-bearing reason this file exists."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 119,
+      "issue": "The token input has `autocomplete=\"off\"` and `spellcheck=\"false\"` (good — keeps the token out of browser autofill/spellcheck pipelines) but uses `type=\"text\"`, so the token is visible on screen as the user pastes it. Other secret inputs in the codebase (auth/login password field) use `type=\"password\"`. Visual exposure is the documented BotFather UX (the user copies the token from BotFather, so they have it on a different surface), but shoulder-surfing risk is the same as any password.",
+      "suggestion": "Consider `type=\"password\"` with an optional reveal toggle. Not blocking — this is a deliberate UX call and matches Telegram BotFather's own copy-paste flow."
+    }
+  ]
+}

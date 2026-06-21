@@ -1,0 +1,1124 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-05-09 19:13:00"
+  last_updated: "2026-05-09 21:15:00"
+  status: "completed"
+  can_resume: false
+  current_question_num: 21
+  feature_size: "L"  # Confirmed: full backend module + soft-delete + cron + guard + UI selector + settings page
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-05-09 19:25:00"
+    topic: "cascade_scope"
+    agent_question: |
+      Workflow lists "bot, subscribers, funnels, broadcasts, keys, events" as cascade
+      targets, but only `events` exists today. Three options proposed: (a) ship only
+      `projects` collection; child epics own their own cleanup. (b) pre-create empty
+      schemas. (c) single coordinator job with hardcoded list.
+      I propose (a) + delete events by metadata.projectId in this epic.
+    user_answer: "Згоден"
+    summary: |
+      Decision: option (a). This feature ships ONLY the `projects` collection +
+      cleanup of `events` (the only existing project-scoped collection).
+      Child epics (04..09) take responsibility for cleaning up their own collections
+      when they ship. Most likely via domain event "ProjectHardDeleted" subscribed
+      to by each module — final mechanism deferred to tech-spec.
+
+  - question_num: 2
+    timestamp: "2026-05-09 19:25:00"
+    topic: "soft_delete_and_limit"
+    agent_question: |
+      User has 5 active projects, soft-deletes one — can they create a 6th
+      immediately, or wait 7 days? Should soft-deleted reserve the name?
+    user_answer: |
+      soft-видалив один → може створити 6-й одразу, soft-deleted взагалі не блокують
+      ім'я — на UI просто не показуються, відновлення додає (restored) суфікс
+    summary: |
+      Decisions:
+      - soft-deleted projects DO NOT count toward the 5-project limit
+      - soft-deleted projects DO NOT reserve their name
+      - soft-deleted projects are hidden from UI (selector, list)
+      - on restore: if name conflicts with an active project, append "(restored)"
+        suffix to the restored project's name automatically (no user prompt)
+
+  - question_num: 3
+    timestamp: "2026-05-09 19:25:00"
+    topic: "forbidden_status_code"
+    agent_question: |
+      Workflow says 403 on foreign project access; I propose 404 (don't leak
+      existence of the project). Which?
+    user_answer: "404"
+    summary: |
+      Decision: 404 instead of 403. Applies to all "not yours" cases:
+      - foreign project ID
+      - soft-deleted project (treated as not-found from user perspective)
+      - hard-deleted / never-existed
+      - malformed project ID (also 404, not 400 — keeps the fact of the resource opaque)
+      Active session is required (otherwise 401), but inside session 404 is uniform
+      for "no such project for you".
+
+  - question_num: 4
+    timestamp: "2026-05-09 19:25:00"
+    topic: "testing_strategy"
+    agent_question: |
+      Proposed: Unit (limit logic, timezone validation, perm-check helper);
+      Integration (CRUD, owner-checks, limit enforcement, soft-delete + cron,
+      session integration via WebTestClient + real Mongo per patterns.md);
+      E2E one Playwright spec — onboarding -> create -> switch -> settings -> delete.
+    user_answer: "Ок"
+    summary: |
+      Approved testing pyramid:
+      - Unit: limit math, timezone validation, owner-check helper
+      - Integration: full backend stack with real Mongo (per patterns.md), covers
+        all CRUD endpoints, 401/404 enforcement, 5-project cap, soft-delete + cron
+        hard-delete, session-bound currentUser
+      - E2E: 1 Playwright spec, golden path: empty-state onboarding -> create
+        first project -> create second -> switch via dropdown -> rename in settings
+        -> delete with name-typing confirmation
+      - No locale-specific E2E (covered by 03-i18n)
+
+  - question_num: 5
+    timestamp: "2026-05-09 19:35:00"
+    topic: "primary_use_case"
+    agent_question: |
+      Three audiences captured: multi-brand business, agencies, devs. Which is
+      THE primary driver for "Зачем" section?
+    user_answer: "#1 мульти-бренд primary"
+    summary: |
+      Primary use-case: small business owners running multiple brands need to keep
+      audiences and funnels isolated per brand. Agencies and devs are secondary
+      audiences but get the same value.
+
+  - question_num: 6
+    timestamp: "2026-05-09 19:35:00"
+    topic: "name_uniqueness"
+    agent_question: |
+      Workflow doesn't specify uniqueness. Two active "Acme" projects break the
+      selector. Propose: unique per-owner among ACTIVE projects; conflict -> 422
+      `project_name_taken`.
+    user_answer: "згоден"
+    summary: |
+      Decision: project name MUST be unique per-owner among ACTIVE (non-soft-deleted)
+      projects. Soft-deleted projects do not block names (consistent with Q2).
+      Conflict on create or rename returns 422 with code `project_name_taken`.
+
+  - question_num: 7
+    timestamp: "2026-05-09 19:35:00"
+    topic: "timezone_validation"
+    agent_question: |
+      Propose: IANA format, backend validates via ZoneId.of() -> 422
+      `invalid_timezone` on bad input. Frontend dropdown via
+      Intl.supportedValuesOf('timeZone'). Default: browser timezone.
+    user_answer: "IANA + ZoneId.of()"
+    summary: |
+      Decisions:
+      - Timezone field accepts IANA names only ("Europe/Kyiv", "America/New_York")
+      - Backend validation via java.time.ZoneId.of(); on DateTimeException returns
+        422 with code `invalid_timezone`
+      - Frontend timezone picker uses Intl.supportedValuesOf('timeZone') for the
+        list (works in Nuxt SSR, no extra library)
+      - Default value at create-time: Intl.DateTimeFormat().resolvedOptions().timeZone
+        from the browser; user can override
+
+  - question_num: 8
+    timestamp: "2026-05-09 19:50:00"
+    topic: "onboarding_flow"
+    agent_question: |
+      Three options for 0-projects flow: (a) dashboard inline empty-state, (b)
+      separate /onboarding page with redirect, (c) /projects page handles both.
+      Recommend (a).
+    user_answer: "Згоден за a"
+    summary: |
+      Decision: dashboard.vue handles 0-projects state inline. When
+      projectsStore.projects.length === 0, dashboard renders the "Create your first
+      project" call-to-action; when >= 1, dashboard renders the normal welcome /
+      stats view. No separate /onboarding page. No redirect.
+
+  - question_num: 9
+    timestamp: "2026-05-09 19:50:00"
+    topic: "restore_ui_and_list_endpoint"
+    agent_question: |
+      Two ways to expose soft-deleted projects for restore: (a) GET
+      /api/v1/projects?include_deleted=true returns active+soft-deleted, frontend
+      filters; (b) separate /api/v1/projects/deleted endpoint. Recommend (a) with
+      a "Recently deleted" section at the bottom of /projects.
+    user_answer: "Згоден"
+    summary: |
+      Decisions:
+      - Single endpoint: GET /api/v1/projects (default: active only).
+      - Query param `?include_deleted=true` returns active + soft-deleted in one
+        list (each row carries `deletedAt`: null = active, instant = soft-deleted).
+      - UI: /projects page renders "Active" section + "Recently deleted (X days
+        until permanent removal)" section below; restore button per soft-deleted row.
+      - Backend handler scopes ownership the same way as default; no separate route.
+      - Restore: POST /api/v1/projects/{projectId}/restore -> 200 + restored
+        Project body. If name conflicts with an active project, append "(restored)"
+        suffix automatically (decided in Q2).
+
+  - question_num: 10
+    timestamp: "2026-05-09 19:50:00"
+    topic: "cross_tab_soft_delete"
+    agent_question: |
+      User has two tabs open. Soft-deletes project A in tab X; tab Y still has
+      currentProjectId=A in localStorage and renders. Two options: (a) any API
+      call with deleted projectId returns 404, frontend resets currentProjectId
+      and auto-selects another or onboarding; (b) Pinia heartbeat polling.
+      Recommend (a).
+    user_answer: "Згоден"
+    summary: |
+      Decisions:
+      - Stale-tab handling: 404 from API on deleted projectId is the trigger.
+      - Frontend interceptor on 404 for /api/v1/projects/{currentProjectId}/...:
+        clear currentProjectId from store + localStorage, refetch project list,
+        auto-select first active project if any (else show empty-state),
+        toast "Цей проект був видалений в іншій вкладці" / "This project was
+        deleted in another tab".
+      - Stale selector dropdown: same handling — switching to a project that no
+        longer exists triggers refetch + toast, no fragile pre-flight check.
+      - No polling, no websockets — 404 is the source of truth.
+
+  - question_num: 11
+    timestamp: "2026-05-09 19:50:00"
+    topic: "verification_strategy"
+    agent_question: |
+      Proposed AVP: Playwright MCP for golden path; curl for limit/404/401 edge
+      cases; MongoDB MCP for collection/index inspection; manual JobRunr
+      dashboard check for recurring job registration.
+    user_answer: "згоден"
+    summary: |
+      Approved AVP for post-deploy verification:
+      1. Playwright MCP — golden path: register fresh user -> onboarding visible
+         -> create first project -> selector shows it -> create second -> switch
+         via dropdown -> rename in settings -> soft-delete with name typing ->
+         restore from "Recently deleted" section.
+      2. curl: 6th project returns 422 + code project_limit_reached; foreign /
+         malformed projectId returns 404; no-session call returns 401.
+      3. MongoDB MCP query: confirm `projects` collection exists with one document
+         after create; deletedAt is null on active; service-level uniqueness
+         enforced (try insert duplicate active name -> 422 from API).
+      4. Manual: open JobRunr dashboard at /jobrunr-dashboard, confirm recurring
+         job `hard-delete-projects` is registered with cron `0 3 * * *`.
+      Pre-deploy QA covers: full unit + integration test runs; Playwright golden
+      path on local stack; manual check that index spec was applied
+      (auto-index-creation=true in dev resolves it).
+
+  - question_num: 12
+    timestamp: "2026-05-09 20:05:00"
+    topic: "concurrent_rename"
+    agent_question: |
+      MongoDB no optimistic locking by default. Two-tab concurrent rename ->
+      last-write-wins. Acceptable for MVP, or add @Version + If-Match?
+    user_answer: "OK з last-write-wins"
+    summary: |
+      Decision: last-write-wins for rename and update on MVP. No optimistic
+      locking, no @Version field, no warning toast on stale updatedAt. Document
+      as conscious trade-off in user-spec; future "audit" or "collaboration"
+      epic can add proper concurrency control.
+
+  - question_num: 13
+    timestamp: "2026-05-09 20:05:00"
+    topic: "zoneid_strictness"
+    agent_question: |
+      ZoneId.of() permissive accepts "GMT+5", "+02:00" — non-IANA, no DST. For
+      broadcast scheduling we want IANA only. Recommend strict gate via
+      ZoneId.getAvailableZoneIds().contains(tz).
+    user_answer: "Згоден"
+    summary: |
+      Decision: ValidTimezoneValidator gates strictly:
+      `if (!ZoneId.getAvailableZoneIds().contains(tz)) return false;`
+      Rejects "GMT+5", "+02:00", "UTC" (which is IANA-listed but acceptable;
+      double-check: ZoneId.getAvailableZoneIds() does include "UTC"). On reject
+      backend returns 422 with code `invalid_timezone`. Frontend dropdown is
+      already restricted to Intl.supportedValuesOf('timeZone'), so legitimate
+      flows never trigger this error.
+
+  - question_num: 14
+    timestamp: "2026-05-09 20:05:00"
+    topic: "deploy_approach"
+    agent_question: |
+      Proposed deploy: env var PROJECTS_MAX_PER_USER (default 5); JobRunr
+      auto-registers recurring job; Mongo auto-index-creation=true in dev,
+      manual in prod (deferred to deploy-prep epic); no migrations; no manual
+      user actions.
+    user_answer: "Згоден"
+    summary: |
+      Deploy plan:
+      - .env.example adds PROJECTS_MAX_PER_USER=5; application.properties uses
+        ${PROJECTS_MAX_PER_USER:5}.
+      - Spring Data MongoDB auto-creates indexes at startup
+        (auto-index-creation=true in dev). Production index management is a
+        deploy-prep epic concern, NOT this feature.
+      - JobRunr `hard-delete-projects` recurring job registers at boot via
+        @Recurring annotation. Multi-replica safe via JobRunr distributed lock.
+      - Mongo collection `projects` is created on first insert (no DDL needed).
+      - No data migrations — new collection, new endpoints, no changes to
+        existing models.
+      - Zero manual user actions. No third-party API setup, no token rotation.
+      - GitHub Actions CI/CD: same path as existing modules
+        (build -> tests -> deploy).
+
+  - question_num: 15
+    timestamp: "2026-05-09 20:05:00"
+    topic: "risks_list"
+    agent_question: |
+      Proposed 6 risks: data leakage (HIGH), hard-delete-vs-restore race (LOW),
+      Mongo partial unique not supported (MEDIUM), localStorage drift (LOW),
+      JobRunr 03:00 collision (LOW), mass-assignment (MEDIUM). Each with
+      mitigation. Confirm/extend.
+    user_answer: "Згоден"
+    summary: |
+      Risk register approved as-listed at the time. Risk #4 (localStorage drift)
+      later REMOVED in Q-localstorage-rework when localStorage was dropped from
+      scope.
+
+  - question_num: 16
+    timestamp: "2026-05-09 20:25:00"
+    topic: "restore_vs_limit"
+    agent_question: |
+      User has 5 active + 1 soft-deleted; soft-deletes one (4 active + 2 sd);
+      creates a new (5 active + 2 sd allowed); now wants to restore one of the
+      soft-deleted -> would yield 6 active. Three options: (a) 422 on restore
+      at limit; (b) allow always; (c) auto-displace oldest active.
+    user_answer: |
+      Давай зараз a, а потім ми зробимо щоб користувач міг більше активних
+      проектів мав, коли якщо зайде і це монетизується
+    summary: |
+      Decision: option (a). On POST /api/v1/projects/{id}/restore the backend
+      counts active projects for ownerId; if count >= app.projects.max-per-user
+      it returns 422 with code project_limit_reached (same code as create-flow
+      limit). UI shows error: "ліміт активних проектів досягнутий, видаліть
+      один з активних щоб відновити цей".
+
+      Future direction (out of scope here, recorded for product roadmap):
+      paid plans will raise the per-user active-project cap. The current
+      app.projects.max-per-user constant is the V1 mechanism; per-user
+      configurable limits move into the future billing/plans epic.
+
+  - question_num: "localstorage-rework"
+    timestamp: "2026-05-09 20:25:00"
+    topic: "drop_localstorage_for_currentProjectId"
+    agent_question: |
+      You questioned whether localStorage was load-bearing. After thinking it
+      through: localStorage primary value is cross-restart persistence
+      (different from Pinia in-memory and from cookie session). Cross-tab sync
+      was over-engineered. Two options proposed: (a) keep localStorage for
+      cross-restart only; (b) drop localStorage entirely, auto-select on each
+      session start.
+    user_answer: |
+      Тоді це тільки для логіна, "Запамʼятати мене" залишаємо. Все інше в
+      localStorage якщо явно воно не потрібно, то не потрібно.
+    summary: |
+      Decision: DROP localStorage for currentProjectId on MVP.
+      - Pinia store frontend/stores/projects.ts is in-memory only. After tab/
+        browser close, currentProjectId is gone.
+      - On every fresh session/page load with >= 1 project: auto-select
+        projects[0] sorted by createdAt desc (most-recently-created active).
+      - 404 interceptor still exists as defensive reset for stale in-memory
+        currentProjectId (e.g. project soft-deleted via API key in another
+        client mid-session): on 404 from /api/v1/projects/{currentProjectId}/*,
+        clear currentProjectId, refetch list, auto-select again.
+      - No SSR gating concerns (no localStorage reads).
+      - No cross-tab sync. Each tab is independent — multi-bot users actually
+        prefer this (manage Acme in one tab, Brand X in another simultaneously).
+      - Trade-off accepted: user with multiple projects who actively works in B
+        will land on C (newest) on each browser restart and must re-select
+        once per session.
+      - This is a CONSCIOUS deviation from workflow/03-проекти/README.md line
+        41 ("Останній обраний проект пам'ятається в localStorage"). The
+        deviation is recorded in user-spec under "Conscious deviations from
+        workflow doc" so future epic specs can reference it.
+
+  - question_num: 17
+    timestamp: "2026-05-09 20:45:00"
+    topic: "acceptance_criteria_validation"
+    agent_question: |
+      Composite list of 29 testable AC presented; final confirmation requested.
+    user_answer: "підтверджую"
+    summary: |
+      AC1..AC29 confirmed by user. AC30 added separately under Q18.
+
+  - question_num: 18
+    timestamp: "2026-05-09 20:45:00"
+    topic: "ui_limit_acceptance_criterion"
+    agent_question: |
+      Workflow MUST HAVE says "UI blocks Create button with explanation" but
+      AC list had no UI-side AC. Proposed AC30: "+ Create new project" button
+      disabled with tooltip when projects.length >= 5.
+    user_answer: "згоден"
+    summary: |
+      AC30 added to acceptance_criteria. UI must visibly disable the
+      "+ Create new project" button (in selector dropdown and on /projects)
+      when projectsStore.projects.length >= 5, with a tooltip explaining the
+      limit and how to free a slot.
+
+  - question_num: 19
+    timestamp: "2026-05-09 20:45:00"
+    topic: "ux_guidelines_pk_update"
+    agent_question: |
+      ux-guidelines.md PK still says localStorage persistence + full-page
+      onboarding — both consciously changed. Update PK in this feature, or
+      leave as-is and document deviation in user-spec only?
+    user_answer: "за a"
+    summary: |
+      Decision: ux-guidelines.md update IS in scope of this feature. Two
+      lines change:
+      - Line 33 ("Zero projects → full-page onboarding..."): change to
+        "Zero projects → inline empty-state on /dashboard with primary CTA
+        'Create your first project'."
+      - Line 43 ("Last selected project persisted in localStorage"): change
+        to "Current project is stored in-memory in Pinia; on each fresh
+        session the most-recently-created active project is auto-selected.
+        No localStorage on MVP."
+      Update lands in the same PR as the feature implementation so PK and
+      code stay in sync.
+
+  - question_num: 20
+    timestamp: "2026-05-09 20:45:00"
+    topic: "minor_deferrals"
+    agent_question: |
+      Minor items folded as design defaults (not requiring explicit AC):
+      - E2E user-seeding via UI register form (standard path, no fixtures)
+      - UA copy for type-name modal: "Введіть «{name}» для підтвердження"
+      - EN copy: "Type «{name}» to confirm"
+    user_answer: "підтверджую"
+    summary: |
+      Implementation defaults captured (no explicit AC needed):
+      - Playwright golden-path spec registers a fresh user via the UI's
+        register form; no backend fixtures, no API-level seeding.
+      - Delete-confirm modal copy keys: errors.projects.delete.confirmTypeName
+        UA: "Введіть «{name}» для підтвердження"
+        EN: "Type «{name}» to confirm"
+
+  - question_num: 21
+    timestamp: "2026-05-09 21:05:00"
+    topic: "localstorage_revisit"
+    agent_question: |
+      Adequacy validator pushed back on full localStorage drop: argued the
+      multi-brand persona (primary use-case Q5) needs cross-restart
+      persistence. Earlier "no localStorage" was reaction to over-engineered
+      cross-tab sync; cross-restart is a different (and legitimate) use.
+      Two options: (a) keep in-memory only; (b) add minimal localStorage
+      (~5-7 lines, import.meta.client gate, no cross-tab events).
+    user_answer: "Окей, давай b"
+    summary: |
+      Decision: option (b). Re-introduce localStorage for cross-restart
+      persistence ONLY.
+      - Pinia store frontend/stores/projects.ts writes
+        localStorage.setItem('bot-funnel.currentProjectId', id) on
+        selectProject(id), gated by import.meta.client.
+      - On fresh session: read localStorage; if value matches an active
+        project in the fetched list, auto-select it; otherwise fallback to
+        most-recently-created auto-select.
+      - 404 interceptor on /api/v1/projects/{currentProjectId}/* also
+        removes the localStorage key (defensive cleanup).
+      - No 'storage' event listener; no cross-tab sync. Different tabs may
+        hold different currentProjectId — accepted (multi-bot users
+        actually want this).
+      - This RESTORES alignment with workflow/03-проекти/README.md line 41
+        ("Останній обраний проект пам'ятається в localStorage") and
+        ux-guidelines.md line 43 — so the "PK update" scope shrinks: only
+        line 33 (full-page onboarding -> inline empty-state) needs editing.
+        AC-31 reflects updated scope.
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "05-projects"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 90
+    status: "complete"
+    value: |
+      Workspace/Project CRUD: isolated containers for users to run multiple
+      businesses/brands. Each project owns its own bots, subscribers, funnels,
+      broadcasts, settings. Hard isolation: project_id required in every API
+      URL; owner-only access on every request (404 uniform on miss).
+      Up to 5 ACTIVE projects per user. Soft-delete with 7-day grace period,
+      then hard-delete via JobRunr daily cron (also clears project-scoped
+      events). UI: project selector in topbar (in-memory store, auto-selects
+      most-recently-created on each fresh session — no localStorage on MVP),
+      settings page, inline empty-state on /dashboard when zero projects.
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: |
+      PRIMARY: small business owners running multiple brands need to keep audiences
+      and funnels isolated per brand. Without workspaces, all data piles into one
+      bucket — same Telegram user from different businesses gets mixed scenarios,
+      tags collide, broadcasts go to wrong audience.
+      SECONDARY: agencies running bots for multiple clients (same isolation need),
+      devs prototyping bots and wanting clean separation from production.
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 80
+    status: "partial"
+    value: |
+      Self-registered users (User role) who run >1 Telegram bot:
+      - Small business owners with multiple brands
+      - Agencies running bots for multiple clients
+      - Devs prototyping bots and wanting clean separation from production
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 90
+    status: "complete"
+    value: |
+      1. Create project -> see in list immediately (201 + project in GET
+         /projects response).
+      2. Cannot see other users' projects (404 on guessed URL — uniform with
+         not-found, anti-enumeration).
+      3. Hard-delete after 7 days removes the `projects` document and any
+         project-scoped events (only `events` collection scoped today; child
+         epics will register their own cleanup mechanism — deferred to those
+         epics). Mechanism: JobRunr daily recurring job.
+      4. 5-project hard limit (active only; soft-deleted excluded). Enforced
+         on backend (422 + code `project_limit_reached`) AND UI ("+ Create
+         new project" button visually disabled with tooltip explaining the
+         limit when user has 5 active).
+      5. Project selector switches active project within a session.
+         Persistence across sessions: NONE on MVP — fresh session auto-selects
+         the most-recently-created active project (workflow doc's localStorage
+         requirement consciously dropped, see notes).
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: |
+      Hard limit: 5 ACTIVE projects per user (config constant `app.projects.max-per-user`).
+      Soft-deleted projects do NOT count toward the limit.
+      Soft-delete grace: 7 days. After grace, JobRunr cron hard-deletes.
+      Soft-deleted projects: hidden from UI, do not reserve names; on restore conflicts
+      with an active project's name, "(restored)" suffix is auto-appended.
+      MVP excludes: co-owners, roles, billing, transfer, archive, duplicate (all in 12-nice-to-have).
+      Hard cap of 5 is fixed for MVP — per-user configurable limits live in future
+      billing/plans epic.
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      Approved test pyramid:
+      - Unit: limit logic (5 active vs N soft-deleted counting), timezone validation
+        (against ZoneId.of), owner-check helper, name-conflict resolver for restore.
+      - Integration (`@SpringBootTest(webEnvironment=RANDOM_PORT)` + WebTestClient + real
+        Mongo per patterns.md): all CRUD endpoints, 401 on no-session, 404 on foreign /
+        deleted / malformed projectId, 422 on limit, soft-delete -> hidden, cron hard-delete,
+        restore-with-suffix.
+      - E2E: ONE Playwright spec, golden path — login -> empty-state onboarding -> create
+        first project -> create second -> switch via dropdown -> rename in settings ->
+        delete with name-typing confirmation. No per-locale variants (covered by 03-i18n).
+      - Skip: separate spec per status code (covered by integration), separate E2E for
+        every error path.
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+phase2_user_experience:
+
+  user_stories:
+    score: 90
+    status: "complete"
+    value: |
+      1. First-time user (post-register or post-login with 0 projects):
+         Lands on /dashboard -> sees inline empty-state "Create your first project"
+         (decided Q8: no separate onboarding page) -> opens create modal/page ->
+         fills name + timezone (default: browser TZ) + optional description ->
+         submits -> project created -> redirected to /dashboard with
+         currentProjectId set in Pinia, normal dashboard rendered, selector
+         shows project name.
+
+      2. Returning user (>= 1 active project) starting a fresh session:
+         Logs in -> /dashboard renders. Pinia store fetches active projects
+         and auto-selects projects[0] (sorted createdAt desc). Selector
+         displays it. No localStorage; user re-selects manually if they
+         prefer a different one.
+
+      3. Multi-project user switching within a session:
+         Clicks selector -> dropdown shows all active projects sorted by
+         createdAt desc -> selects another -> currentProjectId updates in
+         the in-memory Pinia store, current page re-scopes (for now only
+         /dashboard exists; future modules will observe the store).
+
+      4. Project settings flow:
+         Selector dropdown has "Project settings" link OR sidebar Settings
+         entry when currentProject != null. Page allows: rename (409 on
+         duplicate active name), edit description, change timezone. Save ->
+         200 + updated project.
+
+      5. Project soft-delete flow:
+         Settings -> "Danger zone" section -> "Delete project" -> modal opens
+         requiring user to type project name verbatim -> Delete button is
+         disabled until match -> on confirm: DELETE /api/v1/projects/{id} ->
+         200 -> project removed from active list, appears in "Recently
+         deleted" section with N days remaining. If was currentProject,
+         store auto-selects another active project (or empty-state if none).
+
+      6. Project restore flow:
+         /projects page "Recently deleted" -> Restore button -> POST
+         /api/v1/projects/{id}/restore. Outcomes:
+         - Active count < limit: 200, project returns to active list.
+         - Active count == limit: 422 project_limit_reached (Q16 decision a)
+           -> toast "Ліміт 5 активних досягнутий — видаліть один щоб
+           відновити цей".
+         - Name conflicts with an active project: server appends "(restored)"
+           suffix automatically; UI shows informational toast.
+
+      7. In-session stale state defense (Q10 simplified after localStorage
+         dropped):
+         If something external (other browser, API key, future feature)
+         soft-deletes the current project mid-session, the next API call to
+         /api/v1/projects/{currentProjectId}/* returns 404. The store's
+         interceptor clears currentProjectId, refetches the project list,
+         auto-selects another active, and shows a toast. No cross-tab events,
+         no polling.
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 90
+    status: "complete"
+    value: |
+      Backend (REST + persistence):
+      AC1.  POST /api/v1/projects with {name=3-50 chars, timezone=IANA,
+            optional description<=200} returns 201 with full Project body
+            and emits `project_created` audit event.
+      AC2.  POST /api/v1/projects with name length < 3 or > 50 returns 400
+            with code `name_length`.
+      AC3.  POST /api/v1/projects with timezone="GMT+5" or non-IANA returns
+            400 with code `invalid_timezone`.
+      AC4.  POST /api/v1/projects when user already has 5 ACTIVE projects
+            returns 422 with code `project_limit_reached`.
+      AC5.  POST /api/v1/projects with name matching another active project
+            of the same owner returns 409 with code `project_name_taken`.
+      AC6.  GET /api/v1/projects (no query) returns array of OWN active
+            projects only, sorted by createdAt desc.
+      AC7.  GET /api/v1/projects?include_deleted=true returns active +
+            soft-deleted projects (each row carries deletedAt).
+      AC8.  GET /api/v1/projects/{foreign-id} returns 404.
+      AC9.  GET /api/v1/projects/{malformed-id} returns 404 (uniform).
+      AC10. GET /api/v1/projects/{soft-deleted-own-id} returns 404 by default;
+            returns 200 with deletedAt set when ?include_deleted=true on the
+            list endpoint (single-resource GET stays 404 for cleanliness —
+            user navigates from the list view).
+      AC11. Any /api/v1/projects/* call without a session returns 401.
+      AC12. PATCH /api/v1/projects/{id} with valid body returns 200 + updated
+            project; emits `project_renamed` if name changed, else
+            `project_updated`.
+      AC13. DELETE /api/v1/projects/{id} returns 200, sets deletedAt=now,
+            emits `project_soft_deleted`. Project disappears from default
+            list, appears in ?include_deleted=true.
+      AC14. POST /api/v1/projects/{id}/restore on a soft-deleted own project
+            with active count < limit returns 200 + project with deletedAt
+            cleared; emits `project_restored`. If name conflicts with an
+            active project of the same owner, the restored project's name
+            is automatically suffixed with " (restored)" before save.
+      AC15. POST /api/v1/projects/{id}/restore when active count == limit
+            returns 422 `project_limit_reached`.
+      AC16. JobRunr `hard-delete-projects` recurring job is registered with
+            cron `0 3 * * *` UTC.
+      AC17. Hard-delete cron permanently removes projects where deletedAt <
+            now-7d, and removes events with metadata.projectId in the deleted
+            set. Emits `project_hard_deleted` event per deleted project (the
+            event itself is per-user and is NOT removed).
+
+      Frontend:
+      AC18. Login with 0 projects -> /dashboard shows full-width
+            "Create your first project" empty-state with a primary CTA.
+      AC19. Login with >= 1 project -> /dashboard shows the welcome content;
+            topbar has ProjectSelector populated with the active list.
+      AC20. Auto-select on each fresh session: after fetching projects,
+            currentProjectId = projects[0] (sorted createdAt desc); selector
+            displays it without user action.
+      AC21. Switching project in selector updates the in-memory store; no
+            localStorage write. Tab close -> next session re-runs auto-select.
+      AC22. Settings page allows rename, description edit, timezone change
+            via PATCH; danger zone delete requires typing project name.
+      AC23. /projects renders Active section + "Recently deleted (X days
+            remaining)" section with Restore buttons.
+      AC24. 404 interceptor: any 404 from /api/v1/projects/{currentProjectId}/*
+            triggers store reset, refetch, auto-select, toast.
+      AC25. i18n parity: all `projects.*`, `errors.projects.*`, `layout.*`,
+            `validation.*` keys exist in BOTH uk.json and en.json. `pnpm build`
+            (locale parity gate) passes.
+
+      Quality gates (CI):
+      AC26. `gradle test` (backend unit + integration with Testcontainers
+            real Mongo) is green.
+      AC27. `pnpm test` (vitest) is green.
+      AC28. `pnpm test:e2e` (Playwright golden path) is green.
+      AC29. `pnpm build` is green (locale parity gate enforced).
+
+      UI limit enforcement (workflow MUST HAVE):
+      AC30. When `projectsStore.projects.length >= 5`, the "+ Create new
+            project" button (in the selector dropdown and on /projects) is
+            visually disabled and shows a tooltip explaining the 5-project
+            limit and how to free a slot (soft-delete an active project).
+
+      Documentation alignment:
+      AC31. .claude/skills/project-knowledge/references/ux-guidelines.md is
+            updated in the same PR: line 33 changes "full-page onboarding"
+            to "inline empty-state on /dashboard"; line 43 changes
+            "localStorage" to "in-memory Pinia + auto-select most-recently-
+            created on each fresh session". So future features read the
+            current truth.
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 90
+    status: "complete"
+    value: |
+      Resolved:
+      - 5 active + N soft-deleted -> 6th create allowed (soft-deleted not counted).
+      - Cross-tab soft-delete -> 404 triggers store reset + auto-select + toast.
+      - Restore name conflict -> server appends "(restored)" suffix automatically.
+      - Stale selector -> switching to deleted -> 404 + refetch + toast.
+      - Hard-delete fires while user is in restore flow: 404 on POST /restore
+        -> same toast as cross-tab.
+      - Concurrent rename in two tabs: last-write-wins, no warning. Documented
+        as conscious MVP trade-off (no @Version, no If-Match).
+      - Description empty string -> stored as null in Mongo (DTO-level normalization).
+      - Restore of last-soft-deleted by user with 5 active: soft-deleted does
+        not count, so restore always succeeds and may temporarily push user to
+        6 active. Acceptable — limit gates CREATE only, not RESTORE.
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 90
+    status: "complete"
+    value: |
+      Auth/access:
+      - 401 if no active session
+      - 404 uniform for: foreign project, soft-deleted project, malformed
+        projectId, never-existed (uniformity = anti-enumeration)
+
+      Validation (returned as 400 with `code` per code-research §1.7 — bean
+      validation surfaces through GlobalErrorHandler as 400):
+      - name missing / empty -> 400, code `name_required`
+      - name length < 3 or > 50 -> 400, code `name_length`
+      - description length > 200 -> 400, code `description_too_long`
+      - timezone missing -> 400, code `timezone_required`
+      - timezone not in IANA list -> 400, code `invalid_timezone`
+
+      Business rules (custom service-thrown):
+      - 6th project create -> 422, code `project_limit_reached`
+        (note: backend uses 422 here intentionally — 400 is reserved for
+        request-shape validation; 422 = semantically valid request rejected)
+      - Active duplicate name on create or rename -> 409, code `project_name_taken`
+      - Restore of project past 7-day grace -> 404 (record gone)
+
+      UX consequences:
+      - In-session stale current project on any 404: clear in-memory
+        currentProjectId in Pinia, refetch list, auto-select another active,
+        show toast (Q10 simplified after Q-localstorage-rework — no localStorage,
+        no cross-tab events).
+      - Delete requires typing project name verbatim; Delete button disabled
+        until match.
+      - Hard-delete-after-soft-delete: irreversible; no UI warning beyond the
+        7-day countdown shown in "Recently deleted" list.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      Pre-deploy (no live env):
+      - Backend: full unit + integration suite (gradle test).
+      - Frontend: vitest unit/component suite (pnpm test).
+      - Frontend: Playwright golden path on local stack (pnpm test:e2e).
+
+      Post-deploy AVP (Agent Verification Plan):
+      1. Playwright MCP — register fresh user -> see dashboard empty-state ->
+         create first project -> selector visible -> create second -> switch ->
+         rename in settings -> soft-delete with name typing -> restore from
+         "Recently deleted".
+      2. curl scripts — 6th project create returns 422 + code project_limit_reached;
+         GET /api/v1/projects/{foreign-id} -> 404; GET with no session -> 401;
+         GET /api/v1/projects/{malformed} -> 404 (uniform).
+      3. MongoDB MCP — projects collection exists; one document created during
+         AVP step 1 has deletedAt=null; soft-deleted in step 1 has deletedAt set.
+      4. Manual UI check — open JobRunr dashboard at /jobrunr-dashboard;
+         confirm `hard-delete-projects` recurring job is registered with
+         cron `0 3 * * *`.
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 90
+    status: "complete"
+    value: |
+      Topbar (default.vue):
+      - Logo (left) | ProjectSelector dropdown | user name+avatar | Logout | LangSwitcher.
+      - Selector: shows currentProject name; click -> dropdown of active
+        projects (sorted by createdAt desc) + "+ Create new" action + "Project
+        settings" link (visible only when currentProject != null).
+      - When 0 projects: selector hidden (page-level empty-state on dashboard).
+
+      Sidebar:
+      - Dashboard | Profile (existing) | Settings (NEW; visible only when
+        currentProject != null) -> /projects/{currentProjectId}/settings.
+
+      /dashboard (extension):
+      - 0 projects: full-width empty-state card "Create your first project"
+        with primary CTA opening create modal/page (per Q8).
+      - >= 1 project: existing welcome content (extended later by analytics
+        epic).
+
+      /projects:
+      - Active projects list (cards or table) with quick-action: open settings.
+      - "Recently deleted" section below the active list, only rendered if any
+        soft-deleted projects exist; each row shows name + days until permanent
+        removal (computed client-side from deletedAt + 7d - now()) + Restore
+        button.
+
+      /projects/{projectId}/settings:
+      - General section: name input, description textarea, timezone picker
+        (uses Intl.supportedValuesOf('timeZone')). Save button.
+      - Danger zone (separate card with red border): "Delete project" button
+        -> opens type-the-name modal -> Delete disabled until input matches
+        name verbatim -> calls DELETE.
+
+      Create-project (page first; modal can come later):
+      - Form: name (required, 3-50), description (optional, 0-200), timezone
+        (default browser TZ, dropdown override). Submit -> 201 -> store
+        updated, currentProjectId set, navigate to /dashboard.
+
+      Toast for in-session stale state (Q10 simplified): "Цей проект більше
+      недоступний" / "This project is no longer available" — keyed under
+      errors.projects.
+
+      State persistence: NONE in localStorage. Pinia in-memory only;
+      auto-select most-recently-created on each session start (Q-localstorage-
+      rework decision).
+    gaps: ""
+    required: false
+
+  risks:
+    score: 90
+    status: "complete"
+    value: |
+      1. [HIGH] Data leakage between projects (cross-user / cross-project
+         access).
+         Mitigation: ProjectService.requireOwned(ownerId, projectId) called at
+         the entry of every project-scoped handler. Returns Mono<Project> on
+         success, AppException.notFound otherwise. Integration test with two
+         distinct users verifies 404 uniformly. Future epics that ship
+         /api/v1/projects/{id}/* routes MUST plug into the same guard.
+
+      2. [MEDIUM] Mass-assignment via unknown JSON fields (e.g. client posts
+         "ownerId": "<other-user>"). Mitigation: every DTO carries
+         @JsonIgnoreProperties(ignoreUnknown=true) — already standard per
+         profile/dto. Service NEVER reads ownerId from request body.
+
+      3. [MEDIUM] Mongo @CompoundIndex partial filter unsupported, so
+         (ownerId, name) unique-among-active relies on service-layer
+         pre-check (race window microseconds). Mitigation: low-collision per
+         5-project cap; if observed in production, fall back to programmatic
+         IndexOps.ensureIndex with partialFilterExpression.
+
+      4. [LOW] Hard-delete vs restore race: cron deletes at the same instant
+         user clicks Restore. Mitigation: 404 from POST /restore + toast.
+
+      5. [LOW] JobRunr 03:00 cron collision with HardDeleteJob (users).
+         Mitigation: JobRunr serializes; observable via dashboard.
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 90
+    status: "complete"
+    value: |
+      Routing & versioning:
+      - First /api/v1/... module. Existing /api/auth and /api/profile stay
+        where they are. Document convention: future modules (bots, subscribers,
+        ...) nest under /api/v1/projects/{projectId}/...
+
+      Backend:
+      - REST. Project CRUD: GET /api/v1/projects, POST, GET {id}, PATCH {id},
+        DELETE {id}, POST {id}/restore.
+      - Access guard as method on ProjectService: `requireOwned(ownerId, id)`
+        returns Mono<Project> or AppException.notFound. Future modules'
+        services inject ProjectService and call requireOwned before any work.
+      - 404 uniform for all "not yours / not found" cases (anti-enumeration).
+      - 409 for active-name conflict on create/rename.
+      - 422 for limit-reached on CREATE and RESTORE (Q16 decision a).
+      - Bean-validation errors -> 400 with `code` field per existing
+        GlobalErrorHandler contract.
+      - AppException.notFound(...) factory added to common.
+      - WithMockAppUser test annotation moved from profile/ to a shared
+        testsupport package (third consumer threshold reached).
+
+      Soft-delete & cron:
+      - deletedAt: Instant or null (null = active).
+      - JobRunr @Recurring "hard-delete-projects" daily at 03:00 UTC.
+      - Cascade scope today: delete project document + delete events with
+        metadata.projectId in deleted set. Future epics register their own
+        cleanup mechanism — not over-engineered now.
+
+      Validation:
+      - @Size(min=3, max=50) on name, @Size(max=200) on description (no
+        custom annotation needed).
+      - @ValidTimezone with strict IANA gate via
+        ZoneId.getAvailableZoneIds().contains(tz).
+
+      Frontend:
+      - Pinia store frontend/stores/projects.ts — IN-MEMORY ONLY. No
+        localStorage (Q-localstorage-rework). On each fresh session start,
+        auto-select projects[0] sorted createdAt desc.
+      - 404 interceptor on /api/v1/projects/{currentProjectId}/* clears
+        currentProjectId, refetches list, auto-selects again, toast.
+      - No /onboarding page — dashboard handles 0-project empty-state inline.
+      - One Playwright golden-path E2E spec.
+
+      Concurrency:
+      - Last-write-wins on rename/update (Q12). No @Version, no If-Match. To
+        be revisited if collaboration / multi-owner epic ever ships.
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 90
+    status: "complete"
+    value: |
+      Approach: same GitHub Actions CI/CD as existing modules
+      (build -> tests -> deploy on merge to main). Per CLAUDE.md: ALL deployments
+      via GitHub CI/CD only.
+
+      Configuration changes:
+      - .env.example adds PROJECTS_MAX_PER_USER=5.
+      - application.properties: app.projects.max-per-user=${PROJECTS_MAX_PER_USER:5}.
+      - No new GitHub secrets required (no third-party API).
+
+      Database:
+      - Mongo collection `projects` auto-created on first insert.
+      - Indexes auto-created at startup via auto-index-creation=true (dev).
+        Production index management is a deploy-prep epic concern — flagged but
+        NOT in this feature's scope.
+      - No data migrations.
+
+      Background jobs:
+      - JobRunr `hard-delete-projects` recurring job auto-registers via
+        @Recurring at boot. Multi-replica safe via JobRunr distributed lock.
+
+      Pre-deploy checks (gated in CI):
+      - gradle test (unit + integration with Testcontainers)
+      - pnpm test (vitest)
+      - pnpm build (locale parity gate + Nuxt build)
+      - pnpm test:e2e (Playwright golden path)
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 90
+    status: "complete"
+    value: |
+      ZERO manual user actions for the platform owner (deployer):
+      - No third-party API setup (no Telegram bot for THIS feature; that's 04-bots).
+      - No external secret rotation.
+      - No SQL migration scripts to run.
+      - No DNS / proxy changes.
+
+      For the END USER of the platform:
+      - On first login post-deploy, user lands on /dashboard which now shows
+        the empty-state if they have 0 projects. No data migration risk for
+        existing users (there are no projects yet — this is greenfield).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+phase3_integration:
+
+  integration_points:
+    score: 90
+    status: "complete"
+    value: |
+      Upstream dependencies:
+      - 02-auth: authenticated session via spring-session-data-mongodb;
+        currentUserId() extracted from ReactiveSecurityContextHolder; CSRF
+        cookie/header pattern inherited automatically; auth.global.ts middleware
+        unchanged (project routes resolve to known names, fail-closed for
+        unauth).
+
+      Outputs that future epics consume:
+      - ProjectService.requireOwned(ownerId, projectId): Mono<Project> — the
+        shared access guard. Future modules' services (BotService, SubscriberService,
+        FunnelService, BroadcastService, ApiKeyService, AnalyticsService) inject
+        ProjectService and gate every entry point through requireOwned.
+      - URL contract: every project-scoped route nests under
+        /api/v1/projects/{projectId}/... . The {projectId} path variable is the
+        first argument every controller passes to the guard.
+      - Event types: project_created, project_renamed, project_updated,
+        project_soft_deleted, project_restored, project_hard_deleted (open enum
+        in `events` collection). 04-bots and beyond extend with their own event
+        types and may filter by metadata.projectId.
+      - Hard-delete extension point: the `hard-delete-projects` JobRunr job
+        currently cleans `events` by metadata.projectId. Each future epic that
+        owns a project-scoped collection (bots, subscribers, funnels, etc.)
+        registers its own cleanup hook in that epic — out of scope here.
+
+      Frontend integration:
+      - Pinia useProjectStore exposes currentProjectId — future page modules
+        observe it and re-scope their queries.
+      - useApi already CSRF-aware; no per-route work needed.
+      - 404 interceptor (centralized in the project store) is the single
+        cross-tab invalidation mechanism for currentProjectId.
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 80
+    status: "partial"
+    value: |
+      Hard dep: 02-auth (User entity, session, brute-force protection patterns).
+      Code reuse: events service (audit log), profile patterns (delete-with-confirmation).
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 85
+    status: "complete"
+    value: |
+      Reactive stack only (WebFlux + reactive Mongo).
+      Sessions in MongoDB via spring-session-data-mongodb.
+      project_id always in URL path; never inferred from session on the backend.
+      Timezone format: IANA ("Europe/Kyiv"); validated via java.time.ZoneId.of();
+      DateTimeException -> 422 `invalid_timezone`.
+      Name validation: 3-50 chars (workflow doc), trimmed, no leading/trailing whitespace.
+      Description: optional, max 200 chars (workflow doc).
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 90
+    status: "complete"
+    value: |
+      New `projects` collection (Mongo document):
+      - _id: ObjectId
+      - ownerId: ObjectId (ref users._id) — required
+      - name: string (3-50 chars), required, unique per-owner among non-soft-deleted
+      - description: string (0-200 chars), optional
+      - timezone: string (IANA name), required
+      - deletedAt: instant or null — null means active; non-null means soft-deleted
+      - createdAt, updatedAt: instants
+      Indexes:
+      - { ownerId: 1, deletedAt: 1 } — list queries (active vs all)
+      - { ownerId: 1, name: 1 } UNIQUE PARTIAL where deletedAt is null —
+        enforces unique name among ACTIVE only
+      - { deletedAt: 1 } — cron query (find expired soft-deletes)
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 70
+    status: "partial"
+    value: |
+      No existing data — new collection, new endpoints.
+      No backward-compatibility concerns.
+    gaps: "Confirm: zero migration?"
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/05-projects/user-spec.md"
+  status: "approved"
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase1_feature_overview"
+  questions_asked: 0
+  last_question: ""
+  total_required_score: 0
+  total_optional_score: 0
+  completion_estimate: "30%"
+  user_detail_level: "detailed"  # workflow doc is detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Source of requirements: workflow/03-проекти/README.md (read into Cycle 1 priors).
+  Size: L (new backend module, cron, guard pattern, full UI).
+
+  Conscious deviations from workflow doc, captured in the user-spec:
+  - 403 -> 404 for ownership mismatch (anti-enumeration). Workflow says 403.
+  - localStorage for currentProjectId DROPPED. Workflow says
+    "Останній обраний проект пам'ятається в localStorage".
+    On MVP: in-memory Pinia + auto-select most-recently-created on each session.
+  - "Cascade" wording in workflow implies multi-collection cleanup; today only
+    `events` is project-scoped. Each future epic registers its own cleanup.
+
+  Future-direction notes (not in scope):
+  - Per-user configurable max-projects (paid plans) -> billing/plans epic.
+  - Cross-restart project persistence via localStorage or server-side
+    "lastUsedProjectId" -> small UX polish epic when needed.
+  - Optimistic locking on rename/update (currently last-write-wins) ->
+    when collaboration ships.

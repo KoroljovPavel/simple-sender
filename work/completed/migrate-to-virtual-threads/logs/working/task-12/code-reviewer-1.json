@@ -1,0 +1,68 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 12 adds 5 well-structured MockMvc integration tests + 1 TC5 bean-type assertion that successfully lift AC16/AC17/AC18/R3/R4/R5 from manual into automated coverage. All six tests pass three sequential reruns with --rerun-tasks (no flakiness), production code under test was inspected to confirm the assertions match the live contracts, and no new build.gradle dependencies were added. The AC18 TC11 deviation (XSRF-TOKEN co-emission) has a sound structural rationale documented both inline and acknowledged in the commit message; the alternative coverage path is acceptable given the constraint. A handful of minor issues (one broken {@link Cookie} javadoc reference, one regex-greediness nuance in AC17, one robustness concern in parseSetCookieHeaderFor when Spring Session emits multiple Set-Cookie SESSION headers, one minor inaccuracy in the TC11 deviation explanation, and one unused-import flag in ProfileControllerIT) are surfaced below as suggestions.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "line": 704,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The javadoc on parseSetCookieHeaderFor references `{@link Cookie#getMaxAge() Max-Age}` but the file does not import `jakarta.servlet.http.Cookie`. IntelliJ / javadoc-builds in a future toolchain will surface this as an unresolved reference. Either add `import jakarta.servlet.http.Cookie;` or rewrite the reference as `{@code Cookie.getMaxAge()}` to drop the link-resolution dependency.",
+      "benefit": "Keeps the doc navigable in IDEs and avoids a future warning if the project enables a -Xdoclint stricter mode.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "line": 709,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "parseSetCookieHeaderFor returns the FIRST Set-Cookie header whose value starts with `<name>=`. After a session-fixation rotation, Spring Session can in principle emit two `Set-Cookie: SESSION=...` headers (one to clear the old id, one for the new id). Today the test passes deterministically because MockMvc requests never carry an inbound SESSION cookie (so `getSession(true)` + `changeSessionId()` only emits one outbound Set-Cookie), but a future change that pre-seeds a SESSION cookie on these tests would silently match the wrong header. Consider either (a) iterating and asserting exactly one matching header, or (b) preferring the LAST match (which by Servlet convention is the authoritative final state), or at minimum a comment documenting why first-match is safe under MockMvc.",
+      "benefit": "Defends against a future test author adding `.cookie(SESSION...)` to these tests and getting an opaque max-age=0 assertion failure.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "line": 580,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "The regex `^email: .+(, .+: .+)*$` does not actually enforce the joined-format contract on the multi-error branch — the leading `.+` is greedy and will swallow `, password: must be valid` as one chunk, leaving the optional repeating group to match zero times. For the empty-email case under test (which only fires `email` validators) the assertion is sound, but the regex does not catch a future regression that drops the `, ` joiner on multi-field violations. Consider tightening to `^email: [^,]+(, [^,]+: [^,]+)*$` (forbids comma inside an error message body, which neither `@NotBlank` nor `@Email` produce in any locale) to make the joiner-shape assertion actually load-bearing on multi-error responses.",
+      "benefit": "Pins the wire-shape contract the comment claims it pins; useful if a future GlobalErrorHandler refactor drops the joiner.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "line": 600,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The TC11 deviation javadoc claims `csrf()` 'substitutes a TestCsrfTokenRepository for the real bean' — this is slightly inaccurate. `SecurityMockMvcRequestPostProcessors.csrf()` actually injects a valid CSRF token (as both a request cookie and a header/form param) so that the real `CookieCsrfTokenRepository.loadToken()` returns non-null on the request, which causes `RepositoryDeferredCsrfToken.get()` to skip `saveToken()`. The CONCLUSION (no re-emit on the response) is correct; only the mechanism description is imprecise. Suggest replacing the second bullet with: `* With .with(csrf()) the post-processor supplies a matching XSRF-TOKEN cookie + header on the request, so the real CookieCsrfTokenRepository.loadToken() returns the token and the deferred-token getter skips saveToken().`",
+      "benefit": "Future readers searching the codebase for `TestCsrfTokenRepository` will not be misled by a class name that does not exist.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+      "line": 354,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "changePassword_preFlipBsonFixture_isReadCorrectlyByPostFlipRepository asserts the seeded `pre-flip-session` document is DELETED, but the deletion is performed by `ProfileService.terminateAllSessionsExcept(userId, currentSessionId)` — which only proves the post-flip query READS the `principal` field correctly when targeting a doc for delete. The javadoc accurately notes this. However, R5 also implies the live MongoIndexedSessionRepository can FIND / hydrate the pre-flip session (i.e. that `request.getSession()` on a request carrying a pre-flip SESSION cookie deserializes correctly). The current test does not exercise that path. Consider either a follow-up test that issues a request with a Cookie('SESSION', preFlipId) and asserts hydration succeeds, or extending this test's javadoc to scope the claim to 'the terminate-by-principal query path', not 'the post-flip repository reads pre-flip docs' generically (the current first-sentence wording at line 355 is slightly broader than what is verified).",
+      "benefit": "Aligns the assertion with the actual coverage scope; prevents misleading a future reader about how much of R5 is exercised.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+      "line": 10,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`import jakarta.servlet.http.Cookie;` is used in `changePassword_sessionContinuity_principalLookupTerminatesOtherSessions` only (line 296: `Cookie sessionCookie = ...getCookie(\"SESSION\")`). Could be replaced with `var sessionCookie = ...` (the existing style elsewhere in the test class uses explicit types but `Cookie` here is a Jakarta servlet type that does not contribute to readability). Optional — keeping the explicit import is also fine and consistent with the project's preference for explicit types.",
+      "benefit": "Slight noise reduction; this is a stylistic preference and not a defect.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 6,
+    "testCoverageAssessment": "excellent"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "reviewer": "security-auditor",
+  "task": 8,
+  "round": 1,
+  "commit": "fc72d2f",
+  "focus": ["no v-html (XSS / OWASP A03)", "media URL scheme guard (anti-SSRF / anti-XSS, Decision 6)"],
+  "scope": [
+    "frontend/components/funnels/FunnelMessagePreview.vue",
+    "frontend/stores/funnels.ts"
+  ],
+  "summary": "Preview panel renders all backend-escaped text/caption exclusively via {{ }} interpolation; no v-html / innerHTML anywhere (static test guard enforces this). FILE :href is gated behind an http(s) scheme check that rejects file://, data:, javascript: and opaque file_id tokens. One defense-in-depth/consistency gap (single IMAGE :src lacked the scheme guard the ALBUM items already had) was fixed during the audit.",
+  "owasp_checks": {
+    "A03-injection-xss": "PASS — text/caption text-only via {{ }}; static source guard (no v-html=/.innerHTML=); hostile-payload test asserts 0 injected elements",
+    "A10-ssrf": "PASS — frontend never dereferences media URLs server-side; clickable :href and now :src are http(s)-only; file_id/non-http never become a request target",
+    "A01-access-control": "N/A — read-only preview, project scope enforced server-side",
+    "secrets": "PASS — no hardcoded secrets; PreviewStepResponse contract excludes ownerChatId/identity (Decision 8)"
+  },
+  "findings": [
+    {
+      "id": "SEC1",
+      "severity": "medium",
+      "status": "fixed",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "finding": "The single IMAGE block bound :src=block.mediaUrl WITHOUT the http(s) scheme guard that the ALBUM items already applied. An opaque file_id or a non-http scheme (e.g. data:image/svg+xml) would be set as the <img src>. For <img>, javascript:/data: do not execute scripts (browsers script-disable img-loaded SVG), so this was NOT an XSS sink — but it was an inconsistency and a defense-in-depth/anti-SSRF gap (a doomed request, and divergence from Decision 6 'file_id -> icon').",
+      "fix": "Added isHttpUrl(block.mediaUrl) to the IMAGE v-if so a file_id / non-http src renders the neutral icon placeholder instead, matching ALBUM items. Added a regression test covering file_id / data: / javascript: IMAGE srcs.",
+      "reason": "Consistency + defense-in-depth: keep ALL media :src/:href behind one scheme guard so no untrusted scheme ever reaches the DOM as a load target."
+    },
+    {
+      "id": "SEC2",
+      "severity": "info",
+      "status": "noted",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "finding": "FILE link uses target=_blank with rel='noopener noreferrer nofollow' + referrerpolicy='no-referrer'.",
+      "action": "no-change",
+      "reason": "Reverse-tabnabbing and referrer-leak already mitigated correctly."
+    }
+  ],
+  "verdict": "OK (1 medium fixed in-round)"
+}

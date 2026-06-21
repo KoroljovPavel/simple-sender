@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review confirms all three round-1 minor findings have been correctly closed and the suite remains green (./gradlew test --tests com.botfunnel.webhook.ProcessTelegramUpdateJobTest -> BUILD SUCCESSFUL in 17s, UP-TO-DATE which is consistent — no recompile needed). The four new tests (startPrivateMultiWordPayload, stopGroup_eventOnly_noStubCall, startPrivateBotMissing, mediaOnlyMessagePrivate) all carry meaningful assertions and pass the litmus test: each one would fail if the corresponding code branch were removed (multi-word payload uses substring-after-first-whitespace, /stop in group skips stubs entirely, bot==null on private /start routes to logEventOther('unknown'), text==null on a non-null message routes to logEventOther('message')). The failure test's net-new assertions (rethrown.getMessage() token-free + rethrown.getCause() == null + ListAppender token scan across all log events) materially upgrade the security contract — those are the three exact sites where JobRunr could re-leak the raw token (jobrunr_jobs.exception.message, exception cause chain, ERROR log line). The ListAppender lifecycle is correctly scoped per @BeforeEach/@AfterEach with null-safe detach. Two @BeforeEach methods (attachLogAppender + cleanAndSeed) have no inter-dependency so JUnit's undefined ordering is irrelevant. Mockito.reset(subscriberService, funnelTriggerService) in cleanAndSeed correctly precedes any per-test doThrow setup (the failure test's doThrow is inside the @Test body, not in @BeforeEach). Net-new observations are minor and below the passed threshold.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java:129-134 (reentryGuard_doneStatus_noOp)",
+      "issue": "Round-1 finding #3 asked for both processingStatus AND processingError immutability assertions on DONE re-entry. The fix correctly added the processingStatus=DONE assertion (line 131-133) but skipped the processingError=null assertion mentioned in the round-1 recommendation. A regression that writes to processingError without flipping status (e.g. a future audit-trail feature appending a 'retry attempted' note) would not be caught. The assertion is one line and closes the contract fully.",
+      "recommendation": "After `assertThat(reloaded.getProcessingStatus()).isEqualTo(RawUpdateStatus.DONE);` add `assertThat(reloaded.getProcessingError()).as(\"DONE row's processingError must stay null under re-entry\").isNull();`."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java:432-497 (four new tests in 'added coverage from review round 1' section)",
+      "issue": "Consistency gap: the four newly added tests (startPrivateMultiWordPayload, stopGroup_eventOnly_noStubCall, startPrivateBotMissing, mediaOnlyMessagePrivate) all complete a worker invocation but none of them call `assertRawUpdateDone(raw.getId())`. The original happy-path tests (`startPrivateWithPayload_callsSubscriberAndFunnel_writesEvent`, `messageNullAndNoSlot_safeNavigate`) DO assert it. A regression that fails to flip processingStatus on these specific branches (e.g. an early-return in the bot==null path that bypasses the success counter + status flip) would not be caught by the new tests — only by the existing happy-path test, which doesn't traverse those branches. The helper already exists; the assertion is one line per test.",
+      "recommendation": "Append `assertRawUpdateDone(raw.getId());` as the final assertion in each of the four new tests. Also worth adding the same to `stopPrivate_callsMarkUnsubscribedAndCancel_writesEvent`, `startGroup_eventOnly_noStubsNoOwnerPopulate`, `plainTextPrivate_callsSubscriber_writesMessageReceivedEvent`, `plainTextGroup_eventOnly_noStubCall`, and both unknownCommand variants — same one-line cost, locks the success path's status flip across every dispatch branch."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 24,
+      "passed": 24,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 24,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

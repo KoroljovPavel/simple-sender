@@ -1,0 +1,163 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 9,
+      "issue": "Task 9 states '17 .block() sites' in ProcessTelegramUpdateJob. The file actually has 18 matches when grepping for '.block()' — but one at line 32 is inside a comment ('// 2. Cascade ordering — every event.logEventBlocking(...).block() finishes BEFORE...'). Actual executable .block() calls = 17 (lines 79, 100, 105, 127, 183, 195, 208, 227, 241, 242, 248, 253, 254, 267, 275, 282, 289). The 17-count is correct but the task also claims 'Task 2 already dropped 5 of the 17'. At time of validation, Task 2 has NOT been executed: SubscriberService.upsertFromTelegramUpdate, SubscriberService.markUnsubscribed, FunnelTriggerService.fire, FunnelTriggerService.cancelActiveFor all still return Mono<Void>. This means all 17 .block() sites are present and no prior-task cleanup has reduced the count. Task 9 must handle all 17 sites itself (or explicitly depend on Task 2 completing first).",
+      "fix": "Add Task 2 to the depends_on array (currently [1, 2] — Task 2 IS listed, which is correct). However, the task text must be updated to clarify that the 5 stub-service sites (lines 195, 241, 242, 253, 254) will already be gone when Task 2 has run, so Task 9 only needs to drop 12 sites directly. The current wording '5 of the 17 already dropped' is correct in intent but potentially misleading since the pre-condition (Task 2 completion) must actually be verified before starting Task 9."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "Task 7 step 11 says 'EXTRACT the two race tests (postConnect_parallelSameToken_exactlyOneSucceeds_otherReturns409 lines ~509-546, postConnect_parallelSameProjectDifferentTokens_exactlyOneSucceeds_otherReturns409 lines ~548-580) into the new BotConnectRaceIT.java'. Actual line numbers: 511 and 550 (start), ending around lines 545 and 581 respectively. The line ranges are close but the current race tests use Mono.zip(r1, r2, ...).block() for concurrency — NOT ConcurrencyTestUtils.parallelInvoke(). The existing tests fire requests using WebTestClient inside Mono.fromCallable wrappers. Task 7 requires BotConnectRaceIT to use TestRestTemplate + ConcurrencyTestUtils.parallelInvoke(2, ...) over real Tomcat transport. BotConnectRaceIT.java does not yet exist. ConcurrencyTestUtils.java does not yet exist (created by Task 10). BotConnectRaceIT depends on Task 10's ConcurrencyTestUtils, but Task 7's depends_on only lists [1, 2] — it does NOT declare a dependency on Task 10.",
+      "fix": "Add Task 10 to Task 7's depends_on. The test utility ConcurrencyTestUtils must exist before BotConnectRaceIT can compile. Alternatively, document that BotConnectRaceIT is part of the atomic Wave 2 commit and all Wave 2 tasks land simultaneously, making the depends_on annotation informational only."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 8,
+      "issue": "Task 8 step 5 says 'Switch to MongoTemplate and the new MockMvc-based AbstractIntegrationTest (per Task 10)'. TelegramSenderIT.java currently imports ReactiveMongoTemplate (line 21) and uses it as @Autowired field at line 74. Task 8 instructs switching to MongoTemplate. However, Task 8's depends_on is [1, 2] and does NOT explicitly declare Task 10 as a dependency — yet TelegramSenderIT extends AbstractIntegrationTest, which Task 10 rewrites. Without Task 10 landing in the same commit, TelegramSenderIT will not compile. This is consistent with Wave 2 atomicity, but Task 8's depends_on header is incomplete.",
+      "fix": "Same resolution as Task 7: either add Task 10 to depends_on, or add an explicit note that all Wave 2 tasks (3-10) form one commit and the depends_on field tracks logical pre-conditions only, not compile-time ordering within the wave."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 8,
+      "issue": "Task 8 step 5 says TelegramSenderIT 'imports ReactiveMongoTemplate + SecurityMockServerConfigurers.csrf'. The ReactiveMongoTemplate import is confirmed correct (line 21). However, the CSRF import is 'org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers' (line 35, static import of csrf). The task correctly identifies this as the reactive CSRF import to replace. The task says the two @Disabled scenarios 'depend on Task 5's BotService rewrite' and instructs updating the comment to 'Task 7'. The current file comments and @Disabled annotations ALL say 'Task 5' (lines 38, 39, 160, 163, 169, 172). In the actual task decomposition, BotService rewrite is Task 7, not Task 5. The task description correctly identifies this mismatch. However, the instruction to re-enable the @Disabled tests says 'leave @Disabled annotations on those two scenarios with an updated comment (re-enabled by Task 7 BotService rewrite)' — this is correct.",
+      "fix": "No code change needed in Task 8 spec itself — this is correctly handled. The implementer must update the @Disabled comments from 'Task 5' to 'Task 7' but leave the tests disabled (they should be enabled by Task 7, not Task 8)."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 step 12 (BotConnectRaceIT) says 'CSRF handling: preferred path is to pre-fetch the XSRF-TOKEN cookie via a GET, then echo it back as the X-XSRF-TOKEN header on the parallel POSTs'. However, the race test calls TWO concurrent POSTs via ConcurrencyTestUtils.parallelInvoke(2, ...). If both threads pre-fetch cookies from the same GET request sequentially before the latch release, the token is shared — that is fine. But the hint does not specify whether each thread should do its own GET (doubling setup requests) or share one pre-fetched token. The existing BotControllerIT race tests use Mono.zip(r1, r2) — a different concurrency model — and those use WebTestClient's built-in csrf() mutator. The TestRestTemplate approach requires stateful cookie management. The hint is directionally correct but underspecified for an implementer.",
+      "fix": "Clarify in the Implementation Hints section: share ONE pre-fetched XSRF-TOKEN (fetched once before the CountDownLatch barrier) between both parallel requests. Both threads use the same token value — this matches browser behavior (tokens are session-scoped, not request-scoped)."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 step 5 (TelegramWebhookP99IT edge case) says 'If AbstractIntegrationTest is rewritten with webEnvironment = MOCK + @AutoConfigureMockMvc, the P99 IT cannot inherit it'. Task 10 IS specified to rewrite AbstractIntegrationTest with @AutoConfigureMockMvc (webEnvironment = MOCK). The current AbstractIntegrationTest uses RANDOM_PORT. Task 9 correctly identifies the conflict. The edge cases section says 'two options: (a) duplicate Testcontainers + DynamicPropertySource in TelegramWebhookP99IT; (b) create a parallel AbstractRandomPortIntegrationTest'. The task says 'Option (a) is simpler'. However, the implementer must know that AbstractIntegrationTest after Task 10 will have MOCK webEnvironment, so TelegramWebhookP99IT CANNOT extend AbstractIntegrationTest. The edge case section calls this out, but the Acceptance Criteria item says 'TelegramWebhookP99IT exists as a new file with @SpringBootTest(webEnvironment = RANDOM_PORT) + TestRestTemplate + @Tag(slow)' WITHOUT specifying the inheritance strategy. An implementer reading only the AC might attempt to extend AbstractIntegrationTest and fail at compile time.",
+      "fix": "Add to the Acceptance Criteria: 'TelegramWebhookP99IT does NOT extend AbstractIntegrationTest (which uses MOCK webEnvironment after Task 10); instead it directly declares its own @SpringBootTest(webEnvironment = RANDOM_PORT) with duplicated Testcontainers + DynamicPropertySource setup OR extends a new AbstractRandomPortIntegrationTest base class.'"
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 7,
+      "issue": "Task 7 TDD Anchor for 'ProjectControllerIT.java::list_returnsArrayOfProjects' says 'GET /api/v1/projects returns 200 + JSON array (NOT streaming application/x-ndjson or chunked response — D6 collapses streaming to materialised list)'. The existing test is in a 811-LOC file and this specific assertion already exists in some form (D6 collapse is real). However, there is no TDD anchor for the anti-enumeration 4-way collapse on 'requireOwned_throwsNotFound_whenIdMalformed' in ProjectControllerIT (controller-level test). The TDD Anchor does list ProjectServiceTest coverage for this. The integration-test coverage of malformed ObjectId → 404 is important for the security property but is omitted from the TDD Anchor list. It IS mentioned in Step 9 ('Repository assertions... Preserve every existing scenario including... anti-enumeration cases') but not as a named TDD Anchor test.",
+      "fix": "Add a TDD anchor: 'backend/src/test/java/com/botfunnel/project/ProjectControllerIT.java::get_malformedObjectId_returns404NotFound' (or the existing test name) to make the anti-enumeration property explicitly covered in the red-phase."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 9,
+      "issue": "Task 9 implementation hints section (step 4 in Implementation Hints) provides a detailed 'imperative controller body skeleton' described as 'NOT pseudocode — illustrative shape' but then describes the exact control flow: 'lookup with optional chain → bot/project absence handling → secret verify branch → update_id null branch → save with try/catch → enqueue with try/catch → outer try/finally for Timer.Sample.stop'. This is more a step-by-step algorithm skeleton than a pattern reference. Combined with Step 3 in 'What to do' which includes the exact body structure with specific Java expressions ('Timer.Sample sample = Timer.start(meterRegistry); try { ... } finally { sample.stop(durationTimer); }'), the hints prescribe the full solution rather than pointing to patterns.",
+      "fix": "Replace the skeleton body in Implementation Hints with a reference to the existing pattern: 'Follow the early-return guard pattern used in AuthService (servlet-stack version in Task 6) for the lookup chain. The Timer.Sample pattern is the standard Micrometer idiom — see MeterRegistry usage in existing WebhookPayloadSizeFilter @PostConstruct.' Remove the Java expression fragments from the hints."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 step 3 references 'botRepository.findByProjectIdAndStatus(...)' returning Optional<Bot> (post-Task-4 flip). The task also says 'catch IllegalArgumentException from malformed ObjectId → treat as empty'. The current TelegramWebhookController uses '.onErrorResume(IllegalArgumentException.class, ex -> Mono.empty())'. In the synchronous version, the try/catch must wrap the repository call. However, BotRepository.findByProjectIdAndStatus after Task 4 flip will return Optional<Bot>. Spring Data MongoDB throws IllegalArgumentException for malformed ObjectId during the query (before the Optional is returned). Task 9 step 3's snippet 'bot lookup via botRepository.findByProjectIdAndStatus(...) returning Optional<Bot> (catch IllegalArgumentException from malformed ObjectId → treat as empty)' is correct. But the task also says 'project lookup via projectRepository.findById(projectId) returning Optional<Project> (filter deletedAt == null)' — this is also subject to IllegalArgumentException on bad ObjectId. The task explicitly covers catching IllegalArgumentException from bot lookup but only implicitly covers it for project lookup. The AC mentions 'IllegalArgumentException collapse path' for the controller, which is sufficient, but the What to do step only mentions bot lookup's catch explicitly.",
+      "fix": "In Step 3 'What to do', add explicit wording: 'Both the bot lookup AND the project lookup must be wrapped in try/catch(IllegalArgumentException) → treat as empty/missing, so malformed ObjectId on either key collapses to the same 404 path.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 Details section says 'ProjectService.java — 218 LOC'. Actual file is 218 lines (verified). Consistent. BotService.java described as '329 LOC' — actual is 329 lines. Consistent. BotController.java described as '105 LOC' — actual is 105 lines. Consistent. ProfileService.java described as '216 LOC' — actual is 216 lines. Consistent. ProfileController.java described as '99 LOC' — actual is 99 lines. Consistent. ProjectController.java described as '149 LOC' — actual is 149 lines. Consistent. ProjectControllerIT described as '~880 LOC' — actual is 811 lines. This is a ~8% overcount. BotServiceTest described as '~830 LOC, ~25 tests' — actual is 775 lines. ProfileServiceTest described as '~280 LOC, ~10 tests' — actual is 256 lines. BotControllerIT described as '~1100 LOC, ~30 tests' — actual is 1046 lines. These overestimates are minor and do not affect feasibility.",
+      "fix": "Update the Details section LOC estimates to match actual file sizes for accuracy: ProjectControllerIT = 811, BotServiceTest = 775, BotControllerIT = 1046, ProfileServiceTest = 256. Minor documentation accuracy improvement."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 Details section says 'BotControllerIT — ~1100 LOC, ~30 tests. Currently includes two race tests (lines 509-580).' Actual race test start lines: 511 (first), 550 (second). Line range 509-580 is approximately correct (+/- 2 lines). The race test methods currently use Mono.zip(r1, r2, (a, b) -> List.of(a, b)).block() for concurrency, NOT Flux.range.parallel. Task 7 correctly identifies these as requiring the ConcurrencyTestUtils.parallelInvoke approach in the new BotConnectRaceIT.",
+      "fix": "Minor: Update line number references from '509-546' / '548-580' to '511-545' / '550-581' for precision."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 Details section file size descriptions: TelegramWebhookControllerIT '23.6 KB' (actual 24127 bytes = ~23.6 KB, correct), WebhookPayloadSizeFilterTest '8.4 KB' (actual 8610 bytes = ~8.4 KB, correct), ProcessTelegramUpdateJobTest '28.6 KB' (actual 29254 bytes = ~28.6 KB, correct), RawUpdateRepositoryTest '4.8 KB' (actual 4951 bytes = ~4.8 KB, correct), WebhookSecurityBlockTest '5.1 KB' (actual 5267 bytes = ~5.1 KB, correct). All byte counts match within normal rounding. LOC counts: TelegramWebhookControllerIT described as consistent with the P99 test at 'L334-369' — actual P99 test starts at line 337 (@Tag) / 338 (method), ends around line 369. The 'L334-369' range from the task is approximately correct.",
+      "fix": "No change needed. All file sizes confirmed correct."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 9,
+      "issue": "Task 9 TDD Anchor for WebhookPayloadSizeFilterTest says 'scrubbedLog_onReject — per-call-site ListAppender<ILoggingEvent> filtered by Logger=WebhookPayloadSizeFilter + Level=WARN; assert log line contains scrubbed projectId (not raw token-shaped string)'. The current WebhookPayloadSizeFilter.java passes projectId through TelegramApiClient.scrubTokens() before logging — the scrubber is designed for Telegram bot tokens, not arbitrary projectId strings. A projectId is a MongoDB ObjectId hex string (24 hex chars), which will NOT match the TOKEN_PATTERN regex (requires digits:alphanum, minimum 30 chars after colon). So the log assertion about 'not raw token-shaped string' is vacuously satisfied. The meaningful assertion should be that the scrubbed transfer-encoding header value does not contain a token shape — which is the actual security invariant. The TDD anchor description conflates two different log fields.",
+      "fix": "Clarify the TDD anchor: 'Assert that Transfer-Encoding header value in the log line is scrubbed (via scrubTokens) if it happens to contain a token-shaped substring. For projectId, the assertion is that the log fires at WARN level with the expected Logger name.' The security assertion about raw tokens specifically applies to the Transfer-Encoding header log field, not projectId."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 step 6 'Drop .block() from ProjectHardDeleteJob' says 'template.remove(query, EVENTS_COLLECTION).block() → direct call (null-check still applies because servlet variant returns the result)'. The current code at lines 82-86 already does: 'DeleteResult eventsDelete = template.remove(...).block(); long eventsRemovedCount = eventsDelete == null ? 0L : eventsDelete.getDeletedCount();'. With MongoTemplate (sync), template.remove() returns DeleteResult directly (never null in normal operation — the servlet variant always returns a non-null DeleteResult). The null check in the current code exists because .block() on a Mono<DeleteResult> could theoretically return null if the Mono completed empty. After the flip to MongoTemplate, the null check is overly defensive but harmless to keep.",
+      "fix": "Add a note: 'After flipping to MongoTemplate, template.remove() returns DeleteResult (non-null); the null check on eventsDelete can be kept as defensive code or removed — both are correct.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 87,
+    "issues_found": 14,
+    "by_severity": {
+      "critical": 3,
+      "major": 5,
+      "minor": 6
+    },
+    "files_verified": [
+      "backend/src/main/java/com/botfunnel/project/ProjectService.java",
+      "backend/src/main/java/com/botfunnel/project/ProjectController.java",
+      "backend/src/main/java/com/botfunnel/bot/BotService.java",
+      "backend/src/main/java/com/botfunnel/bot/BotController.java",
+      "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "backend/src/main/java/com/botfunnel/profile/ProfileController.java",
+      "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java",
+      "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "backend/src/main/java/com/botfunnel/jobs/HardDeleteJob.java",
+      "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "backend/src/main/java/com/botfunnel/admin/SuperAdminSeeder.java",
+      "backend/src/main/java/com/botfunnel/subscriber/SubscriberService.java",
+      "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerService.java",
+      "backend/src/main/java/com/botfunnel/events/EventService.java",
+      "backend/src/main/java/com/botfunnel/project/ProjectRepository.java",
+      "backend/src/main/java/com/botfunnel/bot/BotRepository.java",
+      "backend/src/main/java/com/botfunnel/webhook/RawUpdateRepository.java",
+      "backend/src/main/java/com/botfunnel/user/UserRepository.java",
+      "backend/src/test/java/com/botfunnel/project/ProjectServiceTest.java",
+      "backend/src/test/java/com/botfunnel/project/ProjectControllerSliceTest.java",
+      "backend/src/test/java/com/botfunnel/project/ProjectControllerIT.java",
+      "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java",
+      "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java",
+      "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java",
+      "backend/src/test/java/com/botfunnel/profile/ProfileServiceTest.java",
+      "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+      "backend/src/test/java/com/botfunnel/profile/WithMockAppUserSecurityContextFactory.java",
+      "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "backend/src/test/java/com/botfunnel/webhook/WebhookPayloadSizeFilterTest.java",
+      "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java",
+      "backend/src/test/java/com/botfunnel/webhook/RawUpdateRepositoryTest.java",
+      "backend/src/test/java/com/botfunnel/webhook/WebhookSecurityBlockTest.java",
+      "backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java"
+    ],
+    "new_files_referenced_not_yet_created": [
+      "backend/src/test/java/com/botfunnel/bot/BotConnectRaceIT.java",
+      "backend/src/test/java/com/botfunnel/common/test/ConcurrencyTestUtils.java",
+      "backend/src/main/java/com/botfunnel/common/HttpRequestUtils.java",
+      "backend/src/main/java/com/botfunnel/common/SessionAttributes.java",
+      "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookP99IT.java"
+    ]
+  }
+}

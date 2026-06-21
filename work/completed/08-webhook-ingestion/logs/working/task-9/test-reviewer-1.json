@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "summary": "ProcessTelegramUpdateJobTest is a thorough Spring Boot integration test that mirrors the HardDeleteJobTest direct-invocation precedent. All 15 TDD-anchor methods exist, AC6-AC12 + AC14 + re-entry guard are covered, all three correctness mechanisms (re-entry guard, atomic ownerChatId CAS, failure scrub+truncate+rethrow) are asserted at the litmus-test level, and `./gradlew test --tests com.botfunnel.webhook.ProcessTelegramUpdateJobTest` exits 0 (BUILD SUCCESSFUL). Mockito.reset in @BeforeEach and meter-registry deltas correctly defend against cross-test state. Minor gaps in AC7 (multi-word `/start ref_a b c` variant) and two tech-spec edge cases (bot==null on private /start, text==null media-only message) are documented in the implementation but not exercised by tests.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java (between line 184 and 188)",
+      "issue": "AC7 explicitly enumerates a multi-word payload case: `/start ref_a b c` → `startPayload=\"ref_a b c\"` (everything after the first whitespace, trimmed). This variant is not in the TDD anchor list but IS in the user-spec AC7. Without an explicit assertion, a regression in `TelegramCommandParser.parse` that drops trailing words (e.g. `String.split(\" \")[1]` instead of `substring(idx+1).trim()`) would not be caught here. The `startWithBotSuffix_payloadExtracted` test only covers single-word payload after the bot suffix.",
+      "recommendation": "Add one @Test `startPrivateMultiWordPayload_preservesWhitespace`: seed `/start ref_a b c` via `privateStartPayload(100L, 100L, \"/start ref_a b c\")`, invoke `job.handle(raw.getId())`, assert `onlyEvent().getMetadata()` containsEntry(\"startPayload\", \"ref_a b c\") and verify `funnelTriggerService.fire(any(), any(), eq(\"on_start\"), eq(\"ref_a b c\"))` called once. Reuses existing helpers, ~6 lines."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java (AC11/edge cases section)",
+      "issue": "Two tech-spec-documented edge cases (task 9 Details → Edge cases) are unguarded: (a) `bot == null` on private /start (concurrent disconnect race) — implementation logs `telegram_update_other` with `updateKind=\"unknown\"`; (b) media-only message (text == null) — implementation classifies as `updateKind=\"message\"`. A regression that throws NPE on either branch would slip through. The branches are exercised in production paths (channel posts, sticker messages) so they earn their tests.",
+      "recommendation": "Add two @Tests: (1) `privateStart_botNotConnected_logsUpdateOtherUnknown` — delete the seeded bot before invocation (`botRepository.deleteAll().block()`), seed `/start ref_X`, assert event has `updateKind=\"unknown\"`, eventType `telegram_update_other`, no stub calls, no NPE. (2) `mediaOnlyMessage_textNull_updateKindMessage` — build payload with `message.text == null` (omit the `text` field on the Document), assert event has `updateKind=\"message\"`, eventType `telegram_update_other`, no stub calls."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java:88-105 (reentryGuard_doneStatus_noOp)",
+      "issue": "The re-entry guard test asserts all three idempotency side-effects (no event, no stub, no counter delta) but does NOT assert that `rawUpdate.processingStatus` is STILL DONE after invocation. If a future change accidentally re-flips the status to PENDING-then-DONE again the test would not catch it. The check is cheap and closes the contract `re-entry returns immediately, leaves row untouched`.",
+      "recommendation": "After `assertThat(failureCount()).isEqualTo(beforeFailure);`, add `RawUpdate reloaded = rawUpdateRepository.findById(raw.getId()).block(); assertThat(reloaded.getProcessingStatus()).isEqualTo(RawUpdateStatus.DONE);` and `assertThat(reloaded.getProcessingError()).isNull();` to lock the row's immutability under re-entry."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 20,
+      "passed": 20,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 20,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

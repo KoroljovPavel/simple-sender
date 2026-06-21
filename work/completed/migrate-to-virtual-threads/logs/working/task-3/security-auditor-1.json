@@ -1,0 +1,7 @@
+{
+  "task": 3,
+  "round": 1,
+  "summary": "Reviewed Wave 2 atomic flip starting point (build/properties/security shell/error handler). All 9 audit-focus invariants verified: CSRF cookie+handler pairing preserves the raw round-trip; AndRequestMatcher AND-scoping keeps CSRF active on /api/** mutating verbs while excluding only the single-segment /webhooks/telegram/{projectId} path; authz rule order places the webhook permit before /api/**; CORS keeps wildcard-free origin from ${app.url} with allowCredentials=true and X-XSRF-TOKEN allowed; BCrypt strength 12 unchanged; RememberMeCookieSerializer pipes server.servlet.session.cookie.* through PropertyMapper without logging session id / cookie value / SecurityContext; CsrfCookieMaterializer ordered after CsrfFilter and only reads (does not log or leak) the token; session-fixation surface untouched (owned by Task 6); webhook path stays unauthenticated and CSRF-excluded for the secret-header gate owned by Task 9. No new hardcoded secrets introduced — pre-existing test defaults in application.properties / application-test.properties were not changed by this task. No findings.",
+  "findings": [],
+  "verdict": "approved"
+}

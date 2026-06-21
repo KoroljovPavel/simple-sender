@@ -1,0 +1,130 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 3,
+      "issue": "Task 3 and the tech-spec architecture section state the new SecurityConfig should use 'XorCsrfTokenRequestAttributeHandler to preserve BREACH mitigation from the current XorServerCsrfTokenRequestAttributeHandler'. The actual current SecurityConfig explicitly does NOT use the Xor variant — it uses 'ServerCsrfTokenRequestAttributeHandler' and the code comment explicitly documents WHY: 'XorServerCsrfTokenRequestAttributeHandler would BREACH-mask only the form-attribute and break the cookie/header round-trip'. So the current code deliberately rejects the Xor handler. If Task 3 implements 'XorCsrfTokenRequestAttributeHandler' it will change CSRF validation semantics (from raw-token comparison to XOR-masked comparison), which would break SPA X-XSRF-TOKEN header validation — a security regression, not a preservation.",
+      "fix": "Task 3 description and implementation hints must specify 'new CsrfTokenRequestAttributeHandler()' (the servlet equivalent of the current 'ServerCsrfTokenRequestAttributeHandler'), NOT 'XorCsrfTokenRequestAttributeHandler'. The tech-spec architecture section for SecurityConfig must also be corrected to remove the false claim about 'XorServerCsrfTokenRequestAttributeHandler' being the current handler. The task should state: preserve the raw-token attribute handler pattern (no BREACH masking) because CookieCsrfTokenRepository writes the raw token to the cookie, and the SPA echoes it back via X-XSRF-TOKEN — XOR masking would break this round-trip."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 1,
+      "issue": "Task 1 Details section claims 'RememberMeWebSessionIdResolver.java' has 'Javadoc-{@link #REMEMBER_ME_ATTR} on line 22'. The actual file at line 22 reads: 'for static flags and the {@link #REMEMBER_ME_ATTR} exchange attribute for Max-Age.' — this is correct, the Javadoc reference IS on line 22. However the task instruction says to replace it with '{@link com.botfunnel.common.SessionAttributes#REMEMBER_ME_ATTR}' in the Javadoc. The actual Javadoc reference at line 22 is inside a general sentence fragment and is embedded in the class-level Javadoc block that starts at line 16. The text at line 22 is the correct target. This is not a false claim but the task description should clarify it is within the class Javadoc block starting at line 15-33, not a standalone line.",
+      "fix": "Minor clarification only — the reference exists and is at the correct line. No fix required for the Javadoc content claim. Downgrade to minor or dismiss."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 1,
+      "issue": "Task 1 states: 'У 4 місцях замінити RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR на SessionAttributes.REMEMBER_ME_ATTR (lines ~341, ~380, ~514-комент, ~526)'. Actual grep of AuthServiceTest.java shows REMEMBER_ME_ATTR references at lines 341, 380, 514 (comment only), 526 — a total of 3 actual references (line 514 is a code comment, NOT a code reference that needs changing). The task says '4 місцях' but line 514 is explicitly marked as a comment in the grep output. This distinction matters because the task also says 'Тест-коментарі, що згадують REMEMBER_ME_ATTR, лишити недоторканими' — so it already correctly says to leave comments alone. However, also from the grep: the import at line 8 is 'import com.botfunnel.security.RememberMeWebSessionIdResolver' and at line 133 there is another comment reference. Only lines 341, 380, 526 need actual code changes (3 sites, not 4). This is a minor count discrepancy but the task itself already handles it correctly by saying to leave comments alone.",
+      "fix": "Downgrade to minor — the task correctly handles this by telling the agent to leave comments alone. Update '4 місцях' to '3 коді-місцях' for accuracy to avoid confusion."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 2,
+      "issue": "Task 2 TDD Anchor says 'Tests below already exist as StepVerifier-based versions; rewrite them BEFORE flipping the interfaces (so they fail to compile against the still-Mono<Void> shape)'. But this TDD ordering is incorrect: if tests are rewritten to use 'assertThatCode(() -> service.<method>(...)).doesNotThrowAnyException()' BEFORE the interfaces are flipped, the test code that calls 'service.<method>(...)' on a void-method signature will compile fine against the Mono<Void> interface too — it just discards the return value. Void-returning call sites compile against Mono<Void>-returning methods without error. So the 'tests will fail to compile' red-phase claim is false. The actual TDD anchor only provides behavioral assurance after the flip, not a compile-time red phase.",
+      "fix": "Remove the false compile-error claim from the TDD Anchor description. Restate: 'Rewrite tests to use assertThatCode() before flipping the interfaces. Tests continue to compile against Mono<Void> shape (discarding the return value is legal), then pass after the flip when return type becomes void.' The behavioral verification step (tests pass on void interface) is still valid."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 edge cases say 'Mockito stubbing of SubscriberService / FunnelTriggerService in other test files (look for when(subscriberService.upsertFromTelegramUpdate(...)).thenReturn(Mono.empty()) in backend/src/test/java/com/botfunnel/webhook/)'. However, actual inspection of ProcessTelegramUpdateJobTest.java and TelegramWebhookControllerIT.java shows these tests use '@MockitoSpyBean' on the real NoOp implementations — they do NOT use 'when(...).thenReturn(Mono.empty())'. TelegramWebhookControllerIT line 401 uses 'Mockito.doThrow(...).when(subscriberService).upsertFromTelegramUpdate(...)' — a void-compatible stub pattern that works correctly with both Mono<Void> and void return types. So the Mockito 'MissingMethodInvocationException' risk the task warns about does NOT actually apply here because there are no thenReturn(Mono.empty()) stubs to break. This means the edge case is a false alarm. There is NO extra Mockito stubbing update required in these test files.",
+      "fix": "Update the edge case note to reflect the actual pattern: tests use @MockitoSpyBean which lets the real NoOp implementation run, plus doThrow() stubs in one test. No thenReturn(Mono.empty()) stubs exist in the webhook test files. The only files that need changes are the 7 listed in the Files section."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 Details section for GlobalErrorHandler says 'Pull BindingResult via ex.getBindingResult()'. However the actual current GlobalErrorHandler at lines 28-31 calls 'ex.getFieldErrors()' and 'ex.getGlobalErrors()' directly on the exception (NOT via getBindingResult()). While MethodArgumentNotValidException extends BindException which has both patterns, the task description introduces a divergence from the existing code style — the actual code never calls getBindingResult(). The task should say 'call ex.getFieldErrors() and ex.getGlobalErrors() directly on the exception, matching the current WebExchangeBindException call pattern byte-for-byte' to ensure the implementation hint does not accidentally introduce an unnecessary getBindingResult() indirection.",
+      "fix": "Change the implementation hint from 'Pull BindingResult via ex.getBindingResult() and reuse the same getFieldErrors() + getGlobalErrors() extraction' to 'Call ex.getFieldErrors() and ex.getGlobalErrors() directly on the exception object, identical to the current WebExchangeBindException handler — MethodArgumentNotValidException has both methods directly (it extends BindException)'."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 3,
+      "issue": "Task 3 TDD Anchor lists 'SecurityConfigTest::cookieSerializer_isRememberMeCookieSerializer_notDefault' and 'SecurityConfigTest::csrfProtection_excludesWebhookPath_keepsApiPathProtected' as tests 'written before the rewrite' that 'become runnable at the Wave 2 commit boundary'. However the actual SecurityConfigTest.java currently contains only 2 existing tests (unauthenticated_protectedEndpoint_returns401, authEndpoints_permitWithoutAuthentication) and uses WebTestClient on @SpringBootTest(RANDOM_PORT). After the atomic flip the base class changes and MockMvc replaces WebTestClient. Task 3 needs to write NEW test methods that will not compile until Wave 2 lands — that is by design. But the task does not mention that the EXISTING 2 tests in SecurityConfigTest.java also need to be migrated from WebTestClient to MockMvc as part of this sub-task or Task 10. This is an undocumented dependency: Task 3 writes new test methods while the old ones remain WebTestClient-based, which would fail after the flip.",
+      "fix": "Task 3 TDD Anchor or Acceptance Criteria should explicitly note that the existing SecurityConfigTest.java contains 2 WebTestClient-based tests that must also be migrated (either in Task 3 or explicitly assigned to Task 10's 'mock-triple sites' scope). Add to files_to_modify or add a cross-task note: 'SecurityConfigTest existing tests migrate to MockMvc as part of Task 10 mock-triple update; Task 3 only adds new test methods that remain stub-only until Wave 2 lands'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 Details section says 'ProcessTelegramUpdateJob.java — 308 LOC'. Actual wc -l shows 307 lines. The block call site lines cited (L189-195, L235-241, L242, L253, L254) are verified as correct against the actual file — the discrepancy is in the total LOC claim only.",
+      "fix": "Update LOC claim from 308 to 307. No functional impact."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 Details claims RememberMeWebSessionIdResolverTest.java has '7 reference на RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR' at 'lines 44, 61, 93, 97, 114, 130, 226'. Actual grep confirms exactly 7 references, at exactly those line numbers (44, 61, 93, 97, 114, 130, 226). This is correct. No issue — recording as verified.",
+      "fix": "No fix needed — claim verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 Details claims SecurityConfig.java is '130 LOC'. Actual file is 129 lines. This is a trivial off-by-one that does not affect any line-referenced instruction in the task.",
+      "fix": "Update LOC claim from 130 to 129. No functional impact."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 Details claims application.properties is '46 LOC'. Actual file is 45 lines. Off-by-one with no functional impact.",
+      "fix": "Update LOC claim from 46 to 45. No functional impact."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 says 'application-test.properties: current file has none [server.reactive.session.cookie.* keys]' and is a 'no-op audit (verified at decomposition time)'. This is confirmed correct — the actual application-test.properties contains no such keys. Recording as verified.",
+      "fix": "No fix needed — claim verified correct."
+    }
+  ],
+  "verified_correct": [
+    "Task 1: RememberMeWebSessionIdResolver.java REMEMBER_ME_ATTR at line 41 — CORRECT",
+    "Task 1: RememberMeWebSessionIdResolver.java usage at line 87 (exchange.getAttribute(REMEMBER_ME_ATTR)) — CORRECT",
+    "Task 1: Javadoc {@link #REMEMBER_ME_ATTR} reference is in the class Javadoc (line 22 area) — CORRECT",
+    "Task 1: AuthService.java imports RememberMeWebSessionIdResolver at line 12 — CORRECT",
+    "Task 1: AuthService.java uses RememberMeWebSessionIdResolver.REMEMBER_ME_ATTR at line 605 — CORRECT",
+    "Task 1: AuthServiceTest.java has REMEMBER_ME_ATTR references at lines 341, 380, 526 (code) + 514 (comment) — CORRECT",
+    "Task 1: RememberMeWebSessionIdResolverTest.java has exactly 7 REMEMBER_ME_ATTR references at lines 44, 61, 93, 97, 114, 130, 226 — CORRECT",
+    "Task 1: common/package-info.java already exists — CORRECT (no need to create)",
+    "Task 1: SecurityConfig line 51 has REMEMBER_ME_ATTR comment — CORRECT",
+    "Task 1: SubscriberService and FunnelTriggerService return Mono<Void> currently — CORRECT",
+    "Task 2: NoOpSubscriberServiceTest.java uses StepVerifier + Duration imports — CORRECT",
+    "Task 2: NoOpFunnelTriggerServiceTest.java uses StepVerifier + Duration imports — CORRECT",
+    "Task 2: NoOpSubscriberServiceTest.java has exactly 3 tests (returnsMonoEmpty x2, acceptsNullOptionalFields) — CORRECT",
+    "Task 2: NoOpFunnelTriggerServiceTest.java has exactly 4 tests (fire_returnsMonoEmpty, cancelActiveFor_returnsMonoEmpty, fire_acceptsNullPayload, fire_acceptsEmptyPayload) — CORRECT",
+    "Task 2: ProcessTelegramUpdateJob stub-service .block() call sites at lines 195, 241, 242, 253, 254 — CORRECT (5 sites as task notes)",
+    "Task 2: ProcessTelegramUpdateJob is 307 LOC — correct (task says 308, minor off-by-one)",
+    "Task 2: AssertJ already on classpath via spring-boot-starter-test — CORRECT",
+    "Task 3: build.gradle starter-webflux at line 26, data-mongodb-reactive at line 22, data-redis-reactive at line 24, reactor-test at line 34 — ALL CORRECT",
+    "Task 3: application.properties server.reactive.session.cookie.* keys at lines 14, 15, 16 — CORRECT",
+    "Task 3: SecurityConfig @EnableWebFluxSecurity at line 32 — CORRECT",
+    "Task 3: SecurityConfig springSecurityFilterChain at line 56 — CORRECT",
+    "Task 3: GlobalErrorHandler @ExceptionHandler(WebExchangeBindException.class) at line 26 — CORRECT",
+    "Task 3: GlobalErrorHandler is 49 LOC — CORRECT",
+    "Task 3: RememberMeWebSessionIdResolver.java is 97 LOC — CORRECT",
+    "Task 3: RememberMeWebSessionIdResolver.java DELETE is correct — no callers remain after Task 1 moves REMEMBER_ME_ATTR — CORRECT",
+    "Task 3: common/SessionAttributes.java is listed as files_to_read (created by Task 1, depends_on [1,2]) — CORRECT",
+    "Task 3: depends_on [1, 2] — CORRECT (Task 1 creates SessionAttributes, Task 2 removes stub Mono dependencies)",
+    "Task 2: ProcessTelegramUpdateJobTest uses @MockitoSpyBean not thenReturn(Mono.empty()) — consistent with task's 'verify interactions, not return values' claim"
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 11,
+    "critical": 1,
+    "major": 6,
+    "minor": 4
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "status": "passed",
+  "round": 2,
+  "summary": "Round-1 major (untested isEmptyRow branch) and minor (no keyboard-specific 4096-trim/PII test) are both genuinely closed by meaningful litmus tests. No new test-quality issues. Suite green.",
+  "findings": [],
+  "round1_verification": [
+    {
+      "round1_severity": "major",
+      "item": "Untested isEmptyRow defensive branch (row with empty/null buttons)",
+      "closed": true,
+      "test": "FunnelStepExecutorTest::setKeyboard_rowWithNoButtons_failsTerminally",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java:670",
+      "litmusTestPassed": true,
+      "rationale": "Input rows = [row(\"A\"), row()] where the second row has an empty (non-null) buttons list — non-null, non-empty list, so the rows==null/isEmpty() conditions do NOT fire; only the rows.stream().anyMatch(isEmptyRow) branch catches it. Removing that anyMatch clause from the guard makes execution proceed to buildReplyKeyboardMarkup + send → CONTINUE instead of FAIL, so the test fails. Asserts FAIL + reasonCode 'empty_keyboard_rows' + sendText never(). Exercises exactly the buttons().isEmpty() sub-branch of isEmptyRow. The row() no-arg helper produces a KeyboardRow with an empty (not null) buttons list, which is the realistic malformed-snapshot shape."
+    },
+    {
+      "round1_severity": "minor",
+      "item": "No keyboard-specific 4096-trim / PII test",
+      "closed": true,
+      "test": "FunnelStepExecutorTest::setKeyboard_trimsTextOver4096AndWarns_pii",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java:683",
+      "litmusTestPassed": true,
+      "rationale": "Input keyboardText = 5000 chars. Asserts CONTINUE (over-length is not a failure), captured text hasSize(MAX_MESSAGE_LENGTH) (fails if trimming/cap not applied via renderTrimmed → text stays 5000), WARN contains LOG_TEXT_TRIMMED (fails if no trim WARN emitted), and noneMatch('aaaa') confirms no rendered payload leaks into the log (PII guard). Mirrors the established message_trimsTextOver4096AndWarns idiom (line 159) adapted to the keyboard send path — verifies the renderTrimmed wiring on the new code path, not the renderer in isolation."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 2,
+      "passed": 2,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 2,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

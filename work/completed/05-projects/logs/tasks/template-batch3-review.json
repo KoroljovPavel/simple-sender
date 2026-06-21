@@ -1,0 +1,91 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 11,
+      "section": "Required Skills",
+      "issue": "Skill link uses bare project-root path `.claude/skills/code-reviewing/SKILL.md` instead of the file-relative `../../../.claude/skills/code-reviewing/SKILL.md` form used elsewhere (see Context Files block in the same task and the consistent form used in Task 12 / Task 14). Following the link from inside the task file (`work/05-projects/tasks/11.md`) will not resolve to the SKILL.md.",
+      "fix": "Replace `[skills/code-reviewing/SKILL.md](.claude/skills/code-reviewing/SKILL.md)` with `[skills/code-reviewing/SKILL.md](../../../.claude/skills/code-reviewing/SKILL.md)` to mirror the relative-path convention used by sibling tasks 12 and 14."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 13,
+      "section": "Required Skills",
+      "issue": "Skill link uses bare project-root path `.claude/skills/test-master/SKILL.md` instead of the file-relative `../../../.claude/skills/test-master/SKILL.md` form used in Context Files of the same task and in Tasks 12 / 14. Same inconsistency as Task 11.",
+      "fix": "Replace `[skills/test-master/SKILL.md](.claude/skills/test-master/SKILL.md)` with `[skills/test-master/SKILL.md](../../../.claude/skills/test-master/SKILL.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 13,
+      "section": "Verification Steps",
+      "issue": "Typo `chist-list` in `Verification Steps → Automated` (`Audit задача — самопроверка через chist-list ниже`). Should be `check-list` / `чек-лист`.",
+      "fix": "Replace `chist-list` with `чек-лист` (or `check-list`) in Verification Steps Automated subsection."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 13,
+      "section": "Reviewers",
+      "issue": "Typo `реверьеров` (should be `ревьюеров`) in Reviewers section narrative.",
+      "fix": "Replace `Audit задача — реверьеров нет.` with `Audit задача — ревьюеров нет.`"
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 14,
+      "section": "Acceptance Criteria",
+      "issue": "Tech-spec defines `AC-T1..AC-T12` (12 technical criteria). Task 14 description and AC checklist mostly say `AC-T1..AC-T10` and `AC-T1..AC-T12` interchangeably (Description line says `AC-T1..T12`, the AC checklist says `Tech-spec AC-T1..AC-T12`, but Acceptance Criteria header mentions `tech-spec AC-T1..T12` and `Description` line 20 mentions `AC-T1..T12`). The tech-spec source-of-truth ALSO has `AC-T1..AC-T10` referenced in the tech-spec Task 13 Description (line 530: `tech-spec AC-T1..T10`) — but the actual AC list in tech-spec runs through AC-T12 (lines 409-420). Task 14 is correct (AC-T1..T12); flag is for downstream awareness that Task 13's Description inherits the same misnomer (`tech-spec AC-T1..T10` in Task 13 Description / What-to-do step 2 and AC checklist) — Task 13 will under-cover by skipping AC-T11 (NoSQL safety) and AC-T12 (single localStorage call site) verification.",
+      "fix": "In Task 13 (not Task 14), update Description and What-to-do step 2 + Acceptance Criteria first item to read `AC-T1..AC-T12` instead of `AC-T1..AC-T10`, so the test-audit coverage matrix actually checks all 12 tech-spec criteria. Task 14 already covers AC-T1..T12 correctly."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 13,
+      "section": "Acceptance Criteria",
+      "issue": "Description says `tech-spec AC-T1..AC-T10`. AC-T11 (NoSQL safety) and AC-T12 (single localStorage.setItem call site) are not explicitly named in the Test Audit's coverage matrix scope, so the test-audit may miss verifying that these two technical AC have test coverage (they do require test evidence: AC-T11 → grep + IT inspection; AC-T12 → unit test plus locale-parity test).",
+      "fix": "Update Task 13 Description, What-to-do step 2, and Acceptance Criteria first item to `AC-T1..AC-T12`. Add an explicit row in the AC→test mapping for AC-T11 (Mongo query typed-values evidence in `ProjectControllerIT` / `ProjectHardDeleteJobIT`) and AC-T12 (`tests/i18n` or `tests/stores/projects.spec.ts` evidence that exactly one source file calls `localStorage.setItem`)."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 14,
+      "section": "Verification Steps",
+      "issue": "Task 14 frontmatter declares `verify: []` but the body's Verification Steps section contains `### Smoke` and `### User` subsections with concrete checks. The `verify` frontmatter field gates feature-execution behavior (smoke / user verification triggers) — for a QA task the convention is acceptable (the agent itself runs the smoke + user checks rather than feature-execution scheduling them), but the mismatch is worth noting so feature-execution does not skip Task 14's user verification step on the assumption that `verify: []` means none.",
+      "fix": "Either: (a) keep `verify: []` and add a one-line note at top of `Verification Steps` clarifying that the QA agent itself executes Smoke + User checklists (not feature-execution); or (b) set `verify: [smoke, user]` to align frontmatter with body. Option (a) is preferable given Task 14 IS the verification task — feature-execution should not double-verify it."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 11,
+      "section": "Reviewers",
+      "issue": "Reviewers section uses narrative form `This task has no reviewers — the auditor IS the review.` rather than the template's `- **{name}** → \\`...\\`` list format. Consistent with `reviewers: []` in frontmatter, but does not follow the template's listed structure. Minor stylistic deviation — also present in Tasks 12, 13, 14 (all four audit/QA tasks). Acceptable as a documented pattern for empty-reviewers audit tasks; flagging for awareness so it can be standardised in the template if desired.",
+      "fix": "Optional: add a comment block at the top of the section like `<!-- No reviewers — auditor is the review (Audit / QA wave convention) -->` to make the empty-by-design intent explicit. Or update the template to document this pattern for audit tasks."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Verification Steps",
+      "issue": "`Verification Steps → Automated` lists grep commands with `<feature-base>..HEAD` placeholder in the AC-T7 zero-touch git-log check (`git log --name-only --pretty=format: <feature-base>..HEAD ...`). The placeholder is not resolved — the audit agent must guess the base branch.",
+      "fix": "Replace `<feature-base>` with the actual base ref for this feature (likely `main` per project policy: `git log --name-only --pretty=format: main..HEAD ...`), or note explicitly that the agent should substitute the base branch from the feature's `checkpoint.yml` / git context."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Verification Steps",
+      "issue": "Verification Steps Automated lists `git diff main -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java` — assumes `main` is the base. Same concern as Task 11's `<feature-base>..HEAD`, but here the literal `main` is hard-coded which is correct for this project but worth noting that Task 11 uses placeholder while Task 12 uses literal — inconsistent across the audit wave.",
+      "fix": "Standardise on literal `main` across audit-wave tasks (Tasks 11 + 12 + 13 + 14) for git-diff/log base ref."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 4,
+    "issues_found": 10
+  }
+}

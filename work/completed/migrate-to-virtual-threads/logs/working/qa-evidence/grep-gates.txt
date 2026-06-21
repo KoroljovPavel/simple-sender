@@ -1,0 +1,21 @@
+=== AC3: reactive imports in backend/src ===
+backend/src/test/java/com/botfunnel/HealthEndpointTest.java:12:// and exercised via WebTestClient. After the flip uses MockMvc + Testcontainers (inherited from
+backend/src/test/java/com/botfunnel/SecurityBlockTest.java:9:// and exercised via WebTestClient.bindToApplicationContext. After the flip both patterns are
+backend/src/test/java/com/botfunnel/HealthSecurityTest.java:12:// Testcontainers instead of the prior reactive WebTestClient + slice mocks.
+backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java:74:    // sole HTTP-level test client; the prior reactive WebTestClient autowire is gone because
+backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java:45:// AbstractIntegrationTest) rather than the prior reactive WebTestClient pipeline.
+backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java:367:        // ReactiveMongoSessionRepository. The minimal pre-flip shape per
+
+=== AC3 MAIN only: reactive imports in backend/src/main ===
+
+=== AC4: lombok in build.gradle ===
+exit:1
+
+=== AC5: VT property ===
+4:spring.threads.virtual.enabled=true
+
+=== AC6: reactive starters ===
+exit:1
+
+=== AC14: docs grep ===
+exit:1

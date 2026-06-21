@@ -1,0 +1,27 @@
+{
+  "validator": "task-validator",
+  "batch": [11],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 11,
+      "section": "Acceptance Criteria sources",
+      "issue": "Task contains an extra section '## Acceptance Criteria sources' (lines 97-101) that is not part of the task template. It is positioned between 'Acceptance Criteria' and 'Context Files'. Content is reasonable (points the QA agent at the full user-spec/tech-spec AC lists), but it deviates from the canonical section set/order.",
+      "fix": "Either remove the section and fold its pointer into the Context Files annotations (user-spec.md / tech-spec.md already link the AC sections), or keep it but be aware it is a non-template addition. Low impact."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 11,
+      "section": "Acceptance Criteria",
+      "issue": "The task does not enumerate every individual user-spec acceptance criterion as its own checklist item; instead it bundles the live/interactive user-spec ACs (canvas render-all-nodes, dagre layout/fitView, move-persists, draw-to-connect field mapping, delete auto-clean, optional start node, broken-edge highlight, read-only list, i18n labels) under two DEFERRED-TO-USER umbrella bullets plus a few automated bullets. This is intentional and correct for a no-live-environment QA task, but a reviewer should confirm no automatable user-spec AC was silently dropped into 'deferred' when it is in fact covered by a Vitest component/mapping test (e.g. 'no edge -> null not \"\"', 'palette = exactly existing types', 'note not executed by engine', 'broken-edge highlight renders' are component/unit-testable and the task does cover most of them).",
+      "fix": "Optional: cross-check the deferred-to-user umbrella against the Vitest component-test list in tech-spec Testing Strategy so that AC items already covered by automated component tests (broken-edge highlight render, start-node lifecycle, escaped note text, hideTargetPickers) are marked automated rather than fully deferred. The task already lists most of these as automated, so this is a verification note, not a hard gap."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 1,
+    "issues_found": 2
+  }
+}

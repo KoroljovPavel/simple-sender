@@ -1,0 +1,114 @@
+{
+  "status": "OK",
+  "summary": "Task 7 reactive→servlet flip of project/bot/profile preserves every security invariant from the pre-flip code. Anti-enumeration 4-way 404 collapse, D14 INCR-every-attempt brute-force semantics, REDIS_FAIL_OPEN_WARN / TELEGRAM_DISCONNECT_WARN fail-open paths, token-scrub coverage, plaintext-token scope discipline, session-termination queries, change-pwd brute-force gate, status-gate 401, BotConnectRaceIT CSRF echo + real /api/auth/login, currentUserId() rejection of null/anonymous principals, and mass-assignment defense (@JsonIgnoreProperties on CreateProjectRequest / UpdateProjectRequest / UpdateProfileRequest / ConnectBotRequest) are all carried over intact. No regressions detected.",
+  "findings": [
+    {
+      "severity": "info",
+      "category": "enumeration",
+      "file": "backend/src/main/java/com/botfunnel/project/ProjectService.java",
+      "line": 50,
+      "title": "Anti-enumeration 4-way 404 collapse intact in requireOwned",
+      "description": "All four 404 paths — IllegalArgumentException from bad ObjectId hex (try/catch wraps only findById), Optional.empty() (missing), foreign owner mismatch, and soft-deleted-without-flag — collapse to identical AppException.notFound(\"Project not found\"). The try/catch is tightly scoped to findById and does not shadow the ownerId/deletedAt checks. Order is: try findById → orElseThrow → ownerId match → deletedAt flag. A caller probing for existence learns nothing.",
+      "remediation": "No change required. Carry-over from pre-flip code preserved exactly."
+    },
+    {
+      "severity": "info",
+      "category": "log-leak",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotService.java",
+      "line": 183,
+      "title": "Token-scrub coverage complete on both Telegram log sites",
+      "description": "Grep of `log.(warn|error).*getMessage` in BotService.java returns exactly 4 sites: (1) line 182-183 Compensation rollback WARN — wrapped via TelegramApiClient.scrubTokens(compErr.getMessage()); (2) line 235 TELEGRAM_DISCONNECT_WARN — wrapped via TelegramApiClient.scrubTokens(err.getMessage()); (3) line 267 REDIS_FAIL_OPEN_WARN on INCR — unwrapped (correct, Redis errors do not embed Telegram tokens); (4) line 276 REDIS_FAIL_OPEN_WARN on DEL — unwrapped (same rationale). No other getMessage() call in BotService logs a Telegram-origin exception unscrubbed.",
+      "remediation": "No change required. BotTokenLeakTest reflectively guards against future regressions."
+    },
+    {
+      "severity": "info",
+      "category": "log-leak",
+      "file": "backend/src/main/java/com/botfunnel/bot/dto/BotResponse.java",
+      "line": 9,
+      "title": "BotResponse DTO contract excludes every token surface",
+      "description": "BotResponse record exposes only telegramBotId, telegramUsername, telegramFirstName, tokenSuffix (last 3 chars), status, and connectedAt. No encryptedTokenCiphertext, no IV, no webhookSecretHash, no plaintext token. The BotController.toResponse(...) mapper at line 68-76 of BotController.java cannot accidentally expose them because the record's canonical constructor only accepts those six fields. BotTokenLeakTest validates this reflectively.",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "rate-limit",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotService.java",
+      "line": 95,
+      "title": "D14 INCR-every-attempt semantics preserved; 11th attempt short-circuits before any Telegram call",
+      "description": "incrementBruteForceCounter is invoked at line 102 — the second step of the connect chain, after requireOwned but before ensureNoConnectedBotForProject and the Telegram getMe call. The threshold check at line 261 (count > 10) throws AppException.tooManyRequests on the 11th attempt within the 15-min TTL window, with no Telegram interaction. resetBruteForceCounter is called ONLY after the entire happy path succeeds (line 108), so failed attempts retain their count. The Connect-then-Disconnect bypass is closed. BotServiceTest::connect_rateLimitThreshold_returns429OnEleventhAttempt_noTelegramCall confirms via verifyNoInteractions(telegramApiClient).",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "rate-limit",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotService.java",
+      "line": 264,
+      "title": "Fail-open Redis semantics preserved with correct AppException rethrow",
+      "description": "incrementBruteForceCounter wraps INCR + EXPIRE + threshold-check in try { ... } catch (AppException e) { throw e; } catch (Exception e) { log.warn(REDIS_FAIL_OPEN_WARN, e.getMessage()); }. The AppException rethrow path ensures a legitimate 429 (Redis-derived) is not swallowed; a Redis outage produces a WARN log on the pinned REDIS_FAIL_OPEN_WARN string and the chain continues to Telegram + persist. Same pattern in resetBruteForceCounter. Equivalent to the pre-flip Reactor .onErrorResume guard.",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "rate-limit",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotService.java",
+      "line": 230,
+      "title": "AC13b fail-open Disconnect: Telegram deleteWebhook failure does not block local update",
+      "description": "doDisconnect (line 222-248) wraps telegramApiClient.deleteWebhook(plaintextToken) in try/catch. On any Exception, it logs WARN on the pinned TELEGRAM_DISCONNECT_WARN string (token-scrubbed) and sets deleted=false. The Bot is unconditionally flipped to DISCONNECTED, token fields and webhookSecretHash are cleared, disconnectedAt is set, and the audit event is emitted. The caller receives 200. Token persists nowhere after this method returns.",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "crypto",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotService.java",
+      "line": 222,
+      "title": "Plaintext token lifecycle in doDisconnect is bounded to method scope",
+      "description": "plaintextToken local at line 227 is derived from tokenEncryptor.decrypt(iv, ct), passed to telegramApiClient.deleteWebhook(plaintextToken) at line 231, and never assigned to a field, returned, or logged. The catch-block scrubs the Telegram error message before logging. After the method returns, the local is eligible for GC. No literal escapes.",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "session",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 95,
+      "title": "Session-termination queries preserve their tenancy invariants",
+      "description": "terminateAllSessions (line 95-104) deletes by Criteria.where(\"principal\").is(userId) with no _id filter — wipes ALL sibling devices including the current one. terminateAllSessionsExcept (line 106-114) deletes by principal=userId AND _id != currentSessionId — preserves the initiating session. The _id field matches Spring Session's MongoSession.MONGO_ID. deleteAccount (line 116-130) calls terminateAllSessions FIRST, then session.invalidate() — the documented order so the Set-Cookie removal signal fires after the DB wipe. Status gate in loadActiveUser (line 134-147) returns 401 (unauthorized) for any user.status != active && != pending, forcing blocked/deleted users back through login.",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "rate-limit",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 68,
+      "title": "Change-password brute-force counter gates BCrypt verify",
+      "description": "changePassword at line 68 calls checkChangePwdRate(userId) FIRST (line 71), BEFORE loadActiveUser and BEFORE BCrypt verify. This closes the cost-12 BCrypt grinding window — an attacker with a hijacked session cannot use the change-password endpoint as a verification oracle to brute-force the current password offline-style. The counter increments ONLY on BCrypt mismatch (registerChangePwdFailure at line 82). Threshold 5, TTL 15 min, key `change-pwd:fail:{userId}`. Pinned Redis change-pwd WARN strings for fail-open observability.",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "csrf",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotConnectRaceIT.java",
+      "line": 259,
+      "title": "BotConnectRaceIT drives real login flow; CSRF echo matches production cookie scheme",
+      "description": "login() at line 259-291 performs three real Tomcat round-trips: (1) GET /api/auth/me primes XSRF-TOKEN cookie via Spring Security's CookieCsrfTokenRepository; (2) POST /api/auth/login with email+password+X-XSRF-TOKEN header binds a real SESSION (no test-time auth bypass — the seeded user has a real BCrypt-hashed password); (3) post-login cookies are merged because session rotates via Task 6's changeSessionId() defense. postConnect (line 293-303) echoes the post-login XSRF token + Cookie header on every parallel request — matches AC18 production browser behaviour. No CSRF disable, no security-shell override.",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "auth",
+      "file": "backend/src/main/java/com/botfunnel/bot/BotController.java",
+      "line": 78,
+      "title": "currentUserId() rejects unauthenticated/wrong-principal across all three controllers",
+      "description": "BotController.currentUserId (line 78-84), ProjectController.currentUserId (line 125-131), and ProfileController.currentUserId (line 68-74) follow the identical pattern: SecurityContextHolder.getContext().getAuthentication() → null check + isAuthenticated() check + AppUserDetails instanceof pattern → AppException.unauthorized(\"Not authenticated\") on any miss. Anonymous principals or wrong principal types collapse to 401 without leaking stack trace. The pattern-match binding (`instanceof AppUserDetails details`) short-circuits before details.id() can be called on a wrong type.",
+      "remediation": "No change required."
+    },
+    {
+      "severity": "info",
+      "category": "mass-assignment",
+      "file": "backend/src/main/java/com/botfunnel/project/dto/CreateProjectRequest.java",
+      "line": 11,
+      "title": "Mass-assignment defense intact on all three flipped controllers' DTOs",
+      "description": "CreateProjectRequest (@JsonIgnoreProperties(ignoreUnknown = true)), UpdateProjectRequest (same), UpdateProfileRequest (same), and ConnectBotRequest (same) all silently discard unknown fields. A hostile `ownerId` in CreateProjectRequest body, or hostile `isSuperAdmin` in UpdateProfileRequest body, are dropped at Jackson deserialisation. The service layers populate ownerId from currentUserId() (server-side), never from the DTO. UpdateProjectRequest fields are also explicitly limited to name/description/timezone via the record components — no setter for any sensitive field exists.",
+      "remediation": "No change required."
+    }
+  ]
+}

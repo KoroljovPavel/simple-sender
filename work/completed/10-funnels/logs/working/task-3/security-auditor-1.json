@@ -1,0 +1,28 @@
+{
+  "reviewer": "security-auditor",
+  "task": 3,
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "Hardcoded Secrets",
+      "title": "Real Telegram bot token in commented-out line of application.properties",
+      "description": "Line 31 of backend/src/main/resources/application.properties contains a commented-out string '#8998527537:AAFMehsshbFz3QLRZB8MElyJ4zcHgofJdNM' that matches the Telegram bot token pattern (\\d+:[A-Za-z0-9_-]{30,50}). Although it is in a comment and not currently parsed as a property, it is a real-looking credential sitting in a tracked config file in the working tree. It would be committed to version history if someone stages this file and creates a commit. It is not part of the reviewed diff (10bf269..183a5b7) but exists in the current working directory and is a critical issue for the repository.",
+      "location": "backend/src/main/resources/application.properties:31",
+      "impact": "If committed and pushed, the bot token becomes permanently embedded in git history and accessible to anyone with repository read access, enabling full control of the Telegram bot (send messages, change webhook, read updates). Even after deletion the token remains in git history unless rewritten.",
+      "recommendation": "Remove line 31 immediately. If this was a real token used for testing, revoke it via @BotFather immediately. Never place credentials (even commented-out) in tracked config files. Use environment variables or a secrets manager instead. Add a pre-commit hook (e.g. gitleaks or trufflehog) to prevent future accidents.",
+      "cwe": "CWE-312"
+    }
+  ],
+  "task_scope_findings": {
+    "token_redaction_sendPhoto": "PASS — All 8 log sites in TelegramSender call TelegramApiClient.scrubTokens() on any string that could carry the token. The 'endpoint' variable passed through the call chain is the URI template ('/bot{token}/sendPhoto'), never the expanded URL with the resolved token. Token substitution occurs only inside Spring RestClient's uri() call at sendOnce:302 and the resolved URL is never stored or logged. The decrypted token lives only as a local variable in sendOnce for the duration of one HTTP attempt.",
+    "error_path_token_leak": "PASS — On the 5xx transient retry path (sendWith5xxRetry:260-261), ex.getMessage() is scrubbed before logging. On the terminal failure path (send:184-185), ex.getMessage() is scrubbed. The TelegramSendException is constructed in toThrowable() with an already-scrubbed description (local var 'scrubbed' at line 334). The failedMetadata() method stores tse.getMessage() which is already scrubbed at construction time.",
+    "imageUrl_caption_logging": "PASS — Neither imageUrl nor caption appear in any log statement. The body map containing 'photo', 'caption', 'parse_mode' is only serialized into the HTTP request body via restClient.post().body(body) and is never logged.",
+    "ssrf": "PASS — imageUrl is placed in body.put('photo', imageUrl) and sent in the JSON POST body to Telegram's API. The backend issues no HTTP request to imageUrl itself. Telegram fetches the image URL server-side. No HTTP client call references imageUrl as a URL.",
+    "sendText_refactor_integrity": "PASS — sendText now calls the new private send() method with '/bot{token}/sendMessage' and its contentFields map, traversing identical downstream machinery (sendWithRateLimitRetry -> sendWith5xxRetry -> sendOnce -> map4xx/toThrowable/terminalReasonFor). No behavioral change to the sendText path. The contentFields map is defensively copied via new HashMap<>(contentFields) at sendOnce:297 before chat_id is added, ensuring retry attempts don't mutate the shared map across attempts.",
+    "token_no_leak_test": "PASS — sendPhoto_failure_doesNotLeakDecryptedToken test (TelegramSenderTest:930) stubs a 400 response whose description embeds TOKEN, captures WARN/ERROR log output, and asserts none contain TOKEN while at least one contains '[REDACTED_TOKEN]'. This directly validates the AC.",
+    "subscriber_hook_log": "PASS — The subscriber hook failure log at dispatchSubscriberHook:218 passes hookEx.getMessage() through scrubTokens before logging."
+  },
+  "summary": "One critical finding (outside the reviewed diff): a real-looking Telegram bot token in a commented-out line of application.properties in the working tree. Must be removed and, if real, revoked before any commit. The Task 3 implementation itself (TelegramSender.sendPhoto + refactored send() path) is clean: token redaction is correctly applied on all log sites including error/exception paths, imageUrl and caption are not logged, no SSRF (imageUrl is sent in JSON body to Telegram, never fetched by the backend), and the sendText refactor preserves all existing behaviour. The token-no-leak test adequately covers the primary acceptance criterion."
+}

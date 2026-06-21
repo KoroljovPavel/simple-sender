@@ -1,0 +1,27 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "2",
+  "round": 1,
+  "commit": "b26d8b3",
+  "verdict": "approve-with-fix-applied",
+  "test_type": "integration (AbstractIntegrationTest + Testcontainers Mongo) — correct: validation performs a real DB lookup, so mocking would be the wrong type",
+  "summary": "Six SUBSCRIBE tests, each earning its place: required (null+blank), not_found (missing/malformed/foreign-project — three distinct code paths to one code), step_not_found, draft-allowed + full round-trip, activation-blocks-on-inactive (negative+positive), and (added in this review) activation-blocks-when-any-second-target-inactive to lock the per-step loop. Assertions check real results (codes, HTTP status, response DTO fields, DB-persisted step), not mock calls. Tests isolated via @BeforeEach deleteAll.",
+  "findings": [
+    {
+      "id": "TST-1",
+      "severity": "minor",
+      "title": "Stated edge case 'multiple SUBSCRIBE steps, fail on first inactive' was not covered",
+      "detail": "Task lists multiple-SUBSCRIBE-steps as an edge case (validate each; activation fails on the first non-active). The single-step activation test did not exercise the loop over >1 SUBSCRIBE step.",
+      "action": "applied",
+      "reason": "Low-cost test locking a stated edge case (the requireSubscribeTargetsActive loop). Added subscribe_activate_blocksWhenAnySecondTargetInactive (first target active, second draft → still 422 inactive). Green."
+    },
+    {
+      "id": "TST-2",
+      "severity": "info",
+      "title": "endParentAfter=false round-trip not separately asserted",
+      "detail": "Round-trip test asserts endParentAfter=true; the false default is exercised on save in other tests but not asserted on the persisted step.",
+      "action": "skip",
+      "reason": "Boolean primitive mapping is Task 1 territory; the true case already proves the wiring. Adding a false-assertion gives marginal confidence."
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "13 acceptance criteria exceeds the >10 threshold for size M. Both step types (SET_KEYBOARD and CLEAR_KEYBOARD) are covered, plus validation, UI, preview, i18n, error handling, and copyOf — all genuinely distinct requirements. The count is justified but warrants a note.",
+      "location": "Критерии приёмки (13 items), frontmatter size: M",
+      "fix": "No action required if all 13 criteria are load-bearing (they are). If future review trims scope, revisit size declaration. Optional: declare size L if the full breadth (2 new step types + editor UI + preview + validation + IT harness) feels like L territory."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "tap_semantics — keyword-routing only, no in-execution text-wait branching (batch 1)",
+      "use_case — bonus-game scenario with nested keyboards and return pattern (batch 1)",
+      "step_model — separate SET_KEYBOARD / CLEAR_KEYBOARD steps, not riding on MESSAGE (batch 1)",
+      "size_testing — size M, integration tests in slow lane, no E2E (batch 1)",
+      "return_pattern — authoring pattern (SET_KEYBOARD at end of branches), no engine stack (batch 2)",
+      "button_wiring — variant B: text convention + non-blocking editor hint (batch 2)",
+      "keyword_quirks — contains-match false positives, menu precedence, fan-out accepted as-is (batch 2)",
+      "success_criteria — SET_KEYBOARD in editor, subscriber sees keyboard, tap launches funnel, CLEAR removes, bonus scenario, endless/finite funnels (batch 2)",
+      "preview — extended to render both steps via VariableTemplateRenderer + buttons list (batch 3)",
+      "step_text_shape — single text field, variables, parse_mode, 4096 cap (batch 3)",
+      "keyboard_options — is_persistent default on, one_time_keyboard default off, resize_keyboard hardcoded true (batch 3)",
+      "dead_button — silent no-op at runtime accepted (batch 3)",
+      "button_cap — text ≤64 chars aligning with keyword cap (batch 4)",
+      "duplicates — blocked at validation (422 + form mirror) (batch 4)",
+      "error_mapping — BLOCKED_BY_USER/CHAT_NOT_FOUND → cancelled; other Telegram errors → failed; invalid_bot_token → failed; confirmed batch 4; now in Ограничення (lines 107-110) and as acceptance criterion",
+      "smoke.md — manual checklist in work/16-persistent-keyboard/smoke.md (batch 4)",
+      "deploy — no deploy environment, manual verification only (batch 4, user preempted)",
+      "re-enter guard — allowReEnter=false silent no-op, allowReEnter=true restart (covered in AC criterion 7)",
+      "FunnelStep.copyOf — new fields must be carried through snapshot and duplicate (Risk 1 + AC criterion 11)",
+      "blank_button_text — empty/whitespace text rejected 422 + form mirror (AC criterion 12, new in round 2)",
+      "observability — existing audit events reused, no new logs/metrics (Ограничення lines 113-114)"
+    ],
+    "missing": []
+  },
+  "summary": "Усі критичні знахідки раунду 1 усунуто: error-mapping явно специфіковано в Ограничення та як окремий критерій; критерій wire-формату (criterion 4) — машино-верифікований через engine IT; бонусний сценарій перенесено до Пользователь проверяет; smoke.md прибрано з AC; Зачем іменує WHO. Специфікація затверджена; єдине зауваження — 13 критеріїв для size M (minor, виправлення не обов'язкове)."
+}

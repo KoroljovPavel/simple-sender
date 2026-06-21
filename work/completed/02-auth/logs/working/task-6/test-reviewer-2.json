@@ -1,0 +1,65 @@
+{
+  "status": "passed",
+  "summary": "Round 2 successfully addresses Round 1 Minor #3 (forgot-password dispatch-failure now also verifies eventService.logEvent fires) and adds 5 new high-quality tests covering security/quality fixes from the round-1 fix commit: forgot-password per-IP rate-limit, Redis fail-open, blocked-user branch, plus resetPassword status-gate for blocked + deleted users. The metadata=null tightening (changed from any() to eq(null) on unknown/deleted forgot-password tests) closes a real contract gap — a regression that started passing user-supplied email into the audit log would now fail the test. All 5 new tests pass the litmus test. Three round-1 minors remain unaddressed (rationale documented by author): the boundedElastic test name still overstates what is asserted, the resetPassword IT does not lock in body-shape parity with verifyEmail, and the magic numbers 24L/30L in setUp are not extracted. None block the task.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java:408",
+      "issue": "Carry-over from round 1 (Minor #1, not addressed). Test name `resetPassword_runsBcryptOnBoundedElastic_doesNotBlockEventLoop` still claims to verify boundedElastic scheduling but asserts only `verify(passwordEncoder).encode(...)`. A regression that ran encode() on the event loop would still pass this test. The inline comment acknowledges the gap but does not remove the misleading promise from the test name itself.",
+      "recommendation": "Rename to `resetPassword_validToken_invokesPasswordEncoderOnce` to match what the test actually verifies. Cheap, no behavioural change."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:496,538",
+      "issue": "Carry-over from round 1 (Minor #2, not addressed). The author's rationale — 'unit test verifies constant `INVALID_RESET_LINK` is used everywhere' — covers the service layer but not the HTTP contract. `resetPassword_invalidToken_400NotServerError` and `resetPassword_expiredToken_400` both assert only `expectStatus().isBadRequest()`. A future change to `GlobalExceptionHandler` that started enriching the response body with an error code would silently introduce an invalid-vs-expired enumeration oracle, and these IT tests would not catch it.",
+      "recommendation": "Add `.expectBody().jsonPath(\"$.message\").isEqualTo(\"Посилання недійсне або прострочено\").jsonPath(\"$.code\").doesNotExist()` to BOTH IT tests. Mirrors the verifyEmail IT pattern at line 259 and locks the controller-level body shape."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java:80",
+      "issue": "Carry-over from round 1 (Minor #4, not addressed). Magic numbers 24L (defaultHours) and 30L (rememberMeDays) remain inline in the AuthService constructor call. None of the tests in this file exercise session TTL behaviour, so impact is low — but a constructor-signature change would force a confusing edit.",
+      "recommendation": "Extract `private static final long DEFAULT_TTL_HOURS = 24L; private static final long REMEMBER_ME_DAYS = 30L;` at the top of the class. No assertion change."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 7,
+      "passed": 7,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 19,
+      "integration": 9,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "critical": [],
+  "major": [],
+  "minor": [
+    {
+      "category": "anti_pattern",
+      "location": "AuthServicePasswordResetTest.java:408 — resetPassword_runsBcryptOnBoundedElastic_doesNotBlockEventLoop",
+      "issue": "Carry-over from round 1: test name claims boundedElastic verification but only asserts encode() was called.",
+      "recommendation": "Rename to resetPassword_validToken_invokesPasswordEncoderOnce."
+    },
+    {
+      "category": "missing_coverage",
+      "location": "AuthControllerIT.java:496,538 — resetPassword_expiredToken_400 + resetPassword_invalidToken_400NotServerError",
+      "issue": "Carry-over from round 1: neither IT locks in response-body parity, leaving the HTTP contract for invalid-vs-expired distinguishability unprotected at the controller layer.",
+      "recommendation": "Add jsonPath assertions on $.message and $.code (does-not-exist) to both ITs, mirroring verifyEmail IT pattern."
+    },
+    {
+      "category": "anti_pattern",
+      "location": "AuthServicePasswordResetTest.java:80 — setUp() AuthService constructor",
+      "issue": "Carry-over from round 1: magic numbers 24L (defaultHours) and 30L (rememberMeDays) remain unnamed.",
+      "recommendation": "Extract to DEFAULT_TTL_HOURS / REMEMBER_ME_DAYS constants."
+    }
+  ],
+  "nitpicks": []
+}

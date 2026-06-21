@@ -1,0 +1,31 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring Failures",
+      "title": "Failure handler ignores cause-chain message — token in t.getCause().getMessage() is dropped silently, not redacted",
+      "description": "handleFailure at line 115 reads ONLY t.getMessage(): `String message = t.getMessage() == null ? t.getClass().getName() : t.getMessage();`. Wrapped exceptions (RuntimeException(\"upsert failed\", new WebClientException(\"/bot12345:ABC.../sendMessage 401\"))) yield a clean outer message that the scrubber happily passes through, while the cause-chain message containing the raw token is simply DROPPED from processingError. The rethrown exception also discards the cause by design (Fix 1, intentional). So the token never reaches a log sink — but the actionable diagnostic (the cause-chain message, which is often the root cause description an operator needs) is also lost. This is the correct security posture (drop > leak) but it is silent: an operator looking at processingError sees only \"upsert failed\" with no hint that there was a downstream WebClient failure. Detection-side, a hostile dependency that deliberately embeds tokens in nested exception messages can't leak via this path — defense holds. But the audit trail becomes ambiguous.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:115",
+      "impact": "Lost debugging signal when a nested exception carries the real failure reason. No data leak — but harder to RCA a flaky downstream. Operators may misattribute root cause when triaging FAILED rows.",
+      "recommendation": "Walk the cause chain when building the message, scrubbing each layer: `String message = buildScrubbedChainMessage(t);` where buildScrubbedChainMessage iterates `t.getCause()` up to a depth bound (3-5 hops to avoid pathological circular references), calls scrubTokens on each layer's message, and joins with ' | caused by: '. Truncate AFTER joining. Example: `RuntimeException(\"upsert failed\", WebClientException(\"/bot[REDACTED_TOKEN]/sendMessage 401\"))` produces processingError=\"upsert failed | caused by: /bot[REDACTED_TOKEN]/sendMessage 401\". The rethrown exception remains untouched (no cause, just the joined scrubbed message). Add a test: cause chain with a token in the second-level message → processingError contains [REDACTED_TOKEN] and DOES contain the second-layer text.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "rawUpdateId / projectId logged unscrubbed in new INFO sites — inconsistent with the surrounding scrub-everything contract",
+      "description": "The two new INFO log statements at lines 96-97 and 107-108 emit `rawUpdateId` and `projectId` directly: `log.info(\"ProcessTelegramUpdateJob - start (rawUpdateId={}, projectId={})\", rawUpdateId, rawUpdate.getProjectId());`. These IDs are server-generated identifiers (UUIDs or Mongo ObjectIds) and cannot mechanically match TOKEN_PATTERN (regex requires literal ':' + 30-50 base64-ish chars; UUIDs use '-' separators, ObjectIds are hex). So under current input distribution this is provably safe. However, the surrounding contract documented in the tech-spec (and previously enforced at line 84 for the not-found warning, which still wraps `scrubTokens(rawUpdateId)`) is 'wrap every interpolated string in scrubTokens at log sites — defense in depth against future refactors that change the ID type'. The two new sites break that invariant. If someone later changes RawUpdateId to be derived from external data (e.g. composite key including a Telegram opaque field), this site silently regresses.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:96-97 and 107-108",
+      "impact": "No exploit today — IDs cannot match the token regex. Forward-compat risk if ID representation changes. Inconsistent with line 84 which DOES wrap rawUpdateId in scrubTokens.",
+      "recommendation": "Either (a) wrap both IDs in TelegramApiClient.scrubTokens(...) at lines 96-97 and 107-108 for consistency with line 84 and the ERROR site at line 129 (note: line 129 ALSO dropped the scrubber on rawUpdateId — same inconsistency), OR (b) document explicitly in a comment that server-generated IDs are scrub-exempt and centralise the contract (e.g. a private static boolean `assertIdShape(String)` invoked in tests). Recommend (a) — cheaper, matches the explicit contract in tech-spec line 433.",
+      "cwe": "CWE-1059"
+    }
+  ]
+}

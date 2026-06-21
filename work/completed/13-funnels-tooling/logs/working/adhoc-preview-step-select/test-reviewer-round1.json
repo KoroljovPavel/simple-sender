@@ -1,0 +1,23 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "adhoc-preview-step-select",
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts: describe('preview step selection')",
+      "issue": "The documented preview priority `edit dialog open > clicked step > first message step` (page previewIndex line 70: `if (editStep.value) return editIndex.value`) is only partially covered. The 'action buttons do not hijack selection' test opens the edit dialog after selecting row 2, but asserts ONLY that the step-form dialog renders — it never asserts that the preview heading/highlight switched to the EDITED step (e.g. heading shows step 2 for editIndex 1, ring on row 1). If the `if (editStep.value)` branch were deleted, the preview would keep showing the clicked row 2 and this test would still pass, so the edit-wins branch is not litmus-protected.",
+      "recommendation": "In the action-buttons test (or a dedicated test) after opening edit-1, assert `wrapper.get('[data-test=\"funnel-preview-step-heading\"]').text()` contains '2' (1-based editIndex) and `funnel-step-row-1` carries `ring-2` while `funnel-step-row-2` does not — proving the edit dialog overrides the prior click selection."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue:69-76 (previewIndex / previewStepNumber fallback)",
+      "issue": "The page-level 'no message step at all' fallback (firstMessageIndex === -1 with no click and no edit → previewStep null, previewStepNumber null → empty state, no heading) has no page-level test. The component-level 'omits heading in empty state' test covers the null-step render path, but not the page computed that produces null (previewIndex -1 guard in previewStepNumber). This is a low-value edge (a funnel with only DELAY/tag steps) and is structurally trivial, hence minor.",
+      "recommendation": "Optional: add a page test mounting steps = [DELAY only] with preview open, asserting `funnel-preview-empty` exists and `funnel-preview-step-heading` does not, confirming the -1 fallback yields a clean empty panel rather than a crash or a stale heading."
+    }
+  ],
+  "notes": "All 49 tests in the two files pass locally (vitest run, node 22). The new tests assert REAL behavior and FAIL against the old code on the discriminating axes: (1) heading 'Крок {N} · {type}' is asserted for both a message step (stepNumber 2) and a non-message DELAY step (stepNumber 3), and omitted in the empty state — the old component had no stepHeading/heading element, so the message + non-message heading tests fail against old. Assertions are non-tautological: they check the literal 1-based number AND `not.toContain('SEND_MESSAGE')`/`not.toContain('DELAY')`, and the localized labels are 'Send message'/'Delay', so these prove the heading uses the localized type name, not a raw i18n key. (2) Default selection uses MIXED_STEPS (DELAY at row 0, messages at 1/2) so the first-MESSAGE-step default is row 1, not row 0 — proving the fallback skips leading non-message steps; asserted via store.preview last-called with id 'm1', heading '2', and ring-2 on row 1 (highlight wiring is new, so this fails against old). (3) Clicking a MESSAGE row (select-2) drives heading to '3', shows funnel-preview-rendered, and moves the ring to row 2 off row 1 — old rows had no select emit/selectedIndex, so this fails against old. (4) Clicking a NON-message row (select-0) asserts store.preview NOT called, placeholder shown, rendered gone, heading '1', ring on row 0 — against old (no-op click) the preview would stay on the default message row and rendered would show, so this fails against old. (5) Action buttons (edit/move) still function and do not hijack selection (edit opens step-form, move calls store.update). The existing no-v-html source guard, placeholder, sample-data, and error tests are untouched and still pass. Altitude is sound: the reviewer-noted debounce concern is correctly handled — for click-driven re-preview the tests assert selection STATE (rendered presence, ring highlight, heading) rather than re-issued store.preview call args, avoiding the 600ms-debounce flakiness; the only store.preview arg assertion is on the first-tick (synchronous, immediate watch, primed-flag) default render, which is deterministic. Two minor coverage gaps noted (edit-wins priority branch not litmus-asserted; page-level no-message-step empty fallback untested) — neither blocks approval."
+}

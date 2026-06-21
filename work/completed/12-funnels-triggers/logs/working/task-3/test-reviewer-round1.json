@@ -1,0 +1,54 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "3",
+  "round": 1,
+  "skill": "test-master",
+  "fallback_note": "Agent/Task spawning tool unavailable in this environment; review performed by apikey-domain teammate loading the test-master skill directly.",
+  "scope": {
+    "changed_files": [
+      "backend/src/test/java/com/botfunnel/api/ApiKeyServiceTest.java",
+      "backend/src/test/java/com/botfunnel/api/ApiKeyRepositoryIT.java"
+    ]
+  },
+  "summary": "Correct pyramid: 7 fast unit tests (single in-memory repo fake) + 3 integration tests on real embedded Mongo for unique-index enforcement and query resolution. Every TDD anchor from the task is covered; all assertions check real state (decoded entropy length, hash equality, lookup results, count, DuplicateKeyException), none are mock-call assertions. Tests are isolated with clean per-test state.",
+  "tdd_anchor_coverage": {
+    "generate_producesAtLeast256BitPlaintext": "covered (asserts decoded bytes >= 32)",
+    "generate_storesHashNotPlaintext": "covered",
+    "generate_returnsPlaintextOnce": "covered",
+    "lookupByHash_roundTrips": "covered (incl. wrong-key -> empty)",
+    "keyPrefix_maskShape": "covered",
+    "regenerate_overwritesAndInvalidatesOld": "covered (incl. count==1)",
+    "lookup_nullOrBlankKey_returnsEmpty": "covered (null, empty, blank)",
+    "ApiKeyRepositoryIT::keyHashUnique_enforced": "covered (+ added projectIdUnique_enforced and findBy*_resolve)"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "coverage-gap",
+      "file": "backend/src/test/java/com/botfunnel/api/ApiKeyServiceTest.java",
+      "line": null,
+      "finding": "lastUsedAt is a contracted field for the Task-7 filter but no test pins it: that generate() leaves lastUsedAt null and that regenerate() resets a previously-stamped lastUsedAt to null. A regression that carries over a stale lastUsedAt would go undetected.",
+      "suggested_fix": "Add assertion(s): after generate, stored.getLastUsedAt() is null; stamp lastUsedAt on the stored row, regenerate, assert it is null again.",
+      "valid": true
+    },
+    {
+      "severity": "minor",
+      "category": "field-roundtrip",
+      "file": "backend/src/test/java/com/botfunnel/api/ApiKeyRepositoryIT.java",
+      "line": null,
+      "finding": "The IT proves index enforcement and query resolution but does not assert full field round-trip through Mongo (createdAt/lastUsedAt persist and read back). Minor — the entity is plain POJO with no custom converters, so risk is low.",
+      "suggested_fix": "Optionally assert createdAt is non-null and lastUsedAt round-trips after save+findByProjectId. Low priority.",
+      "valid": true
+    },
+    {
+      "severity": "minor",
+      "category": "borderline-redundancy",
+      "file": "backend/src/test/java/com/botfunnel/api/ApiKeyServiceTest.java",
+      "line": null,
+      "finding": "generate_returnsPlaintextOnce overlaps with generate_storesHashNotPlaintext (both assert stored fields != plaintext). The distinct contract (plaintext IS returned AND the record exposes only hash+prefix) is thin but legitimate; keeping both is acceptable.",
+      "suggested_fix": "No change required; documented for transparency.",
+      "valid": false
+    }
+  ],
+  "verdict": "approve_with_minor"
+}

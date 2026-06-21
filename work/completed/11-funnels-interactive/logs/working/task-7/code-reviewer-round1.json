@@ -1,0 +1,20 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "approve",
+  "summary": "Webhook callback_query ingest is correct and idiomatic. Typed CallbackQuery DTO mirrors the module's record+@JsonIgnoreProperties convention; dispatch branch is placed before the message-fallback (required because callback_query updates have top-level message==null); bot-resolve, logEvent* helpers, and LinkedHashMap-for-nulls follow existing handleStart/logEventCommandStart patterns. resolveUpdateKind correctly keeps the callback_query classification only for the bot-missing degrade path.",
+  "findings": [
+    {
+      "severity": "info",
+      "area": "ProcessTelegramUpdateJob.handleCallbackQuery",
+      "finding": "Branch ordering, event-before-flip, and error-isolation are all preserved; advanceOnCallback runs inside the existing try/catch(Throwable) with no extra local swallow.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "area": "resolveUpdateKind",
+      "finding": "callback_query null-check converted from JsonNode !isNull() to typed-record null check, hoisted above the JsonNode block; remaining opaque slots untouched.",
+      "action": "none"
+    }
+  ]
+}

@@ -1,0 +1,83 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 inventory expects FunnelServiceKeyboardStepTest.java and FunnelStepForm.keyboard.spec.ts, but these files do not yet exist at validation time (they are created by Tasks 1 and 2 respectively). The audit task correctly marks them as '(new in Task 1)' and '(new in Task 2)', and its depends_on: [1,2,3,4,5,6,7] covers this. No mismatch — context note only.",
+      "fix": "No fix required. The depends_on declaration is correct and the audit task explicitly acknowledges both files as created by earlier tasks."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 Context Files section lists audit reports as 'work/16-persistent-keyboard/logs/working/task-8/', 'task-9/', and 'task-10/' but tasks 8, 9, and 10 all write their reports to 'work/16-persistent-keyboard/logs/working/audit/' (code-auditor.json, security-auditor.json, test-auditor.json). The task-N/ subdirectory paths do not exist and the agent executing task 11 will look in the wrong location.",
+      "fix": "Replace the three context file paths in task 11 with:\n- 'work/16-persistent-keyboard/logs/working/audit/code-auditor.json' — code audit (Task 8)\n- 'work/16-persistent-keyboard/logs/working/audit/security-auditor.json' — security audit (Task 9)\n- 'work/16-persistent-keyboard/logs/working/audit/test-auditor.json' — test audit (Task 10)"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 directs the QA report to 'logs/working/task-11/qa-report.json', while the established project convention (from 15-message-composer) stores the pre-deploy QA report at 'logs/working/qa/pre-deploy-qa-report.json'. The deviation is not blocking — both paths are inside the feature's work/ directory — but it breaks consistency and may confuse future audits or automation that looks for the report under the conventional path.",
+      "fix": "Either align the output path to 'work/16-persistent-keyboard/logs/working/qa/pre-deploy-qa-report.json' to match the 15-message-composer convention, or leave it as-is and treat task-11/ as the accepted divergence (lower priority than the task-8/9/10 mismatch above)."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "smoke.md is referenced as existing at 'work/16-persistent-keyboard/smoke.md' (authored in Task 7), but the file does not exist at the time this validation runs (Tasks 1-7 are still planned). The reference is forward-looking by design (depends_on includes all Wave 1-3 tasks implicitly via Task 10 dependency), but worth confirming once Task 7 completes.",
+      "fix": "No fix required at task-file level. Confirm smoke.md exists at work/16-persistent-keyboard/smoke.md once Task 7 completes before executing Task 11."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 28,
+    "issues_found": 4
+  },
+  "notes": {
+    "cited_test_methods_verified": {
+      "FunnelEventServiceTest.reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches": "EXISTS at line 201",
+      "FunnelEventServiceTest.reEnter_allowReEnterFunnel_cancelsExistingThenInserts": "EXISTS at line 218",
+      "ProcessTelegramUpdateJobTest.plainText_dispatchesKeyword": "EXISTS at line 362",
+      "ProcessTelegramUpdateJobTest.plainText_keywordSuppressedWhileWaitingForReply": "EXISTS at line 380"
+    },
+    "existing_test_files_verified": {
+      "FunnelStepTest.java": "EXISTS",
+      "FunnelStepExecutorTest.java": "EXISTS",
+      "FunnelControllerIT.java": "EXISTS",
+      "FunnelExecutionEngineIT.java": "EXISTS",
+      "FunnelEventServiceTest.java": "EXISTS",
+      "ProcessTelegramUpdateJobTest.java": "EXISTS",
+      "FunnelTestRunSendIT.java": "EXISTS",
+      "FunnelMessagePreview.spec.ts": "EXISTS (no-v-html guard confirmed at lines 9, 117, 142-147)"
+    },
+    "new_files_not_yet_created": {
+      "FunnelServiceKeyboardStepTest.java": "Created by Task 1 — not yet present, expected",
+      "FunnelStepForm.keyboard.spec.ts": "Created by Task 2 — not yet present, expected"
+    },
+    "gradle_commands_verified": {
+      "./gradlew test": "backend/gradlew EXISTS; default lane excludes @Tag('slow')",
+      "./gradlew test -PrunSlow=true": "runSlow property wired in build.gradle (line 52-53)",
+      "pnpm test": "scripts.test = 'vitest' in frontend/package.json",
+      "pnpm build": "prebuild hook runs scripts/check-locales.mjs (locale parity gate)"
+    },
+    "skill_files_verified": {
+      "test-master/SKILL.md": "EXISTS",
+      "pre-deploy-qa/SKILL.md": "EXISTS"
+    },
+    "context_files_verified": {
+      "decisions.md": "EXISTS",
+      "user-spec.md": "EXISTS",
+      "tech-spec.md": "EXISTS",
+      "code-research.md": "EXISTS",
+      "project.md": "EXISTS",
+      "architecture.md": "EXISTS",
+      "patterns.md": "EXISTS"
+    },
+    "audit_report_convention": "15-message-composer stores audit reports at logs/working/audit/{auditor}.json and QA report at logs/working/qa/pre-deploy-qa-report.json. Tasks 8/9/10 follow the audit/ convention correctly. Task 11 QA report path (task-11/) diverges from qa/ convention."
+  }
+}

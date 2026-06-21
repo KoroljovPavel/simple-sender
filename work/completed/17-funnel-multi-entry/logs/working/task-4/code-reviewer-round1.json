@@ -1,0 +1,48 @@
+{
+  "status": "changes_requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "line": 1349,
+      "issue": "invalidTriggerValueWithSpaceReturns422 is a false-green test after the schema migration. The request body sends `\"triggerValue\": \"has space\"` as a top-level JSON field. UpdateFunnelRequest is annotated `@JsonIgnoreProperties(ignoreUnknown = true)`, so that field is silently dropped; `triggers` is null and normalizes to a single bare on_start (valid). The test expects a 422 `funnel_invalid_trigger_value`, but the real outcome is 200 OK — the test either never ran against this code path or the expectation is wrong. Either way it provides false confidence.",
+      "fix": "Rewrite the test to send the invalid value inside a `triggers` array: `\"triggers\": [{\"triggerType\": \"on_start\", \"triggerValue\": \"has space\"}]`. This exercises the actual `normalizeOnStartValue` validation path and should return 422 with `funnel_invalid_trigger_value`."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "line": 1338,
+      "issue": "Multiple legacy IT request bodies (at least 15 occurrences: lines 128, 160, 202, 1338, 1371, 1380, 1399, 1418, 1431, 1447, 1463, 1480, 1496, 1512, 1528, 1544, 1564, 1582, 1599, 1612, …) still send `\"triggerValue\": \"\"` as a top-level field rather than a `triggers` array. Due to `@JsonIgnoreProperties(ignoreUnknown = true)`, the field is silently ignored and `triggers` normalizes to a bare on_start. The tests pass but they exercise the null-triggers normalization path rather than the intended `on_start` flow. These are not correctness regressions for those specific test scenarios (most only care about step behaviour, not trigger round-trips), but they mean no existing IT verifies that the pre-Phase-8 `on_start` payload from the request body still reaches the service correctly — the coverage gap is silent.",
+      "fix": "Migrate these request bodies to use `\"triggers\": [{\"triggerType\": \"on_start\", \"triggerValue\": \"\"}]` (or pass no triggers field and rely on the null-normalization intentionally, with a comment explaining that). At minimum update the tests that explicitly target trigger behaviour (e.g. `emptyTextInTextBlockReturns422`, `exceedingMaxStepsReturns422`) so future readers understand the request shape is deliberate."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 670,
+      "issue": "The null-trigger-array normalization path creates a `TriggerDto` inline with a positional constructor call (`new TriggerDto(TRIGGER_ON_START, \"\", null, null)`) inside `applyTriggers`. This is the only place in the service that constructs a `TriggerDto` (vs a `Trigger`). The semantics are correct, but using `bareOnStartTrigger()` (which already exists on line 769) would be more readable and eliminates the need for the intermediate DTO — or the normalization could be delegated to the same `bareOnStartTrigger()` result directly. Minor duplication risk if `Trigger`/`TriggerDto` diverge.",
+      "fix": "Replace the inline `new TriggerDto(TRIGGER_ON_START, \"\", null, null)` with a reference to `bareOnStartTrigger()` and adapt the loop to treat the initial `Trigger` object directly, skipping the DTO round-trip for the default case. Alternatively, extract a private `bareOnStartTriggerDto()` constant that mirrors `bareOnStartTrigger()`."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 394,
+      "issue": "The comment on `saveHandlingTriggerConflict` (line 391-393) still says \"The ONLY unique index on `funnels` is the on_start one\". After Task 1, the unique indexes on the `funnels` collection include the `(funnelId, subscriberId)` re-enter index on `funnel_executions` (different collection) and potentially others from earlier phases. The claim \"ONLY unique index\" is accurate for the `funnels` collection at the app level but could mislead a reader into thinking other constraints don't exist. Low risk but imprecise.",
+      "fix": "Tighten the comment: \"The ONLY unique index on the `funnels` collection is the onStartTriggerValue partial-unique index, so a DuplicateKeyException here can only mean an on_start trigger collision.\" This removes ambiguity about other collections."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelServiceTriggerTypeTest.java",
+      "line": 196,
+      "issue": "The `triggers_arraySizeCapRejected` test constructs 1 on_start + 50 event triggers = 51 total, and asserts 422. This is correct. However, the boundary case — exactly 50 triggers (the inclusive-valid cap) — is not tested. The existing tests confirm overflow is rejected but not that cap-exactly-50 is accepted. This is a minor coverage gap for Decision 14.",
+      "fix": "Add a positive assertion: with 1 on_start + 49 event triggers (total = 50 = MAX_TRIGGERS), the update succeeds (no exception). This validates the boundary from both sides."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "line": 1181,
+      "issue": "The new Phase 8 section (`patchGet_roundTripsTriggerArray`, `patch_duplicateEventNameReturns422`, `patch_danglingEntryStepIdReturns422`) covers the core round-trip and 422 paths but is missing an IT for the `at most one on_start` rule (two on_start elements in the triggers array → 422 `funnel_multiple_on_start`). This rule is already covered at the service level in `FunnelServiceTriggerTypeTest::triggers_atMostOneOnStart` but the controller-level surface (HTTP path + code in JSON response) is untested.",
+      "fix": "Add a `patch_multipleOnStartReturns422` test in `FunnelControllerIT` that sends two `on_start` elements and asserts `status().isUnprocessableEntity()` + `jsonPath(\"$.code\").value(FunnelService.CODE_MULTIPLE_ON_START)`."
+    }
+  ],
+  "summary": "The core implementation is solid: `applyTriggers` correctly enforces all per-element and cross-trigger rules (at-most-one on_start, duplicate event_name reject, entryStepId resolution, event-only mid-entry, array+keyword caps per Decision 14); `entryStepId` is correctly carved out of the generic edge-pass `validateSteps`; `syncOnStartTriggerValue` is a proper single-writer called from all save paths; `checkTriggerConflict`/`saveHandlingTriggerConflict` correctly skip null scalars and never pass null to the repo; `duplicate` resets triggers to bare on_start with null scalar; `toResponse`/`toSummary`/`toTriggerDtos` round-trip all fields. The new unit test suite (`FunnelServiceTriggerTypeTest`) and IT additions are well-targeted. Two major issues require changes before approval: (1) `invalidTriggerValueWithSpaceReturns422` is a false-green test that no longer exercises the code path it was written for — it will silently pass with 200 OK instead of 422; (2) ~20 legacy IT request bodies still use the old top-level `triggerValue` field which is silently dropped by `@JsonIgnoreProperties`, creating a coverage gap. Four minor findings cover boundary testing gaps and comment precision."
+}

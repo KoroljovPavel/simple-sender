@@ -1,0 +1,101 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 6,
+      "issue": "Step 3 states 'Collapse all 11 Mono.fromCallable(...).subscribeOn(boundedElastic()) sites' but actual code has 4 fromCallable sites (lines 366, 420, 522, 532 — BCrypt only) and 7 fromRunnable sites (lines 470, 506, 525, 537, 571, 577, 585 — event emission + session). The label 'Mono.fromCallable' misidentifies 7 of the 11 sites. Code-research §1.6 correctly labels them as 'Mono.fromCallable / Mono.fromRunnable'. The collapsing instructions are correct for both types, but the mislabeling creates confusion about which sites are BCrypt vs event-emission — important because fromCallable captures a return value while fromRunnable is void, requiring different collapse patterns.",
+      "fix": "Rewrite step 3 to say: 'Collapse all 11 Mono.fromCallable / Mono.fromRunnable sites enumerated in code-research §1.6 (lines 366, 420, 470, 506, 522, 525, 532, 537, 571, 577, 585). BCrypt sites (4, fromCallable): collapse to direct passwordEncoder.encode/matches calls. Audit-emission sites (7, fromRunnable): collapse to direct eventService.logEvent(...) void calls — drop subscribeOn and Mono wrapper.'"
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 6,
+      "issue": "TDD Anchor lists test method names that do not match the actual method names in the source files. Mismatches confirmed by grep: (1) 'login_brute_force_emailThreshold_returns429_andLogsEvent' does not exist — actual name is 'login_emailBruteForceLimitReached_logsBruteForceEvent' (line 259). (2) 'login_brute_force_ipThreshold_returns429' does not exist — actual is 'login_ipBruteForceLimitReached_returns429' (line 247). (3) 'login_redisDown_failsOpen_allowsAuth' does not exist — actual is 'login_redisCheckFails_failsOpen_andContinuesToUserLookup' (line 294). (4) 'login_success_resetsBruteCounters_andSavesSecurityContext' does not exist — actual is 'login_success_resetsBruteForceCountersAndLogsEvent' (line 384). (5) 'login_success_writesRememberMeAttribute' does not exist — actual is 'login_success_setsRememberMeTtl_andPublishesRememberMeTrueAttribute' (line 313). (6) 'resetPassword_validToken_rotatesHash_andTerminatesSessions' does not exist — actual is 'resetPassword_validToken_updatesHash_clearsTokenFields_terminatesSessions_logsEvent' (line 362, AuthServicePasswordResetTest). (7) 'forgotPassword_unknownEmail_runsDummyDelay' does not exist — actual is 'forgotPassword_unknownEmail_completes_doesNotEmail_logsAnonymousEventWithNullMetadata' (line 114, AuthServicePasswordResetTest). (8) 'register_emailExists_returns409_withoutBcrypt' does not exist — actual is 'register_existingActiveEmail_returns409' (line 172, AuthServiceRegistrationTest). Anchor also says 'login_thenMe_endToEnd_succeedsWithBothCookies' should be in AuthControllerIT — it is not present (confirmed by grep); must be treated as a NEW test to add.",
+      "fix": "Update TDD Anchor to use actual existing method names from the codebase. For regression tests, reference the actual names confirmed by grep. For truly NEW tests (changeSessionId invariant, login-then-me roundtrip), mark them explicitly as NEW. Confirm that 'login_thenMe_endToEnd_succeedsWithBothCookies' is a new test to be written (related to TC11) and is not a rename of an existing test."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 6,
+      "issue": "Details section labels test file sizes as 'K LOC' (e.g., 'AuthServiceTest.java — 27.7K LOC', 'AuthServiceRegistrationTest.java — 22.5K LOC', 'AuthServicePasswordResetTest.java — 21.6K LOC', 'AuthControllerIT.java — 26.4K LOC') when these are byte/character counts, not line counts. Actual line counts: AuthServiceTest = 586 lines (~28KB), AuthServiceRegistrationTest = 523 lines (~23KB), AuthServicePasswordResetTest = 479 lines (~22KB), AuthControllerIT = 597 lines (~27KB). Using 'LOC' for byte counts misleads the implementer about file complexity.",
+      "fix": "Replace 'K LOC' with actual line counts (e.g., 'AuthServiceTest.java — 586 lines') or use 'KB' for byte sizes. The ~30 test count claim for AuthServiceTest should read '23 tests' (confirmed by @Test count)."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 5,
+      "issue": "TDD Anchor method name mismatch: 'softDelete_userNotFound_throwsAppException' is listed but the actual existing test is named 'softDelete_userNotFound_returnsError' (UserServiceTest.java:42). The semantics do change (Mono.error → thrown exception), so the test body needs rewriting, but the existing method name is different. Additionally, 'logEvent_propagatesRepositoryError' is listed as a REPLACE for 'logEvent_fireAndForget_repositoryErrorDoesNotPropagate' (EventServiceTest.java:45) — the existing test name must be renamed to match the new D12 contract (error now propagates). The task body text acknowledges the semantic change but the method name reference to the new test is misleading because it implies it already exists under that name.",
+      "fix": "In TDD Anchor: (1) note that 'softDelete_userNotFound_throwsAppException' is a RENAME of 'softDelete_userNotFound_returnsError'; (2) note that 'logEvent_propagatesRepositoryError' is a RENAME+REWRITE of 'logEvent_fireAndForget_repositoryErrorDoesNotPropagate' — the old test asserted no propagation, the new test must assert propagation. Mark these as rename+rewrite to avoid the implementer creating duplicate methods."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 5,
+      "issue": "Step 1 says 'read the constant from [ProjectController] — preserve the exact value' for USER_AGENT_MAX. However, USER_AGENT_MAX = 500 is already defined in AuthService.java (line 54) as well as in ProjectController.java (line 30), ProfileController.java (line 26), and BotController.java (line 24) — four separate definitions all with the same value 500. The hint implies only ProjectController defines it, missing that AuthService already has its own copy of the constant. The implementer should still consolidate into HttpRequestUtils (the task intent is correct), but should be aware that AuthService's capUserAgent at line 636 also uses this constant and must switch to HttpRequestUtils.extractUserAgent.",
+      "fix": "Update step 1 hint to note: 'USER_AGENT_MAX = 500 is also defined in AuthService.java:54 alongside its own capUserAgent at line 636. Task 6 will delete AuthService.capUserAgent when switching to HttpRequestUtils — no action needed in Task 5 for that site.'"
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 5,
+      "issue": "Step 1 says 'mirroring current logic in AuthService.extractIp (lines 642–653) and ProjectController.extractIp (lines 133–148)'. The ProjectController range 133–148 is slightly off: capUserAgent starts at line 133, extractIp starts at line 138. The AuthService range 642–653 is accurate (method at 642, closing brace at line 653 — the last line of the file is 654 which is the class closing brace). Minor labeling issue.",
+      "fix": "Update hint to: 'AuthService.extractIp at lines 642–653 (accurate); ProjectController.extractIp at lines 138–148 (capUserAgent is at 133, extractIp definition starts at 138).'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 6,
+      "issue": "TDD Anchor claims AuthServiceTest has '~30 tests' and AuthServiceRegistrationTest + AuthServicePasswordResetTest have '~50 combined'. Actual counts: AuthServiceTest = 23 @Test methods; AuthServiceRegistrationTest = 22 @Test methods; AuthServicePasswordResetTest = 20 @Test methods; combined = 42 (not ~50). The overcounting could cause an implementer to expect more test coverage than exists and miss adding new coverage during the flip.",
+      "fix": "Update TDD Anchor counts to: 'AuthServiceTest has 23 tests; AuthServiceRegistrationTest has 22 tests; AuthServicePasswordResetTest has 20 tests; combined 42 tests across three files.'"
+    }
+  ],
+  "verified_claims": [
+    "Task 4: All 5 repository files exist at stated paths and currently extend ReactiveMongoRepository<T, String> — verified by Read.",
+    "Task 4: UserRepository has 3 Mono<User> finders + 1 Flux<User> finder — exact match.",
+    "Task 4: ProjectRepository has 3 Flux<Project> + 1 Mono<Long> + 2 Mono<Project> finders — exact match.",
+    "Task 4: BotRepository has 2 Mono<Bot> + 1 Flux<Bot> finders — exact match.",
+    "Task 4: EventRepository body is empty (no custom finders) — exact match.",
+    "Task 4: RawUpdateRepository has 1 Mono<RawUpdate> findFirstByProjectIdAndUpdateId — exact match.",
+    "Task 4: RawUpdateRepository class-level comment exists at lines 8–11 — verified by Read.",
+    "Task 4: Mapping rules (Mono<T>→Optional<T>, Flux<T>→List<T>, Mono<Long>→long) match tech-spec line 32.",
+    "Task 5: UserService.java exists; findByEmail, save, softDelete all return Mono<User>/Mono<User>/Mono<User> — verified.",
+    "Task 5: UserService.softDelete uses switchIfEmpty(Mono.error(...)) pattern — confirmed at line 29.",
+    "Task 5: EventService.java has void logEvent() + Mono<Event> logEventBlocking() — exact match.",
+    "Task 5: EmailService.sendAsync uses Mono.fromRunnable + subscribeOn(boundedElastic()) + subscribe — confirmed.",
+    "Task 5: extractIp is duplicated in exactly 4 files: AuthService (line 642), ProjectController (line 138), ProfileController (line 88), BotController (line 94) — all confirmed.",
+    "Task 5: USER_AGENT_MAX = 500 in ProjectController.java:30 — confirmed.",
+    "Task 5: capUserAgent returns null for null input (ProjectController line 133–135) — confirmed.",
+    "Task 5: code-research.md exists at the referenced path — confirmed.",
+    "Task 5: UserServiceTest, EventServiceTest, EmailServiceTest all exist at stated paths — confirmed.",
+    "Task 5: EmailServiceTest.sendVerificationEmail_fireAndForget_exceptionDoesNotPropagate exists — confirmed at line 82.",
+    "Task 6: AuthService.java exists (654 lines, approximately 650 LOC as claimed).",
+    "Task 6: AuthController.java exists at 83 lines — exact match.",
+    "Task 6: AuthControllerSliceTest.java is 106 lines with 5 @Test methods — exact match.",
+    "Task 6: AuthService has exactly 8 public methods returning Mono<X> or Mono<Void> — confirmed by grep.",
+    "Task 6: AuthService uses ReactiveRedisTemplate, ReactiveMongoTemplate, ServerSecurityContextRepository — confirmed.",
+    "Task 6: AuthService.extractIp private helper at line 642 — confirmed.",
+    "Task 6: AuthService.capUserAgent private helper at line 634 with USER_AGENT_MAX = 500 — confirmed.",
+    "Task 6: REMEMBER_ME_ATTR is referenced from RememberMeWebSessionIdResolver in AuthService (lines 12, 600, 605) — confirmed.",
+    "Task 6: 4 BCrypt Mono.fromCallable sites at lines 366, 420, 522, 532 — exact match.",
+    "Task 6: 7 Mono.fromRunnable sites at lines 470, 506, 525, 537, 571, 577, 585 — exact match.",
+    "Task 6: All 11 Mono.fromCallable/fromRunnable line numbers match code-research §1.6 exactly.",
+    "Task 6: code-research.md §1.4, §1.5, §1.6, §2, and §6 (Wave 6 auth) sections all exist — confirmed.",
+    "Task 6: AuthServiceTest, AuthServiceRegistrationTest, AuthServicePasswordResetTest, AuthControllerSliceTest, AuthControllerIT all exist at stated paths — confirmed.",
+    "Task 6: AuthControllerIT extends AbstractIntegrationTest — confirmed at line 33.",
+    "Task 6: terminateAllSessions is private Mono<Long> — confirmed at line 390.",
+    "Task 6: TDD Anchor test 'login_nonExistentEmail_runsDummyBcrypt_andIncrementsCounters_returns401' exists at line 140 — exact match.",
+    "Task 6: TDD Anchor test 'login_success_returns200WithBody' exists in AuthControllerSliceTest at line 38 — exact match.",
+    "Task 6: 'login_success_callsChangeSessionId_forSessionFixationDefense' correctly identified as NEW test.",
+    "Task 6: depends_on: [1, 2] with Wave 2 atomic commit design is consistent with tech-spec D5/D9 intent."
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 7
+  }
+}

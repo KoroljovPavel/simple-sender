@@ -1,0 +1,49 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "3",
+  "round": 1,
+  "commit": "14c400a5d1e66a6257b879430ab21aa0900d7008",
+  "scope": "Tests for SUBSCRIBE_TO_FUNNEL — focus: enrollDepth/status/skip+WARN/re-enter assertions, IT determinism.",
+  "summary": "Coverage is complete against the task's testing section across all three layers: unit (FunnelStepExecutorTest), engine-IT (FunnelExecutionEngineIT), and test-run IT (FunnelTestRunSendIT). Assertions verify real state (child currentStepId/enrollDepth/telegramBotId/status, parent status, send counts) and the greppable WARN ids per skip reason — not merely that a mock was called (the unit tests additionally verify the exact enrollSpecificFunnel arguments, which is the contract under test). ITs are deterministic: due-set is snapshotted at sweep start, seeded in-flight children use a far-future nextRunAt so the sweep never claims them, the rate-limit counter is pre-seeded above the fixed default cap, and Redis rate keys are cleared in cleanAndSeed to prevent cross-test leakage. A real cross-test MockWebServer queue-bleed in the test-run IT was caught and fixed (the new test drains its recorded request).",
+  "coverage_matrix": {
+    "enroll success (new exec+sub, currentStepId=entry, depth=parent+1, bot inherited)": "subscribeEnrollsTargetWithEntryStepAndInheritedBot (IT) + both unit tests assert depth+bot args",
+    "endParentAfter true -> parent completed / no further steps": "subscribeEndParentTrueCompletesParentNoFurtherSteps (IT, asserts sentCount=0) + subscribeStepEndParentTrueCompletesAndEnrolls (unit, Outcome.COMPLETE)",
+    "endParentAfter false -> parent continues parallel": "subscribeEndParentFalseParentContinuesParallel (IT) + subscribeStepEndParentFalseContinuesAndEnrolls (unit, Outcome.CONTINUE)",
+    "return-to-menu lands on entry step": "subscribeReturnToMenuLandsOnEntryStep",
+    "depth-cap skip+WARN, parent not failed": "subscribeDepthCapSkipsAndParentSurvives (asserts LOG_ENROLL_DROP_DEPTH_CAP + parent completed)",
+    "rate-limit skip+WARN (separate backstop)": "subscribeRateLimitBackstopSkipsAndParentSurvives (asserts LOG_ENROLL_DROP_VOLUME)",
+    "draft target skip+WARN": "subscribeTargetDraftSkipsGracefully (LOG_ENROLL_SKIP_TARGET_INACTIVE)",
+    "deleted target skip+WARN": "subscribeTargetDeletedSkipsGracefully (LOG_ENROLL_SKIP_TARGET_MISSING)",
+    "foreign-project target skip+WARN (fail-closed)": "subscribeTargetWrongProjectSkipsGracefully (LOG_ENROLL_SKIP_TARGET_WRONG_PROJECT)",
+    "deleted entry step -> fallback to start + WARN": "subscribeMissingEntryStepFallsBackToStart (asserts currentStepId=first + LOG_ENROLL_ENTRY_STEP_FALLBACK)",
+    "re-enter no-op (allowReEnter=false) + separate greppable WARN": "subscribeReEnterNoOpWhenTargetInflight (asserts single active child + LOG_ENROLL_REENTER_IGNORED)",
+    "re-enter restart (allowReEnter=true) from entry": "subscribeReEnterTrueRestartsTargetFromEntry (old child cancelled, fresh child at entry step)",
+    "self-target A->A no-op": "subscribeSelfTargetReEnterFalseNoOp",
+    "test-run root depth-0 -> child depth-1, child send next sweep": "testRunParentWithSubscribeStepEnrollsTargetAtChildDepth"
+  },
+  "findings": [
+    {
+      "id": "TR-1",
+      "severity": "major",
+      "status": "fixed",
+      "file": "FunnelTestRunSendIT.java",
+      "finding": "First run of the new test-run IT failed the PRE-EXISTING testRunLinkedBotSends (takeRequest body assertion). Root cause: the JVM-singleton MockWebServer records requests cumulatively across the test class; the new test left a recorded request in the shared queue, which the other test's takeRequest() then popped. Fixed by draining the recorded request at the end of the new test (TELEGRAM.takeRequest()), so the shared request log stays clean. Re-ran: both test-run ITs green.",
+      "action": "fixed in this round before commit verification"
+    },
+    {
+      "id": "TR-2",
+      "severity": "info",
+      "file": "FunnelExecutionEngineIT.java",
+      "finding": "Determinism verified: cleanAndSeed clears funnels + bf:rate:auto-enroll:* keys; seeded in-flight children use nextRunAt=BASE+365d so the sweep cannot claim them within a test; the due-set is snapshotted once per sweep so a child created during the parent's tick is only progressed on a later explicit sweep. No reliance on JobRunr scheduling or wall-clock.",
+      "action": "none"
+    },
+    {
+      "id": "TR-3",
+      "severity": "info",
+      "file": "FunnelStepExecutorTest.java",
+      "finding": "Unit tests assert the exact enrollSpecificFunnel(projectId, subscriberId, targetFunnelId, targetEntryStepId, originDepth, telegramBotId) arguments including child depth (parent+1) and inherited bot — the precise contract the engine relies on — plus the Outcome (CONTINUE/COMPLETE). This is verifying behavior/contract, not redundant mock-was-called noise.",
+      "action": "none"
+    }
+  ],
+  "verdict": "approved — one cross-test bleed found and fixed; coverage complete and deterministic"
+}

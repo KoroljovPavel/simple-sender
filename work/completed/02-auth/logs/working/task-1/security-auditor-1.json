@@ -1,0 +1,36 @@
+{
+  "reviewer": "security-auditor",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 14,
+      "issue": "HttpOnly cookie property is in the Servlet namespace and has no effect on Spring WebFlux. `server.servlet.session.cookie.http-only=true` is a Servlet stack property; the application uses Spring WebFlux (reactive). WebFlux session cookie properties live under `server.reactive.session.cookie.*`. As written, the HttpOnly flag is silently NOT applied to the SESSION cookie, exposing it to JavaScript and XSS-based session theft.",
+      "suggestion": "Replace the property with the correct WebFlux namespace:\n  server.reactive.session.cookie.http-only=true\n  server.reactive.session.cookie.same-site=strict\n  server.reactive.session.cookie.secure=true\nAlso add `secure=true` (HTTPS enforcement in production) and `same-site` here so all cookie security attributes are in one place."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 33,
+      "issue": "Super-admin password falls back to an empty string. The property `app.super-admin.password=${SUPER_ADMIN_PASSWORD:}` has an empty default. If `SUPER_ADMIN_PASSWORD` is not set, the SuperAdminSeeder will create or update the super-admin account with a blank password — effectively an unauthenticated privileged account. There is no fail-fast guard at the configuration layer.",
+      "suggestion": "Remove the empty fallback to force an explicit failure if the env var is absent:\n  app.super-admin.password=${SUPER_ADMIN_PASSWORD}\nAlternatively, keep the empty default but add startup validation in SuperAdminSeeder: if `SUPER_ADMIN_EMAIL` is non-blank and `SUPER_ADMIN_PASSWORD` is blank, log an error and skip seeding (or throw to prevent startup in non-dev environments)."
+    },
+    {
+      "severity": "minor",
+      "file": ".env.example",
+      "line": 13,
+      "issue": "The example super-admin password `changeme123` is a weak, commonly known default. While `.env.example` is intentionally committed and not a real secret, publishing a concrete weak password as the example normalises it as an acceptable value and increases the probability that developers will use it verbatim in staging or CI environments.",
+      "suggestion": "Replace with a clearly unusable placeholder that communicates minimum requirements:\n  SUPER_ADMIN_PASSWORD=<min-12-chars-letters-digits-symbols>\nThis makes it obvious the value must be replaced and communicates the password policy without providing a usable default."
+    },
+    {
+      "severity": "minor",
+      "file": "infra/docker-compose.yml",
+      "line": 44,
+      "issue": "Mailpit container uses an unpinned `latest` image tag (`axllent/mailpit:latest`), while MongoDB and Redis use pinned tags (`mongo:8.0`, `redis:7.4`). Using `latest` means any `docker compose pull` can silently introduce a different (potentially breaking or compromised) image version, violating build reproducibility. This is a supply-chain hygiene issue for local dev.",
+      "suggestion": "Pin to a specific digest or semver tag, consistent with the other services:\n  image: axllent/mailpit:v1.21\nCheck the current latest release at https://github.com/axllent/mailpit/releases and pin to it."
+    }
+  ],
+  "summary": "Four findings across three files. The most significant is the HttpOnly cookie misconfiguration (major): `server.servlet.session.cookie.http-only` has no effect on a WebFlux app — the correct namespace is `server.reactive.session.cookie.*` — meaning session cookies will lack the HttpOnly flag and be accessible to JavaScript. The second major finding is the empty-string fallback for `SUPER_ADMIN_PASSWORD`, which can produce a privileged account with no password if the env var is missing. Two minor findings: the `.env.example` weak password example and the unpinned `latest` Mailpit image. No hardcoded production secrets or critical vulnerabilities were found. The .gitignore correctly excludes `.env` and `.env.*` while committing only `.env.example`. All ports are correctly bound to 127.0.0.1. The JobRunr dashboard is correctly disabled. Dependency versions look appropriate.",
+  "approved": false
+}

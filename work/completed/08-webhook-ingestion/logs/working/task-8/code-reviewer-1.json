@@ -1,0 +1,98 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Runbook is technically accurate, reproducible end-to-end without source access, and faithful to Task 8 Acceptance Criteria. Field names (eventType, processingStatus, updateId), collection names (raw_updates, events, bots, jobrunr_jobs), API path (/api/v1/projects/{projectId}/bot/test-message), and test message body (Hello from Bot Funnel Service! Bot connected ✅) all verified against the source. Two minor issues: length is ~1.85× the precedent 07 runbook (291 vs 157 lines) which is at the stretch end of 'comparable', and the events query lacks a createdAt recency filter that would protect against stale rows on shared staging.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "docs/staging-smoke/08-webhook-ingestion.md",
+      "line": 122,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Step 7 events query (`db.events.find({eventType: 'telegram_command_start'}).sort({createdAt: -1}).limit(1)`) does not filter by recency. On a shared staging where other operators or prior runbook runs have produced telegram_command_start events, the latest may not be the operator's just-sent /start. Mirror 07-telegram-sender.md step 8 by adding `createdAt: {$gte: new Date(Date.now() - 5*60*1000)}` to scope to the last 5 minutes.",
+      "benefit": "Eliminates false positives when checking startPayload=\"ref_smoke_001\" — without the filter, a stale /start from a previous run could pass the check even if the current operator's /start never reached the worker.",
+      "optional": true
+    },
+    {
+      "file": "docs/staging-smoke/08-webhook-ingestion.md",
+      "line": 182,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Same recency-filter issue applies to step 10's telegram_command_stop query. Add `createdAt: {$gte: new Date(Date.now() - 5*60*1000)}` for symmetry and the same robustness benefit as step 7.",
+      "benefit": "Protects AC8 verification from stale rows on shared staging.",
+      "optional": true
+    },
+    {
+      "file": "docs/staging-smoke/08-webhook-ingestion.md",
+      "line": 1,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Runbook is 291 lines vs 07-telegram-sender.md at 157 lines — roughly 1.85× the precedent. Task 8 Acceptance says length should be 'comparable to 07'. Under the hard 300-line ceiling but at the stretch end of 'comparable'. Candidates for compression: collapse the per-step 'Якщо щось пішло не так' boxes into a single 'Troubleshooting' section at the end (the 07 precedent does NOT use per-step troubleshooting boxes — it places troubleshooting in 'Notes'); the Передумови section repeats the staging-URL-vs-ngrok choice in two places (paragraphs and bullets) and could be condensed.",
+      "benefit": "Brings the runbook closer to the 07 precedent length and reduces operator scan-time during execution.",
+      "optional": true
+    },
+    {
+      "file": "docs/staging-smoke/08-webhook-ingestion.md",
+      "line": 89,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Step 4 ('Перевірити, що webhook зареєстровано у BotFather') is not listed in Task 8 'What to do' step 3 — the task ordering goes from 'Підключити бот' directly to 'Надіслати /start'. The step is useful (catches setWebhook regressions) and 06-bot-connection.md does it too (step 6), so it should stay — but consider noting in the section preamble that the strict task-spec sequence is enriched here. Alternatively, fold it as a sub-bullet of step 3 ('verify in BotFather → Bot Settings → Webhook that the URL is set'). As-is, the runbook diverges silently from the task spec ordering and a future reviewer may flag the discrepancy.",
+      "benefit": "Either explicitly justifies the extra step or merges it into step 3, eliminating an unannounced divergence from the task spec.",
+      "optional": true
+    },
+    {
+      "file": "docs/staging-smoke/08-webhook-ingestion.md",
+      "line": 66,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Typo in step 2 troubleshooting: 'acuthtoken' should be 'authtoken'. Minor but visible to operators copy-pasting the explanation.",
+      "benefit": "Fixes a typo in operator-facing text.",
+      "optional": true
+    },
+    {
+      "file": "docs/staging-smoke/08-webhook-ingestion.md",
+      "line": 162,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Step 9 references 'POST {APP_URL}/api/v1/projects/{projectId}/bot/test-message' — confirmed correct against BotController.java:21 + :60. Consider noting that this is what the network tab WILL show (i.e. it is informational for the operator, not something they need to type). Same pattern as 07-telegram-sender.md step 6.",
+      "benefit": "Clarifies that the operator is verifying the URL the browser sends, not constructing it themselves.",
+      "optional": true
+    },
+    {
+      "file": "docs/staging-smoke/08-webhook-ingestion.md",
+      "line": 140,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Step 8 instructs the operator to find the bot via `db.bots.findOne({projectId: '<projectId>', status: 'CONNECTED'}, ...)`. The runbook should make explicit how to obtain `<projectId>` — 07-telegram-sender.md step 1 has the same pattern but at least references that the operator already knows their projectId from the frontend URL. Consider adding a one-line note in Передумови or step 3: 'projectId is visible in the frontend URL after selecting the project (.../projects/<projectId>/settings).' Without this, a first-time operator may not know where to obtain the projectId.",
+      "benefit": "Removes a small piece of out-of-band knowledge required to run steps 6, 8, 9.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 1,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 7,
+    "testCoverageAssessment": "adequate"
+  },
+  "checklistVerification": {
+    "task8_ac_section_ordering": "PASS — all 12 required sections present in the task-spec order; one extra section (step 4 'Перевірити webhook у BotFather') inserted between 'Підключити бот' and 'Надіслати /start', flagged as suggestion #4.",
+    "task8_ac_language": "PASS — Ukrainian narrative, English command literals (mongosh, ngrok, processingStatus, eventType, ownerChatId, BotFather, /start, /stop) and UI element names (Connect, Disconnect, Send Test Message, Settings → Bot).",
+    "task8_ac_concrete_commands": "PASS — every step has either a concrete shell/mongosh command with all arguments or a concrete UI navigation path with element names in bold. No 'use the appropriate command' placeholders.",
+    "task8_ac_mongo_db_and_collections": "PASS — `botfunnel` db used throughout; collections `raw_updates`, `events`, `bots`, `jobrunr_jobs` all match the source (RawUpdate.java:16 collection='raw_updates', Event.java:12 collection='events', JobRunrMongoConfig.java javadoc 'jobrunr_*'). Field names verified: `eventType` (not 'type'), `processingStatus`, `updateId`, `processingError`, `ownerChatId`, `metadata.startPayload`, `metadata.chatType`.",
+    "task8_ac_failed_queue": "PASS — step 11 covers BOTH `raw_updates.processingStatus='FAILED'` query AND the JobRunr-side `jobrunr_jobs` query with a discovery command `db.getCollectionNames() | grep jobrunr` to confirm the actual collection name. Decision 9 scrubbing/truncation contract documented (token-scrub regression flag included).",
+    "task8_ac_checklist_coverage": "PASS — final 'Чек-ліст результатів' enumerates AC1, AC5 (indirectly), AC6, AC7, AC8, AC17 with step references, AND explicitly lists AC2/AC3/AC4/AC11/AC11a/AC14/AC15/AC16/AC18/AC19 as integration-test-only with the specific test class names. No silent gaps.",
+    "task8_ac_length_range": "MARGINAL — 291 lines vs precedent 07 at 157 lines (~1.85×). Under the hard 300-line ceiling. Flagged as suggestion #3.",
+    "task8_ac_style_match_07": "MOSTLY PASS — matches 07's tone, command formatting (fenced bash/mongosh blocks), placeholder convention (<projectId>, <bot _id>, <numeric-chat-id>, {APP_URL}), security warning ('do not paste in chat/commits'). Diverges from 07 by using per-step 'Якщо щось пішло не так' troubleshooting boxes instead of a consolidated 'Notes' section — see suggestion #3.",
+    "source_field_verification": {
+      "raw_updates_collection": "verified RawUpdate.java:16",
+      "events_collection": "verified Event.java:12",
+      "eventType_field_not_type": "verified Event.java:20 — runbook correctly uses `eventType` (task spec line 37 wrote `type`, which would have been wrong; runbook corrects this)",
+      "updateId_top_level": "verified RawUpdate.java:45 — runbook correctly uses top-level `updateId` (task spec line 36 wrote `payload.update_id`, which would have been the Telegram-wire shape; runbook uses the persisted shape)",
+      "processingStatus_uppercase_values": "verified RawUpdate.java:28-35 — DONE/PENDING/FAILED uppercase, runbook matches",
+      "test_message_body": "verified BotService.java:38 — exact text 'Hello from Bot Funnel Service! Bot connected ✅' matches runbook step 9",
+      "test_message_endpoint": "verified BotController.java:21 + :60 — /api/v1/projects/{projectId}/bot/test-message matches runbook step 9",
+      "jobrunr_collection_name": "verified JobRunrMongoConfig.java javadoc line 23 + JobRunr default — jobrunr_jobs is correct; runbook also instructs `db.getCollectionNames()` discovery which is the safe approach"
+    },
+    "reproducibility_check": "PASS — operator with terminal-only access (no editor on codebase) can execute every step. The only piece of context not spelled out is how to obtain `<projectId>` (flagged as suggestion #7). All commands run without 'command not found' / 'no such collection' / 'unknown UI element' on a correctly-deployed staging."
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "status": "changes_required",
+  "summary": "Frontend bootstrap correctly relies on session cookies (no tokens stored in JS) and uses Vue's auto-escaping interpolation for user-supplied fields, so direct XSS surfaces are clean. However, there is a CRITICAL gap between the frontend $fetch wrapper and the backend CSRF policy declared in tech-spec Decision 12: the backend has CookieServerCsrfTokenRepository.withHttpOnlyFalse() enabled (SecurityConfig.java:41) and expects state-changing requests to carry an X-XSRF-TOKEN header, but useApi.ts only sets credentials:'include' and does NOT propagate the XSRF-TOKEN cookie into the request header. As a result every POST/PATCH/DELETE (including the logout call this commit ships) will receive a 403 in production, AND there is no CSRF defense layered into the frontend at all — Decision 12 is unimplemented on the client. Several other minor issues exist around defensive headers, cross-site Pinia state pollution between SSR requests, and dependency hygiene (happy-dom 16.8.1 has known prototype-pollution / SSR script-execution advisories — only used in tests but worth pinning).",
+  "totalFindings": 8,
+  "findingsBySeverity": {
+    "critical": 1,
+    "major": 3,
+    "minor": 3,
+    "low": 1
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "owasp_category": "A01",
+      "category": "A01 Broken Access Control / CSRF (A05 Security Misconfiguration)",
+      "title": "Frontend $fetch wrapper does not send X-XSRF-TOKEN header — Decision 12 not implemented",
+      "file": "frontend/composables/useApi.ts",
+      "line": 3,
+      "issue": "useApi() returns $fetch.create({ baseURL, credentials: 'include' }) and nothing else. The backend (Decision 12, confirmed in backend/src/main/java/com/botfunnel/security/SecurityConfig.java:40-44) has CSRF protection enabled with CookieServerCsrfTokenRepository.withHttpOnlyFalse() + XorServerCsrfTokenRequestAttributeHandler, which issues an XSRF-TOKEN cookie and requires every non-safe (POST/PATCH/PUT/DELETE) request to echo it back via the X-XSRF-TOKEN request header. The frontend wrapper has no onRequest interceptor that reads the XSRF-TOKEN cookie via document.cookie and injects the X-XSRF-TOKEN header, and the cookie is also not present on the SSR side (server has no browser cookie jar). Consequence: (a) the very first state-changing request shipped in this commit — POST /api/auth/logout in stores/auth.ts:23 — will be rejected with 403 in any environment where CSRF is enabled, breaking the logout button in default.vue:6-9, and (b) the system is not actually protected by the layered CSRF defense Decision 12 promises, leaving only SameSite cookies as the sole barrier (which is bypassable in older browsers and via subdomain takeover scenarios).",
+      "impact": "Two-fold: functional break (logout, register, login, change-password, delete-account will all 403) + advertised defense-in-depth CSRF protection from Decision 12 is non-functional on the client. OWASP A01 (CSRF is now classified under Broken Access Control in OWASP 2021).",
+      "fix": "Add an onRequest interceptor that reads the XSRF-TOKEN cookie on the client and attaches it as X-XSRF-TOKEN for non-safe methods. Example:\n\nexport function useApi() {\n  const config = useRuntimeConfig()\n  return $fetch.create({\n    baseURL: config.public.apiBase,\n    credentials: 'include',\n    onRequest({ options }) {\n      if (import.meta.client) {\n        const method = (options.method ?? 'GET').toString().toUpperCase()\n        if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {\n          const match = document.cookie.match(/(?:^|;\\s*)XSRF-TOKEN=([^;]+)/)\n          if (match) {\n            const headers = new Headers(options.headers as HeadersInit | undefined)\n            headers.set('X-XSRF-TOKEN', decodeURIComponent(match[1]))\n            options.headers = headers\n          }\n        }\n      }\n    },\n  })\n}\n\nAdd a unit test that verifies the header is set for POST and not set for GET. Note: SSR-side state-changing requests are not expected from the bootstrap flow; if they ever are, you must forward the cookie + request a token first.",
+      "cwe": "CWE-352"
+    },
+    {
+      "severity": "major",
+      "owasp_category": "A05",
+      "category": "A05 Security Misconfiguration",
+      "title": "apiBase falls back to plain http://localhost:8080 with no production guard",
+      "file": "frontend/nuxt.config.ts",
+      "line": 11,
+      "issue": "runtimeConfig.public.apiBase = process.env.NUXT_PUBLIC_API_BASE || 'http://localhost:8080'. Because NUXT_PUBLIC_API_BASE is read at build time when baked into public runtimeConfig, a deploy that simply forgets to set the env var will silently ship the production bundle pointing at http://localhost:8080. Combined with credentials:'include', any user opening the production page would have their browser attempt cross-origin authenticated requests to their own localhost (potential CSRF/SSRF-style misuse against locally running services on the user's machine, and definitely a broken-product disclosure of the dev URL). 'public' runtimeConfig is shipped to the client bundle in plain text — there is no overwrite at runtime in Nuxt 4 unless NUXT_PUBLIC_API_BASE is exported at build/start time.",
+      "impact": "Misconfigured prod deploy points to localhost; confidential infra hint leaked; users' browsers issue authenticated requests to attacker-controlled local services if they happen to run on :8080.",
+      "fix": "Fail loud when the env var is absent in non-dev mode. In nuxt.config.ts:\n\nconst apiBase = process.env.NUXT_PUBLIC_API_BASE\nif (!apiBase && process.env.NODE_ENV === 'production') {\n  throw new Error('NUXT_PUBLIC_API_BASE must be set in production')\n}\nruntimeConfig: { public: { apiBase: apiBase || 'http://localhost:8080' } }\n\nAlso enforce HTTPS-only when not on localhost (reject any non-https://, non-http://localhost value).",
+      "cwe": "CWE-1188"
+    },
+    {
+      "severity": "major",
+      "owasp_category": "A04",
+      "category": "A04 Insecure Design",
+      "title": "Pinia store mutates `userState.value` only on 401 — other errors leave stale user data",
+      "file": "frontend/stores/auth.ts",
+      "line": 11,
+      "issue": "fetchUser() catches the error, narrows on statusCode/status/response.status, and sets userState.value = null only when code === 401. Any other failure (5xx, network drop, CORS preflight failure, the backend rejecting the X-XSRF-TOKEN cookie with 403 — see finding 1) re-throws but leaves userState untouched. If the user was previously authenticated and then their session was server-side terminated (Decision 14: change-password invalidates other sessions; Decision 8 in user-spec equivalent: terminate-all-on-delete), but the response code is anything except 401 (e.g., 403 due to CSRF, 419 session-expired pattern, gateway 504), the frontend continues to render `authStore.user` indefinitely — the layout shows the user name + email, navigation works, and the user appears authenticated when they are not. This is the classic 'broken auth state machine' that produces stale-credential UI.",
+      "impact": "Authenticated UI displayed to a user whose backend session is no longer valid — confusing at minimum, dangerous if the UI shows tokens/secrets/PII. Combined with finding 1, every CSRF-rejected response (403) will manifest as 'logout button does nothing and user stays logged in'.",
+      "fix": "Treat 401 AND 403 as 'not authenticated' (user.value = null). Also clear user on any error coming from /api/auth/me to avoid stale state:\n\nasync function fetchUser() {\n  try {\n    userState.value = await useApi()<User>('/api/auth/me')\n  } catch (e: unknown) {\n    const code = (e as any)?.statusCode ?? (e as any)?.status ?? (e as any)?.response?.status\n    if (code === 401 || code === 403) {\n      userState.value = null\n      return\n    }\n    userState.value = null  // fail-closed\n    throw e\n  }\n}",
+      "cwe": "CWE-613"
+    },
+    {
+      "severity": "major",
+      "owasp_category": "A07",
+      "category": "A07 Identification and Authentication Failures",
+      "title": "useState('auth-user') backing key has no per-request reset on the SSR server, allowing user data leak between requests in misconfigured deploys",
+      "file": "frontend/stores/auth.ts",
+      "line": 5,
+      "issue": "The store uses useState<User|null>('auth-user', () => null) as backing storage. Nuxt's useState IS per-request in the standard runtime, but the global middleware (auth.global.ts:14-15) only calls fetchUser() when authStore.user === null. If a deployment ever runs Nuxt in a non-default reuse mode (e.g., a custom server adapter, a worker that recycles Pinia instances, or an AsyncLocalStorage misconfiguration in self-hosted Node), a previous user's state from useState could leak to the next SSR request because the middleware would short-circuit on the existing non-null value and never re-validate against /api/auth/me. There is no defensive 'always re-validate on cold path' fallback.",
+      "impact": "Cross-request authentication bleed in non-default Nuxt server configurations — User A's name/email visible to User B's first SSR-rendered HTML.",
+      "fix": "Belt-and-suspenders: always call fetchUser() on the first server-side hit per navigation, OR explicitly seed useState from a request-scoped composable that pulls the cookie. Minimal patch — drop the short-circuit on SSR:\n\nexport default defineNuxtRouteMiddleware(async (to) => {\n  const authStore = useAuthStore()\n  const publicAuth = isPublicAuthRoute(to.path)\n  if (import.meta.server || authStore.user === null) {\n    if (!publicAuth) await authStore.fetchUser()\n  }\n  ...\n})\n\nAdd a regression test that two consecutive SSR renders with different cookies yield different users.",
+      "cwe": "CWE-488"
+    },
+    {
+      "severity": "minor",
+      "owasp_category": "A05",
+      "category": "A05 Security Misconfiguration",
+      "title": "No CSP, X-Frame-Options, Referrer-Policy, or other security headers configured at the Nuxt level",
+      "file": "frontend/nuxt.config.ts",
+      "line": 1,
+      "issue": "The Nuxt config sets no nitro routeRules with security headers, no nuxt-security module, and no manual headers in app config. The frontend will rely entirely on the reverse proxy / hosting platform for headers — there is no in-repo guarantee. Without CSP, a future XSS regression has no second line of defense; without X-Frame-Options/CSP frame-ancestors, the auth pages can be iframed (clickjacking the login form / logout button). Without Referrer-Policy: strict-origin-when-cross-origin, sensitive paths leak to third-party analytics.",
+      "impact": "Defense-in-depth gap. Not a vulnerability today, but every future XSS or clickjacking finding becomes more severe than it should be.",
+      "fix": "Add nitro route headers in nuxt.config.ts or install nuxt-security:\n\nnitro: {\n  routeRules: {\n    '/**': {\n      headers: {\n        'X-Frame-Options': 'DENY',\n        'X-Content-Type-Options': 'nosniff',\n        'Referrer-Policy': 'strict-origin-when-cross-origin',\n        'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',\n        'Content-Security-Policy': \"default-src 'self'; connect-src 'self' http://localhost:8080; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'\"\n      }\n    }\n  }\n}\n\nReview CSP for prod (replace localhost with APP_URL).",
+      "cwe": "CWE-693"
+    },
+    {
+      "severity": "minor",
+      "owasp_category": "A06",
+      "category": "A06 Vulnerable and Outdated Components",
+      "title": "happy-dom@16.8.1 has known security advisories",
+      "file": "frontend/package.json",
+      "line": 24,
+      "issue": "package.json pulls happy-dom@^16.5.3 which resolves to 16.8.1 in pnpm-lock.yaml. happy-dom < 17.4.5 is affected by GHSA-96g7-g7g9-jxw8 and a follow-up server-side script execution advisory (CVE-2024-46939 family). Although happy-dom is a devDependency used only by vitest, malicious test fixtures or compromised upstream test data could execute arbitrary code in the test runner — a real concern for CI pipelines that run untrusted PRs.",
+      "impact": "Supply-chain / CI compromise vector if test fixtures ever come from an untrusted source. Not user-facing in production runtime.",
+      "fix": "Upgrade to happy-dom@^17.4.5 (or latest compatible major). Pin in package.json: \"happy-dom\": \"^17.4.5\". Run pnpm update happy-dom and re-run pnpm test. Also add a periodic pnpm audit step to CI.",
+      "cwe": "CWE-1104"
+    },
+    {
+      "severity": "minor",
+      "owasp_category": "A09",
+      "category": "A09 Security Logging and Monitoring Failures",
+      "title": "Logout swallows backend errors silently — failed logout looks successful to the user",
+      "file": "frontend/stores/auth.ts",
+      "line": 21,
+      "issue": "logout() wraps the POST /api/auth/logout call in try/finally, so any backend failure (including the CSRF 403 from finding 1, or a network error) is silently swallowed and the local state is cleared regardless. The user sees 'logged out' UI but their server-side session may still be active on the device. There is also no client-side audit/telemetry hook indicating the failure.",
+      "impact": "User believes they are logged out (e.g., on a shared computer) when their backend session may persist. Silent-failure of a security-critical action with no operator visibility.",
+      "fix": "Distinguish 'session already gone' (acceptable to clear) from 'request failed' (surface to user, do NOT clear local state and show a retry):\n\nasync function logout() {\n  try {\n    await useApi()('/api/auth/logout', { method: 'POST' })\n    userState.value = null\n  } catch (e: any) {\n    const code = e?.statusCode ?? e?.status\n    if (code === 401) { userState.value = null; return }\n    // 403 / network error — report to user, keep state as-is\n    throw e\n  }\n}\n\nAlso emit a client-side log/Sentry event on logout failures.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "low",
+      "owasp_category": "A03",
+      "category": "A03 Injection (XSS)",
+      "title": "user.name and user.email rendered in topbar — verify backend HTML-escapes / length-bounds these fields",
+      "file": "frontend/layouts/default.vue",
+      "line": 17,
+      "issue": "Vue's `{{ }}` mustache binding HTML-escapes its content, so a string like \"<script>alert(1)</script>\" in user.name will be rendered as text — this is safe against reflected/stored XSS today. However: (1) there is no length cap or truncation on rendering, so a malicious or buggy backend could push a 10MB name and break layout / cause DOS; (2) if a future change replaces `{{ user.name }}` with `v-html` (e.g., to render formatted name) this becomes a stored-XSS sink. The user-spec/Decision 15 confirms backend Bean Validation gates the input, but the frontend should not assume that and should defensively cap.",
+      "impact": "Defensive only. No exploit today. Prevents future regression.",
+      "fix": "Add a short ESLint rule banning v-html in the layouts/* directory and cap the render length (e.g., user.name?.slice(0, 64)). Optionally normalize via a `useDisplayName()` composable that trims and slices.",
+      "cwe": "CWE-79"
+    }
+  ],
+  "checks_performed": {
+    "credentials_in_js": "PASS — no tokens read from or written to localStorage/sessionStorage/JS-readable cookies; auth state lives in useState backed by HTTP-only session cookie issued by backend.",
+    "cors_credentials": "PASS — useApi sets credentials:'include'; backend Decision 8 confirms allowCredentials with explicit origin.",
+    "csrf_handling": "FAIL — see finding #1.",
+    "xss_user_data": "PASS — Vue {{ }} interpolation auto-escapes; no v-html / innerHTML in app code (verified across frontend/**.vue, frontend/**.ts).",
+    "hardcoded_secrets": "PASS — no API keys, tokens, passwords, or connection strings in any added file. NUXT_PUBLIC_API_BASE properly loaded from env. (apiBase fallback to localhost is a config issue, not a hardcoded secret.)",
+    "open_redirect": "PASS — middleware/auth.global.ts only navigates to fixed string literals '/dashboard' and '/auth/login'; no use of `to.query.redirect` or any user-controlled redirect target.",
+    "dependency_vulnerabilities": "PARTIAL — happy-dom@16.8.1 flagged (finding #6); other dependencies (nuxt 4.4.4, vite 7.3.2, pinia 3.0.4, vue 3.5.33, vee-validate 4.15.x, zod 3.24.x, radix-vue 1.9.13, @tanstack/vue-query 5.62.x) are at recent versions with no known critical CVEs as of cutoff.",
+    "deserialization": "PASS — no JSON.parse(untrusted) without schema; vue-query dehydrate/hydrate uses framework-controlled state.",
+    "ssrf": "PASS — no user-controlled URLs passed to $fetch on the server side; baseURL is config-driven.",
+    "logging_monitoring": "WARN — finding #7 (silent logout failure)."
+  },
+  "references": {
+    "tech_spec_decisions": [
+      "Decision 8 (CORS allowCredentials)",
+      "Decision 12 (CSRF with CookieCsrfTokenRepository + X-XSRF-TOKEN — UNIMPLEMENTED on client)"
+    ],
+    "owasp_2021": [
+      "A01 Broken Access Control (CSRF)",
+      "A04 Insecure Design",
+      "A05 Security Misconfiguration",
+      "A06 Vulnerable Components",
+      "A07 Auth Failures",
+      "A09 Logging Failures"
+    ]
+  }
+}

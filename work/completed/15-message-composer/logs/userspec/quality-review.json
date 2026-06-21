@@ -1,0 +1,62 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "pass"
+  },
+  "findings": [
+    {
+      "check": "contradictions",
+      "severity": "major",
+      "issue": "Criterion 4 states text>4096 / caption>1024 is 'позначено на save (у рантаймі — trim + WARN, не фейл)' — meaning it is a WARNING at save, not a blocking error, and the block saves successfully. But step 7 of 'Як має працювати' says 'помилки — інлайн-кодами біля контролу' without distinguishing warnings from hard errors. An implementor reading step 7 alone would treat over-length as a blocking 422, but criterion 4 explicitly says runtime handles it with trim+WARN. The spec needs to clarify: over-length is a non-blocking warning at save (shown inline), not a 422 rejection.",
+      "location": "Як має працювати (крок 7) vs Критерії приёмки (критерій 4)",
+      "fix": "In step 7 of 'Як має працювати', split validation outcomes: 'hard errors (порожній композер, Album <2/>10, кнопки на не-останньому/Album блоці) → 422; soft warnings (text >4096 / caption >1024) → інлайн-попередження, блок все одно зберігається'. Alternatively, add a parenthetical in criterion 4 clarifying '(не блокує збереження — тільки попередження)' to make the distinction unambiguous."
+    },
+    {
+      "check": "edge_cases",
+      "severity": "minor",
+      "issue": "The interview explicitly discussed the edge case 'last block is Album + author wants buttons → must add a trailing text/image block to carry buttons.' This workaround guidance is absent from the spec. A user who runs into validation error 'кнопки на Album-блоці → 422' gets no hint of the solution.",
+      "location": "Як має працювати (крок 5) / Обмеження",
+      "fix": "Add a sentence to step 5 of 'Як має працювати' or to the relevant bullet in 'Обмеження': 'Якщо останній блок — Album, author мусить додати ще один текст/медіа-блок після нього, щоб прикріпити кнопки.'"
+    },
+    {
+      "check": "edge_cases",
+      "severity": "minor",
+      "issue": "The interview error_scenarios section documents 'invalid media URL → Telegram rejects on fetch → terminal TelegramSendException → execution failed (same as sendPhoto)'. This runtime failure path is not mentioned in criteria, constraints, or 'Як має працювати'. It is a meaningful observable behaviour difference from the save-time validation story.",
+      "location": "Критерії приёмки / Обмеження",
+      "fix": "Add a bullet to 'Обмеження' or as a note in criterion 7: 'Невалідний URL повертає TelegramSendException — execution переходить у failed (аналогічно поточному sendPhoto); backend URL не дереференсить (no-SSRF).'"
+    },
+    {
+      "check": "edge_cases",
+      "severity": "minor",
+      "issue": "The interview edge_cases entry 'subscriber blocks the bot mid-node → CANCEL (handled like today's single send)' was discussed but is not reflected anywhere in the spec.",
+      "location": "Критерії приёмки / Обмеження",
+      "fix": "Add one sentence to 'Обмеження' or a note in the at-most-once criterion: 'Блокування бота підписником посеред ноди → CANCEL (наявна поведінка, без змін).'"
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "block-type scope: text/image/video/audio/file/album IN; location/contact/invoice/delay/input/animation DEFERRED",
+      "backward-compat: clean replace, old types (SEND_MESSAGE/SEND_IMAGE/MENU) deleted, no migration",
+      "MENU folded into composer: inline buttons on last non-album block, park-on-reply + resumeOnCallback + branch",
+      "media source: URL/file_id only, no upload this phase, S3 later",
+      "data wipe: manual one-off deleteMany (no prod data, no startup runner)",
+      "at-most-once per node: mid-node crash strands node, no resend",
+      "buttons placement: last block only, never on Album",
+      "limit validation at save/activate: empty/11+ blocks 422, album <2/>10 422, buttons on non-last/album 422, text/caption over-length warn",
+      "testing strategy: executor unit, sender unit (mockwebserver), engine IT, controller IT, frontend vitest; no E2E",
+      "success criteria: N sequential messages in order, buttons branch, legacy types removed, at-most-once",
+      "block rules: 1-10 blocks/node, caption+parseMode on media, album caption on first item, variables on text+all captions, reorder"
+    ],
+    "missing": [
+      "invalid media URL → terminal TelegramSendException → execution failed (discussed in error_scenarios, not in spec)",
+      "subscriber blocks the bot mid-node → CANCEL (discussed in edge_cases, not in spec)",
+      "last-block-is-album workaround: must add trailing text block to carry buttons (discussed in edge_cases, not in spec)"
+    ]
+  },
+  "summary": "Специфікація якісна: всі секції заповнені, критерії прийнятності конкретні й перевіряємі, ризики з митигаціями, тестування з обґрунтуванням. Одна major-проблема: суперечність між кроком 7 ('Як має працювати') і критерієм 4 щодо поведінки при перевищенні лімітів символів — потрібно чітко розмежувати hard-422 і soft-warning. Три minor-прогалини: не відображено в спеці три edge-кейси, обговорені в інтерв'ю."
+}

@@ -1,0 +1,32 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 4,
+  "round": 1,
+  "mode": "self-applied (nested sub-agent spawning restricted in this environment; methodology loaded and applied to the diff by the executing agent)",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/FunnelStepDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/ContentBlockDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/MediaItemDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/PreviewStepRequest.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/PreviewStepResponse.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java"
+  ],
+  "findings": [
+    {
+      "severity": "info",
+      "dimension": "correctness / spec-fidelity",
+      "title": "Album type-mixing predicate (Decision 5) not enforceable at this layer",
+      "detail": "Decision 5 requires rejecting audio/document mixed with photo/video in one album group. The Task 1 model (MediaItem = {mediaUrl, caption}) carries NO per-item media-kind discriminator, so the predicate cannot be evaluated at save time. validateAlbum enforces the enforceable subset (2..10 items, valid media source per item, caption-on-first-only). Documented as a deviation in decisions.md; the type-mix test from the task list is therefore not added (it cannot be exercised against the current model).",
+      "action": "documented; no code change (model limitation, out of this task's file scope)"
+    },
+    {
+      "severity": "minor",
+      "dimension": "consistency",
+      "title": "Button error messages re-labelled MENU -> MESSAGE",
+      "detail": "validateButtons/requireTimeout/requireUrl messages updated from the hardcoded 'MENU ...' to 'MESSAGE ...' / a parameterised field label, so an author editing a composer keyboard or media block no longer sees a misleading 'MENU url button' error. requireUrl now takes a fieldLabel and is shared by the keyboard url-button and the media-source check.",
+      "action": "applied (the task explicitly required extracting a generic field-labelled URL validator)"
+    }
+  ],
+  "verdict": "OK — no blocking findings. The diff follows the file's conventions (CODE_INVALID_STEP business code + AppException.unprocessableEntity, requireFunnel-FIRST in previewStep, defensive null-handling in toBlocks/toStepDto, no silent field drop on round-trip)."
+}

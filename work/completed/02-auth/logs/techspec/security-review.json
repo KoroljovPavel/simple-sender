@@ -1,0 +1,154 @@
+{
+  "verdict": "warn",
+  "summary": "The tech-spec demonstrates strong security fundamentals: BCrypt cost 12, SHA-256 token hashing, email enumeration prevention, HttpOnly session cookies, event logging, and fire-and-forget email errors. No critical (blocking) vulnerabilities found. However, several medium-to-high risk gaps exist that must be addressed during implementation: CSRF protection is explicitly disabled in the current SecurityConfig with no mitigation plan for session-based auth, brute-force protection uses email-only keying (not IP), the Resend endpoint has a timing oracle, the PATCH profile endpoint has mass-assignment risk, the Super Admin password has no minimum strength enforcement, and CORS wildcard risk in the dev profile needs explicit constraints.",
+  "critical": [],
+  "warnings": [
+    {
+      "issue": "CSRF protection disabled with no re-enable plan for session-based auth",
+      "owasp_category": "A01: Broken Access Control / A04: Insecure Design",
+      "cwe": "CWE-352",
+      "location": "SecurityConfig.java:17 — .csrf(csrf -> csrf.disable()); tech-spec Decision 11",
+      "detail": "The current SecurityConfig disables CSRF globally citing 'stateless API'. The tech-spec now switches to session-based auth with HttpOnly cookies, which IS subject to CSRF. The spec does not restore CSRF protection or specify an alternative mitigation (e.g. SameSite=Strict, custom header check, CSRF token). SameSite=Lax (the dev default per the spec) does NOT protect against top-level navigation POST attacks and cross-site GET requests that trigger state changes.",
+      "impact": "A malicious page can craft cross-site requests that execute authenticated actions (logout, change-password, delete-account, terminate-all-sessions) on behalf of a logged-in user if the browser sends the session cookie.",
+      "recommendation": "Re-enable CSRF protection in SecurityConfig for session-based auth, OR explicitly adopt SameSite=Strict (not Lax) for the session cookie in both dev and prod. If SameSite=Strict is chosen as the sole CSRF mitigation, document it as a deliberate decision with justification (not all browsers/reverse-proxies respect it equally). Also add a custom request header check (e.g. X-Requested-With: XMLHttpRequest) as defense-in-depth for state-changing endpoints."
+    },
+    {
+      "issue": "Brute-force key is email-only — trivial bypass by switching target accounts",
+      "owasp_category": "A07: Identification and Authentication Failures",
+      "cwe": "CWE-307",
+      "location": "tech-spec — Brute-force via Redis section; Redis key schema: brute:fail:{email}",
+      "detail": "The brute-force counter key is `brute:fail:{email}`. An attacker can make 4 failed attempts per account across hundreds of accounts without triggering any per-IP lockout. The user-spec says 'brute-force від одного IP/email', implying per-IP throttling is expected, but the tech-spec only implements per-email keying.",
+      "impact": "Password spraying attacks (one password tried against many accounts) bypass the brute-force protection entirely. This is a well-known bypass for email-keyed-only rate limiting.",
+      "recommendation": "Add a secondary Redis key `brute:fail:ip:{clientIp}` with a higher threshold (e.g. 20 attempts across any accounts per 15min window) to catch spray attacks. Extract the real client IP from X-Forwarded-For (with trusted proxy validation) or RemoteAddr. Document the IP extraction approach to avoid header-spoofing."
+    },
+    {
+      "issue": "Resend verification endpoint: timing oracle for email enumeration",
+      "owasp_category": "A07: Identification and Authentication Failures",
+      "cwe": "CWE-203",
+      "location": "tech-spec Decision 7 — POST /api/auth/resend-verification",
+      "detail": "The spec correctly says the endpoint 'always returns 200'. However, when the email does NOT exist in the database, the code path skips the Redis SET NX operation. When the email DOES exist, the code does: DB lookup + Redis SET NX + (possibly) JavaMailSender call. The response time difference between these code paths creates a measurable timing side-channel that allows email enumeration despite the uniform 200 response.",
+      "impact": "An attacker can distinguish registered vs unregistered emails by measuring response latency — undermining the anti-enumeration design for the resend endpoint.",
+      "recommendation": "Always perform the Redis SET NX operation regardless of whether the email exists. Use a constant-time DB lookup pattern (find user, then branch silently). Consider adding a small uniform random delay (e.g. 50-150ms) on the fast path to make timing attacks impractical. The forgot-password endpoint has the same risk."
+    },
+    {
+      "issue": "PATCH /api/profile — mass assignment risk on User document",
+      "owasp_category": "A03: Injection / A01: Broken Access Control",
+      "cwe": "CWE-915",
+      "location": "tech-spec Task 7 — PATCH /api/profile (name only); data model: users collection",
+      "detail": "The spec says PATCH updates 'name only', but does not explicitly mandate a dedicated DTO with a whitelist of allowed fields, nor does it forbid binding the request body directly to the User @Document. If the implementation binds the request body directly to the User document (a common mistake), an attacker can send fields like `isSuperAdmin: true`, `status: 'active'`, `passwordHash: '...'`, etc.",
+      "impact": "Privilege escalation: a user could promote themselves to Super Admin or change their own account status by including unexpected fields in a PATCH request.",
+      "recommendation": "Mandate a dedicated `ProfileUpdateRequest` DTO with only allowed fields (e.g. `name`). The spec should explicitly state: 'PATCH body binds to a whitelist DTO; direct binding to User @Document is forbidden.' Add a test case that sends `isSuperAdmin: true` in the PATCH body and asserts the field is NOT updated in the DB."
+    },
+    {
+      "issue": "Super Admin password stored in env var with no minimum strength or rotation requirement",
+      "owasp_category": "A07: Identification and Authentication Failures",
+      "cwe": "CWE-521",
+      "location": "tech-spec — Super Admin seed (ApplicationRunner); deployment.md SUPER_ADMIN_PASSWORD",
+      "detail": "The spec reads `SUPER_ADMIN_PASSWORD` from env vars and creates the Super Admin account via BCrypt. However, no minimum password strength is enforced server-side for the seeded admin, and there is no mention of first-login password change enforcement or secret rotation guidance. Weak admin passwords set via env vars at deploy time pose elevated risk.",
+      "impact": "If a weak admin password is set (e.g. 'admin123'), it can be brute-forced through the normal login endpoint. The brute-force counter applies, but the admin account has elevated privileges and a successful attack is catastrophic.",
+      "recommendation": "Enforce the same password validation rules (min 8 chars, one digit, one letter) on the seeded password in SuperAdminSeeder before creating the user. Log a startup warning if the password does not meet the policy. Document in deployment.md that SUPER_ADMIN_PASSWORD must be a strong, randomly generated credential (at least 20 chars)."
+    },
+    {
+      "issue": "CORS configuration: 'dev profile allows localhost:3000' — scope is underspecified",
+      "owasp_category": "A05: Security Misconfiguration",
+      "cwe": "CWE-942",
+      "location": "tech-spec Decision 8 — CORS configured for local dev",
+      "detail": "Decision 8 mentions 'CORS configuration allowing http://localhost:3000 in development profile' and 'APP_URL is the allowed origin in production'. However, the spec does not address: (1) whether `allowCredentials: true` is set (required for session cookies to work cross-origin in dev, but dangerous if the origin list is not strict), (2) which HTTP methods are allowed, (3) whether preflight caching headers are set. The comment in the existing SecurityConfig also does not re-introduce this — it will be easy to accidentally configure CORS too permissively.",
+      "impact": "An overly permissive CORS policy (e.g. `allowedOrigins('*')` with credentials, or accidental wildcard in dev) would allow any website to make credentialed requests to the API.",
+      "recommendation": "Explicitly specify in the tech-spec: allowed origins list (exact values), `allowCredentials: true` only when origin is not wildcard, allowed methods (GET, POST, PATCH, DELETE — no wildcard), and that the configuration is profile-specific (application-dev.properties vs application-prod.properties). Add a test that verifies a request from an unlisted origin is rejected."
+    },
+    {
+      "issue": "Login endpoint: status check order allows account enumeration on timing difference",
+      "owasp_category": "A07: Identification and Authentication Failures",
+      "cwe": "CWE-203",
+      "location": "tech-spec — Login flow, step 1: brute-force check → find user → BCrypt verify → status check",
+      "detail": "The login flow checks brute-force first (fast Redis read), then finds the user, then BCrypt verifies, then checks status. If a user is 'blocked', the BCrypt comparison still runs (full 250ms cost), but if a non-existent email is given, the user lookup returns empty and BCrypt is skipped — resulting in faster response. This timing difference between 'no such user' and 'wrong password for existing user' can be used for email enumeration. The spec does not mandate a dummy BCrypt comparison on missing user.",
+      "impact": "Attackers can enumerate which emails have registered accounts by measuring login response time.",
+      "recommendation": "Always run a dummy BCrypt comparison (e.g. `passwordEncoder.matches(rawPassword, DUMMY_HASH)`) when the user lookup returns empty. This is standard Spring Security behavior for UserDetailsService but must be explicitly implemented in the custom WebFlux login handler."
+    },
+    {
+      "issue": "Session fixation: spec does not address session ID rotation on login",
+      "owasp_category": "A07: Identification and Authentication Failures",
+      "cwe": "CWE-384",
+      "location": "tech-spec — Login flow, step 1: get WebSession from exchange → set SecurityContext",
+      "detail": "The login flow description says 'get WebSession from exchange' (implying reuse of the existing pre-auth session) and then sets SecurityContext. If the same session ID is reused after authentication, any session ID an attacker obtained before the user logged in (e.g. via network sniffing, shared environment) remains valid post-login.",
+      "impact": "Session fixation attack: attacker sets a known session ID pre-login, victim logs in, attacker reuses the same session ID to hijack the authenticated session.",
+      "recommendation": "The implementation must call `exchange.getSession().flatMap(session -> session.invalidate()).then(exchange.getSession())` to create a NEW session after successful authentication, not reuse the pre-auth session. Alternatively, verify that Spring WebFlux's WebSession implementation automatically rotates session IDs on privilege change — if not, implement rotation explicitly. Add an integration test: create session pre-login, log in, assert old session ID is no longer valid."
+    },
+    {
+      "issue": "Email templates use String.format() / replace — XSS risk if user-controlled data is embedded",
+      "owasp_category": "A03: Injection",
+      "cwe": "CWE-79",
+      "location": "tech-spec Decision 10 — Email templates as plain HTML; Task 3: EmailService",
+      "detail": "Decision 10 explicitly chooses `String.format()` or simple string replace over Thymeleaf to avoid a dependency. Email templates embed the token URL and potentially the user's name. If user-controlled data (e.g. user name from registration) is interpolated into the HTML email without HTML-encoding, a stored XSS payload in the name field could be rendered in the email client.",
+      "impact": "A user who registers with a name like `<script>alert(1)</script>` could inject HTML/JavaScript into transactional emails sent to themselves or (if names appear in admin emails) to admins. Some email clients render HTML from sender-controlled content.",
+      "recommendation": "HTML-encode all user-supplied values before embedding in email templates (replace `<`, `>`, `&`, `\"`, `'` with HTML entities). Alternatively, use Thymeleaf's `th:text` (auto-escapes) instead of `th:utext`. Add a test case with a name containing HTML special chars and verify the rendered email body contains encoded entities."
+    },
+    {
+      "issue": "Pending user can access the application — authorization model for pending state is undefined",
+      "owasp_category": "A01: Broken Access Control",
+      "cwe": "CWE-284",
+      "location": "tech-spec — Login flow: pending → 200 with warning; user-spec Constraints section",
+      "detail": "The spec allows `pending` users to log in and access `/dashboard` and `/profile`. The constraint 'blocking project creation for pending users is defined in later epics' means there is currently NO backend authorization enforcement preventing a pending user from calling any API endpoint. The frontend banner is informational only — a pending user can call any protected API endpoint directly.",
+      "impact": "Users who have not verified their email can perform all actions available to verified users. If future epics add sensitive operations (e.g. payment, bot creation), pending users may be able to access them before email verification is confirmed.",
+      "recommendation": "Implement a backend guard: create a `@PendingUserRestriction` annotation or a WebFilter that checks `status == pending` on protected endpoints and returns 403 with `{code: 'EMAIL_NOT_VERIFIED'}` for restricted operations. Define the list of allowed operations for pending users explicitly in the tech-spec, even if the full restriction set comes later."
+    },
+    {
+      "issue": "Missing: password validation rules are not specified for the backend",
+      "owasp_category": "A04: Insecure Design",
+      "cwe": "CWE-521",
+      "location": "tech-spec — Registration flow; user-spec: 'мін. 8 символів, одна цифра, одна літера'",
+      "detail": "The user-spec defines password rules: minimum 8 chars, one digit, one letter. The tech-spec does not mention server-side password validation at all. Frontend-only validation (vee-validate/zod) is easily bypassed via direct API calls.",
+      "impact": "A direct POST to /api/auth/register or /api/auth/reset-password bypasses frontend validation. Users can set single-character passwords or empty passwords, which BCrypt will hash and store.",
+      "recommendation": "Add explicit server-side password validation in `AuthService` (or as a Bean Validation annotation on the DTO): minimum 8 chars, at least one letter, at least one digit. Return 400 with a structured error if the rule is violated. Add integration tests that send invalid passwords directly to the API."
+    },
+    {
+      "issue": "SecurityConfig: CSRF disable comment is incorrect post-decision — creates implementation risk",
+      "owasp_category": "A05: Security Misconfiguration",
+      "cwe": "CWE-16",
+      "location": "SecurityConfig.java:17 — comment: 'Stateless API — no session-based features; CSRF protection is unnecessary'",
+      "detail": "The existing SecurityConfig has an incorrect comment that will mislead the implementing agent. The comment says CSRF is unnecessary because the API is stateless. After this epic, the API uses session cookies and CSRF becomes relevant. The misleading comment increases the probability that the implementing agent leaves CSRF disabled with no mitigation.",
+      "recommendation": "The tech-spec must explicitly instruct Task 2 (User domain / SecurityConfig update) to: (1) remove the 'stateless API' CSRF comment, (2) either re-enable CSRF with CookieCsrfTokenRepository or document the chosen mitigation (SameSite=Strict + custom header). This should be a checklist item in Task 2's description."
+    },
+    {
+      "issue": "Hard-delete job: no audit log for deleted records",
+      "owasp_category": "A09: Security Logging and Monitoring Failures",
+      "cwe": "CWE-223",
+      "location": "tech-spec — JobRunr hard-delete section; events collection schema",
+      "detail": "The spec says the HardDeleteJob 'logs count of deleted records' (application log). The `events` collection schema includes `account_deleted` event type, but this appears to be populated on soft-delete (user-initiated). The hard-delete job deleting records from the database leaves no forensic trail of which specific user IDs were permanently removed.",
+      "impact": "In a GDPR context or incident investigation, there is no record of when a specific user's data was permanently deleted. Compliance requirements (right to erasure, audit trail) may require proof of deletion with timestamps and record identifiers.",
+      "recommendation": "Before hard-deleting each user, write a final `hard_delete` event (or enrich `account_deleted`) to an append-only audit log or a separate `deletion_audit` collection that is not itself subject to deletion. Log the user ID, email hash, and timestamp. Alternatively, log the list of deleted user IDs to a structured application log at INFO level."
+    },
+    {
+      "issue": "Change-password endpoint: no session invalidation of OTHER sessions",
+      "owasp_category": "A07: Identification and Authentication Failures",
+      "cwe": "CWE-613",
+      "location": "tech-spec Task 7 — POST /api/profile/change-password; acceptance criteria: '200, new password works for login'",
+      "detail": "The spec correctly invalidates ALL sessions after a password RESET (forgot-password flow). However, for password CHANGE from the profile page, the spec only logs the event and returns 200. Other active sessions (e.g. on other devices) continue using the old session with no re-authentication required. A compromised session on another device would remain valid even after the user changes their password.",
+      "impact": "If an attacker has captured a session cookie from another device, they retain access even after the legitimate user changes their password.",
+      "recommendation": "After a successful password change via /api/profile/change-password, invalidate all sessions EXCEPT the current one (to keep the user logged in on the device initiating the change). Implement the same `sessions` collection query by principal name used in the reset-password flow, but exclude the current session ID. Add an integration test verifying that other sessions are invalidated after password change."
+    }
+  ],
+  "positives": [
+    "BCrypt cost 12 — exceeds OWASP minimum recommendation; correct use of Spring's BCryptPasswordEncoder bean",
+    "Email/password reset tokens stored as SHA-256 hash — raw token never persisted; correct defense against DB compromise",
+    "Email enumeration prevention on forgot-password: always returns 200 regardless of email existence",
+    "Email verification and resend endpoints always return 200 — anti-enumeration correctly applied",
+    "Token one-time-use enforced via passwordResetUsedAt field — prevents replay of reset links",
+    "Token expiry enforced: email verification 24h, password reset 1h — appropriate TTLs",
+    "Session cookie flags: HttpOnly + SameSite=Lax (dev) / Strict+Secure (prod) — correct flag progression",
+    "Security event logging in dedicated events collection covering all critical auth events — good audit trail foundation",
+    "Fire-and-forget email errors — email service failures never exposed to API consumers; errors logged internally only",
+    "Soft-delete 30-day window blocking re-registration on the same email — prevents account resurrection attacks",
+    "Terminate-all-sessions deletes MongoDB session documents directly — true server-side session revocation",
+    "Password reset invalidates ALL sessions — correct behavior to prevent compromised session persistence after account recovery",
+    "Resend verification: Redis NX key with 60s TTL — prevents email bombing",
+    "Brute-force counter reset on successful login — prevents counter accumulation on legitimate users",
+    "Super Admin seed idempotent — prevents duplicate admin account creation on restart",
+    "32-byte random token (256 bits entropy) for email verification and password reset — sufficient entropy against brute-force",
+    "Integration tests with real Testcontainers (MongoDB, Redis, Mailpit) — tests verify actual behavior not mocks",
+    "No JWT storage risks — session-based auth eliminates XSS-based token theft from localStorage",
+    "spring.data.mongodb.auto-index-creation=false — avoids accidental index changes in production",
+    "Mailpit bound to 127.0.0.1 in docker-compose — not exposed to network"
+  ]
+}

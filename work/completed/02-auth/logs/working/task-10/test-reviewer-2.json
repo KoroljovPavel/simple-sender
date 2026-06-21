@@ -1,0 +1,64 @@
+{
+  "summary": "Round 1 majors are largely closed. forgot-password.spec.ts now exists with the privacy-anti-enumeration invariant explicitly pinned (apiMock rejects → success-message still rendered) — this is the highest-value test added in Round 2 and would catch a refactor that re-throws the catch block. reset-password.spec.ts covers all four branches recommended in Round 1 (missing token, valid submit + redirect, 400 → invalid-link, password mismatch). verify-email expanded from 1 → 5 tests; the critical generic-400-vs-TOKEN_EXPIRED discriminator is now pinned (assertion that [data-test=\"expired\"].exists() === false on a plain 400). login.spec.ts now asserts fetchUserMock was called on the success path and the body shape is pinned via expect.objectContaining + exact body literal, including rememberMe: false (catches a regression where rememberMe is dropped from the request). register.spec.ts now pins the request body shape with an exact object literal that excludes confirmPassword — this is the strongest contract test in the suite. The settle() helper is centralized and the comment explains the rationale, but it still uses setTimeout(50); on CI under load this remains a flake vector and adds a real-time penalty to every test (now 12 tests across 5 files). All 14 new tests pass the litmus test (removing the targeted code line breaks each one). Two Round-1 gaps reopen as minor in Round 2: login still covers only 2 of 4 error branches (403 and generic 500 untested — task line 45-49 maps four codes), and register still covers only 1 of 3 error branches (400 and 429 untested). One new minor: most success-path tests assert apiMock was called with a URL/body, but the verify-email success test does not pin the URL or method — replacing the verify call with Promise.resolve() leaves the test green. Status: needs_improvement — zero criticals, zero majors of the original five remain unaddressed at major severity, but two coverage minors and the unchanged setTimeout-based settle warrant another pass before merge.",
+  "verdict": "needs_improvement",
+  "status": "needs_improvement",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/auth/login.spec.ts (5 tests; 2 of 4 documented error branches untested)",
+      "issue": "login.vue lines 42-50 map four status codes to four distinct user-facing messages: 429 → 'Забагато спроб...', 401 → 'Невірний email або пароль', 403 → 'Доступ заборонено. Зверніться до підтримки', else (e.g. 500) → 'Не вдалося увійти. Спробуйте пізніше'. Round 2 added tests for 429 and 401 only. Litmus: change the 403 branch to `submitError.value = 'Доступ заборонено. Зверніться до підтримки'` → `submitError.value = 'Невірний email або пароль'` and the suite stays green. Same for the else branch. The 403 case is the lowest-probability path but is the one explicitly cited in tech-spec for soft-banned accounts; the generic-500 branch is the fallback users see during real outages. Round 1 explicitly listed all four branches as the fix; Round 2 covered the two highest-probability ones. The original major has been mitigated to a minor — the privacy-sensitive 401 (credential leak via differential message) is covered, but the contract is still not fully pinned. Separately: the order of fetchUserMock relative to navigateToMock is not asserted. If a future refactor reorders the calls so navigateTo runs before authStore.fetchUser, the dashboard renders before the user object is hydrated and flickers through unauthenticated state. The current test asserts both were called but cannot detect the reorder.",
+      "recommendation": "Add `loginForm_403Response_showsAccessDeniedMessage` (apiMock.mockRejectedValueOnce({ statusCode: 403 }); assert text matches /доступ заборонено/i; navigateToMock not called) and `loginForm_500Response_showsGenericMessage` (apiMock.mockRejectedValueOnce({ statusCode: 500 }); assert text matches /спробуйте пізніше/i). To pin call ordering in the existing success test: `expect(fetchUserMock.mock.invocationCallOrder[0]).toBeLessThan(navigateToMock.mock.invocationCallOrder[0])`. Both branches plus the ordering check add ~25 lines."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/auth/register.spec.ts (4 tests; 2 of 3 documented error branches untested)",
+      "issue": "register.vue lines 51-58 map three status codes plus a fallback: 409 → 'вже існує' (covered), 400 → 'Перевірте правильність даних...' (NOT covered), 429 → 'Забагато спроб реєстрації...' (NOT covered, despite tech-spec line 35 '429: rate limit'), else → generic. Litmus: deleting the 400-branch and the 429-branch from register.vue (collapsing both into the generic else) leaves Round 2's four tests green. Round 1 listed all three; Round 2 covered the most user-visible (409). Severity is minor because the messages are non-security-sensitive (no credential differential as in login 401) and the schema validation tests already exercise the success-vs-validation-error fork on the client side. But the 429 message is task-spec-explicit.",
+      "recommendation": "Add `registerForm_400Response_showsValidationMessage` (apiMock.mockRejectedValueOnce({ statusCode: 400 }); assert text matches /перевірте правильність/i) and `registerForm_429Response_showsRateLimitMessage` (assert text matches /спробуйте через хвилину/i). ~15 lines."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/helpers/settle.ts:1-11 (centralized helper still relies on setTimeout(50))",
+      "issue": "Round 2 centralized the helper into one file, added a comment explaining the rationale, and follows the setTimeout with an additional flushPromises + nextTick. This reduces (but does not eliminate) two failure modes: race-with-vee-validate (the trailing flushPromises after the macrotask gives microtasks one more drain) and the previously-cited duplication. What remains: (a) on CI under sustained load, the 50ms wait can still be insufficient if the validation pipeline's scheduling jitters past 50ms — the test will fail intermittently with no obvious cause; (b) every test pays a real 50ms penalty, and Round 2 has 12 tests calling settle() at least once (some twice), so the auth-pages suite alone has ~700ms of wall-clock sleep. With future expansion this scales linearly. The Round 1 prescription was to drop setTimeout entirely in favor of `flushPromises(); nextTick(); flushPromises();`. That recommendation was not validated and the timer remained. Severity drops from major to minor because: (1) the additional flushes meaningfully reduce flake probability, (2) duplication is fixed, (3) no actual flake has been reported. But this is the single highest-leverage fix in the file — one helper change benefits all 12 tests.",
+      "recommendation": "Try the timer-free version: `await flushPromises(); await nextTick(); await flushPromises(); await nextTick();` and run the suite 5 times. If green, ship it — eliminates the 50ms penalty and the CI-load flake risk in one change. If red, document which specific test breaks and why (likely a vee-validate version that schedules across multiple macrotasks); only then keep the setTimeout but reduce to the smallest value that works (often 0ms — `setTimeout(r, 0)` yields one macrotask without a real wait). The shouldAdvanceTime fake-timers approach (`vi.useFakeTimers({ shouldAdvanceTime: true })`) is the deterministic alternative and unlocks testing the verify-email cooldown timer without real waits."
+    },
+    {
+      "severity": "minor",
+      "category": "mock_only",
+      "location": "frontend/tests/pages/auth/verify-email.spec.ts:24-32 (verifyEmail_validToken_showsSuccessState)",
+      "issue": "The success-path test mocks apiMock.mockResolvedValueOnce(undefined), mounts the page, and asserts state === 'success'. It does NOT assert apiMock was called with the correct URL ('/api/auth/verify-email'), method ('GET'), or query ({ token: 'sometoken' }). Litmus: replace the body of `verify()` in verify-email.vue (lines 24-29) with `state.value = 'success'` (skip the API call entirely) → test still passes. The page would silently mark every visit as success without ever talking to the backend. This is the mock-return anti-pattern from test-quality-review.md: mock returns success → test asserts success state. Compare with reset-password and forgot-password success tests, which explicitly pin the URL and body — those are litmus-passing.",
+      "recommendation": "Add to the success test: `expect(apiMock).toHaveBeenCalledWith('/api/auth/verify-email', { method: 'GET', query: { token: 'sometoken' } })`. Apply the same to verifyEmail_genericError_showsInvalidState and verifyEmail_tokenExpired_showsResendButton — both currently pass without asserting the verify call shape. Adds 1 line per test."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/auth/verify-email.spec.ts (cooldown setInterval lifecycle untested — carry-over from Round 1 minor)",
+      "issue": "Round 1 listed this as a minor and Round 2 did not address it. verify-email.vue starts a setInterval in startCooldown (called on resend success and on resend 429), decrements cooldownSecondsLeft each second, and clears in onBeforeUnmount. None of: (a) the decrement over time, (b) the button-disabled state during cooldown, (c) the resend 429 → cooldown branch, (d) the unmount-clears-timer cleanup is covered. Litmus: remove `if (cooldownTimer) clearInterval(cooldownTimer)` from onBeforeUnmount → no test fails, but timers leak across test runs and can cause unrelated tests to flake. Remove the entire setInterval body → no test fails (no test asserts that cooldownSecondsLeft decrements over wall-clock time). This is observability-flavored; not user-blocking, but the resend-429 branch is a real production path during brute-force probing.",
+      "recommendation": "Add (with vi.useFakeTimers): `verifyEmail_resend429_showsCooldownAndDisablesButton` — set up TOKEN_EXPIRED state, fill email, apiMock.mockRejectedValueOnce({ statusCode: 429 }) for the resend, settle, assert [data-test=\"resend-cooldown\"].exists() AND wrapper.find('[data-test=\"resend-button\"]').attributes('disabled') !== undefined AND text contains '60'. Then vi.advanceTimersByTimeAsync(30000); assert text contains '30'. Then vi.advanceTimersByTimeAsync(31000); assert button re-enabled and cooldown text gone. Add `verifyEmail_unmount_clearsTimer`: trigger cooldown; wrapper.unmount(); assert vi.getTimerCount() === 0. ~30 lines total. Note: enabling fake timers may interact with settle()'s setTimeout — see finding above."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/auth/{forgot-password,reset-password}.spec.ts (validation tests check .exists() but not error TEXT)",
+      "issue": "Round 2 fixed this for login.spec.ts and register.spec.ts (assertions now use `.text()` with regex). forgot-password.spec.ts:53 (`forgotPassword_invalidEmail_showsValidationError`) and reset-password.spec.ts:76 (`resetPassword_passwordMismatch_showsValidationError`) still assert only `.exists()`. If a future change renders the [data-test=\"email-error\"] paragraph empty (broken i18n, vee-validate config emits empty string), `.exists()` returns true and the test passes despite the user seeing nothing. The page templates use `<p v-if=\"errors.email\" data-test=\"...\">{{ errors.email }}</p>` — the v-if guards against existence-with-empty-string, but a future refactor that moves to a wrapper component or uses v-show could break this guarantee silently.",
+      "recommendation": "Add text assertions: forgot-password test → `expect(emailError.text()).toMatch(/коректний email/i)`. reset-password test → `expect(error.text()).toMatch(/не співпадають/i)` (matches the message defined in reset-password.vue:25). 2 lines, applies pattern already used in login/register. While here, also add the missing reset-password digit-only password test (`resetPassword_noDigitPassword_showsError`, mirroring register's existing test) — the refine rule on line 20 of reset-password.vue is currently unverified, so deleting the rule passes the suite."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 11,
+    "litmusTest": {
+      "checked": 14,
+      "passed": 13,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 21,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "unbalanced"
+    }
+  }
+}

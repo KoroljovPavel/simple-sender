@@ -1,0 +1,179 @@
+{
+  "task": 11,
+  "verdict": "pass",
+  "gates": {
+    "frontend_test": "PASS — pnpm exec vitest run: 581 passed, 0 failed (58 files). Includes useFunnelCanvas mapping units (19), FunnelCanvas/SidePanel/Palette component specs, funnel-editor page specs (53), i18n required-keys (4).",
+    "check_locales": "PASS — node scripts/check-locales.mjs exit 0; uk/en key sets equal. funnels.canvas.* present in BOTH locales with 0 empty values (verified by flattening the subtree).",
+    "build": "PASS — pnpm build: 'Build complete!', server bundle emitted, no 'window is not defined' (canvas client-only + <ClientOnly> keeps Vue Flow off SSR path). prebuild ran check-locales (parity gate) before nuxt build.",
+    "backend_test": "PASS — ./gradlew test -PrunSlow=true: BUILD SUCCESSFUL. 1304 tests, 0 fail, 0 err, 2 skipped (pre-existing TelegramSenderIT, unrelated to feature). FunnelExecutionEngineIT ran 69 tests skip=0 (slow lane genuinely executed, not silently skipped). FunnelControllerIT 108, FunnelServiceTriggerTypeTest 17, FunnelServiceNotesTest 7, TriggerTest 4, CanvasPositionDtoTest 1, FunnelStepTest. TelegramWebhookP99IT PASSED this run."
+  },
+  "acceptance_criteria": [
+    {
+      "id": "US-AC-1 render-all-nodes",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts buildNodes/buildEdges: steps + optional start node + event-trigger nodes + notes produce correct node set; orphan-forest layout test (disconnected subflows preserved, no single-root assumption). FunnelCanvas.spec.ts renders nodes-from-model."
+    },
+    {
+      "id": "US-AC-2 dagre-autolayout + stored coords",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts: dagre layout runs when coords absent; stored coords used as-is; mixed-layout test (unpositioned node gets a coord distinct from stored coord AND sibling). FunnelCanvas runs fitView via onNodesInitialized. Live fitView framing on a measured viewport is DEFERRED-TO-USER."
+    },
+    {
+      "id": "US-AC-3 move persists canvasPosition; survives reload",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "funnel-editor.spec.ts drag-stop tests: node drag-stop writes canvasPosition (step by id, trigger:<i>, on_start 'start', note:<i>) and PATCHes; TRIGGER drag-stop value-asserts {x,y} and carries canvasPosition through the sanitizer (regression fixed in audit-fix). Backend round-trip FunnelControllerIT.canvasPosition_step_and_trigger_round_trips proves persistence; live reload is DEFERRED-TO-USER."
+    },
+    {
+      "id": "US-AC-4 / TS-AC edge writes correct field; no-edge=null not ''",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts connectEdge per edge-type (next / Button.targetStepId of the right button / timeoutTargetStepId / entry) with sibling-unchanged asserts; 'no edge' serializes strict null not ''; connectEdge rejects null/unknown/'' target."
+    },
+    {
+      "id": "US-AC-5 / TS-AC edge only to saved node",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts connectEdge throws on null/unsaved target; add-node-then-edge PATCH respects saved-node-only constraint. FunnelCanvas.spec.ts: connection to unsaved target is a no-op (no emit)."
+    },
+    {
+      "id": "US-AC-6 exactly one next; cycles allowed + engine protected",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts cycle maps to nodes+edges and serializes without infinite recursion. FunnelExecutionEngineIT: loop_without_wait_trips_step_budget, loop_resend_menu_works, emitEventTriggerSelfLoop_terminatesAtBudgetOrMenuPark (step-budget backstop terminates cyclic funnels)."
+    },
+    {
+      "id": "US-AC-7 / TS-AC null next = end of branch (no array fall-through)",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "FunnelExecutionEngineIT.next_null_ends_branch_no_fallthrough() — green under -PrunSlow=true."
+    },
+    {
+      "id": "US-AC-8 / TS-AC on_start enters edge-target step regardless of array order",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "FunnelExecutionEngineIT.on_start_enters_entryStepId_regardless_of_order(); FunnelServiceTriggerTypeTest.test_run_enters_on_start_entryStepId() (author test-run aligned, approved deviation). Live /start enrolment is DEFERRED-TO-USER."
+    },
+    {
+      "id": "US-AC-9 delete node auto-cleans inbound edges + warning",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts deleteStepNode: all inbound edges (next/button/timeout/trigger.entryStepId) auto-cleaned, exact disconnectedCount, surviving edges unchanged. FunnelCanvas authoring: 'N connections will be disconnected' warning + confirm. Live click-to-delete is DEFERRED-TO-USER."
+    },
+    {
+      "id": "US-AC-10 node click opens side-panel form; no SearchableSelect target picker on canvas",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "FunnelCanvasSidePanel.spec.ts mounts FunnelStepForm with hideTargetPickers → button-target / timeout-target / SUBSCRIBE-entry SearchableSelects absent, while emitted step still carries those fields (incl. callback-button regression + SUBSCRIBE targetEntryStepId carried through)."
+    },
+    {
+      "id": "US-AC-11 / TS-AC palette = exactly existing types + trigger + note; no new executable types",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "FunnelCanvasPalette renders exactly the 9 existing step types + trigger + note + optional start node (asserted in palette/FunnelCanvas specs); no condition/randomizer/schedule/AI/HTTP types."
+    },
+    {
+      "id": "US-AC-12 / TS-AC note in notes[], never executed; escaped render",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts notes isolation (notes never appear as steps in PATCH). FunnelControllerIT.notes_round_trip_with_server_minted_id() + rejects_notes_over_cap_and_oversized_text(). funnel-editor.spec.ts / FunnelCanvasSidePanel.spec.ts: injection payload renders ESCAPED (no v-html, innerHTML contains no <img, no img element)."
+    },
+    {
+      "id": "US-AC-13 start node optional; its edge defines on_start entry",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "FunnelCanvas.spec.ts: event-only funnel → no start node; start node present when on_start exists; FunnelServiceTriggerTypeTest.triggers_onStartEntryStepIdAcceptedWhenResolves / onStartNullEntryStepIdAccepted. /start enrolment to that step is DEFERRED-TO-USER."
+    },
+    {
+      "id": "US-AC-14 delete start node removes on_start; deleting only its edge = broken edge; re-add disabled",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "FunnelCanvas authoring specs: deleting start node removes on_start entry; start-node-broken case (on_start entryStepId==null → --broken class + entry broken marker); palette start-node disabled while on_start exists. detectBrokenEdges flags on_start entry null."
+    },
+    {
+      "id": "US-AC-15 cross-funnel SUBSCRIBE as exit badge, not edge",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts: cross-funnel SUBSCRIBE renders as exit badge not edge. FunnelCanvas.spec.ts asserts exitBadge with resolved translated label."
+    },
+    {
+      "id": "US-AC-16 / TS-AC broken edges highlighted; 422 funnel_broken_edge on activate stays",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "useFunnelCanvas.spec.ts detectBrokenEdges missing_target + on_start_entry_null; FunnelCanvas broken highlight rendered. Backend 422 regression covered by FunnelExecutionEngineIT/controller activate-with-dangling-edge path (existing funnel_broken_edge guard retained per Decision 5)."
+    },
+    {
+      "id": "US-AC-17 / TS-AC canvasPosition (step+trigger) and notes[] round-trip backend",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "FunnelControllerIT.canvasPosition_step_and_trigger_round_trips(), notes_round_trip_with_server_minted_id(); FunnelStepTest copyOf carries canvasPosition (own silent-drop seam asserted). TriggerTest.equalsAndHashCodeIgnoreCanvasPosition."
+    },
+    {
+      "id": "US-AC-18 / TS-AC app starts on coordinate-less funnels; no migration",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "FunnelControllerIT.starts_on_coordinate_less_funnel(); nullable additive fields, no migration framework."
+    },
+    {
+      "id": "US-AC-19 vertical list read-only",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "funnel-editor.spec.ts: list rendered read-only (no structural mutators), shows listReadOnly notice; clicking a row (kept non-structural select) does NOT call store.update. FunnelStepsList readonly prop. FunnelTriggersPanel also read-only (audit-fix Decision 2)."
+    },
+    {
+      "id": "US-AC-20 / TS-AC canvas labels in active locale, non-empty; SSR no 'window is not defined'",
+      "source": "user-spec",
+      "status": "pass",
+      "evidence": "check-locales exit 0 + required-keys.spec.ts (funnels.canvas.* registered & non-empty in uk/en, 0 empty values both); pnpm build clean, no 'window is not defined'."
+    },
+    {
+      "id": "TS-AC applyTriggers accepts on_start entryStepId only when funnel-scoped; rejects non-event types",
+      "source": "tech-spec",
+      "status": "pass",
+      "evidence": "FunnelServiceTriggerTypeTest: triggers_onStartEntryStepIdAcceptedWhenResolves, triggers_onStartDanglingEntryStepIdRejected, triggers_nonEventNonOnStartEntryStepIdRejected (negative), triggers_eventRequiresEntryStepId, onStart_stillDefaultsWhenTriggersNull."
+    },
+    {
+      "id": "TS-AC new-field bounds: notes[] cap + text length cap (service re-check) + finite coords + server-minted id",
+      "source": "tech-spec",
+      "status": "pass",
+      "evidence": "FunnelServiceNotesTest (7) service-side cap + text re-check + id-shape-reject + duplicate-id-reject; FunnelControllerIT.rejects_notes_over_cap_and_oversized_text(); CanvasPositionDtoTest finite-value (NaN/Infinity) reject; notes_round_trip_with_server_minted_id() proves server-minted id."
+    },
+    {
+      "id": "TS-AC pnpm build clean (no window is not defined); pnpm lint/typecheck",
+      "source": "tech-spec",
+      "status": "pass",
+      "evidence": "pnpm build PASS (no 'window is not defined'). lint/typecheck scripts do not exist project-wide (pre-existing gap, NOT introduced by this feature — see deviations); pnpm build (Nuxt type-aware bundling) + vitest are the authoritative static gates."
+    },
+    {
+      "id": "TS-AC no regressions in existing tests",
+      "source": "tech-spec",
+      "status": "pass",
+      "evidence": "Full frontend suite 581 passed (incl. pre-existing FunnelStepForm composer/keyboard, list, e2e anchors); full backend 1304 tests 0 fail. No regressions observed."
+    }
+  ],
+  "known_flakes": [
+    "TelegramWebhookP99IT::p99Latency_under100msAt100ParallelRequests — hardware/JIT-sensitive P99 latency benchmark (@Tag slow), unrelated to this feature, fails identically on clean base tree per Task 3 report. PASSED this QA run (0 backend failures), so it is not a blocker here; recorded as known pre-existing flake."
+  ],
+  "deviations": [
+    "No 'lint' or 'typecheck' scripts in frontend/package.json: no eslint flat config / .eslintrc, no pinned eslint, and a local nuxi/vue-tsc typecheck fails on an unrelated @vue/language-core resolution mismatch + a tsconfig baseUrl deprecation. Pre-existing project-wide gap NOT introduced by 18-funnel-canvas (recorded by Tasks 2/4/5/6/7). Authoritative static gates used instead: pnpm build (Nuxt type-aware bundling + prebuild check-locales) + vitest — both green. No lint/typecheck infra was built (out of scope).",
+    "2 backend tests skipped (TelegramSenderIT sendText_terminalFailureViaBotService_emitsFailedEventOnly, sendText_endToEndViaBotService_emitsBothEvents) — pre-existing skips in the Telegram send adapter, unrelated to the canvas feature.",
+    "QA report written to both logs/working/qa/ (orchestrator-specified) and a copy is summarized in decisions.md. Task body named logs/working/task-11/ — that directory was also created."
+  ],
+  "deferred_to_user": [
+    {
+      "criterion": "DEFERRED-TO-USER: live canvas at >=1024px",
+      "reason": "Vue Flow needs a measured DOM container; real pointer drag/zoom/pan cannot be exercised by an agent and Testing Strategy intentionally has no E2E for canvas interactions.",
+      "verificationCondition": "Browser at >=1024px on a deployed/running frontend.",
+      "verificationSteps": "Open a funnel editor; confirm dagre auto-layout + fitView frames the graph; drag a node and reload → position persists; draw next/button/timeout edges and confirm correct behavior; delete a node and see the auto-clean disconnect warning; add a note; confirm orphan/disconnected subflows render."
+    },
+    {
+      "criterion": "DEFERRED-TO-USER: end-to-end webhook<->engine<->Telegram /start flow",
+      "reason": "No live environment / deployed bot exists yet (no deploy). Agent cannot send a real Telegram /start.",
+      "verificationCondition": "Deployed backend + running bot.",
+      "verificationSteps": "Assemble a 'menu with buttons -> branches' funnel on the canvas, activate it, run /start in the bot, and confirm execution follows the drawn graph (drawn next/button edges drive flow; array order does not; on_start enters the start node's edge-target step)."
+    }
+  ],
+  "summary": "Pre-deploy QA PASS. All 4 automated gates green: frontend vitest 581/581, check-locales exit 0 (funnels.canvas.* present & non-empty in uk+en), pnpm build clean (no 'window is not defined'), backend ./gradlew test -PrunSlow=true 1304 tests 0 fail/0 err/2 pre-existing skips with FunnelExecutionEngineIT genuinely executing 69 tests (slow lane not skipped). 24 acceptance criteria verified PASS (all user-spec + tech-spec ACs traced to concrete tests). 2 items DEFERRED-TO-USER (live canvas drag/zoom/pan; end-to-end Telegram /start flow) — no live environment for an agent. Deviation: no lint/typecheck scripts project-wide (pre-existing gap, not from this feature); build+vitest are the authoritative gates. P99 latency benchmark is a known pre-existing flake and passed this run. No feature regressions. Verdict: pass."
+}

@@ -1,0 +1,68 @@
+{
+  "round": 2,
+  "status": "approved",
+  "summary": {
+    "totalFindings": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 0,
+    "info": 1
+  },
+  "resolvedFindings": [
+    {
+      "id": "F4-audit-blind-spot",
+      "round1Severity": "medium",
+      "category": "A09:2021 Security Logging and Monitoring Failures",
+      "title": "Audit blind spot for unauthenticated recon on download endpoint",
+      "resolution": "accepted-as-designed",
+      "verification": "Confirmed SecurityConfig.java:97 maps /api/** to authenticated() with /api/auth/** as the only permitAll child; the download endpoint at /api/v1/projects/{projectId}/subscribers/exports/{exportId}/download sits under /api/** so anonymous requests are rejected at the filter chain (403) before the controller's F4 deny()/audit logic runs. This is a detection-coverage trade-off, NOT a data-exposure issue: the file is HMAC-token-protected regardless, and every AUTHENTICATED-session recon vector (tampered/expired/cross-project/rate-limited/purged token) still fires the audit event. New regression test SubscriberExportSignedUrlIT.unauthenticatedDownload_rejectedBySecurity_returns403 locks the access model via the full Spring Security filter chain (@AutoConfigureMockMvc, anonymous request asserts 403). ACCEPTED."
+    },
+    {
+      "id": "spec-deviation-session-auth",
+      "round1Severity": "low",
+      "category": "A01:2021 Broken Access Control",
+      "title": "Session-auth on download endpoint vs tech-spec §146 HMAC-only wording",
+      "resolution": "accepted-as-designed",
+      "verification": "Same root cause as F4. Implementer kept session-auth as deliberate defense-in-depth (session + HMAC, both required). Rationale verified as sound: task step-3 mandates requireOwned(currentUserId()) (present at SubscriberExportController.java:247), SecurityConfig is outside the task's declared file scope, and permitAll-ing a PII endpoint would be a security-sensitive change beyond this task. Documented as an explicit deviation from tech-spec §146 and locked by the same IT test. This is strictly MORE restrictive than the spec (an additional auth gate on a PII endpoint), so there is no access-control weakening. ACCEPTED."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "info",
+      "category": "A02:2021 Cryptographic Failures",
+      "title": "All-zero default HMAC token-key does not fail fast (carried from Task 1, out of Task 9 scope)",
+      "description": "SignedDownloadToken (com/botfunnel/common/crypto/SignedDownloadToken.java:43) derives its HMAC SecretKeySpec from app.subscriber.export.token-key. The constructor/decodeKey path does not reject an unset or all-zero default key at startup. If deployed without a configured token-key, signed download tokens would be HMAC'd under a predictable all-zero key, allowing token forgery. This file was NOT modified by the round-1 commit (5399f83) — it is not in the diff stat — so the line remains exactly as audited in round 1. It is owned by Task 1, not Task 9, and is correctly routed to the orchestrator for Task 1 follow-up.",
+      "location": "package: com.botfunnel.common.crypto.SignedDownloadToken (constructor / decodeKey); Task 1 scope, not Task 9",
+      "impact": "If the token-key is left at an unconfigured/all-zero default in any environment, an attacker who knows the (well-known) default key could forge valid signed download tokens for arbitrary projectId/exportId, bypassing the HMAC tier of the download authorization. The session-auth tier (confirmed in this round) still independently blocks anonymous access, mitigating impact in production where /api/** is authenticated.",
+      "recommendation": "In Task 1: fail fast at bean construction if the decoded key is absent, all-zero, or shorter than the HMAC block size (e.g. throw IllegalStateException 'app.subscriber.export.token-key must be configured (non-zero, >= 32 bytes)'). Do not allow the application context to start with a default/placeholder key.",
+      "cwe": "CWE-321"
+    }
+  ],
+  "regressionCheck": {
+    "scope": "Re-verified the three round-1 code changes for NEW security regressions: (1) GridFS createdFileId AtomicReference holder, (2) PipedInputStream try-with-resources, (3) refresh-url default-branch IllegalStateException.",
+    "results": [
+      {
+        "change": "GridFS createdFileId holder (ExportSubscribersJob.java:129-199)",
+        "verdict": "no-regression",
+        "detail": "createdFileId.set() runs only after store() returns, on the worker thread; .get() also on the worker thread. If store() throws, the holder stays null and handleFailure() deletes nothing (nothing was persisted). If store() succeeds but the writer errored, the id is published and handleFailure() deletes the partial/0-byte blob — closing the orphan-blob leak (ExportCleanupJob only sweeps DONE rows). New IT SubscriberExportIT asserts the partial blob is deleted on the FAILED branch. AtomicReference is not needed for cross-thread safety here (single-thread access) but is a correct, harmless escape-the-try holder."
+      },
+      {
+        "change": "PipedInputStream try-with-resources (ExportSubscribersJob.java:153-184)",
+        "verdict": "no-regression",
+        "detail": "Read end (in) is closed by try-with-resources only after writer.join() completes (join is inside the try block). Write end (pipeOut) is closed by the writer thread's closeQuietly(). Symmetric close, no double-close, no premature close, no resource leak. Writer interrupt + join still guards against a full-pipe deadlock when store() throws early."
+      },
+      {
+        "change": "refresh-url default-branch IllegalStateException (SubscriberExportController.java:340-342)",
+        "verdict": "no-regression",
+        "detail": "Defensive guard, unreachable for the current 5-value enum (DONE/PENDING/RUNNING/PURGED/FAILED all explicitly handled). If a future enum constant is added it surfaces as a 500 instead of silently masquerading as export_failed. GlobalErrorHandler's catch-all Throwable handler returns a generic 'Internal server error' with null code and NO message/stack-trace leak to the client (the status value goes only to the server log). No information disclosure."
+      }
+    ],
+    "mandatoryChecks": {
+      "hardcodedSecrets": "none introduced in diff (scanned all 5 changed files)",
+      "injection": "no new SQL/NoSQL/command/LDAP/XSS surface; CSV formula-injection neutralization unchanged (whole-cell path test corrected to assert the actual contract, plus direct neutralizeFormula contract test)",
+      "ssrf": "no new user-controlled URL passed to a server-side request",
+      "deserialization": "no new untrusted deserialization; existing objectMapper.convertValue on stored filter Document unchanged"
+    },
+    "compilation": "./gradlew compileTestJava succeeds — all round-1 changes (new streamToGridFs signature, holder, try-with-resources, IllegalStateException default, new tests) compile cleanly."
+  }
+}

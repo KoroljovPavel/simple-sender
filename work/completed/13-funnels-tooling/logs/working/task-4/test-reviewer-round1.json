@@ -1,0 +1,8 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 4,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [],
+  "notes": "i18n-only task; the parity-gate IS the test. node frontend/scripts/check-locales.mjs (node v24.15.0) exits 0 with no output — full uk.json <-> en.json parity. Independent flat-key diff confirms 587 keys in each file, zero keys only-in-uk and zero only-in-en. All 16 new keys present in BOTH locales: the 13 funnels.editor.* (duplicate, duplicateResult, testForMe, testForMeResult, preview, previewPlaceholder, previewSampleData) including the NESTED stopAll object (button/title/message/confirm/cancel/result), plus errors.funnels.funnel_invalid_trigger_type and funnel_invalid_keywords (funnel_owner_not_linked already existed pre-commit; this commit only appended a comma to it). stopAll is a nested object — no flat stopAllConfirm sibling (confirmed false). {count} interpolation placeholder consistent across both locales in stopAll.result (uk: 'Зупинено запусків: {count}', en: 'Runs stopped: {count}'); a project-wide placeholder-set diff across all 587 keys found zero mismatches. Both files parse as valid JSON (gate JSON.parses them). Negative check passed: injecting a uk-only key makes the gate exit 1 naming the missing key, proving the gate guards these additions."
+}

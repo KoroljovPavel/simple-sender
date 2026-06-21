@@ -1,0 +1,21 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 464,
+      "description": "clampKeyboardLabels returns a non-null empty list for a non-null-but-empty rows input (keyboardRows: []), whereas the sibling renderMediaItems returns null for empty input and the method's own doc-comment states the intent 'Null input -> null (mirror \"no data\" rather than inventing an empty structure)'. So a SET_KEYBOARD preview with an empty rows array yields keyboardRows: [] rather than null. The 'no data' contract is only honored for null, not empty. No test covers the empty-but-non-null case, so the actual serialized shape for that input is unverified.",
+      "recommendation": "Either treat empty rows the same as null (early-return null when rows.isEmpty(), matching renderMediaItems and the documented 'no data -> null' intent), or tighten the doc-comment to state explicitly that empty input is preserved as []. Add an IT case asserting the chosen behavior for keyboardRows: []."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 489,
+      "description": "When every button in a row is skipped (e.g. all buttons have null text), clampKeyboardLabels still appends the now-empty labels list (out.add(labels)), so the echoed structure can contain an empty inner row []. Validation (validateSetKeyboard, line 1300) rejects an empty row, so this is a preview-only structural artifact. Defensible under the documented 'only transformation is the clamp / non-validating' contract, but it is an undocumented and untested edge of the flatten.",
+      "recommendation": "Optional: skip rows that flattened to zero labels (if (!labels.isEmpty()) out.add(labels)), or note in the doc-comment that a fully-skipped row is emitted as []. Low priority — the frontend mock tolerates an empty row."
+    }
+  ],
+  "summary": "Task 4 backend preview extension is correct, consistent with the existing renderBlocks/renderMediaItems idiom, and well covered. Cross-file usage verified: RenderedBlock 6-arg constructor, KeyboardRowDto/KeyboardButtonDto accessors, constructor null-padding at the message/non_message call sites, and constant reuse (MAX_KEYBOARD_ROWS/ROW_BUTTONS/BUTTON_TEXT, no duplicated literals) are all sound. Clamp bounds are off-by-none and the char-unit length check matches the validation surface (line 1311). Null-tolerance, the saved-step-type gate, and anti-IDOR ordering are preserved. Two minor, by-design edge observations only (empty-rows -> [] vs the doc's 'no data -> null' intent; empty inner-row emission) — neither blocks. No blocking or major findings."
+}

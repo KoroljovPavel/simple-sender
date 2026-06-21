@@ -1,0 +1,57 @@
+{
+  "status": "approved",
+  "summary": "Round 2 re-validation. Both round-1 medium findings are fully addressed; no new critical mirages introduced by the edits. Verified ~50 claims across tech-spec including the new three-index Bot domain layer, the corrected EventService.logEvent call sites, and the new shadcn-vue Dialog prereq sub-step in Task 9. Three minor observations (not mirages): AVP mongosh check at line 430 only mentions the platform-wide index name and omits the new per-project index name (AC at line 478 already requires both), the 'matches existing email-send retry shape conceptually' aside at line 221 is a soft claim (EmailService has no actual Retry shape — fire-and-forget only), and useApiError signature in Task 9 description is colloquial (the composable takes no args; the returned function takes (error, contextKey)).",
+  "findings": [
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "Tech-spec Agent Verification Plan, line 430: 'mongosh ... --eval \"db.bots.getIndexes()\" after backend boot in dev profile ... partial unique index telegramBotId_unique_connected present with filter { status: \"CONNECTED\" }'.",
+      "reality": "After round-2 edits Bot now declares THREE indexes including a new partial unique on (projectId) filtered to status=CONNECTED, named projectId_unique_connected (Data Models lines 279-282). The AVP mongosh check at line 430 only names telegramBotId_unique_connected and does not assert presence of the new projectId_unique_connected. AC item at line 478 already says 'Both partial unique indexes — telegramBotId_unique_connected and projectId_unique_connected — exist', so the requirement is captured at AC level — only the AVP smoke step lags. Implementer running the verification will likely add it, but the table row is incomplete.",
+      "source": "tech-spec.md line 430 (Agent Verification Plan table)",
+      "fix": "Extend the AVP mongosh row to assert both partial unique indexes by name (telegramBotId_unique_connected AND projectId_unique_connected), or change the wording to '...the two partial unique indexes...' to match the AC."
+    },
+    {
+      "severity": "minor",
+      "type": "missing_pattern",
+      "claim": "Decision 11 rationale (line 221): '3 attempts is the platform default for transient external failures (matches existing email-send retry shape conceptually).'",
+      "reality": "EmailService (backend/src/main/java/com/botfunnel/email/EmailService.java) has no Retry.backoff / retryWhen / retry policy at all — sendAsync() is fire-and-forget on Schedulers.boundedElastic() with a single subscribe-and-log-on-error. The 'platform default for transient external failures' framing is conceptual rather than codified. Not a blocker — the rationale is internally coherent — but the appeal to an 'existing email-send retry shape' is misleading.",
+      "source": "tech-spec.md line 221 (Decision 11 rationale)",
+      "fix": "Soften the wording: drop the email-send analogy and instead frame the 3-attempt choice as a fresh design decision balanced against the frontend's ~35s ofetch timeout budget."
+    },
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "Task 9 description (line 559): 'Errors resolved via useApiError(\"bot.connect\" | \"bot.disconnect\" | \"bot.testMessage\").'",
+      "reality": "Actual useApiError() composable (frontend/composables/useApiError.ts:16) takes zero arguments and returns a function with signature resolveMessage(error, contextKey) — the context key is the SECOND positional arg of the returned function, not an arg to useApiError() itself. An implementer copying the literal call expression from tech-spec produces a wrong call shape (passes the context key to the wrong function). The intent is clear and the contextKey strings themselves are correct.",
+      "source": "tech-spec.md line 559 (Task 9 description)",
+      "fix": "Update wording to 'Errors resolved via the function returned by useApiError(), invoked as resolve(error, \"bot.connect\" | \"bot.disconnect\" | \"bot.testMessage\")'."
+    }
+  ],
+  "stats": {
+    "total_claims_checked": 52,
+    "confirmed": 49,
+    "mirages_found": 3,
+    "verified_claims": [
+      "EventService.logEvent(userId, eventType, ipAddress, userAgent, metadata) at events/EventService.java:23 — matches tech-spec line 74 and line 92",
+      "ProjectService.requireOwned(ownerId, projectId, includeSoftDeleted) at project/ProjectService.java:50",
+      "ProjectController.currentUserId / extractIp / capUserAgent helpers at ProjectController.java:125,138,133",
+      "ProjectController.java:124 comment about deferring extraction to shared util",
+      "AppException factories: badRequest, unauthorized, forbidden, conflict(code,msg), notFound, unprocessableEntity(code,msg), tooManyRequests — all exist in common/AppException.java",
+      "AuthService.incrementWithTtl pattern: INCR + EXPIRE only on count==1 (auth/AuthService.java:554-565) — matches tech-spec line 60",
+      "AuthService brute-force key shape 'brute:fail:' prefix (AuthService.java:627)",
+      "Project.java uses @CompoundIndexes/@CompoundIndex annotations — same pattern referenced in tech-spec",
+      "spring-boot-starter-webflux, data-mongodb-reactive, data-redis-reactive, security, validation all present in backend/build.gradle",
+      "frontend/components/ui/ does NOT exist — confirms shadcn-vue Dialog prereq sub-step in Task 9 is necessary",
+      "shadcn-vue ^1.0.3 in frontend/package.json devDependencies — confirms CLI availability for the prereq sub-step",
+      "radix-vue ^1.9.13 in frontend/package.json (shadcn-vue runtime dep) — Dialog will work after CLI add",
+      "frontend/pages/projects/[projectId]/settings.vue exists as single file (13.4 KB) — folder-split is a real restructure",
+      "frontend/i18n/locales/{uk.json,en.json} both exist — locale parity gate at scripts/check-locales.mjs verified",
+      "useApiError composable exists at frontend/composables/useApiError.ts",
+      "useApi composable exists at frontend/composables/useApi.ts:78",
+      "useProjectsStore exists at frontend/stores/projects.ts:37 with currentProjectId getter",
+      "AbstractIntegrationTest exists at backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java",
+      "WithMockAppUser exists at backend/src/test/java/com/botfunnel/profile/WithMockAppUser.java",
+      "@JsonIgnoreProperties(ignoreUnknown=true) mass-assignment defense applied in project/profile DTOs"
+    ]
+  }
+}

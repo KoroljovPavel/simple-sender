@@ -1,0 +1,59 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "EmailService correctly implements the fire-and-forget reactive pattern, HTML-escapes user-supplied name, loads templates from classpath, and covers all three email types. Two issues require attention: user email addresses (PII) are written to error logs, and template-load failures silently dispatch empty-body emails to recipients instead of aborting the send.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/main/java/com/botfunnel/email/EmailService.java",
+      "line": 70,
+      "severity": "major",
+      "category": "security",
+      "suggestion": "The error log at line 70 includes `to` (the recipient email address), which is PII. Replace with a non-identifying correlation token or omit the address entirely from the log message. Example: log only the subject and a truncated/hashed identifier, or generate a send-attempt ID at the start of sendAsync and log that ID instead.",
+      "benefit": "Prevents email addresses from appearing in application logs, reducing PII exposure risk in log aggregators, SIEM systems, or log exports.",
+      "optional": false
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/main/java/com/botfunnel/email/EmailService.java",
+      "line": 54,
+      "severity": "major",
+      "category": "error-handling",
+      "suggestion": "When `loadTemplate` returns an empty string (template not found or IOException), `buildBody` returns an empty or near-empty string, and `sendAsync` still dispatches the email with a blank HTML body. The recipient receives a useless empty email while the caller has no visibility. Add a guard in the public send methods or in `sendAsync`: if the resolved body is blank after placeholder substitution, log a warning and skip the send entirely. Example: `if (body.isBlank()) { log.warn(\"Skipping email send — body is empty, template may be missing: {}\", templatePath); return; }`",
+      "benefit": "Prevents blank emails being delivered to users, which degrade trust and provide no actionable information. Fail-closed on template misconfiguration rather than silently delivering garbage.",
+      "optional": false
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/main/java/com/botfunnel/email/EmailService.java",
+      "line": 48,
+      "severity": "minor",
+      "category": "security",
+      "suggestion": "`sendAccountBlockedEmail` passes `supportEmail` directly to `String.replace` without HTML escaping. Unlike `name`, the support email comes from app configuration rather than user input, so the risk is low. However, for consistency and defence-in-depth, run `supportEmail` through `htmlEscape()` before substitution, matching the treatment of `name`.",
+      "benefit": "Consistent escaping policy across all externally sourced values embedded in HTML; prevents unexpected breakage if the config value ever contains special characters (e.g. `<admin@company.io>` display name format).",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/test/java/com/botfunnel/email/EmailServiceTest.java",
+      "line": 55,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "`sendVerificationEmail_htmlEscapesNameWithSpecialChars` tests `EmailService.htmlEscape` as a static package-private method directly rather than verifying that a name with special chars is escaped in the actual rendered body sent to the mailer. This test would survive if `buildBody` stopped calling `htmlEscape`, as long as the static method itself still worked. Consider a complementary assertion that inspects the `MimeMessage` body content after `sendVerificationEmail` is called with a name containing `<script>`, to verify the escaping is wired end-to-end.",
+      "benefit": "Closes the gap between unit-level correctness of `htmlEscape` and the integration of escaping into the actual send path.",
+      "optional": true
+    },
+    {
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/test/java/com/botfunnel/email/EmailServiceTest.java",
+      "line": 73,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "`sendPasswordResetEmail_callsJavaMailSender` and `sendAccountBlockedEmail_callsJavaMailSender` only verify that `send()` was invoked, but do not assert that the correct subject or recipient is set on the MimeMessage. This leaves subject-line correctness and recipient routing untested for two of the three email types. Extend these tests to also assert `mimeMessage.getSubject()` and `mimeMessage.getAllRecipients()` as done for `sendVerificationEmail`.",
+      "benefit": "Ensures that a copy-paste error (e.g., wrong subject string or wrong recipient forwarding) would be caught by the test suite.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 2,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "adequate"
+  }
+}

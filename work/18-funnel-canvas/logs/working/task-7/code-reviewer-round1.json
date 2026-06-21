@@ -1,0 +1,44 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 7,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "frontend/e2e/funnels.spec.ts",
+      "line": 62,
+      "severity": "minor",
+      "category": "maintainability",
+      "finding": "Stale [data-test=\"funnel-add-step\"] selectors remain in E2E helper functions (openDraftEditor, addSendMessage, addDelay) after the Add Step button was removed from the page template. Both E2E tests that exercise these helpers were already unconditionally test.skip()-ed by a prior task (15-message-composer), so the selectors are dead code that never runs.",
+      "impact": "No CI impact. If the tests are ever unskipped against a live stack the helpers will fail immediately on the missing element. Low urgency but accumulates tech debt.",
+      "recommendation": "Update the E2E helper functions to use the canvas palette affordance when the E2E tests are eventually migrated to the new canvas-based UI. No immediate action required given the unconditional skip."
+    },
+    {
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 226,
+      "severity": "minor",
+      "category": "readability",
+      "finding": "Comments for onCanvasSteps / onCanvasTriggers / onCanvasNotes refer to persist() as 'the existing debounced full-replace persist()'. persist() itself is not debounced — only the trigger-watch path uses a 600 ms setTimeout. The wording implies debouncing where none exists for the canvas emit path.",
+      "impact": "Misleading comment only; no runtime impact. Multiple rapid canvas emits (e.g. rapid edge draws) will each fire a full PATCH immediately without coalescing.",
+      "recommendation": "Correct the comment to 'the existing full-replace persist()'. Optionally, if rapid canvas updates become a concern, a shared debounce wrapper for the canvas emit path could be introduced, but that is out of scope for this task."
+    },
+    {
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "line": 370,
+      "severity": "minor",
+      "category": "best-practices",
+      "finding": "defineExpose includes handleNodeDragStop alongside the externally-useful handles (handleConnect, selectNode, requestDelete, confirmDelete). handleNodeDragStop is an internal Vue Flow callback adapter — it is registered via onNodeDragStop() and is not called by any external consumer (tests drive the 'node-drag-stop' emit directly via vm.$emit). Exposing it leaks an implementation detail.",
+      "impact": "No runtime impact. Slightly widens the public surface of the component beyond what is necessary.",
+      "recommendation": "Remove handleNodeDragStop from defineExpose. The function remains registered internally via onNodeDragStop(); its exposure is not needed by any test or parent."
+    }
+  ],
+  "summary": "The implementation correctly satisfies all Task 7 acceptance criteria. FunnelCanvas is mounted client-only via *.client.vue + ClientOnly wrapper (Decision 12). @node-drag-stop resolves node ids against the correct model objects (step by id, trigger by on_start search or trigger:<index>, note by note:<index>) using cloned immutable updates before calling the existing persist() — no second save path, re-entrancy guard intact. notes[] is read back in applyResponse() and carried in the PATCH body. FunnelStepsList is made read-only via an additive readonly prop (default absent = false), preserving the select affordance and leaving standalone callers unaffected (Decision 2). AddStepDialog and EditStepDialog components are unmounted from the page but their files are not deleted. Note text is rendered via {{ }} in FunnelCanvasNode and is confirmed non-v-html. The three new test suites cover drag-stop persistence, read-only list, note round-trip, and XSS-escape. i18n keys are present in both locales with non-empty values; NON_EMPTY_REQUIRED_KEYS predicate extended with OR for funnels.canvas.* without dropping triggersPanel coverage. Three minor findings: stale (already-skipped) E2E selectors, a misleading 'debounced' comment, and unnecessary exposure of handleNodeDragStop. No blockers or majors.",
+  "status": "approved_with_suggestions",
+  "metrics": {
+    "filesReviewed": 8,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "adequate"
+  }
+}

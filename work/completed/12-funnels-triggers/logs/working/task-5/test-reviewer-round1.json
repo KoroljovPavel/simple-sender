@@ -1,0 +1,19 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 5,
+  "round": 1,
+  "commit": "7f3cf50",
+  "verdict": "approve",
+  "summary": "All TDD anchors covered at the right pyramid layer. The dispatch side effect is asserted via verify() on the FunnelEventService boundary — appropriate because the unit-of-dispatch (trigger type, matchKey, originDepth) is exactly Task 5's responsibility; the real fan-out is covered separately by the engine. ITs add real-DB behavioral assertions (audit written / not written) alongside the dispatch verify and prove the wired bean (full-context boot = no BeanCurrentlyInCreationException). No redundant tests; each new test pins a distinct contract point.",
+  "findings": [],
+  "coverage": {
+    "addTag_newTag_firesTagAddedTrigger": "SubscriberServiceImplIT + SubscriberStatusMachineTest (depth 0)",
+    "addTag_alreadyPresent_doesNotFire": "SubscriberServiceImplIT (no audit + no dispatch) + SubscriberStatusMachineTest",
+    "recordCustomFieldsSet_changedKeys_firesPerKey": "SubscriberServiceImplIT (2 keys -> 2 dispatches) + SubscriberStatusMachineTest",
+    "recordCustomFieldsSet_emptyDiff_doesNotFire": "SubscriberServiceImplIT + SubscriberStatusMachineTest",
+    "explicit originDepth (manual 0 / funnel child)": "addTag_funnelStep_depthIsParentPlusOne, recordCustomFieldsSet_passesExplicitOriginDepth (IT) + StatusMachineTest depth tests",
+    "emitEvent_returnsContinue_dispatchesEventWithChildDepth": "FunnelStepExecutorTest (depth 1) + emitEvent_carriesParentDepthPlusOne (depth 3)",
+    "addTagStep_passesParentDepthPlusOne": "FunnelStepExecutorTest (parent 2 -> 3) + addTagDelegatesToSubscriberService (depth 1)",
+    "context_starts_after_wiring": "satisfied by SubscriberServiceImplIT / SubscriberTagAssignmentIT booting the full graph with FunnelEventService injected into both StepExecutor and SubscriberServiceImpl (task allows reusing an existing full-context boot rather than duplicating)"
+  }
+}

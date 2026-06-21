@@ -1,0 +1,89 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 10,
+      "issue": "Task 10 reads 'frontend/stores/auth.ts' and 'frontend/layouts/auth.vue' as context files. Neither file exists yet — they are outputs of Task 8 (wave 5). Task 10 depends_on [8, 9], which is correct, but at validation time these files are absent. The task body says to call 'authStore.fetchUser()' after login — this method must exist in the store created by Task 8 before Task 10 starts. This dependency is correctly declared (depends_on: [8, 9]), but the task agent must not proceed until Task 8 is complete.",
+      "fix": "No change required to the depends_on list (already correct). Add an explicit gate-check step at the top of the 'What to do' section: 'Verify frontend/stores/auth.ts, frontend/layouts/auth.vue, and frontend/layouts/default.vue exist before starting.' This prevents the task agent from starting prematurely if the wave orchestrator misfires."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 11,
+      "issue": "Task 11 reads 'frontend/stores/auth.ts' and 'frontend/layouts/default.vue' as context files. Neither file exists — they are created by Task 8 (wave 5). Task 11 depends_on [8, 9], which is correct, but same risk as Task 10: if the orchestrator starts Task 11 without Task 8 being complete, the context files will be missing and the agent will hallucinate or fail.",
+      "fix": "Same fix as Task 10: add an explicit pre-check step verifying that frontend/stores/auth.ts and frontend/layouts/default.vue exist before starting implementation."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Task 10 implementation hint (line 125) refers to the raw verification token as 'JWT-like token' and suggests option (a) 'decode/parse the JWT-like token'. The email verification token is NOT a JWT — it is 32 random bytes encoded as base64url (SecureRandom). It has no header, no payload, no claims. Attempting to base64-decode it to extract an email will produce garbage or throw an error, because the token contains no email. Option (b) — show a small form for the user to enter their email — is the correct approach and is mentioned, but option (a) is a hallucination that could lead an implementer astray.",
+      "fix": "Remove option (a) from the edge case note. Replace with: 'The raw token is opaque (32 random bytes, base64url-encoded) — it contains no email. Show a small email input field for the user to enter their email to resend verification.'"
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 10,
+      "issue": "TDD Anchor test paths use 'src/test/frontend/pages/auth/login.spec.ts'. The frontend directory has no 'src/' subdirectory — the Nuxt 4 project root is 'frontend/' directly, with pages at 'frontend/pages/'. There is no vitest config, no test script in package.json, and no existing test directory. The test paths 'src/test/frontend/...' are inconsistent with the Nuxt 4 project layout. Convention for Nuxt + Vitest is typically 'tests/' or 'test/' at the frontend root, not 'src/test/frontend/'.",
+      "fix": "Align TDD anchor test paths with the actual project structure. Since Task 8 installs vitest and defines the test structure, verify that Task 8's test paths match (Task 8 uses 'src/test/frontend/stores/auth.spec.ts' — same 'src/test/frontend' prefix). If Task 8 establishes this convention, Tasks 10/11 are consistent. However, since neither 'src/' nor 'test/' directories exist yet and no vitest config is present, the entire test path convention needs to be established in Task 8. Flag: the test path prefix 'src/test/frontend' does not match any existing directory and conflicts with Nuxt 4's convention of placing tests at 'tests/' or 'frontend/tests/'."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 11,
+      "issue": "Same test path issue as Task 10: TDD anchor uses 'src/test/frontend/pages/dashboard.spec.ts' and 'src/test/frontend/pages/profile.spec.ts'. These paths reference a non-existent 'src/' directory. Verification step 'cd frontend && pnpm test' will fail because (a) no 'test' script is in package.json, and (b) no vitest config or test files exist.",
+      "fix": "Test infrastructure (vitest config, test script in package.json) must be created in Task 8 before Tasks 10/11 can run 'pnpm test'. Confirm Task 8 adds vitest to package.json scripts and creates vitest.config.ts. Update test paths once Task 8's convention is confirmed."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 10,
+      "issue": "Task 10 calls 'cd frontend && pnpm test' in the Automated Verification Steps. The current package.json has no 'test' script. Vitest is not listed as a dependency. No vitest.config.ts exists. This verification step will fail with 'missing script: test'.",
+      "fix": "Task 8 must add vitest, @vue/test-utils, and a 'test' script to package.json. Add a pre-check in Task 10: 'Verify that pnpm test is available (vitest installed by Task 8) before running tests.'"
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 11,
+      "issue": "Task 11 also calls 'cd frontend && pnpm test'. Same issue as Task 10 — no test script in package.json. Will fail at verification.",
+      "fix": "Same as Task 10 fix. Depends entirely on Task 8 establishing the test infrastructure."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 10,
+      "issue": "Implementation hints section contains a concrete code block with full vee-validate usage pattern: 'const { handleSubmit, errors } = useForm({ validationSchema: toTypedSchema(mySchema) }) / const { value: email } = useField(\"email\") / const onSubmit = handleSubmit(async (values) => { ... })'. This is a step-by-step code implementation hint, not a pointer to a pattern. It prescribes the exact implementation rather than hinting at an approach.",
+      "fix": "Replace the code block with a reference: 'Use vee-validate with @vee-validate/zod toTypedSchema adapter. See vee-validate docs for useForm/useField/handleSubmit pattern. Task 8 establishes this pattern in frontend — reuse it.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 Section 4 says 'Завершити всі сесії' navigates to '/auth/login' after success. However, the tech-spec and Task 7 specify that POST /api/profile/terminate-all-sessions deletes ALL sessions including the current one. The edge case note in Task 11 (line 117) correctly notes the current session is gone after this call. However, the UX of navigating to /auth/login programmatically after session termination may fail if the navigation itself triggers the auth middleware (which calls GET /api/auth/me), gets 401, and redirects to /auth/login again — creating a double-redirect loop. This is a minor UX/feasibility concern, not a blocking issue.",
+      "fix": "In the 'What to do' step 2, Section 4, add: 'After terminate-all-sessions succeeds, call authStore.$reset() or set authStore.user = null before navigating to /auth/login to prevent the auth middleware from making a redundant /api/auth/me call that returns 401.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 asks to verify HardDeleteJob cron expression '0 3 * * *'. This is a standard 5-field Unix cron (minute=0, hour=3). However, JobRunr uses its own cron format which is also 5-field (minute hour day month weekday), so '0 3 * * *' is correct for daily 03:00. The task's own note is accurate. No issue with the cron expression itself, but Task 12 does not mention verifying the @Recurring annotation import path for JobRunr Spring Boot 3 starter — the annotation package changed between JobRunr versions.",
+      "fix": "Minor: add a check that @Recurring is imported from 'org.jobrunr.scheduling.annotations.Recurring' (or the correct JobRunr 7.x package) rather than a deprecated or wrong package. This is a minor audit point."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 12,
+      "issue": "Task 12 references 'patterns.md' as a context file. The actual patterns.md at .claude/skills/project-knowledge/references/patterns.md contains no patterns for Spring WebFlux reactive chains, JobRunr, shadcn-vue, vee-validate, or any of the auth patterns being audited. The file has placeholder sections ('Code Patterns: Filled during development as patterns emerge.'). The patterns.md context file will provide no useful reference for the audit.",
+      "fix": "Remove patterns.md from Task 12 context files, or update patterns.md in Task 9 (documentation update) to include the reactive patterns documented in tech-spec before Task 12 runs."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 11
+  }
+}

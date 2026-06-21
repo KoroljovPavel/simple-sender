@@ -1,0 +1,31 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "verification": {
+    "round": 2,
+    "priorReport": "work/10-funnels/logs/working/task-5/security-auditor-1.json",
+    "round1FindingsVerified": [
+      {
+        "finding": "A01 anti-enumeration: requireFunnel findById not catching IllegalArgumentException -> malformed funnelId surfaced as 500",
+        "status": "resolved",
+        "evidence": "FunnelService.java:212-225 — findById(funnelId) is now wrapped in try/catch(IllegalArgumentException) rethrowing AppException.notFound(MESSAGE_NOT_FOUND). projectService.requireOwned runs FIRST (line 213), and the .filter(projectId-matches).orElseThrow(notFound) tail is preserved, so malformed/foreign/missing funnelId all collapse to the same uniform 404. Mirrors ProjectService.requireOwned."
+      },
+      {
+        "finding": "A05 CORS: allowedMethods omitted PUT while controller exposes PUT /{funnelId}",
+        "status": "resolved",
+        "evidence": "SecurityConfig.java:140 — allowedMethods now List.of(GET, POST, PUT, PATCH, DELETE, OPTIONS). Fails-closed posture intact: only the missing verb was added. allowedOrigins remains single trusted origin (List.of(appUrl), no wildcard), allowedHeaders unchanged, allowCredentials(true) unchanged. No origin/credentials broadening."
+      },
+      {
+        "finding": "A03 deep-link: botUsername concatenated unencoded into t.me URL (informational, host-trusted)",
+        "status": "accepted-no-change",
+        "evidence": "FunnelService.java:392-401 — unchanged as expected. telegramUsername originates from Telegram verified getMe (host-trusted), triggerValue is pattern-constrained (^[A-Za-z0-9_-]{0,64}$), deepLink only returned for active funnel with a CONNECTED bot. Remains low/informational under the current trust boundary."
+      }
+    ]
+  }
+}

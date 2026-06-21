@@ -1,0 +1,96 @@
+{
+  "status": "changes_required",
+  "summary": "Task 5 implements registration, email verification, and resend cleanly with strong cross-file consistency, good DTO/validation design, and well-explained spec deviations. The blocker is one reactive-correctness regression: `AuthService.register()` calls `passwordEncoder.encode()` (BCrypt cost 12, ~250ms blocking) directly inside a `.map()` on the Netty event loop. The login path uses the correct `Mono.fromCallable(...).subscribeOn(boundedElastic())` pattern; registration was not migrated to it.",
+  "criticalIssues": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 125,
+      "severity": "critical",
+      "category": "architecture",
+      "issue": "BCrypt password encoding (`passwordEncoder.encode(...)` at line 235 inside `applyRegistration`) is invoked synchronously from `.map(slot -> applyRegistration(...))` (line 124-125). With BCrypt cost 12 (Decision 3), this is a ~250ms CPU-bound blocking call running on the Reactor Netty event loop, which serves all HTTP requests. Under modest concurrent registration load this will stall every other in-flight reactive request on the same event loop thread. The login flow correctly wraps `passwordEncoder.matches(...)` in `Mono.fromCallable(...).subscribeOn(Schedulers.boundedElastic())` (lines 295-296, 305-306) — registration must follow the same pattern.",
+      "impact": "Event-loop starvation under load: a single registration burst can degrade latency for all concurrent requests (login, verify-email, /me, future endpoints). Direct violation of WebFlux non-blocking I/O constraint that is the central architectural rationale of this project (architecture.md row 1: 'Reactive, non-blocking I/O — critical for high-throughput Telegram webhook processing').",
+      "recommendation": "Refactor `applyRegistration` so the BCrypt call is isolated and offloaded. Minimal change: move `passwordEncoder.encode(req.getPassword())` into its own `Mono.fromCallable(() -> passwordEncoder.encode(req.getPassword())).subscribeOn(Schedulers.boundedElastic())` step in `register()`, then map its result into the user entity. Same scheduler the login path already uses. Also consider offloading `tokenService.generateRawToken()` (SecureRandom can block on entropy depletion in rare cases) but BCrypt is the urgent fix."
+    }
+  ],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 121,
+      "severity": "major",
+      "category": "maintainability",
+      "suggestion": "`register(RegisterRequest, ServerWebExchange exchange)` accepts `exchange` but never reads it (no IP/UA capture, no event logging from register). Either drop the parameter (and update controller signature) or add a `registration_started`/`registration_succeeded` event log for parity with login. Currently it is dead arg that suggests behaviour that is not there.",
+      "benefit": "Removes misleading API surface; matches the principle of least surprise (other auth methods that take `exchange` actually use it for IP and UA extraction).",
+      "optional": false
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 188,
+      "severity": "major",
+      "category": "best-practices",
+      "suggestion": "`resendVerification()` does not log any audit event on success (new token issued) or on rate-limit trip. Login logs `login_failed` with `reason=brute_force` for its rate-limit trip; resend should similarly log a `resend_throttled` (or reuse `login_failed` schema with a new reason) so SOC tooling can detect enumeration attempts that probe the resend endpoint. Acceptance criteria do not require it, but it matches the audit-logging discipline established in Task 4.",
+      "benefit": "Closes an audit-trail gap that an attacker can use to probe the resend endpoint without leaving a trace beyond Redis TTL.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 251,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "`canonicalize(null)` returns empty string which then becomes the Redis key `resend:rate:` and the lookup key for `findByEmail(\"\")`. Bean Validation `@NotBlank @Email` on the DTO blocks the request before it reaches the service, so this is defensive only — but a `null`-input branch in service code that ends up writing an empty-string Redis key is a latent footgun. Consider throwing `AppException.badRequest(...)` on null/blank instead of silently coercing.",
+      "benefit": "Fail-loud over fail-quiet; shrinks the surface where a future caller bypassing the controller layer can poison Redis.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 132,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Both `register()` (line 132) and `resendVerification()` (line 198-199) log `saved.getEmail()` at WARN on email dispatch failure. Email addresses are PII (GDPR Article 4). This pattern is already established in `EmailService` (line 93) and Task 4 events, so it is consistent with the codebase — but the global stance on logging email PII should be documented in `patterns.md` so reviewers do not flag this repeatedly.",
+      "benefit": "Establishes a documented project-wide stance on PII in logs; prevents future inconsistency.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthController.java",
+      "line": 51,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`verifyEmail` query parameter is not validated against length/charset. A pathological 1MB token in the query string would still reach `tokenService.hashToken(...)` and SHA-256 it. Add `@Size(max=128)` (or a hard length check at the service entry) — base64url-of-32-bytes is always 43 chars, so anything beyond ~64 chars is definitionally invalid.",
+      "benefit": "Cheap DoS hardening; the existing `if (rawToken.isBlank())` check in the service can be extended to also reject excessively long inputs.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "line": 136,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "`register_invalidPassword_noDigit_400` asserts `$.message` contains the substring `\"password\"`. The actual message comes from Bean Validation default formatting (`GlobalErrorHandler` for `BindException` / `WebExchangeBindException`) and is locale-sensitive. If the JVM default locale flips on the CI runner, this assertion can break. Consider asserting on a stable structural field (e.g. an `errors` list with the field name) instead of the human-readable string.",
+      "benefit": "Removes locale fragility from the IT suite.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java",
+      "line": 64,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Static container start in a `static {}` block with no shutdown hook means containers persist for the JVM lifetime — Testcontainers' Ryuk handles cleanup, but if Ryuk is disabled (CI policy at some orgs), containers leak. Consider switching to the singleton-pattern with `@SuppressWarnings(\"resource\")` justified by Ryuk reliance, and adding a JVM shutdown hook that calls `.stop()` for resilience.",
+      "benefit": "Defensive cleanup if Ryuk is ever disabled in CI.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 333,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Magic literal `1L` in `count != null && count == 1L` (line 333). Pre-existing from Task 4, but the Task 5 diff did not extract a constant. Consider `private static final long FIRST_INCREMENT = 1L;` for readability.",
+      "benefit": "Self-documenting code; aligns with the named-constants discipline applied elsewhere in this file (`EMAIL_THRESHOLD`, `BRUTE_TTL`, etc.).",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 12,
+    "criticalIssuesCount": 1,
+    "majorIssuesCount": 2,
+    "minorIssuesCount": 6,
+    "testCoverageAssessment": "excellent"
+  }
+}

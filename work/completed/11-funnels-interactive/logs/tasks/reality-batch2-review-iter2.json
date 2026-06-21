@@ -1,0 +1,70 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 2,
+  "status": "approved",
+  "iteration1_fixes_verified": {
+    "task4_record_constructor_caution": {
+      "resolved": true,
+      "evidence": "Task 4 Details line 112 contains explicit warning: 'Додавання полів у record змінює канонічний конструктор — кожен new FunnelStepDto(...) зламається на компіляції. Відомий call-site: FunnelService.toStepDto (static, ~рядок 381). Перед/після зміни — grep -rn \"new FunnelStepDto(\" backend/src і оновити ВСІ сайти'. Implementation hints line 139 repeats as 'Record-конструктори (must do)' with explicit grep commands for both new FunnelStepDto( and new ButtonDto(."
+    },
+    "task5_depends_on_2_3": {
+      "resolved": true,
+      "evidence": "Task 5 frontmatter reads: depends_on: [2, 3]. Previously was [3]. Task 2 provides answerCallbackQuery; dependency is now correctly declared."
+    },
+    "task5_resumeOnCallback_signature_hint": {
+      "resolved": true,
+      "evidence": "Task 5 What-to-do step 8: 'ДО кодування підтвердь фактичну сигнатуру/тип повернення resumeOnCallback(executionId, subscriberId, targetStepId) із звіту Task 3 у decisions.md або реального коду рушія (FunnelExecutionEngine) — не припускай.' Also in Dependencies section: 'Сигнатура/тип повернення resumeOnCallback ПОВ'ЯЗАНА: до кодування звір фактичну сигнатуру зі звіту Task 3 у decisions.md або з реального коду FunnelExecutionEngine — не покладайся лише на tech-spec.'"
+    },
+    "task6_depends_on_1_4": {
+      "resolved": true,
+      "evidence": "Task 6 frontmatter reads: depends_on: [1, 4]. Previously was [4]. Task 1 provides frontend types/funnel.ts MENU/Button/graph-fields; dependency is now correctly declared."
+    },
+    "task6_add_edit_dialog_in_modify_list": {
+      "resolved": true,
+      "evidence": "Task 6 Context Files 'Код (modify)' line 83 explicitly lists: [AddStepDialog.vue](../../../frontend/components/funnels/AddStepDialog.vue) (прокинути siblingSteps крізь діалог), [EditStepDialog.vue](../../../frontend/components/funnels/EditStepDialog.vue) (прокинути siblingSteps крізь діалог). Also listed in What to do step 3 and Details section."
+    },
+    "task6_summary_exhaustiveness_flagged": {
+      "resolved": true,
+      "evidence": "Task 6 What-to-do step 4: '⚠️ Як тільки MENU входить у StepType, наявний switch у summary() стає non-exhaustive → TypeScript-помилка; гілка MENU обовʼязкова.' Also reinforced in Details section: 'після появи MENU у StepType switch стає non-exhaustive → vue-tsc падає; гілка обовʼязкова (typecheck-gate її зловить).'"
+    },
+    "task6_onsubmit_exhaustiveness_flagged": {
+      "resolved": true,
+      "evidence": "Task 6 What-to-do step 2: '⚠️ Наявний onSubmit-switch не має default-гілки: якщо MENU-case не додати, emit(\"step\", …) віддасть undefined для MENU. Гілка case \"MENU\" обовʼязкова.' Details section repeats: 'наявний onSubmit-switch без default-гілки: без case MENU крок для MENU емітнеться як undefined. Обовʼязково додати case MENU.'"
+    }
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "The codebase-verified `new FunnelStepDto(` call-site count is exactly 1 (FunnelService.java line 382). The task correctly identifies this and instructs grepping. No new call-sites were introduced between iter1 and iter2. The caution is adequate; however, the task states the line as '~рядок 381' but actual grep shows line 382. This is a cosmetic discrepancy that will not block compilation since the grep instruction will find it regardless.",
+      "fix": "No action needed. The grep instruction in the must-do hint will find the actual line number at compile time."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "The unresolved iter-1 minor finding remains: validateSteps is called from both update() and activate(), but user-spec says 'draft can be saved, activate-only for broken_edge'. The task correctly flags this as an open decision and says 'Рішення зафіксувати у decisions.md'. This is still an implementation-time decision left open. No regression introduced by iter2.",
+      "fix": "The task documents the tension and defers to the implementor + decisions.md recording. Acceptable as-is; the likely correct resolution (graph validation only on activate) is noted in the iter-1 report."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "Task 6 'End' sentinel encoding: the task says 'КРИТИЧНО: фронтенд має дзеркалити саме те кодування, яке фіналізує Task 4 у ButtonDto (empty-string vs null targetStepId)'. This is correctly flagged but still deferred to implementation time. The issue is real: ButtonDto.targetStepId is a String and null vs empty-string round-trip through JSON differs ('null' is omitted, '\"\"' is present). This is an acknowledged risk with clear guidance.",
+      "fix": "No action needed in the task file; the warning is present. Implementor must confirm null vs empty-string encoding with Task 4 output."
+    }
+  ],
+  "new_issues": [],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 3,
+    "critical_issues": 0,
+    "major_issues": 0,
+    "minor_issues": 3,
+    "iter1_critical_fixes_confirmed": 5,
+    "iter1_major_fixes_confirmed": 3
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 5,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "lines": [117, 205],
+      "category": "redundancy",
+      "title": "Double fitView on initialization",
+      "description": "The component registers onNodesInitialized(() => fitView()) at line 117 AND adds the fit-view-on-init prop to <VueFlow> at line 205. Both fire on the same nodes-initialized event, causing fitView() to execute twice on every initial mount. The task spec explicitly says 'Pick ONE and use it consistently'. fitViewOnInit uses a fitViewOnInitDone guard so the built-in run fires once; the explicit onNodesInitialized callback fires independently — net result is two fitView calls on init.",
+      "recommendation": "Remove fit-view-on-init from the <VueFlow> element and keep only onNodesInitialized(() => fitView()) at line 117, which gives the try/catch guard and matches the task spec."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "lines": [60, 105],
+      "category": "performance",
+      "title": "buildEdges() called twice per reactive update",
+      "description": "rawNodes (line 60-64) calls buildEdges(model.value) internally for layout. flowEdges (line 104-111) calls buildEdges(model.value) a second time independently. Every prop change triggers two full traversals of the steps/triggers arrays. A computed rawEdges would share the result.",
+      "recommendation": "Extract a rawEdges computed that calls buildEdges(model.value) once, then use rawEdges.value inside rawNodes (pass it to layoutNodes) and map it in flowEdges. This halves the traversal cost per update."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelCanvasNode.vue",
+      "lines": [74, 75],
+      "category": "correctness",
+      "title": "Note nodes incorrectly receive a target (input) handle",
+      "description": "The input handle renders for all nodes where !isEntry (line 74). Note nodes satisfy !isEntry (kind='note'), so they get a target handle. The component's own comment at line 134 says 'a note node has no edges at all'. Notes are free-floating canvas annotations and should not expose any handles. While connections TO notes are safely rejected by handleConnect (note ids are not in savedStepIds), the handle is visually misleading and inconsistent with the 'no edges' design intent.",
+      "recommendation": "Change the condition to v-if=\"!isEntry && !isNote\" (line 74). This keeps the input handle on step nodes only, consistent with the 'note has no edges' invariant."
+    },
+    {
+      "id": "F4",
+      "severity": "note",
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "lines": [18, 20],
+      "category": "acceptance-criteria",
+      "title": "CSS not imported in the component file (nuxt.config instead)",
+      "description": "Task AC line 111 states 'imports @vue-flow/core/dist/style.css'. The component does not contain this import; instead, the CSS is registered globally in nuxt.config.ts (added by Task 2). The component comment acknowledges this explicitly. The CSS is loaded and SSR-safe; the AC wording is ambiguous ('the project imports' vs 'the component imports'). This is not a functional issue.",
+      "recommendation": "If strict AC compliance is required, add import '@vue-flow/core/dist/style.css' to the component's <script setup> block. Since nuxt.config already loads it globally, the import would be a no-op on the built output (de-duped by Vite) but would satisfy the letter of the AC."
+    }
+  ],
+  "summary": "Task 5 implementation is structurally sound and passes the spec requirements. The *.client.vue filename correctly gates SSR, useVueFlow() is instantiated exactly once (no second instance anywhere in the file tree), the mapping layer is fully delegated to (no re-implementation of edge/field logic), typed handles are correct and index-aligned with useFunnelCanvas, unsaved-node rejection is properly guarded, SUBSCRIBE exit badge and broken-edge highlight are implemented as specified, and the four required component tests cover all TDD anchor cases. Three minor findings: redundant double fitView (fit-view-on-init prop + onNodesInitialized callback — task says pick one), buildEdges called twice per update (extract rawEdges computed to share the result), and note nodes getting a cosmetically incorrect target handle that is functionally safe. One AC note: the CSS is loaded via nuxt.config rather than a direct component import."
+}

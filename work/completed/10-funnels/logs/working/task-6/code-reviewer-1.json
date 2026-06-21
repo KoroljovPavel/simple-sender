@@ -1,0 +1,40 @@
+{
+  "summary": "Task 6 FunnelExecutionEngine + StepExecutor are correct and production-ready against the task's hardest invariants. The at-most-once guarantee is sound: a single findAndModify CAS (status in [running,waiting] AND nextRunAt<=now AND stepRunStatus==pending -> in_progress) with lowercase .name() literals is the sole claim — no select-then-update window. The deliberate DEVIATION (consecutive non-Delay steps run under one in_progress claim, reset to pending only on Delay-yield) is SAFE: the side-effect -> persistProgress(in_progress) commit ordering means a mid-tick crash leaves the step un-advanced AND in_progress, which the pending-only claim predicate refuses to re-claim => no duplicate send (proven by crashAfterSendBeforeDoneFlipDoesNotResend and the two-replica race IT). Resume-from-waiting increments past the Delay exactly once because status=waiting is only ever set by scheduleDelay with currentStepIndex on the Delay step. Pre-send status-gate + bot-pin ordering, send-fail TerminalReason mapping (BLOCKED_BY_USER/CHAT_NOT_FOUND->cancelled no dup-flip, OTHER+BotTokenInvalidException->failed), Delay-via-nextRunAt (no Thread.sleep), named log constants with no PII, and batch cap+sort+saturation WARN are all implemented per spec. Cross-file signatures (TelegramSender.sendText/sendPhoto, SubscriberCustomFieldsService.setOne, SubscriberService.addTag/removeTag, BotRepository.findFirstByTelegramBotIdAndStatus, VariableTemplateRenderer.render, SentMessage) all verified to match. Compiles clean. Findings are minor: one dead import, an untested saturation-WARN path, and an unboxing-NPE edge that is currently unreachable.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": "23",
+      "finding": "Unused import `java.time.Duration` — Duration is no longer referenced in the engine (delay duration is computed in StepExecutor and passed back as StepResult.delay()). No lint/-Werror gate in build.gradle so it does not break the build, but it is dead code.",
+      "recommendation": "Remove `import java.time.Duration;`."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": "n/a",
+      "finding": "No test exercises the batch-cap saturation WARN path (LOG_SWEEP_SATURATED at FunnelExecutionEngine.java:99). AC explicitly requires 'batch-cap respected, sort nextRunAt asc, cap hit -> WARN', but no IT seeds > sweep-batch-size executions to assert the WARN fires and the cap is honoured. The sort-asc / oldest-first non-starvation behaviour is likewise unverified.",
+      "recommendation": "Add an IT that sets app.funnel.sweep-batch-size to a small value (e.g. via @DynamicPropertySource or @TestPropertySource), seeds that-many-plus-one due executions with staggered nextRunAt, runs sweep(), and asserts (a) LOG_SWEEP_SATURATED was logged via ListAppender and (b) the oldest nextRunAt executions were claimed first. Primarily a test-reviewer concern."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+      "line": "183-191",
+      "finding": "delayDuration() unboxes step.getDelayValue() (Integer) into `int value`. A null delayValue would throw NullPointerException rather than a domain error. Currently unreachable because DELAY steps always carry a validated delayValue (Task 5 DTO validation + the deep-copy snapshot), so this is an edge note, not a live bug.",
+      "recommendation": "Optional: guard with an explicit IllegalStateException (matching the existing default-branch style for unknown delayUnit) if delayValue is null, so a malformed snapshot fails with a clear message instead of an opaque NPE."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": "129-139",
+      "finding": "On resume-from-waiting the in-memory currentStepIndex is incremented and status set to running BEFORE the status-gate/bot-pin checks. If the subscriber is inactive (or bot not CONNECTED) at resume, the execution is terminated (cancelled/failed) while persisting the already-incremented currentStepIndex (delay index + 1). The persisted index is cosmetic on a terminal row and does not affect correctness or at-most-once, but the stored index no longer points at the step that was actually pending.",
+      "recommendation": "Acceptable as-is (terminal rows are not re-processed). If index fidelity on terminal rows matters for observability/debugging, move the waiting-resume increment to after the gate checks, or document that currentStepIndex on a terminal row is the resumed (post-delay) index."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": "154-188",
+      "finding": "The loop ceiling `guard = size + 1` plus the post-loop completion check is defensive belt-and-suspenders that is functionally redundant: Delay always returns out of the loop and every CONTINUE strictly increases currentStepIndex, so the in-loop `if (currentStepIndex >= size) complete()` already covers end-of-steps. The trailing post-loop complete() (lines 186-188) is only reachable if the guard trips, which cannot happen given the increment invariant. Harmless, but slightly obscures the control flow.",
+      "recommendation": "Optional readability cleanup: keep the guard as a safety net but add a one-line comment that the trailing complete() is unreachable under the strictly-increasing-index invariant, or drop it. No behavioural change required."
+    }
+  ]
+}

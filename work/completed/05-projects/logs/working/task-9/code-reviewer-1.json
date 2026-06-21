@@ -1,0 +1,32 @@
+{
+  "status": "approved",
+  "summary": "Task 9 is a tightly-scoped layout composition change that correctly wires <ProjectSelector /> into the topbar and adds a project-aware Settings link to the sidebar guarded by v-if=\"projectsStore.currentProject\". All acceptance criteria are met: i18n key layout.sidebar.settings is used (exists in both uk/en locales), NuxtLinkLocale is used for locale-aware navigation, the zero-touch contract (AC-T7) is preserved, and the ux-guidelines.md line 33 alignment (AC-31 / AC-T10) is in place — grep for 'full-page onboarding' returns 0 matches. No scope creep, no logic changes, no regressions to existing layout behaviour.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "frontend/layouts/default.vue",
+      "line": 22,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The <header> uses `flex justify-between` with three direct children (brand, ProjectSelector, user-info div). Visually this places ProjectSelector in the middle of the topbar rather than next to the brand. The task description allows this (order, not adjacency) and the task explicitly forbids introducing responsive logic in this task, so this is acceptable. Just flagging for awareness: if a future polish pass wants brand+ProjectSelector grouped on the left and user-info+logout+LangSwitcher on the right, the simplest fix is wrapping brand and ProjectSelector in a left-side flex container. No action required for Task 9.",
+      "benefit": "Documents a known visual layout trade-off so reviewers in Task 10 (E2E) or a later polish task do not mistake it for a regression.",
+      "optional": true
+    },
+    {
+      "file": "frontend/layouts/default.vue",
+      "line": 46,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Consistency note: elsewhere in the project (frontend/components/ProjectSelector.vue lines 122/145, frontend/pages/projects/index.vue lines 111/171) NuxtLinkLocale targets are wrapped explicitly with localePath(`...`). Inside default.vue the existing brand/Dashboard/Profile links use the bare-path form (`to=\"/dashboard\"`), and the new Settings link follows that file-local convention — so the file is internally consistent. Per the task's own Implementation Hints, NuxtLinkLocale handles locale prefixing on its own, so the bare-path form is correct and no change is required. Optional: a future small refactor could unify the project-wide style one way or the other.",
+      "benefit": "Project-wide consistency between layouts/components/pages on NuxtLinkLocale prefix handling.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 2,
+    "testCoverageAssessment": "adequate"
+  }
+}

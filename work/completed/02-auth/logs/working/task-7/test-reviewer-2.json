@@ -1,0 +1,36 @@
+{
+  "summary": "All three Round 1 majors are closed with concrete state assertions, not mock-call counts. ProfileControllerIT.deleteAccount now asserts MongoDB sessions count == 0 for the deleted user, the unrelated user's session survives, and a follow-up GET /api/profile returns 401 via the new loadActiveUser status gate — three independent failure modes pinned. ProfileControllerIT.changePassword seeds two sibling sessions for the acting user plus one for an unrelated user and asserts both seeded siblings are removed while the unrelated session survives; the 'current session survives' clause is documented as not assertable under @WithMockAppUser and pinned at the unit layer via the captured Query.toJson() check on '_id != currentSessionId'. HardDeleteJob bumps the cutoff by 1ns and HardDeleteJobTest.hardDelete_exactly30DaysAgo_isRemoved seeds at the exact AC boundary — implementation now matches AC line 81 ('deletedAt <= now - 30d'). The two minor improvements (terminate-all Query JSON capture, switchIfEmpty/status-gate branches) are also addressed; the redundant getProfile unit was removed. Two new unit tests (over-rate-limit short-circuit, wrong-password counter increment) protect the new Redis brute-force gate with strong negative assertions (verify(userRepository, never()).findById(...), verify(passwordEncoder, never()).matches(...)). Pyramid: 9 unit / 10 integration / 0 e2e — healthy. 156 tests pass. Two minor gaps remain: (1) HardDeleteJob GDPR audit log content is not asserted (carry-over from Round 1 minor — not regressed, not addressed), (2) the new checkChangePwdRate Redis fail-open branch (Decision 4) has no test, so a regression that hard-fails change-password during a Redis outage would be invisible.",
+  "verdict": "passed",
+  "status": "passed",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/profile/ProfileServiceTest.java (entire file) — checkChangePwdRate fail-open branch",
+      "issue": "ProfileService.checkChangePwdRate has an explicit Decision-4 fail-open: when Redis throws (non-AppException), it logs a warn and lets the change-password chain continue. No test stubs redisTemplate.opsForValue().get(...) to return Mono.error(new RuntimeException(...)) and asserts the request still proceeds to BCrypt verify. If a future refactor accidentally turns the fail-open into a fail-closed (e.g., by dropping the onErrorResume or by wrapping the AppException check incorrectly), every change-password request during a Redis outage would 500 and no test would catch it. The existing tests only cover the happy-path Redis (count=0) and the over-threshold path (count=5) — never the IO-error branch.",
+      "recommendation": "Add ProfileServiceTest.changePassword_redisOutage_failsOpen_completesSuccessfully: when(redisTemplate.opsForValue().get(eq(\"change-pwd:fail:\" + USER_ID))).thenReturn(Mono.error(new RuntimeException(\"redis down\"))); then stub findById/matches/encode/save/remove/delete as in the happy-path test and StepVerifier.verifyComplete(). Verify userRepository.save was called (i.e., the chain did NOT short-circuit on the Redis error). This costs ~10 lines and pins Decision 4 against future drift."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/jobs/HardDeleteJobTest.java (entire file) — GDPR audit log",
+      "issue": "Carry-over from Round 1: AC line 82 / tech-spec line 95 require 'HardDeleteJob logs deleted user IDs and count before deletion' as a GDPR audit trail. The implementation (HardDeleteJob.java line 53) does emit the log, but no test asserts on the log output. If a refactor silently removes the log statement (e.g., during a logging-framework migration), no test fails. Severity stays minor — this is observability-flavoured spec compliance, not user-visible behavior — but the GDPR framing keeps it non-cosmetic. Not regressed by Round 1, just not addressed.",
+      "recommendation": "Attach a Logback ListAppender to HardDeleteJob's logger in a @BeforeEach setup, run the existing 'older than 30d' scenario, then assert appender.list contains an INFO event whose formatted message includes both seeded user ids and the substring 'removing 2 users'. Total cost ~15 lines, no production change. Same recipe Round 1 prescribed."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 19,
+      "passed": 19,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 9,
+      "integration": 10,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

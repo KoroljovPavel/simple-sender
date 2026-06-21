@@ -1,0 +1,69 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "20 acceptance criteria (>10 threshold), 13 user-flow items (>3 threshold), multiple integration points (>5 threshold). All three thresholds exceeded. size: L is declared correctly and matches actual scope.",
+      "location": "Frontmatter — size: L",
+      "fix": "No action required. size: L is correctly declared. This finding records threshold exceedance for traceability only."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "canvas as sole edit surface; list downgraded to read-only (may be removed later)",
+      "per-step nullable canvasPosition {x,y}; dagre auto-layout for legacy/empty funnels",
+      "reuse existing FunnelStepForm/FunnelTriggerSettings in side-panel (no editor rewrite)",
+      "editor-only note node stored in notes[] outside steps[]",
+      "testing: Vitest component tests + backend IT for canvasPosition and engine changes; no new E2E; manual drag/zoom",
+      "draw-to-connect typed handles — next / per-button / timeout (Q5)",
+      "notes[] as funnel-level array outside steps[], never executed by engine (Q6)",
+      "auto-clean dangling edges on delete + warning with count (Q7)",
+      "palette = existing step types + trigger + note, nothing new (Q8)",
+      "explicit next via drawn edge; array order stops driving step-to-step flow (Q9)",
+      "Start node 'Початковий Крок' optional, single output = on_start entry step",
+      "trigger-only funnels have no Start node",
+      "Start node lifecycle: delete node removes on_start entry; delete edge only = broken edge; re-add via palette; re-adding when already present is disabled (palette item greyed)",
+      "cycles allowed; engine loop backstops (press + step budget) unchanged",
+      "exactly one default next per node; one edge per source handle; each button its own target",
+      "new node must persist to mint id before it can be wired",
+      "cross-funnel SUBSCRIBE shown as exit badge not drawn edge",
+      "broken edges highlighted on canvas; 422 funnel_broken_edge on activate unchanged",
+      "engine change 1: next==null = end-of-branch (no array fallthrough) — advanceToNext",
+      "engine change 2: on_start gets explicit entry step via reuse of Trigger.entryStepId (requireNoEntryStep validation relaxed; FunnelEventService.matchedEntryStepId returns entryStepId for on_start instead of null); resolveStartCursor unchanged",
+      "array order no longer affects execution after engine changes"
+    ],
+    "missing": []
+  },
+  "round3_fix_verification": {
+    "fix1_backend_bullet_colon": {
+      "status": "verified_fixed",
+      "location": "## Ограничення — first bullet, line 145",
+      "note": "Now reads '(плюс зміни рушія/тригерів — див. окремий пункт нижче)' with no colon; engine changes pointed to a separate bullet. Ambiguity resolved."
+    },
+    "fix2_start_node_edge_deletion_ac": {
+      "status": "verified_fixed",
+      "location": "## Критерії приёмки, line 127-129",
+      "note": "422 removed from this AC; now reads '(загальне правило битих ребер)' referencing the general broken-edge rule. Added 'повторне додавання on_start, коли він уже є, недоступне.' No longer mixes frontend highlight and backend HTTP status in one assertion."
+    },
+    "fix3_re_add_on_start_disabled": {
+      "status": "verified_fixed",
+      "location": "## Як має працювати — item 2, line 62-63",
+      "note": "Added 'коли on_start уже є, повторне додавання недоступне (пункт палітри задізейблений).' Scenario is now covered in both the flow description and the AC."
+    },
+    "fix4_on_start_engine_mechanism": {
+      "status": "verified_fixed_no_new_contradictions",
+      "location": "## Ограничення — Рушій/тригери bullet, lines 151-161; ## Технічні рішення — on_start bullet, lines 211-215",
+      "note": "Wording corrected to: reuse Trigger.entryStepId (not a new field); relax requireNoEntryStep validation; matchedEntryStepId in FunnelEventService returns this entryStepId for on_start (instead of null); resolveStartCursor unchanged. Both Ограничення and Технічні рішення are mutually consistent on this mechanism. Observable AC (line 114) states behavioral outcome only — consistent. 'Як перевірити' table (step 2, line 260) tests behavior not implementation — consistent. No contradictions introduced."
+    }
+  },
+  "summary": "Специфікація після round-3 виправлень повністю чиста: усі три мінорні знахідки раунду 2 усунено та верифіковано. Виправлення механізму on_start (entryStepId + matchedEntryStepId замість resolveStartCursor) не вносить суперечностей — Ограничення, Технічні рішення та Як перевірити послідовні між собою і з поведінковим AC. Єдина залишена знахідка — формальне size_check warning через перевищення порогів (20 ACs, L-size задекларовано коректно). Специфікація готова до затвердження."
+}

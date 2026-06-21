@@ -1,0 +1,29 @@
+{
+  "task": 3,
+  "round": 1,
+  "summary": "All ten TDD-anchor scenarios are covered with meaningful, litmus-positive assertions. The three new/rewritten test files use only servlet-stack APIs (no StepVerifier / WebTestClient / MockServerWebExchange / reactor-test) and the deleted RememberMeWebSessionIdResolverTest is gone from the tree. Two minor structural issues worth noting: GlobalErrorHandlerTest splits the anchor 'handleAppException_handleResponseStatus_handleThrowable_unchanged' into five granular methods (broader than the anchor — not a regression), and SecurityConfigTest has one redundant duplicate assertion plus one weak negative assertion (isNotEqualTo(403)) on the webhook path.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/security/SecurityConfigTest.java",
+      "test": "csrfProtection_excludesWebhookPath_keepsApiPathProtected",
+      "issue": "Webhook-bypass assertion uses 'status != 403', which is defensive but weak: a 500 from a misconfigured controller would silently pass the CSRF-bypass check even if the AND-scoped matcher had regressed in a way that mapped to a different error code. The intent (no CSRF challenge) is captured indirectly.",
+      "suggestion": "Sharpen by also reading the response body / header for a CSRF-rejection marker, OR pin the expected reach-through status (most likely 401 since the webhook gate is unauthenticated at this stack level — controller secret-header gate runs later). If the controller may not be wired at Wave 2 commit boundary, add a comment justifying the loose check and keep status=403 specifically as the regression marker, e.g. `.andExpect(status().value(not(403)))` with a clarifying message."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/security/SecurityConfigTest.java",
+      "test": "csrfCookie_writtenOnSafeVerbRequest",
+      "issue": "Performs the same GET /health twice (lines 76-83 then 86-87) to assert cookie presence via two styles. The second perform/expect adds zero coverage — same path, same verb, same matcher semantics — but doubles execution cost on a SpringBootTest context.",
+      "suggestion": "Drop the second `mockMvc.perform(get(\"/health\")).andExpect(cookie().exists(\"XSRF-TOKEN\"))` block — the manual `Cookie xsrf = ...` assertion + value-not-blank check already pins the regression. If you want the higher-level matcher style instead, replace the manual block; do not duplicate."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/common/GlobalErrorHandlerTest.java",
+      "test": "handleAppException_handleResponseStatus_handleThrowable_unchanged",
+      "issue": "The TDD anchor specifies one named test 'handleAppException_handleResponseStatus_handleThrowable_unchanged' but the file splits it into seven granular methods (appException_400/401/403/409/429, handleResponseStatus_propagatesStatusAndReason, throwable_returns500_withoutExposingDetails). Coverage is broader and stronger, but the literal name from the anchor is missing — downstream automation that greps for the anchor name will report it as absent.",
+      "suggestion": "No behavioral fix needed. If the team automates anchor presence via grep on method names, either (a) keep the granular methods and add a one-line comment header listing them as fulfilling the umbrella anchor, or (b) add a single facade test method `handleAppException_handleResponseStatus_handleThrowable_unchanged` that invokes the three handlers with one assertion each and let the granular ones provide depth. Behavioural coverage already exceeds the anchor."
+    }
+  ],
+  "verdict": "approved"
+}

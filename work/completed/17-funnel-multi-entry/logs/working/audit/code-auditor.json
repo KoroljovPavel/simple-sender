@@ -1,0 +1,64 @@
+{
+  "status": "issues_found",
+  "summary": "The 17-funnel-multi-entry feature is architecturally sound and consistent with Phases 1-7. All cross-component invariants hold: a single execution writer (Decision 11) — both the API-event/EMIT_EVENT paths and the on_start path route through one collaborator, with redirectExecution as the only new engine mutation and no forked writer; the new bean cycle FunnelEventService -> FunnelExecutionEngine -> StepExecutor -> FunnelEventService is correctly broken by @Lazy; error-isolation (try/catch(Throwable)+WARN, CAS-loss no-op, broken-cursor isolated terminal-fail) is preserved on every new path; snapshot isolation is respected (redirect resolves entryStepId against the execution's stepsSnapshot); the claim-CAS is scoped by both subscriberId AND funnelId with executionId sourced only from the trusted in-flight probe; the one-execution invariant and loop-bound hold (redirect mutates the row, never calls insertExecutionAt, enrollDepth unchanged); the matched-element re-scan and array-aware queries are consistent; onStartTriggerValue is synced on every save path; index reconciliation is a correct idempotent BeanPostProcessor. No blockers or majors. Findings are 4 minor/nit quality items and 1 documented spec deviation (already recorded in decisions.md, so not a silent drift). No flat-trio dead code remains.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": "344-351",
+      "issue": "In insertAtEntryStep, the allowReEnter=true branch calls cancelExistingForPair before insertExecutionAt. This branch is only reached when the in-flight probe (inFlightExecutionId) already returned null, i.e. there is no in-flight (running/waiting/waiting_for_reply) row to cancel — so cancelExistingForPair is a guaranteed no-op extra DB round-trip on this path. It is harmless and defensible as a guard against a concurrent insert racing the unique index (the method comment even says so), but the call is structurally dead for its stated cancel purpose here, unlike insertOneFunnel/insertTargetExecution where allowReEnter=true genuinely supersedes an existing run. Consider documenting that this cancel is purely race-defense (no row is expected) or dropping it and relying on the catch(DuplicateKeyException) swallow that the allowReEnter=false branch already uses.",
+      "fix": "Either add a one-line comment clarifying the cancel is race-defense only (no in-flight row expected here because the probe returned null), or collapse both branches to the try/insert + swallow form since no pre-existing in-flight row can exist on this path."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": "199, 511-521",
+      "issue": "dispatchForSubscriber/matchingFunnels coerces a null matchKey to \"\" for the event/tag/custom_field exact query, and matchedEntryStepId mirrors that coercion. For an `event` trigger this can never legitimately match (event triggerValue is validated 1..64 chars, never \"\"), so a null/empty event_name silently falls through to LOG_DISPATCH_NO_MATCH. This is correct behaviour but the empty-string coercion is a keyword/on_start idiom carried verbatim onto the event path where \"\" is not a valid value — slightly surprising. Pure cleanliness, no functional impact.",
+      "fix": "Optional: short-circuit dispatchForSubscriber to a NO_MATCH no-op when triggerType==event and matchKey is null/blank, instead of issuing an $elemMatch query with triggerValue:\"\" that can never hit a valid event element."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+      "line": "391-404",
+      "issue": "stepById is duplicated as a private static helper here (linear lookup over the snapshot) and again in FunnelExecutionEngine (line 455). The duplication is acknowledged in the method comment as intentional (the engine keeps it package-private static and the two classes navigate independently), so this is a documented, deliberate small duplication rather than accidental drift. Recorded for completeness only.",
+      "fix": "None required; if a shared snapshot-navigation utility is ever extracted, fold both copies into it. Leaving as-is is acceptable per the existing rationale."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "53-56",
+      "issue": "The class-level Javadoc still describes the trigger-conflict pre-check in terms of the OLD flat (triggerType, triggerValue) pair ('reject a second active funnel with the same (triggerType, triggerValue)'), while the implementation (checkTriggerConflict, line 377) now keys exclusively on the denormalized onStartTriggerValue scalar (Decision 6 / Variant A). The code is correct; only the class doc lags the model. Naming/doc drift, no behavioural impact.",
+      "fix": "Update the class-level Javadoc to describe the conflict guard in terms of onStartTriggerValue (one active funnel per (projectId, on_start payload)) to match the post-Phase-8 model."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+      "line": "145-160",
+      "issue": "Documented spec deviation (NOT a silent drift — it is recorded in decisions.md Task 5): the tech-spec Decision 6 / Task 5 said the on_start lookup should move to findByProjectIdAndOnStartTriggerValueAndStatus, but fire() instead uses the array-aware $elemMatch query findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus over triggers[] on (on_start, payload). The reason is correct and necessary: the denormalized onStartTriggerValue scalar is null for a bare /start (\"\" -> null, Variant A) and the repo method explicitly forbids a null argument, so the prescribed lookup could never resolve a bare-start funnel. The chosen query preserves exact old semantics for both bare \"\" and a deep-link payload, .findFirst() is safe given the on_start uniqueness partial index, and the deviation is fully documented inline and in decisions.md. Flagged so tech-spec readers know the document text (Decision 6 / Task 5 wording) diverges from the as-built lookup.",
+      "fix": "No code change needed (the implementation is the correct one). Optionally align the tech-spec Decision 6 / Task 5 wording so the document reflects that the on_start lookup uses the $elemMatch triggers[] query (bare-start safety), with onStartTriggerValue reserved for the conflict pre-check + unique index only."
+    }
+  ],
+  "files_reviewed": [
+    "backend/src/main/java/com/botfunnel/funnel/Trigger.java",
+    "backend/src/main/java/com/botfunnel/funnel/Funnel.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliation.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionFactory.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/TriggerDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/UpdateFunnelRequest.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/FunnelResponse.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/FunnelSummaryResponse.java",
+    "backend/src/main/java/com/botfunnel/api/EventsController.java (context grep)",
+    "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java (context grep — EMIT_EVENT edge)",
+    "frontend/types/funnel.ts",
+    "frontend/stores/funnels.ts",
+    "frontend/components/funnels/FunnelTriggersPanel.vue",
+    "frontend/components/funnels/FunnelTriggerSettings.vue (context grep — lock-type prop)",
+    "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+    "frontend/i18n/locales/uk.json (triggersPanel block)"
+  ]
+}

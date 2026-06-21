@@ -1,0 +1,29 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "4",
+  "round": 1,
+  "commit": "17c5117",
+  "summary": "Three test files: FunnelEventServiceTest (Mockito unit, all backstops + fan-out + keyword + error-isolation), FunnelEventServiceIT (embedded Mongo, each trigger type + fan-out + depth/fanout Redis-down + volume fail-open, doubles as bean-graph boot check), SubscriberServiceImplTest (anti-IDOR findById). Every TDD-anchor item is covered. Assertions are real (execution rows / captured enrollDepth values / WARN markers via ListAppender), not bare mock-call checks. One coverage gap worth a test.",
+  "findings": [
+    {
+      "id": "TR-1",
+      "severity": "minor",
+      "category": "Coverage gap",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelEventServiceTest.java",
+      "finding": "The per-funnel re-enter interplay in insertOneFunnel is not directly tested: (a) allowReEnter=true funnel -> cancelExistingForPair then insert; (b) allowReEnter=false funnel raising DuplicateKeyException is swallowed and does NOT abort the rest of the fan-out (one dup must not skip sibling matches). Edge case explicitly called out in the task ('Re-enter guard interplay').",
+      "recommendation": "Add a unit test: two matched funnels, the first insert throws DuplicateKeyException -> the second funnel still gets inserted (verify times(1) on the second, LOG_DISPATCH_REENTER_IGNORED logged). Optionally a test that allowReEnter=true triggers cancelExistingForPair before insert.",
+      "action": "fix"
+    },
+    {
+      "id": "TR-2",
+      "severity": "minor",
+      "category": "Assertion strength",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelEventServiceTest.java",
+      "finding": "Several unit tests assert via verify(executionFactory...) invocation counts. For a fan-out dispatcher this count IS the observable behavior, and the IT asserts the real persisted rows/depths — so the unit-level mock-count assertions are justified (not the 'tests only that mock was called' anti-pattern, since enrollDepth values are captured and asserted).",
+      "recommendation": "No change.",
+      "action": "wontfix"
+    }
+  ],
+  "verdict": "approve-with-minor-fixes",
+  "notes": "Test-pyramid balance is correct (unit-heavy logic + targeted IT for persistence/wiring). No redundant tests. Redis-down cases spy StringRedisTemplate rather than stopping the shared container — correct per project convention."
+}

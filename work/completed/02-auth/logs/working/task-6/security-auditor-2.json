@@ -1,0 +1,90 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 3
+  },
+  "critical": [],
+  "major": [],
+  "minor": [
+    {
+      "severity": "minor",
+      "category": "OWASP A04 - Insecure Design (residual)",
+      "title": "Forgot-password rate limit is per-IP only — no per-email bucket",
+      "description": "The Round-1 recommendation called for BOTH a per-email key (forgot:rate:{email} 60s, primary defence against email-bombing a single known victim) AND a per-IP counter (secondary, for clearly abusive volumes). The implemented mitigation only sets forgot:rate:ip:{ip} TTL=60s. An attacker with access to a small pool of IPs (or a residential-proxy / botnet rotation) can still flood any one victim's inbox: each IP can fire one request per minute, so N IPs ⇒ N reset emails per minute to the same target. CGNAT users behind shared IPs are also penalised in the other direction — one user's reset blocks every other user behind that NAT for 60s.\n\nNote: the per-IP-only fix DOES close the SMTP-egress-abuse vector at single-attacker scale, and DOES bound the audit-log write rate. So this is a partial fix, not a regression — flagging as minor because it's strictly weaker than the spec'd defence-in-depth.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:259-260 (forgotKey is ip-only) and 315-317",
+      "impact": "Email-bombing of a known victim's inbox is still feasible from a multi-IP attacker (low-skill if the attacker rents residential proxies). Pending-token DoS (overwriting in-flight reset tokens) is still possible at lower rate. Outbound SMTP volume is bounded per IP but not in aggregate.",
+      "recommendation": "Add a complementary per-email key:\n\n  private static String forgotEmailKey(String email) { return \"forgot:rate:email:\" + email; }\n\n  Mono<Boolean> emailLimit = redisTemplate.opsForValue()\n      .setIfAbsent(forgotEmailKey(email), \"1\", FORGOT_RATE_TTL)\n      .onErrorResume(err -> Mono.just(true));\n  Mono<Boolean> ipLimit = redisTemplate.opsForValue()\n      .setIfAbsent(forgotKey(ip), \"1\", FORGOT_RATE_TTL)\n      .onErrorResume(err -> Mono.just(true));\n  return Mono.zip(emailLimit, ipLimit)\n      .flatMap(t -> (Boolean.FALSE.equals(t.getT1()) || Boolean.FALSE.equals(t.getT2()))\n          ? Mono.empty() : doForgotPassword(email, ip, userAgent));\n\nKeep silent over-limit handling (return 200 with no body) so timing remains uniform. The per-email key must be set BEFORE the user lookup (canonicalized email is what we have) so timing is independent of email validity.",
+      "cwe": "CWE-307"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A09 - Security Logging and Monitoring (test coverage)",
+      "title": "Timing-parity fix has no automated regression assertion",
+      "description": "Round-1 finding #2 recommended adding an automated assertion (unit timing or IT) to catch future regressions of the FORGOT_DUMMY_DELAY. The fix landed (40ms Mono.delay on the unknown/deleted/blocked branch) but no test asserts that both branches take comparable wall-clock time. Anyone refactoring AuthService.doForgotPassword in the future could remove the delay without any test failing — and the next security-auditor pass would have to re-discover the timing oracle by hand.\n\nThis is not an exploitable vulnerability today; it is a test-coverage gap that materially weakens the durability of the fix.",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java (no timing test) and backend/src/main/java/com/botfunnel/auth/AuthService.java:288 (FORGOT_DUMMY_DELAY usage)",
+      "impact": "Future maintainers may silently regress the timing-oracle defence. Detection delay = next manual security review.",
+      "recommendation": "Add a coarse timing assertion. Two cheap options:\n\n(a) Use VirtualTimeScheduler in StepVerifier to verify the unknown-email branch DOES emit a Mono.delay subscription:\n  StepVerifier.withVirtualTime(() -> authService.forgotPassword(\"ghost@x\", exchange()))\n      .expectSubscription()\n      .expectNoEvent(Duration.ofMillis(40))\n      .verifyComplete();\n\n(b) An IT-level wall-clock comparison with high tolerance (e.g. abs(t_known - t_unknown) < 100ms over 5 samples). More flaky in CI; option (a) preferred.\n\nEither test pinned to the FORGOT_DUMMY_DELAY constant catches removal regressions.",
+      "cwe": "CWE-1053"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A04 - Insecure Design (carry-over from Round 1)",
+      "title": "Reset token transported as URL query parameter — frontend mitigations still pending",
+      "description": "Re-flagged from Round-1 finding #6 per orchestrator's note. The reset-password.html template still emits {APP_URL}/auth/reset-password?token={TOKEN}. Backend implementation is fine; the mitigations are frontend-side (Referrer-Policy: no-referrer on the reset page, history.replaceState to strip the token from the URL after extraction). Flagging here as a tracking note so the frontend epic does not lose sight of it — NOT blocking for Task 6 acceptance.",
+      "location": "backend/src/main/resources/templates/email/reset-password.html:12 (token in query string) — frontend mitigation lives outside this task",
+      "impact": "If the reset-password page loads any third-party resource (analytics, fonts, images) OR if a user shares / pastes / has the URL captured in webserver logs within the 1h TTL, the token is recoverable. Window is bounded by TTL and HTTPS in transit.",
+      "recommendation": "Frontend epic: (a) <meta name=\"referrer\" content=\"no-referrer\"> or HTTP Referrer-Policy: no-referrer on /auth/reset-password page; (b) immediately after extracting the token client-side, call history.replaceState({}, '', '/auth/reset-password') so the token is not retained in browser history.",
+      "cwe": "CWE-598"
+    }
+  ],
+  "nitpicks": [],
+  "round1Verification": {
+    "major1_rateLimitOnForgotPassword": "PARTIALLY RESOLVED — per-IP key implemented (forgot:rate:ip:{ip} TTL=60s, fail-open per Decision 4, silent over-limit drop preserves anti-enumeration). Per-email key NOT implemented; downgraded to minor (see findings).",
+    "major2_timingOracle": "RESOLVED — Mono.delay(FORGOT_DUMMY_DELAY=40ms) on unknown/deleted/blocked branch equalises wall-clock with the known-user save+email-build path. No regression assertion landed; downgraded to minor (see findings).",
+    "minor3_metadataAsymmetry": "RESOLVED — both branches now pass null metadata to eventService.logEvent. Tests forgotPassword_unknownEmail_*WithNullMetadata and forgotPassword_deletedUser_*WithNullMetadata assert eq(null).",
+    "minor4_piiInLogs": "RESOLVED — log.warn now emits userId instead of email on dispatch failure (line 305-306).",
+    "minor5_constantTimeHashCompare": "ACCEPTED AS-IS — defense-in-depth note only at 256-bit entropy; orchestrator confirms.",
+    "minor6_tokenInUrlQuery": "DEFERRED to frontend epic — re-flagged as a minor tracking note.",
+    "minor7_hardcodedTestPassword": "ACCEPTED AS-IS — pre-existing, not Task 6 scope; orchestrator confirms.",
+    "bonusFixesObserved": [
+      "Status gate added to resetPassword (lines 334-337): blocked/deleted users cannot rotate password even with valid unexpired token. Tests resetPassword_blockedUser_*_doesNotRotate and resetPassword_deletedUser_*_doesNotRotate cover both. This addresses an account-lifecycle invariant the original spec did not call out.",
+      "@Size(max=254) on ForgotPasswordRequest.email defends against pathological-length inputs that survive @Email/@NotBlank.",
+      "Pending users still allowed to reset (forgot password before email verification is a normal flow) — explicit and documented in code comment line 281-282."
+    ]
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "OWASP A04 - Insecure Design (residual)",
+      "title": "Forgot-password rate limit is per-IP only — no per-email bucket",
+      "description": "Per-IP-only rate limit allows email-bombing of a single victim from a multi-IP attacker (residential-proxy rotation) at N requests/min where N = number of distinct source IPs. CGNAT users penalise each other.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:259-260, 315-317",
+      "impact": "Email-bombing victim possible at scale; pending-token DoS still feasible at lower rate.",
+      "recommendation": "Add complementary forgot:rate:email:{email} key alongside the per-IP key, both checked before the user lookup. Silent over-limit, fail-open on Redis error.",
+      "cwe": "CWE-307"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A09 - Security Logging and Monitoring (test coverage)",
+      "title": "Timing-parity fix has no automated regression assertion",
+      "description": "FORGOT_DUMMY_DELAY can be silently removed by a future refactor without any test failing.",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java",
+      "impact": "Defence durability — future regressions only caught by next manual security review.",
+      "recommendation": "Add a StepVerifier.withVirtualTime test that asserts the unknown-email branch incurs the FORGOT_DUMMY_DELAY before completing.",
+      "cwe": "CWE-1053"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A04 - Insecure Design (carry-over)",
+      "title": "Reset token transported as URL query parameter",
+      "description": "Frontend epic concern: token in URL retained in browser history and leaks via Referer to third-party resources. Backend OK; flagging for frontend tracking.",
+      "location": "backend/src/main/resources/templates/email/reset-password.html:12",
+      "impact": "Token recoverable within 1h TTL if URL is leaked.",
+      "recommendation": "Frontend: Referrer-Policy: no-referrer + history.replaceState to remove token after extraction.",
+      "cwe": "CWE-598"
+    }
+  ]
+}

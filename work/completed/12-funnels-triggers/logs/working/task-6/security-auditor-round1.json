@@ -1,0 +1,20 @@
+{
+  "task": "6",
+  "reviewer": "security-auditor",
+  "round": 1,
+  "skill": "security-auditor",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+    "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java"
+  ],
+  "owasp_review": {
+    "A01_access_control": "PASS — subscriber resolved project-scoped via findByChat(projectId, telegramBotId, chatId); precedence query scoped by projectId+subscriberId. projectId is pinned upstream from the trusted rawUpdate, not attacker-supplied at this layer. No IDOR/cross-tenant path.",
+    "A03_injection": "PASS — attacker-controlled message text is passed as matchKey and only used for an in-memory case-insensitive contains scan (Decision 3); Mongo criteria use parameterized .is(...) on exact literals (projectId, subscriberId, status), never the text. No NoSQL/query injection.",
+    "A04_insecure_design": "PASS — keyword is a depth-0 human root (exempt from the volume rate-limit by design) but the dispatcher's Redis-independent fan-out ceiling (Decision 6c) bounds executions-per-firing; each message already passes the webhook's upstream controls. No new amplification.",
+    "A09_logging": "PASS — keyword block logs ids/codes only (projectId + exception simpleName); the subscriber's message text is never logged (Decision 16 PII rule). No secrets/PII leak.",
+    "error_isolation": "PASS — local try/catch(Throwable) scoped to the keyword block only; the worker's outer FAILED+rethrow path is untouched, so a genuine worker fault still surfaces and no security-relevant exception is masked."
+  },
+  "findings": [],
+  "verdict": "APPROVED — no vulnerabilities found"
+}

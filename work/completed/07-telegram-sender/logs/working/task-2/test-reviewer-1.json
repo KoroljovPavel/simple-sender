@@ -1,0 +1,28 @@
+{
+  "summary": "One new test added (findById_legacyDocumentWithoutOwnerChatId_readsAsNull). It correctly exercises the real BSON round-trip via embedded Mongo (save -> findById), uses StepVerifier idiomatically (assertNext + verifyComplete implicitly rejects any deserialization error), and the assertion is specific (getOwnerChatId() == null). Naming matches the file's methodName_scenario_outcome convention. Reuses newBot(...) without modifying its signature. BotTokenLeakTest invariant preserved: Bot.java declares no toString. The test passes the litmus test — removing 'private Long ownerChatId;' breaks compilation, and switching to primitive long flips the assertion (would deserialize to 0L), so the test actively pins both the field's existence AND the wrapper-Long contract called out in Decision 14 / Risk R6. One minor: a positive-path round-trip case (setOwnerChatId(N) -> save -> reload -> assert == N) is not strictly required for this task (the riskier semantic is 'absent field reads as null', and a positive round-trip would mostly test framework behavior), but it would cheaply tighten the contract documentation for the next task that actually populates the field.",
+  "findings": [
+    {
+      "severity": "minor",
+      "area": "redundant_testing / coverage",
+      "finding": "No positive-path round-trip test for ownerChatId — only the null/absent case is covered. The task scope deliberately limits to the legacy-document contract (Risk R6, TDD Anchor), and a getter/setter round-trip largely re-tests Spring Data MongoDB's wrapper-Long handling rather than business logic, so this is defensible. However, Wave-2/Wave-3 tasks will populate this field via webhook ingestion; an explicit save-with-value/reload-equals-value assertion would document the write side of the contract one task earlier and protect against a future accidental change of the field to a non-stored property (e.g., a hand-rolled @Transient or a custom converter).",
+      "suggestion": "Optional follow-up (not blocking this task): add one more @Test in BotRepositoryTest — e.g. findById_persistedOwnerChatId_roundTripsValue: build a Bot via newBot(...), call bot.setOwnerChatId(987654321L), then StepVerifier.create(botRepository.save(bot).flatMap(saved -> botRepository.findById(saved.getId()))).assertNext(reloaded -> assertThat(reloaded.getOwnerChatId()).isEqualTo(987654321L)).verifyComplete(). Cheap, pairs naturally with the null-case test, and pins the round-trip contract before Epic 04b consumers arrive. Defer to the Wave-2 author if preferred.",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java (new method would sit alongside line 85)"
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 1,
+      "passed": 1,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 1,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "verdict": "passed"
+}

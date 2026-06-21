@@ -1,0 +1,76 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Variable name collision in verify-email.vue: line 12 declares `const t = route.query.token`. Task 9 instructs adding `const { t } = useI18n()` at the top of <script setup>. This creates a duplicate `const t` declaration in the same scope, which is a syntax/TS error that will prevent the file from compiling. The task makes no mention of this collision and gives no rename instruction.",
+      "fix": "Either rename the token variable (e.g. `const rawToken = route.query.token`) and update all 3 references to it in the file, or destructure useI18n with a different alias: `const { t: $t } = useI18n()` and use `$t()` throughout the file. The token variable must also be renamed to avoid shadowing the computed `token` ref. Add explicit renaming instruction to task step 5 and to step 6 (cross-file consistency note)."
+    },
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Existing page specs will break because `useLocalePath` is not mocked. After Task 9 changes, each auth page calls `const localePath = useLocalePath()` inside <script setup> and then `navigateTo(localePath('/auth/login'))` or `navigateTo(localePath('/dashboard'))`. The existing specs (login.spec.ts, register.spec.ts, reset-password.spec.ts) do NOT mock `useLocalePath` via `mockNuxtImport`. In the Vitest + @nuxt/test-utils environment, calling an unmocked Nuxt composable that depends on @nuxtjs/i18n will throw at mount time or return undefined — causing `navigateTo(undefined)` and breaking assertions. Specifically: register.spec.ts asserts `navigateToMock.toHaveBeenCalledWith({ path: '/auth/login', query: { registered: '1' } })` but the actual call after wrapping will be `navigateTo({ path: localePath('/auth/login'), query: ... })` where `localePath` result is unknown without a mock. Task AC18 says existing specs must pass without modification — this is violated.",
+      "fix": "Task 9 must document that `useLocalePath` needs to be mocked in each affected page spec. Add `mockNuxtImport('useLocalePath', () => () => (path) => path)` to login.spec.ts, register.spec.ts, reset-password.spec.ts (forgot-password.spec.ts has no navigateTo; verify-email.spec.ts has no navigateTo). This mock makes `localePath('/auth/login')` return `'/auth/login'` for uk locale, preserving existing assertion strings. Alternatively, task must explicitly state this is an authorized exception to AC18 requiring spec updates. Currently the task body (TDD Anchor section) claims 'DO NOT write new tests — existing specs continue to pass without modification' which is incorrect given the `localePath` wrapping change."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 9,
+      "issue": "Implementation hints in Task 9 contain full code blocks with complete implementation logic (vee-validate schema pattern, useApiError call site). The hints section (lines 160-179 in task file) provides a complete <script setup> schema snippet and a complete catch-block snippet — this crosses from 'pointer to a pattern' into 'prescribe the solution'. Per validation rules, hints with pseudocode or step-by-step algorithms with code blocks are severity major.",
+      "fix": "Replace full code blocks with references to existing patterns in the codebase: point to the existing register.vue schema structure and note the computed() wrapping needed per Decision 11. Remove the catch-block snippet and just reference useApiError() factory composable usage per Decision 10."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 8,
+      "issue": "Implementation hints in Task 8 contain a full code block with exact TypeScript implementation of the SEO head wiring (lines 145-149 in task file): `const head = useLocaleHead({ seo: true }); useHead(head)`. While this is a 2-line pattern, it is presented as the complete implementation. The hints section also contains explicit Tailwind class specifications (`top-4 right-4 z-10`) duplicating the Acceptance Criteria. The curl verification command (`curl -s http://localhost:3000/dashboard | grep -E '<html|hreflang'`) in hints goes beyond a hint into a test script.",
+      "fix": "Reduce the code block to a reference: 'See @nuxtjs/i18n v9 useLocaleHead docs pattern'. Keep the Tailwind classes only in the Acceptance Criteria section, not duplicated in hints. Move the curl command to the Verification Steps section."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "useRouteBaseName and useLocalePath composables do not exist in the current codebase — @nuxtjs/i18n is NOT installed (not in frontend/package.json, not in node_modules). Task 7 correctly declares depends_on: [2] which installs the package. However, the task's Verification Steps include `pnpm typecheck` which will fail until Task 2 completes. More critically, the task description says to mock `useRouteBaseName` and `useLocalePath` via `mockNuxtImport` in the test spec — but `mockNuxtImport` works by intercepting the auto-import registry, and these composables will only appear in the auto-import registry after @nuxtjs/i18n is registered in nuxt.config.ts (Task 2). The mock setup should still work because mockNuxtImport intercepts by name string, but the task does not document this sequencing risk.",
+      "fix": "Add a note that Task 7 MUST be executed after Task 2 (Wave 3 is correct), and that running `pnpm typecheck` before Task 2 completes will fail. Also document that `mockNuxtImport('useRouteBaseName', ...)` works regardless of whether the module is installed because it intercepts by name — confirming the test approach is safe."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 7,
+      "issue": "Task 7 TDD Anchor defines test case `backendError_protectedRouteByName_redirectsToLogin` which asserts that a transient 500 error during fetchUser causes redirect to login. However, the current auth.global.ts catch block swallows non-401 errors from fetchUser (leaving authStore.user as null) and then the middleware correctly redirects. After the refactor, this behavior should be preserved. But there is no test for the case where authStore.user is already populated (from a previous successful hydration) and fetchUser throws — in that case, authStore.user remains non-null and the user should pass through. The TDD anchor covers the null-start + error case but not the populated-state + error case, leaving a coverage gap in the transient-error behavior.",
+      "fix": "Add one more TDD anchor case: `backendError_alreadyHydratedUser_protectedRoute_passesThrough` — authStore.user pre-populated with ACTIVE_USER, then fetchUser throws 500, middleware should passthrough (user is authenticated). This confirms the catch does not reset user state."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 Details section references specific line numbers in default.vue that are slightly off. It says 'Lines 1-14 <script setup>' but actual file has lines 1-14 as the script block (correct). It says 'Line 19 brand: Bot Funnel' — actual file line 19 is the NuxtLink with Bot Funnel (correct). However it says 'Lines 20-31 topbar flex-row' — actual flex-row div starts at line 20 and the button ends at line 31 (correct, 12 lines). Details section also says the topbar flex-row container is '<div class=\"flex items-center gap-3\">' at line 20 — this is correct per actual file. No actionable problem, but line number claims should be verified at implementation time since any prior task touching default.vue would shift lines.",
+      "fix": "Add a note in the Details section: 'Line references are from the pre-Task-8 state of default.vue; verify actual line numbers before editing if any upstream task has modified the file.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 step 5 says to replace 'success CTA Увійти → (preserve the arrow as part of the localized string or as a sibling node)'. The current verify-email.vue has the arrow directly in the link text as `Увійти →` on line 125. The task correctly notes both options. However the implementation hint at the bottom says 'include the arrow inside the locale value (e.g. `\"signIn\": \"Sign in →\"`) for consistency'. The arrow character `→` is a semantic content character, not a purely decorative one — including it inside the locale string is correct and preferred, but the task should be explicit that the EN locale key must also include the arrow (`\"Sign in →\"`) and the UK key must match exactly (`\"Увійти →\"`) to preserve the existing test assertion in verify-email.spec.ts which only checks data-test attributes (no string assertions), so this is not a test-breaking issue.",
+      "fix": "Minor clarification only — explicitly state that both uk.json and en.json keys for the sign-in CTA should include the arrow character (→) to match current literal and preserve UX."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 TDD Anchor says 'No new unit tests are introduced here.' However it also says 'If during implementation a defect surfaces that warrants a unit test, add a focused test under frontend/tests/layouts/default.spec.ts'. This file does not exist. The tests directory structure has tests/pages/, tests/middleware/, tests/stores/, tests/helpers/ — there is no tests/layouts/ directory. If a developer follows the task and creates tests/layouts/default.spec.ts, it would be a new directory that needs to exist.",
+      "fix": "Either create the tests/layouts/ directory as part of setup, or change the path to an existing directory or explicitly note that the directory would need to be created first."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 9
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "Round 2 fixes resolve both Round-1 minor findings cleanly. EmailServiceTest's `_smtpFailureLogsError` and `_buildFailureLogsError` now filter the ERROR log stream by `startsWith(\"Email send failed to user@example.com:\")` BEFORE asserting `hasSize(1)` — the regress-net is now decoupled from incidental template-loading log noise. HttpRequestUtilsTest's `cannotBeInstantiated` switched from `ctor.canAccess(null)` to `Modifier.isPrivate(ctor.getModifiers())` with a self-documenting inline comment (`// D13 anti-instantiation gate`) and now produces a clear failure message independent of caller package. The production EmailService change (passing the throwable as a trailing SLF4J arg) is a strict improvement (full stack trace in logs) that does NOT alter the formatted-message prefix — the test's `startsWith` assertion remains correct. All 17 TDD anchors still pass the litmus test: removing the production line under test (status mutation in softDelete, save propagation in EventService, try/catch in EmailService, leftmost-IP parsing in HttpRequestUtils, private-ctor invariant) flips the assertion to red. No new issues introduced.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 17,
+      "passed": 17,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 24,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

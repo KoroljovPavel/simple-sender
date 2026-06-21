@@ -1,0 +1,8 @@
+{
+  "reviewer": "security-auditor",
+  "scope": "manual-fix-keyboard-preview",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "All keyboard-preview user content (keyboardText and every button label) is rendered exclusively via {{ }} mustache interpolation — Vue's escaped text binding. Zero v-html directives exist in FunnelCanvasNode.vue or the canvas client component. The only :src binding in the file is previewThumbUrl, which is gated by a strict HTTP_URL_RE = /^https?:\\/\\//i scheme guard that rejects javascript:, data:, file://, and opaque tokens — keyboard nodes carry no media block so this path is never reached for SET_KEYBOARD/CLEAR_KEYBOARD content. Truncation operates on plain strings via String.slice() before the value is handed to the template, preserving Vue's normal escaping. The injection-payload test (FunnelCanvas.spec.ts:966) is load-bearing: it feeds <img src=x onerror=alert(1)> as both keyboardText and a button label and asserts no /<img[^>]*onerror/i match, entity-encoded &lt;img present, and zero real <img> elements — all three assertions guard against stored-XSS materialization. No unsafe sinks (:href, :style, innerHTML, document.write) are present in any code path introduced by this commit."
+}

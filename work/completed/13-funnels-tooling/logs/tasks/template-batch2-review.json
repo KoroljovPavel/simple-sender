@@ -1,0 +1,55 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "tasks": [
+    {
+      "task": 6,
+      "verdict": "ok",
+      "findings": []
+    },
+    {
+      "task": 7,
+      "verdict": "issues",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "structure",
+          "section": "Reviewers",
+          "issue": "Task 7 has no `## Reviewers` section. Tasks 8, 9, 10 (also reviewers: []) include a `## Reviewers` section with an explicit 'Нет' note; Task 7 jumps straight from Details to Post-completion. Template lists Reviewers as a section. Frontmatter reviewers: [] is correct for an audit task, so this is purely a structural/consistency gap, not a content error.",
+          "fix": "Add a `## Reviewers` section mirroring Tasks 8/9 (e.g. 'Нет (audit-задача — сама является ревью; результат потребляет lead).') for cross-task consistency."
+        }
+      ]
+    },
+    {
+      "task": 8,
+      "verdict": "ok",
+      "findings": []
+    },
+    {
+      "task": 9,
+      "verdict": "ok",
+      "findings": []
+    },
+    {
+      "task": 10,
+      "verdict": "ok",
+      "findings": []
+    }
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 7,
+      "section": "Reviewers",
+      "issue": "Missing `## Reviewers` section (Tasks 8/9/10 include one with an explicit 'Нет'). Frontmatter reviewers: [] is correct for an audit task.",
+      "fix": "Add a `## Reviewers` section noting the audit has no nested reviewers, matching Tasks 8/9."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 1
+  },
+  "notes": "All 5 tasks pass on frontmatter completeness, required sections, content quality, atomicity, and skills/reviewers catalog compliance. Code/audit/QA split is correctly applied: Task 6 (code) has TDD Anchor + reviewers [code-reviewer, security-auditor, test-reviewer] with an explicit no-v-html vitest assert in both TDD Anchor and Acceptance Criteria (stored-XSS guard, OWASP A03 per Decision 9). Tasks 7/8/9 (audits) and Task 10 (QA) correctly omit TDD Anchor and set reviewers: []. Skills map to catalog: T7 code-reviewing, T8 security-auditor, T9 test-master, T10 pre-deploy-qa — all with reviewers: [] (auditor/QA IS the review). Wave/depends_on all consistent and acyclic: T6 wave5 deps[3,5] (both < wave5); T7/T8/T9 wave6 deps[1,2,3,4,5,6] (all < wave6, incl. T6 wave5); T10 wave7 deps[7,8,9] (all wave6 < wave7). No dependency cycles. Only finding: Task 7 lacks a `## Reviewers` section that Tasks 8/9/10 include (minor structural inconsistency; frontmatter reviewers:[] is correct). NOTE on tech-spec carry-forward: tech-spec Task 6 lists reviewers as [code-reviewer, test-reviewer] (no security-auditor), but the task file adds security-auditor — this is a justified, intentional addition given the XSS-sensitive sink and the code-writing default reviewer set, and was explicitly requested; not flagged as a finding. Zero critical findings → status approved."
+}

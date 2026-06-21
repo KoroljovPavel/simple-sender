@@ -1,0 +1,42 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 1,
+  "round": 2,
+  "verdict": "OK",
+  "priorFindingsResolved": {
+    "finding1_tautological_isNotNull_after_byKey": {
+      "resolved": true,
+      "evidence": "FunnelIndexesIT lines 67, 84, 87: bare byKey() calls with no isNotNull() assertion on the returned Document. byKey() throws AssertionError if the index is absent, so the assertion is now implicit and non-tautological. The only assertions that follow byKey() are on .getBoolean(\"unique\") and partialFilterExpression content — both meaningful."
+    },
+    "finding2_deepCopy_4_of_11_fields": {
+      "resolved": true,
+      "evidence": "FunnelStepTest.deepCopyProducesIndependentStep now populates all 11 fields including customFieldValue (line 28). Initial equality is asserted for all 11 fields (lines 33-43). Copy-independence (copy mutated, source unchanged) verified for all 11 fields (lines 46-68). Source-independence (source mutated, copy unchanged) verified for all 11 fields (lines 71-93). customFieldValue tested in both directions: copy.setCustomFieldValue(\"silver\") does not affect original (still \"gold\"), and original.setCustomFieldValue(\"src-value\") does not affect copy (still \"silver\")."
+    },
+    "finding3_contextStarts_vacuous": {
+      "resolved": true,
+      "evidence": "FunnelIndexesIT lines 58-59: after asserting getCollectionNames() contains both collections, the test now additionally calls indexes(\"funnels\").isNotEmpty() and indexes(\"funnel_executions\").isNotEmpty(). Because listIndexes() forces materialisation of the collection and its index set, and every collection carries at least _id_, a non-empty result proves real collection creation — not just context startup."
+    },
+    "finding4_no_empty_string_triggerValue_IT": {
+      "resolved": true,
+      "evidence": "New test activeFunnelTriggerUniquenessHoldsForEmptyTriggerValue (lines 115-139): (a) inserts one active funnel with triggerValue=\"\" — succeeds; (b) inserts second active funnel with same (projectId, triggerType, triggerValue=\"\") — asserts DuplicateKeyException or DataIntegrityViolationException is thrown; (c) inserts two more active funnels with distinct triggerValues (\"promo\", \"vip\") — both succeed; (d) counts all three surviving funnels for the projectId and asserts count==3. Finally block cleans up inserted documents."
+    }
+  },
+  "findings": [],
+  "newFindings": [],
+  "summary": "All four round-1 findings are fully resolved. The tautological isNotNull calls are gone — byKey() now throws on absence, making the assertion implicit and correct. The deepCopy test exercises all 11 FunnelStep fields in both independence directions, including customFieldValue with a String scalar. The contextStarts test is no longer vacuous — it forces index listing on both collections and asserts non-empty. The new activeFunnelTriggerUniquenessHoldsForEmptyTriggerValue integration test correctly verifies the duplicate-key guard fires for empty-string triggerValue and that distinct triggerValues coexist, with proper cleanup in a finally block. No new issues were found.",
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 2,
+      "integration": 3,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

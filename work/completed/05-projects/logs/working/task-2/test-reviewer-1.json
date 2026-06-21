@@ -1,0 +1,67 @@
+{
+  "verdict": "needs_improvement",
+  "summary": "Tests are well-structured, follow the existing mockNuxtImport pattern from auth.spec.ts, and cover all 14 TDD anchors with meaningful state assertions on the Pinia store (projects, currentProjectId, isLoaded, localStorage). Apart from the SSR-context branch, the litmus test holds (mocking is at the I/O boundary `useApi`; assertions verify real store state, not mock returns). The i18n required-keys spec correctly leverages the flat key set produced by collectKeySet and would fail if any of the four AC-25 keys were absent or moved to a non-leaf position. Two real concerns: (1) both SSR-context tests stub localStorage to undefined but never flip import.meta.client to false, so the production `if (!import.meta.client) return` early-return is never executed — the tests pass purely because the try/catch swallows ReferenceError, meaning if someone deleted the SSR guards the tests would still go green (Risk R6 is not actually pinned down); (2) the SSR tests assert only `not.toThrow()`, never that localStorage.setItem was NOT called — easy upgrade with a spy on a real localStorage before stubbing. Minor gaps: the defensive sortByCreatedAtDesc is never exercised (ACTIVE_LIST is already desc-sorted, so removing the sort would not fail any test), and the QuotaExceeded branch in writePersisted has no test. All 109 tests in the suite pass locally (vitest 3.2.4, environment: nuxt).",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "file": "frontend/tests/stores/projects.spec.ts",
+      "line": 242,
+      "issue": "SSR-context branch test fails the litmus test for Risk R6. The test calls `vi.stubGlobal('localStorage', undefined)` but never flips `import.meta.client` to false. Inside readPersisted/writePersisted the production code is `if (!import.meta.client) return; try { localStorage... } catch {}`. With `import.meta.client === true` (Nuxt test env default) the guard does nothing — control reaches the try-block and the ReferenceError from accessing undefined.localStorage is silently swallowed by the catch. If a developer removed both `if (!import.meta.client) return` lines (the very SSR guards Risk R6 mandates per AC-21/Decision 10), this test would still pass. The test verifies the catch fallback, not the SSR guard. AC-T7/Decision 10 says the localStorage write must be gated by import.meta.client, not merely by try/catch — those are two different defenses and the spec only locks down one.",
+      "suggestion": "Replace the global stub with an actual import.meta.client override. Two viable patterns in Nuxt 4 + vitest: (a) `vi.stubGlobal('import', { meta: { client: false, server: true, env: { ... } } })` plus a spy on a still-real localStorage so you can assert it was NOT called; or (b) the cleanest fix — refactor the store to use the `import.meta.client` check via a tiny boundary helper imported from a separate module, then `vi.mock` that module to return `{ isClient: false }` in the SSR test. Then assertions become: `const setItemSpy = vi.spyOn(window.localStorage, 'setItem'); /* set isClient=false */; const store = useProjectsStore(); store.selectProject('abc'); expect(setItemSpy).not.toHaveBeenCalled(); store.selectProject(null); expect(window.localStorage.removeItem).not.toHaveBeenCalled();`. The positive `not.toHaveBeenCalled()` assertion is what locks the contract — `not.toThrow()` is too weak."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/projects.spec.ts",
+      "line": 250,
+      "issue": "The 'SSR context: store init does not read localStorage' test only asserts `not.toThrow()`. It does not assert that `localStorage.getItem` was not called. Same root cause as the previous finding: the test passes via the catch swallow, not via the SSR guard. If the SSR guard in readPersisted is removed, the test still passes because `localStorage` is stubbed to undefined and the resulting ReferenceError is caught. The Risk R6 mitigation is therefore unverified.",
+      "suggestion": "Before stubbing localStorage to undefined, `const getItemSpy = vi.spyOn(window.localStorage, 'getItem')`. Then flip import.meta.client to false (see fix above). Assert `expect(getItemSpy).not.toHaveBeenCalled()` AND `expect(useProjectsStore().currentProjectId).toBeNull()` (because nothing was read). With this in place, removing the `if (!import.meta.client) return null` line in readPersisted would correctly fail the test."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/projects.spec.ts",
+      "line": 56,
+      "issue": "`sortByCreatedAtDesc` defensive re-sort in the store (projects.ts:25-26, used inside runAutoSelect) is never exercised. ACTIVE_LIST is provided as `[P2, P1]` which is already createdAt-desc, so deleting the sort line in the implementation does not fail any test. The store comment in the task says 'backend already sorts but the store re-sorts defensively' — the test should pin that contract.",
+      "suggestion": "Add one test: `it('fetchAll re-sorts defensively when API returns out-of-order list', async () => { apiMock.mockResolvedValueOnce([P1, P2]); /* P1 createdAt=2026-01-02, P2=2026-01-03 — out of desc order */ const store = useProjectsStore(); await store.fetchAll(); expect(store.currentProjectId).toBe(P2.id) /* P2 wins because runAutoSelect re-sorts */ })`. With this test, removing `sortByCreatedAtDesc` would correctly fall back to `[P1, P2][0]` = P1 and the assertion would fail."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/projects.spec.ts",
+      "line": 1,
+      "issue": "The QuotaExceededError fallback in writePersisted (projects.ts:20-22) has no test. The 'Edge cases' section of task 2 explicitly calls out this branch ('localStorage quota exceeded — wrap setItem in try/catch; on throw, log a console.warn and continue'). Removing the try/catch from writePersisted would not fail any current test. This is not blocking but worth a smoke test given the explicit edge-case callout.",
+      "suggestion": "Add: `it('selectProject swallows QuotaExceededError and keeps in-memory state', () => { vi.spyOn(window.localStorage, 'setItem').mockImplementation(() => { const e = new DOMException('quota', 'QuotaExceededError'); throw e }); const store = useProjectsStore(); expect(() => store.selectProject('id-1')).not.toThrow(); expect(store.currentProjectId).toBe('id-1') })`. This locks the 'in-memory state still correct' contract from the task's Edge Cases section."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "frontend/tests/i18n/required-keys.spec.ts",
+      "line": 6,
+      "issue": "Uses `__dirname` in a project with `\"type\": \"module\"`. Works because vitest polyfills it, but it's an inconsistency with native ESM and could surprise a future maintainer who runs the spec outside vitest. Other ESM scripts in the repo use `fileURLToPath(new URL(...))` (e.g. check-locales.mjs:62, 68).",
+      "suggestion": "Replace with native ESM equivalent: `const localesDir = fileURLToPath(new URL('../../i18n/locales', import.meta.url))`. Add `import { fileURLToPath } from 'node:url'`. Functionally identical, removes the implicit vitest dependency on a non-standard global, and matches the codebase's existing ESM idiom."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 17,
+      "passed": 14,
+      "failed": 3
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 19,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "tddAnchorCoverage": {
+      "anchorsInTaskFile": 14,
+      "anchorsRealizedByTests": 14,
+      "missing": []
+    },
+    "testRunResult": "all 109 tests pass (vitest 3.2.4, env: nuxt)"
+  }
+}

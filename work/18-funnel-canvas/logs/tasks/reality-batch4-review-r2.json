@@ -1,0 +1,65 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 Verification Steps include '--tests' selectors alongside '-PrunSlow=true', which is correct, but it is worth noting that the explicit `--tests '*FunnelExecutionEngineIT*'` filter is paired with '-PrunSlow=true': the property correctly removes the excludeTags barrier first, so this combination is safe and will actually run the IT.",
+      "fix": "No action required; combination is correct."
+    }
+  ],
+  "verified_fixes": [
+    {
+      "task": 10,
+      "fix_verified": "gradle command now uses '-PrunSlow=true' (line 74 of task 10); build.gradle confirmed: 'if (!project.hasProperty(\"runSlow\")) { excludeTags \"slow\" }' — so -PrunSlow=true removes the exclusion and FunnelExecutionEngineIT @Tag(\"slow\") will execute.",
+      "claim_checked": "FunnelExecutionEngineIT is @Tag(\"slow\") at class level (confirmed grep line 62 of FunnelExecutionEngineIT.java)."
+    },
+    {
+      "task": 10,
+      "fix_verified": "AC now explicitly states: if canvas spec is ABSENT on disk AFTER its producing task ran → CRITICAL coverage gap that the audit MUST record. Wording at task 10 line 43: '→ це CRITICAL пробіл покрытия, який аудит ЗОБОВ'ЯЗАНИЙ зафіксувати як знахідку. Аудит НЕ скипає такий кейс мовчки'.",
+      "claim_checked": "AC text confirmed present and unambiguous."
+    },
+    {
+      "task": 10,
+      "fix_verified": "Audit confirmation of engine ITs actually running is required: task 10 line 74 requires checking 'testsRun > 0 / відсутність SKIPPED по класу' rather than trusting green build status.",
+      "claim_checked": "Confirmed present."
+    },
+    {
+      "task": 10,
+      "fix_verified": "No 'pnpm lint' or 'pnpm typecheck' commands appear in task 10 (grep: 0 matches). frontend/package.json scripts confirmed: dev, prebuild, build, generate, preview, test, test:e2e — no lint or typecheck script.",
+      "claim_checked": "Absence confirmed."
+    },
+    {
+      "task": 11,
+      "fix_verified": "'pnpm lint' and 'pnpm typecheck' do NOT appear as commands in Verification Steps or AC. Lines 61 and 125 only appear in explanatory negative context: 'Build також покриває typecheck — окремих pnpm lint/pnpm typecheck скриптів в frontend/package.json немає'. frontend/package.json grep for lint/typecheck: 0 matches.",
+      "claim_checked": "Absence of bogus script references confirmed."
+    },
+    {
+      "task": 11,
+      "fix_verified": "Backend Verification Step uses '-PrunSlow=true' (task 11 lines 22, 39, 58, 84, 126, 127, 151 — all occurrences correct). Bogus '-Pslow' flag: 0 matches in both tasks.",
+      "claim_checked": "build.gradle property is 'runSlow'; flag -PrunSlow=true is correct and consistent throughout task 11."
+    },
+    {
+      "task": 11,
+      "fix_verified": "Task 11 notes at line 152 that agent must confirm 'FunnelExecutionEngineIT реально выполнился, а не пропущен; иначе engine-семантика не проверена и QA ложно проходит'.",
+      "claim_checked": "Confirmed present in Edge cases section."
+    },
+    {
+      "task": 11,
+      "fix_verified": "pnpm build noted as covering typecheck (prebuild + nuxt build): task 11 line 62 AC explicitly: 'Build також покриває typecheck — окремих pnpm lint/pnpm typecheck скриптів в frontend/package.json немає'. frontend/package.json confirms: 'prebuild' runs check-locales.mjs, 'build' runs nuxt build; no separate lint/typecheck scripts.",
+      "claim_checked": "Confirmed consistent with actual package.json."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 18,
+    "issues_found": 0,
+    "critical_findings": 0,
+    "major_findings": 0,
+    "minor_findings": 1
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "status": "needs_improvement",
+  "summary": "The redirect/start test suite is genuinely strong on the high-risk invariants: one-execution-per-pair, anti-IDOR (mismatched subscriber), CAS-loss no-op with a real ListAppender WARN assertion, broken-cursor terminal-fail with a true 'sweep still runs the other execution' control, and the EMIT_EVENT self-loop budget gate. Assertions read real DB state, not mock returns, so they survive the litmus test. Two real gaps remain: (1) the allowReEnter=false swallow path named in the TDD anchor and acceptance criterion is never exercised — the test that claims to cover it actually hits the redirect branch instead; (2) redirect_ofRunningAndWaiting_movesCursor does not actually prove the cursor moved (it would pass even if currentStepId stayed on s1). Both are fixable in the current context.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "FunnelEventServiceIT.java::event_noInFlight_startsFreshAtEntryStep_respectingAllowReEnter",
+      "issue": "The TDD anchor and acceptance criterion both explicitly require: 'allowReEnter=false при активном выполнении → no-op'. This test name promises that coverage but does not deliver it. After the first dispatch a running/waiting row exists, so the SECOND dispatch's in-flight probe (inFlightExecutionId) returns that row and the code takes the REDIRECT branch (executionEngine.redirectExecution) — it never reaches insertAtEntryStep's allowReEnter=false swallow path (DuplicateKeyException -> LOG_DISPATCH_REENTER_IGNORED -> return false). The test's own comment even admits 'the second dispatch REDIRECTS it'. So the swallow/no-op start branch (FunnelEventService.java:342-350) has zero coverage, and the 'respectingAllowReEnter' clause in the test name is misleading.",
+      "recommendation": "Add a dedicated test that forces the start-path DuplicateKeyException: seed an event funnel with allowReEnter=false, then create a TERMINAL row (e.g. status=completed) for (funnelId, subscriberId) so the in-flight probe returns null (forcing the start branch) but the partial-unique re-enter index still rejects a fresh insert. Assert: still exactly one fresh row inserted OR insertAtEntryStep returns false and a LOG_DISPATCH_REENTER_IGNORED INFO/WARN fires, and no exception escapes. If the unique index does not bite on terminal rows (per Edge cases note: terminal statuses do NOT hold the re-enter index), instead unit-test insertAtEntryStep via FunnelEventServiceTest by stubbing executionFactory.insertExecutionAt to throw DuplicateKeyException and asserting redirectOrStart returns false + LOG_DISPATCH_REENTER_IGNORED, with no throw. Either way, the allowReEnter=true cancel-then-insert branch (insertAtEntryStep:336-340) is also untested — add an assertion that a pre-existing active row is cancelled and a new row inserted at entryStepId."
+    },
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "FunnelExecutionEngineIT.java::redirect_ofRunningAndWaiting_movesCursor",
+      "issue": "Litmus test failure. The test name promises 'movesCursor' but the only assertion is reload(execId).getStatus()==completed. The seed is s1=sendMessage('orig', next=null), entry=sendMessage('redirected', next=null), cursor on s1, enqueueOk(1). If claimForRedirect set the WRONG currentStepId (or did not move it at all and left it on s1), drive() would run s1, send 'orig', hit next=null, and ALSO complete with exactly one send. So removing/breaking the '.set(\"currentStepId\", entryStepId)' line in claimForRedirect leaves this test green — it proves only that a claim+drive happened, not that the cursor moved onto entry.",
+      "recommendation": "Make the move observable. Two concrete options: (a) give entry a distinct downstream so the terminal state differs by branch (e.g. entry -> next 's3' where only s3 exists, so a correct redirect lands somewhere s1's path cannot reach, then assert the reached step); or simpler (b) assert message CONTENT, not just count — capture the outbound Telegram request body via the MockWebServer (TELEGRAM.takeRequest()) and assert it contains 'redirected' and NOT 'orig'. Minimal-change version: seed s1 with next=null AND make entry have a downstream step or a distinct side effect (tagStep) and assert that side effect occurred, which only the entry branch produces."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "FunnelEventService.java::matchedEntryStepId (no-matched-element drift WARN, FunnelEventService.java:157)",
+      "issue": "The defensive LOG_DISPATCH_NO_MATCHED_TRIGGER_ELEMENT branch (the multikey query matched the funnel but the in-memory triggers[] re-scan finds no element) is asserted nowhere. It is a deliberately greppable operator signal and a documented drift path, but no test drives a funnel whose triggers[] does not contain the matched element. Currently it could regress silently (e.g. wrong triggerType comparison) without any test catching it.",
+      "recommendation": "Add a small FunnelEventServiceTest (unit) case: stub funnelRepository to return a funnel whose triggers[] has a non-matching element (e.g. triggerType 'tag_added' while the event dispatch is type 'event'), dispatch an event, and assert (a) a LOG_DISPATCH_NO_MATCHED_TRIGGER_ELEMENT WARN fired and (b) the fallback start-from-step-0 path ran (insertOneFunnel invoked / one row). This locks the drift-detection contract."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "FunnelEventServiceIT.java::event_noInFlight_startsFreshAtEntryStep_respectingAllowReEnter",
+      "issue": "After the misnamed second-dispatch block (see major finding), the only assertion is executionsFor(f).hasSize(1). It does not assert the cursor of the (now redirected) row, nor that no DuplicateKeyException-style error was swallowed. The 'still one row' assertion is weak: it would pass whether the second dispatch redirected, no-op'd, or silently faulted in the error-isolated catch. Combined with the major finding, this section conflates three different behaviors behind one size==1 check.",
+      "recommendation": "Split into two intent-revealing tests: keep event_noInFlight_startsFreshAtEntryStep with the clean fresh-start assertions (size==1, cursor=='entry'), and move the second-dispatch behavior into a clearly-named test (e.g. secondEvent_whileInFlight_redirectsSameRow) that also asserts the row id is unchanged and cursor moved — not just the row count."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 9,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 3,
+      "integration": 11,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

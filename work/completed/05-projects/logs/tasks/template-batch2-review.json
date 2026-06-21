@@ -1,0 +1,67 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "Mandatory PK context-file links use '../../' (two levels up) instead of '../../../' (three levels up). From 'work/05-projects/tasks/9.md', '../../' resolves to 'work/05-projects/' which has no '.claude/' subdirectory — so links to project.md, architecture.md, patterns.md, ux-guidelines.md are all broken (HTTP 404 if rendered, FileNotFoundError if Read). Mandatory PK context (project.md, architecture.md) cannot be reached via these links.",
+      "fix": "Change '[project.md](../../.claude/skills/project-knowledge/references/project.md)' to '[project.md](../../../.claude/skills/project-knowledge/references/project.md)'. Same fix for architecture.md, ux-guidelines.md, patterns.md (lines 63-66). Other tasks in this batch (6, 7, 8, 10) use '../../../' correctly — copy that pattern."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Required Skills",
+      "issue": "Skill link path uses '~/' shell-expansion ('~/.claude/skills/code-writing/SKILL.md'). Markdown does not expand '~' — the link is broken when followed from the rendered task file or by tooling. All other tasks in this batch use a relative path like '../../../.claude/skills/code-writing/SKILL.md'.",
+      "fix": "Replace '[SKILL.md](~/.claude/skills/code-writing/SKILL.md)' with '[SKILL.md](../../../.claude/skills/code-writing/SKILL.md)' (or with the literal text used by sibling tasks: '[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)')."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 9,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor section is missing. Task 9 is code-modifying (edits frontend/layouts/default.vue with new component injection and conditional sidebar link) and so qualifies as a 'code task' under the template's conditional rule. The task explicitly states no new tests are added; if that is intentional, the section should still be present with a one-line note explaining the test-coverage gap (e.g. 'No new vitest spec — existing ProjectSelector.spec.ts and projects.spec.ts cover the wired-in component contract; this task is integration-only').",
+      "fix": "Either (a) add a 'TDD Anchor' section noting that no new tests are introduced and explaining how regression is covered by existing specs (Task 5's ProjectSelector.spec.ts and Task 2's projects.spec.ts), or (b) document explicitly in Description that this task is treated as non-code/integration-only and TDD Anchor is intentionally omitted."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths hardcode round number '1' (e.g. 'work/05-projects/logs/working/task-9/code-reviewer-1.json') instead of using the '{round}' placeholder per the task template. Hardcoding to round 1 implies only the first review round will be tracked under that filename; subsequent rounds (round 2, round 3) will not have pre-declared paths.",
+      "fix": "Replace '-1.json' with '-{round}.json' on lines 120-122 to match the template format and the format already used by tasks 6, 7, 8, 10."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 7,
+      "section": "What to do",
+      "issue": "Step 3 makes an inline architectural decision that deviates from tech-spec wording ('Toast plumbing: there is no existing toast composable... Inline status approach is acceptable'). Tech-spec Implementation Tasks Task 7 says '...with toasts (success / 422 limit / informational renamedDueToConflict)'. The deviation is reasonable (no toast service exists) but should be flagged in decisions.md per Post-completion checklist, not silently absorbed into the task.",
+      "fix": "Either (a) keep the inline-banner approach but explicitly note in 'Details > Implementation hints' that the deviation from tech-spec wording ('toasts' → inline banner) must be logged in decisions.md when implementing, or (b) remove the deviation and implement an actual toast composable as part of Task 7. Option (a) is the lighter touch given the documented UX rationale ('Functionality over aesthetics on MVP')."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 10,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor entry format does not strictly follow the template format `path::test_name — description`. The single bullet uses 'frontend/e2e/projects.spec.ts::golden path — registration → ...' without backticks around the path::test segment. The body of the section also acknowledges 'E2E-спек сам по собі не має класичного TDD-циклу (тести = код)', which is true for Playwright golden-path specs but means the section is being used as a manifest of selectors/data-test attributes rather than as a TDD anchor.",
+      "fix": "(a) Wrap the path::test reference in backticks: `frontend/e2e/projects.spec.ts::golden path` — registration → ... ; (b) consider relabelling the section to clarify intent (e.g. add a one-line preamble: 'No classic red-green TDD cycle for an E2E spec; treat the entry below as the spec contract — selector/data-test plan must be in place before writing the test.')."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 8,
+      "section": "Acceptance Criteria",
+      "issue": "AC-22b carry-forward conflicts subtly with the 'What to do' step 2 wording on description-blank semantics. The AC says 'submit пустий → опис очищається у store і у відповіді бекенду (зберігається як null у Mongo)', and 'What to do' step 2 says 'description: '' → бекенд переведе в null'. This is consistent with tech-spec PATCH semantics, but Task 6 (create form) normalizes blank → null on the client side. The asymmetry (PATCH sends '' literal vs POST sends null) is intentional but is not flagged anywhere in the task. A reviewer may flag this as inconsistent unless it's explicitly explained.",
+      "fix": "Add a one-liner to 'Details > Edge cases' or 'Implementation hints': 'PATCH-vs-POST description-blank asymmetry: this PATCH form sends literal `description: \"\"` and lets the backend normalize to null (per tech-spec PATCH semantics in Data Models); Task 6 (POST /projects) normalizes blank → null client-side before submit. Both flows produce `description: null` in Mongo; the asymmetry is intentional.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 7
+  }
+}

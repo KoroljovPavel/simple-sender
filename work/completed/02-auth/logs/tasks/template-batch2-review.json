@@ -1,0 +1,139 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "decisions.md is absent from Context Files. This is a mandatory link required for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "decisions.md is absent from Context Files. This is a mandatory link required for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "decisions.md is absent from Context Files. This is a mandatory link required for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "decisions.md is absent from Context Files. This is a mandatory link required for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "project.md is absent from Context Files. This is a mandatory project-context link required for all tasks.",
+      "fix": "Add `- [project.md](../../.claude/skills/project-knowledge/references/project.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 10,
+      "section": "Context Files",
+      "issue": "decisions.md is absent from Context Files. This is a mandatory link required for all tasks.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 10,
+      "section": "Context Files",
+      "issue": "architecture.md is absent from Context Files. This is a mandatory project-context link required for all tasks.",
+      "fix": "Add `- [architecture.md](../../.claude/skills/project-knowledge/references/architecture.md)` to Context Files section."
+    },
+    {
+      "severity": "major",
+      "category": "atomicity",
+      "task": 7,
+      "section": "What to do",
+      "issue": "Task 7 bundles three distinct logical units into one task: (1) ProfileController/ProfileService with 5 endpoints, (2) SuperAdminSeeder (ApplicationRunner), and (3) HardDeleteJob (JobRunr recurring job). These are in separate packages (profile/, admin/, jobs/) addressing unrelated concerns. Each unit produces an independently testable result. The tech-spec groups them for 'thematic' reasons but they are not logically cohesive — removing SuperAdminSeeder steps would leave ProfileController fully functional and vice versa. Split candidate.",
+      "fix": "Consider splitting into: Task 7a (ProfileController + ProfileService), Task 7b (SuperAdminSeeder + HardDeleteJob). Both can remain in wave 4. If splitting is impractical due to task count, document the bundling rationale explicitly. As-is, the task exceeds the 3-file atomicity guideline (7 new files across 3 packages)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Details",
+      "issue": "Details section is missing an explicit **Dependencies** subsection. Current section header 'Sessions collection field path verification' replaces it but does not follow the expected format.",
+      "fix": "Add a `**Dependencies:**` subsection listing: ReactiveMongoTemplate injection (constructor arg in AuthService), Task 5 (TokenService, EmailService must be implemented), spring-session-data-mongodb library."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 7,
+      "section": "Details",
+      "issue": "Details section is missing an explicit **Dependencies:** subsection. The 'Terminate-all sessions (coordinate with Task 6)' note partially substitutes for it but does not cover package dependencies or other task dependencies.",
+      "fix": "Add a `**Dependencies:**` subsection listing: depends_on Task 5 (UserRepository, EventService), Task 6 (verified sessions collection field path), jobrunr-spring-boot-3-starter library."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 8,
+      "section": "Details",
+      "issue": "Details section is missing an explicit **Dependencies:** subsection.",
+      "fix": "Add a `**Dependencies:**` subsection listing: Task 6 and Task 7 backend must be running for integration, npm packages listed in What to do step 1, backend CORS configured to allow frontend origin."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Details",
+      "issue": "Details section is missing **Dependencies:** and **Implementation hints:** subsections. Current structure only has **Files to modify:**, **Important:**, and **Edge cases:**.",
+      "fix": "Add `**Dependencies:**` (none — standalone doc task) and `**Implementation hints:**` (minimal: read each file fully before editing, use grep to find all jjwt/JWT occurrences across docs before removing)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Details",
+      "issue": "Details section is missing an explicit **Dependencies:** subsection. The vee-validate code snippet appears under an unlabeled header rather than **Implementation hints:**.",
+      "fix": "Add `**Dependencies:**` subsection listing: Task 8 (stores/auth.ts, layouts/auth.vue must exist), shadcn-vue components already initialized. Rename the `**vee-validate + zod pattern:**` block to `**Implementation hints:**` or merge it under that subsection."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Details",
+      "issue": "Details section contains a TypeScript code block under 'vee-validate + zod pattern' that shows implementation code (how to use the API), not just declarative hints. This borders on pseudocode/HOW territory per task-creator rules.",
+      "fix": "Replace the code block with a declarative description: 'Use vee-validate useForm() with toTypedSchema(zodSchema) for reactive validation. useField() per field. handleSubmit() wraps async API calls with automatic isSubmitting state.' Reference shadcn-vue Form components by name without showing code."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "TDD Anchor",
+      "issue": "Test `logout_invalidatesCurrentSession_otherSessionUnaffected` tests two distinct behaviors in one test name (current session invalidated AND other session unaffected). While the test covers both AC items, two separate test cases would be clearer and easier to diagnose on failure.",
+      "fix": "Consider splitting into: `logout_invalidatesCurrentSession` and `logout_doesNotAffectOtherSessions`. Each covers one AC item distinctly."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Verification Steps",
+      "issue": "Verification Steps only has an Automated subsection (grep commands). While this is appropriate for a documentation task, there is no explicit statement that Smoke and User subsections are intentionally absent. Template comments say 'Omit section if no smoke checks' — the sections are omitted correctly, but it would be clearer to state why.",
+      "fix": "No change required — omitting Smoke and User subsections when there are no smoke/user checks is correct per template. Finding is informational only."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 16
+  }
+}

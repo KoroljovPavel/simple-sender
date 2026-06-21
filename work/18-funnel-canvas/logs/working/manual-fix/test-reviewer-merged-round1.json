@@ -1,0 +1,50 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-merged",
+  "round": 1,
+  "verdict": "pass",
+  "summary": "All 655 tests pass in the merged state. Build is clean. Locales check exits 0. Both fixers' tests are value-based and load-bearing: the id-preservation tests assert exact id/next/canvasPosition values after a real form submit and would fail if the fix were reverted; the canvas tests assert functional path-builder output and structural DOM markers. No existing coverage weakened.",
+  "suites": {
+    "frontend": "655 passed / 0 failed — 60 test files, 36.47s",
+    "locales": "exit 0, no output (clean)",
+    "build": "success — 8.51 MB output, nitro build complete"
+  },
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 9,
+      "integration": 2,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "detail": {
+    "commit_46cd122": {
+      "FunnelStepForm.identity.spec.ts": {
+        "tests": 3,
+        "assessment": "load-bearing — each test mounts the real FunnelStepForm with a typed FunnelStep prop carrying explicit id/next/canvasPosition, triggers a DOM form submit, and asserts on the emitted payload. Removing the fix (the spread that re-attaches id/next to the emitted step) causes the id assertion to fail. The DELAY test additionally mutates a field the form owns (delayValue) to confirm the edit is preserved alongside the identity fields — preventing a silent partial-revert. All three step types (DELAY, ADD_TAG, SUBSCRIBE_TO_FUNNEL) are independently exercised.",
+        "litmus_result": "passed — the test exercises the real component submit path and asserts on concrete ids, not mock call counts"
+      },
+      "funnel-editor.spec.ts_new_tests": {
+        "tests": 2,
+        "assessment": "load-bearing. Test 1 (page-level repro) emits 'update:steps' directly on FunnelCanvas and inspects the exact PATCH body passed to storeMock.update — asserts persistedDelay.id === 'delay-1' and persistedKb.next === 'delay-1'. A regression to the old code would drop id from the DELAY in the PATCH, causing the id assertion to fail. Test 2 (Fix 2 / remap) mocks the server re-minting the DELAY id to 'delay-NEW' and then inspects FunnelCanvas props after applyResponse — asserts next/targetStepId/entryStepId all updated to 'delay-NEW'. Mock-heavy but legitimately integration-level page wiring; the assertions are on real component props/state, not mock call counts.",
+        "litmus_result": "passed — both tests catch a real regression"
+      }
+    },
+    "commit_0350af6": {
+      "FunnelCanvas.spec.ts_updated_tests": {
+        "tests": 4,
+        "assessment": "All four tests are load-bearing. (1) connectionRadius=28: asserts cfg.radius === 28 — would fail if the constant regressed to the old <=12 value. (2) connectionLinePath cursor-following: calls the exposed path builder with two distinct target coordinates and asserts the outputs differ AND contain the target coordinates — would fail if the builder ignored its arguments or center-snapped. (3) forgiving left drop zone: asserts data-left-extend > 12 AND that the inline style contains a negative left value — structural markers that cannot be silently dropped. (4) overlay inert at rest: asserts the node does NOT carry the --droppable class when no drag is active — guards against a regression where pointer-events would always be enabled.",
+        "litmus_result": "passed — all four catch distinct real regressions",
+        "note": "Test (4) is the weakest of the four: it only asserts the absence of a CSS class at rest rather than directly checking pointer-events CSS. Acceptable because the class toggling is the mechanism, and a live drag cannot be exercised in jsdom; flagged minor."
+      }
+    }
+  }
+}

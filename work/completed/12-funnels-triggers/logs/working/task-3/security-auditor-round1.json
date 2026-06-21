@@ -1,0 +1,46 @@
+{
+  "reviewer": "security-auditor",
+  "task": "3",
+  "round": 1,
+  "skill": "security-auditor",
+  "fallback_note": "Agent/Task spawning tool unavailable in this environment; audit performed by apikey-domain teammate loading the security-auditor skill directly.",
+  "scope": {
+    "changed_files": [
+      "backend/src/main/java/com/botfunnel/api/ApiKey.java",
+      "backend/src/main/java/com/botfunnel/api/ApiKeyRepository.java",
+      "backend/src/main/java/com/botfunnel/api/ApiKeyService.java",
+      "backend/src/test/java/com/botfunnel/api/ApiKeyServiceTest.java",
+      "backend/src/test/java/com/botfunnel/api/ApiKeyRepositoryIT.java"
+    ]
+  },
+  "summary": "Credential-foundation code. OWASP review focused on A02 (crypto) and secret handling. SecureRandom CSPRNG, 256-bit entropy, hash-only at rest (Sha256Hex), plaintext never persisted and returned exactly once as an in-memory value, lookup-by-hash with no plaintext-compare path, null/blank input guarded before hashing. No logging anywhere so no secret-leak-to-log surface. No critical/high/medium findings.",
+  "findings": [
+    {
+      "severity": "low",
+      "owasp": "A09 Security Logging and Monitoring",
+      "file": "backend/src/main/java/com/botfunnel/api/ApiKeyService.java",
+      "line": null,
+      "finding": "No security audit event is emitted on (re)generation. The project has an EventService audit convention (events collection) used by Bot/Auth flows. Key (re)generation is a security-relevant action; an audit trail would aid incident response. Note: the task explicitly scopes this service minimal and Task 8 (settings endpoint) is the natural owner of the audit event, so this is intentionally deferred rather than a defect here.",
+      "suggested_fix": "Defer audit-event emission to the Task-8 settings controller (api_key_generated / api_key_regenerated via EventService.logEvent). No change required in this task; flagged for Task 8 awareness.",
+      "valid": false
+    },
+    {
+      "severity": "low",
+      "owasp": "A04 Insecure Design",
+      "file": "backend/src/main/java/com/botfunnel/api/ApiKeyService.java",
+      "line": 54,
+      "finding": "generate(projectId) performs no ownership/authorization check on projectId. This is correct layering — ProjectService.requireOwned is enforced by the Task-8 session-authed controller, not the service — but is worth recording so the Task-8 caller does not skip it.",
+      "suggested_fix": "No change in this task. Task 8 MUST call ProjectService.requireOwned before generate(). Documented for the caller.",
+      "valid": false
+    }
+  ],
+  "verdict": "approve",
+  "crypto_assessment": {
+    "csprng": "java.security.SecureRandom — correct CSPRNG",
+    "entropy": "32 bytes / 256 bits — meets the >=256-bit floor; WEBHOOK_SECRET_BYTES(16) correctly NOT reused",
+    "at_rest": "Sha256Hex.hex(plaintext) only; unsalted SHA-256 is safe here because the preimage is a 256-bit uniform random secret (no brute-forceable low-entropy preimage) — matches Decision 8",
+    "plaintext_lifetime": "returned once as GeneratedKey in-memory record; never a persisted field",
+    "comparison": "lookup is an indexed equality on the digest; no plaintext byte-compare, so no string-compare timing oracle on the secret",
+    "prefix_exposure": "keyPrefix = 8 hex chars (32 bits of a 256-bit key); 224 bits remain secret — non-sensitive mask"
+  }
+}

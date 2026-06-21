@@ -1,0 +1,7 @@
+{
+  "auditor": "test-auditor",
+  "round": 1,
+  "verdict": "OK",
+  "summary": "Re-reviewed the audit-fix test changes (commit c0fdd15) for F4/F5 + the F3 vitest cases. All meaningful and deterministic. F4: frontend/e2e/funnels.spec.ts now contains exactly the net-new MENU happy-path (funnels_menuGoldenPath_buildAndActivate) plus the pre-existing Phase-1 funnels_goldenPath; the redundant funnels_activation422_showsInlineError was removed (its branch is covered by vitest funnel-editor.spec.ts 422-inline-error specs). F5: (a) snapshot-isolation IT editingFunnelDuringWait_doesNotChangeInFlightExecution parks a waiting_for_reply MENU, mutates the SOURCE funnel in the funnels collection (button repointed to a ghost step, branch target s2 deleted), then resumeOnCallback follows the snapshot's s2 to completed with sentCount==2 — discriminating (would fail if the engine read the live funnel) and deterministic (MutableClock + direct sweep/resume). (b) cancel-of-waiting_for_reply extended deleteReturns204AndCancelsActiveExecutions to seed a waiting_for_reply execution and assert it flips to cancelled. F3 vitest: 4 new cases (timeout omitted -> fields unset; value+unit+step target encoded; End -> timeoutTargetStepId null; unit-without-value blocks submit) with concrete assertions on the emitted step. Verification: backend FunnelControllerIT + FunnelExecutionEngineIT -PrunSlow=true BUILD SUCCESSFUL; whole funnel.* module green; frontend vitest 18/18 (funnel-editor) and 391/391 full; nuxt build clean.",
+  "findings": []
+}

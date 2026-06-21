@@ -1,0 +1,93 @@
+{
+  "status": "issues_found",
+  "summary": "Testing Strategy is broadly comprehensive for an L-size feature: 18 unit + 4 integration scenarios cover the major retry/error matrix, attempts counter, and the BotService null/present branching. However several user-spec ACs have weak or implicit coverage (AC5 WebClient connect/read timeouts not exercised; AC15/AC20 token-leak covered by a single scenario rather than separately at WARN and ERROR sites; AC13 internal-only TelegramRateLimitException never asserted as non-propagating). Awaitility is only named once and several async event assertions risk flakiness; negative-path 'what is NOT written' assertions and explicit attempts==N assertions are inconsistent.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests (AC15 / AC20)",
+      "issue": "Token-leak coverage is collapsed into a single unit scenario (sendText_tokenInUpstreamErrorDescription_neverInLogs) that claims to cover both WARN and ERROR levels. WARN logs are emitted on transient retry sites (5xx attempt, 429 wait), while ERROR logs are emitted on terminal failure sites (timeout, retry-exhaustion, 401, 4xx). A single happy-error scenario cannot exercise both code paths.",
+      "missing_scenario": "Token-leak verification at each distinct logging site: (1) WARN during 5xx retry with token-bearing description, (2) WARN during 429 wait with token-bearing description, (3) ERROR on retry-exhaustion, (4) ERROR on overall 30s timeout, (5) ERROR on terminal 4xx with token-bearing description.",
+      "recommendation": "Split into at least two scenarios: sendText_tokenInTransientErrorDescription_scrubbedInWarnLogs (enqueue [503 with token in body, 200], assert ListAppender WARN events scrubbed) and sendText_tokenInTerminalErrorDescription_scrubbedInErrorLogs (enqueue [400 with token in description], assert ListAppender ERROR events scrubbed). Assert explicitly: events.stream().noneMatch(e -> e.getFormattedMessage().contains(rawToken)) AND events.stream().anyMatch(e -> e.getFormattedMessage().contains(\"[REDACTED_TOKEN]\"))."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy (AC5)",
+      "issue": "AC5 mandates WebClient TCP-connect=5s and response-read=10s timeouts (reusing TelegramApiClient constants). No unit/integration test verifies the read timeout actually fires, nor that the configured value is the documented 10s. A regression that drops the read timeout to 60s would silently pass.",
+      "missing_scenario": "sendText_readTimeout_classifiedAsTransient_retries — MockWebServer.enqueue(new MockResponse().setBodyDelay(15, SECONDS)) followed by 200; assert request count == 2 (read timeout treated as transient by isTransient), and elapsed wall-clock between attempts ≈ 10s + backoff.",
+      "recommendation": "Add the read-timeout scenario above. Alternatively, add an assertion that the WebClient construction uses TelegramApiClient's published timeout constants (constants must be referenceable from TelegramSenderTest)."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests (AC13)",
+      "issue": "AC13 explicitly requires TelegramRateLimitException to be internal-only and never reach GlobalErrorHandler. No test asserts that this sentinel is consumed inside the 429 loop and that under retry-exhaustion via timeout the externally-propagated type is TelegramSendException, never TelegramRateLimitException.",
+      "missing_scenario": "sendText_429RetryAfterExceedsTimeout_propagatesAsTelegramSendException_notRateLimit — enqueue [429(retry_after=120)]; assertThatThrownBy(...).isInstanceOf(TelegramSendException.class).isNotInstanceOf(TelegramRateLimitException.class). Same assertion class on the missing/negative retry_after scenarios.",
+      "recommendation": "Strengthen the existing three large-/missing-/negative-retry_after tests with an explicit isNotInstanceOf(TelegramRateLimitException.class) assertion, or add one dedicated scenario."
+    },
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy → Integration tests (sendText_terminalFailure_emitsFailedEventOnly) and Unit (sendText_429NegativeRetryAfter)",
+      "issue": "Several scenarios describe vague assertions: 'attempts captured' (sendText_overallTimeout), 'clamp to 0 then re-fire; if Telegram repeats, overall timeout catches it' (negative retry_after) — without specifying the concrete attempts count or events.stream() filter. Off-by-one bugs in the AtomicInteger counter (e.g., increment in onNext vs onSubscribe) would not surface.",
+      "missing_scenario": "Explicit attempts==N assertions for every retry scenario, and a concrete attempts range for the negative-retry_after case.",
+      "recommendation": "For sendText_happyPath: assert attempts==1 in success event metadata. For sendText_5xxRetryExhausted: assert attempts==4. For sendText_429And5xxInterleaving: assert attempts==4. For sendText_overallTimeout: assert attempts >= 1 AND failure event.metadata.attempts present and numeric. For negative retry_after: assert attempts >= 2 AND ≤ 30, and that the terminal exception is TelegramSendException with a 'timeout' or equivalent description marker."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests (AC21) and BotControllerIT additions",
+      "issue": "Awaitility is mentioned only in the first IT scenario (sendText_endToEndViaBotService_emitsBothEvents) and once in BotControllerIT.postTestMessage_in07. The other integration scenarios (sendText_terminalFailure_emitsFailedEventOnly, sendTestMessage_ownerChatIdNull_returns422) also assert on event presence/absence — these need Awaitility too because EventService.logEvent is fire-and-forget. Negative-presence assertions need a polling window with a final 'still empty' check, not a single read.",
+      "missing_scenario": "Asserting absence of an event without a wait window risks false-pass: the event arrives 50ms after the assertion.",
+      "recommendation": "For positive-presence assertions: Awaitility.await().atMost(2, SECONDS).untilAsserted(() -> assertThat(eventsCollection.find(eq(\"eventType\", \"telegram_message_sent\"))).hasSize(1)). For negative-presence assertions (e.g., bot_test_message_sent NOT written on failure): wait a fixed minimum window (e.g., 500ms after the HTTP response completes) then assert collection.countDocuments(eq(\"eventType\", \"bot_test_message_sent\")) == 0. Document this pattern explicitly in the spec."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → BotServiceTest updates (sendTestMessage_whenOwnerChatIdPresentAndSenderFails_propagatesError_noBotEvent)",
+      "issue": "Negative-path assertion only checks that bot_test_message_sent is NOT written. It does not assert: (a) which exact exception type propagates (TelegramSendException? BotTokenInvalidException? both possible), (b) that the sender's telegram_send_failed event was written by the sender (since it's mocked, this must be verified at IT level — but IT scenarios don't currently assert the absence of bot_test_message_sent on the wired-error path).",
+      "missing_scenario": "End-to-end IT: seed bot with ownerChatId, enqueue Telegram [503,503,503,503], assert HTTP 400 telegram_send_failed, telegram_send_failed event present (Awaitility), bot_test_message_sent event absent (negative-presence wait).",
+      "recommendation": "Add IT scenario sendTestMessage_telegramFails_emitsSenderFailureEvent_noBotEvent. In the BotServiceTest unit, also assert StepVerifier.expectError(TelegramSendException.class) for the propagated error type."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests",
+      "issue": "bot_test_message_sent event metadata is asserted only at presence level. AC17 requires metadata { projectId, telegramBotId, chatId, messageId }. A bug that omits messageId from metadata would not surface.",
+      "missing_scenario": "Assertion on event document shape: metadata.messageId equals the messageId returned by the enqueued Telegram 200 response; metadata.chatId equals the seeded ownerChatId; metadata.projectId equals the URL projectId.",
+      "recommendation": "Extend postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent: assert event.metadata containsEntry(\"messageId\", 42L) AND containsEntry(\"chatId\", seededOwnerChatId) AND containsEntry(\"projectId\", projectId)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests (sender flow step 5: URI template)",
+      "issue": "Decision 8 / Security Audit Task 8 calls out that the token is passed via URI template placeholder {token} so WebClient encodes it rather than concatenating into the URL string. No test verifies (a) MockWebServer received a request whose path contains the bot token (expected for the wire — Telegram requires it), AND (b) no log line contains the raw URL with the token. A regression switching to URI string concatenation could change error logs to include the URL.",
+      "missing_scenario": "sendText_tokenInRequestUri_neverInLogsOnConnectionFailure — point WebClient at a refused port (or use MockWebServer.shutdown() mid-test); assert ListAppender events do not contain the raw token even though the WebClient exception message likely contains the URI.",
+      "recommendation": "Add a connection-failure scenario that asserts log scrubbing applies to WebClient transport-error messages (which often embed the URI), not just to Telegram payload descriptions."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests (AC15 — log site coverage)",
+      "issue": "No test asserts that token-bearing strings logged at the 429-wait path (logger may print 'will retry after Ns: <description>') are scrubbed. The retry-after path is one of the most likely sites where Telegram-supplied description bypasses the scrubber if a developer forgets to wrap it.",
+      "missing_scenario": "sendText_429WithTokenInDescription_scrubbedInWaitLog — enqueue [429 with parameters.retry_after=1 AND description containing the token, 200]; assert WARN log exists for the 429 wait AND does not contain the raw token.",
+      "recommendation": "Add this scenario to the unit list to cover the third logging site (success / transient retry / 429 wait / terminal failure)."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 22,
+      "passed": 18,
+      "failed": 4
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 18,
+      "integration": 8,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

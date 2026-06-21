@@ -1,0 +1,54 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "Task 8 AC and integration-test description require a Micrometer counter `botfunnel.bot_connect.brute_force.redis_failures` read via `MeterRegistry` in the redis-down IT (`postConnect_redisDown_failsOpen_connectSucceeds_warnLogged_metricIncremented`). Task 6 explicitly prohibits `MeterRegistry` injection — 'Do NOT inject MeterRegistry — the project does not depend on spring-boot-starter-actuator'; observability is via a WARN log line only. `backend/build.gradle` confirms no actuator dependency. The Task 8 IT will fail at compile-time (no `MeterRegistry` bean) or at assertion-time.",
+      "fix": "Remove the `metricIncremented` assertion from the Task 8 IT. Replace with a WARN log-line assertion (the same pattern Task 6 prescribes: attach a Logback `ListAppender` to `BotService` and assert the dedicated greppable WARN message). Rename the test method to `postConnect_redisDown_failsOpen_connectSucceeds_warnLogged`. Also update Task 8 AC bullet 'Redis down → Connect still succeeds with WARN log + Micrometer counter incremented' to read '… with WARN log emitted'."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "Task 8 AC line 110 says the integration test must assert that the `bot_connected` event's metadata Map 'contains the keys projectId, telegramBotId, ip, userAgent (and telegramUsername)'. However, `EventService.logEvent(userId, eventType, ipAddress, userAgent, metadata)` stores ip and userAgent as top-level `Event` fields (via `new Event(userId, eventType, ipAddress, userAgent, metadata, Instant.now())`), NOT inside the metadata Map. Task 6 line 152 correctly states: bot_connected metadata carries `{projectId, telegramBotId, telegramUsername}` — no ip or userAgent. The Task 8 AC will cause the implementer to erroneously insert ip/userAgent into the metadata Map, violating both Task 6 and the EventService contract.",
+      "fix": "Correct Task 8 AC line 110: remove 'ip' and 'userAgent' from the list of metadata Map keys. The test should assert `evt.getMetadata()` contains `projectId`, `telegramBotId`, `telegramUsername` (for bot_connected) and `projectId`, `telegramBotId`, `webhookDeleted` (for bot_disconnected). If the test also wants to verify ip/userAgent, use `evt.getIpAddress()` and `evt.getUserAgent()` — the top-level Event fields."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "Task 8 integration test `postConnect_redisDown_failsOpen_connectSucceeds_warnLogged_metricIncremented` (tech-spec Testing line 392) appears in the tech-spec Integration tests list as: 'Redis down — fail-open: Micrometer counter botfunnel.bot_connect.brute_force.redis_failures incremented'. The tech-spec Decision 14 also prescribes this counter. However, Task 6 (the BotService task that implements the fail-open logic) explicitly overrides D14's Micrometer requirement and delivers only a WARN log. There is no single source of truth: tech-spec D14 + tech-spec Testing section + Task 8 AC all say Micrometer; Task 6 says WARN-only. This inconsistency also infects Task 11 (security audit focus area 5: 'WARN log + Micrometer counter fire on every Redis failure') and will produce an incorrect audit.",
+      "fix": "Align all documents: since Task 6 is the authoritative implementation spec and correctly omits actuator (confirmed by build.gradle), update tech-spec D14 rationale to reflect 'Micrometer counter deferred; WARN log is the observable signal in 06', update tech-spec Testing Integration tests section to remove the Micrometer assertion from the Redis-down scenario, and update Task 11 focus area 5 to drop the Micrometer counter check."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 (wave 1, depends_on: []) uses i18n keys `bot.subnav.general`, `bot.subnav.bot`, and `bot.placeholder` that are owned by Task 4 (also wave 1, depends_on: []). These two tasks have no declared dependency between them. If Task 5 executes before Task 4 commits its locale changes, the `pnpm test` and `pnpm prebuild` verification steps in Task 5 will pass vacuously (Vue I18n returns the key literal silently in dev, parity gate only checks that both files match each other — and both will be missing the same keys). The issue surfaces only at runtime or in Task 9's full component spec.",
+      "fix": "Add `depends_on: [4]` to Task 5 frontmatter, or (if parallel execution is required) document explicitly that Task 5 must be executed after Task 4 within Wave 1 and that the Task 5 verification steps (`pnpm test` + `pnpm prebuild`) must be run only after Task 4 has committed the locale keys."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 defines `errors.bot.generic` at the top level of the `errors.bot` object. However, `useApiError()` builds the fallback path as `errors.{contextKey}.generic` where contextKey is `'bot.connect'`, `'bot.disconnect'`, or `'bot.testMessage'`. With contextKey=`'bot.connect'`, the fallback resolves to `errors.bot.connect.generic` — NOT `errors.bot.generic`. The top-level `errors.bot.generic` is unreachable in this feature (no code path calls `useApiError(err, 'bot')`). Task 4 AC lines 157/160/161 correctly also mandate per-action generic keys (`(and generic)` inside each action object), so the implementation should be correct IF those per-action keys are actually added. The risk is an implementer adds only `errors.bot.generic` (a single top-level key) thinking it covers all fallbacks, and omits the per-action generics.",
+      "fix": "Add an explicit note to Task 4 'What to do' clarifying that BOTH `errors.bot.generic` (referenced from the Description but unreachable via useApiError in this feature — keep for consistency with errors.projects pattern) AND per-action generics (`errors.bot.connect.generic`, `errors.bot.disconnect.generic`, `errors.bot.testMessage.generic`) are required. The AC lines 157/160/161 already list these; the implementation hint on line 213 should explicitly mention the per-action generic keys."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 13,
+      "issue": "Task 13 produces `docs/staging-smoke/06-bot-connection.md` as a deliverable. The `docs/staging-smoke/` directory does not yet exist in the repository (`docs/` only contains `local-setup.md`). The task does not instruct the agent to create the directory before writing the file, which may cause the write to fail depending on the tool used.",
+      "fix": "Add a step to Task 13 'What to do' between steps 12 and 13: 'Ensure `docs/staging-smoke/` directory exists; create it if necessary (`mkdir -p docs/staging-smoke`).' Alternatively, note it in the Details section."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 13,
+    "claims_verified": 47,
+    "issues_found": 6
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepIdBackfillTest.java",
+      "line": 73,
+      "issue": "Idempotency is asserted only for the funnels path (backfillIsIdempotentAndNeverOverwritesExistingIds). The execution path has an additional idempotency contract per Decision 7: currentStepId is seeded ONLY when null and existing snapshot ids must not be overwritten. No test pins 'execution with a pre-existing currentStepId is left untouched'.",
+      "suggestion": "Add a test: insert an in-flight execution whose snapshot steps already have ids and whose currentStepId is already set to a value that differs from the index-derived one; run backfill; assert currentStepId is unchanged and ids are unchanged."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepTest.java",
+      "line": 116,
+      "issue": "deepCopyButtonsAreIndependent proves list-reference isolation but does not assert the elements are the same immutable Button instances (shallow element copy is the intended Decision 5 behavior). Asserting element identity documents that Buttons are shared-by-reference (safe because immutable), preventing a future 'fix' that needlessly deep-copies records.",
+      "suggestion": "Add assertThat(copy.getButtons().get(0)).isSameAs(original.getButtons().get(0)) before mutating the lists, to pin the shallow-element-copy contract."
+    }
+  ]
+}

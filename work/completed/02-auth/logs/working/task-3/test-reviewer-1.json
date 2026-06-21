@@ -1,0 +1,63 @@
+{
+  "status": "needs_improvement",
+  "summary": "Five TDD anchors are present and all named tests exist. One anchor test (htmlEscapesNameWithSpecialChars) fails the litmus test — it tests the static helper in isolation instead of verifying the integration path through sendVerificationEmail, so removing the htmlEscape call from buildBody leaves the test green. Two mock-only tests (sendPasswordResetEmail, sendAccountBlockedEmail) verify only that send() was called without asserting recipient, subject, or placeholder substitution. Key acceptance criteria (token URL format, SUPPORT_EMAIL substitution, from address) have no coverage.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "mock_only",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:49",
+      "issue": "sendPasswordResetEmail_callsJavaMailSender only verifies that javaMailSender.send() was called. It makes no assertion on the recipient address, subject line, or body content. Litmus test fails: changing the recipient to 'wrong@example.com' inside sendPasswordResetEmail leaves this test green. The tech-spec acceptance criterion 'Reset link format: {APP_URL}/auth/reset-password?token={TOKEN}' is entirely unchecked.",
+      "recommendation": "After await().untilAsserted(), add assertions on the captured MimeMessage: (1) mimeMessage.getAllRecipients()[0].toString() equals 'user@example.com', (2) mimeMessage.getSubject() equals 'Скидання пароля', (3) extract body content via mimeMessage.getContent() and assert it contains the expected reset URL, e.g. 'http://localhost:3000/auth/reset-password?token=resettoken'. The MimeMessage instance returned by newMimeMessage() is already populated by JavaMailSender — read its fields directly after the await."
+    },
+    {
+      "severity": "major",
+      "category": "mock_only",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:57",
+      "issue": "sendAccountBlockedEmail_callsJavaMailSender only verifies that javaMailSender.send() was called. No assertion on recipient, subject, or the critical SUPPORT_EMAIL placeholder substitution. Litmus test fails: if the line .replace('{SUPPORT_EMAIL}', supportEmail) is removed from sendAccountBlockedEmail, the test remains green. The tech-spec acceptance criterion 'Account blocked email contains {SUPPORT_EMAIL} placeholder' is unchecked.",
+      "recommendation": "After the await, assert: (1) mimeMessage.getAllRecipients()[0].toString() equals 'user@example.com', (2) mimeMessage.getSubject() equals 'Ваш акаунт заблоковано', (3) extract the body and assert it contains 'support@test.com' (the supportEmail argument passed in the test call). This directly verifies the SUPPORT_EMAIL substitution that is an explicit acceptance criterion."
+    },
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:34",
+      "issue": "sendVerificationEmail_htmlEscapesNameWithSpecialChars tests EmailService.htmlEscape() directly as a static method call, completely bypassing sendVerificationEmail. Litmus test fails: removing the htmlEscape(name) call from buildBody() does not cause this test to fail — the static method still escapes correctly in isolation. The TDD anchor requirement is 'name containing <script> is escaped in rendered HTML', meaning the integration path must be verified, not the helper in isolation.",
+      "recommendation": "Replace the direct static call with a full integration check through sendVerificationEmail. Call sendVerificationEmail('user@example.com', '<script>alert(\\'xss\\')</script>', 'token123') with a mocked JavaMailSender, await send(), then extract the body from the MimeMessage and assert: (1) body contains '&lt;script&gt;', (2) body does not contain '<script>'. This verifies that buildBody actually invokes htmlEscape on the name before embedding it. Keep a separate unit test for htmlEscape if desired, but rename it to reflect it tests the helper directly, not the email-send path."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java",
+      "issue": "The from address ('noreply@test.com') is never verified in any test. sendVerificationEmail_callsJavaMailSenderWithCorrectRecipient checks the To header but not From. If the helper.setFrom(from) line were removed or the wrong address used, no test would catch it.",
+      "recommendation": "In sendVerificationEmail_callsJavaMailSenderWithCorrectRecipient, add: assertThat(mimeMessage.getFrom()[0].toString()).isEqualTo('noreply@test.com'). One test is sufficient — it validates that the injected 'from' value is wired through."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java",
+      "issue": "Token and APP_URL placeholder substitution is not verified. sendVerificationEmail accepts a token parameter and builds a URL ({APP_URL}/auth/verify-email?token={TOKEN}), but no test checks that the token appears in the email body. If the .replace('{TOKEN}', token) call were removed, all tests remain green.",
+      "recommendation": "In sendVerificationEmail_callsJavaMailSenderWithCorrectRecipient (or a new dedicated test), extract the MimeMessage body after the await and assert it contains 'http://localhost:3000/auth/verify-email?token=token123'. This covers both TOKEN substitution and APP_URL wiring in a single assertion."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java",
+      "issue": "The template-not-found path (loadTemplate returns empty string when getResourceAsStream returns null) has no test. The implementation silently sends an empty HTML body with no exception. This is a production risk: a misdeployed classpath would result in blank emails with no visible failure.",
+      "recommendation": "Add a test that exercises a missing template path. Since the template path is hardcoded, the easiest approach is a separate EmailService instantiation with a deliberately wrong base path, or use a spy on the class to intercept loadTemplate. Assert that (1) no exception is thrown from the public method (fire-and-forget contract), and (2) log.error was called — this can be verified by injecting a test appender or using a LogCapturer."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 5,
+      "passed": 2,
+      "failed": 3
+    },
+    "coverageAssessment": "insufficient",
+    "pyramidBalance": {
+      "unit": 5,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

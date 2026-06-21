@@ -1,0 +1,43 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "project-knowledge links use bare path `.claude/skills/project-knowledge/references/project.md` (and architecture.md, patterns.md, ux-guidelines.md) without the `../../../` prefix that other tasks in this batch use. From `work/15-message-composer/tasks/8.md` these relative links resolve to a non-existent path and are broken.",
+      "fix": "Prefix with `../../../` to match tasks 6/7/9: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Required Skills + Context Files",
+      "issue": "Bare paths without `../../../` prefix: Required Skills link `[skills/security-auditor/SKILL.md](.claude/skills/security-auditor/SKILL.md)` and Context Files project-knowledge links (project.md, architecture.md, patterns.md) resolve to non-existent paths from the task file location.",
+      "fix": "Prefix project-knowledge and skill links with `../../../` (e.g. `../../../.claude/skills/security-auditor/SKILL.md`) to match the working relative links used in task 9."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Required Skills",
+      "issue": "Skill link uses bare `[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)` (no `../../../` prefix). Same pattern in task 8 line 16. Cosmetic/path-resolution only — the skill itself (code-writing) is correct and matches frontmatter.",
+      "fix": "Prefix with `../../../` for a resolvable relative link, as task 7 does (`[.claude/skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)` is also non-resolving from tasks dir)."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 6,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor describes the only test as optional (compile-only assignability fixture) and frames the file as pure-types with no runtime logic. The single anchor `tests/types/funnel-blocks.spec.ts` is a compile-time `expect(...).toBeTruthy()` fixture that verifies type-shape/assignability rather than behavior. This is acceptable for a pure-types task but borders on a structure-not-logic anchor.",
+      "fix": "Acceptable as-is given the task produces no runtime logic; keep the typecheck-based verification as the primary gate. No change required."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 4
+  }
+}

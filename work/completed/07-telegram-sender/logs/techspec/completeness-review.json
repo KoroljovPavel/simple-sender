@@ -1,0 +1,38 @@
+{
+  "status": "issues_found",
+  "findings": [
+    {
+      "type": "shallow_solution",
+      "severity": "major",
+      "description": "Architecture section 'How it works' step 9 specifies the 429-delay as `Math.min(retryAfter, 30) + jitter(0..200ms)` seconds, but this formula does not handle negative `retry_after` values. Math.min(-5, 30) == -5, which causes Mono.delay with a negative duration — Reactor interprets that as an immediate resubscription, creating a tight loop until the 30s outer cap fires. AC8 and the unit test `sendText_429NegativeRetryAfter_capsAtOverallTimeout` both require correct negative-value handling. The correct formula is Math.max(0, Math.min(retryAfter, 30)). The test case exists but the Architecture does not reflect the correct implementation.",
+      "user_spec_ref": "AC8: 'якщо retry_after > 30s, missing або від'ємне — sender не намагається довше, ніж overall timeout'",
+      "tech_spec_section": "Architecture → How it works → step 9 (rateLimitRetry delay formula)",
+      "recommendation": "Update Architecture step 9 to read `Math.max(0, Math.min(retryAfter, 30)) + jitter` and add a matching assertion to `sendText_429NegativeRetryAfter_capsAtOverallTimeout` verifying that MockWebServer receives a second request (i.e., negative delay is clamped to 0 and one retry is attempted before the overall timeout catches repeated 429s)."
+    },
+    {
+      "type": "shallow_solution",
+      "severity": "major",
+      "description": "`attempts` counter closure scope is underspecified. Architecture step 11 says AtomicInteger is incremented inside `.doOnSubscribe` of the inner request Mono. With the outer (429) / inner (5xx) retry structure, if the AtomicInteger is declared inside the inner Mono supplier, the 429-outer-loop resubscribes the entire chain and creates a fresh counter — meaning only the retries within the current 429-window are counted, not the total across all 429-retries. The spec must explicitly state that the AtomicInteger is captured in the outermost closure (before both retryWhen operators) so all HTTP attempts across 5xx-retries and 429-retries accumulate into a single counter. Without this clarification an implementer may produce a counter that resets on each 429-retry.",
+      "user_spec_ref": "AC14: 'attempts — загальна кількість HTTP-запитів до Telegram, що відбулись у межах виклику (включаючи 5xx-retry і 429-retry; перший attempt = 1)'",
+      "tech_spec_section": "Architecture → How it works → 'attempts counter' paragraph",
+      "recommendation": "Add a sentence: 'The AtomicInteger is declared before the inner Mono construction (i.e., in the flatMap body that builds the HTTP chain), so its reference is shared across all resubscriptions from both retryWhen operators.' Add an assertion to the interleaving test (sendText_429And5xxInterleaving_succeeds) that explicitly checks the `attempts` field in the failure/success audit event metadata equals 4."
+    },
+    {
+      "type": "gap",
+      "severity": "minor",
+      "description": "AC5 requires WebClient timeouts of 5s connect and 10s read, and states 'Reuse constants from TelegramApiClient'. The tech-spec Shared Resources table confirms TelegramSender constructs its own WebClient instance, but the Architecture section ('How it works') has no step or note describing the WebClient construction with timeout configuration. There is no explicit statement that TelegramSender's constructor mirrors TelegramApiClient.java:51-61 with the same CONNECT_TIMEOUT_MILLIS and responseTimeout values. Task 4 description references 'Architecture → How it works' for the full implementation but that section omits the constructor shape.",
+      "user_spec_ref": "AC5: 'WebClient timeouts: 5s на TCP-connect, 10s на response read. Reuse констант з TelegramApiClient'",
+      "tech_spec_section": "Architecture → How it works (no constructor step), Architecture → Shared Resources",
+      "recommendation": "Add a step 0 (or a constructor note) to 'How it works' specifying that TelegramSender constructs its WebClient using the same HttpClient pattern as TelegramApiClient.java:51-61, reusing DEFAULT_RESPONSE_TIMEOUT (10s) and CONNECT_TIMEOUT (5s) constants declared on TelegramApiClient."
+    },
+    {
+      "type": "gap",
+      "severity": "minor",
+      "description": "No unit or integration test verifies that passing `ownerId=null` to `sendText` does not throw a NullPointerException and still writes audit events with `userId=null`. User-spec AC14 explicitly says `userId = ownerId (може бути null для system callers)` and the Constraints note that Epic 06/07 workers will call with null ownerId. For an L-size feature with a stated null-ownerId use case, the absence of a null-ownerId test is a coverage gap.",
+      "user_spec_ref": "AC14: 'Events пишуться через EventService.logEvent із userId = ownerId (може бути null для system callers)'",
+      "tech_spec_section": "Testing Strategy → Unit tests (TelegramSenderTest.java) — no null-ownerId scenario listed",
+      "recommendation": "Add a unit test `sendText_ownerIdNull_happyPath_writesEventWithNullUserId` to TelegramSenderTest: enqueue 200 OK, call sendText with ownerId=null, assert SentMessage returned and EventService.logEvent captured with userId=null (not NPE). Mirror the existing ListAppender pattern."
+    }
+  ],
+  "summary": "All 23 user-spec ACs and all 15 'Технічні рішення' entries are addressed in the tech-spec. The spec is substantive and non-paraphrasing. Two major issues exist: (1) the 429-delay formula in Architecture step 9 omits Math.max(0,...) clamping for negative retry_after, leaving a tight-loop risk that AC8 intends to prevent; (2) the AtomicInteger closure scope is ambiguous — without explicit placement guidance an implementer may reset the counter on each 429-cycle, producing incorrect 'attempts' in audit events. Two minor gaps: AC5 WebClient timeout constructor details are not shown in the Architecture flow, and no test covers the null-ownerId path that Epic 06/07 workers will exercise."
+}

@@ -1,0 +1,84 @@
+{
+  "status": "passed",
+  "summary": "Round 2 cleanly addresses all four round-1 findings. (1) TelegramApiClientTest.getMe_5xxThen200_succeedsAfterRetry_attemptsEqualsThree now pins the success-recovery branch of the hand-rolled retry loop with the exact 500/500/200 → requestCount==3 scenario from tasks/8.md line 85; backoff (200ms + 400ms ≈ 600ms) is well under any timeout, no flake risk. (2) TelegramSenderTest.sendText_terminalFailure_emitsErrorLogBeforeAuditEvent uses a fresh Mockito-mocked Appender + the existing eventService mock under inOrder(spyAppender, eventService); the argThat matcher pins BOTH Level.ERROR AND substring 'Telegram send terminal failure' (the exact format string at TelegramSender.java:133), so the ordering test will fail loud if the log.error is reordered after eventService.logEvent OR if either call is missing. For the 401 path, line 256 returns BotTokenInvalidException BEFORE the log.warn at line 267, so the spy appender's only interaction is the terminal ERROR — the matcher cannot accidentally match a sibling WARN. (3) sendText_401_throwsBotTokenInvalidException_noRetry now verifies the audit failure event fires with the correct shape per failedMetadata: botId + attempts==1 (the AtomicInteger increments at line 220 BEFORE the HTTP call, so a 401 catch-site reads 1), and explicitly doesNotContainKey for errorCode/errorDescription (BotTokenInvalidException skips the TelegramSendException branch at line 356-359); also asserts never-EVENT_TELEGRAM_MESSAGE_SENT. (4) Both botNotFound (Optional.empty → orElseThrow branch) and botDisconnected (Optional.of(bot) with BotStatus.DISCONNECTED → .filter-rejection branch) now assert verify(eventService, never()).logEvent(any(), any(), any(), any(), any()) — both branches of isTerminalAuditable's 'pre-HTTP AppException not auditable' carve-out are guarded. No new regressions: spy appender is properly detached in finally; logger is the class-level field, so no cross-test bleed; no Thread.sleep magic; teardown unchanged. All 12 TDD anchors in tasks/8.md are now satisfied.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:437-447 (sendText_401_throwsBotTokenInvalidException_noRetry, failedMetadata assertion)",
+      "issue": "The 401 metadata assertion pins botId + attempts + absence of errorCode/errorDescription, but does not pin chatId. The implementation at TelegramSender.java:349 always inserts chatId into failedMetadata (`meta.put(\"chatId\", chatId)`), so a regression that drops chatId from the failure metadata would not fail this test. The tech-spec error-mapping table notes BotTokenInvalidException omits errorCode/errorDescription but does not say it omits chatId — chatId is part of the universal failure-metadata shape.",
+      "recommendation": "Add `.containsEntry(\"chatId\", CALLER_CHAT_ID)` to the 401 test's `assertThat(metaCap.getValue())` chain. Mirrors the sentMetadata shape pin in sendText_happyPath_returnsSentMessage_attemptsEqualsOne (line 198). Cheap, completes the metadata-shape contract."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:451-480 (sendText_terminalFailure_emitsErrorLogBeforeAuditEvent)",
+      "issue": "Test uses fully-qualified `org.mockito.Mockito.mock`, `org.mockito.Mockito.when`, `org.mockito.ArgumentMatchers.argThat` and `ch.qos.logback.core.Appender` inline, while the rest of the file uses static imports (mock, when, etc.). Cosmetic — slightly hurts readability and breaks the established pattern in the file. The functionality is identical.",
+      "recommendation": "Optional: add `import ch.qos.logback.core.Appender;` and `import static org.mockito.ArgumentMatchers.argThat;` at the top of the file, then drop the fully-qualified prefixes inline. Matches the style of the rest of the file (`mock(BotRepository.class)`, `when(...)`, etc. at lines 81-82 and 120)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java:163-177 (two @Disabled tests carried from round 1)",
+      "issue": "Carried over unchanged from round 1. Both @Disabled tests still have empty method bodies with a 'Task 7 will enable this' comment. Task 7 has shipped (commit 56c9506 / d842813 precede round 2). Not in-scope for round 2's fixes, but the comment is now stale.",
+      "recommendation": "Either implement the two IT scenarios now that Task 7's BotService rewrite has landed, or update the @Disabled message to point at the remaining blocker (e.g. 'enabled by <future task> — requires X wiring'). Same recommendation as round 1; not a regression introduced by this commit."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 34,
+      "passed": 34,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 33,
+      "integration": 4,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "round1FindingsAddressed": {
+      "major1_inOrderOrdering": {
+        "status": "fixed",
+        "verification": "sendText_terminalFailure_emitsErrorLogBeforeAuditEvent at TelegramSenderTest.java:451-480; uses inOrder(spyAppender, eventService); argThat matcher pins Level.ERROR && substring 'Telegram send terminal failure' (exact match against TelegramSender.java:133 format string); 401 path does not emit a sibling WARN (BotTokenInvalidException short-circuits at line 256 before line 267 log.warn), so matcher uniquely identifies the terminal ERROR; spy appender is detached in finally; InOrder fails loud if either call is missing OR reordered"
+      },
+      "major2_5xxThen200": {
+        "status": "fixed",
+        "verification": "getMe_5xxThen200_succeedsAfterRetry_attemptsEqualsThree at TelegramApiClientTest.java:94-116; exact 500/500/200 enqueue matches task spec line 85; asserts user.id()==42 (proves the third response was parsed) AND mockServer.getRequestCount()==3 (proves no extra attempts); backoff is 200+400=600ms, no flake risk"
+      },
+      "minor_401AuditEvent": {
+        "status": "fixed",
+        "verification": "sendText_401_throwsBotTokenInvalidException_noRetry at TelegramSenderTest.java:437-447 verifies eventService.logEvent fires with EVENT_TELEGRAM_SEND_FAILED and metadata containsEntry botId+attempts(1) and doesNotContainKey errorCode+errorDescription — exactly matches failedMetadata's BotTokenInvalidException branch at TelegramSender.java:346-360; attempts==1 correct (AtomicInteger increments at line 220 before HTTP); also asserts never EVENT_TELEGRAM_MESSAGE_SENT; minor gap: chatId not pinned (see findings)"
+      },
+      "minor_botNotFoundDisconnectedNeverAudit": {
+        "status": "fixed",
+        "verification": "Both sendText_botNotFound_throwsNotFound_noHttp_noAuditEvent (line 615) and sendText_botDisconnected_throwsNotFound_noHttp_noAuditEvent (line 635) assert verify(eventService, never()).logEvent(any(), any(), any(), any(), any()). Branch coverage: botNotFound exercises Optional.empty → orElseThrow at TelegramSender.java:124; botDisconnected exercises Optional.of(bot) → .filter rejection at the same line. Both branches of isTerminalAuditable's pre-HTTP AppException carve-out are guarded"
+      }
+    },
+    "regressionCheck": {
+      "newImports": ["org.mockito.InOrder", "static org.mockito.Mockito.inOrder"],
+      "newImportsAssessment": "minimal and appropriate; no reactive/StepVerifier/Mono/Flux re-introduction",
+      "teardownChanges": "none — @AfterEach unchanged; spy appender attached/detached entirely within sendText_terminalFailure test's try/finally",
+      "flakeRisk": "none — getMe_5xxThen200 has deterministic 600ms backoff; InOrder test has no timing dependency; no Thread.sleep added; no shared state mutations between tests",
+      "scenarioParityVsRound1": {
+        "telegramApiClientTestCount": "13 → 14 (+1: getMe_5xxThen200_succeedsAfterRetry_attemptsEqualsThree)",
+        "telegramSenderTestCount": "26 → 27 (+1: sendText_terminalFailure_emitsErrorLogBeforeAuditEvent)",
+        "telegramSenderITCount": "4 → 4 (unchanged; @Disabled placeholders still present)",
+        "renames": ["sendText_botNotFound_throwsNotFound_noHttp → ..._noAuditEvent", "sendText_botDisconnected_throwsNotFound_noHttp → ..._noAuditEvent"],
+        "drops": []
+      }
+    },
+    "tddAnchorCoverage": {
+      "totalAnchors": 12,
+      "fullySatisfied": 12,
+      "partiallySatisfied": 0,
+      "missing": 0,
+      "round1Gaps": {
+        "getMe_5xx_then_200_succeedsAfterRetry": "now satisfied (was missing in round 1)",
+        "sendText_terminalFailure_emitsErrorLogBeforeAuditEvent": "now satisfied (was missing in round 1)",
+        "sendText_botNotFound_throws404_noAuditEvent": "now fully satisfied (round 1 was partial — exception + zero HTTP but no never-audit assertion)"
+      }
+    }
+  }
+}

@@ -1,0 +1,115 @@
+{
+  "status": "changes_required",
+  "summary": "Checked 47 verifiable claims in tech-spec.md against actual codebase. Found 1 critical, 3 major, 4 minor issues. Critical: MeterRegistry will NOT be autoconfigured without spring-boot-starter-actuator — micrometer-core alone is insufficient. Major: BotConnectIT does not exist (referenced 2x); BotControllerIT:399 cited for token-leak assertions is wrong line (assertions live around :278-286); @Indexed.expireAfterSeconds is deprecated since Spring Data MongoDB 4.4. Minor issues: patterns.md line citations slightly off in two places.",
+  "findings": [
+    {
+      "severity": "critical",
+      "type": "missing_dependency",
+      "claim": "tech-spec says (Decision 10 + Shared resources + Dependencies sections): adding only `io.micrometer:micrometer-core` to backend/build.gradle is sufficient for Spring Boot to autoconfigure the `MeterRegistry` bean (\"`MeterRegistry` bean autoconfigured by Spring Boot when this jar is on classpath, even without `spring-boot-starter-actuator`\"). The four webhook counters and Timer in Decision 10 inject this bean.",
+      "reality": "All Spring Boot autoconfig classes that produce a `MeterRegistry` bean (`MetricsAutoConfiguration`, `CompositeMeterRegistryAutoConfiguration`, `SimpleMetricsExportAutoConfiguration`, `JvmMetricsAutoConfiguration`) live under the package `org.springframework.boot.actuate.autoconfigure.metrics.*` — that package ships with the `spring-boot-actuator-autoconfigure` JAR, which is pulled in only by `spring-boot-starter-actuator`. With ONLY `micrometer-core` on the classpath there is no `MeterRegistry` `@Bean` definition, no `SimpleMeterRegistry` is created, and `@Autowired MeterRegistry meterRegistry` in the controller/worker will fail context startup with `NoSuchBeanDefinitionException`. Verified via Spring Boot 3.5 docs (Context7).",
+      "source": "tech-spec.md Decision 10 (lines 135-138), Shared resources table (line 85), Dependencies section (line 298), Task 1 verify-smoke (line 402)",
+      "fix": "Either (a) switch the dependency to `spring-boot-starter-actuator` and explicitly disable the actuator endpoints in security/properties (e.g. `management.endpoints.web.exposure.exclude=*` + a SecurityConfig rule), OR (b) declare a `@Bean SimpleMeterRegistry meterRegistry() { return new SimpleMeterRegistry(); }` in a `@Configuration` class so the bean exists. Without one of these the AC16 counter assertions will never compile/run."
+    },
+    {
+      "severity": "major",
+      "type": "missing_file",
+      "claim": "tech-spec references `BotConnectIT` as an existing test: (1) Acceptance Criteria line 387 — \"No regressions in existing tests: `BotControllerIT`, `BotConnectIT`, `TelegramSenderIT`, `ProjectControllerIT`, `SecurityBlockTest` all stay green\"; (2) Task 2 verify-smoke line 410 — `./gradlew test --tests *Sha256HexTest --tests *WebhookSecretVerifierTest --tests *BotConnectIT all green`.",
+      "reality": "There is no `BotConnectIT.java` anywhere under `backend/src/test/java/`. The connect-flow integration tests live INSIDE `backend/src/test/java/com/botfunnel/bot/BotControllerIT.java` (the file contains `postConnect_*` and `parallelSameToken*` tests). The other referenced files exist: `BotControllerIT.java`, `TelegramSenderIT.java`, `ProjectControllerIT.java`, `SecurityBlockTest.java`.",
+      "source": "tech-spec.md line 387 (Acceptance Criteria), line 410 (Task 2 Verify-smoke)",
+      "fix": "Replace `BotConnectIT` references with `BotControllerIT` (or with the specific connect tests, e.g. `--tests *BotControllerIT.postConnect_*`). The Task 2 smoke command will silently match zero tests today and pass without exercising the Connect regression."
+    },
+    {
+      "severity": "major",
+      "type": "name_mismatch",
+      "claim": "tech-spec line 329 / line 478 — \"AC18 — token-scrubber per log site via `ListAppender<ILoggingEvent>` filtered by `Logger.getName()` and `Level` — split per call site, no combined assertion (matches `BotControllerIT.java:399` precedent).\"",
+      "reality": "`BotControllerIT.java:399` is not the token-leak assertion site. Line 399 is `.expectStatus().isEqualTo(502)` inside `postConnect_setWebhookTransientFailures_returns502WithCodeTelegramUnavailable`. The actual token-leak invariant lives around lines 278-286 (assertions using `TOKEN_REGEX.matcher(body).matches()` and `TOKEN_SUBSTRING.matcher(body).find()`).",
+      "source": "tech-spec.md line 329 (Testing Strategy AC18), Task 10 Files to read (line 478)",
+      "fix": "Update the line citation to `BotControllerIT.java:~278-286` (the assertNoTokenInBody helper-style block) or remove the specific line number and just cite `BotControllerIT` as the per-site `ListAppender` precedent."
+    },
+    {
+      "severity": "major",
+      "type": "missing_pattern",
+      "claim": "tech-spec line 209 — `@Indexed(name=\"ttl_createdAt\", expireAfterSeconds=7776000, partialFilter=\"...\")` on `RawUpdate.createdAt`. Decision 8 + Data Models use the `expireAfterSeconds` attribute.",
+      "reality": "In Spring Data MongoDB 4.5.4 (the version on classpath via Spring Boot 3.5.0), `@Indexed.expireAfterSeconds` is marked `@Deprecated(since=\"4.4\", forRemoval = true)` in `Indexed.java`. The current attribute is `expireAfter()` returning a duration String like `\"90d\"`. Using `expireAfterSeconds` will compile (and work at runtime) but generate a deprecation warning and is on the removal path.",
+      "source": "tech-spec.md line 209 (Data Models — RawUpdate field), Decision 8 (line 126)",
+      "fix": "Switch to the non-deprecated form: `@Indexed(name=\"ttl_createdAt\", expireAfter=\"P90D\", partialFilter=\"...\")` or `expireAfter=\"90d\"`. The 7776000 seconds = 90 days literal stays semantically identical."
+    },
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "tech-spec Solution paragraph (line 14) — \"Worker (JobRunr-thread, blocking-safe per `patterns.md` line 59)\". Also Decision 11 line 143 — \"Worker uses `.block()` on inner reactive helpers — accepted per `patterns.md` line 59 (JobRunr thread ≠ Netty event-loop)\".",
+      "reality": "patterns.md line 59 says: \"**JobRunr recurring jobs.** Cleanup/maintenance jobs are registered as recurring jobs with explicit cron (e.g. `HardDeleteJob` daily at 03:00). Use `BackgroundJob`/`@Recurring` + idempotent semantics; jobs run on every replica but JobRunr's distributed lock prevents double-execution.\" Line 59 does not say anything about \"blocking-safe on JobRunr thread\" or \"JobRunr thread ≠ Netty event-loop\". The blocking-safe pattern is implicit (see `HardDeleteJob.java` using `.block()`) but is not documented on patterns.md line 59.",
+      "source": "tech-spec.md line 14 (Solution), line 143 (Decision 11)",
+      "fix": "Either (a) drop the specific line citation and reference patterns.md \"JobRunr recurring jobs\" rule + the `HardDeleteJob`/`ProjectHardDeleteJob` precedents directly, or (b) add an explicit \"JobRunr worker threads are safe to .block() (not Netty event-loop)\" line to patterns.md and pin to the new line number."
+    },
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "tech-spec Risks R1 line 364 — \"fall-back is Caffeine cache for Bot lookup (deferred per `patterns.md` line 119, only when measured)\".",
+      "reality": "patterns.md line 119 is about per-call decrypt of bot tokens, not about Bot lookup caching: \"Per-call decrypt; `requireValidTokenShape` runs BEFORE URI construction... Cache (Caffeine with short TTL) was rejected as premature — revisit when Epic 07 broadcast load profiles show measurable cost.\" The Caffeine-cache deferral principle is documented for the token-decrypt path, not for Bot-lookup. The principle is analogous but the citation is not exact.",
+      "source": "tech-spec.md line 364 (Risks R1)",
+      "fix": "Soften citation to \"premature-caching deferral convention used elsewhere (e.g. patterns.md line 119 for token-decrypt cache)\" or drop the line number and keep the spirit of the rule."
+    },
+    {
+      "severity": "minor",
+      "type": "missing_pattern",
+      "claim": "tech-spec Decision 11 line 143 — \"static `BackgroundJob.enqueue` matches existing `@Recurring` precedent in `HardDeleteJob` / `ProjectHardDeleteJob` (no `JobScheduler` injection in codebase yet).\"",
+      "reality": "HardDeleteJob.java and ProjectHardDeleteJob.java both use `@Recurring` (cron-scheduled) and do NOT call `BackgroundJob.enqueue(...)` at all. Their executor is JobRunr's recurring-job scheduler, not a static `BackgroundJob.enqueue` call. So the claim that \"static `BackgroundJob.enqueue` matches existing `@Recurring` precedent\" is misleading — `@Recurring` is a registration annotation, not an enqueue call. The codebase has NO existing `BackgroundJob.enqueue(...)` precedent (this is acknowledged in code-research.md line 127: \"No existing one-shot `BackgroundJob.enqueue(...)` call exists in the codebase\").",
+      "source": "tech-spec.md line 143 (Decision 11 alternatives considered)",
+      "fix": "Rephrase: \"static `BackgroundJob.<X>enqueue(lambda)` is the official JobRunr API (verified via Context7) and avoids introducing a new injected bean type. The codebase has no prior `BackgroundJob.enqueue` call (only `@Recurring` registrations), so this introduces a new pattern — flagged in Risks.\""
+    },
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "tech-spec Task 10 line 478 — files-to-read includes `backend/src/test/java/com/botfunnel/bot/BotControllerIT.java` \"(race-test + token-leak assertion precedents)\". The exact race-test cited elsewhere (line 478 R3-related) and tech-spec testing strategy line 325 reference `Flux.range(0, 2).parallel(2)` shape.",
+      "reality": "BotControllerIT.java does have the race-test precedent at lines 511-580 (postConnect_parallelSameToken_exactlyOneSucceeds_otherReturns409 and postConnect_parallelSameProjectDifferentTokens_*), but they use `Mono.zip(r1, r2, ...)` rather than `Flux.range(0, 2).parallel(2).flatMap(...)`. The test pattern is correct but the syntactic shape differs from what the tech-spec testing strategy describes for AC5 (line 325).",
+      "source": "tech-spec.md line 325 (Testing Strategy AC5), line 478 (Task 10 files to read)",
+      "fix": "Adopt the existing `Mono.zip(...)` shape in 04b race tests for consistency with the codebase precedent, OR explicitly note in the tech-spec that 04b uses `Flux.parallel` because the AC5 race involves a status pair `{200, 200}` (not `{200, 409}`) which is shape-independent."
+    }
+  ],
+  "stats": {
+    "total_claims_checked": 47,
+    "confirmed": 38,
+    "mirages_found": 9,
+    "verified_claims": [
+      "backend/src/main/java/com/botfunnel/bot/BotService.java exists with private sha256Hex method at lines 331-338",
+      "Bot.java:51 has `private Long ownerChatId;` field",
+      "BotService.java:124 reads bot.getOwnerChatId() for 422 branch",
+      "SecurityConfig.java has authorizeExchange at :68-73 with /api/** authenticated rule",
+      "SecurityConfig.java uses CookieServerCsrfTokenRepository.withHttpOnlyFalse() (:55-65)",
+      "BotRepository.findByProjectIdAndStatus exists (BotRepository.java:9)",
+      "ProjectRepository extends ReactiveMongoRepository, findById inherited",
+      "EventService.logEventBlocking exists (EventService.java:34-38)",
+      "EventService.logEvent fire-and-forget exists (EventService.java:23-28)",
+      "TelegramApiClient.scrubTokens public static (TelegramApiClient.java:179)",
+      "ProjectService.softDelete at ProjectService.java:140-151",
+      "application.properties:6 has spring.data.mongodb.auto-index-creation=true",
+      "application.properties:34 has org.jobrunr.dashboard.enabled=false",
+      "application-test.properties:9 has org.jobrunr.background-job-server.enabled=false",
+      "build.gradle:30 has org.jobrunr:jobrunr-spring-boot-3-starter:7.3.2",
+      "JobRunrMongoConfig.java exists with sync MongoClient bean",
+      "JobRunrInMemoryConfig.java exists with InMemoryStorageProvider bean",
+      "AbstractIntegrationTest exists with Testcontainers Mongo 8.0/Redis/Mailpit",
+      "ProjectHardDeleteJob.java uses logEventBlocking().block() BEFORE remove cascade (lines 89-95)",
+      "HardDeleteJob.java exists with @Recurring annotation",
+      "HardDeleteJobTest.java exists with direct invocation pattern (job.hardDeleteSoftDeletedUsers())",
+      "BotRepositoryTest.findById_legacyDocumentWithoutOwnerChatId_readsAsNull exists at line 85",
+      "@CompoundIndex.partialFilter attribute exists in Spring Data MongoDB 4.5.4 (since 3.1)",
+      "@Indexed.partialFilter attribute exists in Spring Data MongoDB 4.5.4 (since 3.1)",
+      "NegatedServerWebExchangeMatcher exists in Spring Security 6.5 since 5.1",
+      "PathPatternParserServerWebExchangeMatcher(String pattern) constructor exists in Spring Security 6.5",
+      "JobRunr 7.3.x supports BackgroundJob.<X>enqueue(lambda) static form per JobRunr docs",
+      "ReactiveMongoTemplate.findAndModify exists with returnNew option per Spring Data docs",
+      "common/crypto/TokenEncryptor.java exists (placement convention for Sha256Hex)",
+      "architecture.md line 20 documents common.crypto as at-rest-secret-helpers home",
+      "deployment.md line 5 says platform TBD (no CI/CD yet)",
+      "patterns.md line 44 documents pathMatchers first-match rule",
+      "patterns.md line 45 documents scoped CSRF disable for webhooks",
+      "patterns.md line 82 documents defense-in-depth uniqueness + DuplicateKeyException precedent",
+      "patterns.md line 83 documents JobRunr cascade ordering for audit events",
+      "patterns.md line 84 documents @JsonIgnoreProperties mass-assignment defense",
+      "patterns.md line 98 documents log scrubber for upstream descriptions",
+      "patterns.md line 101 documents SHA-256 hash for pre-image verification only"
+    ]
+  }
+}

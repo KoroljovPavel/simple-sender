@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "All round-2 findings have been correctly addressed. Body assertions for sendPasswordResetEmail and sendAccountBlockedEmail now extract content from the actual MimeMessage via extractHtmlBody(mimeMessage) rather than standalone builder calls, closing the litmus-test failures. HTML-escape coverage gaps are filled by four new builder-level tests (buildPasswordResetBody_htmlEscapesName, buildAccountBlockedBody_htmlEscapesName, htmlEscape_escapesSingleQuote, buildVerificationBody_htmlEscapesToken). The sendVerificationEmail_fireAndForget test now includes await() to confirm send was attempted. One minor observation remains: the verification URL is asserted only via the buildVerificationBody builder call (line 76-79), not through the full async send path, while password-reset and account-blocked tests verify URL/support-email through the actual MimeMessage. This is a minor inconsistency but not a litmus-test failure because the builder test still catches URL substitution bugs.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:76",
+      "issue": "sendVerificationEmail_bodyContainsVerificationUrl asserts the verification URL by calling emailService.buildVerificationBody('Alice', 'mytoken') directly — it does not go through the full sendVerificationEmail send path. By contrast, sendPasswordResetEmail and sendAccountBlockedEmail both verify their key body content (reset URL and support email) through extractHtmlBody on the actual MimeMessage. The inconsistency means a bug where sendVerificationEmail passes the wrong body string to sendAsync would not be caught by this test (though such a bug is unlikely given the simple delegation pattern).",
+      "recommendation": "Add a full-path assertion to sendVerificationEmail_callsJavaMailSenderWithCorrectRecipientAndFrom (or a new dedicated test) by extracting the body via extractHtmlBody(mimeMessage) after the await and asserting it contains 'http://localhost:3000/auth/verify-email?token=token123'. This makes coverage strategy consistent across all three send methods. The standalone buildVerificationBody test can be retained as-is."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 11,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

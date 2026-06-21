@@ -1,0 +1,65 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "AC 'Send Image' describes the expected retry/429/Decision-4 hook by reference to sendText behaviour ('той самий ретрай/429/Decision-4-хук, що й `sendText`') rather than stating the observable outcome explicitly (e.g., '429 → TelegramSender internal backoff+retry; 403 → blocked flip + execution cancelled'). As written it is verifiable by an engineer familiar with the codebase, but the criterion relies on implicit knowledge of how sendText behaves rather than being self-contained.",
+      "location": "## Критерии приёмки — Send Image bullet",
+      "fix": "Expand to name the observable outcomes directly: 'Send Image: надсилає зображення за URL + caption через `sendPhoto`; 429 → internal retry+backoff; 403/400-chat-not-found → TelegramSender авто-flip + виконання cancelled; інші термінальні → failed (ідентична поведінка Send Message).' One sentence is enough."
+    },
+    {
+      "check": "template_compliance",
+      "severity": "minor",
+      "issue": "In the 'Тестирование' section the rationale for doing E2E (Playwright) is implicit rather than explicit. The integration rationale is well stated ('рушій критично залежить від конкурентності й планувальника, юніти цього не покриють'). The E2E block lists what will be covered but does not state why Playwright-level testing is needed for the editor (as opposed to additional unit/vitest tests).",
+      "location": "## Тестирование — E2E тести paragraph",
+      "fix": "Add a one-clause rationale, e.g.: 'делаем (Playwright) — редактор є критичним user-facing інтерфейсом; взаємодія picker → форма → активація вимагає browser-level перевірки, яку Vitest не забезпечить.'"
+    },
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "Size L is declared and appropriate. However, numeric thresholds are exceeded: 25 acceptance criteria (threshold >10) and 5 user flows in 'Как должно работать' (threshold >3). This triggers a 'warning' status for the size_check. The excess is expected for a new-architecture L feature; no action is strictly required, but it is worth noting that the spec is at the heavy end of L.",
+      "location": "Frontmatter size: L; ## Критерии приёмки (25 items); ## Как должно работать (5 scenarios)",
+      "fix": "No change required — L sizing is correct and all 25 AC map to distinct, non-overlapping behaviours. If desired, minor consolidation of closely related criteria (e.g., 'Завершення' and 'Послідовність без Delay') could reduce the count, but this is optional."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "scope_framing: 4-phase decomposition, Phase 1 = linear funnels only; Phases 2-4 deferred (НЕ робити section + Что делаем)",
+      "step set: 6 linear types (Send Message, Send Image URL-only, Delay, Add Tag, Remove Tag, Set Custom Field); end of list = completion, no End Funnel step",
+      "trigger: /start with optional deep-link payload (trigger_value), UI generates t.me/<bot>?start=<payload> + Copy button (Scenario 2, AC Тригер + deep link)",
+      "trigger conflict rule: block activation with same (/start, trigger_value) pair → 422 funnel_trigger_conflict (AC Конфлікт тригера)",
+      "delay granularity: хв/год/дні, minimum 1 min, precision ±~30s, sub-minute not supported (AC Delay, Ограничения)",
+      "mid-flight edit + snapshot: step list copied onto FunnelExecution at start; edits affect only new runs (AC Snapshot, Scenario 5, Технические решения)",
+      "status lifecycle: draft/active/paused; delete → cancel active + confirm; activate only valid (≥1 step, required fields) (Scenarios 3 and 5)",
+      "re-enter: allow_re_enter=false ignores repeat /start while running|waiting; =true cancels old + restarts fresh (AC Re-enter, Scenario 5)",
+      "send-failure semantics: 403/400 → TelegramSender auto-flip + cancelled; other terminal → failed; no funnel-level retries (AC Send-failure semantics)",
+      "execution retention forever: Технические решения ('зберігати завершені виконання безстроково')",
+      "testing matrix: unit (step executors, VariableTemplateRenderer, state transitions, trigger-matcher, funnel validation) + integration (Testcontainers Mongo + JobRunr in-memory + MockWebServer, 13 scenarios) + Playwright E2E + staging-smoke runbook",
+      "deploy: no CI/CD; env vars FUNNEL_SCHEDULER_INTERVAL_SECONDS=30 and FUNNEL_MAX_STEPS=50 → .env.example + docs/local-setup.md (Ограничения — Деплой)",
+      "verification boundary: user tests locally with real Telegram + ngrok; no staging host; staging-smoke runbook = local-with-ngrok (Как проверить — Пользователь проверяет)",
+      "multi-replica confirmed → sweep = JobRunr @Recurring with distributed lock, NOT Spring @Scheduled (Ограничения, Технические решения)",
+      "bot pinning: snapshot telegramBotId at start; not CONNECTED at send → execution failed, no silent switch (AC Bot pinning, Технические решения)",
+      "parse_mode: picker None/HTML/MarkdownV2, default None (AC Send Message, Технические решения)",
+      "deleted custom-field mid-execution → Set Custom Field step skip+continue, not failed (AC Set Custom Field, Технические решения)",
+      "re-enter guard via atomic unique partial index (funnelId, subscriberId) on running|waiting (AC Re-enter, Ограничения — Індекси)",
+      "subscriber missing at fire() → log + skip (Ограничения sole-writer rule paragraph)",
+      "fire() error isolation: idempotent swallow+log to prevent poisoning raw_update retry loop (AC fire() isolation, Риски)",
+      "ProjectHardDeleteJob cascade: funnels + funnel_executions deleted before drop projects (AC Каскад)",
+      "variable templating: {user.first_name|last_name|username}, {custom.<key>}, unknown → empty string, {{ escape to {, HTML/MarkdownV2 value escaping (AC Templating)",
+      "pre-send status check: non-active subscriber → cancel execution (AC Status gating)",
+      "at-most-once per step: atomic claim (pending→in_progress→done) before send; retry/restart does not re-send (AC At-most-once per step, Риски)",
+      "observability: each execution state transition logged; JobRunr dashboard disabled so logs are sole visibility (AC Observability)"
+    ],
+    "missing": []
+  },
+  "summary": "Документ повністю заповнений і відповідає шаблону: всі секції містять реальний зміст, 25 критеріїв приймання конкретні й тестовані, 10 ризиків мають митигації, всі теми інтерв'ю знайдено в специфікації. Знайдено 3 незначних зауваження (minor): AC Send Image посилається на поведінку sendText замість прямого опису результату; E2E секція не містить явного обґрунтування; розмір L перевищує кількісні пороги (25 AC, 5 флоу), що очікувано для нової архітектури. Критичних або major проблем не виявлено — специфікація готова до затвердження."
+}

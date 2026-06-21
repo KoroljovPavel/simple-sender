@@ -1,0 +1,51 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "AC22 lists i18n error keys for testMessage as `{422, 502}` but the spec also references the 502 path indirectly only — there is no AC describing a Telegram 5xx code path for test-message, and 06b will own real `sendMessage` calls. Until 06b lands, the 422 stub is the only branch that fires, so the 502 key has no runtime producer in this feature.",
+      "why_matters": "Pre-creating a 502 key that no code path produces is harmless but invites confusion for the locale parity reviewer (\"who emits this?\"). Either the spec should explicitly note 'pre-allocated for 06b' so a reviewer doesn't grep for the producer, or the key should be deferred until 06b adds it together with the producer.",
+      "fix": "Add a one-line note next to AC22's testMessage 502 entry: 'pre-allocated for 06b's sendMessage path'. Or drop the 502 entry from AC22 and let 06b add it. Trivial either way."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "AC11 specifies `DEL brute:bot-connect:{userId}` on success and fail-open if Redis is unreachable, but the spec is silent on whether the DEL itself runs through the same fail-open guard. If Redis goes down between the INCR-OK and the DEL on a successful request, an exception surfacing here could mask a 200-success path. The auth pattern's `resetBruteCounters` similarly needs to be best-effort.",
+      "why_matters": "Edge case but matches the brittleness profile of the previous round's findings — the rate-limit subsystem must never block a happy path. AuthService's reset pattern handles this; the bot spec should explicitly inherit it.",
+      "fix": "One-line addition to AC11 (or §Технические решения brute-force bullet): 'Both INCR and DEL operations are wrapped in fail-open semantics — Redis errors are logged WARN and do not fail the Connect request.'"
+    },
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "Round 1 finding on tech-spec scope leak was addressed for most items (regex, IV/tag bytes, retry delays, class names removed) but a few residuals remain: AC18 dictates the exact masking visual format (`{first id segment}:•••...{last 3 chars}`) including the unicode bullet character and the exact 'last 3 chars' count; §Технические решения still references the property name `app.bot.encryption.key-v1` implicitly through D3's wording about a single env var. The masking format is arguably UX (acceptable in user-spec); the env-var convention belongs in tech-spec.",
+      "why_matters": "Minor — the masking format is borderline UX (user-visible) which is legitimate user-spec territory; the env-var name is the only remaining HOW leak and it's already moved to decisions.md D3 which is one step removed from user-spec proper. Not worth blocking on.",
+      "fix": "Optional: drop the specific `•••...` bullets and `last 3 chars` count from AC18 and say 'masked with a recognizable prefix and the trailing characters of the secret'. Tech-spec then chooses the literal mask. If the team prefers the user-spec to lock the visual, keep AC18 as-is."
+    }
+  ],
+  "worst_category": "underengineering",
+  "summary": "All 6 round-1 findings (2 critical + 4 major) and the 4 minor findings have been addressed substantively in user-spec.md + decisions.md. No critical issues remain. Three minor cosmetic gaps (i18n key without producer, fail-open guard for DEL, residual masking-format detail) are flagged for completeness but do not block approval. Spec is now feasibility-solid, well-sized at L, and the deliberate deviations (two-layer uniqueness, compensating deleteWebhook, 4xx vs 5xx split) are properly documented in decisions.md.",
+  "round1_resolution_status": {
+    "R1-CRITICAL-cleartext-webhook-secret": "RESOLVED. AC20 + decisions.md D2: SHA-256 hash, plaintext only in-process during Connect, 06b will verify by hashing the incoming header. Stronger than the AES suggestion (no key to leak).",
+    "R1-CRITICAL-orphan-webhook-on-persist-fail": "RESOLVED. AC9 + decisions.md D4: compensating deleteWebhook (best-effort, logged on failure), 500 returned. Symmetric to Disconnect-path policy. No premature pending_webhook state introduced (good — keeps the flow simple).",
+    "R1-MAJOR-4xx-vs-5xx-setWebhook": "RESOLVED. AC5 (webhook_config_error → 500) split from AC4 (telegram_unavailable → 502) with decisions.md D8 explaining the rationale. Operator logs carry the precise Telegram description (correct: not in response body).",
+    "R1-MAJOR-two-bots-same-project": "RESOLVED. AC7 + decisions.md D5: per-project pre-check returning 409 bot_already_in_project. Naming distinct from AC6's platform-wide bot_already_connected.",
+    "R1-MAJOR-keyVersion-YAGNI": "RESOLVED. decisions.md D3 + R3 risk note: field dropped, single env var, future rotation via one-off migration. Schema kept minimal.",
+    "R1-MAJOR-tech-detail-in-user-spec": "RESOLVED. Regex literal, AES IV/tag bytes, retry delays/timeouts, class names, package names, test library names removed. One minor residual (masking format `•••...{last 3 chars}` in AC18) flagged as minor but borderline UX.",
+    "R1-MAJOR-two-layer-uniqueness-vs-patterns.md": "ADDRESSED (deliberate deviation). decisions.md D1 records the deviation explicitly with reason (race window matters more for bot identity — recovery from misallocation is messy) and a recommendation to update patterns.md. This is the right call: the documented disagreement is more valuable than silently conforming.",
+    "R1-MAJOR-logback-appender": "RESOLVED. AC13 replaced with behavioral AC17: unit test on masking function + code-review checklist + no log line carries the token. Drops the brittle global log scan.",
+    "R1-MAJOR-size-M-vs-L": "RESOLVED. Frontmatter now `size: L`.",
+    "R1-MAJOR-test-message-in-06": "DECIDED to keep in scope. decisions.md D7 documents the rationale (forward-compatible contract, lands once). AC15 reflects the 422 stub. User accepted the trade-off explicitly.",
+    "R1-MINOR-vue-query-divergence": "RESOLVED. The spec no longer mentions @tanstack/vue-query; AC21 just says 'data-fetch composable' and §Ограничения says 'server-authoritative on every page mount via the existing data-fetch composable'.",
+    "R1-MINOR-DEL-on-success": "RESOLVED. AC11 explicitly: 'On a successful Connect the counter is DELETED for the user (matching the auth pattern).' (Residual minor: DEL itself should be fail-open — noted in current findings.)",
+    "R1-MINOR-test-profile-encryption-key": "PARTIAL. Spec mentions fail-fast on missing/wrong-length key in §Технические решения context but no explicit AC about application-test.properties. Likely acceptable to defer to tech-spec since this is build/test config, not user-facing contract.",
+    "R1-MINOR-orphan-webhook-runbook": "PARTIAL. R5 mentions 'Operations runbook notes the manual deleteWebhook curl recipe' but there's no AC committing to writing that runbook. Minor — could be promoted to a backlog item rather than this feature's AC."
+  },
+  "new_issues_round2": {
+    "feasibility": "No new feasibility issues. Stack-compatible (WebFlux + reactive WebClient + reactive Mongo + Redis), SHA-256 hash is a single Java stdlib call, compensating deleteWebhook fits the existing retry semantics.",
+    "overengineering": "No new overengineering. The compensating deleteWebhook is symmetric with Disconnect path (good). The 4xx vs 5xx split is appropriately scoped (not overdesigned — just two error codes). The two-layer uniqueness defense remains but is now explicitly deliberate per D1 rather than accidental.",
+    "underengineering": "Two minor gaps identified: testMessage 502 i18n key has no producer in 06; AC11's DEL operation needs explicit fail-open semantics. Neither is critical.",
+    "better_alternative": "No simpler alternative spotted. SHA-256 hash is strictly simpler than the original AES suggestion. Single key (no version field) is the minimal viable design.",
+    "sizing": "L is correct for this scope: greenfield bot module + first reactive WebClient + AES utility + frontend route restructure + sub-nav + new page + i18n subtree + integration tests with mocked Telegram. Splittable at backend/frontend boundary if needed but not required — L sprints fit."
+  }
+}

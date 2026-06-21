@@ -1,0 +1,30 @@
+{
+  "validator": "security",
+  "status": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "owasp": "A03",
+      "description": "Preview path echoes unvalidated keyboardRows verbatim. previewStep is non-validating by existing design (Decision 7 / code-research §6), so the SET_KEYBOARD caps (1..10 rows, 1..4 buttons, button text <=64) are NOT enforced on PreviewStepRequest.keyboardRows before they are returned as raw labels in PreviewStepResponse. An authenticated owner can post arbitrarily large/long row arrays bounded only by the HTTP max body size, and the frontend keyboard mock will render them. Exploitability is low (reflected only to the same authenticated author; labels rendered via {{ }} interpolation, never v-html, so no XSS), but it is an unbounded echo surface the spec does not call out.",
+      "recommendation": "In previewStep, clamp the echoed rows to the validation caps (truncate to 10 rows x 4 buttons, trim labels to 64 chars) before building PreviewStepResponse.keyboardRows, or explicitly document in Decision 7 that the preview echo relies on the request body size limit and the {{ }}-only render convention. Add a preview test with an over-cap rows payload pinning the chosen behavior."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A04",
+      "description": "Asymmetric strictness in cross-type field rejection. Decision 6 has CLEAR_KEYBOARD reject keyboardRows being present, but is silent on (a) isPersistent/oneTimeKeyboard present on CLEAR_KEYBOARD, and (b) any keyboard fields present on non-keyboard step types (MESSAGE, DELAY, ...). Unrejected stray fields persist as dead data on the embedded FunnelStep, round-trip via toStepDto, and survive copyOf into execution snapshots — a small data-integrity/ambiguity gap rather than an exploit, since the executor only reads them on the two new types.",
+      "recommendation": "Extend validateClearKeyboard to also reject isPersistent/oneTimeKeyboard (same 422 funnel_step_invalid), and state in the spec whether keyboard fields on other step types are rejected or silently ignored (the existing per-type flat-nullable-field convention should be applied consistently and pinned by a FunnelServiceKeyboardStepTest case)."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A09",
+      "description": "No-PII-in-logs is convention-only for the new StepExecutor cases. The spec adds no new logs ('observability unchanged') and the existing pipeline is safe (TelegramSender scrubs tokens in every WARN/ERROR path; trim warnings log codes/lengths), but Task 3 does not explicitly instruct the implementer that any new log line in the two switch cases must carry ids/codes only — rendered keyboardText and button labels are subscriber-personalized content (variables substituted) and must not be logged.",
+      "recommendation": "Add one sentence to Task 3 (and the Task 9 audit checklist already covers verification): new StepExecutor cases must not log rendered text or button labels; follow the existing LOG_*_TRIMMED / scrubbed-message idiom (ids, error codes, lengths only)."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A04",
+      "description": "Accepted-risk record: the persistent keyboard makes one-tap keyword execution creation ubiquitous, amplifying the existing Phase-3 surface — contains-match false positives and fan-out (one tap can start several funnels), with re-enter guard as the only throttle (allowReEnter=false collapses repeat taps to a no-op). This is explicitly accepted in user-spec (Risks 2/3, Ограничения) and adds no new webhook parsing or attack surface; recorded here for traceability only, no change requested.",
+      "recommendation": "None required. If subscriber tap-spam ever becomes a cost problem, a per-subscriber dispatch rate limit in FunnelEventService is the natural future control — out of scope for this feature."
+    }
+  ]
+}

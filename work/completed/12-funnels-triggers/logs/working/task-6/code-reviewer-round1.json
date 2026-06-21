@@ -1,0 +1,39 @@
+{
+  "task": "6",
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "skill": "code-reviewing",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+    "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java"
+  ],
+  "summary": "Keyword webhook path is correctly wired: subscriber resolve -> read-only waiting_for_reply precedence probe -> error-isolated fan-out dispatch. Cross-file signatures verified (findByChat, dispatchForSubscriber, mongoTemplate.exists, ExecutionStatus.waiting_for_reply.name()). Error-isolation is a local swallow around the keyword block only, leaving the worker's outer try/catch intact. WARN markers are greppable and PII-free. No blocking issues.",
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "minor",
+      "dimension": "Performance",
+      "title": "Connected-bot resolved twice for one keyword firing",
+      "detail": "dispatchKeyword resolves the subscriber via findByChat, then dispatchForSubscriber internally re-resolves the CONNECTED bot via botRepository. This is one extra Mongo round-trip per plain-text private message.",
+      "decision": "WONT_FIX",
+      "reason": "Intentional by design (tech-spec Decision 2 / Task 4): FunnelEventService is the single owner of bot-pinning and is also called from non-webhook contexts (tag/field/event/EMIT_EVENT). Passing the already-resolved bot would break that encapsulation and the dispatcher's self-contained contract. The cost is one indexed lookup on an already-DB-bound path."
+    },
+    {
+      "id": "CR-2",
+      "severity": "minor",
+      "dimension": "Readability",
+      "title": "telegramBotId param passed to dispatchKeyword but only used for findByChat",
+      "detail": "dispatchKeyword takes telegramBotId solely to scope the subscriber lookup; the dispatcher re-derives the bot itself.",
+      "decision": "WONT_FIX",
+      "reason": "findByChat is keyed by (projectId, telegramBotId, chatId) — the param is required for the project-scoped subscriber resolution and matches FunnelTriggerServiceImpl's resolution form. Removing it is not possible."
+    }
+  ],
+  "good_practices": [
+    "Read-only precedence probe uses mongoTemplate.exists(...) — never the destructive updateMulti, exactly as the task warned.",
+    "Status literal uses ExecutionStatus.waiting_for_reply.name() (lowercase, Decision 14) so the criteria matches persisted rows.",
+    "Local swallow scoped to the keyword block only; the worker's outer try/catch (FAILED + rethrow) is untouched, so a genuine worker fault still surfaces.",
+    "WARN/INFO markers (KEYWORD_DISPATCH_ERROR, KEYWORD_SUPPRESSED_WAITING_FOR_REPLY) are greppable and carry ids/codes only — no message text (Decision 16)."
+  ],
+  "verdict": "APPROVED"
+}

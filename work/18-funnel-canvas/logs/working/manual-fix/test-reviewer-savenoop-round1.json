@@ -1,0 +1,31 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-savenoop",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts — describe 'side-panel step save (no silent no-op)'",
+      "issue": "No test for the explicit-Save happy path on a COMPLETED step: the 'exact repro' test (L345-367) drives 'update:steps' (the implicit autosave path on the page) and asserts the PATCH fires. But it does not drive 'step-save' afterwards to exercise the full explicit-Save code path (onCanvasStepSave → stepSaveFeedback = null). The feedback-clear branch in onCanvasStepSave() is untested: if that branch were accidentally deleted, no existing test would catch it.",
+      "recommendation": "Add a fourth test in the describe block: mount with a completed step, emit 'update:steps' (triggers PATCH + clears feedback if any was set), then emit 'step-save' on that same completed step, and assert (a) storeMock.update was called exactly once (not twice), (b) wrapper.find('[data-test=\"funnel-step-save-feedback\"]').exists() === false. This locks down the 'completed step → explicit Save → no duplicate PATCH, no stale feedback banner' invariant."
+    }
+  ],
+  "summary": "All six required scenarios are covered by load-bearing, value-based assertions. The core repro (id:null node, 'Привіт' text, index routing) is tested at two layers (canvas unit + page integration). Saved-node regression, feedback-on-incomplete, no-PATCH-on-empty, and dangling-trigger tests all carry concrete assertions that would fail against pre-fix code. One minor gap: the explicit-Save happy path on a COMPLETED step (the feedback-clear branch in onCanvasStepSave) is not exercised, leaving that branch without a regression guard.",
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 2,
+      "integration": 4,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

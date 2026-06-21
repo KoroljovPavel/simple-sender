@@ -1,0 +1,61 @@
+{
+  "verdict": "approved_with_suggestions",
+  "summary": "All 8 TDD-anchor specs are present, exercise the real page through mountSuspended, and pass the litmus test (removing core logic in pages/projects/index.vue — section v-if, daysRemaining math, restore handler, rename comparison, atLimit gate, localePath wiring — would fail the corresponding assertion). Mock surface is appropriately scoped to useApi + useProjectsStore + useLocalePath; the wall-clock-only fake timer strategy is correct given settle() needs a real macrotask. AC coverage maps cleanly: AC-23 (empty/has-deleted), AC-14b (rename), AC-15 (422 + row retention), AC-30 (disabled + tooltip), AC-25 (i18n strings rendered). Gaps are around edge-cases the task description explicitly enumerates (banner auto-dismiss, concurrent double-click, 5-active+deleted coexistence, non-422 error path) and some brittleness in localized-substring assertions.",
+  "findings": [
+    {
+      "severity": "minor",
+      "where": "frontend/tests/pages/projects/index.spec.ts:100-102",
+      "issue": "Countdown assertions use bare digit regexes (/7/, /3/, /1/). The /1/ match would also accept any number containing '1' (e.g. 10, 11, 21) so a future off-by-one regression (e.g. ceil vs round, or returning 7-day fixtures as 6 not 7) could still match. The /3/ case is similarly loose.",
+      "suggestion": "Anchor the digit or use the full localized string with interpolation, e.g. expect(wrapper.find('[data-test=\"days-remaining-d4\"]').text()).toBe('Залишилось днів: 3'), or assert the count is exactly 3 via a regex like /\\b3\\b/. Same for d0 → 7 and d6 → 1."
+    },
+    {
+      "severity": "minor",
+      "where": "frontend/tests/pages/projects/index.spec.ts:123,140,157,176",
+      "issue": "Banner / tooltip assertions match localized substrings (/Проект відновлено/, /Назву було змінено/, /ліміт/i, /ліміт у 5 активних проектів/i). Any wording tweak in uk.json — even cosmetic — breaks the test, and the 422 vs. create-422 strings both contain 'ліміт' so the assertion would still pass if the wrong key resolved.",
+      "suggestion": "Either (a) import the resolved string from the i18n bundle and compare against t('projects.restore.success') / t('errors.projects.restore.renamedDueToConflict') / t('errors.projects.restore.422') / t('projects.create.limitReachedTooltip'), or (b) add `data-test-i18n-key` attributes to the banner/tooltip and assert the key, decoupling from copy. The latter is more robust and matches how i18n parity is enforced elsewhere."
+    },
+    {
+      "severity": "minor",
+      "where": "frontend/tests/pages/projects/index.spec.ts (no test exists for it)",
+      "issue": "Missing coverage for the per-row in-flight disable guard described in Edge cases (`restoringIds: Set<string>`). A user double-clicking Restore must not call projectsStore.restore twice. The page implements this (lines 64-66, 79 of index.vue with the early return + finally cleanup) but no test pins the behaviour, so the guard can be deleted without test failure.",
+      "suggestion": "Add a spec: queue restoreSpy with a pending Promise (resolvers captured manually), click the same restore-button twice with await nextTick() between clicks, assert restoreSpy.toHaveBeenCalledTimes(1) AND that the button has the disabled attribute while in flight, then resolve and assert the button re-enables (or the row is removed)."
+    },
+    {
+      "severity": "minor",
+      "where": "frontend/tests/pages/projects/index.spec.ts (no test exists for it)",
+      "issue": "AC-30 + AC-23 coexistence edge case is uncovered: the task explicitly notes '5 active + 1 deleted → Restore button still rendered but 422 surfaces the limit message; row stays in the deleted section'. The current 422 test (line 143) uses an empty projectsRef, so it does not pin the disabled-Create + visible-Restore + 422-banner combination.",
+      "suggestion": "Add a spec that seeds projectsRef with 5 active rows AND apiMock with 1 deleted row, restoreSpy rejects with 422, and asserts: create-project-button has disabled attribute, restore-button-d1 is still present and clickable, and after click the banner shows the limit message and deleted-row-d1 still exists."
+    },
+    {
+      "severity": "minor",
+      "where": "frontend/tests/pages/projects/index.spec.ts (no test exists for it)",
+      "issue": "Banner auto-dismiss (BANNER_TIMEOUT_MS = 4000) is unverified. The page schedules clearTimeout/setTimeout (lines 22-28) — deleting that block leaves the banner permanently visible, and no test would catch it.",
+      "suggestion": "Either keep the current real-timer strategy for settle() and add a spec that uses vi.advanceTimersByTimeAsync(4001) after switching to fake timers in that one test (saving the macrotask cost), OR document the omission. The fake-timer dance is awkward; alternative: assert onBeforeUnmount cleanup by unmounting the wrapper and checking no setTimeout leak — but that is also imperfect. At minimum, leave a comment in the spec explaining the gap so future readers don't assume coverage."
+    },
+    {
+      "severity": "minor",
+      "where": "frontend/tests/pages/projects/index.spec.ts (no test exists for it)",
+      "issue": "Non-422 error path is uncovered. The page's apiError(err, 'projects.restore') resolver also handles 404 (errors.projects.restore.404 → 'Проект не знайдено') and generic fallback. If the resolver returns an empty string (line 77 of index.vue: `if (msg) showBanner(...)`), the banner stays absent — this guard is untested.",
+      "suggestion": "Add a spec that rejects restoreSpy with { statusCode: 500 } and asserts the banner shows the generic-error fallback text; and a second case where the resolver returns '' (e.g. unknown context key) and asserts the banner element is NOT rendered."
+    },
+    {
+      "severity": "nit",
+      "where": "frontend/tests/pages/projects/index.spec.ts:71-73",
+      "issue": "afterEach calls vi.useRealTimers() but the test never enabled fake timers — vi.setSystemTime() alone does not switch to fake timers per Vitest semantics. Harmless but misleading; readers may assume timers are faked and copy the pattern incorrectly.",
+      "suggestion": "Replace with `vi.useRealTimers()` only if a test opts into fake timers explicitly, or drop the afterEach hook entirely and rely on Vitest's per-test reset. Alternatively, add a comment noting that setSystemTime is the only mutation and useRealTimers is defensive cleanup."
+    },
+    {
+      "severity": "nit",
+      "where": "frontend/tests/pages/projects/index.spec.ts:188",
+      "issue": "index_under5Projects_createButtonEnabled asserts `disabled` is undefined but does not assert that `aria-disabled` is absent or false. Since the disabled-state path also sets aria-disabled=\"true\", a regression that flips only the disabled attribute (leaving aria-disabled=\"true\" stuck) would still pass.",
+      "suggestion": "Add `expect(btn.attributes('aria-disabled')).toBeUndefined()` alongside the existing disabled-attribute assertion."
+    },
+    {
+      "severity": "nit",
+      "where": "frontend/tests/pages/projects/index.spec.ts:191-192,207-208",
+      "issue": "Falls back from `href` to `to` (`btn.attributes('href') ?? btn.attributes('to')`). This obscures whether NuxtLinkLocale is rendered as an anchor (href) or as the test-utils stub (to). If the stub behaviour changes between Nuxt versions, the assertion silently picks the other attribute and continues to pass — losing the actual contract being tested.",
+      "suggestion": "Pin to the expected attribute (`href` if the component is rendered, `to` if stubbed) and update if the rendering changes. Better: assert against the resolved router location, e.g. wrapper.findComponent({ name: 'NuxtLinkLocale' }).props('to')."
+    }
+  ],
+  "coverage_summary": "8/8 TDD-anchor specs implemented and passing. Litmus test passes for each. ACs covered: AC-23 (empty + has-deleted sections), AC-14b (rename banner), AC-15 UI side (422 + row retention), AC-30 (disabled + tooltip + title), AC-25 (i18n strings used). Gaps: concurrent-restore guard, banner auto-dismiss, 5-active+deleted coexistence, non-422 error path, empty-resolver guard. Mock fidelity is appropriate (mountSuspended, real component, real useApiError, store actions spied). Determinism is sound (wall-clock frozen via setSystemTime, real macrotask preserved for settle()). beforeEach reset hygiene is clean."
+}

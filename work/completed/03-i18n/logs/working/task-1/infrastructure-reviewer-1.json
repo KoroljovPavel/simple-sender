@@ -1,0 +1,33 @@
+{
+  "task": "1",
+  "round": 1,
+  "reviewer": "infrastructure-reviewer",
+  "verdict": "approved",
+  "summary": "Playwright bootstrap is clean: package.json + lockfile consistent (^1.59.1 resolves to 1.59.1), playwright.config.ts has all required fields with sane defaults, nested frontend/.gitignore covers only Playwright artifacts without duplicating root rules, e2e/ dir tracked via .gitkeep. Smoke (--version, --list) already passed. No critical or major issues.",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "frontend/package.json:30",
+      "issue": "Installed @playwright/test specifier is ^1.59.1, while the task description (line 26) calls for ^1.49. The Edge Cases section of the task (line 92) explicitly permits minor/patch upgrades within the 1.x major, so this is within spec, but the commit message and task description were not updated to reflect the actual resolved version. Worth recording for traceability.",
+      "fix": "Optional: amend post-completion notes / decisions.md to record that ^1.59.1 was installed (latest stable in 1.x at install time) so future task-archaeology lines up. No code change required."
+    },
+    {
+      "severity": "info",
+      "file": ".git/hooks/pre-commit:1-9",
+      "issue": "Local pre-commit hook is wired to gitleaks but emits 'WARNING: gitleaks not installed. Skipping secret scan.' on this machine, so the commit landed without an actual secret scan. This is dev-environment state (gitleaks binary missing on the developer machine), not a config defect — the hook itself is correctly installed. Flagging because no scan ran on 8e6946b.",
+      "fix": "Developer should install gitleaks locally (`brew install gitleaks`). Out of scope for Task 1; CI-side secret scanning remains the authoritative gate. No repo change needed."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/playwright.config.ts:15-20",
+      "issue": "webServer.command is `pnpm dev`. In CI (`reuseExistingServer: !process.env.CI` => false) every Playwright run will cold-start Nuxt dev server, which is slow and pulls in Vite dev-only behavior (HMR, source maps) that can mask production bugs. For Task 1 (infrastructure-only, smoke = --list) this is fine and matches the task spec verbatim. Worth reconsidering when Task 11's i18n.spec.ts lands and CI starts running real browsers — at that point `pnpm build && pnpm preview` produces a more representative target.",
+      "fix": "No change required for Task 1. When wiring CI E2E (Task 11+), consider switching webServer.command to `pnpm preview` (with a separate `pnpm build` step) for CI runs, keeping `pnpm dev` for local. Document the choice in tech-spec / decisions when made."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/.gitignore:1",
+      "issue": "`playwright-report/` is preemptively ignored even though current `reporter: 'list'` does not write any HTML report directory. Harmless and forward-compatible (reporter may switch to 'html' later), but worth noting that the ignore was added defensively rather than to cover a real artifact today.",
+      "fix": "No change needed — keep as-is for forward compatibility. If `html` reporter is later adopted, the ignore is already in place."
+    }
+  ]
+}

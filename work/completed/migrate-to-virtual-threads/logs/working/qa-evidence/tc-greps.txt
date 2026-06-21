@@ -1,0 +1,34 @@
+=== TC3: reactive mocks in test ===
+exit:1
+
+=== TC4: reactive session.cookie keys ===
+exit:1
+
+=== TC4b: servlet session.cookie keys present ===
+backend/src/main/resources/application.properties:17:server.servlet.session.cookie.http-only=true
+backend/src/main/resources/application.properties:18:server.servlet.session.cookie.secure=${SESSION_COOKIE_SECURE:false}
+backend/src/main/resources/application.properties:19:server.servlet.session.cookie.same-site=${SESSION_COOKIE_SAME_SITE:lax}
+
+=== TC6a: MethodArgumentNotValidException ===
+7:import org.springframework.web.bind.MethodArgumentNotValidException;
+26:    @ExceptionHandler(MethodArgumentNotValidException.class)
+27:    public ResponseEntity<ErrorResponse> handleBindException(MethodArgumentNotValidException ex) {
+
+=== TC6b: WebExchangeBindException in main ===
+exit:1
+
+=== TC7: Reactive repositories in main ===
+exit:1
+
+=== TC7b: MongoRepository repos in main ===
+backend/src/main/java/com/botfunnel/webhook/RawUpdateRepository.java:7:public interface RawUpdateRepository extends MongoRepository<RawUpdate, String> {
+backend/src/main/java/com/botfunnel/user/UserRepository.java:9:public interface UserRepository extends MongoRepository<User, String> {
+backend/src/main/java/com/botfunnel/project/ProjectRepository.java:9:public interface ProjectRepository extends MongoRepository<Project, String> {
+backend/src/main/java/com/botfunnel/bot/BotRepository.java:8:public interface BotRepository extends MongoRepository<Bot, String> {
+backend/src/main/java/com/botfunnel/events/EventRepository.java:5:public interface EventRepository extends MongoRepository<Event, String> {
+
+=== TC9: Mono<ResponseEntity in main ===
+exit:1
+
+=== TC10: BotTokenLeak tests ===
+backend/src/test/java/com/botfunnel/bot/BotTokenLeakTest.java

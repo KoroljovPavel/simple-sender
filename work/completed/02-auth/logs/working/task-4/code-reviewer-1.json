@@ -1,0 +1,140 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 4 implementation is well-structured: reactive chains are correct, blocking BCrypt is offloaded to boundedElastic, fire-and-forget event logging works, and helper methods keep `login()` readable. A few quality issues warrant attention: deviation from spec signature on `me()`, `AppUserDetails.getPassword()` returns an empty string instead of the real hash, missing `login_failed` event despite tech-spec listing it as an event type, and a hard-coded brute-force TTL that bypasses the externalised-config style used elsewhere.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 86,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`me()` deviates from task-spec signature `me(ServerWebExchange exchange)` (task 4 step 6.b) by relying on `ReactiveSecurityContextHolder.getContext()`. The behavior is correct (the SecurityContext is hydrated from the session by `WebSessionServerSecurityContextRepository`), and this is in fact the more idiomatic WebFlux pattern. Either update the task/tech-spec note to record the simplification, or accept the deviation explicitly in decisions.md.",
+      "benefit": "Keeps spec and code in lockstep so future readers don't infer that `me()` is missing wiring it actually has.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AppUserDetails.java",
+      "line": 22,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`getPassword()` returns `\"\"`. Spring Security's `UserDetails` contract expects either the hashed password or null, and downstream `DaoAuthenticationProvider`-style code paths that call `getPassword()` would silently treat any empty-string match as success. Return `user.getPasswordHash()` (or `null` since auth happens manually in `AuthService`) and add a brief comment explaining why.",
+      "benefit": "Removes a subtle foot-gun if any future code (admin tool, password rotation, custom AuthenticationManager) calls `getPassword()`.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 42,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "`BRUTE_TTL = Duration.ofSeconds(900)` is hard-coded while session TTLs are externalised via `@Value`. Either externalise (`@Value(\"${app.brute-force.window-seconds:900}\")`) for consistency, or document inline that the 15-minute window is fixed by Decision 4 and intentionally not configurable.",
+      "benefit": "Aligns configuration style across the service and enables tuning without redeploy.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 154,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`checkStatusAndAuthorize` has 8 parameters (user, request, exchange, emailKey, ipKey, ip, userAgent, plus `this`). The same is true of `authenticate`. Consider an internal `LoginContext` record (e.g. `record LoginContext(LoginRequest request, ServerWebExchange exchange, String ip, String userAgent, String emailKey, String ipKey)`) to thread the call chain.",
+      "benefit": "Reduces parameter-list churn and makes the helper signatures stable as the flow evolves in tasks 5/6.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 168,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Tech-spec (data-models §events) lists `login_failed` as an event type and the wave-2 `events` package is intended to record both successes and failures. Currently only `login_success` is logged; failed attempts (wrong password, blocked, brute-force lockout) leave no MongoDB audit trail. Either add a `login_failed` event in `registerFailure()` / status branches, or document explicitly in decisions.md that `login_failed` logging is deferred to a later task.",
+      "benefit": "Closes a gap between the documented event schema and actual emitter coverage; makes brute-force forensics possible from the events collection.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 207,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "`extractIp()` falls back to the literal `\"unknown\"`. All requests without a remote address would then collide on the same `brute:fail:ip:unknown` key, both inflating that bucket and obscuring real IPs in events. Consider logging at WARN when the fallback fires, or using a per-request UUID so the bucket cannot be poisoned.",
+      "benefit": "Avoids a single shared brute-force bucket for unidentified requests and surfaces misconfigured proxy setups.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 207,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`extractIp` is `private static` on `AuthService` but conceptually a request-utility. With `ProfileService` (task 7) and password-reset (task 6) likely to need the same logic, consider hoisting to `common/RequestUtils` (or similar) to avoid duplication.",
+      "benefit": "Prevents three near-identical copies appearing across services in the next two tasks.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/events/EventService.java",
+      "line": 25,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`eventRepository.save(event).subscribe(...)` is invoked synchronously from the calling reactive chain (via `Mono.fromRunnable` in `AuthService.checkStatusAndAuthorize`). The reactive Mongo driver is non-blocking, but the subscribe still runs on whatever thread `Mono.fromRunnable` resolves on (typically the request thread). Adding `.subscribeOn(Schedulers.parallel())` (or `boundedElastic` to match existing pattern) would make the fire-and-forget property explicit and decouple log latency from request latency.",
+      "benefit": "Makes the fire-and-forget contract explicit in code, not just in the comment, and protects request latency from any future blocking work added to event pipeline.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/events/Event.java",
+      "line": 11,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "`@CompoundIndex` will not be created at startup because `spring.data.mongodb.auto-index-creation=false` is set globally (per `User.java` comment). The index needs manual creation in MongoConfig or via a migration. Mirror the disclaimer that `User.java` already carries, or add a TODO referencing the index-creation strategy.",
+      "benefit": "Avoids silent index absence in production, where the userId+createdAt query becomes a collection scan.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/events/Event.java",
+      "line": 26,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Constructor takes `createdAt` as a parameter but every caller (currently only `EventService`) passes `Instant.now()`. Move the timestamp into the constructor (`this.createdAt = Instant.now()`) so callers cannot forget to set it and tests cannot accidentally store events with null timestamps.",
+      "benefit": "Tightens the invariant that every event has `createdAt`.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/dto/LoginRequest.java",
+      "line": 6,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`LoginRequest` is a plain class with getters/setters; `AuthResponse` and `MeResponse` are records. For consistency, convert `LoginRequest` to a record (or all DTOs to classes) — Bean Validation works on record components since 3.x. Mixed styles cause subtle equals/hashCode and Jackson-binding differences.",
+      "benefit": "Consistent DTO style across the auth package; smaller surface for bugs.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 117,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`handleUserNotFound` returns `Mono<User>` but always errors. The signature is misleading because the type variable exists only to satisfy `switchIfEmpty`. A short Javadoc explaining \"never emits a User; runs dummy bcrypt then errors\" would prevent confusion.",
+      "benefit": "Reduces reading time for the next maintainer encountering the unusual return type.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 174,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`openSession` calls `securityContextRepository.save(exchange, context)` after `setMaxIdleTime`. The save persists the SecurityContext to the new WebSession; the WebSession itself (with `maxIdleTime`) is committed by the Spring WebFlux session manager at end of request. This works, but a short comment documenting that ordering — `// session attribute mutation must happen before save() so the saved context lands in the new session` — would help future maintainers reason about session-fixation invariants.",
+      "benefit": "Makes the session-fixation invariant explicit and self-checking.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/TokenService.java",
+      "line": 26,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`rawToken.getBytes(java.nio.charset.StandardCharsets.UTF_8)` uses fully qualified name where one short import would clean it up. Add `import java.nio.charset.StandardCharsets;` and use `StandardCharsets.UTF_8`.",
+      "benefit": "Matches the rest of the codebase's import style.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 11,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 14,
+    "testCoverageAssessment": "adequate"
+  }
+}

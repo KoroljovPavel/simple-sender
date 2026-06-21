@@ -1,0 +1,27 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 1,
+  "round": 1,
+  "summary": "SignedDownloadTokenTest covers all 9 TDD Anchor cases with behavior-focused, non-tautological assertions. The mint->verify round-trip asserts every parsed payload field against the mint input (litmus-passes: stub the parser and it fails). Tamper helpers are correct: flipFirstBase64Char swaps to a still-valid base64url char ('A'<->'B'), so the segment decodes and the failure routes to BAD_SIGNATURE rather than accidentally tripping INVALID_FORMAT. Cross-project substitution re-signs nothing (keeps A's signature) so it correctly proves the signature, not a projectId comparison, rejects it. Constructor failure tests assert the property name is present and (non-hex case) that the offending char / 'at index' detail is NOT echoed, matching the TokenEncryptor scrub precedent. Malformed-input test is unusually thorough (no-dot, multi-dot, base64 garbage, empty). All 9 tests pass via gradle. Findings are minor coverage suggestions only; no critical/major issues. Entities/repos correctly carry no unit tests (index presence deferred to IT) per task design.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/common/crypto/SignedDownloadTokenTest.java",
+      "finding": "No test pins the verify() ordering invariant that signature is checked BEFORE expiry. The implementation javadoc (SignedDownloadToken.java:56-60) and the verify() body (signature compare at line 83, expiry check at line 94) deliberately reject tampered tokens with BAD_SIGNATURE even when the embedded expiresAt is in the past, so an attacker cannot flip the failure reason to EXPIRED. This is a documented security property with no regression guard: a future refactor that moves the expiry check above the HMAC compare would pass every existing test.",
+      "recommendation": "Add verify_tamperedAndExpired_returnsBadSignature_notExpired: mint a token with expiresAt in the past (so it is genuinely expired), then flip a payload char via flipFirstBase64Char, and assert reasonOf(...) == BAD_SIGNATURE (NOT EXPIRED). This locks in the check-signature-first ordering."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/common/crypto/SignedDownloadTokenTest.java",
+      "finding": "No negative test proves the HMAC is keyed (i.e. a token minted under one key is rejected under a different key). The TokenEncryptor precedent has wrongKeyRejected() for exactly this. Without it, a regression that, e.g., dropped mac.init(key) or used a constant key would only be caught indirectly by the tamper tests, and a same-data/different-instance forgery path is not directly asserted.",
+      "recommendation": "Add verify_tokenFromDifferentKey_returnsBadSignature: construct a second SignedDownloadToken with OTHER_KEY_HEX (a distinct 64-hex constant, mirror TokenEncryptorTest.OTHER_KEY_HEX), mint with the second instance, verify with the first, assert BAD_SIGNATURE. Cheap, mirrors existing precedent, and directly pins that the secret key participates in the signature."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/common/crypto/SignedDownloadTokenTest.java",
+      "finding": "verify_malformedToken_returnsInvalidFormat does not include the case where both segments are syntactically valid base64url but the decoded payload bytes are not valid JSON for TokenPayload. The implementation has a dedicated branch for this (MAPPER.readValue try/catch at lines 88-92 -> INVALID_FORMAT), reached only after the signature passes, so the malformed-string cases never exercise it. This branch is currently untested.",
+      "recommendation": "Add a case that mints a token, then replaces the payload segment with base64url of a non-JSON byte string AND re-signs it with the same instance (so the signature passes and execution reaches the JSON parser), asserting INVALID_FORMAT. To re-sign you can expose a test-only mint-from-raw-bytes helper, or accept this is a low-value edge (the public mint path always emits valid JSON) and leave it; flagged for awareness, not a blocker."
+    }
+  ],
+  "verdict": "approve"
+}

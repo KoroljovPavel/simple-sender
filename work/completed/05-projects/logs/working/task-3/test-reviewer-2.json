@@ -1,0 +1,54 @@
+{
+  "verdict": "passed",
+  "summary": "All round-1 findings (2 major + 3 minor) are properly addressed in commit 4c85960; both suggestions are also applied at code level (errorBodies 422/404 tightening) with the patterns.md/decisions.md write-up correctly deferred per the round-1 fix's own guidance. Test count grew 68 -> 69 with the new IT getProject_singleHappyPath_returns200WithProjectResponseShape pinning the end-to-end DB->DTO path.",
+  "round1_findings_status": [
+    {
+      "round1_severity": "major",
+      "round1_issue_short": "anyEndpoint_unauthenticatedBareClient_returns401 not bare and 4 of 6 verbs relaxed to is4xxClientError",
+      "status": "fixed",
+      "note": "Now constructs `WebTestClient.bindToApplicationContext(applicationContext).build()` (ApplicationContext autowired on the class), pre-attaches `mutateWith(csrf())` on POST/PATCH/DELETE/POST-restore, and asserts `isUnauthorized()` on all six verbs. Auth-before-CSRF intent of AC-11 is now locked."
+    },
+    {
+      "round1_severity": "major",
+      "round1_issue_short": "Response-shape lock $.ownerId.doesNotExist() missing on six PATCH/RESTORE handlers + no GET-single happy-path IT",
+      "status": "fixed",
+      "note": "Added `$.ownerId.doesNotExist()` to all six identified happy-path bodies (PATCH no-name-change, PATCH no-op same-name, PATCH blank description, PATCH blank timezone, RESTORE happy, RESTORE collision). New IT `getProject_singleHappyPath_returns200WithProjectResponseShape` exercises real DB->entity->DTO and asserts the full ProjectResponse shape."
+    },
+    {
+      "round1_severity": "minor",
+      "round1_issue_short": "Thread.sleep(10) in getProjects_returnsOnlyOwnActiveSortedDesc is brittle",
+      "status": "fixed",
+      "note": "Replaced with new `saveActiveAt(ownerId, name, timezone, createdAt)` helper and explicit `Instant.parse(\"2026-05-10T10:00:00Z\")` / `:01Z` timestamps. Sort is now deterministic regardless of clock resolution."
+    },
+    {
+      "round1_severity": "minor",
+      "round1_issue_short": "restoreProject_onActiveProject_* should assert no project_* event (broader contract) for projectId",
+      "status": "fixed",
+      "note": "Single `assertThat(all).noneMatch(e -> eventMatchesProject(e, active.getId()))` replaces the two-event check. Helper `eventMatchesProject` null-guards getMetadata() once and keys on `eventType.startsWith(\"project_\")` plus metadata.projectId match — exactly the broader Decision 14 contract requested."
+    },
+    {
+      "round1_severity": "minor",
+      "round1_issue_short": "update_noOpRenameSameName_doesNotThrow409 missing metadata-shape and never-rename verifies",
+      "status": "fixed",
+      "note": "Now captures metadata via `metadataCaptor()` and asserts `containsOnlyKeys(\"projectId\")`, plus `verify(eventService, never()).logEvent(anyString(), eq(\"project_renamed\"), anyString(), anyString(), any())`. Both regressions named in round-1 are now pinned."
+    },
+    {
+      "round1_severity": "suggestion",
+      "round1_issue_short": "Slice mocks empirical result (0 needed) should land in decisions.md / patterns.md",
+      "status": "fixed",
+      "note": "Round-1 fix itself flagged this as a post-completion artifact (decisions.md / patterns.md edit). Correctly deferred — does not block this PR; is a project-knowledge update tracked separately. Class-level comment in the slice test already documents the empirical result inline."
+    },
+    {
+      "round1_severity": "suggestion",
+      "round1_issue_short": "errorBodies_alwaysHaveMessageAndCode missing 422 arm; 404/400 arms don't pin code=null",
+      "status": "fixed",
+      "note": "Added 422 arm (seeds 4 active projects, 5th POST asserts isEqualTo(422) + `$.code == \"project_limit_reached\"`). Tightened 400 and 404 arms with `.jsonPath(\"$.code\").isEqualTo(null)` to lock the GlobalErrorHandler null-code contract. AC-T1 now covers all four status codes end-to-end."
+    }
+  ],
+  "new_findings": [],
+  "non_findings": [
+    "Test count is 69 (was 68): the new `getProject_singleHappyPath_returns200WithProjectResponseShape` is the only added test — matches the orchestrator's accounting (38 -> 39 IT).",
+    "All round-1 fixes preserve existing assertions and add narrowly-scoped checks; no test was loosened or removed.",
+    "Helper extraction (`saveActiveAt`, `eventMatchesProject`) reduces duplication and improves future-test ergonomics — same arrangement style as the existing `saveActive` / `awaitEvent` / `findEvent` helpers."
+  ]
+}

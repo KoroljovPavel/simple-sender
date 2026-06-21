@@ -1,0 +1,33 @@
+{
+  "validator": "skeptic",
+  "status": "pass",
+  "summary": "Checked 46 claims against the codebase, found 0 mirages. Every file path, symbol, DTO shape, enum constant, i18n key, test class/method, and build command referenced in tech-spec.md exists and matches as described.",
+  "findings": [],
+  "stats": {
+    "total_claims_checked": 46,
+    "confirmed": 46,
+    "mirages_found": 0,
+    "verified_claims": [
+      "backend/src/main/java/com/botfunnel/funnel/{StepType,FunnelStep,FunnelService,StepExecutor,FunnelController,FunnelEventService,VariableTemplateRenderer,StepTypeReadConverter,ContentBlock,Button}.java exist",
+      "StepType constants MESSAGE..SUBSCRIBE_TO_FUNNEL + UNKNOWN (UNKNOWN last, new constants go before it)",
+      "FunnelStep.copyOf at line 99 with defensive new ArrayList<>() copies for list fields",
+      "TelegramSender 6-arg sendText(String botId, Long chatId, String text, String parseMode, String ownerId, Object replyMarkup) at lines 149-150; 5-arg overload delegates with replyMarkup=null",
+      "StepExecutor: renderTrimmed (272), buildReplyMarkup (298), StepResult.cont(), fromTerminalReason (396), fail(\"invalid_bot_token\") (205), Outcome enum {CONTINUE,DELAY,CANCEL,FAIL,WAIT_FOR_REPLY,COMPLETE} (429)",
+      "FunnelService: CODE_INVALID_STEP=\"funnel_step_invalid\" (87), validateSteps (767), validateMessage (822), validateButtons (929), requireParseMode (1106), toSteps (658), toStepDto (1203), previewStep (396), isMessageStep (469), MAX_KEYWORD_LENGTH=64 (81)",
+      "FunnelStepDto: positional record with exactly 17 components ending endParentAfter; @JsonIgnoreProperties(ignoreUnknown=true); only stepType @NotNull",
+      "PreviewStepRequest record (String stepType, List<ContentBlockDto> blocks); PreviewStepResponse record (renderedBlocks, sampleData, kind) with kind values \"message\"|\"non_message\" and nested RenderedBlock/RenderedMediaItem",
+      "FunnelController @PostMapping(\"/{funnelId}/steps/{stepId}/preview\") -> previewStep (122-128)",
+      "ProcessTelegramUpdateJob.dispatchKeyword (230) + hasWaitingForReplyExecution menu-precedence probe (238)",
+      "FunnelEventService.containsAnyKeyword (375); Funnel.allowReEnter default false (74); ExecutionStatus waiting_for_reply + partial-unique re-enter guard documented",
+      "frontend/types/funnel.ts: StepType union (line 12), FunnelStep interface, kind: 'message' | 'non_message' (218), FunnelSummaryResponse status/triggerType/keywords (127-131), PreviewStepRequest/Response mirrors",
+      "FunnelStepForm.vue: STEP_TYPES (36), menuButtons/composerTouched/menuTouched sub-editor idiom, ensureFunnelsLoaded (448) -> funnelsStore.fetch('all') (453), subscribeInactiveHint amber-hint precedent (1359)",
+      "FunnelMessagePreview.vue: isMessageStep gate (50), zero v-html usage (mentions only in comments)",
+      "stores/funnels.ts: useFunnelsStore (22), fetch(status='all') omits ?status param (35-40)",
+      "i18n: errors.funnels.funnel_step_invalid in BOTH uk.json and en.json (line 456 each); funnels.steps.type.{7 types} in both locales (756-762); funnels.steps.form.subscribeInactiveHint in both (848)",
+      "prebuild gate: frontend/package.json \"prebuild\": \"node scripts/check-locales.mjs\" + scripts/check-locales.mjs and its test exist; \"test\": \"vitest\"; packageManager pnpm@10.33.2",
+      "backend/build.gradle gates slow lane on project.hasProperty('runSlow') -> -PrunSlow=true works; backend/gradlew exists",
+      "Test classes all exist: FunnelStepExecutorTest, FunnelStepTest (deepCopyProducesIndependentStep, copyOf_preservesEventName, copyOf_copiesBlocksToNewListInstance, copyOf_nullBlocksStaysNull), FunnelServiceEmitEventTest (emitStep helper at 71 with positional-order comment at 72-74), FunnelExecutionEngineIT (@Tag(\"slow\") line 59), TelegramSenderIT (sendText_withReplyMarkup_includesInlineKeyboardInBody 287, sendText_nullReplyMarkup_omitsKeyField 317), FunnelTestRunSendIT (takeRequest/readUtf8 drain idiom 131-174), FunnelControllerIT (testRunInvalidStepsReturns422 539, preview tests 606+)",
+      "Frontend test/spec files exist: FunnelStepForm.composer.spec.ts, FunnelMessagePreview.spec.ts (static no-v-html readFileSync source guard at lines 1-9), FunnelTriggerSettings.vue; docs/staging-smoke/09-subscribers.md exists; no new packages claimed (none needed)"
+    ]
+  }
+}

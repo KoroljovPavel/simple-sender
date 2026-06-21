@@ -1,0 +1,23 @@
+{
+  "reviewer": "security-auditor",
+  "task": "11",
+  "round": 1,
+  "summary": "Static audit (no Node available) of Task 11 frontend closing-wave: 3 tag dialogs, 3 custom-field dialogs, RecentExportsDialog, /tags + /custom-fields + /subscribers pages, Playwright E2E spec + webhook fixture, and the 09-subscribers staging-smoke runbook. No XSS, no mass-assignment, no secret-leak, no IDOR/path-scope regressions found. All dynamic content (Cyrillic + Telegram-supplied identity fields, slugs, labels) renders through Vue {{ }} mustache interpolation or :attr bindings (auto-escaped); zero v-html / innerHTML. Request bodies are strictly whitelisted (slug/label for tag create; label only for tag rename; name/label/type/defaultValue for custom-field create; label/defaultValue for edit) with no owner-bound fields. The signed downloadUrl is bound verbatim to <a :href download> with no concatenation/mutation and never logged; the refresh-URL flow surfaces 401/409/410/429/503 via i18n-key-only useApiError toasts. Path params (slug/name) are encodeURIComponent-wrapped. The E2E webhook secret is read from process.env (no hardcoded value); .gitignore covers .env/.env.*/*.key/secrets/credentials.json and no .env is tracked. Runbook uses mongodb://…/botfunnel placeholders with an explicit do-not-paste-connection-strings warning. Non-canonical slug-regex guard (rg '[a-z][a-z0-9_]') returns zero matches. Two LOW/INFO observations recorded for defense-in-depth, neither blocking.",
+  "findings": [
+    {
+      "severity": "low",
+      "owasp": "A09",
+      "file": "frontend/components/subscribers/RecentExportsDialog.vue:57; frontend/pages/projects/[projectId]/tags/index.vue:47; frontend/pages/projects/[projectId]/custom-fields/index.vue:47",
+      "finding": "List-load failures console.warn(..., err) with the full ofetch error object. For these specific GET endpoints the request URL carries no signed token (tokens only ride in the export downloadUrl, which only appears on a 2xx exports-list body, not in an error). The genuinely sensitive path — refreshUrl() in RecentExportsDialog, the only place a freshly minted signed token returns — correctly does NOT console.log and only toasts an i18n key. So this is residual defense-in-depth noise, not a live token leak: a non-2xx exports response could theoretically still echo a partially-populated body into err.response._data in browser devtools, and devtools is dev-only (Vue devtools disabled in prod per patterns.md). Acceptable as-is; if hardened later, log err?.message / status instead of the raw error object on the exports-list catch.",
+      "remediation": "Optional: in the exports-list catch, log a narrowed shape (status + message) rather than the full err object, mirroring the frontend secret-handling redaction discipline in patterns.md:182. No change required for approval."
+    },
+    {
+      "severity": "info",
+      "owasp": "A01",
+      "file": "frontend/components/subscribers/RecentExportsDialog.vue:101",
+      "finding": "The refresh-url request path interpolates row.exportId without encodeURIComponent, unlike slug/name elsewhere which ARE encoded. row.exportId is a server-generated 24-char ObjectId hex sourced from the backend's own exports-list response (never user-typed), so there is no injection or path-traversal surface here. Noted only for consistency: the surrounding code (tags/custom-fields) encodes its path identifiers, and exportId happens to be encode-safe by construction rather than by an explicit guard.",
+      "remediation": "No action required. For uniformity a future cleanup could encodeURIComponent(row.exportId), but the value is constrained to hex by the backend contract."
+    }
+  ],
+  "verdict": "approve"
+}

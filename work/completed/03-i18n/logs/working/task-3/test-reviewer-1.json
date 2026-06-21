@@ -1,0 +1,51 @@
+{
+  "task": "3",
+  "round": 1,
+  "reviewer": "test-reviewer",
+  "verdict": "approved",
+  "summary": "All 15 tests pass the litmus test (each fails if its core logic line is removed) and the suite faithfully covers every TDD-anchor fixture from task lines 60-73 plus the additional edge cases enumerated at lines 134-142. TDD discipline is exemplary: pure decision function, zero Nitro/H3 mocking, deterministic, descriptive names. Three minor coverage gaps (query-only path, root path, multi-locale allow-list) are worth adding but do not block approval.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/tests/server/strip-invalid-locale.spec.ts:117",
+      "issue": "Edge case '/?foo=bar' (query-only, no path segment) explicitly enumerated in task line 138 as a passthrough case but not asserted. The regex anchor `^/([a-z]{2})(?=/|$)` correctly skips it, but no test currently locks in that contract — a regression that made the regex match `/?` would be caught by no test in this suite.",
+      "fix": "Add `it('query-only path /?foo=bar passes through', () => { expect(decideLocaleStrip('/?foo=bar', allowList)).toEqual({ kind: 'passthrough' }) })`. Place it next to the other passthrough cases (lines 23-33)."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/server/strip-invalid-locale.spec.ts:117",
+      "issue": "Root path '/' is not tested. The regex won't match (no 2-letter chars), so it should passthrough, but the boundary case is undocumented in tests. Combined with the empty-string post-strip branch (line 30 of locale-strip.ts: `pathname.slice(3) || '/'`), the root case verifies the implementation never tries to operate on an empty pathname.",
+      "fix": "Add `it('root path / passes through', () => { expect(decideLocaleStrip('/', allowList)).toEqual({ kind: 'passthrough' }) })`."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/server/strip-invalid-locale.spec.ts:4",
+      "issue": "Allow-list fixture is hardcoded to single-locale `['en']` across all 15 tests. The implementation uses `nonDefaultLocales.includes(prefix)` which works for any size, but if it were ever simplified (e.g., `=== nonDefaultLocales[0]`) the regression would not be caught. Decision 14 (parity guard) explicitly anticipates a future 3rd locale — the test suite should already protect against single-locale-only logic.",
+      "fix": "Add one test exercising a multi-locale allow-list, e.g. `it('multi-locale allow-list: /fr passthrough when fr is allowed', () => { expect(decideLocaleStrip('/fr/dashboard', ['en', 'fr'])).toEqual({ kind: 'passthrough' }) })`."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/tests/server/strip-invalid-locale.spec.ts:35",
+      "issue": "The isAuthZone branch `target.startsWith('/auth?')` is logically reachable (e.g. `/fr/auth?token=x` — root /auth path with query) but no test directly exercises that exact branch. Existing test at line 35 covers `startsWith('/auth/')` (verify-email subpath), and test at line 110 covers `=== '/auth'` (no query). The third branch is dead-code-equivalent unless explicitly tested.",
+      "fix": "Add `it('/fr/auth?token=x flags isAuthZone (auth root with query)', () => { expect(decideLocaleStrip('/fr/auth?token=x', allowList)).toEqual({ kind: 'redirect', target: '/auth?token=x', isAuthZone: true }) })`. Optional — addresses the third isAuthZone branch."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 15,
+      "passed": 15,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 15,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "tddDiscipline": "confirmed — red phase via missing-import error, then green after implementation",
+    "redundancy": "none — each test covers a distinct branch or edge case",
+    "reliability": "deterministic — pure function, no time/random/network/IO dependencies"
+  }
+}

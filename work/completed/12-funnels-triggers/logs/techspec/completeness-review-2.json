@@ -1,0 +1,86 @@
+{
+  "validator": "completeness",
+  "round": 2,
+  "status": "pass",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 22,
+  "requirements_covered": 22,
+  "requirements_partial": 0,
+  "requirements_missing": 0,
+  "round1_regressions": {
+    "F-01_error_isolation_webhook": "RESOLVED — Decision 12, Testing Strategy IT block, AC line confirmed",
+    "F-02_error_isolation_api": "RESOLVED — Decision 12, Testing Strategy IT block, AC line confirmed",
+    "depth_propagation": "RESOLVED — Decision 6 explicitly chooses explicit-param over ThreadLocal with JobRunr rationale",
+    "event_name_validation": "RESOLVED — DTO @NotBlank + slug pattern in Data Models; Task 8 owns it; unit-test entry present",
+    "subscriber_id_precedence": "RESOLVED — Data Models and Architecture both specify: subscriber_id wins when both present; neither present → 400"
+  },
+  "findings": [
+    {
+      "type": "documented_deviation",
+      "severity": "minor",
+      "requirement": "US-9/US-10: Two-backstop anti-cycle (user-spec Scenario 7)",
+      "detail": "Per-dispatch fan-out ceiling (Decision 6c, max-fanout-per-event default 50) is not in the user-spec. It is documented in User-Spec Deviations with reason ('fail-open /events rate-limit leaves public ingress unbounded during Redis outage') and marked [PENDING USER APPROVAL] in a draft spec. Per validation rules, documented scope creep with reason downgrades from scope_creep to documented_deviation. Draft status makes PENDING acceptable.",
+      "recommendation": "keep — justification is sound (closes a Redis-outage security hole at the API boundary); ensure user approves before spec promotion to approved"
+    },
+    {
+      "type": "documented_deviation",
+      "severity": "minor",
+      "requirement": "US-9: Auto-enroll rate-limit counts кроку/тегу/поля/події",
+      "detail": "User-spec rate-limit text implies any auto-trigger counts (including tag-add from the UI panel). Tech-spec redefines 'auto-enroll' as 'depth > 0' (funnel-originated only), which exempts manual-UI tag-adds from the 20/min counter. This is a behavior difference, not merely a clarification. The deviation is documented in User-Spec Deviations with reason and marked [PENDING USER APPROVAL] in a draft spec — correctly handled. However the deviation entry characterises it as 'not a behavior change' which is slightly inaccurate; the actual behavior change is documented implicitly via the depth=0 rule.",
+      "recommendation": "adjust — amend the deviation entry wording: replace 'clarification of an internal ambiguity, not a behavior change' with 'reconciliation that excludes manual-UI tag/field writes from the volume counter (depth=0 rule); external api-event is also depth=0 and not counted — consistent with user-spec risk text treating external events as human/external roots'"
+    }
+  ],
+  "forward_traceability": {
+    "US-1_keyword": "covered — Decision 3, Architecture keyword section, Task 7",
+    "US-2_tag_added": "covered — Decision 5, Architecture tag/field section, Task 5",
+    "US-3_custom_field_set": "covered — Decision 5, Architecture tag/field section, Task 5",
+    "US-4_api_event_endpoint": "covered — Decision 7, Architecture external event section, Task 8",
+    "US-5_EMIT_EVENT_step": "covered — Decision 4, Architecture EMIT_EVENT section, Task 6",
+    "US-6_shared_event_namespace": "covered — Decision 4, trigger-type model section",
+    "US-7_fan_out_index_relax": "covered — Decision 1, fan-out via index relax section, Task 1+2",
+    "US-8_on_start_1to1": "covered — Decision 1, partial-unique index, AC",
+    "US-9_anti_cycle_volume": "covered — Decision 6a, backstops section, Task 4",
+    "US-10_anti_cycle_depth": "covered — Decision 6b, backstops section, Task 4",
+    "US-11_api_key_generation": "covered — Decision 8, Task 3+9+11",
+    "US-12_api_namespace_isolation": "covered — Decision 7, security chain section, Task 8",
+    "US-13_index_migration": "covered — Decision 9, Task 2",
+    "US-14_error_isolation_webhook": "covered — Decision 12, Testing IT, AC",
+    "US-15_error_isolation_api": "covered — Decision 12, Testing IT, AC",
+    "US-16_keyword_precedence": "covered — Architecture keyword section, Task 7",
+    "US-17_trigger_ui": "covered — Architecture frontend section, Task 10",
+    "US-18_reenter_guard": "covered — fan-out section (partial-unique guard remains), Decision 1",
+    "US-19_subscriber_resolution": "covered — Data Models DTO spec, Architecture external event section",
+    "US-20_rate_limit_429_failopen": "covered — Decision 10, Risks table",
+    "US-21_uniform_401_antienumeration": "covered — Decision 7, architecture key filter section",
+    "US-22_no_subscriber_autocreate": "covered — Architecture external event section + AC"
+  },
+  "reverse_traceability": {
+    "fan_out_ceiling_Decision_6c": "documented_deviation — see finding above",
+    "lastUsedAt_stamping": "infrastructure/audit detail — acceptable without user-spec tracing",
+    "keyPrefix_stored": "directly derived from user-spec scenario 6 (prefix••• mask) — covered",
+    "SecurityFilterChain_Order1": "directly derived from user-spec constraints + risks — covered",
+    "audit_wave_tasks_12_13_14": "engineering additions (code/security/test review) — acceptable"
+  },
+  "overengineering_check": {
+    "List_Trigger": "not present — correctly deferred to Epic 8 per user-spec",
+    "regex_keywords": "not present — out of scope per user-spec",
+    "Mongock": "not present — deferred per user-spec",
+    "backfill_runner": "not present — explicitly rejected in Decision 8",
+    "rotation_multiple_keys": "not present — deferred to Epic 08",
+    "YAGNI_FunnelEventService_interface": "FunnelEventService described as @Service (no separate interface imposed); no YAGNI issue"
+  },
+  "underengineering_check": {
+    "error_handling": "all new paths error-isolated per Decision 12",
+    "input_validation": "DTO @NotBlank + slug pattern + identifier-present guard → 400",
+    "boundary_conditions": "depth > 10 and fan-out > 50 both handled with WARN+drop",
+    "concurrent_access": "Redis INCR/EXPIRE (atomic) for rate-limits; partial-unique index for re-enter",
+    "shared_resources": "Shared Resources table filled; FunnelEventService singleton documented"
+  },
+  "solution_depth": "pass — Solution section describes architecture strategy beyond user-spec: four reused patterns, three independent backstops, error-isolation convention, subscriber-keyed fan-out entrypoint rationale",
+  "structural_integrity": "pass — all Decision-level content is in the Decisions section; task descriptions reference decisions by number only",
+  "summary": "22/22 requirements covered. 0 gaps, 0 missing, 0 uncovered partial. 2 documented deviations (both minor, both correctly entered in User-Spec Deviations with reasons, both [PENDING USER APPROVAL] in draft spec). All 5 round-1 findings confirmed resolved. No YAGNI/overengineering violations — List<Trigger>/rotation/regex/Mongock/backfill all absent. No underengineering: error-isolation Decision 12 covers webhook and API paths, DTO validation specified, all three loop backstops Redis-independent-testable. Per-dispatch fan-out ceiling is justified scope extension (closes Redis-outage width hole), correctly documented. One wording improvement recommended for the auto-enroll deviation entry."
+}

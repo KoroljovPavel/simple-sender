@@ -1,0 +1,36 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 2,
+  "round": 2,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "resolved",
+      "ref": "round-1-minor-1",
+      "finding": "longValue() overflow assumption is now documented with a comment at renderValue() line 153-154 (YAGNI + CustomFieldValueValidator guarantee). Addressed."
+    },
+    {
+      "severity": "resolved",
+      "ref": "round-1-minor-2",
+      "finding": "Objects.requireNonNull(subscriber, \"subscriber\") added at the top of render() (line 63-64). Addressed."
+    },
+    {
+      "severity": "resolved",
+      "ref": "round-1-minor-3",
+      "finding": "loneClosingBraceWithoutOpenerIsLiteral() test added. Bonus test closingBracesAfterPlaceholderLeaveLoneBrace() also added to cover the '}}' after a placeholder case. Addressed."
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "finding": "HTML double-quote escaping: case '\"' -> sb.append(\"&quot;\") added to escapeHtml(). Logic is correct — Telegram HTML mode decodes &quot; as a standard named entity, so legitimate quotes display correctly while attribute-injection via a raw \" is now blocked. The None/HTML/MarkdownV2 branch ordering in escape() is unchanged.",
+      "verdict": "correct, no regression"
+    },
+    {
+      "severity": "info",
+      "category": "security",
+      "finding": "MarkdownV2 backslash escaping: condition widened to (c == '\\\\' || MARKDOWN_V2_SPECIALS.indexOf(c) >= 0). The implementation iterates the original value char-by-char in a single pass, so an emitted '\\\\' is never re-processed. Input '\\\\*' produces '\\\\\\\\\\\\*' (Java source) which is the string '\\\\\\*' — correct Telegram encoding for a literal backslash followed by a literal '*'. The dedicated regression test markdownV2EscapesBackslashToPreventInjection() and the updated markdownV2ModeEscapesFullCharset() test both encode the expected values correctly. Author markup in the template (e.g. *bold*) is still emitted via out.append(c) in the main render loop and never passes through escape(), confirming it remains untouched.",
+      "verdict": "correct, no regression"
+    }
+  ],
+  "summary": "All three round-1 minors are resolved: the longValue() assumption is documented, subscriber is null-checked with requireNonNull, and the lone-'}' edge case has a test. The new escape-logic changes (HTML '\"' → &quot;, MarkdownV2 backslash self-escape) are correct and clean: single-pass char iteration prevents double-processing, None/HTML/MarkdownV2 ordering is unchanged, and author markup in templates remains untouched. Two new regression tests (htmlModeEscapesDoubleQuoteInAttribute, markdownV2EscapesBackslashToPreventInjection) directly pin the fixed vulnerabilities. No new findings."
+}

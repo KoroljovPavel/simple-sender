@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round 2 re-validation: all three Round 1 majors are resolved and all three minors are addressed in the revised Testing Strategy. AC-6 now has an explicit register-auto-login regression bullet asserting exchange attribute = Boolean.FALSE (locks Decision 6 against silent regression). AC-7 is covered by Scenario D, which calls setSessionId twice on fresh exchanges with flipped attribute values and asserts independent cookie outputs — proves race-freedom claim from Decision 1 with concrete assertions. AC-4 is covered by Scenario G (resolveSessionIds inherited-behavior check ensuring pre-fix cookies without Max-Age still resolve) plus manual seed in Task 5; reasonable for an S bug. Scenario E pins AC-3 by parameterizing app.session.ttl-remember-me-days over {30, 7, 60} and asserting Max-Age = days * 86400 — eliminates the hardcoded-30 drift surface. Scenario F is now a concrete per-attribute toggle matrix (name, http-only, secure, same-site, path, domain) with explicit non-default values (e.g. name=ALT, secure=true, same-site=Strict) — vacuous-pass risk eliminated. Scenario H now asserts expireSession writes Max-Age=0 regardless of attribute state, guarding a future erroneous branch on REMEMBER_ME_ATTR. Pyramid is healthy for this S-sized bug fix: 8 unit cases + design-justified deferral of cookie-capture IT (Decision 7 ties the deferral to documented WebTestClient.bindToApplicationContext header-stripping). No critical or major issues remain.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "Section: Testing Strategy / Unit tests / Scenario G (resolveSessionIds inherited-behavior smoke)",
+      "issue": "Scenario G is labeled a smoke check on inherited behavior. RememberMeWebSessionIdResolver does not override resolveSessionIds, so this test re-verifies Spring's CookieWebSessionIdResolver contract rather than fix-specific code. The litmus test (remove the override of setSessionId) leaves Scenario G passing — meaning it does not catch a regression in *this* fix. It earns its place only as documentation that AC-4 is intentionally untouched.",
+      "recommendation": "Acceptable for an S bug as a sentinel test. To strengthen if desired: rename to e.g. 'pre_fix_cookie_shape_isResolvable_byInheritedReader' and seed a synthetic request with a Cookie header lacking Max-Age (the realistic pre-fix shape); assert resolveSessionIds returns that exact id. This anchors the test to the specific AC-4 promise rather than to the parent-class API surface."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 9,
+      "passed": 8,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 11,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

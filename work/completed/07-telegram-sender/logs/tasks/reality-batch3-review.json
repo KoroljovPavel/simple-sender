@@ -1,0 +1,79 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 Description (line 25) and Acceptance Criteria (line 51) both say 'All 18 unit scenarios in TelegramSenderTest are present' — but the Details audit catalog (lines 94-145) now explicitly lists 28 discrete unit @Test methods (4 happy-path + 3 five-xx + 6 four-twenty-nine + 3 terminal-4xx + 5 pre-wire-guards + 2 timeouts + 5 token-leak = 28). The headline 18 in Description and AC are not updated to reflect the expanded catalog. An executing agent reading Description/AC will believe 18 is the full target, potentially stopping short and missing the 10 additional scenarios (pre-wire guards, timeouts, per-site token-leak tests). The jq assertion at line 90 uses `length >= 28` but the comment explains it as '18 unit + 4 integration + 3 BotServiceTest + 2 BotControllerIT + 1 BotRepositoryTest = 28' — which is arithmetic for a floor of 28 total across all files, not 28 unit-only. In practice if the agent emits one entry per catalog item the threshold will be 38 (28 unit + 10 others), so the jq assertion would under-guard.",
+      "fix": "Update Description line 25 and AC line 51 from '18 unit scenarios' to '28 unit scenarios'. Update the jq assertion comment to reflect the real count: 28 unit + 4 integration + 3 BotServiceTest + 2 BotControllerIT + 1 BotRepositoryTest = 38, and raise the threshold to `length >= 38`."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 'What to do' step 1 (line 37) still contains a brittle user-spec line-number reference: 'user-spec ACs AC19–AC23 (lines 93–98)'. The user-spec is a living document; lines 93–98 do correspond to AC19–AC23 at the time of writing, but the reference is fragile if the file is ever edited. The previous iteration flagged this as a minor issue; it remains unfixed in iteration 2.",
+      "fix": "Remove the parenthetical '(lines 93–98)' from step 1 and reference only 'user-spec ACs AC19–AC23'. The AC numbers are stable identifiers; line numbers are not."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 Verification Steps (line 92) still uses 'python' to validate the JSON report file: `python -c \"import json; json.load(open('work/...'))\"`'. On this system 'python' resolves to Anaconda Python so it works, but a CI environment or a developer without Anaconda may have only 'python3' or neither. The previous iteration flagged this as minor; it remains unfixed. Task 7 uses `jq .` which is portable and already present on this system.",
+      "fix": "Replace the python command with `jq . work/07-telegram-sender/logs/working/task-8/security-auditor.json > /dev/null` to match Task 7's verification style and avoid the python/python3 ambiguity."
+    }
+  ],
+  "iteration_2_fixes_verified": {
+    "task_7_test_files_added_to_audit_scope": {
+      "status": "confirmed",
+      "evidence": "TelegramSenderTest.java and TelegramSenderIT.java appear in Context Files (lines 90-91) and Details 'Files to read' (lines 110-111) with explicit justification for the scrubber-coverage dimension."
+    },
+    "task_7_architecture_step3_decrypt_contract": {
+      "status": "confirmed",
+      "evidence": "Line 44 now specifies 'scoped to the Base64 decode call only: catch IllegalArgumentException from Base64.getDecoder().decode(...)', explicitly states the catch does NOT cover IllegalStateException from TokenEncryptor.decrypt, and references the unit test sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid. Matches TokenEncryptor.java:56-58 which wraps GeneralSecurityException into IllegalStateException."
+    },
+    "task_7_dependency_chain_transitive": {
+      "status": "confirmed",
+      "evidence": "Task 7 depends_on: [6]; Task 6 depends_on: [5]; Task 5 depends_on: [4]; Task 4 depends_on: [1, 2, 3]. All Wave 1-4 deliverables (TelegramSender.java, exceptions, DTOs, Bot.ownerChatId, BotService rewrite, staging-smoke runbook) are transitively guaranteed before Task 7 executes."
+    },
+    "task_8_task6_reference_fixed": {
+      "status": "confirmed",
+      "evidence": "Line 117 now reads 'Dependencies: Task 6 (Staging-smoke runbook) — Wave 4 must complete so the full feature codebase (Tasks 1-5) and its documentation exist. Audit reads but does not modify.' The previous 'Wire TelegramSender into BotService.sendTestMessage' label (which described Task 5) is gone."
+    },
+    "task_8_a02_decrypt_contract": {
+      "status": "confirmed",
+      "evidence": "Lines 36 and 125 both correctly describe the narrow catch scope: IllegalArgumentException from Base64.getDecoder().decode() only maps to BotTokenInvalidException; IllegalStateException from TokenEncryptor.decrypt propagates as 500. Risk R7 accepted-limitation note is present."
+    },
+    "task_9_catalog_expanded_to_28": {
+      "status": "confirmed",
+      "evidence": "Details section lines 94-145 list 28 numbered unit test entries. Entry 19 is sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid (renamed from the two-test split in iteration 1). All 5 pre-wire guard tests, 2 timeout tests, and 5 per-site token-leak tests are present. This matches the tech-spec Testing Strategy which also uses this test name at line 317."
+    },
+    "task_9_renamed_test_names": {
+      "status": "confirmed",
+      "evidence": "Catalog entry 19 (sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid) consolidates the previous two separate test names (sendText_corruptedCiphertext and sendText_tokenEncryptorMisconfigured) into one, matching tech-spec line 317 which describes a single test covering both failure modes. Entry 18 (sendText_invalidBase64Ciphertext_throwsBotTokenInvalidException_beforeHttp) replaces the old sendText_base64DecodeFails name."
+    },
+    "all_context_file_paths_valid": {
+      "status": "confirmed",
+      "evidence": "All ../../../.claude/skills/ and ../../../backend/ relative paths in Tasks 7, 8, 9 resolve correctly from work/07-telegram-sender/tasks/. Skills project.md, architecture.md, patterns.md, deployment.md, code-reviewing/SKILL.md, security-auditor/SKILL.md, test-master/SKILL.md, and all test-master/references/*.md files exist."
+    },
+    "audit_report_paths_correct": {
+      "status": "confirmed",
+      "evidence": "work/07-telegram-sender/logs/working/ directory exists. Task 7 writes to .../task-7/code-reviewer.json, Task 8 to .../task-8/security-auditor.json, Task 9 to .../task-9/test-reviewer.json. mkdir -p instructions present in Task 7 Details; Task 9 says 'create parent directory if missing'."
+    }
+  },
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 3,
+    "breakdown": {
+      "task_7": 0,
+      "task_8": 1,
+      "task_9": 2
+    },
+    "iteration_1_criticals_resolved": 6,
+    "iteration_1_majors_resolved": 3
+  }
+}

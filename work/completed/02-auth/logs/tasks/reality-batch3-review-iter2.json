@@ -1,0 +1,86 @@
+{
+  "validator": "reality-checker",
+  "batch": [11, 12, 13, 14, 15],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 14,
+      "issue": "The Testcontainers singleton pattern example still shows `.withReuse(true)` in the code block: `new MongoDBContainer(\"mongo:8.0\").withReuse(true)`. The note immediately below it says 'Prefer a static singleton base class pattern instead' — but the example code contradicts the note. An auditor following the example will accept `.withReuse(true)` usage in reviewed code even though it silently fails in CI without `~/.testcontainers.properties`. The note and the example send opposite messages.",
+      "fix": "Remove `.withReuse(true)` from the example code block so it reads `new MongoDBContainer(\"mongo:8.0\")`. The note about the CI limitation is correct and should remain, but the example must not show the pattern being warned against."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Section 5 (Delete account) describes the post-confirm flow as 'clear authStore.user, navigate to /auth/login' without the rationale comment present in Section 4. Section 4 explicitly documents WHY clearing before navigating is necessary ('prevents the auth middleware from triggering an extra GET /api/auth/me call'). Section 5 has the same requirement — navigate happens while session is already invalidated — but omits the rationale, making it likely an implementer treats the order as arbitrary and may inadvertently reverse it.",
+      "fix": "Add the same rationale to Section 5: 'clear authStore.user to null, then navigate to /auth/login (same rationale as Section 4 — prevents auth middleware from re-fetching /api/auth/me after session is gone)'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 step 10 instructs writing findings to `work/02-auth/logs/working/task-13/security-auditor-1.json` but no step in 'What to do' creates the output directory. If the directory is absent, the write fails. Task 15 has an explicit `mkdir -p` step; Task 14 has the mkdir note buried in Details; Task 13 has neither.",
+      "fix": "Add as the first bullet in step 10 (or as a standalone step before step 10): 'Ensure output directory exists: `mkdir -p work/02-auth/logs/working/task-13/`'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "`mkdir -p work/02-auth/logs/working/task-14/` instruction is at the bottom of the Details section, after all substantive audit steps. Task 15 correctly places its mkdir as the first pre-flight check in step 1. An auditor who writes the findings file before reaching the Details section may encounter a write failure.",
+      "fix": "Move `mkdir -p work/02-auth/logs/working/task-14/` from the Details section to step 1 of 'What to do' (as the very first action, before 'Discover all test files')."
+    }
+  ],
+  "resolution_confirmed": [
+    {
+      "task": 11,
+      "resolved": "Test paths now use frontend/tests/pages/ (dashboard.spec.ts, profile.spec.ts) — correct convention for the Nuxt project, consistent with Task 8 test infrastructure setup."
+    },
+    {
+      "task": 11,
+      "resolved": "Section 4 (terminate-all-sessions) explicitly states 'clear authStore.user to null, then navigate to /auth/login' with rationale comment. Previous critical finding fully addressed."
+    },
+    {
+      "task": 14,
+      "resolved": "RedisContainer is now correctly attributed to org.testcontainers:redisstack or GenericContainer — no longer incorrectly tied to ch.martinelli.oss:testcontainers-mailpit."
+    },
+    {
+      "task": 14,
+      "resolved": "Mailpit token extraction hint is now a pattern reference ('construct a WebClient pointing to mailpitContainer.getMappedPort(8025), call GET /api/v1/messages') without prescriptive implementation code or injected bean assumption."
+    },
+    {
+      "task": 14,
+      "resolved": "Frontmatter correctly uses skills: [test-master] and Required Skills section loads /skill:test-master."
+    },
+    {
+      "task": 14,
+      "resolved": "decisions.md added to Context Files (line 97)."
+    },
+    {
+      "task": 15,
+      "resolved": "JaCoCo pre-flight check now present in step 1: 'Verify JaCoCo plugin is configured in backend/build.gradle (added in Task 1). If missing, it is a blocker.'"
+    },
+    {
+      "task": 15,
+      "resolved": "INCR+EXPIRE atomicity check now correctly framed as source code review: 'Review AuthService source code — verify EXPIRE is called only when INCR returns 1... This cannot be verified via test output — read the code.'"
+    },
+    {
+      "task": 15,
+      "resolved": "decisions.md added to Context Files. mkdir step present as first pre-flight check in step 1."
+    },
+    {
+      "task": 13,
+      "resolved": "decisions.md added to Context Files (line 89)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "claims_verified": 42,
+    "issues_found": 4,
+    "critical": 0,
+    "major": 1,
+    "minor": 3
+  }
+}

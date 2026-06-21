@@ -1,0 +1,20 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "OK",
+  "summary": "All 9 TDD anchors implemented as full-path integration tests in FunnelExecutionEngineIT (Testcontainers Mongo + MockWebServer + MutableClock), driving the PUBLIC advanceOnCallback end-to-end (trigger -> engine -> Mongo/Telegram) — no over-mocking, real state asserted. Each test verifies behaviour (execution status, currentStepId, lastButtonClicked, event count/contents, send count) rather than mock interactions. The three task-critical guarantees are explicitly asserted: answerCallbackQuery-always (sentCount on every no-op path), IDOR-reject (owner execution untouched + no event + ack still issued), and no-PII event (metadata.doesNotContain firstName). 38 tests in the suite, 0 failures; full funnel module green, no Phase-1 regressions.",
+  "findings": [
+    {
+      "severity": "minor",
+      "finding": "pausedFunnel_drainsToCompleted overlaps with validClick on the happy 'click -> completed' assertion; its distinct value is documentary (Decision 11: no paused-gate in resume).",
+      "action": "Kept — it is a required TDD anchor and pins the Decision-11 invariant against a future regression that might add a paused-gate to the resume path.",
+      "blocking": false
+    },
+    {
+      "severity": "info",
+      "finding": "currentStepIdMismatch_noOp exercises the cursor-on-non-MENU-step branch (StepType != MENU); the cursor-resolves-to-no-step branch (menu == null) shares the same no-op exit but is not separately seeded.",
+      "action": "Accepted — both branches funnel to the identical LOG_CALLBACK_STEP_MISMATCH no-op with the same observable outcome; the realistic 'already advanced past the menu' shape is covered.",
+      "blocking": false
+    }
+  ]
+}

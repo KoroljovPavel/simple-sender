@@ -1,0 +1,52 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 5,
+      "section": "Post-completion",
+      "issue": "Post-completion item 1 still reads `Write report to decisions.md` (line 150) without anchoring the path to the feature directory. Iteration 1 flagged the same issue and recommended anchoring to `work/07-telegram-sender/decisions.md` (the form used by tasks 1, 2, 3, 4 in their Post-completion blocks). Task 5 was not updated in this iteration. Cosmetic — does not block approval — but the inconsistency is still present.",
+      "fix": "Change line 150 from `Write report to decisions.md (...)` to `Write report to work/07-telegram-sender/decisions.md (...)` to match the anchored form used by all other tasks in the batch."
+    }
+  ],
+  "previous_findings_verification": {
+    "task_1_reviewer_absolute_paths": "FIXED — lines 107-109 now use relative `work/07-telegram-sender/logs/working/task-1/{reviewer-name}-{round}.json`.",
+    "task_2_reviewer_absolute_paths": "FIXED — lines 106-108 now use relative `work/07-telegram-sender/logs/working/task-2/{reviewer-name}-{round}.json`.",
+    "task_2_required_skills_russian": "FIXED — line 15 now reads `Before starting, load:` (English).",
+    "task_2_post_completion_russian": "FIXED — lines 112-114 are in English.",
+    "task_3_broken_skill_md_link": "FIXED — line 16 now reads `[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)` (correct relative prefix, matches tasks 1, 2, 4, 5).",
+    "task_3_post_completion_russian": "FIXED — lines 122-124 are in English.",
+    "task_3_tdd_anchor_for_scaffolding_task": "RESOLVED — Task 3 retains a brief TDD Anchor section but the previous iteration finding was minor/optional; structure now consistent with template's note that compilation-only tasks may use compile checks as the anchor.",
+    "task_5_zero_diff_botcontroller_ac": "FIXED — line 74 explicitly states `BotController.java has zero diff after this task (carry-forward from tech-spec global AC; this task touches only BotService.java and the two test files).`",
+    "task_5_post_completion_decisions_md_path": "NOT FIXED — see Findings above (minor)."
+  },
+  "carry_forward_verification": {
+    "task_4_architecture_step_3_risk_r7_rewrite": "PASS — Task 4 Description (line 24), What-to-do step 3 (line 34), AC (line 109), Edge cases (line 188), Implementation hints step 3 (line 203), and the Error mapping table (lines 241-242) all reflect the updated semantics: catch ONLY `IllegalArgumentException` from `Base64.getDecoder().decode`, do NOT catch `IllegalStateException` from `TokenEncryptor.decrypt`, both tampered-ciphertext (wrapped `AEADBadTagException`) and misconfigured-bean surface as `IllegalStateException` and propagate as 500. Test `sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid` (single consolidated test) covers both modes per the updated spec.",
+    "task_4_test_names_match_testing_strategy": "PASS — All 28 unit-test names in Task 4 TDD Anchor (lines 47-87) match Testing Strategy verbatim, including the renamed `sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid`.",
+    "task_4_pre_wire_count": "PASS — 5 pre-wire tests in Task 4 (lines 71-76) match the 5 pre-wire tests in tech-spec Testing Strategy (lines 314-319). Single decrypt-IllegalState test consolidation matches.",
+    "gradle_commands_use_cd_backend": "PASS — every gradle invocation in tasks 1, 2, 3, 4, 5 is prefixed with `cd backend && ./gradlew ...` (verified across AC sections, Verification Steps, Implementation hints). No standalone `./gradlew` invocations remain.",
+    "task_5_ac_carry_forward": "PASS — Task 5 AC (lines 68-77) carry forward the tech-spec global ACs that apply: zero diff to `BotController.java` (line 74), HTTP contract preserved (line 73), branch on `bot.getOwnerChatId()` per Architecture (line 68), `bot_test_message_sent` not written on failure (line 72)."
+  },
+  "structural_checks": {
+    "frontmatter_valid": "PASS — all 5 tasks have valid YAML frontmatter with correct types (status: planned, depends_on: array, wave: number, skills: array, reviewers: array, verify: array). Task 5 carries `verify: [smoke, user]` to match tech-spec Verify-user clause.",
+    "no_template_placeholders": "PASS — no `[Task Name]`, `[What we do...]`, `{PK path}`, `{reviewer-name}`, `{round}` literals in section bodies. The `{round}` token in Reviewer report paths is the intended placeholder per template line 78-80.",
+    "no_todo_fixme_tbd": "PASS — only intentional TODO references to Task 5 wiring inside Task 4 `@Disabled` notes, which are documented work items, not unresolved placeholders.",
+    "sections_in_order": "PASS — Required Skills, Description, What to do, TDD Anchor, Acceptance Criteria, Context Files, Verification Steps, Details, Reviewers, Post-completion — order preserved across all 5 tasks.",
+    "frontmatter_to_body_consistency": "PASS — `skills: [code-writing]` matches Required Skills section in all 5 tasks; `reviewers: [code-reviewer, security-auditor, test-reviewer]` matches Reviewers section in all 5 tasks.",
+    "dependency_graph": "PASS — wave 1 tasks (1, 2, 3) have `depends_on: []`; wave 2 task 4 has `depends_on: [1, 2, 3]`; wave 3 task 5 has `depends_on: [4]`. No cycles, no missing references, wave ordering monotonic with dependencies."
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1,
+    "previous_critical_resolved": 0,
+    "previous_minor_resolved": 7,
+    "previous_minor_carried_forward": 1
+  }
+}

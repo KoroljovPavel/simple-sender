@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "summary": "Round 2 verification: all 7 round-1 findings (6 major, 1 minor cluster) are explicitly resolved in tech-spec.md (lines 320-346). Token-leak coverage is split into 5 per-site scenarios (4xx WARN, 5xx-retry WARN, 429-wait WARN, terminal ERROR, transport-error). AC5 read timeout has a dedicated setBodyDelay(15s) test. AC13 has an explicit isNotInstanceOf(TelegramRateLimitException.class) assertion. Every retry scenario names a concrete attempts==N value in the test name AND body. Awaitility usage and settle-window pattern are documented up-front for all four IT scenarios. BotServiceTest negative-path pins TelegramSendException type and uses verify(eventService, never()). Event metadata shape, transport-error scrubbing, and 429-wait log site are all addressed. No regressions or gaps introduced. Test pyramid remains healthy (18 unit + 4 IT + BotServiceTest unit updates + BotControllerIT positive-path).",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "tech-spec.md:306 (sendText_429NegativeRetryAfter_clampsToZero_thenCapsAtOverallTimeout)",
+      "issue": "Round 1 finding #4 recommended a concrete attempts range (>=2 AND <=30) for the negative-retry_after scenario to detect off-by-one bugs in the AtomicInteger counter. Current spec says 'request count is bounded (not infinite)' but does not name a numeric ceiling. A regression that increments attempts twice per loop iteration would still be 'bounded' yet wrong.",
+      "recommendation": "Tighten the assertion: 'request count >= 2 AND <= 35' (≈ 30s budget / 1s minimum delay between attempts + small slack). This pins the counter semantics observably."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "tech-spec.md:299 (sendText_ioExceptionRetried)",
+      "issue": "Test description uses conditional language ('if next test enqueues; otherwise asserts terminal') which leaves the assertion shape under-specified. A reader cannot tell which behavior is being verified. This was flagged in round 1 (vague attempts assertions cluster) and is the only remaining instance.",
+      "recommendation": "Pick one shape and pin it: 'sendText_ioExceptionThenSuccess_retriesOnce_attemptsEqualsTwo' — first MockWebServer instance shut down to induce IOException, second instance enqueues 200; assert success, attempts==2. Drop the conditional clause."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 24,
+      "passed": 22,
+      "failed": 2
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 22,
+      "integration": 5,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

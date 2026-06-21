@@ -1,0 +1,61 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-handles-redesign",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "category": "architecture",
+      "area": "cover-target reactivity",
+      "title": "pointer-events gating is CSS-class-driven, not handle-connectable gating — two independent mechanisms stay in sync",
+      "detail": "The cover-target drop path has two concurrent mechanisms: (1) CSS `.funnel-canvas-node--droppable :deep(.funnel-handle--card-target) { pointer-events: all }` controls DOM hit-testing by `elementFromPoint`; (2) Vue Flow's own `isConnectable` / `connectableEnd` class on the handle controls whether the handle is treated as connectable by `isValidHandle`. The CSS toggle driven by `isConnecting` correctly enables the handle for DOM hit-testing during a drag. The Handle component unconditionally emits `connectable` + `connectableend` classes (derived from `nodesConnectable` which is true by default, and no `:connectable` prop was overridden). This means during a non-connecting state, `elementFromPoint` skips the transparent `pointer-events:none` cover — any click or node-body drag is not intercepted. During connecting, `pointer-events:all` makes the cover hittable and `isValidHandle` succeeds because `connectable` + `connectableend` are already set. The two mechanisms are consistent. No timing hole: `connectionStartHandle` is set synchronously by Vue Flow's `startConnection` before any `pointermove` fires, and cleared synchronously by `endConnection` on `pointerup` — so `isConnecting` has no window of being stale.",
+      "risk": "None for correctness. Minor conceptual complexity: if someone later adds `:connectable=\"false\"` to the cover handle (e.g. for a read-only mode), the CSS class will still be toggled but the handle will not fire connect — the two knobs could diverge. Document the coupling.",
+      "recommendation": "No code change required. Optionally add a code comment noting that `connectable`/`connectableend` classes on the cover handle must not be suppressed independently of the pointer-events CSS toggle."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "category": "architecture",
+      "area": "cover-target handleBounds registration",
+      "title": "Card-target Handle omits `id` prop — skips onMounted self-registration but IS registered by the ResizeObserver path with id:null",
+      "detail": "Vue Flow's Handle `onMounted` has an explicit guard: `if (!__props.id) return` — so the no-id cover-target skips the self-registration path. However, `updateNodeDimensions` (called by the ResizeObserver on the node element) uses `getHandleBounds('target', nodeElement, ...)` which runs `querySelectorAll('.vue-flow__handle.target')` and reads `data-handleid` from the DOM (null when no id). The card-target element satisfies the query selector and IS included in `handleBounds.target` with `id: null`. `getClosestHandle` will therefore find it by distance and return it as a candidate. `isValidHandle` then cross-checks using `elementFromPoint` at the mouse position — and since the handle is `pointer-events:all` during connecting (CSS class active), `elementFromPoint` hits the cover element, returning a valid result. The connection fires with `targetHandle: null`, matching the design intent (resolve by node id, not handle id). The `handleConnect` path in `FunnelCanvas.client.vue` passes `conn.targetHandle` (null) straight through to `connectEdge` via `resolveEdgeRef`, which reads only `conn.source` and `conn.sourceHandle` for EdgeRef resolution — so null targetHandle is safe.",
+      "risk": "The `getHandleBounds` registration gives the cover handle `x` and `y` equal to its top-left corner (0,0 relative to node), not its center. `getClosestHandle` calculates distance to `(x + width/2, y + height/2)` via `getHandlePosition`. For a full-cover handle, the center is the node center — so `getClosestHandle` picks the node-center as the snap point, which is correct for a whole-card drop zone. No functional risk.",
+      "recommendation": "No code change required. The design works correctly via `elementFromPoint` DOM hit-testing, which is the authoritative path. `handleBounds` registration is a secondary optimization for the connection snap point display."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "category": "maintainability",
+      "area": "i18n dead keys",
+      "title": "Old per-kind handle keys (handle.next, handle.button, handle.timeout) are dead code — still in both locale files and still in required-keys list",
+      "detail": "After the redesign, no component references `t('funnels.canvas.handle.next')`, `t('funnels.canvas.handle.button', ...)`, or `t('funnels.canvas.handle.timeout')` (grep of `/frontend/components/` returns zero hits). The new keys are `outputNext` and `outputTimeout`. However, `handle.next`, `handle.button`, and `handle.timeout` remain in both `en.json` and `uk.json` and are still listed in `required-keys.spec.ts` (lines 99–101), so check-locales and the required-keys test both pass without error. They will not cause a runtime error — they are unreachable dead translations.",
+      "risk": "No runtime impact. Minor ongoing maintenance cost: future locale contributors may translate the dead keys unnecessarily. If a future developer re-adds the per-kind title for a tooltip they might unknowingly reactivate a key that wasn't cleaned up.",
+      "recommendation": "In a follow-up cleanup commit: remove `handle.next`, `handle.button`, `handle.timeout` from both locale files AND from the `REQUIRED_KEYS` array in `required-keys.spec.ts`. This is not a blocker for this PR."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "category": "testing",
+      "area": "isConnecting / droppable class",
+      "title": "No unit-level assertion for the `--droppable` class toggle or `pointer-events` CSS state",
+      "detail": "The test suite validates the handle structure (cover target exists, output labels, monochrome classes) but does not assert that `.funnel-canvas-node--droppable` is applied during a simulated connecting state, nor that the card-target carry `pointer-events:none` by default. `connectionStartHandle` is reactive state inside the VueFlow store — it can be set in a unit test by calling `useVueFlow().startConnection(...)` on the mounted wrapper. The current tests rely on live user verification per the stated Testing Strategy, which is consistent with the project's approach. The gap is noted for completeness.",
+      "risk": "If the CSS class binding on the node root (`:class=\"{... 'funnel-canvas-node--droppable': isConnecting && !isEntry && !isNote}\"`) were accidentally broken by a future refactor, no unit test would catch it. The CSS pointer-events flip would silently stop working.",
+      "recommendation": "Optional (consistent with project Testing Strategy: live drag is user-verified). If desired, add a single test that sets `connectionStartHandle` on the VueFlow store instance and asserts `funnel-canvas-node--droppable` appears on a step node but not on a start/note node."
+    }
+  ],
+  "click_move_drop_assessment": {
+    "click_to_select": "SAFE. At rest, `.funnel-handle--card-target` is `pointer-events:none` (CSS on the `:deep()` selector, applied unconditionally when the `--droppable` class is absent). `elementFromPoint` passes through it to the node body div, which fires the `@node-click` handler in `FunnelCanvas.client.vue`. Node selection is unaffected.",
+    "node_body_drag_to_move": "SAFE. Vue Flow's drag filter checks `!hasSelector(target, '.nodrag', nodeEl)`. The Handle component unconditionally adds `noDragClassName` (= 'nodrag') to its rendered div, regardless of pointer-events. Even if the cover were somehow hittable during a drag-start, the `nodrag` class on the cover handle DOM element blocks the drag before it starts. Additionally, at rest `pointer-events:none` means the cover is never the drag-start target anyway.",
+    "drop_connection_anywhere": "WORKS. During a connection drag, `isConnecting` becomes true → `--droppable` class is applied → `pointer-events:all` activates on the cover. `isValidHandle` uses `elementFromPoint` at cursor position — the cover (now pointer-events:all, covering 100%×100% of the card) is hit anywhere on the card area. The handle carries `connectable` + `connectableend` classes (set by Vue Flow Handle component based on `nodesConnectable`). The connection fires with `targetHandle: null`, which the `resolveEdgeRef` / `connectEdge` path handles correctly (target is resolved by node id).",
+    "timing_hole": "NONE DETECTED. `connectionStartHandle` is set synchronously inside `startConnection()` before any `pointermove` fires, and cleared synchronously inside `endConnection()` on `pointerup` — Vue Flow reactivity picks it up in the same microtask tick. There is no async gap where the cover could remain `pointer-events:all` after the connect gesture ends."
+  },
+  "handle_ids_check": "UNCHANGED. Output handles retain ids `next`, `btn:<i>`, `timeout`, `entry`. The cover target has NO id, matching the design intent. `resolveEdgeRef` reads only `conn.sourceHandle` and `conn.source` for EdgeRef construction — null `targetHandle` is the expected value and is handled correctly throughout the connect path.",
+  "stacking_math_check": "CORRECT. Formula `top: ((i + 1) / (outputs.length + 1)) * 100%` distributes n outputs evenly between 0% and 100%. For n=1: 50%. For n=2: 33%/67%. For n=4 (next+btn:0+btn:1+timeout): 20%/40%/60%/80%. No two outputs share the same pixel. The `transform: translateY(-50%)` on `.funnel-output-row` centers each row on its computed `top` value. Overlap is structurally impossible.",
+  "hover_affordance_check": "CORRECT. `.funnel-handle--output:hover` and `.vue-flow__handle-connecting` use only `transform: scale(1.4)` and `box-shadow`. No `width`, `height`, `top`, `left` changes. Zero layout reflow on hover — jitter eliminated.",
+  "ssr_safety_check": "SAFE. FunnelCanvasNode.vue runs inside `FunnelCanvas.client.vue` (`.client.vue` suffix excludes from SSR). `useVueFlow()` requires the VueFlow provider context which only exists client-side. No `window`/`document` access in FunnelCanvasNode itself.",
+  "xss_check": "SAFE. All user content (note text, button labels) rendered via `{{ }}` interpolation only. No `v-html` anywhere in the file. `truncate()` operates on a plain string — no HTML involved.",
+  "read_only_check": "UNAFFECTED. The card-target handle and output handles render regardless of broken/read-only state — no change to the read-only rendering path.",
+  "summary": "The handles redesign is correct. The whole-card cover-target pattern is sound: pointer-events:none at rest prevents click/drag interception; pointer-events:all during connecting (driven by connectionStartHandle reactivity) enables the drop anywhere on the destination card; the nodrag class on the Handle element independently prevents node-body drag interference. The connect path (resolveEdgeRef → connectEdge) is unchanged and handles null targetHandle correctly. Output stacking math eliminates overlap. i18n parity is complete. Four minor findings: two are informational (reactivity analysis, handleBounds registration mechanics), one is a minor dead-key cleanup (handle.next/button/timeout keys no longer referenced but not removed from locales or required-keys list), one is a gap in automated test coverage for the CSS class toggle. None are blockers."
+}

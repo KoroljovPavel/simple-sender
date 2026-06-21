@@ -1,0 +1,12 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "issue": "Task 5 description still contains the inline value `expireAfter=\"90d\"` while pointing to Decisions 4 and 8 by number. The partial-filter expression and `1_048_576` style duplication was cleaned up elsewhere, but the TTL string remains duplicated between Decision 8 and Task 5 description.",
+      "fix": "Replace `TTL with expireAfter=\"90d\" and partial filter on UPPERCASE enum names` with `compound unique index + TTL per Decisions 4 and 8`. Keep the literal value only in Decision 8 and the Data Models section so there is a single source of truth."
+    }
+  ],
+  "summary": "Iteration 2 addresses all prior critical and major findings: Decisions 7/17/18/19 now have explicit `Alternatives considered:` lines; T9 trimmed from ~12 to ~3 sentences (scope only — branching/atomic-write detail removed); T10 split into T10 (controller, ~4 sentences) + new T11 (filter + SecurityConfig, ~4 sentences) — both reference Decisions by number rather than reproducing values; T2 line-range `:331-338` removed; `1_048_576` and `Ordered.HIGHEST_PRECEDENCE + 10` no longer appear inline in tasks (T11 says `per Decision 13`); T3/T4/T6/T7 each gained a one-line `Verify-smoke` gradlew command. Structural verification: 15 tasks total (within ≤15 limit), wave layout T1-T8 / T9 / T10 / T11 / Audit / Final is internally consistent; T11 depending on T10 is logical because the controller's existence pins the path that SecurityConfig must permit and that the filter must guard. Wave conflict scan clean: within Wave 1 only T1 touches `build.gradle` and only T2 touches `BotService.java`; T11 is the sole writer of `SecurityConfig.java` (Wave 4, isolated). All skills (`code-writing`, `documentation-writing`, `code-reviewing`, `security-auditor`, `test-master`, `pre-deploy-qa`) and reviewers match the catalog; Audit Wave tasks correctly have `reviewers: none`; Final Wave correctly omits Deploy/Post-deploy per Decision 19. Frontmatter valid (created=2026-05-16, status=draft, branch=dev, size=L); no time estimates; all template sections present. Zero critical findings, zero majors — status=approved. One minor (Task 5 still inlines `expireAfter=\"90d\"`) is informational cleanup for the author."
+}

@@ -1,0 +1,59 @@
+{
+  "verdict": "approve_with_suggestions",
+  "summary": "Task 7 implementation is correct, well-scoped, and aligned with prior tasks. The page composes existing primitives (projectsStore, useApiError, NuxtLinkLocale, useApi) safely, the two documented deviations (page-level banner placement; reuse of flat projects.* i18n keys) are justified and harmless, and the 8 vitest specs cover the AC carry-forwards. Findings are non-blocking polish items.",
+  "findings": [
+    {
+      "severity": "minor",
+      "where": "frontend/pages/projects/index.vue:40",
+      "issue": "Sort comparator for soft-deleted rows uses a ternary that only ever returns 1 or -1: `(a.deletedAt ?? '') < (b.deletedAt ?? '') ? 1 : -1`. For equal deletedAt values it returns -1 instead of 0, which is a non-stable sort. In practice deletedAt collisions are vanishingly rare (it is a server timestamp with millisecond precision per soft-delete call), but the comparator should still return 0 on equality for correctness.",
+      "suggestion": "Use a tri-valued comparator: `(a, b) => { const av = a.deletedAt ?? ''; const bv = b.deletedAt ?? ''; return av < bv ? 1 : av > bv ? -1 : 0 }`. Mirrors the `sortByCreatedAtDesc` helper already in `frontend/stores/projects.ts`."
+    },
+    {
+      "severity": "minor",
+      "where": "frontend/pages/projects/index.vue:68-74",
+      "issue": "Success branch dereferences `restored.name` without guarding against an unexpected falsy/empty response. `projectsStore.restore` is typed to return `Project` and the backend contract guarantees it, but if a future refactor ever made it return `undefined` (e.g. interceptor swallows the body), the rename-detection would throw. Not a current bug — just a brittleness note.",
+      "suggestion": "Optional: `if (restored && restored.name !== preRequestName) ...` or rely on TS strict-null to catch regressions at the store boundary."
+    },
+    {
+      "severity": "minor",
+      "where": "frontend/pages/projects/index.vue:75-77",
+      "issue": "When `apiError(err, 'projects.restore')` returns an empty string (no key matched and even `errors.generic` is missing), the catch block silently drops the error and shows no banner. The row also already stayed in 'Recently deleted' (good), but the user gets zero feedback for an unexpected status. Today `errors.generic` always exists in both locales so this is theoretical; still worth a fallback.",
+      "suggestion": "Fallback to a hardcoded i18n-key call: `const msg = apiError(err, 'projects.restore') || t('errors.generic')`. Matches the defensive pattern in `pages/profile.vue` where `nameError.value = apiError(err, 'profile.saveName')` assumes a string is always returned."
+    },
+    {
+      "severity": "minor",
+      "where": "frontend/pages/projects/index.vue:49-52",
+      "issue": "Data fetching is gated by `if (import.meta.client)`, so during SSR the page renders with empty Active and absent Recently-deleted sections; the real content only appears after client-side hydration. Other pages in this repo follow the same pattern (no `useAsyncData`), so this is consistent but means the page has no meaningful SSR output. Acceptable for an authenticated app behind a session cookie, but worth flagging in case SEO/perf comes up later.",
+      "suggestion": "Optional follow-up: introduce a shared `useAsyncData` wrapper for the soft-deleted fetch when SSR fidelity becomes a concern. Out of scope for this task."
+    },
+    {
+      "severity": "nit",
+      "where": "frontend/pages/projects/index.vue:54",
+      "issue": "`activeProjects = computed(() => projectsStore.projects.filter(p => p.deletedAt === null))` is belt-and-suspenders: the default `GET /api/v1/projects` (without `include_deleted=true`) already returns only active rows, and `fetchAll()` in the store is called without the flag here. The filter is harmless but slightly misleads readers into thinking the store may hold soft-deleted rows.",
+      "suggestion": "Either drop the filter and use `projectsStore.projects` directly, or add a one-line comment explaining the defensive filter is for the (future) case where the store is shared with code that fetches `include_deleted=true`."
+    },
+    {
+      "severity": "nit",
+      "where": "frontend/pages/projects/index.vue:96,104,115,135,142,164,175,200",
+      "issue": "i18n keys reused across contexts: the page uses `layout.projectSelector.createNew`, `layout.projectSelector.noActive`, `layout.projectSelector.settingsLink` from the layout/component namespace, and `projects.title` (instead of the task-mentioned `projects.list.title`). This is the documented Task-6-style deviation (orchestrator flagged it). It works and avoids adding parallel keys, but coupling the page text to the project-selector dropdown's namespace means a copy change in one place silently changes the other.",
+      "suggestion": "Optional: in a future i18n-cleanup task, hoist the shared strings to a neutral `projects.*` namespace and have the selector reference them. No action required now."
+    },
+    {
+      "severity": "nit",
+      "where": "frontend/tests/pages/projects/index.spec.ts:191-192",
+      "issue": "`const href = btn.attributes('href') ?? btn.attributes('to')` — the fallback to `to` is dead in practice because `NuxtLinkLocale` always renders as an `<a>` with `href`. Not wrong, just noise.",
+      "suggestion": "Optional: simplify to `expect(btn.attributes('href')).toBe('/projects/new')`."
+    }
+  ],
+  "good_things": [
+    "Per-row in-flight guard via `restoringIds` Set prevents double-submit on rapid clicks; Vue 3 reactive() wraps Set so .add()/.delete() correctly trigger template re-render of the disabled button.",
+    "Banner timer cleanup in `onBeforeUnmount` plus `clearTimeout` before scheduling a new dismiss handles the rapid-restore case cleanly — no leaked setTimeout, no stale dismiss clearing a fresh banner.",
+    "Cross-file usage is correct: `projectsStore.restore(id)` returns `Promise<Project>` per stores/projects.ts:104; `useApiError()` is invoked once at script-setup top and the returned resolver is called per error as `apiError(err, 'projects.restore')` per composables/useApiError.ts:16-19 — exactly the two-step pattern the task requires.",
+    "Soft-delete fetch failure is caught and silently degrades to an empty section rather than poisoning the page — sensible because the active list is the primary content.",
+    "Rename-due-to-conflict detection is correctly anchored to the pre-request name captured in component scope, not to a server-side flag (AC-14b).",
+    "Days-remaining computation matches the task formula `Math.max(0, Math.ceil((deletedAt + 7d - now) / 1d))`, clamps at 0, and the spec verifies 7/3/1 day counts under a frozen wall clock.",
+    "All visible strings go through `t('key')`; no hard-coded UA/EN literals (AC-25).",
+    "No direct `localStorage` access on the page (AC-T6); persistence stays in the store.",
+    "`data-test` selectors on every interactive element match the task contract exactly, including the banner being kept as `restore-toast` for spec parity."
+  ]
+}

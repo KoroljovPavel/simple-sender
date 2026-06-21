@@ -1,0 +1,72 @@
+{
+  "validator": "reality-checker",
+  "batch": [9, 10],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Details section (line 252) says: 'frontend/e2e/funnels.spec.ts — golden-path + 422-page-test (стаб API через `page.route()` за взірцем `e2e/subscribers.spec.ts`)'. The real `e2e/subscribers.spec.ts` has ZERO `page.route()` calls — it drives a real backend only. The TDD Anchor in the same task (line 117) explicitly prohibits `page.route()`/`stubAuth`/`makeX()`. This surviving contradiction in the Details block will cause the implementer to introduce `page.route()` stubs that the exemplar never had.",
+      "fix": "Replace line 252 with: 'frontend/e2e/funnels.spec.ts — golden-path + 422-page-test (РЕАЛЬНИЙ бекенд + env-bootstrap + test.skip, за взірцем e2e/subscribers.spec.ts; БЕЗ page.route()/stubAuth/makeX() — їх у взірці немає).'"
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Context Files (line 167-168) annotates patterns.md as: 'Testing (Vitest `mountSuspended` component specs, Playwright e2e з `page.route()`-стабами, i18n parity gate)'. The real patterns.md has no Playwright/E2E section at all (grep of the file returned 0 matches for 'playwright', 'e2e', 'page.route'). The annotation is doubly wrong: it implies patterns.md documents page.route stubs, which (a) the file does not, and (b) the task's own TDD Anchor forbids.",
+      "fix": "Change the patterns.md annotation to: 'фронтенд-патерни (project-scoped page redirect на 404, dialog form) + Testing (Vitest mountSuspended component specs, i18n parity gate). Примітка: patterns.md НЕ містить Playwright/E2E секції.'"
+    }
+  ],
+  "confirmed_fixes": [
+    {
+      "task": 9,
+      "claim": "useApiError is NOT called inside any Pinia store",
+      "verdict": "CONFIRMED — grep of frontend/stores/*.ts returns zero matches for useApiError. All existing stores (bot.ts, projects.ts, subscribers.ts, auth.ts) re-throw errors without calling useApiError. Task 9 text correctly states this rule and explains the runtime reason (useI18n() requires Vue component setup context)."
+    },
+    {
+      "task": 9,
+      "claim": "Structural exemplar is stores/bot.ts and stores/projects.ts (not subscribers.ts)",
+      "verdict": "CONFIRMED — both files exist and are simple CRUD stores. Task 9 correctly restricts subscribers.ts to only the listUrl()/useRoute().params.projectId idiom (line 17-21 of subscribers.ts)."
+    },
+    {
+      "task": 9,
+      "claim": "Vitest spec paths are under frontend/tests/",
+      "verdict": "CONFIRMED — vitest.config.ts include: ['tests/**/*.{spec,test}.ts']. All task 9 spec paths (frontend/tests/stores/funnels.spec.ts, frontend/tests/components/funnels/CreateFunnelDialog.spec.ts, frontend/tests/i18n/required-keys.spec.ts) match this convention."
+    },
+    {
+      "task": 10,
+      "claim": "E2E guidance matches real e2e/subscribers.spec.ts: real backend + /health probe in test.beforeAll + test.skip when down, NOT page.route/stubAuth — in TDD Anchor",
+      "verdict": "CONFIRMED for TDD Anchor (lines 116-134 and 291). The real subscribers.spec.ts uses exactly this pattern: health probe on ${BACKEND_URL}/health (not /actuator/health), test.skip(!backendUp), test.skip(!seedReady), real UI login. No page.route() calls anywhere in the file."
+    },
+    {
+      "task": 10,
+      "claim": "Vitest uses mockNuxtImport('useApi', () => () => apiMock) from @nuxt/test-utils/runtime (not vi.stubGlobal for useApi)",
+      "verdict": "CONFIRMED — the exemplar AddCustomFieldDialog.spec.ts (line 2, 11) does exactly: import { mockNuxtImport } from '@nuxt/test-utils/runtime' and mockNuxtImport('useApi', () => () => apiMock). Task 10 specifies this pattern correctly."
+    },
+    {
+      "task": 10,
+      "claim": "navigator.clipboard uses vi.stubGlobal (not mockNuxtImport)",
+      "verdict": "CONFIRMED as stated — navigator.clipboard is a browser global, not a Nuxt composable, so vi.stubGlobal is correct. No existing test in the codebase uses vi.stubGlobal for navigator (the test suite has no clipboard tests yet), but the pattern is accurate per Vitest API. AddCustomFieldDialog.spec.ts confirms the distinction: it uses mockNuxtImport only for Nuxt composables."
+    },
+    {
+      "task": 10,
+      "claim": "i18n parity for funnels enforced by frontend/scripts/check-locales.mjs, NOT tests/i18n/required-keys.spec.ts",
+      "verdict": "CONFIRMED — check-locales.mjs exists (2.5K), exports collectKeySet, runs symmetric uk/en key diff. required-keys.spec.ts has zero occurrences of 'funnels' and only checks a hardcoded list of 10 older keys. The task correctly attributes parity enforcement to check-locales.mjs."
+    },
+    {
+      "task": 10,
+      "claim": "Guard note: stores/funnels.ts exists only after Task 9 completes",
+      "verdict": "CONFIRMED — no frontend/stores/funnels.ts exists in the current codebase. Task 10 correctly states depends_on: [5, 9] and wave: 4, with Task 9 in wave 3. The guard note on line 207-209 is accurate."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 25,
+    "issues_found": 2,
+    "iter1_fixes_confirmed": 7,
+    "iter1_fixes_unresolved": 1,
+    "new_findings": 1
+  }
+}

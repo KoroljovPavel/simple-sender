@@ -1,0 +1,30 @@
+{
+  "summary": "AES-256-GCM TokenEncryptor implementation is cryptographically sound and follows current best practice. Transformation is the full AES/GCM/NoPadding (not the dangerous bare AES), IV is a fresh 12-byte random from a shared thread-safe SecureRandom, GCM tag is the maximum 128 bits, and tag-mismatch propagates as IllegalStateException wrapping the JDK AEADBadTagException (callers can pattern-match the cause; tests assert this). Key handling fail-fasts on missing/non-hex/wrong-length values both at unit-test level and via the ApplicationContextRunner boot test, the key is held only as a SecretKeySpec field with no accessor, error messages never echo key material, and decrypt rejects nulls and non-12-byte IVs. Secret management is clean: .env.example carries an empty placeholder with the 'openssl rand -hex 32 / NEVER commit' guidance, the all-zeros test key is confined to src/test/resources/application-test.properties and clearly marked as not a real secret, .gitignore excludes .env / .env.* / *.key / secrets/ with the standard !.env.example exception, no real .env is tracked, and the production property defaults to empty so the application refuses to boot rather than fall back to a weak key. Two informational items are noted but neither rises to a finding: the EncryptedValue record's auto-generated array accessors return the underlying byte[] reference without defensive copying (in-process trust boundary, not a security issue) and SecretKeySpec keeps the raw key bytes on the heap for the JVM lifetime (standard JCA pattern; HSM/KMS integration deferred per D3). No critical or major findings; no OWASP Top 10 violations detected.",
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "low",
+      "owasp": "A09:2021 — Security Logging and Monitoring Failures",
+      "title": "Hex-parse error message may echo a small fragment of the malformed key into boot logs",
+      "location": "backend/src/main/java/com/botfunnel/common/crypto/TokenEncryptor.java:69-71",
+      "description": "When BOT_TOKEN_ENCRYPTION_KEY is set but contains non-hex characters, the constructor wraps HexFormat.parseHex's IllegalArgumentException and includes its message via `failMessage(\"not valid hex (\" + e.getMessage() + \")\")`. The JDK message typically embeds the offending character and its index (e.g. 'illegal hexadecimal character z at index 0'), so a single character of the misconfigured key value can surface in the startup log. Practically the malformed value cannot be a working secret (decryption would fail), so the disclosure value is near-zero, but per A09 the audit-friendliest behaviour is to log only metadata (position, length) and never echo key bytes — even bytes from a key that already failed validation.",
+      "suggestion": "If you prefer to be strict, replace `e.getMessage()` with a generic phrasing such as `failMessage(\"not valid hex; check the value contains only 0-9 / a-f\")` and log the original exception's message at DEBUG only. Optional — current behaviour is acceptable and the existing tests still pass because they only assert the property name appears in the message."
+    },
+    {
+      "severity": "low",
+      "owasp": "A04:2021 — Insecure Design",
+      "title": "EncryptedValue record exposes internal byte[] arrays without defensive copy",
+      "location": "backend/src/main/java/com/botfunnel/common/crypto/EncryptedValue.java:3",
+      "description": "Records auto-generate accessors that return the same byte[] reference held by the record. A caller of `encrypted.iv()` or `encrypted.ciphertext()` receives the live array and can mutate it; a later call to `decrypt(encrypted.iv(), encrypted.ciphertext())` would then run against the mutated bytes. In the current trust boundary all consumers are in-process Java code under our control (BotService in Task 6 will Base64-encode the bytes and store them; no external code receives the EncryptedValue), so this is a best-practice nit rather than an exploitable bug.",
+      "suggestion": "Optional: convert to a final class with defensive `iv = iv.clone()` / `ciphertext = ciphertext.clone()` in the constructor and the same on each accessor; or keep the record and document the convention 'do not mutate the returned arrays'. Not blocking — the current shape matches the task spec which explicitly requested a record."
+    },
+    {
+      "severity": "low",
+      "owasp": "A02:2021 — Cryptographic Failures",
+      "title": "AES key bytes remain on the heap for the JVM lifetime",
+      "location": "backend/src/main/java/com/botfunnel/common/crypto/TokenEncryptor.java:25,29",
+      "description": "The 32-byte key is decoded once in the constructor and wrapped in a SecretKeySpec held on a final field for the lifetime of the singleton bean. SecretKeySpec does not implement Destroyable in a meaningful way (the underlying byte[] is never zeroed), so a heap dump of a running container reveals the key. This is the standard JCA pattern and matches the project's deliberate D3 'single-key, no rotation, no HSM' decision (rotation is deferred to a one-off migration job if ever needed), so it is not a code defect — flagged here only so the team is aware of the residual risk surface when prioritising future hardening (KMS/HSM integration, container memory protections).",
+      "suggestion": "No action required for this task. If/when the threat model expands (e.g. multi-tenant production with heap-dump access concerns), move the key to a KMS-backed provider or a JCE Destroyable key; this would be a separate, larger piece of work and is explicitly out of scope per D3."
+    }
+  ]
+}

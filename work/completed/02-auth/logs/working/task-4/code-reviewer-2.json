@@ -1,0 +1,122 @@
+{
+  "status": "approved",
+  "summary": "Round 1 fixes are applied correctly and introduce no regressions. AppUserDetails is now a credentials-free record, email is canonicalized before brute-force keying and user lookup, the user-not-found branch increments counters and emits login_failed events, login_failed events are emitted on all four failure branches (user_not_found, wrong_password, blocked, deleted), and User-Agent is capped at 500 chars before storage. Only minor code-quality nits remain — none block approval.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthServiceTest.java",
+      "line": 31,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`import reactor.util.context.Context;` is unused — the four new `me()` tests call `contextWrite(ReactiveSecurityContextHolder.withSecurityContext(...))`, not `Context` directly. Drop the import.",
+      "benefit": "Removes a stale import left over from a refactor; keeps the import block honest.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 79,
+      "severity": "minor",
+      "category": "cross-file-consistency",
+      "suggestion": "`login()` lowercases email before `findByEmail`, but registration (Task 5) has not yet been implemented — when it is, it MUST also store `email.trim().toLowerCase()` (and the unique index on `users.email` must be backed by the canonical form). If registration stores the raw mixed-case email, `findByEmail(\"user@x.com\")` will not find a user registered as `User@x.com` and login will fail with a misleading 401. Worth recording in decisions.md as a forward-looking constraint, or filing an explicit TODO on the Task 5 file.",
+      "benefit": "Prevents a class of \"login fails for legitimate user\" bugs once registration ships, by making the email-canonicalization contract explicit at both ends of the flow.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 96,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "The `me()` filter `a != null && a.isAuthenticated() && a.getPrincipal() instanceof AppUserDetails` collapses three distinct unauth conditions (null auth / unauthenticated token / wrong principal type) into a single 401. Behavior is correct, but a misconfigured upstream that injects a non-AppUserDetails principal will silently look like \"not logged in\" rather than a server bug. Consider logging at WARN when principal type is unexpected. The `me_principalNotAppUserDetails_returns401` test confirms the silent-401 path is intentional, so a one-line `log.warn(...)` is sufficient — no behavior change needed.",
+      "benefit": "Surfaces auth misconfiguration in logs without changing the 401 response contract.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 138,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`authenticate(...)`, `checkStatusAndAuthorize(...)`, and `handleUserNotFound(...)` thread the same five context fields (`emailKey`, `ipKey`, `ip`, `userAgent`, plus request/exchange) through their signatures. With `login_failed` events now emitted from four call sites, the parameter list duplication is more pronounced. An internal `record LoginCtx(String emailKey, String ipKey, String ip, String userAgent, ServerWebExchange exchange, LoginRequest request)` would shorten signatures and stabilize the call chain as Tasks 5/6 add password-reset and verification flows that share the same context. Round 1 carried this as a minor; round 1 made the case slightly stronger by adding event emission to four branches. Still optional — deferring is reasonable given the file remains readable.",
+      "benefit": "Reduces parameter-list churn before Tasks 5/6 add more flows that need the same context.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 162,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`incrementWithTtl` carries the comment `Crash between INCR and EXPIRE is a known small race (no Lua); on next failure the counter just keeps growing without TTL — Redis MEMORY-policy still bounds it.` This is true for runtime crashes, but the implication \"Redis MEMORY-policy still bounds it\" only holds if the Redis instance is configured with `maxmemory-policy allkeys-lru` or similar. With the default `noeviction` policy, an unbounded counter could pin a key forever. If MEMORY-policy is not enforced by infra, the comment is misleading. Either tighten the wording (\"counter persists until manual cleanup or LRU eviction; ensure Redis is configured with allkeys-lru\") or open a follow-up to switch to a Lua INCR+EXPIRE script (atomic, no race).",
+      "benefit": "Avoids documenting an invariant that depends on infra configuration that may not hold.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 130,
+      "severity": "minor",
+      "category": "performance",
+      "suggestion": "On the user-not-found path, the chain is `bcrypt-dummy → registerFailure (2× INCR + maybe 2× EXPIRE) → eventService.logEvent (fire-and-forget) → error`. The bcrypt call dominates (~250 ms by design). The two INCRs are sequential via `Mono.when` inside `registerFailure`, which is correct, but the whole chain runs strictly before the 401 is returned to the caller. For the wrong-password path the same is true. Consider moving `eventService.logEvent` to a `.doOnError` / detached scheduler so it does not extend response latency. Currently `logEvent` is non-blocking (sync call → internal `subscribe`), but the `Mono.fromRunnable(...)` wrapper runs on the request thread before the chain completes. Round 1 raised the same point about the success path; the failure paths inherit it.",
+      "benefit": "Decouples audit-log latency from auth-response latency on the failure paths, matching the success-path \"fire-and-forget\" intent.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 233,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`capUserAgent` truncates by Java `char` count, not by code points or UTF-8 bytes. For most real User-Agent strings (ASCII), this is identical, but a malicious client sending 500 surrogate-pair characters could yield a 1000-byte string post-truncation if the field is later persisted as UTF-8. Given the storage target is MongoDB (which accepts any unicode), the only risk is a pathological actor inflating index/storage cost. Either document that 500 is char-count by design, or switch to a byte-level cap with `getBytes(StandardCharsets.UTF_8).length`. Not security-critical (security-auditor is downstream), but readability/maintainability worth a one-line comment.",
+      "benefit": "Makes the cap semantics explicit for future maintainers.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 251,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Round 1's `extractIp` minor (\"unknown\" fallback collides for all proxy-less requests) is unaddressed. Acceptable per the open-decisions list, but if not externalized, please add a one-line `log.warn` when the fallback fires — currently the symptom (single shared `brute:fail:ip:unknown` bucket) would be invisible until brute-force locks out an unrelated user.",
+      "benefit": "Surfaces misconfigured deployments without changing behavior.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/events/Event.java",
+      "line": 26,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Round 1 minor about moving `Instant.now()` into the constructor (rather than passing as parameter) is unaddressed. The signature still requires every caller to pass `createdAt`; `EventService` does so correctly, but the invariant is enforced by convention, not the type system. Convert the public constructor to take `(userId, eventType, ipAddress, userAgent, metadata)` and set `this.createdAt = Instant.now()` internally — keeps the no-arg constructor (Mongo deserialization) and removes the chance of a future caller passing `null` or a wrong instant.",
+      "benefit": "Tightens the \"every event has createdAt\" invariant via the type system.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/events/EventService.java",
+      "line": 26,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Round 1 minor about `subscribeOn(Schedulers.boundedElastic())` is unaddressed. `eventRepository.save(event).subscribe(...)` runs on the calling thread until the reactive Mongo driver's first non-blocking I/O. Since `logEvent` is invoked from inside a `Mono.fromRunnable` on the request flow, any synchronous validation/serialization the Mongo driver does runs on the request thread. Adding `.subscribeOn(Schedulers.boundedElastic())` before `.subscribe(...)` makes the fire-and-forget property explicit and matches the bcrypt-offload pattern already used elsewhere in `AuthService`.",
+      "benefit": "Makes fire-and-forget explicit in code, not just in the comment, and protects request latency against any future blocking work added to the event pipeline.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/dto/LoginRequest.java",
+      "line": 6,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Open from round 1 and acknowledged as a deliberate keep (Bean Validation + Jackson with setters). The kept-as-class decision is reasonable, but the rationale belongs in a Javadoc on the class itself so future maintainers don't \"normalize\" the DTO style mid-feature. One-liner `// Class (not record) because Jakarta Bean Validation annotations + Jackson setter-based binding are simpler with mutable fields. AuthResponse/MeResponse are records (output-only, no validation).` would self-document the choice.",
+      "benefit": "Documents the asymmetric DTO-style decision in code so it survives drive-by refactors.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/TokenService.java",
+      "line": 26,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Round 1 minor about replacing `java.nio.charset.StandardCharsets.UTF_8` with a top-of-file import is unaddressed (open per task brief: \"will be cleaned\"). Confirming for the round-2 record that this is still pending.",
+      "benefit": "Matches the rest of the codebase's import style.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 11,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 12,
+    "testCoverageAssessment": "adequate"
+  }
+}

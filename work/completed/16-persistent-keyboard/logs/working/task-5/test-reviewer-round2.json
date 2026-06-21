@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review of the two round-1 fixes in FunnelMessagePreview.spec.ts. Both fixes are correct, behavior-driven, and free of false-positive risk. The new empty-renderedBlocks desync test exercises the real defensive branch (keyboardText computed returns null on missing TEXT block, mock absent on null keyboardRows, panel still mounts) and would catch a crash or an unconditional renderedBlocks[0] access. The debounce test now pairs call-count gating with toHaveBeenLastCalledWith(objectContaining(...)), proving the mutated keyboardText/keyboardRows actually propagated into the payload rather than only that a call fired. Spec re-run green: 29 tests, up from 28. No blocking or major findings.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts:535-539",
+      "issue": "The keyboardRows propagation assertion uses objectContaining({ keyboardRows: [{ buttons: [{ text: 'B' }] }] }) which only confirms the mutated rows reached the payload; it does not also re-assert keyboardText remains 'Новий текст'. Coverage is correct but the test does not pin that the unchanged sibling field is preserved across the second debounce, so a future regression that drops keyboardText during a rows-only edit would go unnoticed by this test (the dedicated text assertion is on the earlier setProps, with a different rendered value). Non-blocking — the payload-shape test at line 499 already locks the full SET_KEYBOARD payload shape.",
+      "recommendation": "Optional: widen the last assertion to objectContaining({ keyboardText: 'Новий текст', keyboardRows: [{ buttons: [{ text: 'B' }] }] }) so the rows-only edit also proves the carried-over text field is preserved in the same payload."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 3,
+      "passed": 3,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 29,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

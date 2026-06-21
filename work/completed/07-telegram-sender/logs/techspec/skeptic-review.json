@@ -1,0 +1,42 @@
+{
+  "status": "issues_found",
+  "summary": "Verified ~30 claims in tech-spec against current code. Found 1 critical mirage (verbatim 422 stub message string is wrong), 3 major mirages (cited line-number / precedent that does not actually demonstrate the claimed property, and a `BotResponse` modify-list inconsistency vs. unchanged-list claim), and 2 minor cosmetic discrepancies (line numbers and dependency-declaration claim). Most architectural and structural claims (paths, classes, methods, properties, dependency, exception factories, anti-enumeration pattern) check out.",
+  "findings": [
+    {
+      "severity": "critical",
+      "claim_in_tech_spec": "Architecture → How it works → BotService integration step 2: `Mono.error(AppException.unprocessableEntity(\"owner_chat_id_unknown\", \"Owner chat ID not yet known\"))` (verbatim stub)",
+      "what_actually_exists": "Current `BotService.sendTestMessage` at lines 109-116 throws `AppException.unprocessableEntity(\"owner_chat_id_unknown\", \"Send /start to your bot in Telegram first, then try again\")`. The code= matches but the message string differs entirely from what the tech-spec claims is being preserved \"verbatim\". If a developer follows the tech-spec literally they will silently change the user-facing 422 error message — a regression on existing UI/contract behavior.",
+      "file_or_evidence": "backend/src/main/java/com/botfunnel/bot/BotService.java:113-115"
+    },
+    {
+      "severity": "major",
+      "claim_in_tech_spec": "Decision 14 + R6: \"Spring Data MongoDB reads missing fields as `null` for object types — verified in `BotRepositoryTest.java:24-42` precedent (`disconnectedAt`)\"",
+      "what_actually_exists": "`BotRepositoryTest.java` (the entire file, 104 lines) contains zero references to `disconnectedAt` deserialisation behavior. Lines 24-42 are the `newBot` helper which sets `disconnectedAt` for DISCONNECTED rows but never demonstrates legacy-document deserialisation with a missing field. The cited precedent does not exist in the test as described — the architectural property may still be true, but no current test verifies it. The new `sendTestMessage_legacyDocumentReadsAsNull` integration test in Testing Strategy is therefore the *first* such verification, not a follow-on to a precedent.",
+      "file_or_evidence": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java (full file scanned; no `disconnectedAt`/missing-field deserialisation case)"
+    },
+    {
+      "severity": "major",
+      "claim_in_tech_spec": "Architecture → Modified files lists `BotControllerIT.java`, `BotServiceTest.java`, `Bot.java`, `BotService.java`, `TelegramApiClient.java`. Architecture → Unchanged claims `BotResponse.java — `ownerChatId` is internal; not exposed on the API` and \"BotController.java — endpoint signature stays Mono<ResponseEntity<Void>>\".",
+      "what_actually_exists": "Verified: `BotController.testMessage` is `Mono<ResponseEntity<Void>>` (BotController.java:60-68) — claim holds. `BotResponse` is a record without `ownerChatId` (BotResponse.java:9-16) — claim holds. However, the tech-spec also says (Acceptance Criteria) \"BotResponse.java has zero diff (`ownerChatId` is internal)\" yet does not mention that `BotController.testMessage` is annotated `@PostMapping(\"/test-message\")` — minor: tech-spec says `BotController.sendTestMessage` but the actual method name is `testMessage`. A reviewer scanning by method name will not find it. Same name mismatch in Acceptance Criteria (`BotController.sendTestMessage HTTP contract preserved`).",
+      "file_or_evidence": "backend/src/main/java/com/botfunnel/bot/BotController.java:60 method name is `testMessage` (not `sendTestMessage`); the service-side method is `sendTestMessage`."
+    },
+    {
+      "severity": "major",
+      "claim_in_tech_spec": "Decision 12 + Task 1: comment \"promoted for `TelegramSender` reuse\" should mirror \"the existing `scrubTokens` promotion comment at line 169-170\"",
+      "what_actually_exists": "`TelegramApiClient.java` lines 169-170 contain the comment `// Promoted to public for shared use by BotService log sites — the same regex must scrub / Telegram error messages before they reach any logger, including downstream callers'.` The line-number reference is correct, but the cited justification is for *BotService* reuse, not *TelegramSender* reuse. A new \"promoted for TelegramSender reuse\" comment is fine, but the spec implies an exact mirror that doesn't quite match the existing comment's framing. Cosmetic but the implementation guidance is slightly off. Task 1 also instructs the agent to add this comment in this exact form.",
+      "file_or_evidence": "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java:169-170"
+    },
+    {
+      "severity": "minor",
+      "claim_in_tech_spec": "Decision 9: \"`TelegramApiClient.mapClientError` builds an empty `TelegramResult<>` fallback at line 122\"",
+      "what_actually_exists": "Line 122 in `TelegramApiClient.java` is `.bodyToMono(new ParameterizedTypeReference<TelegramResult<Object>>() {})`; the empty-fallback `TelegramResult<>` constructions are on lines 123-124 (`onErrorResume(... new TelegramResult<>(false, null, null, null))` and `defaultIfEmpty(new TelegramResult<>(false, null, null, null))`). Off-by-one / off-by-two — claim is essentially right, line number is wrong.",
+      "file_or_evidence": "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java:122-124"
+    },
+    {
+      "severity": "minor",
+      "claim_in_tech_spec": "Architecture → Unchanged: \"`build.gradle` — `okhttp3:mockwebserver:4.12.0` already present as `testImplementation`\" + Dependencies: \"`org.awaitility.Awaitility` — async event verification in `TelegramSenderIT`\" implied to be already available.",
+      "what_actually_exists": "`mockwebserver:4.12.0` confirmed present at `backend/build.gradle:38`. `Awaitility` is NOT explicitly declared in `backend/build.gradle`; it is only available transitively via `spring-boot-starter-test`. Existing tests (BotControllerIT, AuthControllerIT, ProjectControllerIT, ProfileControllerIT, EventServiceTest) all use it successfully so the transitive availability is real, but the spec should either mention this explicitly or risk a future Spring Boot bump silently dropping the transitive.",
+      "file_or_evidence": "backend/build.gradle:21-40 (no explicit awaitility declaration); test usages confirm transitive availability."
+    }
+  ]
+}

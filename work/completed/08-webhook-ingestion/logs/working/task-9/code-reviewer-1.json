@@ -1,0 +1,59 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "ProcessTelegramUpdateJob faithfully implements Decisions 5, 9, and 12. The re-entry guard is the first action after load (no event/stub/counter on DONE), cascade ordering puts every logEventBlocking(...).block() before the rawUpdate save, the failure handler is atomic (findAndModify), scrubs+truncates correctly, increments the failure counter, and rethrows so JobRunr retries. The atomic ownerChatId populate uses the exact (_id, status=CONNECTED, ownerChatId=null) predicate per Decision 5. Dispatch matrix matches the task's enumeration including edge cases (bot==null, media-only message, channel posts without sender). Tests exercise all enumerated ACs and the re-entry path. Suggestions are minor (test gap for /stop in group, no behavioural assertion for cascade ordering, no INFO worker-start/completion log).",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java",
+      "line": 203,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "Add a `/stop` in group/supergroup test case symmetric to startGroup_eventOnly_noStubsNoOwnerPopulate. The implementation routes group /stop through handleStop and emits telegram_command_stop without calling stubs, but this behaviour is not explicitly enumerated in the task's Step-3 matrix and has zero test coverage — a future refactor could quietly change the classification (event_other vs command_stop) without breaking a test.",
+      "benefit": "Locks in the (currently undocumented) group-/stop classification and protects against silent regression.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java",
+      "line": 159,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "There is no test that directly proves Decision-12 cascade ordering (event-write must complete BEFORE save(processingStatus=DONE)). The task line 110 explicitly says \"Verified by reading the source ordering AND by unit-test in T9 if practical.\" One way: stub rawUpdateRepository.save to throw, invoke worker, and assert (a) the event still landed in events collection, (b) rawUpdate is then marked FAILED by the catch handler. Without this, a reordered refactor would only be caught by code review.",
+      "benefit": "Mechanises the audit-survival invariant (\"no DONE row without its audit event\") so it cannot be silently violated.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 105,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Tech-spec Risks → Token-scrubber sites enumerates five worker log sites (INFO worker start, WARN per-command branches with chatId+scrubbed payload, ERROR terminal failure, INFO ownerChatId populate, INFO worker success). Implementation has only two (ERROR failure + INFO populate). The omitted sites are NOT required by ACs, but their absence makes the success path opaque in production — operator can only confirm \"the worker ran\" via the success counter, not via log correlation. Consider mirroring ProjectHardDeleteJob's \"run completed\" INFO line at minimum (scrubbed rawUpdateId + updateKind + projectId + durationMs).",
+      "benefit": "Closes the operational visibility gap that motivated the original tech-spec enumeration, without changing AC behaviour.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 269,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "logEventOther uses HashMap while logEventCommandStart/Stop/MessageReceived use LinkedHashMap. The functional difference is iteration order (LinkedHashMap preserves insertion, HashMap does not), which matters for log/audit readability when the metadata is later printed or serialised. Use LinkedHashMap consistently across all four helpers — the in-method comment on line 247 already calls out the choice.",
+      "benefit": "Consistent metadata field ordering across all event types in the audit log and in any future log line that prints the Map.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 171,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Bot is looked up via botRepository.findByProjectIdAndStatus three times per worker invocation for /start, /stop, and plain-text-private paths (lines 171, 196, 234). All three branches need the same bot for the same projectId. Hoist a single lookup at the top of dispatch (after the message != null gate) and pass it as a parameter to handleStart/handleStop/plainTextPrivate. Saves two Mongo round-trips on every text message and eliminates the three duplicate \"bot == null → log unknown\" branches.",
+      "benefit": "~2x fewer Mongo reads on the hot path; collapses repeated null-bot handling into one place.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 5,
+    "testCoverageAssessment": "adequate"
+  }
+}

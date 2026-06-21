@@ -1,0 +1,21 @@
+{
+  "reviewer": "security-auditor",
+  "task": "2",
+  "round": 1,
+  "commit": "34f9dc2",
+  "verdict": "pass",
+  "focus": "fail-closed projectId scoping on the SUBSCRIBE target DB-lookup, IDOR, cross-tenant leak",
+  "owasp_checked": ["A01-broken-access-control", "A03-injection", "A04-insecure-design", "A09-logging"],
+  "summary": "The SUBSCRIBE target lookup is correctly fail-closed by projectId. resolveSubscribeTarget loads via findById (not DB-project-scoped) then applies an explicit .filter(projectId.equals(f.getProjectId())) before returning — the same anti-IDOR guard as requireFunnel. Missing id, malformed ObjectId, and foreign-project id all collapse to a single funnel_subscribe_target_not_found code (no existence oracle, no cross-tenant leak). Malformed ObjectId is caught and mapped to 422, never 500. No user input is logged. Same fail-closed resolve is reused on the activation path. No vulnerabilities found.",
+  "findings": [
+    {
+      "id": "SEC-1",
+      "severity": "info",
+      "owasp": "A01",
+      "title": "Project-scope guard verified present on every target resolution",
+      "detail": "Both save (validateSubscribeTarget) and activation (requireSubscribeTargetsActive) route through resolveSubscribeTarget, which enforces projectId.equals(target.getProjectId()) post-load. Callers (update/activate/testRun) all run requireFunnel/requireOwned FIRST, so projectId is already proven owned by the caller before it is used as the scope. No cross-tenant target binding is reachable.",
+      "action": "none",
+      "reason": "Correct as implemented; recorded for traceability."
+    }
+  ]
+}

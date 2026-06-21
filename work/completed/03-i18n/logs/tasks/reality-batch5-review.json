@@ -1,0 +1,60 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14, 15],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Skill path link uses wrong relative path: `[skills/test-master/SKILL.md](.claude/skills/test-master/SKILL.md)`. The correct relative path from `work/03-i18n/tasks/` to the skills directory is `../../../.claude/skills/test-master/SKILL.md` (as used correctly in Task 13). The file exists at the correct absolute path, so the skill itself is loadable via `/skill:test-master` invocation — only the markdown hyperlink is broken.",
+      "fix": "Change the link to `[skills/test-master/SKILL.md](../../../.claude/skills/test-master/SKILL.md)` to match the pattern used in Task 13."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Skill path link uses wrong relative path: `[skills/pre-deploy-qa/SKILL.md](.claude/skills/pre-deploy-qa/SKILL.md)`. Correct pattern (per Task 13) should be `../../../.claude/skills/pre-deploy-qa/SKILL.md`. Skill file exists at the correct absolute path; only the markdown hyperlink is broken.",
+      "fix": "Change the link to `[skills/pre-deploy-qa/SKILL.md](../../../.claude/skills/pre-deploy-qa/SKILL.md)` to match Task 13 pattern."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Tech-spec AC count mismatch. Task 15 step 9 states 'Walkthrough всіх 19 AC з user-spec + 11 AC з tech-spec'. The tech-spec Acceptance Criteria section (lines 259-271) actually contains 13 checkboxes, not 11. This count is also cited in Task 15 Description ('11 додаткових технічних AC') and AC checklist item. The agent executing Task 15 will walk 13 ACs while expecting 11, creating confusion about completeness.",
+      "fix": "Update all references in Task 15 ('11 додаткових технічних AC', step 9, AC checklist) to '13 додаткових технічних AC'. Alternatively confirm whether 2 items (the last 2 in tech-spec: silentTranslationWarn and pre-commit hooks) were intentionally excluded from QA scope."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Build-fail test restore command is inconsistent between 'What to do' step 6 and 'Verification Steps' section. Step 6 says: `cp /tmp/en-backup.json frontend/i18n/locales/en.json` (repo-root relative path). The Verification Steps section says: `cp /tmp/en-backup.json i18n/locales/en.json` (frontend-relative, after `cd frontend`). The two versions are inconsistent. The step 6 version is the standalone command that runs from repo root — which is correct. But both appear in the same task as authoritative, creating ambiguity.",
+      "fix": "Align both versions to use the same restore command. Canonical form: running from repo root → `cp /tmp/en-backup.json frontend/i18n/locales/en.json`. Or wrap both backup and restore inside one `cd frontend &&` chain consistently."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "User-spec 'Як перевірити' table has 8 rows but they are not all curl scenarios — the first row is `pnpm test` (Vitest) and the second is `pnpm test:e2e` (Playwright). Task 15 context file annotation says '19 AC, \"Як перевірити\" секція з 8 curl-сценаріями' which is inaccurate: the table has 8 scenarios total but only 5 are curl commands; 2 are test-runner commands and 1 is a Playwright assertion. This is a labeling inaccuracy in the context file description but the actual step 5 in 'What to do' correctly lists 8 curl commands that are separately derived and accurate.",
+      "fix": "Update the context file description from '8 curl-сценаріями' to '8 verification scenarios (5 curl + 2 test-runner + 1 Playwright)'. The actual 8 curl commands listed in step 5 are independently correct and fully cover the security-relevant checks."
+    }
+  ],
+  "notes": {
+    "audit_wave_design": "Tasks 13, 14, and 15 are Audit/QA Wave tasks that run after all implementation waves (1-5). The checkpoint file confirms last_completed_wave=0 — no waves have run yet, so all files referenced in the audit tasks (frontend/server/middleware/strip-invalid-locale.ts, frontend/composables/useApiError.ts, frontend/components/LangSwitcher.vue, frontend/i18n/locales/uk.json, frontend/e2e/i18n.spec.ts, etc.) do not exist. This is by design — audit tasks are specifications for future execution, not references to current state. They are not flagged as findings.",
+    "task13_overall": "Security audit task is well-structured. All 8 focus invariants map clearly to tech-spec Decisions and Risks. Output path work/03-i18n/logs/audit/security-audit.json is reasonable. The edge cases list (double-encoded payloads, backslash variants, prototype-pollution payload) correctly matches the implementation requirements in Decision 5 and Decision 9. No hallucinated APIs or incorrect patterns detected.",
+    "task14_overall": "Test audit task is well-structured. All 6 test-file references are plausible given the tech-spec testing strategy. The pyramid breakdown (4 unit + 1 updated middleware + 1 E2E) matches M-feature sizing. The 6-dimension audit framework (meaningful assertions, pyramid balance, coverage, AC18 compliance, mock hygiene, prototype-pollution fixture) is comprehensive and correctly anchored to tech-spec. The AC18 exception for auth.global.spec.ts is correctly cited per Decision 16.",
+    "task15_overall": "Pre-deploy QA task is well-structured. The 8 curl commands listed in step 5 are independently correct and match tech-spec verification plan. Dependencies on Tasks 12, 13, 14 are correctly declared. The edge case about production-mode Secure flag on HTTP localhost is properly handled with a 'deferred-to-post-deploy' escape hatch. The 'pnpm build && pnpm preview' for production-mode cookie test is correct. No hallucinated APIs or impossible steps.",
+    "cross_task_integration": "Task 15 correctly depends on Tasks 12, 13, 14. Tasks 13 and 14 both depend on Task 11 (final implementation task). No shared resource duplication across audit tasks. All three tasks write to distinct output paths (security-audit.json, test-audit.json, pre-deploy-qa.json). No cross-task integration issues.",
+    "security_coverage": "Task 13 correctly covers all 8 security invariants from tech-spec. The OWASP Top 10 holistic check requirement is appropriate. No security gaps in audit scope design.",
+    "tdd_note": "These are Audit/QA Wave tasks — no TDD applies per the task nature. Correctly identified in input context."
+  },
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  }
+}

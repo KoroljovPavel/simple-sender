@@ -1,0 +1,6 @@
+{
+  "summary": "Security audit of LangSwitcher.vue (commit 2e5b605) against the four focus areas: locale-injection/open-redirect, XSS, cookie integrity, and clickjacking/CSRF on setLocale. No vulnerabilities found. The `code` value passed to setLocale is sourced from the static @nuxtjs/i18n configured `locales` array and additionally hard-filtered against an allow-list (`'uk' || 'en'`) before reaching `setLocale`; it is never user-controlled. The template performs only Vue-escaped interpolation (`{{ item.code.toUpperCase() }}`) and bound attributes with primitive values — no v-html, no innerHTML, no untrusted concatenation. The component does not read or write the `i18n_lang` cookie itself; cookie state is delegated to the @nuxtjs/i18n module per Decision 3, and Decision 3 explicitly accepts non-HttpOnly because the cookie carries only UI preference. CSRF/clickjacking on a locale toggle has negligible security impact (no auth/data state change). No hardcoded secrets, no new dependencies, no injection sinks, no SSRF surface.",
+  "blocking_findings": [],
+  "non_blocking_findings": [],
+  "verdict": "OK"
+}

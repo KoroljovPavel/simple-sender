@@ -1,0 +1,117 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 7,
+      "issue": "frontend/stores/projects.ts does not exist. Task 7 depends on it being created by Task 2 (Wave 1), but the file is absent from the codebase. The store actions fetchAll(), restore(id), and the projectsStore.projects / isLoaded refs that task 7 directly reads are all unverifiable.",
+      "fix": "Confirm Task 2 is complete before executing Task 7. The dependency is declared (depends_on: [5, 6]) but the store file must exist. Wave ordering should prevent this, but the file was not found at frontend/stores/projects.ts."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 7,
+      "issue": "frontend/components/ProjectSelector.vue does not exist. Task 7 instructs setting definePageMeta({ layout: 'default' }) so the topbar/sidebar from Task 9 wraps the page — but Task 9 (which wires ProjectSelector into the layout) is in the same wave as Task 7. ProjectSelector.vue itself comes from Task 5 and was not found at frontend/components/ProjectSelector.vue.",
+      "fix": "Confirm Task 5 is complete. frontend/components/ currently only contains LangSwitcher.vue. Task 7 must run after Task 5 is done."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 8,
+      "issue": "frontend/stores/projects.ts does not exist. Task 8 directly uses update(id, partial), softDelete(id), currentProject, projects, isLoaded, fetchAll from the store. The store is created in Task 2 which Task 8 lists as a dependency, but the file is absent.",
+      "fix": "Ensure Task 2 is complete before executing Task 8. The store must exist at frontend/stores/projects.ts."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 9,
+      "issue": "frontend/components/ProjectSelector.vue does not exist. Task 9 step 2 says to read this component and step 3 inserts <ProjectSelector /> into default.vue. The component is created in Task 5 (declared dependency), but was not found in the codebase.",
+      "fix": "Task 9 correctly declares depends_on: [5]. Ensure Task 5 is executed and creates frontend/components/ProjectSelector.vue before Task 9 runs."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 9,
+      "issue": "frontend/stores/projects.ts does not exist. Task 9 imports useProjectsStore from ~/stores/projects and binds currentProject for the conditional Settings link. The store is created in Task 2 (undeclared dependency in the task frontmatter — depends_on: [5] only).",
+      "fix": "Add Task 2 to depends_on in the task 9 frontmatter, or confirm it is a Wave dependency that is enforced externally. The store must exist before Task 9 executes."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "useApiError() signature mismatch. Task 7 step 3 says 'useApiError(err, \"projects.restore\")' as a direct function call. But actual useApiError.ts returns a resolver function: const apiError = useApiError(); then call apiError(err, contextKey). The task description conflates instantiation with invocation in the error handling description (step 2, step 3), which could lead to incorrect implementation.",
+      "fix": "In the implementation, call const apiError = useApiError() at the top of <script setup> (once, to capture the i18n context), then call apiError(err, 'projects.restore') in the catch block — matching the pattern in frontend/pages/profile.vue line 10."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 8,
+      "issue": "useApiError() is described incorrectly in the Details section. Task 8 Details says 'викликати const apiError = useApiError() в <script setup> ОДИН раз (lifecycle для useI18n())' which is correct, but the What to do section step 2 says 'useApiError(err, \"projects.update\")' suggesting a direct two-argument call without prior instantiation. This is inconsistent and could cause a runtime error (useApiError() returns a function, not a string).",
+      "fix": "Ensure the implementation follows: const apiError = useApiError() at top of script, then apiError(err, 'projects.update') in catch. The Details section is correct; the What to do step 2 wording needs clarification."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 7,
+      "issue": "Task 7 claims 'there is no existing toast composable in the repo (verified — pages/profile.vue uses inline <p> status messages, not toasts)'. This is correct as a statement, but the ux-guidelines.md line 49 ('API errors: toast notification with human-readable message') contradicts the inline approach. Task 7 resolves this by citing 'Functionality over aesthetics on MVP', but the pattern.md Testing Requirements section and ux-guidelines conflict. The inline approach chosen is defensible but the task's own verification steps reference pnpm build which enforces i18n parity — the inline banner approach using data-test=\"restore-toast\" is fine but implementors may be confused by the UX guideline conflict.",
+      "fix": "Minor: the task reasoning is correct. The inline banner is acceptable for MVP. No change needed in the task, but note this diverges from ux-guidelines.md which says API errors use toasts."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 8,
+      "issue": "Implementation hint for Danger zone contains a concrete computed property definition: 'Computed canDelete = nameInput.value.trim() === project.name (case-sensitive trim-compare)'. This is prescriptive code-level logic (a specific expression), not a pointer to a pattern. The TDD anchor test further prescribes exact input fixtures (\"Acme\", \"Acme \", \"acme\") with pass/fail outcomes, which crosses from guidance into implementation. This is the boundary of what hints should contain per the methodology.",
+      "fix": "Rewrite the hint to reference the profile.vue modal pattern for the disabled-state concept, and let the test spec drive the exact condition. The current phrasing is acceptable but borderline — no code change needed if the implementor treats it as a behavioral description rather than copy-paste code."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 8,
+      "issue": "Task 8 says 'shadcn-vue компоненти не використовуємо — plain Tailwind (per tech-spec Dependencies / patterns.md \"Functionality over aesthetics on MVP\")'. However, shadcn-vue IS installed (package.json line 35: \"shadcn-vue\": \"^1.0.3\", radix-vue: \"^1.9.13\"), and ux-guidelines.md line 6 says 'Ready-made components only: shadcn-vue + Tailwind — no custom design system.' The task's claim that shadcn-vue is not available and should not be used is inconsistent with the installed packages and the UX guidelines. However, no shadcn-vue ui components directory was found under frontend/components/ui/, so shadcn-vue may be installed but not yet scaffolded. Task 7 also makes a similar claim ('shadcn-vue Tooltip is not scaffolded in the repo today — verified — components/ui/* is not present'). Task 7's caveat about scaffolding is correct and reasonable.",
+      "fix": "Task 8's blanket 'we don't use shadcn-vue' statement should be qualified: shadcn-vue is installed but components/ui/ is not scaffolded, so plain Tailwind is the correct approach for now. The current guidance is practically correct but could mislead future tasks if shadcn-vue gets scaffolded."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 9,
+      "issue": "Task 9 depends on Task 2 (useProjectsStore, layout.sidebar.settings i18n key) but Task 2 is NOT listed in Task 9's depends_on frontmatter (only [5] is declared). The task body text acknowledges this dependency: 'Task 2 (provides useProjectsStore, the i18n key layout.sidebar.settings, and currentProject computed). Already done in Wave 1.' But relying on Wave 1 completion without declaring the dependency is an omission — if wave gates are not enforced, Task 9 could start before Task 2 produces the i18n key or store.",
+      "fix": "Add Task 2 to depends_on: [2, 5] in Task 9's frontmatter, or document explicitly that Wave 1 completion is a prerequisite enforced at the wave boundary."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 9,
+      "issue": "Task 9 has no new tests at all ('No tests fail: cd frontend && pnpm test is green... this task should not require changes to either'). The task modifies frontend/layouts/default.vue to add a conditional Settings link and inserts <ProjectSelector /> — these are untested UI changes. No spec exists or is planned for layout integration. If ProjectSelector.spec.ts from Task 5 only tests the component in isolation, the layout integration (the conditional v-if, the link target, locale-awareness) has zero automated coverage.",
+      "fix": "Consider adding at least a minimal layout spec (or expanding ProjectSelector.spec.ts) to assert: (a) Settings link renders when currentProject != null, (b) Settings link is absent when null, (c) link target includes currentProject.id. This is optional per the task's zero-test declaration but represents a gap in automated coverage."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 9,
+      "issue": "Task 9 implementation hint says 'Use the same t(\"layout.sidebar.settings\") pattern that t(\"layout.dashboard\") and t(\"layout.profile\") already use in this file'. However, the existing keys layout.dashboard and layout.profile are flat under the layout namespace, while the new key is layout.sidebar.settings — one level deeper. The nesting structure is different. The hint correctly conveys the t() call pattern but implies structural similarity that does not exist.",
+      "fix": "Clarify that layout.sidebar.settings is nested under layout > sidebar > settings in the locale files (different structure from layout.dashboard which is directly under layout). The implementor should check uk.json/en.json for the Task 2-added structure."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "Task 7 references tests/pages/projects/ directory as one that 'will be created (it does not exist yet)'. This is accurate — the directory does not exist. However, the task also references the dashboard.spec.ts pattern for mockNuxtImport. The dashboard.spec.ts does NOT mock useApi (only useAuthStore and useLocalePath), while Task 7's page will need useApi mocked for the ?include_deleted=true fetch. Task 7's TDD spec will need a different mock pattern than dashboard.spec.ts — specifically adding a useApi mock similar to profile.spec.ts.",
+      "fix": "Update the implementation guidance to reference profile.spec.ts (which mocks useApi) rather than dashboard.spec.ts for the useApi mock pattern. Dashboard.spec.ts does not mock useApi and is not the right reference for this page's test."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 References section says 'frontend/pages/profile.vue (lines 187-213, 414-477) — патерн delete modal'. Profile.vue was read and the delete modal pattern exists at lines 187-213 (correct). However, the file has fewer lines than 477 — profile.vue ends before line 477 based on the read (the delete section and template close before that). The line range 414-477 may be inaccurate for the current state of the file.",
+      "fix": "Verify the exact line range by reading profile.vue in full before relying on the referenced line numbers. The modal pattern is in the file; the specific line numbers are approximate."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 42,
+    "issues_found": 14
+  }
+}

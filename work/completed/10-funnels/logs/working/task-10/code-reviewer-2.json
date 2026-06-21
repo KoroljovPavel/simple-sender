@@ -1,0 +1,34 @@
+{
+  "summary": "Round-2 re-review of Task 10 (funnel editor frontend), commit 8309b15. All four round-1 findings are correctly fixed and covered by new/updated tests. The major blank-page-on-load-failure issue is resolved: a loading/error/retry shell now lives OUTSIDE the v-if=funnel block (loadError ref drives [data-test=funnel-load-error] + retry; [data-test=funnel-editor-loading] covers the pending state). The duplicate activate/save banner is gone (activate() returns on persist failure without copying saveError). 422-code extraction now reads err.data.code ?? err.response._data.code via the errorCode() helper, matching the canonical ofetch FetchError shape. TriggerSettings returns null for a pattern-invalid value, so no broken copyable link is offered. Full Vitest suite passes (367/367, 47 files) and check-locales is clean. One NEW minor cosmetic regression: when a bot IS connected but the trigger value fails the pattern, link becomes null so the v-else falls through to the 'Connect a bot…' (noBot) message — misleading copy, though the explicit value-pattern error is still shown directly above. Re-checked low items (out-of-order overlapping PATCHes, .int() on delay, active deep-link ?start= divergence) remain acceptable as documented/intentional. Verdict moves to approved_with_suggestions.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelTriggerSettings.vue",
+      "line": "21-29, 89",
+      "finding": "The fix makes link return null whenever valueError is set (good — prevents copying a broken deep-link). But the template's deep-link block is `v-if=\"link\"` with `v-else` showing funnels.trigger.noBot ('Connect a bot to the project to see the deep link.'). So when a bot IS connected and only the trigger value is invalid, the page now shows the misleading 'connect a bot' message instead of the deep link. The dedicated value-pattern error ([data-test=funnel-trigger-value-error]) is still rendered directly above, so the user does get the real reason; impact is cosmetic/misleading-copy only.",
+      "recommendation": "Gate the noBot fallback on the real cause: e.g. `v-else-if=\"!botUsername && !deepLink\"` for the noBot text, and otherwise render nothing (the link is simply suppressed while the value is invalid). Optional — the value error already communicates the problem."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": "146-155",
+      "finding": "Re-checked per request: overlapping/out-of-order full-array PATCHes (debounced trigger persist vs. step actions) still have no sequencing/cancellation guard; last-resolved applyResponse() wins. Unchanged from round 1. Acceptable for Phase-1 single-editor scope; flagged for awareness only.",
+      "recommendation": "No action required for Phase 1. If hardened later: serialize persists via an in-flight token or AbortController, or skip applyResponse() for the debounced-trigger persist."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "line": "50-55, 87",
+      "finding": "Re-checked per request: delay validation still uses z.coerce.number().int().min(1) — stricter than the backend (rejects null / <1 only). Cannot cause a false 422 (stricter client never passes what the server rejects). Safe; deliberate positive-integer UX choice. Unchanged.",
+      "recommendation": "No action required. Optionally note in the header comment that delay is intentionally validated as a positive integer client-side."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/components/funnels/FunnelTriggerSettings.vue",
+      "line": "18-29",
+      "finding": "Re-checked per request: the active-funnel deep-link preview drops the trailing ?start= for an empty value (bare t.me/<bot> instead of the server's t.me/<bot>?start=). Confirmed intentional per spec (bare /start for an empty value); both resolve to the same /start. No change needed.",
+      "recommendation": "None — intentional per spec."
+    }
+  ],
+  "verdict": "approved_with_suggestions"
+}

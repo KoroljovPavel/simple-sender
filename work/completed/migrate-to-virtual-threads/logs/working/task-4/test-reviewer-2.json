@@ -1,0 +1,19 @@
+{
+  "verdict": "OK",
+  "summary": "Round 2 cleanly migrates both BotRepositoryTest and RawUpdateRepositoryTest off Reactor with assertion semantics preserved. No remaining un-migrated repository test files under the 5 affected packages. The TC7 grep-gate concern from round 1 remains an advisory tech-spec item, out of scope for this task's test code.",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "work/migrate-to-virtual-threads/tech-spec.md:351",
+      "issue": "Advisory carry-over from round 1: TC7 grep gate still only inspects production sources, not test sources. Not a defect in this task's test files (both are correctly migrated); resolution would require a tech-spec edit (either strengthen TC7 grep to include backend/src/test, or require ./gradlew compileTestJava to pass post-Wave 2). Track as a tech-spec follow-up, not a Task 4 blocker.",
+      "suggestion": "In a separate tech-spec touch-up, extend TC7 grep to scan backend/src/test/java/com/botfunnel/{user,project,bot,events,webhook}/ as well, or add compileTestJava to the acceptance gate. No action required on the test files themselves."
+    }
+  ],
+  "semanticsCheck": {
+    "findByProjectIdAndStatus_returnsConnectedRowForProject": "OK — Optional<Bot> return type inherently encodes exactly-one-or-empty; the assertNext+verifyComplete uniqueness property is preserved by the type signature itself. Field equality assertions on telegramBotId and status are retained.",
+    "findByProjectId_returnsAllStatusesForProject": "OK — direct List<Bot> with hasSize(2) plus containsExactlyInAnyOrder on statuses and telegramBotIds is strictly equivalent to (and slightly stronger than) the original collectList+size check.",
+    "duplicateProjectIdUpdateId_throwsDuplicateKey": "OK — assertThatThrownBy(...).isInstanceOf(DuplicateKeyException.class) is the canonical AssertJ equivalent of expectError(DuplicateKeyException.class).verify(). First save() is synchronous, so it commits before the lambda runs; the duplicate-key path is reachable with correct sequencing. No ordering issue.",
+    "indexOps_tests": "OK — sync MongoTemplate.indexOps(...).getIndexInfo() returns List<IndexInfo> directly; the .collectList().block() boundary is correctly dropped."
+  },
+  "remainingRepoTestFiles": "grep over backend/src/test/java/com/botfunnel/{user,project,bot,events,webhook}/ for ReactiveMongoRepository|ReactiveMongoTemplate|StepVerifier in *Repository* files returns zero matches. Only two repository test files exist under the affected packages; both migrated."
+}

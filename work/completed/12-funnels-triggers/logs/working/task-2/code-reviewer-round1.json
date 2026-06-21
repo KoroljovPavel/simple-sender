@@ -1,0 +1,25 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "2",
+  "round": 1,
+  "skill": "code-reviewing",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliation.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java"
+  ],
+  "summary": "Trigger-index reconciliation implemented as a BeanPostProcessor on MongoDatabaseFactory (justified deviation from the ApplicationRunner plan in Decision 9 — proven necessary by a live boot smoke: auto-index-creation runs during MongoTemplate instantiation, before any ApplicationRunner, and the same-name/different-filter index causes MongoDB error 86 IndexKeySpecsConflict that fails the boot). Idempotent via partialFilterExpression inspection, log-but-never-throw, distinct greppable markers. Cross-file signatures (MongoDatabaseFactory.getMongoDatabase, SimpleMongoClientDatabaseFactory ctor) verified. Single MongoDatabaseFactory bean confirmed (JobRunr creates a MongoClient, not a factory). Live 3-boot smoke + slow ITs + full suite green.",
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "minor",
+      "dimension": "Cross-File Consistency / Resource Management",
+      "title": "BPP once-guard relies on single MongoDatabaseFactory bean",
+      "detail": "postProcessAfterInitialization fires on the first MongoDatabaseFactory bean and the `reconciled` flag prevents re-entry. Verified there is exactly one such bean (Spring Boot autoconfig); JobRunrMongoConfig contributes a MongoClient, not a factory. Documented in javadoc. No change required.",
+      "action": "acknowledged-no-change",
+      "status": "accepted-as-is"
+    }
+  ],
+  "verdict": "approve",
+  "blocking": false
+}

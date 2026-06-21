@@ -1,0 +1,166 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task-integration",
+  "cycle": 2,
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+  "iteration": "cross-task cycle 2/2",
+  "status": "approved",
+  "summary": "All four cycle-1 critical findings and three of four cycle-1 major findings are resolved. One cycle-1 minor finding (Task 5 placeholder spec path) is unresolved and remains minor. One new minor finding surfaced (stale 'WARN + metric capture' phrasing on Task 6 edge-case line 143 — narrative-only, no AC/test impact). No new critical or major findings.",
+  "fixes_verified": [
+    {
+      "fix": "T6 ↔ T8 Micrometer counter aligned",
+      "result": "OK",
+      "detail": "Task 6 line 26+32+50+77+121+137 explicitly removes MeterRegistry and substitutes a single greppable WARN log line `\"bot-connect brute-force counter Redis failure (fail-open)\"` asserted via Logback `ListAppender`. Task 8 line 79 renames the IT to `postConnect_redisDown_failsOpen_connectSucceeds_warnLogged` (the `_metricIncremented` suffix is gone). Task 8 line 102 AC says 'No Micrometer assertion — Task 6 does not inject MeterRegistry'. Task 8 line 175 explicitly says 'Do NOT read a Micrometer counter'. Both tasks reference the exact same string literal for the WARN line — `grep` confirms three occurrences in T6 and two in T8 of the identical phrase. Contract drift fully closed."
+    },
+    {
+      "fix": "T6 ↔ T8 event metadata shape (ip/userAgent are top-level, not in metadata Map)",
+      "result": "OK",
+      "detail": "Task 6 line 156 reaffirms `bot_connected` metadata = `{projectId, telegramBotId, telegramUsername}` and `bot_disconnected` = `{projectId, telegramBotId, webhookDeleted}`. Task 8 line 110 AC now reads: 'integration test asserts the emitted bot_connected event has metadata map = {projectId, telegramBotId, telegramUsername}. ip and userAgent are TOP-LEVEL fields on the Event document (set by EventService.logEvent(userId, eventType, ipAddress, userAgent, metadata)) — asserted via evt.getIpAddress() / evt.getUserAgent(), NOT via the metadata map.' Task 8 line 184 implementation hint matches. Three-way agreement (T6 ↔ T8 ↔ EventService signature)."
+    },
+    {
+      "fix": "Task 5 declares depends_on: [4]",
+      "result": "OK",
+      "detail": "Task 5 frontmatter line 3: `depends_on: [4]`. Wave still 1 — task-creator chose declaration over wave-promotion, which is acceptable given the orchestrator can sequence intra-wave by depends_on. Task 5 still consumes Task 4's `bot.subnav.*` and `bot.placeholder` keys; the declared dependency now makes the producer→consumer relationship machine-readable."
+    },
+    {
+      "fix": "Task 2 declares depends_on: [1]",
+      "result": "OK",
+      "detail": "Task 2 frontmatter line 3: `depends_on: [1]`. Wave still 1. The `application.properties` shared-edit conflict between T1 and T2 is now expressed by the dependency declaration. T2 still keeps the `@Value('${app.telegram.base-url:https://api.telegram.org}')` default as belt-and-suspenders. Resource-sharing contract closed."
+    },
+    {
+      "fix": "T4 ↔ T9 disconnect modal key namespace aligned (dot-segmented bot.disconnect.modal.*)",
+      "result": "OK",
+      "detail": "Task 4 lines 55-56, 89, 95, 184-185, 207-209, 270-272 all use dot-segmented `bot.disconnect.modal.{title,body,confirm,cancel}` and explicitly forbid the camelCase compound root `bot.disconnectModal.*`. Task 9 line 161, 166, 172 use the same dot-segmented namespace and call out the canonical form. Both tasks reference the same anchor (AC19). Vue-i18n key lookup will now succeed in production."
+    },
+    {
+      "fix": "Task 6 verify: [] aligned with Verification Steps sections",
+      "result": "OK",
+      "detail": "Task 6 frontmatter line 6: `verify: []`. Verification Steps section contains only an Automated subsection (Gradle test invocation + unit-test coverage description). HTML comment on line 124 explicitly states 'No Verify-smoke and no Verify-user specified in tech-spec for Task 6 — tech-spec line 535's Verify-smoke entry is in fact a description of the unit-test coverage above'. Frontmatter and section content now match."
+    },
+    {
+      "fix": "Task 11 focus area 5 no longer mentions a required Micrometer counter",
+      "result": "OK",
+      "detail": "Task 11 line 135 says: 'D14's Micrometer counter expectation is deferred from epic 06 per Task 6's deviation (no Spring Boot Actuator / Micrometer dependency on the project). The audit MUST NOT fail the feature for the missing Micrometer counter; record it as Info / deferred only.' The audit guidance is now consistent with the implementation contract in Tasks 6 and 8 — auditor will not be misled into flagging the missing counter as a critical finding."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 5,
+      "section": "TDD Anchor — placeholder spec path",
+      "issue": "Task 5 TDD Anchor (line 51) still references `frontend/tests/pages/projects/bot.spec.ts::placeholder renders SettingsSubnav` (placed at `tests/pages/projects/bot.spec.ts`), while Task 9 'Files to modify' (line 29, 43, 48, 50–67, 101, 121) places its full bot-page spec at `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` (one level deeper, under `[projectId]/settings/`). Two different files. Cycle-1 minor finding #2 is still unresolved. Risk: Task 9 either has to delete Task 5's smoke spec or leave a stale file behind. The pnpm parity gate will not catch this.",
+      "fix": "Either (a) change Task 5 line 51 to use the deeper path `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` so Task 9 cleanly replaces it, or (b) document in Task 9 'What to do' that the file at `tests/pages/projects/bot.spec.ts` is deleted as part of Task 9's setup. (a) is simpler; (b) requires no Task-5 edit but adds an extra step to Task 9.",
+      "carried_from_cycle_1": true
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 6,
+      "section": "Details / Edge cases — line 143",
+      "issue": "Task 6 Edge cases line 143 says 'Redis unreachable on DEL after successful Connect: must not fail the Connect — counter expires naturally after 15 min; WARN + metric capture the failure.' The 'WARN + metric' wording is leftover from the prior Micrometer contract — there is no metric in the implementation any more (Description, ACs, TDD Anchor, Verification Steps all explicitly removed the counter). This is a stale phrase in narrative text only, not in any AC or test; severity minor because no test or implementer-action follows from this line. But a reviewer reading bottom-up could be misled.",
+      "fix": "Edit Task 6 line 143 to drop the 'metric capture' phrase: 'Redis unreachable on DEL after successful Connect: must not fail the Connect — counter expires naturally after 15 min; WARN log line emitted (via Logback ListAppender-asserted message — see Description).'",
+      "new_in_cycle_2": true
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 3,
+      "section": "Acceptance Criteria — JSON wire format / tech-spec documentation hygiene",
+      "issue": "Cycle-1 finding #10 (tech-spec D14-style: tech-spec Task 3 entry does not mention @JsonValue lowercase serialisation, but Task 3 implements it). Still unresolved at the task-file layer (Task 3 itself encodes the contract correctly). This is a tech-spec hygiene issue, not a task issue — flagging only because the cycle-1 report listed it; no blocker for execution.",
+      "fix": "After Wave 4 lands, update tech-spec.md Implementation Tasks Task 3 entry to mention the @JsonValue lowercase serialisation contract. Not a task-file blocker.",
+      "carried_from_cycle_1": true
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 6,
+      "section": "Acceptance Criteria — deviation from tech-spec D14",
+      "issue": "Cycle-1 finding #11 (tech-spec D14 mandates a Micrometer counter, Task 6 intentionally drops it, Task 6 AC11 acknowledges the deviation). The cross-task contract between T6 and T8 is now consistent (fix verified above), but tech-spec D14 still on paper requires the Micrometer counter. Recommended (out of scope of cross-task review): edit tech-spec D14 to drop 'Micrometer counter' and replace with 'dedicated greppable WARN log line'. Until then, Post-completion step on Task 6 ('If deviated from spec — describe deviation and reason') will capture the deviation in decisions.md.",
+      "fix": "(Optional, post-wave-5) Edit tech-spec D14 to remove the Micrometer counter requirement and align with the WARN-log contract. This is documentation cleanup, not a task-file fix.",
+      "carried_from_cycle_1": true
+    }
+  ],
+  "checks_passed": [
+    {
+      "check": "shared-resource ownership",
+      "result": "OK",
+      "detail": "TokenEncryptor owner T1 → consumer T6; TelegramApiClient owner T2 → consumer T6; BotRepository owner T3 → consumer T6; application.properties shared edit owner T1 → consumer T2 (now declared via T2 depends_on [1]); i18n bot.* keys owner T4 → consumers T5, T9 (T5 declares depends_on [4]; T9 declares depends_on [4])."
+    },
+    {
+      "check": "no competing instances",
+      "result": "OK",
+      "detail": "No two tasks in the same wave create their own instance of any shared resource. Wave-1 application.properties edits are owned by T1; Wave-1 i18n locale-file edits are owned by T4; Wave-2 BotService is the sole consumer of T1/T2/T3 Wave-1 outputs."
+    },
+    {
+      "check": "wave/dependency graph",
+      "result": "OK",
+      "detail": "W1=[1,2,3,4,5]; W2=[6,7]; W3=[8,9]; W4=[10,11,12]; W5=[13]. All depends_on values reference existing tasks with strictly lower waves OR same-wave intra-wave dependency (T2→[1] same wave, T5→[4] same wave — both acceptable when orchestrator honours depends_on within the wave). T6→[1,2,3] (W1→W2 ✓), T7→[3] (W1→W2 ✓), T8→[6] (W2→W3 ✓), T9→[4,5,7] (W1,W1,W2 → W3 ✓), T10/11/12→[8,9] (W3→W4 ✓), T13→[10,11,12] (W4→W5 ✓). No cycles."
+    },
+    {
+      "check": "wire-format: status lowercase",
+      "result": "OK",
+      "detail": "T3 implements @JsonValue lowercase + @JsonCreator lowercase parsing; T7 declares the lowercase literal union; T8 IT asserts lowercase JSON. Three layers agree."
+    },
+    {
+      "check": "wire-format: token regex",
+      "result": "OK",
+      "detail": "T2 scrubber regex `\\d{1,20}:[A-Za-z0-9_-]{30,50}` matches T6 negative-assertion regex and T9 DOM-negative-assertion regex `/\\d{1,20}:[A-Za-z0-9_-]{30,50}/`. Consistent."
+    },
+    {
+      "check": "wire-format: webhook URL shape",
+      "result": "OK",
+      "detail": "T6 and T8 both specify `${app.url}/webhooks/telegram/{projectId}`; T8 IT asserts the exact URL is sent to MockWebServer for setWebhook."
+    },
+    {
+      "check": "wire-format: bot_connected/bot_disconnected event names & metadata",
+      "result": "OK",
+      "detail": "T6 emits `bot_connected` and `bot_disconnected` only; metadata maps are explicitly `{projectId, telegramBotId, telegramUsername}` and `{projectId, telegramBotId, webhookDeleted}`. T8 IT asserts the same shape with `ip`/`userAgent` checked as top-level Event document fields via `evt.getIpAddress()` / `evt.getUserAgent()`. No `bot_test_message_sent` event."
+    },
+    {
+      "check": "fail-open observability contract (Redis WARN)",
+      "result": "OK",
+      "detail": "T6 emits a single dedicated WARN string `\"bot-connect brute-force counter Redis failure (fail-open)\"` from BotService logger on both INCR-failure and DEL-failure paths; asserted via Logback `ListAppender<ILoggingEvent>`. T8 IT asserts the SAME exact string via the SAME `ListAppender` pattern. No Micrometer / MeterRegistry / actuator on either side. Tech-spec D14 deviation is intentional and consistent across tasks."
+    },
+    {
+      "check": "i18n key namespace (bot.* and errors.bot.*)",
+      "result": "OK",
+      "detail": "T4 owns the full inventory: `bot.page.*`, `bot.connectForm.*`, `bot.connected.*`, `bot.disconnect.modal.{title,body,confirm,cancel}` (DOT-segmented, NOT camelCase), `bot.toasts.*`, `bot.subnav.{general,bot}`, `bot.placeholder`, `errors.bot.connect.{400,409,422,429,500,502}`, `errors.bot.disconnect.404`, `errors.bot.testMessage.{422,502}`, `errors.bot.{connect,disconnect,testMessage}.generic`. T5 and T9 consume; T9 line 162-172 inventory matches T4 verbatim. pnpm prebuild parity gate enforces uk↔en symmetry."
+    },
+    {
+      "check": "Base64 boundary encoding (T1 ↔ T6)",
+      "result": "OK",
+      "detail": "T1 `EncryptedValue(byte[] iv, byte[] ciphertext)` is raw bytes by contract. T6 step 2 (line 33) now explicitly: '**Base64-encode both iv and ciphertext with Base64.getEncoder().encodeToString(...) before persistence**' and step 4 (line 35) '**Base64-decode** the stored encryptedTokenIv and encryptedTokenCiphertext strings via Base64.getDecoder().decode(...)'. TDD Anchor lines 55-56 add `connect_encryptedTokenAndIvAreBase64EncodedBeforeSave` and `disconnect_base64DecodesIvAndCiphertextBeforeDecrypt` tests. Boundary contract is now explicit and test-anchored."
+    },
+    {
+      "check": "MockWebServer lifecycle discipline (T8)",
+      "result": "OK",
+      "detail": "T8 line 181 specifies class-level static `MockWebServer` (for @DynamicPropertySource compatibility) AND line 182 explicitly mandates per-test isolation: 'in @BeforeEach, drain ALL leftover recorded requests with a zero-timeout loop until null — `while (mockTelegram.takeRequest(0, TimeUnit.MILLISECONDS) != null) { /* drain */ }` — AND reset the dispatcher / clear the response queue.' Cross-test contamination risk mitigated with an explicit protocol."
+    },
+    {
+      "check": "partial unique index filter casing",
+      "result": "OK",
+      "detail": "T3 partialFilter uses uppercase `{ 'status': 'CONNECTED' }` matching Java BotStatus.CONNECTED.name(); T13 mongosh smoke asserts the same uppercase. Jackson lowercase wire format is independent of Mongo storage."
+    },
+    {
+      "check": "disconnect-nulled fields",
+      "result": "OK",
+      "detail": "T3 declares nullable, T6 disconnect step nulls all four (encryptedTokenCiphertext, encryptedTokenIv, tokenSuffix, webhookSecretHash) plus sets disconnectedAt. T8 IT asserts post-disconnect all four are null."
+    },
+    {
+      "check": "audit-task review-rounds semantics (T13)",
+      "result": "OK",
+      "detail": "T13 lines 28, 63, 188, 192 consistently model T10/T11/T12 as `reviewers: []` audit tasks done when the report is produced and committed, with critical findings resolved via follow-up fix-tasks (not review rounds). Cycle-1 finding #11 fully addressed."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 13,
+    "critical_findings": 0,
+    "major_findings": 0,
+    "minor_findings": 4,
+    "total_findings": 4,
+    "cycle_1_findings_resolved": 9,
+    "cycle_1_findings_carried_forward": 3,
+    "new_findings_in_cycle_2": 1
+  }
+}

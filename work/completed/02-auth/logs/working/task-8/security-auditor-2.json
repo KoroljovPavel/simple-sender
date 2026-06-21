@@ -1,0 +1,103 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "deferred (acknowledged)",
+      "title": "apiBase fallback to http://localhost:8080 with no production guard (deferred)",
+      "description": "Round 1 finding (major) re-classified as deferred per commit message and decisions.md context. nuxt.config.ts still falls back to http://localhost:8080 if NUXT_PUBLIC_API_BASE is unset. Re-noting here so the deferral remains visible. No new code change in commit 477048b touched this surface.",
+      "location": "frontend/nuxt.config.ts:11",
+      "impact": "Misconfigured production deploy could ship a bundle pointing at localhost:8080 with credentials:'include'.",
+      "recommendation": "Track in backlog; add an env-var guard in nuxt.config.ts before the next deploy that builds the frontend bundle (throw if NUXT_PUBLIC_API_BASE is missing in production).",
+      "cwe": "CWE-1188"
+    },
+    {
+      "severity": "minor",
+      "category": "deferred (acknowledged)",
+      "title": "fetchUser only clears userState on 401 (deferred)",
+      "description": "Round 1 finding (major) deferred. fetchUser() in stores/auth.ts still leaves userState populated when a non-401 error occurs (e.g., 403, 5xx, network), which can produce stale 'authenticated' UI on a server-side terminated session. Tests added in this commit (fetchUser_500Response_propagatesErrorAndKeepsUser) explicitly codify the deferred behavior, so the gap is documented.",
+      "location": "frontend/stores/auth.ts (catch branch)",
+      "impact": "User UI may display authenticated state after backend session has been invalidated by an error other than 401.",
+      "recommendation": "Track in backlog; consider fail-closed semantics (clear user on any /api/auth/me failure) in a follow-up.",
+      "cwe": "CWE-613"
+    },
+    {
+      "severity": "minor",
+      "category": "deferred (acknowledged)",
+      "title": "useState SSR cross-request leak risk in non-default Nuxt deployments (deferred)",
+      "description": "Round 1 finding (major) deferred. Middleware now calls fetchUser() whenever authStore.user === null (including on /auth/** routes — improvement from round 1), but still short-circuits when user is non-null. In default Nuxt runtime useState is per-request; in non-standard deployments this is still a residual risk. Acknowledged by team and acceptable for current default deployment topology.",
+      "location": "frontend/stores/auth.ts:5, frontend/middleware/auth.global.ts",
+      "impact": "Cross-request authentication bleed only in non-default Nuxt server configurations.",
+      "recommendation": "Track in backlog; add a regression test covering two SSR renders with different cookies before introducing custom server adapters.",
+      "cwe": "CWE-488"
+    },
+    {
+      "severity": "minor",
+      "category": "deferred (acknowledged)",
+      "title": "No CSP / X-Frame-Options / Referrer-Policy at the Nuxt level (deferred)",
+      "description": "Round 1 minor finding deferred. nuxt.config.ts still configures no nitro routeRules with security headers and no nuxt-security module. Defense-in-depth gap remains; not blocking.",
+      "location": "frontend/nuxt.config.ts",
+      "impact": "Missing layered defense against future XSS / clickjacking regressions; relies entirely on reverse proxy / hosting.",
+      "recommendation": "Track in backlog; add nitro routeRules with CSP, X-Frame-Options: DENY, X-Content-Type-Options: nosniff, Referrer-Policy: strict-origin-when-cross-origin in a follow-up.",
+      "cwe": "CWE-693"
+    },
+    {
+      "severity": "minor",
+      "category": "deferred (acknowledged)",
+      "title": "happy-dom@16.8.1 has known advisories (deferred)",
+      "description": "Round 1 minor finding deferred. happy-dom is still pinned at ^16.5.3 (resolves to 16.8.1) in package.json. devDependency only, used by vitest — no production runtime impact. Supply-chain risk for CI if untrusted PR test fixtures are ever introduced.",
+      "location": "frontend/package.json (happy-dom devDependency)",
+      "impact": "CI compromise vector for runs with untrusted PR fixtures; no production runtime impact.",
+      "recommendation": "Track in backlog; bump to happy-dom@^17.4.5 and add `pnpm audit` step to CI in a follow-up.",
+      "cwe": "CWE-1104"
+    }
+  ],
+  "round_2_verification": {
+    "round_1_critical_csrf": {
+      "status": "FIXED",
+      "verified_in_commit": "477048b",
+      "file": "frontend/composables/useApi.ts",
+      "evidence": "useApi() now installs an onRequest interceptor that (a) skips SAFE methods (GET/HEAD/OPTIONS), (b) reads the XSRF-TOKEN cookie via document.cookie regex with decodeURIComponent (handles base64 padding correctly), (c) clones existing headers via new Headers() and sets X-XSRF-TOKEN, (d) is SSR-safe via the import.meta.client + typeof document guard so it no-ops cleanly on server-side $fetch (no token needed because no state-changing requests are made during SSR bootstrap). Implementation matches tech-spec Decision 12 (CookieCsrfTokenRepository.withHttpOnlyFalse + X-XSRF-TOKEN header) and the round 1 fix recommendation. Logout (POST /api/auth/logout) and all future state-changing requests will now include the CSRF token.",
+      "implementation_quality_notes": [
+        "Header type cast `as HeadersInit | undefined` is correct for ofetch's options.headers type.",
+        "Regex `(?:^|;\\s*)XSRF-TOKEN=([^;]+)` correctly anchors to cookie-name boundary (no partial-match false positives on cookies whose name ends in XSRF-TOKEN).",
+        "decodeURIComponent on the token value matches Spring Security CookieCsrfTokenRepository behavior (token is URL-encoded in the cookie).",
+        "SAFE_METHODS set follows RFC 7231 / OWASP guidance.",
+        "No token leak via console.log or telemetry."
+      ]
+    },
+    "deferred_findings": [
+      "apiBase localhost fallback (round 1 major) — deferred per commit/decisions",
+      "fetchUser non-401 stale state (round 1 major) — deferred per commit/decisions",
+      "useState SSR cross-request leak (round 1 major) — deferred per commit/decisions",
+      "Missing CSP / security headers (round 1 minor) — deferred per commit/decisions",
+      "happy-dom advisory (round 1 minor) — deferred per commit/decisions"
+    ],
+    "new_changes_reviewed": {
+      "frontend/middleware/auth.global.ts": "Now calls fetchUser() whenever user is null (including on /auth/** routes) — strictly better than round 1 (closes the SSR-state-pollution short-circuit on /auth/**). try/catch swallows non-401 errors so navigation always completes; combined with store's '401-only clears state' behavior this means a 5xx during navigation leaves user as null (correct). No new security regression.",
+      "frontend/layouts/default.vue": "Logout handler wraps authStore.logout() in try/catch so navigateTo('/auth/login') always runs; store's finally clause guarantees local userState is cleared before the throw. Net effect: even if backend logout fails (e.g., CSRF mismatch, network drop), the user is redirected to login and local state is cleared. This is acceptable for a UX fail-closed behavior; no security regression introduced.",
+      "frontend/tests/stores/auth.spec.ts": "New tests (fetchUser_500Response_propagatesErrorAndKeepsUser, logout_apiError_stillClearsUser) codify the deferred 401-only-clear behavior. fetchUser_401Response_setsUserNull is now non-tautological (pre-arms ACTIVE_USER). No new security concern.",
+      "frontend/tests/middleware/auth.global.spec.ts": "Per the commit stat, adds backend-error and valid-session-on-/auth/login regression tests. These exercise the new behavior of always calling fetchUser when user is null. No new security concern.",
+      "frontend/package.json + pnpm-lock.yaml": "Drops the explicit `vue` dep (now transitive via nuxt) — eliminates the dup-Vue-copies risk. No new security concern."
+    },
+    "owasp_top_10_recheck": {
+      "A01_access_control_csrf": "PASS — X-XSRF-TOKEN header now sent (was the round 1 critical).",
+      "A02_crypto": "PASS — no crypto introduced/changed in this commit.",
+      "A03_injection_xss": "PASS — Vue {{ }} interpolation used; no v-html added.",
+      "A04_insecure_design": "PARTIAL (deferred items only) — no new design flaws.",
+      "A05_misconfig": "PARTIAL (deferred items only) — no new misconfig.",
+      "A06_vuln_components": "PARTIAL (deferred happy-dom only) — no new deps in this commit.",
+      "A07_auth_failures": "PASS — fixes here strictly improve auth state handling on logout/middleware paths.",
+      "A08_integrity": "PASS — no deserialization changes; lockfile was updated to remove dup vue (smaller attack surface).",
+      "A09_logging": "PASS — no logging regression; logout still surfaces error to caller via rethrow (layout swallows for UX, but underlying observability path is intact).",
+      "A10_ssrf": "PASS — no server-side URL fetches added."
+    },
+    "hardcoded_secrets_scan": "PASS — no hardcoded credentials introduced in commit 477048b across all 7 modified files."
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "notes": [
+    "Scope: frontend-only change in frontend/pages/projects/[projectId]/funnels/[funnelId].vue and frontend/tests/pages/funnel-editor.spec.ts. Reworks a single flat trigger into a FunnelTrigger[] array sent in the PATCH body, with a per-element client-side autosave gate. Reviewed against OWASP Top 10 (2021) and mandatory hardcoded-secrets / XSS / injection checks.",
+    "A03 Injection / XSS: No new output sink introduced. The page renders all dynamic data (funnel.name, error messages, status) via Vue {{ }} interpolation, which auto-escapes. grep for v-html across frontend/pages and frontend/components/funnels found ZERO usages — every match is an explicit comment documenting the team's 'never v-html' invariant. No innerHTML, no v-html, no dangerouslySetInnerHTML. Trigger values flow into the PATCH JSON body, not into the DOM as markup.",
+    "ReDoS (A03-adjacent): The two client-side regexes used as the autosave gate are safe. TRIGGER_VALUE_RE = /^[A-Za-z0-9_-]{0,64}$/ and EVENT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/ are fully anchored, use a single bounded character class with an upper bound (64), and have no nesting, backreferences, or overlapping alternation — linear time, no catastrophic backtracking. Inputs are user-typed trigger slugs, also short.",
+    "A04 Insecure Design / trust boundary: Client-side validation (triggerReady / regexes / sanitizeTrigger) is correctly positioned as a UX gate only, NOT a security control. Comments and the task spec are explicit that the backend remains the authoritative validator (422 + business code, mapped inline via resolveFunnelError). sanitizeTrigger strips stale cross-type fields (keyword owns keywords / clears triggerValue; other types vice versa) which reduces payload ambiguity but is not relied on for security. No client-side authorization decisions added.",
+    "A01 Broken Access Control / IDOR: Unchanged and intact. funnelId comes from the route; the anti-IDOR uniform-404 redirect (statusOf(err) === 404 -> navigateTo list) is preserved verbatim. No ownership/authorization logic was added or weakened on the client; the server enforces tenant scoping and returns a uniform 404 for missing/cross-owner funnels.",
+    "Hardcoded secrets: None. No API keys, tokens, passwords, or connection strings in the diff. Test fixtures (draft()/summary() factories) contain only inert sample data (e.g. 'order_paid', '2026-01-01' timestamps).",
+    "A08 Integrity / deserialization: No JSON.parse/eval of untrusted input added; the response is consumed via the typed store (funnelsStore.fetchOne/update) and spread into typed objects. The applyingResponse re-entrancy guard is a correctness mechanism (prevents an infinite persist->applyResponse->watch loop), not a security boundary.",
+    "A10 SSRF: N/A — this is browser-side code; no server-side fetch of a user-controlled URL is introduced. deepLink is passed to the panel for display only.",
+    "A09 Logging: N/A for a frontend component; no sensitive data logged. Errors are surfaced to the user via localized inline banners / toasts, not console dumps.",
+    "Dependencies: No new npm dependencies added (consistent with the task's stated constraint). No package manifest changes in scope."
+  ]
+}

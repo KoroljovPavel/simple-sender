@@ -1,0 +1,115 @@
+{
+  "verdict": "approved",
+  "status": "approved",
+  "summary": {
+    "totalFindings": 3,
+    "blocker": 0,
+    "major": 0,
+    "minor": 3,
+    "critical": 0
+  },
+  "scope": {
+    "files": [
+      "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "frontend/stores/bot.ts",
+      "frontend/composables/useApiError.ts",
+      "frontend/composables/useApi.ts",
+      "frontend/i18n/locales/en.json",
+      "frontend/i18n/locales/uk.json"
+    ],
+    "acs_audited": ["AC17", "AC18", "AC19", "AC23"]
+  },
+  "ac_results": {
+    "AC17_token_never_leaves_frontend": {
+      "pass": true,
+      "evidence": [
+        "tokenInput is a local page-level ref (bot.vue:20) — not in Pinia state, not on botStore.current.",
+        "On successful connect, tokenInput.value = '' (bot.vue:49) clears the local ref.",
+        "botStore.connect(projectId, token) receives token only as a positional arg — store body (bot.ts:39-63) places it in the POST body only; never on state, never returned, never in URL.",
+        "Error path: only apiError(err, 'bot.connect') runs (bot.vue:51,75,89). useApiError returns i18n strings keyed by status code — never inserts err.options.body or response.body into the user-visible message.",
+        "ofetch body redaction in store (bot.ts:59-60) replaces err.options.body with '[redacted]' before re-throwing, so even callers that log the whole error object cannot leak the secret.",
+        "Token is never interpolated into a URL, query string, route param, log statement, or surviving reactive ref.",
+        "Vitest spec asserts wrapper.text() !~ TOKEN_REGEX after a 422 error path (bot.spec.ts:347-362)."
+      ]
+    },
+    "AC18_masked_token_literal_form": {
+      "pass": true,
+      "evidence": [
+        "maskedToken computed at bot.vue:29-35 returns `${bot.telegramBotId}:•••...${bot.tokenSuffix}`.",
+        "The middle glyph is the literal U+2022 BULLET character repeated three times — no JS escape sequence, no \\u202… substitution.",
+        "Only the last 3 chars (tokenSuffix from API) appear; backend never sends the body, so the secret remains undisclosed.",
+        "Spec asserts the exact rendered text '1234567890:•••...xyz' (bot.spec.ts:176, 371)."
+      ]
+    },
+    "AC19_disconnect_modal_copy": {
+      "pass": true,
+      "evidence": [
+        "Modal body uses t('bot.disconnect.modal.body', { username: botStore.current?.telegramUsername ?? '' }) (bot.vue:185-191) — canonical i18n key with {username} interpolation.",
+        "uk.json body: 'Відключити бота @{username}? Вхідні повідомлення припиняться, а вебхук буде видалено. Підключити знову можна будь-коли.'",
+        "en.json body: 'Disconnect bot @{username}? Incoming messages will stop and the webhook will be removed. You can reconnect anytime.'",
+        "Username is rendered via Vue {{ }} interpolation inside DialogDescription — HTML-encoded by default; no XSS surface even if username were attacker-shaped.",
+        "Spec asserts modal text contains '@SmokeBot' and the canonical phrase (bot.spec.ts:265-279)."
+      ]
+    },
+    "AC23_no_unmasked_token_via_errors": {
+      "pass": true,
+      "evidence": [
+        "useApiError builds candidates as `errors.${contextKey}.${status}` then `errors.${contextKey}.generic` then `errors.generic` — pure i18n key resolution. No interpolation of error.body, response.body, response.data, err.message, etc.",
+        "Error display in template (bot.vue:174-176) uses {{ errorMessage }} via Vue text interpolation — HTML-encoded, no v-html.",
+        "Store-level redaction of err.options.body (bot.ts:59-60) provides defense-in-depth for any caller that decides to console.log the rejected error."
+      ]
+    }
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Bot-token input uses type=\"text\" instead of type=\"password\"",
+      "description": "The token input is `<input id=\"bot-token\" v-model=\"tokenInput\" type=\"text\" autocomplete=\"off\" spellcheck=\"false\" …>` (bot.vue:112-122). The token is a long-lived bearer credential for the Telegram Bot API. Rendering it as visible plaintext exposes it to shoulder-surfing, screen-share leaks, and screenshot artifacts during the connect flow. Using `type=\"password\"` would mask the characters by default while keeping paste support intact. autocomplete=\"off\" is correctly set, but masking is independent of autofill behaviour.",
+      "location": "frontend/pages/projects/[projectId]/settings/bot.vue:112-122",
+      "impact": "Live token visible on screen while typing/pasting; risk multiplied if user records a demo, shares their screen, or works in a public space. Not an AC17 violation (the token still never leaves the browser) but reduces the practical secrecy of the token at the user-interface boundary.",
+      "recommendation": "Change to `type=\"password\"`. If product wants a 'show token' toggle for usability, add a separate button that flips type between password↔text and resets to password on blur/unmount. Example: `<input :type=\"reveal ? 'text' : 'password'\" …>` with `reveal` defaulting to false.",
+      "cwe": "CWE-549",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 116
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Token persists in input ref after a failed connect attempt",
+      "description": "onConnect (bot.vue:42-55) clears `tokenInput.value` only on the success path (line 49). When connect rejects (400/409/422/429/500/502), the token remains both in the reactive ref and as the DOM input's `.value` until the user manually clears it or navigates away. While AC17 specifically governs leakage OUTSIDE the user's browser, the persistence widens the window in which Vue Devtools / DOM inspection / screenshot artifacts retain the secret.",
+      "location": "frontend/pages/projects/[projectId]/settings/bot.vue:42-55",
+      "impact": "Slightly longer lifetime of the bearer token in client memory and in the DOM after an error. UX trade-off (user may want to fix a typo without re-pasting), but secrets handling typically prefers explicit clearing.",
+      "recommendation": "Either (a) clear `tokenInput.value` in the catch block as well (forces re-paste on retry, but maximally tight); or (b) accept the current UX and document the trade-off explicitly in a code comment so future maintainers don't 'helpfully' bind tokenInput to anywhere else. The status quo is defensible — no change is strictly required.",
+      "cwe": "CWE-316",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 50
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Empty-string fallback in modal body interpolation can render '@ '",
+      "description": "Modal renders `t('bot.disconnect.modal.body', { username: botStore.current?.telegramUsername ?? '' })` (bot.vue:187-189). If `botStore.current` becomes null while the modal is open (e.g., the projects-store watcher in bot.ts:75-86 clears `current` on project switch, or a stale-current 404 fires), the interpolation produces `@ ` followed by the rest of the sentence — confusing UX rather than a security issue, but it's a leakage of an inconsistent state to the user.",
+      "location": "frontend/pages/projects/[projectId]/settings/bot.vue:185-191",
+      "impact": "Cosmetic/UX, no exploitation path. Worth a defensive check: if `botStore.current` is null while the modal is open, the modal should auto-close rather than render an empty `@`. Not a security finding strictly, included for completeness because it relates to the AC19 copy.",
+      "recommendation": "Add `watch(() => botStore.current, (v) => { if (!v) showDisconnectModal.value = false })` near the existing setup script, or gate the Dialog `open` prop on `showDisconnectModal && !!botStore.current`. Optional hardening; do not block on this.",
+      "cwe": null,
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 188
+    }
+  ],
+  "non_findings_explicitly_checked": [
+    "Token in URL/query/route — not present; `useApi()<Bot>(\\`/api/v1/projects/${projectId}/bot/connect\\`, { method: 'POST', body: { token } })` keeps token in body only.",
+    "Token in Pinia state — botStore.$state only exposes `current: Bot|null`; `inFlight` is a module-scoped closure and the connect function does not write the token to any reactive holder.",
+    "Token in console.log/console.error — no log statements in bot.vue or bot.ts; the only console.warn is on a 404 stale-current path that does not touch the token (useApi.ts:73).",
+    "XSS via telegramUsername/telegramFirstName/tokenSuffix — all rendered via Vue {{ }} text interpolation; no v-html; HTML-encoded by default. Safe.",
+    "XSS via i18n message interpolation — vue-i18n by default HTML-escapes interpolated values; no <i18n-t> with t-component slots used.",
+    "CSRF — useApi.ts:99-103 adds X-XSRF-TOKEN header from the XSRF-TOKEN cookie for non-safe methods (POST connect/disconnect/test-message). Spring CookieServerCsrfTokenRepository pairing is documented in the composable. Protected.",
+    "Authz — frontend correctly delegates authorization to backend on `/api/v1/projects/{projectId}/bot/*`. No client-side gate is acceptable for a SPA when the server enforces it.",
+    "Hardcoded secrets — no embedded API keys, tokens, passwords, or connection strings in any of the audited files. The fixture token `1234567890:AAFakeTokenABCDEFGHIJKLMNOPQRSTUVWXYZ` in bot.spec.ts is a test-only string explicitly named 'Fake' and only used inside the test runner.",
+    "Insecure deserialization — N/A; only $fetch JSON parsing of trusted-shape responses.",
+    "SSRF — N/A; client-side code.",
+    "Vulnerable components — out of scope for this delta; not changed by Task 9.",
+    "Disconnect operation does not re-prompt for confirmation outside the modal — modal copy itself satisfies AC19; double-confirm not required."
+  ]
+}

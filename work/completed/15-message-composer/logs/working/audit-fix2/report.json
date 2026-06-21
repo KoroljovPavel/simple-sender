@@ -1,0 +1,56 @@
+{
+  "task": "Audit fixes round 2 — engine IT slow-lane green (R2-MAJ-1, R2-MIN-1, R2-INFO-1)",
+  "feature": "15-message-composer",
+  "agent": "engine-it-fixer",
+  "date": "2026-06-10",
+  "docker": "available (docker ps → 6 containers). Slow lane (Testcontainers) runnable here.",
+  "self_review": {
+    "methodologies": ["code-reviewing (11 dimensions)", "test-master"],
+    "verdict": "OK — no blocking findings; fix is a genuine harness defect repair, no test weakened/disabled/deleted, no implementation bug found in StepExecutor/engine."
+  },
+  "root_cause": {
+    "id": "R2-MAJ-1 (slow-lane RED standalone)",
+    "failing_tests": [
+      "FunnelExecutionEngineIT.multiBlockMessage_crashMidBlocks_doesNotResendOnReClaim",
+      "FunnelExecutionEngineIT.multiBlockMessage_runsAllBlocksInOneTickAndCompletes"
+    ],
+    "classification": "TEST-HARNESS DEFECT (not an implementation bug).",
+    "evidence": "Temporary debug print on the crash test showed sentCount=0, status=completed, reqCount=0 — ZERO Telegram requests, yet the execution completed. So the 400 for block-3 was 'not consumed' only because NO send ever happened; the step was never executed. The auditor's 'MockWebServer QueueDispatcher / send-count interaction' hypothesis was the symptom, not the cause.",
+    "mechanism": "The seed helper multiTextMessage(id, next, texts...) called s.setId(\"m\"). FunnelExecutionEngine.graphMode(snapshot) probes snapshot.get(0).getId() != null → a non-null first-step id flips the snapshot into GRAPH mode. But seedExecution() seeds only currentStepIndex=0 and never sets currentStepId. In graph mode currentStep()/endOfGraph() treat a null currentStepId as the explicit 'End' marker (FunnelExecutionEngine.java:351-354, 387-388), so the engine completed the run WITHOUT executing step 0 → zero sends. The single-block sendMessage() helper (which passes) sets NO id, so its runs stay in index-drain mode and execute step 0 correctly.",
+    "why_unit_green_but_IT_red": "FunnelStepExecutorTest (default lane) calls StepExecutor.message() directly, bypassing the engine's currentStep() cursor resolution, so the graph/index mismatch never surfaced there — confirming the engine send-loop and crash semantics are correct; only the IT seeding was wrong."
+  },
+  "fix": {
+    "summary": "Split the multiblock seed helper by navigation mode so each test seeds a consistent cursor. Index-seeded tests (seedExecution, drives by currentStepIndex) now use a new id-less helper multiTextMessageIndexed(String...); the graph-mode snapshot-isolation test keeps multiTextMessage(id, next, String...) with seedGraphExecution (which sets currentStepId). Shared block-builder multiTextMessageBlocks() avoids duplication.",
+    "overload_ambiguity_guard": "Used a DISTINCT name (multiTextMessageIndexed) rather than a multiTextMessage(String...) overload: a call like (\"b1\",\"b2\",\"b3\") would bind to the MORE-SPECIFIC (String,String,String...) id-setting variant under Java varargs overload resolution and silently re-introduce the graph-mode mismatch. Documented inline.",
+    "invariant_proof_preserved": "Per-node at-most-once is asserted by send-count ACROSS TWO TICKS (crash test: sentCount==3 after tick 1, still ==3 after the second sweep — terminal-failed row never re-claimed, no replay), not by status alone. Happy-path asserts exactly 3 sends in one tick.",
+    "no_impl_change": "No production code behaviour changed. The only main-source edits are comment corrections (see below)."
+  },
+  "impl_bug_found": "NONE. StepExecutor.message() and the engine are correct; the slow-lane failure was a test-seeding (cursor-mode) defect.",
+  "trivial_fixes": [
+    {
+      "id": "R2-MIN-1",
+      "change": "FunnelService.java:426 (renderBlocks javadoc tail) and :493 (stubSubscriber comment): 'Decision 9' → 'Decision 8'. The legitimate Decision 9 reference at FunnelService:1119 (delay floor) and webhook/trigger/rate-limit files were NOT touched (different feature, correct)."
+    },
+    {
+      "id": "R2-INFO-1",
+      "change": "StepType.java (UNKNOWN doc) and StepTypeReadConverter.java javadoc: corrected the rejection mechanism. UNKNOWN is a valid enum constant, so stepType=\"UNKNOWN\" deserialises through Jackson and passes @NotNull; it is FunnelService.validateSteps (case UNKNOWN -> throw, 422 on every create/update/activate/test-run path) that gates author input, NOT a Jackson 400 boundary. Comment now flags that validateSteps UNKNOWN case as load-bearing."
+    }
+  ],
+  "verification": {
+    "default_lane": "./gradlew test → BUILD SUCCESSFUL; 1108 tests, 0 failures, 0 errors, 2 skipped.",
+    "engine_IT_class_slow": "./gradlew test --tests 'com.botfunnel.funnel.FunnelExecutionEngineIT' -PrunSlow=true → 57 tests, 0 failures, 0 skipped.",
+    "two_target_tests_standalone": "multiBlockMessage_crashMidBlocks + runsAllBlocksInOneTickAndCompletes (+ leftInProgress + snapshotIsolation) → BUILD SUCCESSFUL standalone.",
+    "full_slow_lane": "./gradlew test -PrunSlow=true: run 1 had 4 failures (2 target crash-ITs ALREADY-GREEN-elsewhere were NOT among them; instead TelegramWebhookP99IT + intermittent BotConnectRaceIT + SubscriberExportSignedUrlIT); run 2 had ONLY TelegramWebhookP99IT failing. BotConnectRaceIT and SubscriberExportSignedUrlIT pass standalone and are non-deterministic resource-contention flakes under full-lane parallelism — unrelated to 15-message-composer (bot-connect race / signed-url export). TelegramWebhookP99IT::p99Latency is the documented hardware-timing flake (build.gradle:48-51; got 189ms vs <100ms SLA, AC1 latency probe)."
+    },
+  "remaining_failures": [
+    {
+      "test": "TelegramWebhookP99IT::p99Latency_under100msAt100ParallelRequests",
+      "reason": "Pre-existing documented hardware-timing flake (build.gradle:48-51). Latency SLA only (got 189ms); unrelated to this feature. Not chased per task brief."
+    },
+    {
+      "test": "BotConnectRaceIT, SubscriberExportSignedUrlIT (intermittent)",
+      "reason": "Non-deterministic resource-contention flakes under full slow-lane parallelism (pass standalone; passed on slow-lane re-run). Concurrency/infra tests unrelated to 15-message-composer. Pre-existing; not introduced by this fix (diff touches only the engine IT seed helpers + comments)."
+    }
+  ],
+  "pre_deploy_qa_note": "Added to decisions.md: pre-deploy QA (Task 12) MUST run `cd backend && ./gradlew test -PrunSlow=true`. The two load-bearing crash/at-most-once engine ITs are now genuinely green standalone and in-class (57/57). The only expected non-green is TelegramWebhookP99IT (hardware-timing SLA) plus occasional parallelism flakes in unrelated concurrency ITs — re-run standalone to confirm. No CI invented (deploy is Task 13)."
+}

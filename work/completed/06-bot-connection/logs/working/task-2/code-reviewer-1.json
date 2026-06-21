@@ -1,0 +1,40 @@
+{
+  "status": "findings",
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "minor",
+      "where": "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java:40-44",
+      "issue": "@Autowired on the public constructor is redundant. Since Spring 4.3, a class with a single constructor has it auto-detected for injection, and the @Component already participates in autowiring. The annotation adds visual noise and slightly diverges from the codebase style — see EmailService.java:26-32, which has the same shape (single @Value-annotated constructor) and intentionally omits @Autowired.",
+      "suggestion": "Drop the @Autowired annotation (and its import on line 10). The injection behaviour is unchanged and the constructor matches the convention already in use elsewhere in this module."
+    },
+    {
+      "id": "C2",
+      "severity": "minor",
+      "where": "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java:62, 77, 88",
+      "issue": "`.onStatus(s -> s.is4xxClientError(), this::mapClientError)` uses a lambda where a method reference reads more cleanly and matches both the tech-spec wording (line 43: `HttpStatusCode::is4xxClientError`) and other onStatus usages in the codebase.",
+      "suggestion": "Replace the three occurrences with `.onStatus(HttpStatusCode::is4xxClientError, this::mapClientError)` and add the `org.springframework.http.HttpStatusCode` import. Pure readability — no behaviour change."
+    },
+    {
+      "id": "C3",
+      "severity": "minor",
+      "where": "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java:95-96",
+      "issue": "`mapClientError` declares its parameter as a fully-qualified type `org.springframework.web.reactive.function.client.ClientResponse` instead of importing it. The rest of the file imports `WebClient`, `WebClientResponseException` from the same package, so the inconsistency stands out and slightly hurts readability.",
+      "suggestion": "Add `import org.springframework.web.reactive.function.client.ClientResponse;` at the top and shorten the parameter type to `ClientResponse response`. Pure style cleanup."
+    },
+    {
+      "id": "C4",
+      "severity": "low",
+      "where": "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java:98-101",
+      "issue": "`mapClientError` reads the 4xx response body via `bodyToMono(TelegramResult<Object>)` and handles only the empty-body case via `defaultIfEmpty(...)`. If Telegram (or an upstream proxy/CDN) returns a 4xx with a non-JSON body (HTML error page, plain text), `bodyToMono` emits a Jackson decoding error and that exception, not a properly-shaped `AppException`, surfaces to GlobalErrorHandler. This isn't a likely real-world Telegram path but it's a plausible failure mode behind misconfigured infrastructure.",
+      "suggestion": "Defend with `.onErrorResume(ex -> Mono.just(new TelegramResult<>(false, null, null, null)))` after `defaultIfEmpty(...)` (or before the map), so any parse failure falls through to the status-only branch (UNAUTHORIZED → invalid_bot_token, generic 4xx → badRequest fallback). The current contract — error code derived from HTTP status, not body — survives intact."
+    },
+    {
+      "id": "C5",
+      "severity": "low",
+      "where": "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java:66",
+      "issue": "`getMe` maps via `TelegramResult::result` without a null guard. If Telegram ever returns `{ok:true, result:null}` (theoretical, not observed), `Mono.map` returning null collapses to `Mono.empty()`, and the caller's `.block()` returns null silently rather than producing an error — easy way for an NPE to surface downstream in BotService rather than at the source. `setWebhook`/`deleteWebhook` already defend with `Boolean.TRUE.equals(r.result())`; `getMe` is the asymmetric one.",
+      "suggestion": "Either swap `.map(TelegramResult::result)` for `.flatMap(r -> r.result() != null ? Mono.just(r.result()) : Mono.error(new AppException(HttpStatus.BAD_GATEWAY, \"telegram_unavailable\", \"Telegram returned empty result\")))`, or accept the asymmetry and document why getMe is allowed to emit empty. Either path is fine — current code is the only one of the three that can silently emit empty."
+    }
+  ]
+}

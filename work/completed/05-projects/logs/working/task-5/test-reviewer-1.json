@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "summary": "Both specs are well-constructed: tests drive real behavior (no mock-only assertions), assertions are concrete (call counts, ref values, DOM attributes, tag names), the LangSwitcher hoist/module-ref/mockNuxtImport idiom is mirrored correctly, and the interceptor spec correctly drives handleApiResponseError directly rather than through a $fetch instance. All 8 TDD anchor scenarios are present and pass the litmus test. Coverage of AC-24 is complete (4 mandatory cases plus 4 extras: URL instance, query string, non-404 status, collection path). Findings are minor coverage gaps for edge-case branches already documented in the task; none affect correctness of the implementation.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/composables/useApi-404-interceptor.spec.ts",
+      "issue": "Task `Edge cases` section enumerates three request shapes the interceptor must normalize: relative path string, URL instance, and absolute URL string (e.g. `http://localhost:8080/api/v1/projects/abc`). Tests cover relative string and URL instance, but the absolute-URL-string branch in `extractPath()` (lines 43-47 of useApi.ts: `new URL(request).pathname`) is unexercised. A regression that breaks the absolute-string branch (e.g. someone replaces `new URL(request).pathname` with a regex that only handles leading `/`) would not fail any current test.",
+      "recommendation": "Add one case: `handleApiResponseError(makeCtx(`http://localhost:8080/api/v1/projects/${CURRENT_ID}`, 404))` and assert `handleStaleCurrentSpy` was called once + `pendingBannerKeyRef.value === 'errors.projects.unavailable'`. Mirrors the existing URL-instance test."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/ProjectSelector.spec.ts",
+      "issue": "The `Settings link hidden when currentProject is null` test sets `currentProjectId = null`, which also drives the trigger button to show the empty-state placeholder per the component template (`currentProject?.name ?? t('layout.projectSelector.placeholder')`). That placeholder branch is not asserted. Also, the edge case documented in task Details — `currentProjectId` set but the matching project missing from `projects[]` (mid-fetch race) — is not exercised; `currentProject` computed returns null, settings link must be hidden, no throw.",
+      "recommendation": "Two small additions: (1) in the `currentProject is null` test, additionally assert `wrapper.find('[data-test=\"project-selector-trigger\"]').text()` contains `'layout.projectSelector.placeholder'`. (2) Add a test: set `projectsRef.value = [P_NEW]` and `currentProjectIdRef.value = 'unknown-id'` (not in projects). Assert settings link does not exist and the component mounts without throwing."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/ProjectSelector.spec.ts",
+      "issue": "Component implements outside-click close (lines 36-43, 54-61 of ProjectSelector.vue) and Escape-to-close (lines 45-52). Neither path has a test. Removing either listener would not fail any current test. Task `What to do` step 1 explicitly lists `close on outside click` as a behavioural requirement, and the ARIA Menu Button pattern requires Esc-to-close.",
+      "recommendation": "Add two tests after opening the dropdown: (1) dispatch `document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))` with target outside the panel/trigger refs — assert `wrapper.find('[role=\"menu\"]').exists()` becomes `false` after `settle()`. (2) dispatch `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))` — assert the same. If the outside-click path is hard to drive in jsdom because the listener attaches to `document` (not the wrapper root), wrap the assertion around a direct `document.dispatchEvent` call as above."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 15,
+      "passed": 15,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 15,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

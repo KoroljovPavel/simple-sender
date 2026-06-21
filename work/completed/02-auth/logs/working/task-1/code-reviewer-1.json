@@ -1,0 +1,43 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 14,
+      "issue": "server.servlet.session.cookie.http-only=true is a Servlet-stack property and has no effect in a Spring WebFlux application.",
+      "suggestion": "Remove this property from application.properties. In WebFlux with spring-session-data-mongodb, configure HttpOnly via CookieWebSessionIdResolver in SecurityConfig (Task 2): create a @Bean of type CookieWebSessionIdResolver, call setCookieHttpOnly(true), and register it. Note: Spring Session's default CookieWebSessionIdResolver already sets HttpOnly=true and Secure=true (in HTTPS context), so the explicit bean is only needed if you need to override defaults (e.g., set SameSite). The property as written gives false documentation confidence while doing nothing at runtime."
+    },
+    {
+      "severity": "major",
+      "file": "infra/docker-compose.yml",
+      "line": 44,
+      "issue": "Mailpit service uses axllent/mailpit:latest — an unpinned image tag. All other services in this file use explicit version tags (mongo:8.0, redis:7.4).",
+      "suggestion": "Pin to a specific version, e.g. axllent/mailpit:v1.21.7 (current stable as of May 2026). Using :latest makes the local dev environment non-reproducible and risks unexpected breakage when the image is updated. The Testcontainers decision (Decision 6) pins testcontainers-mailpit:1.3.1 — the docker-compose image should match the same Mailpit major/minor version to keep behavior consistent between local compose and test containers."
+    },
+    {
+      "severity": "minor",
+      "file": "infra/docker-compose.yml",
+      "line": 43,
+      "issue": "Mailpit service is missing a healthcheck and memory limit, which both existing services (MongoDB, Redis) have.",
+      "suggestion": "Add a healthcheck using Mailpit's API endpoint and a memory limit consistent with its usage profile. For example:\n  healthcheck:\n    test: [\"CMD\", \"wget\", \"-q\", \"--spider\", \"http://localhost:8025/api/v1/messages\"]\n    interval: 10s\n    timeout: 5s\n    retries: 3\n  deploy:\n    resources:\n      limits:\n        memory: 64m\nThis keeps the compose file consistent and prevents runaway memory consumption on developer machines."
+    },
+    {
+      "severity": "minor",
+      "file": ".env.example",
+      "line": 13,
+      "issue": "SUPER_ADMIN_PASSWORD=changeme123 is a weak, human-memorable default that pattern-matches common credential scanners and may be copy-pasted into non-local environments.",
+      "suggestion": "Use a placeholder value that is clearly not a real password and cannot be mistaken for one, e.g. SUPER_ADMIN_PASSWORD=<strong-random-password-here> or SUPER_ADMIN_PASSWORD=CHANGE_ME_USE_A_STRONG_PASSWORD. The task spec implementation hint says to show example values — a placeholder string communicates the requirement without suggesting a usable weak password."
+    },
+    {
+      "severity": "nitpick",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 12,
+      "issue": "spring.session.store-type=mongodb is technically a Spring MVC / Servlet stack property name. In Spring Boot 3.x WebFlux, spring-session-data-mongodb is activated via its own ReactiveSessionRepository auto-configuration when the dependency is on the classpath, without needing this property.",
+      "suggestion": "Verify at runtime (during Task 2 smoke test) that spring-session-data-mongodb creates the sessions collection and populates it after login. If the property is silently ignored in WebFlux, it is safe to remove — or add a comment noting it is present for documentation/clarity purposes. Either way, add spring.data.mongodb.auto-index-creation=false note in context of sessions collection TTL index (already present and correct — just ensure the comment documents that spring-session creates its own expireAt TTL index independently)."
+    }
+  ],
+  "summary": "Infrastructure setup is solid: all required Gradle dependencies are present with correct scopes, MongoDB/Redis env var bindings are fixed, mail/session/jobrunr/super-admin properties are all added per spec, and Mailpit is correctly bound to 127.0.0.1 only. Two major issues require attention before Wave 2 proceeds: a Servlet-stack session cookie property that has no effect in WebFlux (misleading dead config), and an unpinned Mailpit image tag that breaks reproducibility. Two minor issues round out the review. No security-critical or architectural blockers.",
+  "approved": false
+}

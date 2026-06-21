@@ -1,0 +1,36 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-id-preserve",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "correctness / edge-case",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 249,
+      "description": "sentSteps is a direct reference to the reactive array (const sentSteps = steps.value), not a deep clone. In Vue 3 a ref<T[]> holds a Proxy; assigning steps.value returns the same underlying array object. onCanvasSteps replaces steps.value wholesale (steps.value = next) so sentSteps always retains the pre-PATCH array and the positional remap comparison is correct. However, a future in-place mutation (splice/push on steps.value) between the snapshot and the await would corrupt the comparison silently. A shallow spread const sentSteps = [...steps.value] would be the safer idiom and makes the intent explicit.",
+      "impact": "Currently safe given the canvas's replace-not-mutate invariant (confirmed: only three assignment sites in funnelId.vue, all wholesale replacements). No data loss risk in present code.",
+      "optional": true
+    },
+    {
+      "severity": "minor",
+      "category": "null-handling / type-safety",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "line": 930,
+      "description": "idBase is typed as Pick<FunnelStep, 'id' | 'next'> which permits null values. The expressions `props.initial?.id ?? undefined` and `props.initial?.next ?? undefined` coerce server-returned null to undefined, meaning the emitted step carries id: undefined rather than id: null. This is intentional per Decision 10 (new steps must not carry an id key) and is correct for the edit path (where the server always mints a non-null string). The type annotation could be tightened to `{ id?: string; next?: string }` to make the null-exclusion explicit, but this is cosmetic.",
+      "impact": "No functional risk. The backend treats absent and undefined id identically (mints a new one). The remap safety net in remapResponseIds handles this correctly since the guard is `if (oldId && newId && oldId !== newId)` — falsy oldId (undefined/null) is skipped.",
+      "optional": true
+    },
+    {
+      "severity": "minor",
+      "category": "test-coverage",
+      "file": "frontend/tests/components/funnels/FunnelStepForm.identity.spec.ts",
+      "line": 1,
+      "description": "The new identity spec covers DELAY, ADD_TAG, and SUBSCRIBE_TO_FUNNEL. REMOVE_TAG, EMIT_EVENT, and SET_CUSTOM_FIELD are not covered by explicit edit+preserve regression tests. Existing tests for those types in AddStepDialog.spec.ts exercise only the add path (no props.initial) and do not assert id/next preservation. CLEAR_KEYBOARD and MESSAGE (regression guard) are also absent from the identity spec.",
+      "impact": "Low correctness risk: idBase is constructed once before the switch and uniformly spread in all six non-MESSAGE branches — a regression would require removing the spread from a specific branch, which would be caught by the three existing identity tests. Missing cases are a coverage gap, not a current defect.",
+      "optional": true
+    }
+  ],
+  "summary": "Fix is correct and complete across all dimensions checked. Fix 1 (FunnelStepForm.onSubmit): idBase is constructed once and spread into all nine step-type branches (MESSAGE, DELAY, ADD_TAG/REMOVE_TAG, EMIT_EVENT, SET_CUSTOM_FIELD, SUBSCRIBE_TO_FUNNEL, SET_KEYBOARD, CLEAR_KEYBOARD). The type-specific fields each branch DOES own are emitted correctly with no lost or overwritten fields. MESSAGE/SET_KEYBOARD/CLEAR_KEYBOARD previously had inline id/next preservation — the refactor to shared idBase is a clean replacement with no regression. canvasPosition is correctly overlaid after the switch for all types, conditional on non-null initial value (Decision 10 preserved). hideTargetPickers is unrelated to the step shape and is untouched. Fix 2 (remapResponseIds): logic is sound — no-op when lengths differ or no id changed, rewrites all four inbound-reference kinds (step.next, step.timeoutTargetStepId, Button.targetStepId, trigger.entryStepId), null/absent ids are guarded by `id != null` in remap, runs before applyResponse. sentSteps snapshot is safe under the current replace-not-mutate invariant. Three minor observations noted — none are blockers."
+}

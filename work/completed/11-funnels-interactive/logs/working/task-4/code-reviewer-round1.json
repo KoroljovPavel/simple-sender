@@ -1,0 +1,28 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "info",
+      "dimension": "Cross-File Consistency",
+      "location": "FunnelService.toButtons / toButtonDtos / toStepDto",
+      "finding": "Button record constructor order (type,label,targetStepId,url) and the 16-arg FunnelStepDto canonical constructor match all call sites; verified by clean compileJava/compileTestJava.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "dimension": "Architecture / Separation of Concerns",
+      "location": "validateSteps edge pass",
+      "finding": "Graph-edge validation (next + timeoutTargetStepId) runs for every step type including MENU. Harmless and defensive (null next is valid); aligns with Decision 2 (stable-id targets). No behavior change for non-MENU Phase-1 steps since their next/timeout fields are null on the existing path.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "dimension": "Readability",
+      "location": "CODE_BROKEN_EDGE / MAX_BUTTONS / BUTTON_TYPE_* constants",
+      "finding": "Magic numbers/strings extracted to named static finals next to existing CODE_* constants, matching the file convention.",
+      "action": "none"
+    }
+  ]
+}

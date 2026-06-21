@@ -1,0 +1,21 @@
+{
+  "reviewer": "security-auditor",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 485,
+      "description": "Label clamp uses String.substring(0, MAX_KEYBOARD_BUTTON_TEXT) on UTF-16 code units. A label whose 64th/65th chars form a surrogate pair (emoji, supplementary plane) is cut mid-pair, producing a lone surrogate in the echoed label. Not a security vulnerability (the value is plain JSON string data, never rendered as markup server-side, and the clamp uses the exact same .length() semantics as the validator at line 1311, so it stays consistent with the validation cap), but a malformed surrogate can produce an invalid UTF-8 sequence the frontend may render as a replacement char. Truncation correctness only.",
+      "recommendation": "Optional: if surrogate-faithful truncation matters for the mock, clamp on code points or trim a trailing lone high-surrogate. Otherwise leave as-is — it mirrors the validator's char-count contract; document the parity in the helper comment."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 453,
+      "description": "An unknown/invalid keyboardParseMode in the (non-validating) preview request falls through VariableTemplateRenderer.escape() to the 'default -> value' branch (no escaping). Substituted variable values are then NOT escaped for that text. This is by design and is byte-for-byte faithful to the runtime engine (the renderer's documented contract treats unknown parse modes as plain text), and substituted PII still cannot inject markup because the frontend renders preview text via {{ }} text interpolation (never v-html) per Decision 8 / Task 5. Flagged only so the reviewer is aware the escape decision is delegated entirely to parseMode + the frontend's text-only render; no server-side XSS exposure on the preview surface itself.",
+      "recommendation": "No code change required. Confirm in Task 5 review that the preview panel binds keyboardText/renderedBlocks text via {{ }} (text node), never v-html, so the no-escape plain-text path cannot become a DOM-XSS sink. Keep keyboardParseMode pass-through as-is for runtime fidelity."
+    }
+  ],
+  "summary": "No blocking or major findings. The preview-surface keyboard extension is secure against the focus areas. A01/IDOR: requireFunnel runs FIRST (FunnelService.java:408) before findStep/stepId-404 — ordering unchanged, no existence oracle. A03/XSS: keyboardText is escaped per parseMode by VariableTemplateRenderer (only substituted values escaped); button labels are echoed verbatim into List<List<String>> and NEVER variable-rendered (correct — labels are the keyword link), with markup-escaping correctly delegated to the frontend's text-only {{ }} render (Task 5, out of scope). A04/DoS: clampKeyboardLabels caps the echoed payload at 10 rows x 4 buttons with 64-char labels and breaks early, so the response can never reflect an unbounded unvalidated payload. Mass-assignment: @JsonIgnoreProperties(ignoreUnknown=true) retained on PreviewStepRequest and both new keyboard DTOs. Identity-leak: PreviewStepResponse is exactly {renderedBlocks, sampleData, kind, keyboardRows} — no ownerChatId or other identity field; keyboardRows carries only clamped echoed labels; no media URL is dereferenced (anti-SSRF). Null-tolerance in clampKeyboardLabels (null rows/buttons/text skipped, null input -> null) prevents NPE/500 on hostile/partial payloads. Two minor, non-exploitable observations recorded (surrogate-pair truncation correctness; unknown-parseMode no-escape path is by-design runtime-faithful and mitigated by frontend text-only render)."
+}

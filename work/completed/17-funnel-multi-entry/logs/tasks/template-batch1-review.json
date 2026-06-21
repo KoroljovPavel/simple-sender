@@ -1,0 +1,51 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "Required Skills",
+      "issue": "Skill link uses a bare relative path `(.claude/skills/code-writing/SKILL.md)`. From the task file at `tasks/2.md` this resolves to `tasks/.claude/...` — a broken link. Other tasks (1, 4, 5) correctly use `../../../.claude/...`.",
+      "fix": "Change the link target to `../../../.claude/skills/code-writing/SKILL.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "PK links use bare relative paths: `(.claude/skills/project-knowledge/references/project.md)`, `(...architecture.md)`, `(...patterns.md)`. From `tasks/2.md` these resolve to `tasks/.claude/...` and are broken.",
+      "fix": "Prefix each PK link with `../../../` so they resolve to repo-root `.claude/skills/project-knowledge/references/...`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Required Skills",
+      "issue": "Skill link uses bare relative path `(.claude/skills/code-writing/SKILL.md)` — broken from the task file location (resolves to `tasks/.claude/...`).",
+      "fix": "Use `../../../.claude/skills/code-writing/SKILL.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "project.md link points to `../../../.claude/skills/project-knowledge/project.md` but the file lives at `.claude/skills/project-knowledge/references/project.md` (no `project.md` exists directly under project-knowledge). Broken link. Note architecture.md/patterns.md in the same task correctly use the `references/` segment.",
+      "fix": "Change to `../../../.claude/skills/project-knowledge/references/project.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 5,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths are hardcoded to round 1 (`code-reviewer-1.json`, `security-auditor-1.json`, `test-reviewer-1.json`) instead of the `{round}` placeholder used by tasks 1-4. This is a stylistic inconsistency, not a leftover template placeholder.",
+      "fix": "Use `{round}` in the path: `work/17-funnel-multi-entry/logs/working/task-5/code-reviewer-{round}.json` etc., to match the other tasks."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 5
+  }
+}

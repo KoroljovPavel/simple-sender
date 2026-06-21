@@ -1,0 +1,77 @@
+{
+  "validator": "task-validator",
+  "iteration": 3,
+  "batch": [4, 5, 9],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "Line 77 still says '18 unit scenarios' for TelegramSenderTest.java — internal inconsistency with the rest of the file which was updated to '28 unit scenarios' (Description line 25, What to do line 37, AC line 51, Details audit catalog line 96, Verification Steps line 90 jq '>= 38'). The iteration 3 fix replaced 18→28 everywhere except this annotation, so the file now contradicts itself: '18 from tech-spec lines 290–331' vs '28 catalog entries' a few sections later. Risk: agent picks the wrong floor when auditing.",
+      "fix": "Change line 77 annotation from 'all 18 unit scenarios from tech-spec lines 290–331' to 'all 28 unit scenarios from tech-spec lines 290–330' (line 330 is the last `sendText_tokenInTransportErrorMessage_scrubbed` bullet). Optional: also harmonize the Edge cases bullet at line 208 which still calls 18 'the headline' — that bullet is still defensible as a historical reference to user-spec AC19's number, but if the team wants strict consistency, reword to 'the user-spec AC19 headline (numerically lower) is a floor; the tech-spec elaboration of 28 discrete `@Test` methods is the catalog the auditor verifies'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "issues_found": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "iter3_fix_verification": {
+    "task_4_two_try_block_code_shape": {
+      "present": true,
+      "location": "tasks/4.md lines 208-224 (Implementation hints, step 3) — fenced Java block showing separate try for Base64.decode and bare tokenEncryptor.decrypt outside the catch; Anti-pattern callout immediately below."
+    },
+    "task_4_illegal_argument_wrong_iv_propagates_500": {
+      "present": true,
+      "location": "tasks/4.md lines 181 (Edge cases bullet 'IllegalArgumentException has TWO distinct sources') + lines 206-207 (Implementation hints, Critical scoping rule) + error mapping table row 'Pre-HTTP | TokenEncryptor.decrypt throws IllegalStateException ... → 500'. Wrong-IV-length case explicitly distinguished from the catchable Base64 case."
+    },
+    "task_5_warning_seedConnectedBot_placeholder": {
+      "present": true,
+      "location": "tasks/5.md line 31 (top-level WARNING blockquote in Description) + Edge cases bullet 'IT seeding ciphertext trap' at line 140 + Implementation hints 'Seeding real ciphertext in BotControllerIT' at lines 146-151."
+    },
+    "task_5_helper_guidance_for_positive_path": {
+      "present": true,
+      "location": "tasks/5.md step 6 (What to do) lines 55-58 — Option A (preferred: seedConnectedBotWithRealEncryption) vs Option B (inline tokenEncryptor.encrypt). Acceptance Criteria line 82 enforces 'real AES-GCM ciphertext'. Implementation hints lines 146-151 give a 4-step recipe."
+    },
+    "task_9_18_to_28_unit_scenarios": {
+      "present_partial": true,
+      "location": "tasks/9.md updated at line 25 (Description), line 37 (What to do step 1), line 51 (AC), line 96 (audit catalog header). NOT updated at line 77 (Context Files annotation) — flagged as the only finding in this report.",
+      "regression": "Single annotation-line oversight; all other surfaces are consistent."
+    },
+    "task_9_jq_threshold_38": {
+      "present": true,
+      "location": "tasks/9.md line 90 Verification Steps Automated: `jq -e '.scenarios_audited | length >= 38' ...` with inline comment '28 unit + 4 integration + 3 BotServiceTest + 2 BotControllerIT + 1 BotRepositoryTest = 38 catalog entries minimum'."
+    },
+    "task_9_user_spec_AC_labels": {
+      "present": true,
+      "location": "tasks/9.md line 37 (What to do step 1) replaces user-spec line refs with 'user-spec ACs AC19–AC23'. Note: tech-spec line refs (e.g. 'tech-spec.md lines 290–330') were intentionally retained per iteration 3 scope ('user-spec line refs replaced with AC labels' — tech-spec line refs are out of scope)."
+    },
+    "tech_spec_28_consistency": {
+      "present": true,
+      "location": "tech-spec.md line 493 Task 9 Description now says '28 unit scenarios (4 happy + 3 5xx + 6 429 + 3 4xx/payload + 5 pre-wire + 2 timeouts + 5 token-leak)'. Matches tasks/4.md and tasks/9.md throughout (except the one annotation flagged above)."
+    }
+  },
+  "section_presence_check": {
+    "task_4": "All 11 expected sections present in order (Title, Required Skills, Description, What to do, TDD Anchor, Acceptance Criteria, Context Files, Verification Steps, Details, Reviewers, Post-completion).",
+    "task_5": "All 11 expected sections present in order.",
+    "task_9": "10 sections present — TDD Anchor correctly omitted (non-code task: test audit with explicit 'Do NOT modify any test or production code'). Required Skills is `test-master`, reviewers is `[]` (self-verifying audit), verify is `[]`. All compliant with template's conditional-section rule."
+  },
+  "frontmatter_check": {
+    "task_4": "status=planned, depends_on=[1,2,3], wave=2, skills=[code-writing], verify=[smoke], reviewers=[code-reviewer, security-auditor, test-reviewer] — all valid.",
+    "task_5": "status=planned, depends_on=[4], wave=3, skills=[code-writing], verify=[smoke, user], reviewers=[code-reviewer, security-auditor, test-reviewer] — all valid.",
+    "task_9": "status=planned, depends_on=[6], wave=5, skills=[test-master], verify=[], reviewers=[] — all valid; empty reviewers correct for self-verifying audit task."
+  },
+  "carry_forward_check": {
+    "task_4_vs_tech_spec": "All 28 unit + 4 integration test names from tech-spec Testing Strategy (lines 290-339) carry forward verbatim. No drop; field shape, retry semantics, rate-limit loop, terminal errors, pre-wire guards, timeouts, token-leak — all preserved.",
+    "task_5_vs_tech_spec": "All 3 BotServiceTest cases + new BotControllerIT positive-path test from tech-spec lines 341-347 carry forward verbatim. Null-branch regression test preserved.",
+    "task_9_vs_tech_spec": "All 28 unit + 4 integration + 3 BotServiceTest + 2 BotControllerIT + 1 BotRepositoryTest = 38 catalog entries enumerated in tasks/9.md Details audit catalog (lines 94-158). 1:1 with tech-spec Task 9 Description (line 493)."
+  },
+  "regression_check": {
+    "previous_iter_fixes_preserved": true,
+    "details": "Iteration 1+2 fixes confirmed still present: (a) Decision 5 package-private TelegramRateLimitException callout at task 4 AC line 114 + Details line 178; (b) explicit `sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid` test at task 4 TDD Anchor line 74 + AC line 109; (c) 6-scrub-site enumeration at task 4 lines 247-253 + AC line 118; (d) anti-enumeration 404 uniformity at task 4 AC line 108; (e) `seedConnectedBotWithRealEncryption` Option A helper pattern at task 5 step 6; (f) the in07/in06 naming for the new BotControllerIT positive-path test at task 5 line 55 + task 9 line 80."
+  }
+}

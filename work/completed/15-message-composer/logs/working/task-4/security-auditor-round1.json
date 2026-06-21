@@ -1,0 +1,22 @@
+{
+  "reviewer": "security-auditor",
+  "task": 4,
+  "round": 1,
+  "mode": "self-applied (nested sub-agent spawning restricted; OWASP Top 10 methodology applied to the diff by the executing agent)",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/ContentBlockDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/MediaItemDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/PreviewStepRequest.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/PreviewStepResponse.java"
+  ],
+  "checks": {
+    "A01_broken_access_control_IDOR": "PASS — previewStep keeps requireFunnel FIRST (uniform-404 before the stepId-404, anti-enumeration). No new repository read bypasses the projectId scope. validateMessage adds no DB read.",
+    "A03_injection_XSS": "PASS — preview rendering delegates escaping entirely to VariableTemplateRenderer (per-block parseMode escaping of substituted values); escape logic is NOT duplicated. previewEscapesHostilePayload IT asserts <script> is escaped to &lt;script&gt; and the raw response contains no unescaped tag.",
+    "A04_insecure_design_SSRF": "PASS — the backend NEVER dereferences a media URL. requireMediaSource only validates the scheme; renderBlocks/renderMediaItems pass mediaUrl through verbatim. Strict http(s)-only scheme check (URI parse, exact scheme, non-empty host, strip-guard) rejects file://, data:, javascript:, tg://, leading-whitespace-obfuscated and empty-host values.",
+    "A08_mass_assignment": "PASS — ContentBlockDto + MediaItemDto carry @JsonIgnoreProperties(ignoreUnknown = true), consistent with the other funnel DTOs.",
+    "info_disclosure_logging": "PASS — the over-length WARN logs only the field name + length, never the content (no PII leak, Decision 16 parity)."
+  },
+  "findings": [],
+  "verdict": "OK — no vulnerabilities. The three load-bearing invariants (anti-IDOR uniform-404, backend-side parseMode escaping / XSS-guard, no media-URL dereference) are preserved; file_id is treated as an opaque token."
+}

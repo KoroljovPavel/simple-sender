@@ -1,0 +1,75 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "Project-knowledge links resolve to non-existent files. Task 7 references `../../../.claude/skills/project-knowledge/project.md`, `architecture.md`, and `patterns.md` at the root of project-knowledge/, but actual PK files live under `project-knowledge/references/` (verified: only `references/project.md` exists, not `project.md`).",
+      "fix": "Update the three project-knowledge links in Task 7 Context Files to use the `references/` subdir, matching tasks 6/8/10: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, `[architecture.md](../../../.claude/skills/project-knowledge/references/architecture.md)`, `[patterns.md](../../../.claude/skills/project-knowledge/references/patterns.md)`."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "Project-knowledge links resolve to non-existent files. Task 9 references `../../../.claude/skills/project-knowledge/project.md` and `architecture.md` at the root of project-knowledge/, but actual PK files live under `project-knowledge/references/`. The `patterns.md` and `ux-guidelines.md` links also drop the `references/` segment.",
+      "fix": "Update all four project-knowledge links in Task 9 Context Files to include the `references/` subdir: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, `[architecture.md](.../references/architecture.md)`, `[patterns.md](.../references/patterns.md)`, `[ux-guidelines.md](.../references/ux-guidelines.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 7,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use the relative form `work/06-bot-connection/logs/working/task-7/...` instead of the absolute form used by tasks 6, 8, 9 (`/Users/pavlokorolov/.../work/06-bot-connection/logs/working/task-7/...`). Task-creator notes that paths should be anchored to feature_path so that bare `logs/...` paths don't resolve from CWD; both forms work but the inconsistency across batch tasks is a style/consistency concern.",
+      "fix": "Align Task 7 Reviewers paths to the absolute form used by the rest of the batch, or align the whole batch to the relative `work/{feature}/...` form. Pick one shape and apply consistently."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 6,
+      "section": "Acceptance Criteria",
+      "issue": "Task 6 AC checklist drops a couple of items present in tech-spec global AC / user-spec that are within Task 6's BotService scope: AC10 (webhook URL equals `${app.url}/webhooks/telegram/{projectId}` + secret is freshly generated per Connect) and AC20 (webhook secret stored as SHA-256 hash, not plaintext) are not explicit AC bullets in this task, though they are partially exercised by the TDD anchor `connect_webhookSecretIsHashedWithSha256_neverPlaintext`. AC23 (audit events `bot_connected`/`bot_disconnected` written and `bot_test_message_sent` NOT emitted in 06) is also only implicitly covered.",
+      "fix": "Add explicit AC bullets to Task 6 for AC10, AC20, AC23 — each tied to the corresponding TDD anchor (`connect_happyPath...` covers webhook URL composition; `connect_webhookSecretIsHashedWithSha256_neverPlaintext` covers AC20; the event-emission and no-event-on-testMessage tests cover AC23)."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 8,
+      "section": "Acceptance Criteria",
+      "issue": "Task 8 AC list is largely complete but does not explicitly call out AC23's audit-event metadata shape requirement (events should reference bot id, Telegram bot id, username for `bot_connected`; bot id, Telegram bot id, and `webhookDeleted` boolean for `bot_disconnected`). The integration tests do reference event assertions via `awaitEvent`/`findEvent`, but the AC bullet only mentions the token-leak regex assertion.",
+      "fix": "Add an explicit AC bullet to Task 8 mirroring AC23's metadata-shape requirement: `bot_connected` metadata contains projectId/telegramBotId/telegramUsername; `bot_disconnected` metadata contains projectId/telegramBotId/webhookDeleted boolean; no `bot_test_message_sent` event emitted in 06."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 6,
+      "section": "Required Skills",
+      "issue": "The link text label is `skills/code-writing/SKILL.md` while the target path is `.claude/skills/code-writing/SKILL.md`. The link target resolves correctly (file exists), but the label and target disagree, which is a minor style mismatch carried from the template's example.",
+      "fix": "Either match the label to the target (`[.claude/skills/code-writing/SKILL.md](...)`) or use a label like `code-writing skill`. Apply the same fix to tasks 7, 8, 9 where the same pattern recurs."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 9,
+      "section": "Acceptance Criteria",
+      "issue": "Task 9 AC bullets reference AC18, AC19, AC22 but do not explicitly carry forward AC21 (Settings folder split with sub-nav linking between General and Bot) — task 9 only mentions `<SettingsSubnav />` rendering. AC21's split is owned by Task 5, but Task 9 must integrate with it. An explicit AC bullet ensures the validator/reviewer flags any regression in sub-nav integration.",
+      "fix": "Add an explicit AC bullet referencing AC21: `bot.vue` renders `<SettingsSubnav />` at the top so the user can navigate between General and Bot tabs without leaving Settings."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "Code-file links in `Code files to modify` and `Code files to read` are listed as plain bullet points without markdown links (e.g. `frontend/pages/projects/[projectId]/settings/bot.vue` — currently a placeholder...`). The template + task-creator rules require all paths as markdown links `[name](path)`.",
+      "fix": "Convert all code-file entries in Task 9 Context Files to markdown links, matching the format used in tasks 6 and 8 (e.g. `[bot.vue](../../../frontend/pages/projects/[projectId]/settings/bot.vue) — currently a placeholder...`)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 8
+  }
+}

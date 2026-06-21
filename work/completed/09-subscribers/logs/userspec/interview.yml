@@ -1,0 +1,696 @@
+# Interview Plan for Feature Planning: 09-subscribers
+# Adaptive interview for Epic 05 (Subscribers, tags, custom fields, segments) per project.md.
+
+# ============================================================================
+# Interview Metadata
+# ============================================================================
+interview_metadata:
+  started: "2026-05-24 00:00:00"
+  last_updated: "2026-05-24 00:05:00"
+  status: "completed"
+  can_resume: false
+  current_question_num: 5
+  feature_size: "L"  # CRM module: DB schema, REST API, UI (list/profile/tags/customfields/export pages), async CSV export, status state-machine, replaces NoOpSubscriberService stub consumed by Epic 04b worker.
+
+# ============================================================================
+# Conversation History
+# ============================================================================
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-05-24 00:00:00"
+    topic: "initial_clarifications: workflow→Mongo mapping, custom-fields placement, tag counter, history collection, scope, csv export"
+    agent_question: |
+      Opening probe (6 точок) перед стартом інтерв'ю — звірка workflow/05-підписники з architecture.md:
+      1. JSONB у workflow читається як MongoDB embedded document — ок?
+      2. CustomFieldDefinition: окрема колекція чи embed у Project doc?
+      3. Tags counter: real-time inc/dec на add_tag/remove_tag чи on-demand aggregation?
+      4. Subscriber profile "останні 50 подій" — нова колекція subscriber_events чи розширення events?
+      5. "Send personal message" з профілю — включаємо чи в 12-nice-to-have?
+      6. CSV export 100K+ підписників: синхронний download чи async job (email/in-app link)?
+    user_answer: |
+      1. так, якщо це взагалі буде необхідно
+      2. як краще нова сутність чи прямо в проект?
+      3. давай по запиту, але якщо в реальному часі простіше швидше то можна і в реальному часі
+      4. як ти вважаєш що краще?
+      5. лишаємо
+      6. давай 2. Job з відправкою на імейл або посилання прям в проекті після генерації
+    summary: |
+      P1 — embedded approach OK (subdoc/array на Subscriber).
+      P2 — user asks for recommendation: agent will propose embed-in-Project (max 20 полів, bounded).
+      P3 — on-demand aggregation OK, real-time allowed if simpler.
+      P4 — user asks for recommendation: agent will propose new subscriber_events collection (different retention/access pattern).
+      P5 — Send personal message INCLUDED in 09 scope.
+      P6 — async CSV export job; result delivered via email link AND in-app download link.
+  - question_num: 2
+    timestamp: "2026-05-24 00:01:00"
+    topic: "design-recos: customfields placement, subscriber_events collection, search/pagination, tags lifecycle"
+    agent_question: |
+      Batch 2 (4 закриваючі рекомендації):
+      Q2. CustomFieldDefinition — recommend embed у Project.customFieldDefinitions[] (bounded 20, atomic update, never queried independently).
+      Q3. SubscriberEvent — recommend нова колекція subscriber_events (TTL 1y, index (subscriberId, createdAt desc)), окремо від events (різна retention + access pattern).
+      Q4. Search/Pagination — Mongo text index (firstName, lastName, username) + min 2 chars, cursor-pagination (lastCreatedAt, lastId base64), 50 per UI / 200 max API. Indexes: unique(projectId, telegramUserId), (projectId, status, createdAt desc), (projectId, tags), text-index.
+      Q5. Tags — окрема колекція tags{projectId, slug, label?, createdAt} unique(projectId, slug), counters on-demand (aggregation, Redis 60s cache if slow), implicit find-or-create on add_tag, explicit CRUD via /tags, rename = sync update_many, delete = $pull + confirm modal.
+    user_answer: "Q2 Ok, Q3 згоден, Q4 ok, Q5 ok"
+    summary: "All 4 design recos accepted. Lock-in: customFields embedded in Project, subscriber_events new collection, text-index + cursor pagination, separate tags collection with on-demand counters."
+  - question_num: 3
+    timestamp: "2026-05-24 00:02:00"
+    topic: "status-machine, csv export storage, per-project cap, testing strategy"
+    agent_question: |
+      Batch 3 (4 closing questions for Cycle 1):
+      Q6. Status state-machine: active↔unsubscribed (/stop or manual), *→blocked (TelegramSender 403), *→deleted (TelegramSender 400 chat-not-found); reactivation на нове /start для unsubscribed/blocked/deleted. TelegramSender — єдиний writer статусів 403/400 у broadcast/funnel/personal-msg паттернах.
+      Q7. CSV export storage: локальний disk + EXPORT_STORAGE_DIR + 7-day TTL + signed URL + email + in-app exports list + 10 min job timeout.
+      Q8. Per-project cap: A — no cap, B — hard 100k subscribers, C — rate-limit 100 /start/min via Redis bucket. Recommend C.
+      Q9. Testing matrix: unit (StatusMachine, SegmentFilterBuilder, CsvBuilder, CustomFieldValidator, TgTextValidator), integration (replace NoOp + tags + custom-fields + list + export + status flips + access guards + cross-project isolation), E2E (Playwright golden path), staging-smoke (docs/staging-smoke/09-subscribers.md).
+    user_answer: |
+      Q6 ok, Q7 давай в базу байти покладемо, gridfs, Q8 C, Q9 ok
+    summary: |
+      Q6 — status state-machine confirmed including reactivation rules.
+      Q7 — PIVOT: CSV files stored in MongoDB GridFS (NOT local disk). Unified backups, multi-instance compat, no env var for path. ExportCleanupJob deletes via GridFsTemplate. Signed-URL download endpoint streams from GridFS.
+      Q8 — C selected: Redis-based rate-limit 100 new-/start/min per project. Existing subscriber re-/start exempt. No hard cap on total count.
+      Q9 — Testing matrix accepted.
+  - question_num: 4
+    timestamp: "2026-05-24 00:03:00"
+    topic: "post-code-research: cascade, deleted retention, export concurrency, customfield semantics, sender hook"
+    agent_question: |
+      Batch 4 (5 closing questions from code-research open list):
+      Q10. Project soft-delete cascade: A — soft only project doc, children intact, hard-delete cascades all (extend ProjectHardDeleteJob: subscribers + subscriber_events + tags + subscriber_exports + GridFS); restore returns everything; signed URL for soft-deleted → 410. B — soft-delete project clears children immediately.
+      Q11. Subscriber status=deleted retention: A — forever (reactivate on new /start), no purge job. B — TTL 6 months.
+      Q12. CSV export concurrency: A — one in-flight per project (409 on second), state via partial-unique index on subscriber_exports (projectId, status IN PENDING|RUNNING). Metadata doc forever; GridFS file 7d; after purge status=PURGED, download → 410. B — unbounded queue. C — cap N=3.
+      Q13. CustomFieldDefinition semantics: A — rename slug (mongo $rename on all subscribers). B — slug immutable, label/defaultValue editable; type immutable; delete with cascade $unset + confirm "X subscribers will lose data".
+      Q14. TelegramSender error-hook: A — direct constructor-inject SubscriberService in sender, call markBlocked/markDeleted in sendText catch, toThrowable stays pure mapper. B — ApplicationEventPublisher (no precedent). C — typed-exception bubble. Plus: telegram_send_failed audited by sender; subscriber_blocked/_deleted events written by SubscriberService.
+    user_answer: "q10 a, q11 a, q12 a, q13 b, q14 згоден"
+    summary: |
+      All 5 recommendations accepted:
+      Q10 A — ProjectHardDeleteJob extends cascade list to include subscriber CRM collections + GridFS files. Soft-delete window keeps children intact. Restore re-enables.
+      Q11 A — deleted-status forever, reactivate on new /start; no TTL/purge job in Epic 05.
+      Q12 A — one in-flight export per project; subscriber_exports doc forever + GridFS file 7d; download 410 after purge.
+      Q13 B — CustomFieldDefinition.name immutable, label/defaultValue editable, type immutable; delete cascades $unset on all subscribers with confirm.
+      Q14 A — direct SubscriberService injection in TelegramSender; events split: telegram_send_failed by sender, subscriber_blocked/_deleted by service.
+  - question_num: 5
+    timestamp: "2026-05-24 00:04:00"
+    topic: "completeness-checker gap closures: pagination, tag slug regex, HMAC payload, retry UX, markBlocked signature, sidebar+index strategy"
+    agent_question: |
+      Batch 5 (close completeness-checker gaps):
+      Q15. Pagination on /subscribers — recommend cursor only via "Load more" infinite (no numbered pages, no Prev).
+      Q16. Tag slug regex — recommend `^[a-z0-9_-]{1,32}$` lowercase+alnum+dash/underscore, no dots.
+      Q17. Signed URL HMAC payload — A: HMAC_SHA256(SECRET, exportId|expiresAt|projectId), so cross-project substitution blocked at HMAC verify. B: keep current (DB-lookup only).
+      Q18. Failed export "Retry" button — replace with "New export" (creates new POST with same filter; old FAILED row stays for audit, manually deletable). Or remove button entirely.
+      Q19. SubscriberService.markBlocked/markDeleted signature — A: (projectId, botId, chatId) + sender re-fetches bot; B: (Bot, chatId) pass entity; C: (projectId, botId, chatId) with sender extracting from already-loaded Bot.
+      Q20. Sidebar nav for Tags/Custom Fields — sub-items under Subscribers or under Project Settings? Production index management — @PostConstruct ensureIndex callbacks vs auto-index-creation в prod (currently true).
+    user_answer: "Q15 ok, q16 ok, q17 a, q18 ok, q19 c, q20 нема думки"
+    summary: |
+      Q15 ok — cursor "Load more" only.
+      Q16 ok — `^[a-z0-9_-]{1,32}$` lowercase regex, no dots.
+      Q17 A — HMAC payload includes projectId (defense-in-depth at verify level, no DB hit).
+      Q18 ok — "New export" replaces "Retry" for FAILED/PURGED rows; failed rows stay for audit.
+      Q19 C — loose coupling: markBlocked/markDeleted takes (projectId, telegramBotId, chatId); sender extracts projectId from already-loaded Bot (no re-fetch).
+      Q20 agent decides: sub-items under Subscribers + keep auto-index-creation=true (already globally enabled per application.properties:9; new collections inherit, accepted risk documented in tech-spec).
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "09-subscribers"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 90
+    status: "complete"
+    value: |
+      Subscriber CRM module (Epic 05) — реальна реалізація замість NoOpSubscriberService stub, що споживається 04b-вебхуком (ProcessTelegramUpdateJob).
+      Backend:
+      - Subscriber entity + repo + service з upsert-from-webhook, manual-unsubscribe, status-machine (active/unsubscribed/blocked/deleted з reactivation на нове /start).
+      - Tag entity (окрема колекція tags{projectId, slug, label?, createdAt}) + on-demand counters.
+      - CustomFieldDefinition[] embedded у Project (max 20, type=string|number|boolean|date, per-type validation).
+      - SubscriberEvent (нова колекція) — append-only history feed, TTL 1y.
+      - Segment filter: status + tags_include/_exclude + subscribedAt range (без AND/OR-builder на MVP).
+      - Async CSV export job через JobRunr; файли в Mongo GridFS, 7-day retention via ExportCleanupJob; signed-URL download + email notification.
+      - TelegramSender error-handler: 403→markBlocked, 400→markDeleted (writer-of-record для transitions з зовнішніх send-сайтів).
+      - Rate-limit 100 нових /start per project per minute через Redis bucket (захист від spam-атак); existing subscriber re-/start exempt.
+      Frontend (Nuxt):
+      - /subscribers list — search (text-index, min 2 chars) + filters (tag include/exclude, status, subscribedAt range) + cursor pagination 50/page + "Export CSV" + "Recent exports" dialog.
+      - /subscribers/{id} profile — fields, tags (chips + add/remove), custom-fields edit, history feed (50 latest), actions (manual unsubscribe, send personal message dialog).
+      - /tags page — list з counters, rename, delete з confirm.
+      - /custom-fields page — schema CRUD (name slug + label + type + defaultValue).
+      Замикає Epic 04b stub interfaces, готує grounds для Epic 06 (Funnels) і Epic 07 (Broadcasts).
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: |
+      Без 09-subscribers webhook-worker (04b) пише в no-op stubs → жодних підписників у системі. Юзер бачить підключеного бота, але немає кому слати, нема для кого будувати воронки, нема для кого робити розсилки. CRM-частина MVP, без якої воронки (06) і розсилки (07) фізично не запускаються.
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 75
+    status: "complete"
+    value: |
+      Прямі UI:
+      - Project owner (User) — переглядає subscribers list, редагує custom fields, керує тегами, надсилає індивідуальні повідомлення, експортує CSV.
+      Непрямі:
+      - Telegram subscriber — auto-зареєстрований через /start; може відписатися /stop, може потрапити в розсилку/воронку, отримати персональне повідомлення.
+      - Super Admin (Epic 10) — read-only огляд subscribers через admin panel (deferred to Epic 10, цей user-spec лише не блокує).
+      - Public REST API клієнти (Epic 08) — CRUD на subscribers + tags + custom fields (deferred to Epic 08; цей user-spec формує internal API, public surface оголошує 08).
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 85
+    status: "complete"
+    value: |
+      1. /start від нового tg-user (private chat) → Subscriber з'являється у /subscribers списку із заповненими firstName/lastName/username/languageCode у <2s після події.
+      2. Add/remove tag у profile → зберігається синхронно; тег з'являється на /tags з лічильником (on-demand aggregation, allowance for ≤60s Redis cache).
+      3. Filter by tag (`tags_include: ['vip']`) на /subscribers повертає правильний набір; cursor pagination коректна на 1k+ subscribers.
+      4. CSV-експорт (10k subscribers) запускається асинхронно; за <10 хв job DONE, файл у GridFS, owner отримує email з signed-URL посиланням, "Recent exports" у UI показує DONE з download-кнопкою.
+      5. /stop у private chat → Subscriber.status=unsubscribed; наступна броадкаст/воронка не висилається.
+      6. Send personal message → TelegramSender catches 403 → Subscriber.status=blocked + event personal_message_failed; 400 chat-not-found → status=deleted.
+      7. Custom field type=number приймає 42, "3.14", відмовляє "abc" з HTTP 422; type=date приймає ISO-8601, відмовляє "tomorrow"; type=boolean приймає true/false/"yes"/"no" (TBD у tech-spec).
+      8. Rate-limit: спам 200 /start/min від unique tg-users у one project → перші 100 створюють Subscriber'ів, інші 100 ловлять silent ignore + event rate_limit_exceeded; existing subscriber повторні /start не лімітуються.
+      9. Reactivation: blocked/unsubscribed/deleted Subscriber → нове /start → status=active, all tags + customFields зберігаються (workflow line 76).
+      10. Cross-project isolation: same telegram_user_id у Project A і Project B → ДВА Subscriber-документи з ізольованими tags/customFields/status (project.md role table guarantee).
+      11. Subscriber list endpoint P95 <300ms на dataset 1000 subscribers (text-index + cursor pagination).
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: |
+      Stack/runtime:
+      - MongoDB sync driver, Spring MVC + virtual threads (architecture.md).
+      - Унікальність (projectId, telegramUserId) — обов'язковий compound unique index.
+      - Custom fields max 20 полів на проект, embedded у Project.customFieldDefinitions[].
+      - SubscriberEvent — окрема колекція, TTL 1 рік на createdAt, indexed (subscriberId, createdAt desc).
+      Search/listing:
+      - Mongo text-index (firstName, lastName, username), case-insensitive, мін. 2 chars query.
+      - Pagination cursor (lastCreatedAt, lastId) base64, 50/page UI, 200 hard cap API.
+      - Sort default createdAt desc; alt lastSeenAt desc.
+      Tags:
+      - Окрема колекція tags{projectId, slug, label?, createdAt}, unique (projectId, slug).
+      - On-demand counter aggregation, Redis 60s cache якщо профайл показав >300ms.
+      - Sync rename (update_many) і delete ($pull + confirm modal).
+      Status state-machine (Q6):
+      - active↔unsubscribed: /stop або manual UI button.
+      - *→blocked: TelegramSender catches 403 → SubscriberService.markBlocked.
+      - *→deleted: TelegramSender catches 400 chat-not-found → SubscriberService.markDeleted.
+      - Reactivation: будь-який not-active → active при новому /start (workflow line 76; tags+customFields зберігаються).
+      CSV export (Q7):
+      - Зберігання у MongoDB GridFS (collection prefix fs.*), 7-day retention via recurring ExportCleanupJob.
+      - Signed-URL download endpoint streams з GridFS (HMAC token, 7-day TTL).
+      - In-app "Recent exports" + email з посиланням.
+      - Job 10 min hard timeout; filter >200k results → 422 при enqueue.
+      Rate-limit (Q8):
+      - 100 нових /start per project per minute via Redis bucket (key bf:rate:start:{projectId}, INCR + EXPIRE 60s).
+      - Existing subscriber re-/start не лімітується.
+      - Overflow → event rate_limit_exceeded, без створення Subscriber.
+      Frontend:
+      - shadcn-vue + Tailwind, uk/en через t('key'), responsive ≥ 768px (ux-guidelines.md).
+      Send personal message:
+      - TelegramSender.sendMessage(...), text ≤4096 chars (Telegram limit) + UI char counter.
+      Tag slug:
+      - To clarify: regex `^[a-z0-9_-]{1,32}$` (kebab/snake, max 32 chars) — recommend default.
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      Unit:
+      - SubscriberStatusMachine: усі transitions з усіх початкових станів + reactivation rules.
+      - SegmentFilterBuilder: DTO {status, tags_include[], tags_exclude[], dateRange} → Mongo query Document.
+      - CsvBuilder: BOM, UTF-8, escape (";"/quotes/newlines), header order, tags-join, customFields-as-json.
+      - CustomFieldValidator: per-type strict validation (string trim/maxLen, number parse, boolean coerce, date ISO-8601).
+      - TelegramTextValidator: length 1..4096, non-blank.
+      - TagSlugValidator: regex ^[a-z0-9_-]{1,32}$.
+      - RateLimitGuard: Redis bucket counter (можна замокати Lettuce у unit, але краще покривати в integration).
+      Integration (@SpringBootTest + Testcontainers Mongo + embedded Redis або mockito-bean для Lettuce):
+      - Webhook end-to-end: ProcessTelegramUpdateJob → SubscriberService.upsertFromTelegramUpdate створює Subscriber + event subscriber_created (замінює NoOp).
+      - /stop: status flip + event manual_unsubscribe.
+      - Re-/start від blocked/unsubscribed/deleted → active, tags збереглись.
+      - Cross-project isolation: same telegramUserId у двох проектах = 2 Subscriber.
+      - Tags CRUD + rename cascade (≥10 subscribers) + delete з $pull + counters aggregation.
+      - CustomField schema CRUD + value set/edit + per-type validation 422.
+      - List endpoint: search text-index + filter combinations + cursor pagination + sort.
+      - CSV export: enqueue job → run → GridFS file written + email enqueued (JavaMailSender mock + GridFsTemplate read) + signed-URL endpoint serves file + cleanup-job deletes after 7d.
+      - Send personal message: success-path + TelegramSender 403 → status=blocked + event + 400 → deleted + 429 → retry-then-surface.
+      - Access control: ProjectService.requireOwned guards on every endpoint (anti-IDOR test).
+      - Rate-limit: 100 нових /start succeed, 101-й — silent ignore + event; existing subscriber повторні /start unaffected.
+      E2E Playwright (golden path):
+      - login → /projects → click project → /subscribers → search "test" → click row → /subscribers/{id} → add tag → /tags → see tag з counter → export CSV → "Recent exports" → download.
+      Staging-smoke (docs/staging-smoke/09-subscribers.md):
+      - ngrok tunneled local backend → BotFather throwaway bot → Connect у UI → /start від tg → Subscriber у /subscribers UI → add tag → /stop → status flip → export → email прийшов.
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+phase2_user_experience:
+
+  user_stories:
+    score: 90
+    status: "complete"
+    value: |
+      S1 (auto-register). Telegram-юзер пише /start новому боту проекту → ProcessTelegramUpdateJob викликає SubscriberServiceImpl.upsertFromTelegramUpdate → новий Subscriber створений (status=active, tags=[], customFields={}); event subscriber_registered записаний у subscriber_events. Owner відкриває /subscribers і бачить його за <2s.
+      S2 (re-/start activity refresh). Той самий юзер пише будь-який текст → upsert оновлює lastSeenAt і застарілі поля (firstName/username), без створення нового документа.
+      S3 (reactivate from inactive). Той самий юзер після /stop (status=unsubscribed) знов /start → status=active, tags та customFields збережені; event subscriber_reactivated.
+      S4 (rate-limit guard). 200 unique tg-users одночасно надсилають /start у проект A за 60s → перші 100 створюють Subscriber, 101-200 ловлять silent ignore + event rate_limit_exceeded; existing-subscriber повторні /start у тому самому вікні НЕ лімітуються.
+      S5 (view list + search/filter/paginate). Owner на /subscribers вводить "iva" у пошук → text-index повертає Ivan/Ivanna; додає filter `tags_include=vip` + `status=active` → перевіряє 50 рядків; гортає cursor pagination до 4-ї сторінки.
+      S6 (view profile + history). Owner клік на рядок → /subscribers/{id} показує: identity-картку, tags chips, custom fields edit, history feed (50 останніх subscriber_events).
+      S7 (add/remove tag). Owner у profile натискає "Add tag" → autocomplete з існуючих project-tags + опція "Create new"; додає `vip` → API POST /tags-assign; tag-counter на /tags оновлюється at next aggregation request.
+      S8 (manual unsubscribe). Owner у profile натискає "Manual unsubscribe" → confirm → status=unsubscribed, event subscriber_unsubscribed{reason:"manual"}. Subscriber не отримує наступну broadcast/funnel.
+      S9 (send personal message). Owner у profile відкриває dialog "Send personal message" → textarea (max 4096 chars + counter) → Send → TelegramSender.sendMessage; на 200-OK → event personal_message_sent + toast "Sent"; на 403 → event personal_message_failed{reason:"blocked"} + Subscriber.status=blocked + toast "Subscriber blocked the bot"; на 400 chat-not-found → status=deleted; на 429 → retry-with-backoff, потім toast "Telegram rate limit, try later".
+      S10 (define custom field schema). Owner у /custom-fields натискає "Add field" → name (slug regex `^[a-z0-9_-]{1,32}$`, immutable після save) + label + type (string|number|boolean|date) + optional defaultValue → save. У Project.customFieldDefinitions[] з'являється новий запис; cap-check 20.
+      S11 (set custom field value). Owner у subscriber profile редагує value поля city="Київ" → validation per type (number: parseDouble; date: ISO-8601; boolean: true/false/yes/no) → save. Save zapisuje у Subscriber.customFields{city:"Київ"} + event subscriber_custom_field_set.
+      S12 (delete custom field definition). Owner видаляє field `city` → confirm "20 subscribers have a value for this field. Deleting will remove their data. Continue?" → backend $unset на всіх subscribers + cascade видалення з definition[]. Event custom_field_definition_deleted.
+      S13 (rename custom field label). Owner редагує label "Місто" → "Город" → save (тільки label) → instant update.
+      S14 (manage tags). Owner у /tags бачить список з counters; редагує label, видаляє тег → confirm modal → cascade $pull на subscribers; event tag_deleted.
+      S15 (export CSV). Owner у /subscribers натискає "Export CSV" з поточними filter'ами → API POST creates subscriber_exports row (status=PENDING) + enqueues ExportSubscribersJob; UI показує toast "Export started". Job стрімить cursor-by-cursor у GridFS, status=DONE, sendExportReadyEmail з signed URL. У UI "Recent exports" dialog показує row з кнопкою Download.
+      S16 (download exported CSV). Owner клікає Download → endpoint перевіряє HMAC signed URL + expiresAt + ownership → стрімить InputStreamResource з GridFS; Content-Disposition attachment.
+      S17 (concurrent export attempt). Owner натискає Export ще раз поки PENDING/RUNNING → API повертає 409 export_in_flight; UI показує банер "Export already running".
+      S18 (export cleanup). За добу `ExportCleanupJob` видаляє GridFS-файли старші 7d; subscriber_exports.status переходить у PURGED; download endpoint → 410 Gone.
+      S19 (project soft-delete cascade). Owner soft-delete'ить проект → /subscribers, /tags, /custom-fields усі endpoints на цей projectId → 404. Існуючі signed export URLs → 410. Після 7-day retention `ProjectHardDeleteJob` видаляє subscribers + subscriber_events + tags + subscriber_exports + GridFS-файли.
+      S20 (cross-project isolation). Той самий tg-user пише `/start` у проект A і проект B → два окремих Subscriber-документа (project.md role-table guarantee).
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 95
+    status: "complete"
+    value: |
+      AC1. POST /start (new tg-user, private chat, bot CONNECTED, project not soft-deleted) → Subscriber з'являється у /api/v1/projects/{id}/subscribers list із заповненими firstName/lastName/username/languageCode/telegramUserId/telegramChatId/telegramBotId; status=active; event subscriber_registered; latency observed-in-UI <2s.
+      AC2. Той самий tg-user повторно пише /start, але status=unsubscribed/blocked/deleted → upsert переводить status→active, tags + customFields збережено; event subscriber_reactivated; (workflow line 76).
+      AC3. /stop у private chat → SubscriberService.markUnsubscribed → status=unsubscribed + unsubscribedAt set; event subscriber_unsubscribed{reason:"command_stop"}.
+      AC4. Manual unsubscribe button на /subscribers/{id} → status=unsubscribed; event subscriber_unsubscribed{reason:"manual"}.
+      AC5. Send personal message: TelegramSender.sendText 403 catches → SubscriberService.markBlocked → status=blocked + blockedAt; event subscriber_blocked + telegram_send_failed (existing). На 400 chat_not_found → markDeleted → status=deleted + deletedAt; events analog.
+      AC6. Rate-limit: 100 нових /start per project per minute via Redis bucket bf:rate:start:{projectId}, INCR+EXPIRE 60s; existing-subscriber re-/start не лімітується (lookup перед counter); overflow → silent ignore (НЕ створює Subscriber) + event rate_limit_exceeded.
+      AC7. Cross-project isolation: same telegram_user_id у Project A і Project B → 2 окремих Subscriber-документа (unique compound (projectId, telegramUserId) гарантує + service-level enforcement).
+      AC8. Tag CRUD: POST /tags створює Tag (slug regex ^[a-z0-9_-]{1,32}$, unique projectId+slug 409); GET /tags повертає список + on-demand counters via aggregation (cache Redis 60s якщо >300ms); PATCH перейменовує (label only, slug immutable); DELETE з confirm cascades $pull на subscribers + event tag_deleted.
+      AC9. Add/remove tag на subscriber: POST /subscribers/{id}/tags{slug} → tag find-or-create + $addToSet на Subscriber.tags + event subscriber_tag_added; DELETE → $pull + event subscriber_tag_removed.
+      AC10. CustomFieldDefinition CRUD: POST /custom-fields створює embed-запис у Project.customFieldDefinitions[] (name slug immutable + label + type immutable + optional defaultValue + createdAt); 20-field cap → 422 custom_field_limit_reached; same name twice → 409 custom_field_name_taken; PATCH дозволяє лише label/defaultValue change.
+      AC11. Per-type validation на set custom field value (PATCH /subscribers/{id}/custom-fields): type=string strip+max 1024 chars; type=number Double.parseDouble; type=boolean true/false/"yes"/"no"; type=date ISO-8601; на failure → 422 custom_field_type_mismatch.
+      AC12. Delete CustomFieldDefinition → cascade $unset на всіх subscribers projecting that field; confirm-modal у UI; event custom_field_definition_deleted.
+      AC13. List endpoint /subscribers GET: search (мін. 2 chars, Mongo text-index firstName+lastName+username), filters (status, tags_include[], tags_exclude[], subscribedAt[from,to]), sort (createdAt desc default | lastSeenAt desc), cursor pagination (50/page UI, 200 hard cap API, opaque base64 cursor (lastCreatedAt, lastId)), P95 <300ms на dataset 1k subscribers.
+      AC14. Subscriber profile GET /subscribers/{id}: identity + tags + customFields + last 50 subscriber_events (sort createdAt desc).
+      AC15. Send personal message POST /subscribers/{id}/messages: text validation 1..4096 chars; TelegramSender call; success → event personal_message_sent + 200; 403→AC5; 400→AC5; 429→retry-with-backoff (existing TelegramSender behaviour), потім 503 telegram_rate_limited.
+      AC16. Export CSV: POST /subscribers/export {filter:...} → 202 з exportId + status=PENDING; ExportSubscribersJob стрімить cursor → SubscriberCsvWriter → GridFS (text/csv, UTF-8 BOM); сolumns: id, telegram_user_id, telegram_chat_id, first_name, last_name, username, language_code, status, subscribed_at, last_seen_at, tags (joined ";"), custom_fields (JSON string); on DONE → sendExportReadyEmail + status=DONE + fileId.
+      AC17. Export concurrency: друга POST /subscribers/export while status IN (PENDING, RUNNING) → 409 export_in_flight; підтверджено через partial-unique index `(projectId, status)` filtered status IN (PENDING, RUNNING).
+      AC18. Export cap on filter size: estimated count >200000 → 422 export_filter_too_large.
+      AC19. Export download GET /subscribers/exports/{exportId}/download?token=<HMAC>: HMAC verify (key from SUBSCRIBER_EXPORT_TOKEN_KEY env) + ownership (ProjectService.requireOwned) + expiresAt check → streams GridFsResource; Content-Disposition attachment; Content-Type text/csv.
+      AC20. Export cleanup: ExportCleanupJob @Recurring(cron "0 3 * * *") видаляє GridFS-файли старші 7d; subscriber_exports.status → PURGED + fileId nullified; download endpoint → 410 export_purged; event subscribers_export_purged.
+      AC21. Access control: all endpoints проходять ProjectService.requireOwned(currentUserId, projectId, includeSoftDeleted=false); foreign owner / soft-deleted / malformed projectId → 404 uniform.
+      AC22. Soft-delete cascade: project.deletedAt set → all subscriber-CRM endpoints на цей projectId → 404 (requireOwned блокує); signed export URLs → 410 export_project_unavailable; signed-URL endpoint перевіряє project.deletedAt is null. Through ProjectHardDeleteJob extension — на hard-delete cascade видаляє subscribers + subscriber_events + tags + subscriber_exports docs + GridFS files.
+      AC23. SubscriberEvent collection: append-only, TTL 365d на createdAt, indexed (subscriberId, createdAt desc); event types: subscriber_registered, subscriber_reactivated, subscriber_unsubscribed, subscriber_blocked, subscriber_deleted, subscriber_tag_added, subscriber_tag_removed, subscriber_custom_field_set, personal_message_sent, personal_message_failed.
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 90
+    status: "complete"
+    value: |
+      EC1. Race на (projectId, telegramUserId) — два паралельних /start від того самого юзера на той же бот → unique compound index гарантує один документ (DuplicateKeyException → silent ignore у service, перевикликає `update` шлях замість insert).
+      EC2. Race на add_tag — два паралельних POST /tags/{id}/assign того ж тегу → `$addToSet` ідемпотентний; tag find-or-create через unique index на (projectId, slug) — DuplicateKeyException catch у service.
+      EC3. Race на CustomFieldDefinition 20-field cap — 21-й паралельний insert ловиться post-write count check; якщо overflow після race → cleanup: видалити останній додатнй.
+      EC4. /start від blocked → reactivate (AC2). /start від deleted → reactivate (рідкісний випадок — користувач написав боту після chat-deletion; Telegram повторно надав chatId).
+      EC5. Emoji + RTL у firstName/lastName/username → зберігаємо as-is (UTF-8); text-index використовує default analyzer (просто lowercase + tokenize); search "😀" не повертає результатів — accepted limitation MVP.
+      EC6. >4096-char personal message → frontend zod schema blocks; backend bean-validation @Size(max=4096) → 400 inline error.
+      EC7. Personal message → Telegram 429 → TelegramSender existing behaviour: sleep retry_after + jitter, retry до N attempts; на exhaustion → 503 telegram_rate_limited без зміни subscriber.status.
+      EC8. Pagination cursor stale (subscriber deleted after token issued) → naturally skipped через WHERE (createdAt, _id) < (cursorTuple); no error.
+      EC9. Tag rename з 50k subscribers — current spec sync update_many (Q5). Якщо `db.subscribers.count({projectId, tags: oldSlug}) > 10000` → API повертає 202 + enqueues TagRenameJob; UI показує "Renaming in progress" банер. Threshold tunable env var.
+      EC10. Custom field type change attempt → 422 type_immutable (per Q13 lock-in).
+      EC11. Export filter повертає 0 subscribers → still creates CSV (header-only), DONE, email-link working — owner може зрозуміти, що filter не дав результатів.
+      EC12. Export з filter, що повертає >200k → AC18 422 export_filter_too_large.
+      EC13. GridFS upload fail mid-stream → ExportSubscribersJob catches, status=FAILED + processingError; JobRunr retry-policy за дефолтом (3 attempts); після exhaustion — admin redrive через JobRunr dashboard (deferred Epic 10).
+      EC14. Signed download URL форсовано до іншого проекту (token-substitution attack) → HMAC perevіrка fail (key per-project не використовується, але fileId у doc projectId-binded; перевірка project ownership через requireOwned).
+      EC15. URL expired (>7d від createdAt) → 410 export_expired.
+      EC16. Export job triggered while project soft-deleted (race: deletedAt set під час RUNNING) → job завершується, але finalization step перевіряє project.deletedAt, якщо not null → status=PURGED + GridFS file видалити; email НЕ надсилаємо.
+      EC17. Subscriber у status=blocked отримує broadcast (Epic 07) → broadcast worker фільтрує по status=active before dispatch. Epic 05 only гарантує status flips та filter exposure.
+      EC18. Webhook доставляє /start від tg-bot (`is_bot: true`) → silent ignore у ProcessTelegramUpdateJob (вже зроблено у 04b — confirm у tech-spec).
+      EC19. /start ref_X (payload) → subscriber created з event metadata.startPayload (existing 04b behaviour); Epic 05 не змінює.
+      EC20. Subscriber writes Cyrillic username (рідкісний edge case Telegram бо вони ASCII-only) → handled by UTF-8 schema.
+      EC21. CustomField value mass-assignment защита: PATCH /subscribers/{id}/custom-fields ловить лише ключі, які є у Project.customFieldDefinitions[]; інші — silent drop (НЕ помилка, бо frontend може посилати застарілу схему).
+      EC22. Tag slug validation: пробіл "vi p" → 400 inline; uppercase "VIP" → 400 (regex enforces lowercase); довжина 33 → 400.
+      EC23. Manual unsubscribe на subscriber з status=unsubscribed → 409 already_unsubscribed (idempotent, не пишемо подвійний event); same for blocked/deleted.
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 90
+    status: "complete"
+    value: |
+      ER1. Personal message → Telegram 403 → SubscriberService.markBlocked (status=blocked) + event subscriber_blocked + telegram_send_failed (existing sender audit) + 200 OK у API (action recorded, наслідки відображені у UI).
+      ER2. Personal message → Telegram 400 chat_not_found → markDeleted (status=deleted) + event subscriber_deleted + 200 OK.
+      ER3. Personal message → Telegram 429 → existing TelegramSender retry+backoff; exhausted → 503 telegram_rate_limited (caller transparency). Не пишемо subscriber_blocked.
+      ER4. CustomField validation fail (PATCH /subscribers/{id}/custom-fields з типом number у поле type=string) → 422 custom_field_type_mismatch.
+      ER5. Tag conflict (POST /tags { slug: "vip" } коли вже існує) → 409 tag_name_taken.
+      ER6. Tag slug regex fail → 400 з полем `slug` у validation errors.
+      ER7. CustomField limit (21-й add) → 422 custom_field_limit_reached.
+      ER8. CustomField name conflict → 409 custom_field_name_taken.
+      ER9. Subscriber not found (GET /subscribers/{id} з лівим id) → 404; project soft-deleted → 404 (uniform anti-enumeration).
+      ER10. Filter by unknown tag (`tags_include=nonexistent`) → silent empty result (НЕ помилка); UI показує empty-state.
+      ER11. Export filter too large → 422 export_filter_too_large.
+      ER12. Concurrent export → 409 export_in_flight.
+      ER13. Download з invalid HMAC → 401 invalid_token.
+      ER14. Download з expired token (>7d) → 410 export_expired.
+      ER15. Download після GridFS purge → 410 export_purged.
+      ER16. Download project soft-deleted під час runtime → 410 export_project_unavailable.
+      ER17. ExportSubscribersJob fail (Mongo cursor exhausted unexpectedly або GridFS upload fail) → status=FAILED + processingError; email "Export failed, try smaller filter" via sendExportFailedEmail (нова метод у EmailService); JobRunr retry exhausted → admin тільки через dashboard (Epic 10).
+      ER18. /start від rate-limit overflow → silent ignore + event rate_limit_exceeded; webhook повертає 200 OK Telegram (НЕ 429, щоб Telegram не повторив).
+      ER19. ProcessTelegramUpdateJob fail на upsert (Mongo unreachable) → JobRunr retry exhausted → raw_updates.processingStatus=failed (existing 04b behaviour preserved).
+      ER20. Manual unsubscribe вже unsubscribed → 409 already_unsubscribed.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      During development (no deploy):
+      - Unit: SubscriberStatusMachine, SegmentFilterBuilder, SubscriberCsvWriter, CustomFieldValidator, TelegramTextValidator, TagSlugValidator (per testing_strategy item).
+      - Integration (@SpringBootTest + AbstractIntegrationTest + Testcontainers Mongo+Redis+Mailpit):
+        * SubscriberServiceImplIT — replace NoOp behaviour through ProcessTelegramUpdateJob (call real worker, assert Subscriber persisted + event emitted, reactivation flow).
+        * SubscriberRateLimitIT — assert 100/min cap via Redis bucket.
+        * SubscriberControllerIT — список/search/filter/cursor pagination + access guards.
+        * SubscriberProfileIT — GET profile + history feed.
+        * SubscriberPersonalMessageIT — sendMessage success + mock TelegramSender 403/400/429 (using existing MockWebServer pattern from `architecture.md` deps line `mockwebserver`).
+        * SubscriberStatusFlowIT — manual unsubscribe + reactivation + idempotent unsubscribe-twice.
+        * TagControllerIT — CRUD + counter aggregation + rename cascade (≥10 subs sync, threshold-test for async path).
+        * CustomFieldDefinitionIT — schema CRUD + 20-cap + name conflict + label edit + delete cascade $unset.
+        * SubscriberExportIT — POST export → ExportSubscribersJob (run directly via @Autowired job + manual handle()) → GridFS file written, email enqueued (Mailpit), status=DONE.
+        * SubscriberExportDownloadIT — signed URL endpoint: happy path + invalid token + expired + project soft-deleted + GridFS purged.
+        * ExportCleanupJobIT — purge after 7d (clock-skew test).
+        * ProjectSoftDeleteCascadeIT — soft-delete → all CRM endpoints return 404; hard-delete → cascades collections + GridFS.
+        * CrossProjectIsolationIT — same tg_user_id у 2 проектах = 2 Subscriber-документа.
+      - Frontend Vitest unit tests на vee-validate schemas.
+      - Playwright E2E (frontend/e2e/subscribers.spec.ts):
+        * login → /projects → click → /subscribers → bots stub send fake webhook → page refresh → row visible → click → /subscribers/{id} → Add tag "vip" → /tags → counter=1 → Export CSV → "Recent exports" → Download.
+      Staging-smoke (docs/staging-smoke/09-subscribers.md):
+        1. ngrok forward staging-host
+        2. BotFather throwaway bot → Connect в UI (04a)
+        3. /start від tg → перевірити /subscribers у UI (<2s)
+        4. /stop → перевірити status=unsubscribed
+        5. Add tag через UI → /tags counter=1
+        6. Define custom field → set value → save
+        7. Export CSV → email прийшов на test mailbox → click link → CSV завантажено
+        8. Hard delete bot + project
+      Post-deploy MCP-based QA (optional):
+        - Playwright MCP для UI flow.
+        - Telegram MCP (`telegram_send_message` + `telegram_get_messages`) для /start, /stop, перевірки що personal-message прийшов.
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 90
+    status: "complete"
+    value: |
+      Pages (project-scoped, потребує currentProject у Pinia):
+      - /subscribers — list page (responsive ≥768px):
+        * Header: page title + "Export CSV" button + "Recent exports" trigger (opens Dialog зі списком exports).
+        * Filters bar: search Input (placeholder "Search by name or username", min 2 chars), Status Select (Any/Active/Unsubscribed/Blocked/Deleted), Tags MultiSelect (combo with Include/Exclude tabs), DateRange picker (Subscribed at).
+        * Table: columns First Name, Last Name, Username, Tags (Badge chips, overflow "+N"), Subscribed At, Status (Badge color-coded), Last Seen.
+        * Pagination: "Load more" button (cursor-based, прелодить наступні 50). Або "Previous/Next" — TBD у tech-spec; recommend Load more (infinite scroll-friendly, no page-number drift).
+        * Empty state: коли проект порожній — "No subscribers yet. They appear when someone messages your bot. Link to settings."
+      - /subscribers/{subscriberId} — profile page:
+        * Card identity: name + username + status badge + telegram id + language + subscribed/last seen dates + actions buttons (Manual unsubscribe disabled-if-not-active, Send personal message).
+        * Tabs (shadcn-vue Tabs): "Tags" (chips + Add tag combo), "Custom fields" (list з inline edit per row), "History" (chronological feed, 50 latest, expandable JSON metadata).
+        * "Send personal message" Dialog: textarea з char counter (n/4096), Send button (loading спіннер під час requ), toast на success/failure.
+        * Confirmation Dialog for Manual unsubscribe.
+      - /tags — management page:
+        * List: slug + label + counter + actions (Edit label, Delete з confirm).
+        * "Create tag" inline form (slug + label).
+        * Empty state: "No tags yet. Create one or add a tag to a subscriber to get started."
+      - /custom-fields — schema page:
+        * Table: name (slug, immutable badge), label, type, default value, actions (Edit label/default, Delete з confirm cascade warning).
+        * "Add field" Dialog (name slug, label, type Select, optional default).
+        * 20-cap UI guard: disable Add when at limit + tooltip "Limit reached".
+        * Empty state: "No custom fields. Add one to capture extra info."
+      - "Recent exports" Dialog (opened from /subscribers):
+        * Table: createdAt, filter summary, status, action (Download / Retry / Delete).
+        * Pagination 10/page (внутрішня).
+      Sidebar:
+      - Уже містить "Subscribers" item (ux-guidelines.md). Tags та CustomFields — sub-nav або через project Settings → tabs? Recommend: окремі sidebar items "Tags" і "Custom fields" під Subscribers для discoverability. ALT: під Settings (zwięźlej). Рекомендую sub-items.
+      Components до scaffold через `pnpm dlx shadcn-vue add`:
+      - Table, Input, Select, Badge, Toast (Sonner-style), Tabs, Sheet, Checkbox, DatePicker (or RangeCalendar), Combobox, Dropdown, Tooltip.
+      i18n:
+      - All strings via t('key'). Namespace prefixes: subscribers, tags, customFields, exports. Parity gate (`scripts/check-locales.mjs`) гарантує uk/en sync.
+      Toasts:
+      - Action confirmations: "Tag added", "Field saved", "Message sent", "Unsubscribed".
+      - Errors via useApiError mapping; specific error codes (e.g. tag_name_taken) показуються human-readable.
+    gaps: ""
+    required: true
+
+  risks:
+    score: 90
+    status: "complete"
+    value: |
+      R1. CSV export OOM на 100k+ subscribers. Mitigation: streaming MongoTemplate cursor + PipedOutputStream → GridFS upload без in-memory list. Test under @Tag("slow") with 50k seeded subscribers + heap-size assertion.
+      R2. Tag rename cascade на 10k+ subscribers — sync update_many може блокувати event loop. Mitigation: threshold 10k → async TagRenameJob; UI шенерує банер "Renaming in progress" + опрос status. Env var SUBSCRIBER_TAG_RENAME_SYNC_THRESHOLD.
+      R3. Custom field type=immutable обмеження може незадовольнити юзера (Q13 B). Mitigation: документувати у user-spec обмежень; UI показує warning при create "Type cannot be changed later"; delete-and-recreate доступний як ескейп.
+      R4. Race на tags collection unique index — паралельні find-or-create. Mitigation: DuplicateKeyException catch у TagService + retry-read (per BotService.connect precedent).
+      R5. Race на 20-field cap — паралельні CustomFieldDefinition inserts. Mitigation: post-write count check + cleanup last-inserted якщо overflow. Або use $push з conditional (size < 20) в mongo aggregation pipeline — TBD у tech-spec.
+      R6. Cross-project isolation — same tg_user_id у двох проектах. Mitigation: compound unique (projectId, telegramUserId) + service-level check; integration test CrossProjectIsolationIT.
+      R7. Index size on (projectId, tags) при 100k subscribers × avg 5 tags. Estimate: 500k index entries × ~20 bytes = ~10MB. Acceptable for MVP. Mitigation: monitoring (Epic 09).
+      R8. Text-index size на (firstName, lastName, username). Estimate: ~150 bytes per subscriber. На 100k = 15MB. Acceptable. Mitigation: deferred Atlas Search якщо >1M.
+      R9. Signed URL security: HMAC key compromise → all signed URLs leaked. Mitigation: env var SUBSCRIBER_EXPORT_TOKEN_KEY (rotated quarterly), short expiry 7d. Audit: subscribers_export_downloaded event.
+      R10. TelegramSender constructor injection: cyclic dependency Subscriber↔Bot↔TelegramSender? Mitigation: ApplicationContext-level check — SubscriberService doesn't inject TelegramSender (one-way). Subscriber events go through EventService (no cycle).
+      R11. Existing 04b NoOpSubscriberService is `@Service` (not `@Primary`). Two @Service з same interface → Spring fail. Mitigation: delete NoOp (or @Primary on real impl + retain NoOp for test slices). Recommend delete (simpler).
+      R12. ExportSubscribersJob long-running (10 min cap) може блокувати JobRunr workers — backpressure. Mitigation: JobRunr concurrency=4 default, max 4 simultaneous exports across all projects (АС17 per-project одна in-flight, але cross-project 4); якщо більше — JobRunr queues. Acceptable MVP.
+      R13. GridFS query performance на purge sweep. Mitigation: prelookup `subscriber_exports.fileId` doc IDs з status=DONE створення<now-7d → batch-delete за doc IDs. Запит на fs.files без index = TS, але 1×/day OK.
+      R14. ProjectHardDeleteJob extension complexity — додаємо 5 нових cascade steps. Mitigation: test ProjectHardDeleteJobIT extension; document order: subscribers → subscriber_events → tags → subscriber_exports + GridFS → project doc.
+      R15. Rate-limit fail-open під час Redis outage → spam-атака під час outage пройде. Mitigation: fail-open is codebase convention; ризик прийнятий per Q8. Monitoring у Epic 09 додасть alert на Redis-down.
+      R16. Subscriber profile history feed 50 events — на active subscribers може швидко зростати (100+ events/день). Mitigation: profile fetch query LIMIT 50 + sort createdAt desc; "Load more" optional у Phase 2 спека (не required MVP).
+      R17. Custom field rename limitation (Q13 B). UX disutility — owner може хотіти "rename city to town" без втрати даних. Workaround: delete + create + bulk re-set values via API. MVP accepts limitation. Phase 2: add rename via JobRunr-job з $rename.
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 95
+    status: "complete"
+    value: |
+      TD1. CustomFieldDefinition[] embedded у Project (Q2, code-research §13). Bounded 20, atomic update, never queried independently.
+      TD2. SubscriberEvent — нова колекція (Q3, code-research §9). TTL 365d на createdAt, index (subscriberId, createdAt desc).
+      TD3. Search via Mongo text index on (firstName, lastName, username), min 2 chars (Q4). Case-insensitive default. Deferred Atlas Search если >1M.
+      TD4. Cursor pagination з base64-encoded (lastCreatedAt, lastId) tuple (Q4). 50/page UI, 200 hard cap API.
+      TD5. Tags — окрема колекція з unique(projectId, slug) (Q5). On-demand counter aggregation, Redis 60s cache якщо >300ms профайл.
+      TD6. Tag rename — sync update_many до threshold 10k subscribers, async TagRenameJob інакше (Q5, R2). Threshold env-tunable.
+      TD7. Status state-machine writers (Q6, code-research §4): active↔unsubscribed via webhook worker або UI; *→blocked/deleted via TelegramSender direct call SubscriberService.markBlocked/markDeleted. Reactivation on /start.
+      TD8. CSV export storage — MongoDB GridFS (Q7-pivot, code-research §6). No env var for path; unified backups; signed-URL endpoint streams GridFsResource.
+      TD9. Signed-URL — HMAC-SHA256(exportId, expiresAt) keyed by env SUBSCRIBER_EXPORT_TOKEN_KEY; expiry 7d (Q7, R9). Helper SignedDownloadToken у common/crypto/.
+      TD10. Email — EmailService.sendExportReadyEmail + sendExportFailedEmail; raw HTML templates у resources/templates/email/ (code-research §8).
+      TD11. Rate-limit C — 100 нових /start per project per minute via Redis bucket bf:rate:start:{projectId}; existing-subscriber re-/start exempt; fail-open (Q8, code-research §7).
+      TD12. Project soft-delete cascade — keep children intact; ProjectHardDeleteJob extends cascade to subscribers + subscriber_events + tags + subscriber_exports + GridFS (Q10).
+      TD13. Subscriber status=deleted forever (Q11). No purge job in Epic 05.
+      TD14. CSV export concurrency — one in-flight per project via partial-unique index (projectId, status IN PENDING|RUNNING); 409 export_in_flight на duplicate (Q12). Metadata doc forever, GridFS file 7d, status→PURGED після cleanup.
+      TD15. CustomFieldDefinition — name slug immutable, label/defaultValue editable, type immutable (Q13). Delete cascades $unset on subscribers + confirm modal.
+      TD16. TelegramSender hook — direct constructor inject SubscriberService (Q14). markBlocked/markDeleted called inside sendText catch; toThrowable pure mapper. Events split: telegram_send_failed (sender), subscriber_blocked/_deleted (service).
+      TD17. Stub replacement — delete NoOpSubscriberService (R11). Add SubscriberServiceImpl @Service. Tests update to use real impl (no slice tests rely on no-op currently per code-research §1).
+      TD18. Package layout — com.botfunnel.subscriber/ (entity, service, controller, repository, dto, jobs, export); com.botfunnel.tag/ окрема; CustomFieldDefinition у project/ (embedded record) + CustomFieldsController у project/ (code-research §12).
+      TD19. DTO style — Java records, suffix Request/Response, @JsonIgnoreProperties(ignoreUnknown=true) (code-research §12).
+      TD20. Error codes — 422 (business rule), 400 (bean validation), 409 (unique conflict). Specific codes: tag_name_taken, custom_field_*, export_in_flight, export_filter_too_large, export_expired, export_purged, export_project_unavailable, rate_limit_exceeded (event-only, not HTTP), already_unsubscribed.
+      TD21. JobRunr — recurring ExportCleanupJob @Recurring(id="subscriber-export-cleanup", cron="0 3 * * *"); one-shot ExportSubscribersJob enqueue via JobScheduler з deterministic UUID = nameUUIDFromBytes(exportId) (code-research §5).
+      TD22. Index strategy:
+        - subscribers: unique(projectId, telegramUserId); (projectId, status, createdAt desc); (projectId, tags); text(firstName, lastName, username).
+        - subscriber_events: (subscriberId, createdAt desc); TTL 365d.
+        - tags: unique(projectId, slug).
+        - subscriber_exports: (projectId, createdAt desc); partial-unique (projectId, status) WHERE status IN (PENDING, RUNNING).
+      TD23. Frontend pages — /subscribers, /subscribers/{id}, /tags, /custom-fields. shadcn-vue components scaffolded Wave 1: Table, Input, Select, Badge, Toast, Tabs, Sheet, Checkbox, DatePicker, Combobox, Dropdown, Tooltip.
+      TD24. i18n namespaces — subscribers.*, tags.*, customFields.*, exports.*; uk.json + en.json parity gate.
+      TD25. Email subject lang — Ukrainian default (per existing EmailService precedent: "Експорт підписників готовий"; "Експорт підписників не вдався"). User-facing emails ignore i18n cookie (UA-default per current EmailService pattern).
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 90
+    status: "complete"
+    value: |
+      CI/CD only через GitHub Actions (per CLAUDE.md). Без direct SSH.
+      Нові env vars (через GitHub Actions secrets + .env.example):
+      - SUBSCRIBER_EXPORT_TOKEN_KEY — 32-byte hex; HMAC-SHA256 key для signed download URLs. Генерується раз через openssl rand -hex 32.
+      - SUBSCRIBER_EXPORT_RETENTION_DAYS — default 7.
+      - SUBSCRIBER_RATE_LIMIT_START_PER_MIN — default 100.
+      - SUBSCRIBER_TAG_RENAME_SYNC_THRESHOLD — default 10000.
+      Зміни у .env.example + docs/local-setup.md.
+      Без infra-змін (GridFS — частина того ж Mongo).
+      Production index management: code-research §13 flags ручне створення нових індексів (auto-creation тільки у dev). Tech-spec має описати чи extend deploy script для new collections, чи додати @PostConstruct ensure-index callbacks (повториш ProjectHardDeleteJob precedent).
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 90
+    status: "complete"
+    value: |
+      Pre-deploy (one-time):
+      1. Generate HMAC key: `openssl rand -hex 32` → store у GitHub Actions secret SUBSCRIBER_EXPORT_TOKEN_KEY.
+      2. (Optional) Configure env defaults для retention/rate-limit/rename-threshold.
+      Post-deploy (project owner perspective):
+      1. Open /subscribers (empty if немає інтеракцій з ботом).
+      2. (Optional) Create custom fields у /custom-fields.
+      3. (Optional) Test: write /start від свого Telegram → бачити subscriber у списку.
+      4. Verify: /stop → subscriber status flips to unsubscribed.
+      5. (Optional) Add tag через /tags.
+      6. (Optional) Export CSV → check email + download.
+      Staging-smoke runbook у docs/staging-smoke/09-subscribers.md (повний у verification_strategy).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+phase3_integration:
+
+  integration_points:
+    score: 95
+    status: "complete"
+    value: |
+      Inbound (read-side):
+      - ProcessTelegramUpdateJob (Epic 04b) → SubscriberServiceImpl.upsertFromTelegramUpdate / markUnsubscribed. Replaces NoOpSubscriberService.
+      - Frontend HTTP → /api/v1/projects/{projectId}/subscribers/** + /tags/** + /custom-fields/** + /subscribers/exports/** + /subscribers/exports/{id}/download.
+      Outbound (write-side / external):
+      - TelegramSender.sendText для personal messages; sender catches 403/400 → calls SubscriberService.markBlocked/markDeleted (TD16).
+      - EmailService.sendExportReadyEmail / sendExportFailedEmail.
+      - GridFsTemplate.store(InputStream, filename, "text/csv", metadata) для CSV upload; GridFsResource read for download.
+      - JobScheduler.enqueue(deterministic UUID, j -> j.handle(exportId)) для ExportSubscribersJob.
+      - JobRunr @Recurring(cron "0 3 * * *") для ExportCleanupJob.
+      - Redis bf:rate:start:{projectId} INCR+EXPIRE 60s (mirrors AuthService pattern).
+      - EventService.logEvent з userId=project.ownerId (existing 04b precedent) для subscriber-lifecycle + tag + customField + export events.
+      Modifies:
+      - ProjectHardDeleteJob — extend cascade with: subscriberRepository.deleteByProjectId, subscriberEventRepository.deleteByProjectId, tagRepository.deleteByProjectId, subscriberExportRepository.deleteByProjectId + GridFsTemplate.delete by metadata.projectId. Order documented у tech-spec.
+      - Project.java — add embedded customFieldDefinitions[] (Java schema-add, no migration).
+      - TelegramSender.java — add SubscriberService collaborator + catch 403/400.
+      - SubscriberService interface — add markBlocked + markDeleted methods. (Existing methods upsertFromTelegramUpdate + markUnsubscribed preserved.)
+      - SubscriberService NoOp — delete (TD17).
+      - SecurityConfig — no changes (auth-required для /api/v1/projects/{projectId}/subscribers/** через existing patterns).
+      - i18n — add subscribers/tags/customFields/exports namespaces у frontend/i18n/locales/{uk,en}.json.
+      Closes:
+      - Epic 04b NoOp stub for SubscriberService.
+      Enables (future epics):
+      - Epic 06 (Funnels) reads Subscriber + tags + customFields for triggers.
+      - Epic 07 (Broadcasts) segments audience.
+      - Epic 08 (Public API) exposes /api/v1/* as external.
+      - Epic 09 (Analytics) reads subscriber_events stream.
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 80
+    status: "complete"
+    value: |
+      Hard:
+      - 04a (06-bot-connection): Bot entity, TelegramSender для send-personal-msg.
+      - 04b (08-webhook-ingestion): ProcessTelegramUpdateJob, NoOpSubscriberService інтерфейс (заміняємо impl).
+      - 03 (05-projects): Project entity + access control via ProjectService.requireOwned.
+      - 02 (02-auth): session auth для UI endpoints.
+      - 01 (foundation): JobRunr, Mongo, MeterRegistry, EmailService.
+      Soft:
+      - Epic 06 (Funnels): зчитуватиме Subscriber + tags + custom fields для триггерів.
+      - Epic 07 (Broadcasts): сегментує audience.
+      - Epic 08 (Public API): exposes subscribers/tags як external API.
+      - Epic 09 (Analytics): Subscriber growth, segment stats.
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 90
+    status: "complete"
+    value: "Captured fully in phase1_feature_overview.constraints (above)."
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 95
+    status: "complete"
+    value: |
+      Нові колекції:
+      - subscribers
+        Fields: _id, projectId, telegramUserId(Long), telegramChatId(Long), telegramBotId(Long), firstName, lastName, username, languageCode, isPremium(Boolean nullable), status(enum), tags(List<String>), customFields(Map<String,Object>), subscribedAt(Instant), lastSeenAt(Instant), unsubscribedAt(Instant nullable), blockedAt(Instant nullable), deletedAt(Instant nullable).
+        Indexes: unique(projectId, telegramUserId); (projectId, status, createdAt desc); (projectId, tags); text(firstName, lastName, username).
+      - subscriber_events
+        Fields: _id, subscriberId, projectId, type(String), metadata(Map<String,Object>), createdAt(Instant).
+        Indexes: (subscriberId, createdAt desc); TTL 365d на createdAt.
+      - tags
+        Fields: _id, projectId, slug, label(nullable), createdAt.
+        Indexes: unique(projectId, slug).
+      - subscriber_exports
+        Fields: _id (= exportId), projectId, userId(owner), filter(embedded SegmentFilter doc), status(enum PENDING|RUNNING|DONE|FAILED|PURGED), fileId(GridFS ObjectId nullable), rowCount(Long nullable), errorMessage(String nullable), createdAt, completedAt(nullable).
+        Indexes: (projectId, createdAt desc); partial-unique(projectId, status) WHERE status IN (PENDING, RUNNING).
+      Schema-edit:
+      - Project — add customFieldDefinitions: List<CustomFieldDefinition>{name, label, type(enum), defaultValue(nullable Object), createdAt}. Embed-array, no migration, legacy docs read as empty list.
+      - SubscriberService interface — add markBlocked(projectId, telegramBotId, chatId), markDeleted(projectId, telegramBotId, chatId).
+      GridFS collections: fs.files, fs.chunks (Spring Data auto). Metadata stored on fs.files: { exportId, projectId, createdAt, expiresAt }.
+      No new index on `bots` чи інших існуючих колекціях.
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 70
+    status: "complete"
+    value: |
+      Жодного migration script у класичному сенсі:
+      - subscribers, subscriber_events, tags(?) — нові колекції, auto-created indexes через spring data.
+      - Project.customFieldDefinitions — Java field-only schema-add, legacy docs читаються як empty list (nullable-wrapper pattern).
+      - Replace NoOpSubscriberService impl — same @Service annotation на новому SubscriberServiceImpl, видалити NoOp (or refactor у no-op test fixture).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/09-subscribers/user-spec.md"
+  status: "approved"
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+  required_threshold: 85
+  optional_threshold: 50
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: value filled, no TBD, gaps empty or conscious limitations"
+  priority_order:
+    - "Required < 85% (lowest first)"
+    - "Optional mentioned in context"
+    - "Other optional if user knowledgeable"
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Propose solutions based on PK, opinionated"
+    - "Challenge with substance"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Progress
+# ============================================================================
+progress:
+  current_phase: "ready_for_completeness_check"
+  questions_asked: 4
+  last_question: "post-code-research batch (cascade + retention + concurrency + customfield + sender hook)"
+  total_required_score: 1325
+  total_optional_score: 555
+  completion_estimate: "85% (Cycle 1+2 done; completeness-checker next)"
+  user_detail_level: "moderate"
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  - workflow/* — reference only (per global memory). Source of truth — project-knowledge + this interview.
+  - NoOpSubscriberService.upsertFromTelegramUpdate сигнатура вже задана у 04b. Real impl має зберегти контракт (або змінити з оновленням 04b worker — менш бажано).
+  - project.md role-table стверджує: "Same Telegram user in two projects = two separate Subscriber records (intentional isolation)". Це треба підтвердити окремою AC.
+  - architecture.md Data Model для subscribers вже зафіксував поля: `tags array`, `customFields JSONB-equivalent document`, `status (active|unsubscribed|blocked|deleted)`.

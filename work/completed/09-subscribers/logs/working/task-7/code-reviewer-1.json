@@ -1,0 +1,13 @@
+{
+  "status": "approved",
+  "summary": "Task 7 cleanly extends ProjectHardDeleteJob's cascade per Decision 8 / AC22 in the exact required order (events -> GridFS -> subscriber_exports -> subscriber_events -> subscribers -> tags -> emit project_hard_deleted -> drop projects). The GridFS-before-exports ordering, null-defensive DeleteResult handling, idempotency, the extended single structured INFO log line (both deletion and zero-deletion branches), and the AC-17b temporal-sandwich invariant are all correct and well-documented. Cross-file checks confirm every collection name, projectId field, entity setter, enum value, requireOwned 404 contract, and EventService.logEvent signature match production code. Test coverage is excellent. No critical or major issues found; only one minor maintainability note.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": 41,
+      "description": "The GridFS file-metadata collection name is hardcoded as the literal default bucket name \"fs.files\". This is correct today because no custom GridFS bucket is configured (no spring.data.mongodb.gridfs.bucket property and no GridFsTemplate bean override), so the default bucket 'fs' -> 'fs.files'/'fs.chunks' applies and gridFsOperations.delete(query) sweeps the same default bucket the count reads. However, the count read (template.count on the literal \"fs.files\") and the delete (gridFsOperations.delete, which honors the configured bucket) are decoupled: if a future change introduces a custom bucket name, the count would silently read the wrong collection and report gridFsFilesRemoved=0 while the delete still works, producing a misleading log metric (not data loss). This is purely a count/observability coupling, not a correctness bug in the cascade itself.",
+      "suggested_fix": "Optional hardening: add a one-line comment at the constant noting it must stay in sync with any future configured GridFS bucket name, or derive the metadata-collection name from the bucket configuration if one is ever introduced. No action required while the default bucket is in use."
+    }
+  ]
+}

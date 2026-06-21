@@ -1,0 +1,18 @@
+{
+  "reviewer": "test-reviewer",
+  "skill": "test-master",
+  "round": 1,
+  "task": "task-15 finding — funnel trigger auto-save 422 on type switch",
+  "commit": "54ac53dd8db83d21afa509e74173dce89771e476",
+  "files": ["frontend/tests/pages/funnel-editor.spec.ts"],
+  "findings": [],
+  "notes": [
+    "Correct test type: UI component-integration (mounts the page + real FunnelTriggerSettings, drives real DOM). Only framework boundaries mocked (store + Nuxt imports), not 3+ business deps.",
+    "Behavior over implementation: assertions are on the network boundary (storeMock.update called / not called) and on the actual PATCH payload (triggerType, keywords, triggerValue) — verifies real outcome, not just that a mock fired.",
+    "Coverage maps 1:1 to triggerReady branches: keyword-empty, tag_added/custom_field_set/event-empty (parametrized loop), keyword-filled payload, event-filled payload, on_start empty-valid vs invalid. No redundant tests.",
+    "Determinism: fake timers + tick() helper resolve the watch-microtask -> 600ms debounce -> persist promise chain; afterEach restores real timers and isolates each test.",
+    "The 'assert not-called then filled then called' pattern in the keyword/event flow tests is a deliberate in-flow guard (PATCH is triggered by the value, not the type switch), not redundant duplication."
+  ],
+  "verdict": "approve",
+  "summary": "No findings. Tests are the right type, assert real behavior at the correct seam, and each earns its place by covering a distinct readiness branch. 25/25 specs in the file pass."
+}

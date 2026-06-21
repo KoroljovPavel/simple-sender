@@ -1,0 +1,32 @@
+{
+  "status": "approved",
+  "summary": "Re-verified tech-spec after fixes. Checked 28 claims, found 0 mirages. All four previously-flagged method-name mirages are now resolved: the spec references applyTriggers (forward trigger pass, FunnelService:679) and toTriggerDtos (reverse mapper, FunnelService:1578); the non-existent validateTriggers / toTriggers / toTriggerDto (singular) no longer appear anywhere in the spec (0 grep matches each in both spec and code). Funnel-scoped validation claim (Decision 5 / Task 3) confirmed: requireEventEntryStep (FunnelService:770) and stepIds.contains (FunnelService:775) both exist. No NEW mirages introduced by the edits; MAX_NOTES / NOTE_TEXT_MAX / hideTargetPickers are correctly framed as proposed-new identifiers, not claimed-existing.",
+  "findings": [],
+  "stats": {
+    "total_claims_checked": 28,
+    "confirmed": 28,
+    "mirages_found": 0,
+    "verified_claims": [
+      "applyTriggers exists (FunnelService:679) — forward trigger pass",
+      "toTriggerDtos exists (FunnelService:1578) — reverse trigger mapper",
+      "validateTriggers absent from code AND spec (correctly removed)",
+      "toTriggers absent from code AND spec (correctly removed)",
+      "toTriggerDto singular absent from code AND spec (correctly removed)",
+      "requireEventEntryStep exists (FunnelService:770)",
+      "requireNoEntryStep exists (FunnelService:761)",
+      "stepIds.contains check exists (FunnelService:775)",
+      "toSteps exists (FunnelService:920)",
+      "toStepDto exists (FunnelService:1588)",
+      "FunnelStep.copyOf used (FunnelService:322)",
+      "MAX_TRIGGERS=50 exists (FunnelService:91)",
+      "advanceToNext exists (FunnelExecutionEngine:489)",
+      "insertExecutionAt exists (FunnelExecutionFactory:88)",
+      "insertExecution exists (FunnelExecutionFactory:76)",
+      "fire() exists (FunnelTriggerServiceImpl:121)",
+      "testRun exists (FunnelService:434)",
+      "Trigger.entryStepId field exists (Trigger:35)",
+      "@vue/devtools-api alias stub precedent (nuxt.config.ts:40)",
+      "@vue-flow/core + @dagrejs/dagre absent from package.json (correct — NEW deps)"
+    ]
+  }
+}

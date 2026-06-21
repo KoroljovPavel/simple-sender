@@ -1,0 +1,49 @@
+{
+  "status": "needs_improvement",
+  "summary": "Both F1 and F2 tests are well-targeted and mutation-resistant: the F1 unit test asserts the normalized value into applyAll and the exact old/new maps into recordCustomFieldsSet (fails on OLD code that called setOne and never recordCustomFieldsSet), and the F2 IT deterministically simulates the post-claim/pre-write cancel window and asserts the cancel is not resurrected (fails on OLD blind-save code). Litmus passes for both. The gaps are coverage breadth, not test validity: several CAS-protected paths (scheduleDelay/complete/terminate) and the null-old-value + same-value-no-op cases are only asserted indirectly or relied upon from neighbouring suites, and the F2 IT covers only the persistProgress/advance write of the four guarded writers.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java:225 (concurrentCancelMidTickWinsOverEngineWrite)",
+      "issue": "The F2 production change converts FOUR writers to claim-conditional CAS — persistProgress, scheduleDelay, complete, terminate — but the only race IT exercises the persistProgress (advance) path: cancel lands during step-1's send, then the engine tries to advance to step-2. The complete() and scheduleDelay() CAS predicates are never raced. A mutant that reverts complete() back to a blind save (or drops the stillClaimed predicate from complete/scheduleDelay) would NOT be caught: e.g. a single-step funnel where the cancel lands during that step's send would, on mutated code, be resurrected to 'completed' — no test covers it. terminate() is the cancel-path itself so it is self-consistent, but complete() and scheduleDelay() are unprotected by tests.",
+      "recommendation": "Add two more race ITs mirroring the existing one. (a) complete(): single send-step funnel [sendMessage(\"only\")], same dispatcher that flips status=cancelled/stepRunStatus=done on the first send; after sweep assert status==cancelled (NOT completed), completedAt==null, sentCount==1. (b) scheduleDelay(): funnel [sendMessage(\"first\"), delay(5,MIN)], cancel during the send; after sweep assert status==cancelled (NOT waiting), nextRunAt unchanged (null/seed), stepRunStatus==done. Reuse the inline-Dispatcher pattern already in the file so each stays deterministic."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java:164 (setCustomFieldAppliesAndRecordsAuditEvent)",
+      "issue": "The null-old-value branch in StepExecutor.currentValue (subscriber.getCustomFields() == null → oldValues = singletonMap(key, null)) is documented as an explicit edge case in the task (line 85) but is never asserted. The single F1 happy-path test seeds existing.put(\"age\", 10.0), so customFields is always non-null. A mutant that NPEs on null customFields, or that substitutes an empty map / omits the null entry, would pass this test. Collections.singletonMap with a null value is also a known foot-gun worth pinning.",
+      "recommendation": "Add setCustomFieldFirstTimeRecordsNullOldValue: activeSubscriber() with customFields left null (or sub.setCustomFields(null)), validateAndNormalize stubbed to return 30.0, then verify recordCustomFieldsSet captures oldValues == singletonMap(\"age\", null) — assertThat(oldCap.getValue()).containsExactly(entry(\"age\", null)) and .hasSize(1) — and newValues == entry(\"age\", 30.0). This pins the currentValue(null) contract that recordCustomFieldsSet's diff relies on."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java (no test) — TDD anchor line 44, StepExecutor.java:152-154",
+      "issue": "TDD anchor explicitly lists 'SET_CUSTOM_FIELD with the same value already set → recordCustomFieldsSet no-op (empty changedKeys), step CONTINUE' as a required case; no test covers it at the StepExecutor layer. The no-op IS verified inside SubscriberServiceImpl (recordCustomFieldsSet_writesOneEventWithChangedKeys covers the changedKeys logic, and the empty-changedKeys early-return at SubscriberServiceImpl.java:232), so the no-op behavior itself is not unverified — but the executor's contribution (passing old==new so the downstream no-op triggers, while still returning CONTINUE) is not asserted. Lower severity because the executor unconditionally calls recordCustomFieldsSet regardless, so the executor has no branch of its own here — the anchor item is largely satisfied by the existing SubscriberServiceImplIT no-op coverage.",
+      "recommendation": "Either (a) add setCustomFieldUnchangedValueStillContinues at the executor layer: seed existing age==30.0, stub validateAndNormalize→30.0, assert outcome==CONTINUE and that oldValues==newValues==entry(\"age\",30.0) are passed to recordCustomFieldsSet (proving the executor hands identical maps so the sole-writer no-ops); or (b) leave the executor test as-is and note in decisions.md that the no-op semantics are owned/verified by SubscriberServiceImplIT, since the executor itself has no conditional. Pick one and record it."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java:255-256 (concurrentCancelMidTickWinsOverEngineWrite)",
+      "issue": "The test's own dispatcher writes status=cancelled AND stepRunStatus=done before the engine's CAS runs, so asserting after.getStepRunStatus()==done (line 256) is partly asserting the value the TEST wrote, not solely the engine's behavior. It does still have value (it proves the engine did not flip stepRunStatus back to in_progress/pending), but it would not distinguish a mutant where the engine's CAS predicate accidentally matched and overwrote other fields while leaving stepRunStatus alone. The load-bearing assertions here are status==cancelled, currentStepIndex==0, and sentCount==1 — those genuinely fail on OLD/mutated code.",
+      "recommendation": "Keep the assertion but add a stronger discriminator that only the engine could have changed: capture the updatedAt before sweep and assert the engine did NOT bump it (no-op write leaves updatedAt at the dispatcher-write value), or assert completedAt remains null. This makes the test fail specifically when the engine's CAS wrongly matches the cancelled row, independent of the fields the dispatcher set."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "litmusTest": {
+      "checked": 4,
+      "passed": 4,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 3,
+      "integration": 1,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

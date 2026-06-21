@@ -1,0 +1,38 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 4,
+  "round": 3,
+  "verdict": "OK",
+  "findings": [
+    {
+      "id": "CF-R2-01-RESOLVED",
+      "severity": "resolved",
+      "description": "setOne(projectId, subscriberId, CustomFieldType type, String key, Object value) is now present.",
+      "detail": "Signature matches the tech-spec exactly (line 88 of SubscriberCustomFieldsService.java). type==null guard returns immediately (no-op skip, line 89-90). Non-null path calls validateAndNormalize then delegates to applyAll via singletonMap (lines 92-93). No audit call inside setOne — responsibility is documented (Javadoc, lines 68-87) and explicitly left to the caller. Controller does NOT route through setOne; it continues to use the two-pass validateAndNormalize+applyAll with a single aggregated recordCustomFieldsSet call (controller lines 85-97). All-or-nothing controller semantics are fully intact."
+    },
+    {
+      "id": "CF-R2-02-RESOLVED",
+      "severity": "resolved",
+      "description": "validateAndNormalize null-type guard is now in place.",
+      "detail": "Lines 58-60: if (type == null) throw new IllegalArgumentException(\"type must not be null\"). Unit test validateAndNormalize_nullType_throwsIllegalArgument confirms it (SubscriberCustomFieldsServiceTest lines 64-70)."
+    }
+  ],
+  "verificationChecklist": {
+    "setOne_exists_correct_signature": true,
+    "setOne_null_type_skips": true,
+    "setOne_calls_validateAndNormalize_then_applyAll": true,
+    "setOne_no_audit_inside": true,
+    "setOne_no_audit_doc_says_caller_responsible": true,
+    "controller_uses_two_pass_not_setOne": true,
+    "controller_all_or_nothing_intact": true,
+    "controller_single_recordCustomFieldsSet_per_patch": true,
+    "validateAndNormalize_null_guard_added": true,
+    "test_setOne_valid_value": true,
+    "test_setOne_deleted_skip": true,
+    "test_setOne_invalid_422": true,
+    "test_setOne_null_unsets": true,
+    "no_request_scope_deps_in_service": true,
+    "no_ProjectService_SecurityContextHolder_in_service": true
+  },
+  "summary": "Both round-2 findings are fully resolved. CF-R2-01: setOne is present with the exact spec signature; null-type returns immediately (no-op skip); non-null path validates then applies via singletonMap; no audit is written inside the method and this is clearly documented. The controller continues to use the independent two-pass validateAndNormalize+applyAll path with one aggregated recordCustomFieldsSet call, so all-or-nothing semantics and the sole-writer audit invariant remain intact. CF-R2-02: validateAndNormalize now throws IllegalArgumentException on a null type argument, with a corresponding unit test. All four TDD anchor tests for setOne are present and cover valid, deleted-skip, invalid-422, and null-unset cases. No new issues found. Implementation is clean and production-ready."
+}

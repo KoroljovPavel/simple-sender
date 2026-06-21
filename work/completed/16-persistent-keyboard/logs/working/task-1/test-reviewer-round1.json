@@ -1,0 +1,28 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/test/java/com/botfunnel/funnel/FunnelServiceKeyboardStepTest.java",
+      "line": 192,
+      "description": "setKeyboard_buttonTextAtCaps_areValid covers the inclusive boundaries text=4096 and buttonText=64, but its only assertion is `assertThat(resp.steps().get(0).keyboardText()).hasSize(4096)`. The 64-char button boundary is exercised by validation only — there is no assertion that the 64-char button text actually survived the round-trip. Litmus: if toSteps/toStepDto silently dropped the button while validation still passed (validation runs on the domain rows before mapping back), this test would stay green. The 'button text exactly 64 valid' TDD-anchor boundary is therefore only half-asserted (accepted, but not round-tripped).",
+      "recommendation": "Add an assertion on the button text: `assertThat(resp.steps().get(0).keyboardRows().get(0).buttons().get(0).text()).hasSize(64);` (and optionally `.isEqualTo(\"y\".repeat(64))`). This makes the 64-char boundary a real round-trip assertion, not just a validation pass-through."
+    },
+    {
+      "severity": "minor",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/test/java/com/botfunnel/funnel/FunnelServiceKeyboardStepTest.java",
+      "line": 192,
+      "description": "The two distinct inclusive boundaries (keyboardText length == MAX_KEYBOARD_TEXT and buttonText length == MAX_KEYBOARD_BUTTON_TEXT) are merged into one test method with a single payload. They share a happy path so a regression in either cap's off-by-one (e.g. `>=` vs `>`) on the accept side would be caught only if it happened to fail the combined payload. The matching reject cases (4097 / 65) are correctly split into separate tests, so the accept side is the weaker half. This is a clarity/isolation nit, not a correctness gap.",
+      "recommendation": "Optional: split into setKeyboard_textAt4096_valid and setKeyboard_buttonTextAt64_valid so each boundary has an independent accept-side test with its own targeted assertion. Keeps the off-by-one regression localized to one failing test."
+    },
+    {
+      "severity": "info",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/test/java/com/botfunnel/funnel/FunnelServiceKeyboardStepTest.java",
+      "line": 110,
+      "description": "assert422 asserts status==422 AND code==CODE_INVALID_STEP, which is correct and the right strength. It does not assert anything about the message text — acceptable per the PII/plain-English contract (messages must not be relied upon). No action needed; noting that the many rejection tests share one code, so they cannot distinguish which rule fired (e.g. a row-count error vs a duplicate error would both pass the same rejection test if the wrong branch threw). Given the single-code contract this is by design, but it slightly weakens each rejection test's specificity.",
+      "recommendation": "No change required under the one-code contract. If stronger specificity is ever wanted, assert on a substring of getMessage() (e.g. \"duplicate\" / \"exceeds the maximum of 10 rows\") in the few rules most prone to mis-wiring — but only if the team accepts coupling tests to plain-English message text."
+    }
+  ],
+  "summary": "Strong test set: all 18+ TDD-anchor cases are present with meaningful, litmus-passing assertions. copyOf unit tests assert new-list-instance (isNotSameAs), element sharing (isSameAs), content equality, null-stays-null, and bidirectional mutation isolation — all load-bearing for user-spec Risk 1 and all would fail if the defensive copy were removed. Round-trip is verified both at the service layer (response DTO + persisted entity, proving toSteps and toStepDto) and over real HTTP in FunnelControllerIT (PUT->GET jsonPath on rows/buttons/booleans/text, plus the 422 case). Every rejection rule from Decision 6 is covered, including null-row/null-button-element (422 not NPE), empty-vs-null rows, trimmed-duplicate, and CLEAR_KEYBOARD strict-field rejection (rows/isPersistent/oneTimeKeyboard, both empty-list and true/false). No over-mocking (correct integration-test pyramid placement against a real test DB), no mock-return anti-pattern, no brittle/false-confidence tests. Only gap: the 'button text exactly 64 valid' boundary is exercised by validation but not asserted on the round-trip (the single assertion checks keyboardText length, not the button). Two minor + one info finding; zero blocking, zero major. Status: passed."
+}

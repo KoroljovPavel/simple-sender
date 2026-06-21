@@ -1,0 +1,177 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task-integration",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+  "iteration": "final",
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "consistency",
+      "task": 6,
+      "related_tasks": [8],
+      "section": "Description / What to do (Task 6) vs Acceptance Criteria / Edge cases (Task 8)",
+      "issue": "Task 6 deliberately drops the Micrometer counter `botfunnel.bot_connect.brute_force.redis_failures` (tech-spec D14) and substitutes a distinct WARN log line because `spring-boot-starter-actuator` is not on the classpath. Task 6 explicitly says 'Do NOT inject MeterRegistry... adding the dep just for this task is out of scope'. However Task 8's Acceptance Criteria still states 'Redis down → Connect still succeeds with WARN log + Micrometer counter incremented (AC11, D14)' and Edge cases say 'Verify Connect still returns 200 and the Micrometer counter botfunnel.bot_connect.brute_force.redis_failures increments (read via MeterRegistry)'. Task 8's BotControllerIT method `postConnect_redisDown_failsOpen_connectSucceeds_warnLogged_metricIncremented` will fail because the counter is never incremented by the implementation. This is a hard cross-task contract mismatch: T6 and T8 disagree on what observability surface exists.",
+      "fix": "Either (a) update Task 8 to drop the Micrometer counter assertion and replace with a Logback `ListAppender`-based WARN-log assertion matching Task 6's contract, OR (b) update Task 6 to add `spring-boot-starter-actuator` and emit the Micrometer counter as tech-spec D14 originally specified. Whichever path is chosen, the test name `...metricIncremented` must also be renamed."
+    },
+    {
+      "severity": "critical",
+      "category": "consistency",
+      "task": 8,
+      "related_tasks": [6],
+      "section": "Acceptance Criteria — bot_connected event metadata shape",
+      "issue": "Task 8 line 110 specifies that the integration test asserts the `bot_connected` event's `metadata` map contains the keys `projectId, telegramBotId, ip, userAgent (and telegramUsername)`. But tech-spec How-it-works line 75-77 and Task 6 line 152 both say `bot_connected` metadata is `{projectId, telegramBotId, telegramUsername}` ONLY — `ip` and `ua` are SEPARATE positional parameters to `EventService.logEvent(userId, type, ip, ua, metadata)`, NOT inside the metadata map. The Task 8 IT assertion as written will fail because `ip`/`userAgent` are never put into the metadata map by Task 6.",
+      "fix": "Update Task 8 line 110 to assert metadata map keys = {projectId, telegramBotId, telegramUsername} for bot_connected and {projectId, telegramBotId, webhookDeleted} for bot_disconnected, matching Task 6 and tech-spec. The `ip`/`userAgent` audit fields should be asserted on the Event row's top-level columns (via EventRepository), not on the metadata Map."
+    },
+    {
+      "severity": "critical",
+      "category": "resource-sharing",
+      "task": 5,
+      "related_tasks": [4],
+      "section": "frontmatter.depends_on",
+      "issue": "Task 5 consumes i18n keys `bot.subnav.general`, `bot.subnav.bot`, `bot.placeholder` owned by Task 4 (Task 4 'Description' and 'What to do' explicitly list these as Task-4-owned keys 'beyond user-spec AC22, in lock-step for Task 5'). Task 5 'Verify Steps → Automated' includes `pnpm prebuild` (locale parity gate) which will FAIL if Task 4 keys are missing. Task 5 'Acceptance Criteria' requires `pnpm prebuild exit 0`. Despite this hard consumer relationship, Task 5 frontmatter declares `depends_on: []` — Task 4 is not listed. Both tasks live in Wave 1 (same wave), so the wave orchestrator may run Task 5 before Task 4 finishes. Task 5 'Dependencies' section even acknowledges 'если Task 4 ещё не закоммичен на момент старта — синхронизироваться с агентом Task 4' — but this manual coordination is NOT captured in machine-readable `depends_on`.",
+      "fix": "Change Task 5 frontmatter `depends_on: []` → `depends_on: [4]` and either (a) move Task 5 to Wave 2, OR (b) keep both in Wave 1 but rely on the orchestrator's intra-wave dependency awareness if the framework supports it. Option (a) is safest and matches the actual data-flow dependency."
+    },
+    {
+      "severity": "critical",
+      "category": "consistency",
+      "task": 9,
+      "related_tasks": [4],
+      "section": "Implementation hints / What to do — i18n key path for disconnect modal body",
+      "issue": "Task 4 owns the disconnect modal copy under the key path `bot.disconnectModal.body` (camelCase root segment — see Task 4 lines 78 and 164). Task 9 line 161 reads: `t('bot.disconnect.modal.body', { username: bot.telegramUsername })` — uses path `bot.disconnect.modal.body` (dot-segmented). At runtime vue-i18n will look up the dot path and return the literal key string if `bot.disconnect.modal.body` doesn't exist (Task 4 only registered `bot.disconnectModal.body`). The page will silently render `bot.disconnect.modal.body` as plaintext in the modal. The `pnpm prebuild` parity gate compares Ukraine vs English key sets, not key existence vs usage, so this drift will pass CI but break the UI.",
+      "fix": "Pick one canonical path and align both tasks. Recommended: keep Task 4's `bot.disconnectModal.body` (camelCase) since it is the locale-file source of truth; update Task 9 line 161 to `t('bot.disconnectModal.body', { username: ... })`. Alternatively, change Task 4 to use `bot.disconnect.modal.body` everywhere. Same convention should apply for any other modal/subnav keys mentioned in Task 9."
+    },
+    {
+      "severity": "major",
+      "category": "resource-sharing",
+      "task": 2,
+      "related_tasks": [1],
+      "section": "frontmatter.depends_on",
+      "issue": "Task 2 consumes the property `app.telegram.base-url` introduced by Task 1 in `backend/src/main/resources/application.properties`. Tech-spec Implementation Tasks line 491 explicitly assigns ownership of BOTH properties to Task 1 'to avoid a Wave 1 conflict with Task 2'. Task 2 frontmatter declares `depends_on: []`. Task 2 mitigates this by defaulting `@Value('${app.telegram.base-url:https://api.telegram.org}')` so it can compile without Task 1, but the dependency on Task 1 for the production-environment property line is still real. This is the same shared-resource gap as Task 5↔Task 4: both in Wave 1, undeclared dependency on the property-file edit.",
+      "fix": "Add `depends_on: [1]` to Task 2 frontmatter and either move Task 2 to Wave 2 or rely on orchestrator's intra-wave ordering. The `@Value` default mitigates compile-time risk but does not justify dropping the declaration — git-merge conflicts on `application.properties` between two Wave-1 tasks editing the same file are exactly what the wave system is supposed to prevent."
+    },
+    {
+      "severity": "major",
+      "category": "decomposition",
+      "task": 6,
+      "related_tasks": [1],
+      "section": "Details / Implementation hints — encryption byte handling",
+      "issue": "Task 1 defines `EncryptedValue(byte[] iv, byte[] ciphertext)` as raw bytes, with Task 1 Description line 28 explicitly stating 'the caller (BotService in Task 6) is responsible for Base64-encoding before persistence and Base64-decoding on read'. Task 6 stores `encryptedTokenCiphertext: String` and `encryptedTokenIv: String` (per Task 3 Bot.java schema — these are String fields). However, Task 6's 'What to do' step 2 and 'Implementation hints' do not explicitly mention the Base64-encoding step between `tokenEncryptor.encrypt(...)` and `botRepository.save(...)`, nor the reverse decoding in `disconnect`. An implementer following Task 6 verbatim could miss this conversion and either store binary in a String field (UTF-8 corruption) or write the contract differently.",
+      "fix": "Add an explicit step in Task 6 'What to do' (between encrypt and save): 'Base64-encode `EncryptedValue.iv` and `EncryptedValue.ciphertext` to strings before persisting; on Disconnect, Base64-decode before calling `tokenEncryptor.decrypt(iv, ciphertext)`.' This makes the cross-task boundary contract explicit."
+    },
+    {
+      "severity": "major",
+      "category": "consistency",
+      "task": 6,
+      "section": "Verification Steps — Smoke section content",
+      "issue": "Task 6 frontmatter declares `verify: [smoke]` but the Smoke subsection content is entirely unit-test descriptions (asserting mock interaction order, mock-based tests for compensating deleteWebhook, etc.). These belong under Automated (unit tests), not Smoke (executable agent-runnable checks against running services). The template defines Smoke as 'Executable checks — agent runs before reviews. No deployment needed. From tech-spec Verify-smoke. Types: command (curl, python -c), MCP tool, API call, docker build, local server check, agent with test prompt.' Task 6 cannot satisfy this contract from unit tests alone.",
+      "fix": "Either (a) drop `smoke` from frontmatter `verify: []` since Task 6 has no agent-runnable smoke (BotService is wired up by Task 8's controller), OR (b) replace the Smoke section content with a real smoke check (e.g. boot the backend and verify the bean wires) — but this likely belongs to Task 8 anyway. Recommend option (a)."
+    },
+    {
+      "severity": "major",
+      "category": "consistency",
+      "task": 8,
+      "section": "What to do (step 4) and Details — MockWebServer lifecycle",
+      "issue": "Task 8 says BotControllerIT 'starts a MockWebServer per test class via a static initializer (so @DynamicPropertySource can read its URL before the Spring context boots); shut down in @AfterAll.' This contradicts both 'per-test isolation' (Task 8 hints mention 'drain leftover recorded requests between tests') AND test-audit Task 12 line 25 which says 'enqueue the right responses for the expected number of calls, assert the recorded request count, and assert URL/method/body of each takeRequest() ... leaked MockWebServer instances (not shut down), and shared/parallel-unsafe instances across tests.' A class-level MockWebServer shared across all ~22 tests in BotControllerIT will accumulate state if any test forgets to drain — the drain-loop hint is mitigation, not prevention. Cross-test contamination is the most likely flakiness source.",
+      "fix": "Clarify in Task 8 whether the MockWebServer is `@BeforeAll`/`@AfterAll` class-level (as written) or `@BeforeEach`/`@AfterEach` per-test (cleaner isolation but requires re-registering @DynamicPropertySource each time, which Spring doesn't natively support — so class-level is the pragmatic choice). If class-level, explicitly require a no-side-effects-from-prior-test invariant in @BeforeEach: 'drain MockWebServer.takeRequest(0, TimeUnit.SECONDS) until null, AND reset MockWebServer.dispatcher to a fresh QueueDispatcher.'"
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 5,
+      "section": "TDD Anchor — placeholder spec",
+      "issue": "Task 5 TDD Anchor includes `frontend/tests/pages/projects/bot.spec.ts::placeholder renders SettingsSubnav` — but Task 9 'Files to modify' lists `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` (different path — under `[projectId]/settings/`). Task 9 will likely overwrite or be at a different path than Task 5's placeholder spec, causing test-file duplication or path confusion.",
+      "fix": "Align Task 5's placeholder spec path to `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` so Task 9 cleanly replaces it (or document explicitly that Task 9 deletes the Task-5 spec and creates a new one)."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 3,
+      "section": "Acceptance Criteria — JSON wire format",
+      "issue": "Task 3 introduces `@JsonValue` (lowercase serialization) and `@JsonCreator` for `BotStatus`. This is required by Task 7 and Task 8's wire-format contract. However, Tech-spec Implementation Tasks Task 3 entry does NOT mention `@JsonValue` / `@JsonCreator` — only the enum constants. Task 3's task file added them based on cross-task awareness, but the tech-spec line 506 ('Create BotStatus enum (CONNECTED, DISCONNECTED)') is silent. Anyone re-reading tech-spec without Task 3 would miss the lowercase-on-the-wire contract.",
+      "fix": "After all tasks land, update tech-spec Implementation Tasks Task 3 entry to mention the @JsonValue lowercase serialization. Not a blocker for execution (Task 3 already encodes it), just a documentation hygiene issue."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 13,
+      "related_tasks": [10, 11, 12],
+      "section": "Dependencies / What to do",
+      "issue": "Task 13 reads audit reports from Tasks 10, 11, 12 at paths `work/06-bot-connection/logs/working/task-{10,11,12}/{code-audit,security-audit,test-audit}-report.md`. Task 10 writes `code-audit-report.md`, Task 11 writes `security-audit-report.md`, Task 12 writes `test-audit-report.md` — names match. ✓. However, Task 13 Acceptance Criteria item 'Audit reports from tasks 10, 11, 12 read; any critical/WAIT-FOR-FIX findings either resolved...' references 'Task N Round 2 OK review in decisions.md'. Tasks 10/11/12 frontmatter declares `reviewers: []` (no review rounds at all — they ARE the review). So 'Round 2 OK review' is conceptually inconsistent — audits do not get reviewed.",
+      "fix": "Reword Task 13 Acceptance Criteria to: 'any critical findings either have a follow-up fix-task entry in decisions.md marked done, or are explicitly listed in the QA report as a deploy blocker.' Drop the 'Round 2 OK review' phrasing since audits have no review rounds."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 6,
+      "section": "Acceptance Criteria",
+      "issue": "Task 6 AC11 explicitly states 'Fail-open on Redis errors — both INCR and DEL silently no-op the rate-limit logic and emit the dedicated WARN log line (no metric counter, see Description).' This is an INTENTIONAL deviation from tech-spec D14 which mandates a Micrometer counter. The deviation is justified (no actuator dep on the project), but the carry-forward from tech-spec is broken: tech-spec D14 'Anchors: AC11' implies the counter is part of AC11's contract. Task 6 should record this deviation under Post-completion 'If deviated from spec' or — better — Task 6 should update tech-spec D14 to remove the Micrometer counter requirement before implementation, so the carry-forward is clean.",
+      "fix": "Reconcile tech-spec D14 with Task 6's pragmatic decision: edit tech-spec D14 (and AC11 anchor) to drop 'Micrometer counter' and replace with 'dedicated greppable WARN log line'. Then Task 8's IT assertion (see Critical finding above) also gets updated. This single source-of-truth alignment prevents Task 6 ↔ Task 8 drift."
+    }
+  ],
+  "checks_passed": [
+    {
+      "check": "shared-resource ownership",
+      "result": "OK",
+      "detail": "TokenEncryptor owner T1 → consumer T6 (depends_on [1]); TelegramApiClient owner T2 → consumer T6 (depends_on [2]); BotRepository owner T3 → consumer T6 (depends_on [3]); WebClient bean lives inside TelegramApiClient (single owner). ReactiveRedisTemplate is pre-existing autoconfig bean, no ownership task needed."
+    },
+    {
+      "check": "no competing instances",
+      "result": "OK",
+      "detail": "No two tasks in the same wave create their own instance of any shared resource. T6 (Wave 2) is the sole consumer of T1/T2/T3 outputs from Wave 1."
+    },
+    {
+      "check": "wave/dependency graph",
+      "result": "OK",
+      "detail": "W1=[1,2,3,4,5]; W2=[6,7]; W3=[8,9]; W4=[10,11,12]; W5=[13]. All depends_on values reference existing tasks with strictly lower waves: T6→[1,2,3] (W1→W2 ✓), T7→[3] (W1→W2 ✓), T8→[6] (W2→W3 ✓), T9→[4,5,7] (W1,W1,W2 → W3 ✓), T10/11/12→[8,9] (W3→W4 ✓), T13→[10,11,12] (W4→W5 ✓). No cycles detected."
+    },
+    {
+      "check": "wire-format: status lowercase",
+      "result": "OK",
+      "detail": "T3 implements @JsonValue lowercase serialization + @JsonCreator lowercase parsing. T7 declares `BotStatus = 'connected' | 'disconnected'` (lowercase literal union). T8 IT asserts lowercase value in JSON response. All three layers agree."
+    },
+    {
+      "check": "wire-format: token regex",
+      "result": "OK",
+      "detail": "T2 scrubber regex `\\d{1,20}:[A-Za-z0-9_-]{30,50}` matches T6 negative-assertion regex and T9 DOM-negative-assertion regex `/\\d{1,20}:[A-Za-z0-9_-]{30,50}/`. Consistent."
+    },
+    {
+      "check": "wire-format: webhook URL shape",
+      "result": "OK",
+      "detail": "T6 and T8 both specify `${app.url}/webhooks/telegram/{projectId}`. T8 IT asserts this exact URL is sent to MockWebServer for setWebhook."
+    },
+    {
+      "check": "wire-format: bot_connected/bot_disconnected event names",
+      "result": "OK",
+      "detail": "T6 emits `bot_connected` on Connect and `bot_disconnected` on Disconnect; T8 IT awaits and asserts the same event-type strings. No `bot_test_message_sent` event in 06 (T6 explicit + T8 IT asserts zero events on test-message)."
+    },
+    {
+      "check": "MockWebServer dependency",
+      "result": "OK",
+      "detail": "T2 owns the `testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'` build.gradle edit. T8 (BotControllerIT) consumes it transitively via T8→T6→T2 dependency chain. T8 does not declare direct depends_on [2], but the transitive path through Wave-1/Wave-2 ordering is sufficient; no parallel-wave conflict."
+    },
+    {
+      "check": "i18n key namespace (errors.bot.*)",
+      "result": "OK",
+      "detail": "T4 owns the full inventory `errors.bot.connect.{400,409,422,429,500,502}`, `errors.bot.disconnect.404`, `errors.bot.testMessage.{422,502}`. T9 consumes via `useApiError(err, 'bot.connect' | 'bot.disconnect' | 'bot.testMessage')`. Context keys match. The pnpm-prebuild parity gate enforces uk↔en symmetry."
+    },
+    {
+      "check": "partial unique index filter casing",
+      "result": "OK",
+      "detail": "T3 uses uppercase `partialFilter = \"{ 'status': 'CONNECTED' }\"` matching the Java `BotStatus.CONNECTED.name()` that Spring Data Mongo persists (independent of Jackson lowercase wire format). T13 mongosh smoke asserts the same uppercase filter. Tech-spec D1 prose used lowercase `\"connected\"` but T3 acknowledges this and follows the Data Models section (correct uppercase)."
+    },
+    {
+      "check": "disconnect-nulled fields",
+      "result": "OK",
+      "detail": "T3 declares `encryptedTokenCiphertext, encryptedTokenIv, tokenSuffix, webhookSecretHash` as nullable. T6 disconnect step explicitly nulls all four + sets `disconnectedAt`. T8 IT `postDisconnect_happyPath...` asserts all four are null after disconnect. Three-way agreement."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 13,
+    "critical_findings": 4,
+    "major_findings": 4,
+    "minor_findings": 4,
+    "total_findings": 12,
+    "cross_task_checks_run": 11
+  }
+}

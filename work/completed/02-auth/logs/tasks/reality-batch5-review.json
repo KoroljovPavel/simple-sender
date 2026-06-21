@@ -1,0 +1,103 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14, 15],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 15,
+      "issue": "Task 15 step 1 says 'JaCoCo reports 80%+ line coverage' and Verification Steps say `./gradlew jacocoTestReport`. The JaCoCo Gradle plugin is not in `backend/build.gradle` and is not listed in the tech-spec Dependencies section. No task (including Task 1) is assigned to add the `jacoco` plugin or configure `jacocoTestReport`. The `jacocoTestReport` Gradle task will not exist at QA time, making the 80% coverage criterion unverifiable.",
+      "fix": "Add `id 'jacoco'` to the plugins block in `backend/build.gradle` as part of Task 1 (infrastructure setup). Add `test { finalizedBy jacocoTestReport }` and `jacocoTestReport { dependsOn test }` configuration. Update the tech-spec Dependencies section to list JaCoCo explicitly."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 14,
+      "issue": "Task 14 step 2 contains a garbled parenthetical: 'Are all three containers present: MongoDBContainer, RedisContainer (via ch.martinelli.oss:testcontainers-mailpit:1.3.1), Mailpit?' — this incorrectly attributes RedisContainer to the `ch.martinelli.oss:testcontainers-mailpit` library. That library provides only a MailpitContainer. Redis comes from `org.testcontainers:redisstack` or a generic `GenericContainer`. The instruction will confuse the auditor into looking for Redis container support inside the Mailpit library, which does not exist.",
+      "fix": "Rewrite step 2 as: 'Are all three containers present: MongoDBContainer (org.testcontainers:mongodb), RedisContainer (org.testcontainers:redisstack or GenericContainer with redis:7.4 image), MailpitContainer (ch.martinelli.oss:testcontainers-mailpit:1.3.1)?'"
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 14,
+      "issue": "The Details section contains a full Mailpit token extraction code block with concrete implementation logic (`mailpitClient.get().uri(...).retrieve().bodyToMono(MailpitMessages.class).block()`) that prescribes a specific WebClient construction approach. This is a full implementation hint rather than a pattern pointer. Additionally, `mailpitClient` is referenced as if it's an injected/pre-existing bean, but the MailpitContainer provides only host/port — the test code must construct the WebClient itself using `container.getHost()` and `container.getMappedPort(8025)`. The hint is both over-specified and slightly wrong.",
+      "fix": "Replace the code block with a pattern description: 'Use WebTestClient or WebClient built from the MailpitContainer mapped port to call GET /api/v1/messages, parse the response body to extract the raw token from the verification link.' Reference the MailpitContainer API for host/port retrieval."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 14,
+      "issue": "The Details section's Testcontainers singleton pattern example uses `.withReuse(true)`, which requires `testcontainers.reuse.enable=true` in the user-level `~/.testcontainers.properties` file. This is not a project-level config and will silently not work in CI (GitHub Actions) unless explicitly configured there. The task does not mention this requirement, which can lead the auditor to accept `.withReuse(true)` as sufficient when the actual singleton pattern for CI requires `static` fields without `.withReuse(true)` — the `static` field alone achieves the singleton-per-JVM behavior.",
+      "fix": "Remove `.withReuse(true)` from the example or add a note: '.withReuse(true) requires testcontainers.reuse.enable=true in ~/.testcontainers.properties — not reliable in CI. The static field alone is sufficient for singleton-per-test-run behavior.'"
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 step 4 requires verifying 'INCR + EXPIRE atomicity: EXPIRE set on first increment (count == 1), not repeated on subsequent increments.' This is a Redis implementation detail that requires either reading the AuthService source or writing a specific Redis spy test. Task 15 is a QA task (not a code audit), and verifying this via `./gradlew test` alone is insufficient — the integration tests would need to explicitly assert EXPIRE is called once. Task 15 does not reference any mechanism (e.g., Redis monitor, test assertion) to verify this atomicity property. The step is not verifiable as described.",
+      "fix": "Replace this step with: 'Verify INCR+EXPIRE atomicity by reading AuthService source: confirm EXPIRE is only called when INCR result == 1 (not on every failure). Flag if EXPIRE is called unconditionally — that would reset the 15-minute window on every failed attempt, making brute-force protection bypassable.'"
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 Context Files lists user-spec.md, tech-spec.md, project.md, architecture.md — but not decisions.md. By the time Task 13 runs (wave 7), decisions made during implementation (Tasks 1–11) will be recorded in decisions.md. The security auditor needs decisions.md to understand architectural choices (e.g., Decision 12 CSRF, Decision 8 CORS, Decision 3 BCrypt cost) without re-reading the entire tech-spec. patterns.md is also missing and contains relevant security baseline info (SecurityConfig patterns, CSRF note).",
+      "fix": "Add to Task 13 Context Files: `- [decisions.md](../decisions.md)` and `- [patterns.md](../../.claude/skills/project-knowledge/references/patterns.md)`"
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 14,
+      "issue": "Task 14 Context Files lists user-spec.md, tech-spec.md, project.md, architecture.md, patterns.md — but not decisions.md. Implementation decisions recorded during Tasks 1–11 (e.g., deviations from the test plan, discovered session collection field paths from Task 6) are critical context for the test auditor.",
+      "fix": "Add to Task 14 Context Files: `- [decisions.md](../decisions.md)`"
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 15,
+      "issue": "Task 15 Context Files lists user-spec.md, tech-spec.md, project.md, architecture.md, patterns.md — but not decisions.md. Pre-deploy QA must understand decisions and any deviations from the original plan (e.g., if Task 14's test audit found gaps that were resolved differently).",
+      "fix": "Add to Task 15 Context Files: `- [decisions.md](../decisions.md)`"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 step 6 says 'Verify `@JsonIgnoreProperties(ignoreUnknown=true)` is on `UpdateProfileRequest`' as the primary mass assignment check. This annotation prevents unknown JSON fields from causing deserialization errors but does NOT itself prevent mass assignment — it ignores extra fields silently. The real protection is that `UpdateProfileRequest` DTO only declares a `name` field. The annotation check is secondary; the auditor should primarily verify the DTO field list.",
+      "fix": "Reorder step 6: 'Verify UpdateProfileRequest DTO only declares the name field — isSuperAdmin must not appear as a field. As a secondary check, verify @JsonIgnoreProperties(ignoreUnknown=true) is present to prevent unknown-field deserialization errors.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 output path `work/02-auth/logs/working/task-13/security-auditor-1.json` requires the directory `logs/working/task-13/` to exist. The task does not include a step to create this directory. If the directory is absent, the write will fail (depending on the tool used). Task 14 and Task 15 have the same issue for their respective output paths.",
+      "fix": "Add a step at the start of the 'What to do' section: 'Ensure output directory exists: `mkdir -p work/02-auth/logs/working/task-13/`'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Same missing-directory issue as Task 13: output path `work/02-auth/logs/working/task-14/test-reviewer-1.json` requires `logs/working/task-14/` to exist. The task does not include a mkdir step. The task's Details section mentions 'Ensure parent directory exists: mkdir -p work/02-auth/logs/working/task-14/' — but this is buried at the bottom of Details, not in the actionable 'What to do' steps.",
+      "fix": "Move the mkdir instruction from Details to step 1 of 'What to do', before any file operations."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 output path `work/02-auth/logs/working/task-15/pre-deploy-qa-1.json` requires `logs/working/task-15/` to exist. No mkdir instruction in the task.",
+      "fix": "Add `mkdir -p work/02-auth/logs/working/task-15/` as first step in 'What to do'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 step 4 requires verifying the per-IP brute-force threshold: '20 failed logins from the same IP (different emails)'. The Details section correctly notes that WebTestClient must send `X-Forwarded-For` header, but does not verify that the backend AuthService actually reads `X-Forwarded-For` from the request headers. If AuthService reads only `exchange.getRequest().getRemoteAddress()`, all WebTestClient requests will appear as loopback (127.0.0.1) and the per-IP counter test will be unreliable. Task 15 should add an explicit check that the IP extraction method is verified.",
+      "fix": "Add to step 4: 'Confirm that AuthService extracts client IP from X-Forwarded-For header (or X-Real-IP) before falling back to RemoteAddress. If it reads only RemoteAddress, the per-IP test is only valid with a real proxy in front — document this as a known limitation.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 12
+  }
+}

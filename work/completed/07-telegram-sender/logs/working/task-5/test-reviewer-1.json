@@ -1,0 +1,29 @@
+{
+  "summary": "Task 5 test changes pass all seven targeted review criteria. The three new BotServiceTest cases (null / present+success / present+failure) each have meaningful behavioral assertions that fail the litmus test if the corresponding production branch is removed. The null-branch unit test strengthens the regression net by pinning the verbatim 422 message string (task AC explicitly required this beyond the prior assertion on the code alone). The positive-path unit test asserts the exact 5-arg call to telegramSender.sendText with eq() matchers and uses an ArgumentCaptor to verify the bot_test_message_sent metadata contains exactly the four required keys {projectId, telegramBotId, chatId, messageId} with the right values. The failure-path test pins the exact TelegramSendException type (not 'any error') and verifies via verify(eventService, never()).logEvent(any(), eq(\"bot_test_message_sent\"), ...) that no double-write occurs. The new BotControllerIT positive-path test uses real AES-GCM ciphertext via a new seedConnectedBotWithRealEncryption helper (NOT the placeholder bytes from seedConnectedBot), uses Awaitility for the async event, and asserts the request actually reaches /sendMessage on the class-level MockWebServer. The existing null-branch IT test and the sendTestMessage_noConnectedBot_returns404 unit test remain unchanged and continue to pass. Two minor stylistic nits noted (Mockito eq(null) vs isNull(), unnecessary doNothing() stub on a void method); neither weakens the assertions.",
+  "findings": [
+    {
+      "severity": "nit",
+      "where": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:604-606,613-614,644-646",
+      "issue": "Mockito eq(null) is used for the parseMode argument in three places (the stub and the verify in the success-path test, and the stub in the failure-path test). eq(null) works but is non-idiomatic — Mockito's isNull() matcher is the canonical form and avoids a potential static-import collision if a future contributor imports ArgumentMatchers.eq vs org.mockito.Matchers.eq.",
+      "suggestion": "Replace eq(null) with isNull() (org.mockito.ArgumentMatchers.isNull). Three sites: line 604-606 (success-path stub), line 613-614 (success-path verify), line 644-646 (failure-path stub). Purely cosmetic — assertions are correct as-is."
+    },
+    {
+      "severity": "nit",
+      "where": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:607-608",
+      "issue": "doNothing().when(eventService).logEvent(...) is registered on a Mockito mock whose default behaviour for void methods is already 'do nothing'. The stub is harmless but has no effect — adds three lines of noise that suggest the test author expected non-default behaviour.",
+      "suggestion": "Remove the doNothing() stub at lines 607-608 of the success-path test. The mock's default void behaviour suffices; verify(eventService).logEvent(...) below still works."
+    },
+    {
+      "severity": "low",
+      "where": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java:806-810",
+      "issue": "The positive-path IT asserts the response status (200) and that the body is empty, but does NOT verify the recorded /sendMessage request body contains chat_id=42 or the TEST_MESSAGE_BODY string. The unit test pins exact arguments at the sendText boundary, so this is not a coverage gap, but a body-content assertion at the HTTP boundary would catch a regression where BotService accidentally calls telegramSender with wrong args yet the audit-event captor still happens to see the seeded ownerChatId from the mock-stub side. As written, the IT proves 'a request reached /sendMessage' but not 'the right payload was sent'.",
+      "suggestion": "After drainRequests(), readUtf8() the recorded /sendMessage body and assert it contains \"chat_id\":42 (or chat_id=42 form-url-encoded, depending on TelegramSender's actual serialization) and the TEST_MESSAGE_BODY string. Optional hardening; the existing assertions are sufficient for the AC."
+    },
+    {
+      "severity": "low",
+      "where": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java:767-788",
+      "issue": "The null-branch IT (postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents) asserts code == \"owner_chat_id_unknown\" but does NOT pin the verbatim message string \"Send /start to your bot in Telegram first, then try again\". The task strengthened the unit-test side with this assertion; the IT could mirror it to catch a regression where the message drifts in BotService and the unit test is updated but the IT isn't.",
+      "suggestion": "Add .jsonPath(\"$.message\").isEqualTo(\"Send /start to your bot in Telegram first, then try again\") inside the expectBody() chain at line 779-781. Acceptable to defer — the unit test already pins this and the task AC explicitly said the IT assertions \"must not weaken\", not \"must be strengthened\"."
+    }
+  ]
+}

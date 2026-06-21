@@ -1,0 +1,51 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "decomposition",
+      "task": 4,
+      "section": "What to do / Context Files",
+      "issue": "Task 4 step 2 adds the same FunnelRepository list-variant + keyword query that Task 1 step 5 already adds. Both tasks list funnel/FunnelRepository.java as a file to modify for the identical purpose (List-returning trigger lookup + findByProjectIdAndTriggerTypeAndStatus keyword query). This is duplicated/competing work on the same file for the same logical change. Task 4 even says 'drop the single-result Optional' while Task 1 says 'Keep the existing single-Optional method' — a direct contradiction about whether to retain the Optional method.",
+      "fix": "Assign the FunnelRepository query additions to exactly one owner (Task 1, the data-layer foundation, is the natural owner). In Task 4, remove step 2's instruction to add the queries and instead reference them as 'shipped by Task 1' (Task 4 already depends_on [1]). Reconcile the Optional-method contradiction: pick one policy (keep the single Optional for the on_start pre-check, add a distinctly-named List sibling) and state it once in Task 1 only."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "PK references use bare paths without the ../../../ prefix: [project.md](.claude/skills/project-knowledge/references/project.md), [architecture.md](.claude/...), [patterns.md](.claude/...). The task file lives at work/12-funnels-triggers/tasks/2.md, so a bare .claude/... link resolves relative to the tasks/ directory and is a broken link. Tasks 1, 3, 4, 5 correctly use the ../../../.claude/skills/project-knowledge/references/ prefix.",
+      "fix": "Prefix the three PK links in Task 2 with ../../../ to match the other tasks: ../../../.claude/skills/project-knowledge/references/{project,architecture,patterns}.md"
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "Code files are listed as plain text bullets ('Code (modify): backend/src/main/java/com/botfunnel/funnel/ — new FunnelTriggerIndexReconciliation.java', 'Code (read): ...FunnelStepIdBackfill.java ...', etc.) rather than markdown links. Template requires all context files as markdown links [name](path). Tasks 1 and 3 use proper [name](path) links for code files.",
+      "fix": "Convert the Code (modify)/Code (read)/Test bullets in Task 2 to markdown links, e.g. [FunnelStepIdBackfill.java](../../../backend/src/main/java/com/botfunnel/funnel/FunnelStepIdBackfill.java)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "Context Files",
+      "issue": "The 'Code (read)' group mixes markdown links with a plain-text label prefix ('Code (read): [FunnelTriggerService.java](...), [SubscriberServiceImpl.java](...) (rate-limit idiom), ...'). The links themselves are valid, but FunnelEventService.java (the new file to create) and the 'Code (modify):' prose use a label-prefixed list rather than the clean per-line markdown-link form the template models. Minor stylistic divergence from the template's one-link-per-line Context Files convention.",
+      "fix": "Normalize Task 4 Context Files to one markdown link per line under a 'Code files' heading, matching Task 1/3 formatting. Cosmetic only — links resolve."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 5,
+      "section": "frontmatter depends_on",
+      "issue": "Task 5 Description and Dependencies explicitly state it depends on both Task 4 AND Task 1 (StepType.EMIT_EVENT, FunnelStep.eventName, FunnelExecution.enrollDepth), but frontmatter depends_on is [4] only. Ordering is still correct transitively (Task 1 wave 1 < Task 4 wave 2 < Task 5 wave 3, and Task 4 depends_on [1]), so this is not a wave-ordering violation — only an under-declared direct dependency.",
+      "fix": "Optionally add 1 to Task 5 depends_on ([1, 4]) to make the Task-1 symbol dependency explicit, or leave as-is and rely on the transitive Task 4 -> Task 1 chain. No ordering risk either way; flagged for accuracy of the dependency graph."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 5
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "low",
+      "category": "task",
+      "detail": "Task 7 (frontend MENU editor) lists reviewers code-reviewer + test-reviewer but omits security-auditor (the default reviewer set for code-writing). Frontend form work handles user input (button labels, URLs, callback_data) and validation; security-auditor is justified here. Either add security-auditor or confirm the omission is intentional for a UI-only task.",
+      "location": "Implementation Tasks > Wave 3 > Task 7 > Reviewers"
+    },
+    {
+      "severity": "low",
+      "category": "task",
+      "detail": "Configuration value duplication: the max-steps-per-tick default '100' appears both in Decision 4 (authoritative) and inside Task 3's description ('app.funnel.max-steps-per-tick, дефолт 100'). Per task-quality rules, keep the concrete value in the Decisions section and have the task reference it rather than restating the number, to avoid drift.",
+      "location": "Implementation Tasks > Wave 2 > Task 3 > Description (vs Decision 4)"
+    },
+    {
+      "severity": "low",
+      "category": "task",
+      "detail": "Task numbering is non-sequential relative to wave order (Wave 3 contains Task 5 and Task 7; Wave 4 contains Task 6). IDs are unique and there is no functional problem, but renumbering to follow wave order would improve readability.",
+      "location": "Implementation Tasks > Wave 3 / Wave 4"
+    }
+  ],
+  "summary": "PASS. Frontmatter valid (status: draft, size: L, branch: dev, created YYYY-MM-DD). All template sections present and filled, including Architecture > Shared resources, User-Spec Deviations, and a table-format Risks section. 11 tasks total (<=15). Skill values valid per catalog; all referenced reviewers (code-reviewer, security-auditor, test-reviewer) exist as agents. Audit Wave present with Code/Security/Test audits (reviewers: none); Final Wave has mandatory Pre-deploy QA; Deploy/post-deploy correctly omitted for a local-only feature. NO WAVE CONFLICTS: within every wave, parallel tasks modify disjoint file sets. FunnelExecutionEngineIT.java is touched by Task 3 (Wave 2) and Task 5 (Wave 3), but these are in different waves (sequential), so no parallel collision. Cross-wave dependency ordering is sound (model/sender foundations in W1; engine+validation in W2; trigger+frontend in W3; webhook ingest in W4) with no circular deps. Tasks are scope-level (WHAT/WHY), no AC/TDD anchors embedded. Only three low-severity advisories: Task 7 omits security-auditor, the '100' default is duplicated between Decision 4 and Task 3, and task IDs are out of wave order."
+}

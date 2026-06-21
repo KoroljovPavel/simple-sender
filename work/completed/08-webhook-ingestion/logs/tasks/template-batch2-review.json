@@ -1,0 +1,83 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "Missing mandatory context files `project.md` and `architecture.md` from `.claude/skills/project-knowledge/`. Validator checklist marks these as mandatory (critical if missing).",
+      "fix": "Add `[project.md](../../../.claude/skills/project-knowledge/project.md)` and `[architecture.md](../../../.claude/skills/project-knowledge/architecture.md)` to Context Files."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "Missing mandatory context files `project.md` and `architecture.md` from `.claude/skills/project-knowledge/`. Validator checklist marks these as mandatory (critical if missing).",
+      "fix": "Add `[project.md](../../../.claude/skills/project-knowledge/project.md)` and `[architecture.md](../../../.claude/skills/project-knowledge/architecture.md)` to Context Files."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "Missing mandatory context files `project.md` and `architecture.md` from `.claude/skills/project-knowledge/`. Validator checklist marks these as mandatory (critical if missing).",
+      "fix": "Add `[project.md](../../../.claude/skills/project-knowledge/project.md)` and `[architecture.md](../../../.claude/skills/project-knowledge/architecture.md)` to Context Files."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "Missing mandatory context files `project.md` and `architecture.md` from `.claude/skills/project-knowledge/`. Validator checklist marks these as mandatory (critical if missing).",
+      "fix": "Add `[project.md](../../../.claude/skills/project-knowledge/project.md)` and `[architecture.md](../../../.claude/skills/project-knowledge/architecture.md)` to Context Files."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 10,
+      "section": "Context Files",
+      "issue": "Missing mandatory context files `project.md` and `architecture.md` from `.claude/skills/project-knowledge/`. Validator checklist marks these as mandatory (critical if missing).",
+      "fix": "Add `[project.md](../../../.claude/skills/project-knowledge/project.md)` and `[architecture.md](../../../.claude/skills/project-knowledge/architecture.md)` to Context Files."
+    },
+    {
+      "severity": "critical",
+      "category": "resource-sharing",
+      "task": 9,
+      "section": "frontmatter.depends_on",
+      "issue": "Task 9 (`ProcessTelegramUpdateJob`) consumes the shared `MeterRegistry` resource (constructor-injected per `## What to do` step 2: `MeterRegistry meterRegistry`; uses `worker_outcome_total` counter per Decision 10) but does NOT declare `depends_on` on its owner Task 1 (`MeterRegistryConfig @Bean SimpleMeterRegistry`). Tech-spec Shared Resources table explicitly lists `ProcessTelegramUpdateJob` as a consumer. Wave-ordering (T1 in wave 1, T9 in wave 2) provides implicit ordering but the explicit dependency declaration is missing — required by validator's resource-sharing rule.",
+      "fix": "Add `1` to `depends_on` in task 9 frontmatter: `depends_on: [1, 2, 3, 4, 5, 6, 7]`. Also update tech-spec Implementation Tasks → Task 9 dependency list to include T1 for consistency."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Acceptance Criteria",
+      "issue": "AC item states 'All four controller-owned counters register exactly' but then enumerates five distinct counter forms (received, duration Timer, rejected{invalid_secret}, rejected{project_not_found}, rejected{duplicate}). Numeric mismatch between header phrase ('four') and listed items (five). Same inconsistency appears in the task title and Description ('FOUR counters').",
+      "fix": "Reword AC to 'All controller-owned metrics register exactly' or change count to five. Align Description and title wording: there are 3 rejected-reason counters + 1 received + 1 duration Timer = 5 instruments (or 4 counters + 1 timer if you separate Counter vs Timer)."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 9,
+      "section": "Edge cases",
+      "issue": "Task 9 introduces an extra edge case beyond what user-spec/tech-spec specifies: `text == null AND message != null` (image-only / sticker-only message) — chooses `telegram_message_received` with no stub call as conservative default and asks to 'Document the choice'. This branch is not enumerated in user-spec AC matrix or tech-spec worker matrix. Either spec needs update or the default should be `telegram_update_other` with `updateKind='message'`-ish to match the AC11 catch-all shape.",
+      "fix": "Either (a) add this branch to user-spec AC matrix or tech-spec Worker path, OR (b) collapse to existing AC11 fallback `updateKind='unknown'` to avoid introducing an undocumented contract. Pick one and document in decisions.md."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 9,
+      "section": "Details → Dependencies",
+      "issue": "Task 9 'Dependencies' note about T2 says 'T2 still listed as a dep because Sha256Hex lives under common/crypto and the worker package import chain may transitively depend on it (verify).' This is speculative — the worker as described loads `RawUpdate`, calls stubs, atomic ownerChatId populate, writes events. None of these flows go through `Sha256Hex`. Tech-spec lists T2 because `WebhookSecretVerifier` is also new in T2, but the worker does not consume the verifier either. The dependency is weak/unjustified for the worker.",
+      "fix": "Either confirm T2 dependency with concrete reason or drop T2 from `depends_on`. If kept, replace the speculative `(verify)` note with a concrete justification (e.g., 'package-level coupling via shared error type X' or 'shared SHA256 helper for log-correlation IDs')."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 9
+  }
+}

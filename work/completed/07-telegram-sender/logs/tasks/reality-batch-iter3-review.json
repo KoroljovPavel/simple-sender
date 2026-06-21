@@ -1,0 +1,82 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 9],
+  "iteration": 3,
+  "status": "approved",
+  "iteration_focus": "Focused re-check of three iteration-3 fixes: (1) Task 4 two-try-block decrypt shape, (2) Task 5 positive-path IT must use real tokenEncryptor.encrypt ciphertext, (3) Task 9 scenario catalog count reconciliation (28 unit / 38 total).",
+  "findings": [],
+  "verification_results": {
+    "fix_1_task4_two_try_block_decrypt": {
+      "description": "Task 4 iter-3 fix: Base64 decode in its own try/catch(IllegalArgumentException) -> BotTokenInvalidException; tokenEncryptor.decrypt(iv,ct) placed OUTSIDE that catch so its IllegalArgumentException (wrong-IV-length, line 46-49 of TokenEncryptor.java) and IllegalStateException (AEAD failure, lines 56-57) both propagate as 500.",
+      "token_encryptor_line_46_49": {
+        "actual_code": "if (iv == null || iv.length != IV_BYTES) throw new IllegalArgumentException('AES-GCM IV must be exactly ' + IV_BYTES + ' bytes; got ...')",
+        "throws": "IllegalArgumentException on bad IV length — NOT GeneralSecurityException and NOT IllegalStateException",
+        "implication": "A single catch(IllegalArgumentException) wrapping both Base64.decode AND tokenEncryptor.decrypt would incorrectly catch the wrong-IV-length signal and convert a storage-corruption 500 into a user-facing 422 invalid_bot_token. The two-try-block shape is the ONLY correct implementation."
+      },
+      "token_encryptor_line_56_57": {
+        "actual_code": "throw new IllegalStateException('AES-GCM decryption failed', e) inside catch(GeneralSecurityException e)",
+        "covers": "Both tampered ciphertext (AEADBadTagException) and all other GeneralSecurityException subclasses — wraps into IllegalStateException, propagates as 500 via GlobalErrorHandler."
+      },
+      "task4_description_line_181": "PRESENT — 'Edge cases' block explicitly names the two IllegalArgumentException sources and states 'Never wrap the entire decrypt block in a single catch(IllegalArgumentException)'",
+      "task4_implementation_hints_step3": "PRESENT — Required code shape provided with two separate try blocks; anti-pattern called out with label 'do NOT write'",
+      "task4_acceptance_criteria_line_109": "PRESENT — 'Token decryption error scoping: catch ONLY IllegalArgumentException from Base64.getDecoder().decode(...) -> BotTokenInvalidException. Do NOT catch IllegalStateException from TokenEncryptor.decrypt'",
+      "task4_test_scenario_19": "PRESENT — sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid stubs TokenEncryptor.decrypt to throw IllegalStateException and asserts exception propagates as-is (NOT wrapped in BotTokenInvalidException)",
+      "result": "PASS — fix is fully reflected in task 4 description, acceptance criteria, implementation hints (two-try-block code shape), and test catalog. Matches actual TokenEncryptor.java throw semantics at lines 45-58."
+    },
+    "fix_2_task5_real_encryption_it": {
+      "description": "Task 5 iter-3 fix: positive-path IT test postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent must NOT reuse seedConnectedBot (placeholder ciphertext 'Zm9v'/'YmFy' = 3-byte IV, fails IV_BYTES=12 check). Must use tokenEncryptor.encrypt(VALID_TOKEN) to produce real AES-GCM ciphertext.",
+      "seed_connected_bot_actual": {
+        "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+        "lines": "182-195",
+        "encryptedTokenCiphertext": "Zm9v",
+        "encryptedTokenIv": "YmFy",
+        "iv_decoded_length": "3 bytes (Base64.decode('YmFy') = [98, 97, 114] — 3 bytes, far below IV_BYTES=12)",
+        "result_if_reused_for_positive_path": "tokenEncryptor.decrypt([3-byte iv], ct) throws IllegalArgumentException('AES-GCM IV must be exactly 12 bytes; got 3') at TokenEncryptor.java:46-49; per narrow-catch policy propagates as 500 — test fails with wrong HTTP status"
+      },
+      "encrypted_value_record": {
+        "path": "backend/src/main/java/com/botfunnel/common/crypto/EncryptedValue.java",
+        "definition": "public record EncryptedValue(byte[] iv, byte[] ciphertext)",
+        "exists": true
+      },
+      "task5_warning_block": "PRESENT — 'WARNING — DO NOT REUSE seedConnectedBot FOR THE POSITIVE PATH' block at lines 31-33 explains exactly why (3-byte IV fails length check), and points to step 6 + Implementation hints for the seedConnectedBotWithRealEncryption pattern",
+      "task5_step6_option_a": "PRESENT — Inject @Autowired TokenEncryptor; call tokenEncryptor.encrypt(VALID_TOKEN) to produce EncryptedValue ev; Base64-encode ev.ciphertext() and ev.iv(); set ownerChatId. Explicitly says 'Do NOT copy or extend existing seedConnectedBot helper'",
+      "task5_tdd_anchor": "PRESENT — postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent explicitly states 'MUST use real AES-GCM ciphertext produced by tokenEncryptor.encrypt(VALID_TOKEN) — NOT the Zm9v/YmFy placeholder bytes from seedConnectedBot — those fail the iv.length != 12 check inside decrypt'",
+      "task5_acceptance_criteria": "PRESENT — AC line 82: 'The new positive-path BotControllerIT test uses real AES-GCM ciphertext produced by tokenEncryptor.encrypt(VALID_TOKEN) — NOT the Zm9v/YmFy placeholder bytes'",
+      "result": "PASS — fix is fully reflected in task 5 warning block, step 6, TDD anchor, and acceptance criteria. The trap and its exact mechanism (3-byte IV vs. required 12-byte IV_BYTES) are accurately described and match actual TokenEncryptor.java:46-49 behavior."
+    },
+    "fix_3_task9_scenario_catalog_count": {
+      "description": "Task 9 iter-3 fix: catalog count reconciled to 28 unit / 38 total. jq threshold set to >= 38.",
+      "count_breakdown": {
+        "unit_TelegramSenderTest": 28,
+        "integration_TelegramSenderIT": 4,
+        "BotServiceTest_cases": 3,
+        "BotControllerIT_cases": 2,
+        "BotRepositoryTest_cases": 1,
+        "total": 38
+      },
+      "task9_line_90_jq_check": "jq -e '.scenarios_audited | length >= 38' — threshold is 38, comment shows 28+4+3+2+1=38",
+      "task9_unit_catalog_in_details": "Lists exactly 28 named scenarios (4 happy + 3 5xx + 6 429 + 3 4xx/payload + 5 pre-wire + 2 timeouts + 5 token-leak) at lines 99-145 — count verified by enumeration",
+      "task9_integration_catalog": "Lists exactly 4 scenarios at lines 147-153",
+      "task9_bot_controller_it_catalog": "Lists 2 cases at line 154",
+      "task9_bot_service_test_catalog": "Lists 3 cases at lines 156-158",
+      "task9_bot_repository_test_catalog": "Lists 1 case at line 159",
+      "tech_spec_unit_count": "tech-spec lines 290-330 enumerate exactly 28 distinct named test methods (verified by reading each scenario bullet) — matches task 9 catalog",
+      "cross_check_task4_unit_count": "Task 4 TDD Anchor states '28 scenarios: 4 happy/field-shape + 3 5xx + 6 429 + 3 4xx/payload + 5 pre-wire + 2 timeouts + 5 token-leak' — identical decomposition",
+      "context_note": "Task 9 line 77 still reads 'Expected to carry all 18 unit scenarios from tech-spec lines 290-331' (a stale reference to the user-spec AC19 floor, not the elaborated catalog count). This sentence is internally inconsistent with the 28-scenario catalog in the Details section and the jq threshold of 38. However, the Details section (lines 94-160) and the jq check (line 90) are the normative references for the auditor; the '18' in line 77 is a non-normative 'floor' annotation (as the final paragraph of Details also states: 'the headline 18 is a floor, not a ceiling'). The stale '18' in the Context Files section does not create a blocking ambiguity for task execution — the auditor reads the Details catalog and uses the jq threshold, not the Context Files headline.",
+      "result": "PASS — jq threshold of 38 is arithmetically correct for the 28+4+3+2+1 breakdown. The minor stale '18' annotation in Context Files line 77 is non-normative per the task's own text and does not block execution."
+    },
+    "supporting_codebase_facts": {
+      "TokenEncryptor_decrypt_signature": "public String decrypt(byte[] iv, byte[] ciphertext) at line 45 — matches task 4 and task 5 usage",
+      "TokenEncryptor_IV_BYTES": "private static final int IV_BYTES = 12 at line 22 — confirms 12-byte IV requirement",
+      "EncryptedValue_record": "public record EncryptedValue(byte[] iv, byte[] ciphertext) — matches tokenEncryptor.encrypt(plaintext) return type used in Task 5 seedConnectedBotWithRealEncryption pattern",
+      "seedConnectedBot_iv_decoded_bytes": "Base64.decode('YmFy') = 3 bytes, confirmed below IV_BYTES=12 — the trap described in tasks 4 and 5 is accurate",
+      "TokenEncryptor_IllegalStateException_wrap": "lines 56-57: catch(GeneralSecurityException e) { throw new IllegalStateException('AES-GCM decryption failed', e); } — not IllegalArgumentException, so a catch(IllegalArgumentException) around decrypt() would NOT catch AEAD failures; they propagate as IllegalStateException as documented",
+      "TokenEncryptor_IllegalArgumentException_from_decrypt": "lines 46-49: if (iv == null || iv.length != IV_BYTES) throw new IllegalArgumentException(...) — this IS IllegalArgumentException and would be swallowed by a broad catch around the full decrypt block, confirming the two-try-block necessity"
+    }
+  },
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 21,
+    "issues_found": 0
+  }
+}

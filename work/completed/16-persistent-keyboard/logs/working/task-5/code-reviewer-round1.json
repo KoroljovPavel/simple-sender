@@ -1,0 +1,48 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "task": "5",
+  "feature": "16-persistent-keyboard",
+  "status": "approved",
+  "summary": "Task 5 frontend preview panel for keyboard steps is implemented correctly and faithfully. The DTO mirrors match the Task-4 backend contract byte-for-byte (request keyboardRows -> KeyboardRowDto{buttons:[{text}]}, response keyboardRows -> List<List<String>> mapped to string[][]). The stored-XSS guard holds: all rendered text and labels are {{ }} interpolation, no v-html anywhere; the source guard test is intact. The renderable gate correctly splits MESSAGE/keyboard/non-renderable, MESSAGE behavior is unchanged, and the keyboard mock renders from the RESPONSE keyboardRows (one source of truth). Watch tuple, payload shape, debounce, and i18n parity are all correct. Findings are minor/optional only.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "line": 87,
+      "description": "keyboardMockRows filters out empty rows with `row.length > 0` and silently drops them. The backend already clamps and guarantees 1..4 buttons per row, so an empty row in the response means a backend/front desync. Dropping it is the right defensive choice, but if rows 0 and 2 are present and row 1 is empty, the surviving rows are re-indexed (data-test funnel-preview-keyboard-row-0 / -1), which could mask the desync during manual QA. Acceptable as defensive behavior; consider a console.warn in dev if a row is dropped, or accept silently. Not blocking.",
+      "recommendation": "Optional: leave as-is (clamp guarantees this never happens in practice), or add a dev-only warning when a non-empty keyboardRows contains an empty row to surface desync."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "line": 236,
+      "description": "The keyboard-text paragraph is gated on `keyboardText !== null`. When the backend returns kind:'keyboard' with an empty-string TEXT block (a valid render of empty step text), keyboardText is '' (not null) so an empty bordered text box renders. This matches the stated 'empty rendered text uses the same path as MESSAGE' constraint, so it is intended, but the empty bordered box is a slightly odd visual. Cosmetic only.",
+      "recommendation": "Optional: no change required. If desired, the empty-box visual could be suppressed, but doing so would diverge from the MESSAGE TEXT-block behavior, so leaving it consistent is preferable."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/types/funnel.ts",
+      "line": 1,
+      "description": "File header comment says 'Mirrors the Task-5 backend DTOs' (pre-existing, refers to an earlier feature's task numbering, not this feature's Task 5). The PreviewStepRequest/PreviewStepResponse doc comments correctly reference 16-persistent-keyboard / Decision 7, so the contract docs are accurate; only the top-of-file legacy header is stale. Documentation nit, no functional impact.",
+      "recommendation": "Optional: ignore — the per-interface comments are the authoritative ones and they are correct."
+    }
+  ],
+  "verified": {
+    "dto_contract_mirror": "PreviewStepRequest.keyboardRows: KeyboardRow[] -> backend KeyboardRowDto{buttons: KeyboardButtonDto[]{text}} matches exactly; PreviewStepResponse.keyboardRows: string[][] | null -> backend List<List<String>> matches exactly; kind union 'message'|'non_message'|'keyboard' matches backend.",
+    "xss_guard": "No v-html / innerHTML in the component (keyboard text and all row labels output via {{ }}); the static source guard test (strips comments then asserts no v-html=/.innerHTML=) remains valid; hostile-content keyboard test covers both rendered text and labels.",
+    "render_source": "keyboardMockRows derives from rendered.value.keyboardRows (RESPONSE, server-clamped), not from local form state — single source of truth per Decision 7 implementation hint.",
+    "message_behavior_unchanged": "isMessageStep gate preserved; MESSAGE payload still {stepType, blocks}; previewBlocks clamp unchanged and lives only in the kind==='message' branch; DELAY and other non-renderable types still hit the placeholder with no backend call (gate isRenderableStep + runPreview early-return aligned).",
+    "watch_and_payload": "Watch tuple extended with keyboardText/keyboardParseMode/keyboardRows (deep watch on, immediate primed first-run); keyboard payload sends stepType + the three keyboard fields; store preview(funnelId, stepId, payload) signature matches.",
+    "i18n_parity": "previewKeyboardCaption + previewKeyboardAria present in BOTH uk.json and en.json under funnels.editor.* — parity gate satisfied.",
+    "cross_file": "Store action signature, KeyboardRow/KeyboardButton reuse from Task 2, and backend DTO field names all verified to match."
+  },
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "excellent"
+  },
+  "note": "Frontend test suite was not executed (Bash run denied in this environment); review is static. Orchestrator should confirm `pnpm test tests/components/funnels/FunnelMessagePreview.spec.ts`, full `pnpm test`, and `pnpm build` locale parity gate are green per the task's verification steps."
+}

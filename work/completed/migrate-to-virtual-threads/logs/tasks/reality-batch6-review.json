@@ -1,0 +1,61 @@
+{
+  "validator": "reality-checker",
+  "batch": [16, 17],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 16,
+      "issue": "Task 16 Verification Steps (line 82) instructs the agent to extract per-file coverage via 'grep / xmllint on backend/build/reports/jacoco/test/jacocoTestReport.xml'. That XML file does not exist: the project's build.gradle configures `jacocoTestReport { dependsOn test }` with no explicit XML reports block, so Gradle only produces the HTML report under backend/build/reports/jacoco/test/html/. The XML output must be explicitly enabled with `reports { xml.required = true }` inside the `jacocoTestReport {}` block, which is absent. Attempting the xmllint command on a non-existent file will silently fail or produce an error.",
+      "fix": "Either (a) add `reports { xml.required = true }` to the `jacocoTestReport {}` block in build.gradle (and document it in the task), or (b) rewrite the Verification Steps to parse per-file data from the HTML report or via the Gradle jacocoTestReport HTML files, or use the jacoco exec binary. The task body must not reference a file that does not exist in the current build config."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 17,
+      "issue": "Task 17 step 6 (AC7 boot probe) uses `./gradlew bootRun -Pargs=\"-Djdk.tracePinnedThreads=full\"`. The build.gradle contains no configuration to consume a `-Pargs` project property and pass it as JVM arguments to the bootRun task. The Spring Boot Gradle plugin does not support `-Pargs` by default — it uses `bootRun { jvmArgs = [...] }` or the system property `org.gradle.jvmargs`. The command as written will silently ignore the `-Pargs` property and boot without the VT-pinning flag, producing a false-negative AC7 result (no pinning lines emitted even though pinning may occur). Task 11 (the authoring task for this probe) consistently uses `-PappArgs` instead, which is also not configured in build.gradle but is the Spring Boot Gradle plugin's documented `applicationDefaultJvmArgs` approach when wired via a hook. User-spec AC7 row also uses `-Pargs`, and Task 11's Verify-smoke uses `-PappArgs` — three distinct inconsistent forms for the same command, none of them wired.",
+      "fix": "Add a bootRun JVM-args hook to backend/build.gradle (e.g. `bootRun { if (project.hasProperty('appArgs')) { jvmArgs project.appArgs.split(',') } }`) and standardise all three references (Task 11, Task 17, user-spec row 7) to the same form. Alternatively, document `JAVA_TOOL_OPTIONS=-Djdk.tracePinnedThreads=full ./gradlew bootRun` as the universal approach. Without this wiring, AC7 cannot be automated as described."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 16,
+      "issue": "Task 16 Context Files lists 'backend/build/reports/jacoco/test/html/index.html + per-class XML' as the coverage source (line 74). The per-class XML does not exist (same root cause as finding above: XML reports not enabled in build.gradle). The agent executing Task 16 will either silently skip TC12 XML-based verification or fail the xmllint step without a clear error.",
+      "fix": "Same fix as the first finding: enable XML reports in build.gradle, or rewrite Context Files to reference only the HTML report. The HTML file at backend/build/reports/jacoco/test/html/index.html does exist."
+    },
+    {
+      "severity": "minor",
+      "category": "hallucination",
+      "task": 17,
+      "issue": "Task 17 TC1 instructs the agent to read `backend/build/reports/compile-java.txt` for compile warnings (line 47). That file does not exist in the project — Gradle does not produce a `compile-java.txt` report by default. The task hedges with '(or compile output)' but the primary path is the nonexistent file.",
+      "fix": "Remove the primary path to the nonexistent file. The fallback '(or compile output)' is the correct approach: capture `./gradlew compileJava 2>&1` stdout/stderr during the task run and scan it for WARNING lines. If baseline capture is desired, redirect it to a file during this QA run and document the absence of a pre-migration baseline as a minor finding per the task's own edge-case note."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 17,
+      "issue": "Task 17 Description (from tech-spec line 491) says 'Verify AC1-AC6, AC14, AC15, TC1-TC9 from this tech-spec', but the task body (line 26) says 'Verify tech-spec TC1-TC11 (TC12 per-file coverage floor is a coverage check, included)'. The tech-spec description and the task body are inconsistent on the TC scope: TC1-TC9 vs TC1-TC11 vs TC1-TC12. The task's Acceptance Criteria (line 74) requires 'Each tech-spec TC (TC1-TC12) appears in acceptanceCriteria[]', which matches the body. The tech-spec description appears to be a stale summary that was not updated when TC10 and TC11 were added.",
+      "fix": "Update the tech-spec Task 17 description bullet to read 'TC1-TC12' to match the task file's own Acceptance Criteria. This is a documentation drift, not a functional gap, since the task body is correct."
+    },
+    {
+      "severity": "minor",
+      "category": "hallucination",
+      "task": 17,
+      "issue": "Task 17 Inputs to consume (line 129) states 'Per-site BotTokenLeakTest-shaped tests from Tasks 8/9/10/11 — TC10 evidence'. Task 10 (test infrastructure) and Task 11 (VT pinning documentation) do not add or modify any token-scrubber log tests — Task 10 is limited to AbstractIntegrationTest, ConcurrencyTestUtils, HealthController, and mock-triple updates; Task 11 is a documentation task only. The TC10 token-scrubber site evidence comes from Tasks 7 (BotTokenLeakTest flip), 8 (TelegramApiClient + TelegramSender log sites), and 9 (WebhookPayloadSizeFilter + TelegramWebhookController + ProcessTelegramUpdateJob log sites). Citing Tasks 10 and 11 as TC10 evidence producers is incorrect.",
+      "fix": "Change the input reference to 'Per-site BotTokenLeakTest-shaped tests from Tasks 7, 8, 9 — TC10 evidence' to accurately reflect where TC10 log-site tests are authored."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 16,
+      "issue": "Task 16 depends_on includes [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13] but does not include Tasks 1 and 2 (Phase A pre-flip cleanup). Task 2 modifies test files `NoOpSubscriberServiceTest.java` and `NoOpFunnelTriggerServiceTest.java`, and Task 16 explicitly audits those files (line 73: 'backend/src/test/java/com/botfunnel/subscriber/NoOpSubscriberServiceTest.java, funnel/NoOpFunnelTriggerServiceTest.java — stub tests StepVerifier → direct invocation (Task 2)'). Without Tasks 1-2 in depends_on, the dependency is implicit but undeclared.",
+      "fix": "Add tasks 1 and 2 to the depends_on list in Task 16's frontmatter: `depends_on: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13]`. This is low-severity because the wave structure implicitly orders Phase A before Phase B before audit, but the explicit dependency graph should be complete."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 38,
+    "issues_found": 7
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "summary": "Task 8 commit 72b4e03 modifies only application-shell sources (frontend/app.vue, frontend/layouts/{default,auth}.vue) and the uk/en locale dictionaries (flattening layout.default.* → layout.*). Zero test files were touched, satisfying Decision 16 / AC18 (existing UA-literal specs protected). Task file explicitly defers behavioral verification of the shell to Task 11 E2E (e2e/i18n.spec.ts) and to user-verify steps; no new vitest mounts are appropriate here because layouts require <NuxtLayout> + router resolution and useLocaleHead/useLocalePath wiring would force 3+ mocks (excessive-mocking anti-pattern per test-master). I cannot execute `pnpm test` in this sandbox (Node/pnpm not on PATH), but verified indirectly that no existing spec can regress: (a) git diff 72b4e03^..72b4e03 against frontend/tests/** and frontend/e2e/** is empty; (b) grep across frontend/tests/ for the changed strings (\"Bot Funnel\", >Logout<, >Dashboard<, >Profile<) and changed layout files returns zero hits — no existing spec mounts default.vue/auth.vue or asserts those literals; (c) grep for the old key path `layout.default` across frontend/ returns zero hits, so the flatten is complete with no stale references. Deferring layout verification to Task 11 E2E is the correct test-pyramid choice for this scope.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "low",
+      "category": "missing_coverage",
+      "location": "frontend/e2e/i18n.spec.ts (planned in Task 11)",
+      "issue": "Behavioral guarantees introduced by this commit (SSR `<html lang>` flips between uk/en, presence of `<link rel=\"alternate\" hreflang=\"uk|en|x-default\">`, locale-prefixed post-logout `navigateTo`, LangSwitcher rendering in both layouts) currently have no executable assertion in the test suite — only the commit-message curl checks and Verify-user steps. This is acceptable for Task 8 in isolation (deferred to Task 11 by design), but if Task 11's e2e/i18n.spec.ts ships without explicit assertions for each of these four behaviors, the deferral becomes a real coverage gap. Out of scope for Task 8 to fix; flagging so the Task 11 reviewer enforces it.",
+      "recommendation": "When Task 11 lands, ensure e2e/i18n.spec.ts asserts at minimum: (1) `await page.goto('/dashboard'); expect(await page.locator('html').getAttribute('lang')).toBe('uk')` and the analogous `/en/dashboard` → `'en'`; (2) `expect(await page.locator('link[rel=alternate][hreflang=uk]').count()).toBe(1)` plus the same for `hreflang=en` and `hreflang=x-default` on both URLs; (3) click Logout on `/en/dashboard` and assert URL becomes `/en/auth/login` (not `/auth/login`); (4) LangSwitcher visible+clickable on both `/dashboard` and `/auth/login`. No change to Task 8 itself."
+    },
+    {
+      "severity": "low",
+      "category": "redundant_testing",
+      "location": "frontend/tests/layouts/default.spec.ts (hypothetical)",
+      "issue": "Task 8's TDD Anchor section correctly states no new unit tests should be added — mocking useLocaleHead + useLocalePath + useI18n + Nuxt head manager to test layout wiring would trigger the >=3-mock excessive-mocking rule and would be tautological (mock returns X, assert X). Confirming this stance is correct and that the absence of layout unit tests in this commit is not a gap to backfill.",
+      "recommendation": "No action. Keep the TDD Anchor decision as written; rely on Task 11 E2E for behavioral coverage of the shell."
+    }
+  ],
+  "verdict": "OK"
+}

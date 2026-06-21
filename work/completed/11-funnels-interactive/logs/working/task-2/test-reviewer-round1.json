@@ -1,0 +1,25 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java",
+      "finding": "All TDD-anchor scenarios present and covered: reply_markup-in-body (with both callback_data and url buttons), null-reply_markup omits key, answerCallbackQuery POST to /answerCallbackQuery with callback_query_id+text, null-text omits key, 5xx best-effort does-not-throw (Decision 8), disconnected-bot no-HTTP (optional anchor). 8 pass, 2 pre-existing @Disabled (Task 7), 0 failures.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java",
+      "finding": "Tests assert on real wire behavior — RecordedRequest path + Jackson-parsed body — not mock-call verification. Correct test type (integration: real Mongo/RestClient/TokenEncryptor + MockWebServer). Independent via @BeforeEach drain+clean.",
+      "action": "none"
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java",
+      "finding": "answerCallbackQuery_telegram5xx asserts drainRequests().isNotEmpty() rather than an exact count (4 = initial + MAX_RETRIES). Loose check is intentional to avoid coupling to the retry constant; exact attempt-count mechanics are already covered by TelegramSenderTest. The IT only needs to prove the best-effort swallow and that an attempt was made.",
+      "action": "accepted as-is — avoids brittle coupling"
+    }
+  ]
+}

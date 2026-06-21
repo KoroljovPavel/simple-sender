@@ -1,0 +1,39 @@
+{
+  "status": "passed",
+  "summary": "Round 2 successfully addresses all major and most minor findings from round 1. The fetchUser_401Response_setsUserNull test now pre-arms auth-user with ACTIVE_USER and explicitly asserts store.user === ACTIVE_USER before fetch, so removing `userState.value = null` from the catch branch would now break the test (litmus passes). Three new tests fill the previously missing branches: fetchUser_500Response_propagatesErrorAndKeepsUser locks in `throw e` for non-401, logout_apiError_stillClearsUser locks in the finally-block clear, backendError_protectedRoute_redirectsToLogin locks in the middleware's swallow-and-redirect behavior. A bonus test (unauthenticatedWithValidSession_authRoute_hydratesAndRedirectsToDashboard) covers the valid-session-on-/auth/login hydration path. unauthenticated_publicAuthRoute_passesThrough now also exercises the apiMock rejection path, partially addressing the round 1 redundant_testing finding. All 9 tests pass the litmus test. Two round 1 minor items (requiresAuth: false meta branch coverage; reaching into 'auth-user' useState by literal key) were not addressed but were explicitly marked low-priority polish, not blockers.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/middleware/auth.global.spec.ts (no test)",
+      "issue": "Carryover from round 1 (not addressed): the `to.meta.requiresAuth === false` opt-out branch is referenced in tech-spec as the documented way for future public pages to skip the redirect. Currently no test enforces this contract, so a refactor could break it silently.",
+      "recommendation": "Add `unauthenticated_routeWithRequiresAuthFalse_passesThrough`: `apiMock.mockRejectedValueOnce({ statusCode: 401 }); await middleware(makeRoute('/public-landing', { requiresAuth: false }), makeRoute('/')); expect(navigateToMock).not.toHaveBeenCalled();`. Note: middleware/auth.global.ts currently does not branch on `to.meta.requiresAuth` — if the contract is `everything outside /auth/** requires auth`, document that and drop the recommendation. If the contract is meta-driven, the implementation also needs the check."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/stores/auth.spec.ts:16,32,44,68; frontend/tests/middleware/auth.global.spec.ts:27,40,60",
+      "issue": "Carryover from round 1 (not addressed): tests still reach into Nuxt module state with `useState<unknown>('auth-user').value = ...`, coupling tests to the literal key string. If the store ever renames its useState key, these resets silently stop working and tests start leaking state between cases.",
+      "recommendation": "Export the key as a constant from stores/auth.ts (`export const AUTH_USER_KEY = 'auth-user'`) and import it in tests, OR add a manual `$reset` action to the setup store and call `useAuthStore().$reset()` in beforeEach. Low priority — fix opportunistically when next touching the store."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 11,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "taskRequired": {
+    "needed": false,
+    "rationale": "Status passed — zero critical, zero major findings. Remaining two minor items are explicit carryovers documented as low-priority polish (one depends on whether the meta-driven contract is real; the other is a constant-extraction hygiene fix). Both can wait for a future touch of stores/auth.ts."
+  }
+}

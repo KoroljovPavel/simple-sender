@@ -1,0 +1,134 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "Context Files section uses plain text for several code-file entries (atomic-claim exemplars, worker idioms, sender contract, subscriber mutations, etc.) instead of markdown links. Only the project-knowledge docs use markdown links. Code file paths like `backend/src/main/java/com/botfunnel/subscriber/jobs/ExportSubscribersJob.java` are listed as plain text, not `[name](path)`.",
+      "fix": "Convert all code file paths in Context Files to markdown link format: `[ExportSubscribersJob.java](../../../backend/src/main/java/com/botfunnel/subscriber/jobs/ExportSubscribersJob.java)` etc."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 6,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use `work/10-funnels/logs/working/task-6/...` (relative, no leading slash) instead of the full absolute feature_path form `/Users/pavlokorolov/IdeaProjects/simple-sender/work/10-funnels/logs/working/task-6/...`. Task-creator rules specify: 'Always anchor to feature_path' to avoid CWD-relative resolution.",
+      "fix": "Prefix reviewer paths with the absolute project root: `work/10-funnels/logs/working/task-6/code-reviewer-{round}.json` → `/Users/pavlokorolov/IdeaProjects/simple-sender/work/10-funnels/logs/working/task-6/code-reviewer-{round}.json`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "TDD Anchor",
+      "issue": "Test `FunnelExecutionEngineIT::stateTransitionsEmitNamedLogConstantsWithoutPayload` verifies presence of a log constant and absence of rendered body in the log. This is a structural/text-presence assertion (assert constant in log output, assert body not in log). Per the checklist, anchors that only verify string presence in output are insufficient — they test structure, not logic.",
+      "fix": "Minor — acceptable given this is specifically an observability/PII test where log-content assertions are the only meaningful verification. Flag for awareness; keep test but consider adding a complementary state-transition assertion."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 7,
+      "section": "Required Skills",
+      "issue": "Required Skills section uses a slightly different format (`/skill:code-writing — [SKILL.md](../../../.claude/skills/code-writing/SKILL.md)`) with an absolute-style path, while other tasks use `.claude/skills/code-writing/SKILL.md`. This is inconsistent within the batch but not blocking.",
+      "fix": "Normalize skill path to match template format used in tasks 6, 9, 10: `[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)` or consistently use the absolute path across all tasks."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 7,
+      "section": "Verification Steps",
+      "issue": "Verification Steps section does not use the `### Automated` / `### Smoke` / `### User` subsection structure from the template. It uses `**Automated:**` (bold text) and a closing note `_(Smoke/User verification не застосовується для цієї задачі.)_` in italics — valid content but deviates from template format.",
+      "fix": "Use `### Automated` heading for the automated block. Since no smoke/user verifications apply, omit those subsections (as template instructs: 'Omit section if no smoke/user checks')."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "Mandatory project-knowledge context files `project.md` and `architecture.md` use paths without the `references/` subdirectory: `[project.md](.claude/skills/project-knowledge/project.md)` and `[architecture.md](.claude/skills/project-knowledge/architecture.md)`. Tasks 6, 7, 9, 10 all correctly use `.claude/skills/project-knowledge/references/project.md`. These paths are likely broken (file not found at that path).",
+      "fix": "Correct the paths: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)` and `[architecture.md](../../../.claude/skills/project-knowledge/references/architecture.md)`. Verify actual file location in `.claude/skills/project-knowledge/`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "Also missing `patterns.md` correct path — listed as `[patterns.md](.claude/skills/project-knowledge/patterns.md)` without `references/` subdirectory, same issue as project.md/architecture.md.",
+      "fix": "Correct to `[patterns.md](../../../.claude/skills/project-knowledge/references/patterns.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "Code files listed in the 'Code files (modify)' and 'Code files (read first)' subsections inside Context Files are plain text paths, not markdown links. For example `backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java` should be a link.",
+      "fix": "Convert all code file paths to markdown link format: `[ProjectHardDeleteJob.java](../../../backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java)`."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 8,
+      "section": "Verification Steps",
+      "issue": "Smoke section duplicates the same test command as the Automated section (`./gradlew test --tests '*ProjectHardDelete*'`). Smoke checks should be distinct from automated test runs — they should be quick executable commands that don't duplicate the automated suite.",
+      "fix": "The second smoke check (context startup verification) is appropriate. Remove the duplicate first smoke check that is already covered by Automated, or rewrite it as a distinct runtime verification command."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "Context Files section mixes markdown links with plain-text file paths. Files in the 'Файли для створення' subsection are listed as plain text (`frontend/stores/funnels.ts`, etc.) instead of markdown links. Additionally, the 'Взірець' subsection correctly uses markdown links, but the 'Файли для створення' ones do not.",
+      "fix": "Convert plain-text file paths in 'Файли для створення' to markdown links, or note them as new files to be created (which don't yet exist as links). At minimum, clarify that these are new files being created, not existing context files."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 9,
+      "section": "Details",
+      "issue": "Task 9 wave is 3 but Task 8 is also wave 3. Both depend on Task 1 and Task 6. Task 9 depends on Task 5 (wave 2). Task 8 depends on Tasks 1 and 6 (wave 2). This is consistent. However, the tech-spec places Task 9 in 'Wave 4 (фронтенд — залежить від Task 5 API-контракту)' while the task file sets wave: 3. This is a minor discrepancy but could affect parallel execution ordering.",
+      "fix": "Change Task 9 wave to 4 to match tech-spec 'Wave 4'. This ensures correct scheduling: Tasks 7 and 8 (wave 3) complete before Task 9 starts, matching the tech-spec intent."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 10,
+      "section": "Frontmatter",
+      "issue": "Task 10 wave is 4, but the tech-spec places it in 'Wave 5 (фронтенд-редактор — після Task 9)'. If Task 9 is corrected to wave 4, Task 10 must be wave 5 to maintain sequential execution ordering of locale files.",
+      "fix": "Change Task 10 wave to 5 to match tech-spec 'Wave 5'. This keeps Tasks 9 and 10 sequential (not parallel) as required by the shared locale-file constraint documented in both tasks."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor test `FunnelTriggerSettings.spec.ts::renders deep link and copies it` checks that Copy button calls `navigator.clipboard.writeText` with the correct link. This verifies API invocation (structural) rather than full behavior — the 'Copied' feedback state and the link construction logic (empty trigger_value → bare /start) are not explicitly tested.",
+      "fix": "Minor — acceptable coverage. Consider adding explicit assertions: (1) empty triggerValue → deep-link without `?start=` parameter; (2) 'Copied' UI feedback state appears after clicking Copy."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 7,
+      "section": "Acceptance Criteria",
+      "issue": "Tech-spec testing strategy mentions a HIGH-priority scenario: 'ProcessTelegramUpdateJobTest.startCommandFiresFunnelTrigger — fire(...) після upsert (наявний)'. The task covers this in 'What to do' step 7 and TDD Anchor but the Acceptance Criteria checklist does not include an explicit criterion for 'ProcessTelegramUpdateJobTest.startCommandFiresFunnelTrigger залишається зеленим'. It is present only in Verification Steps.",
+      "fix": "Add AC item: `- [ ] ProcessTelegramUpdateJobTest.startCommandFiresFunnelTrigger зелений після оновлення мока на інтерфейс FunnelTriggerService.`"
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 8,
+      "section": "TDD Anchor",
+      "issue": "Tech-spec TDD Anchor for Task 8 specifies smoke check `./gradlew test --tests '*ProjectHardDelete*'` (cascade removes funnels+funnel_executions). The TDD Anchor in the task file lists only two IT scenarios (cascadeRemovesFunnelsAndExecutions, cascadeDoesNotTouchOtherProjects). The note '(Конфіг-properties, .env.example, docs/local-setup.md, docs/staging-smoke/10-funnels.md — doc/config deliverables без власних автотестів)' is present, which is appropriate.",
+      "fix": "No action required for test coverage — the explanation for non-testable deliverables is present. This is informational only."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 15,
+    "critical": 1,
+    "major": 0,
+    "minor": 14
+  }
+}

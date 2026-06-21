@@ -1,0 +1,21 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "Round 1 A-MAJOR-1 was closed on D7/D10/D11 and AC15 (all four now defer specifics to tech-spec), but the same HOW-leak migrated into the 'Тестирование' section. Lines 140 and 144-146 still hardcode: `MockMvcBuilders.webAppContextSetup`, `SecurityMockMvcRequestPostProcessors`, `@WebMvcTest(controllers=…)`, `Executors.newVirtualThreadPerTaskExecutor() + CountDownLatch`, the exact '8 файлов' count, and the three mock FQNs (`com.mongodb.reactivestreams.client.MongoClient` → `com.mongodb.client.MongoClient`, `ReactiveRedisConnectionFactory`, `RedisConnectionFactory`). This is the same overengineering category as round 1 — implementation details bound in the user-spec — just relocated from Decisions/ACs to the testing subsection.",
+      "why_matters": "User-spec scope is WHAT and WHY; HOW belongs in tech-spec. Locking implementation classes (specific executor, specific mutator class, specific mock-triple FQNs) in user-spec freezes the design space before tech-spec exploration and creates the same double-source-of-truth risk round 1 flagged. Lower severity than round 1 because it's confined to one descriptive subsection rather than four binding decisions/ACs, but the same anti-pattern.",
+      "fix": "Rewrite 'Тестирование' subsections at outcome level: 'Integration tests for HTTP endpoints migrate from reactive test-client to servlet-stack test-client; concurrency tests run under virtual-thread executors; security/wiring-only test classes mock the servlet-stack infrastructure beans instead of reactive equivalents. Specific class picks and exact file count — in tech-spec.' Optionally leave a single concrete example (e.g. 'AbstractIntegrationTest base class') as an anchor."
+    },
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "D5 lists six specific component names in the atomic flip-commit (`build.gradle`, `application.properties` cookie-prefix, `SecurityConfig`, `RememberMe`-наследник, `WebhookPayloadSizeFilter`, `GlobalErrorHandler`). The first three describe stack-level boundaries (build, config, security entry-point) which are user-spec-appropriate. The last three are class-level component names that belong in tech-spec.",
+      "why_matters": "Same overengineering signal as the testing section — implementation-level names in user-spec narrow the design space prematurely. Borderline because `WebhookPayloadSizeFilter` is the unique name of a behavior the user-spec already commits to preserving (per Constraints / patterns.md #27); the issue is more about `RememberMe`-наследник and `GlobalErrorHandler` which are pure implementation labels.",
+      "fix": "Restate D5 atomic boundary as: 'build.gradle dependency flip + application.properties cookie-prefix swap + Spring Security configuration + remember-me cookie write-path + path-scoped payload-size filter + global validation-error mapping — все шесть в одном коммите, потому что WebFlux и Web стартеры взаимоисключающи на classpath. Конкретные классы — в tech-spec.' Or just keep D5 as-is and accept it as named-boundaries rather than HOW-leak — but be consistent with how D7/D10/D11 were rewritten."
+    }
+  ],
+  "worst_category": "overengineering",
+  "summary": "Round 1 findings are all closed: D7/D10/D11/AC15 abstracted (A-MAJOR-1), AC16/17/18 added covering session continuity, validation shape, and remember-me Max-Age (A-MAJOR-2), R7 added (A-MINOR-1), AC17 + 'Сохраняемое поведение' note added (A-MINOR-2), SB4/JDK24 rationale added (A-MINOR-3), rollback strategy paragraph added (A-MINOR-4). Two residual minors remain — both are leftover implementation-detail leaks (Тестирование subsection still names specific classes/FQNs; D5 still lists six component names). Neither is blocking; tech-spec can absorb both. Spec is approved for tech-spec stage."
+}

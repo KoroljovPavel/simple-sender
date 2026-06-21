@@ -1,0 +1,104 @@
+{
+  "round": 2,
+  "status": "approved",
+  "summary": {
+    "totalFindings": 4,
+    "critical": 0,
+    "major": 0,
+    "minor": 4
+  },
+  "previous_findings_resolved": [
+    {
+      "id": "F1",
+      "title": "CSV formula injection on exported cells",
+      "resolution": "Decision 7 (line 100) mandates apostrophe prefix for any cell starting with one of `= + - @ \\t \\r`. Applied to ALL string cells (firstName, lastName, username, languageCode, status, tags-joined, custom_fields JSON-string) AND stringified numeric/date cells (since `Double.isFinite` accepts `=1+1` as String upstream). Acceptance Criteria line 494 explicitly requires it. `SubscriberCsvWriterTest` (line 374) seeds named formula-injection cases: `firstName=\"=SUM(A1:A99)\"`, `username=\"@evil\"`, `lastName=\"-cmd|notepad\"`, `custom_fields={\"city\":\"+1+1\",\"note\":\"\\tsneaky\"}` plus control case `firstName=\"Iva\"` without prefix. Verified."
+    },
+    {
+      "id": "F2",
+      "title": "Signed-URL leakage window via reverse-proxy logs / Referer (7d TTL)",
+      "resolution": "Decision 15 (line 140) lowers TTL to 24h via `SUBSCRIBER_EXPORT_URL_TTL_HOURS=24` env (7x exposure reduction). GridFS retention stays 7d. UI two-state button — `Download` when fresh, `Refresh URL` when expired — calls new endpoint `POST /api/v1/projects/{projectId}/subscribers/exports/{exportId}/refresh-url`. Rate-limit `bf:refresh:export:{projectId}` 5/hour. Env var declared in AC list (line 493). Tests `refreshUrl_expiredToken_returnsNew_andRespectsRateLimit` (line 397) cover happy + 6th-call-429. Verified."
+    },
+    {
+      "id": "F3",
+      "title": "HMAC key rotation strategy undocumented",
+      "resolution": "Decision 15 (line 140) documents rotation semantics: `SUBSCRIBER_EXPORT_TOKEN_KEY` rotation invalidates ALL existing signed URLs (verify returns 401 `invalid_token`) — by design, this IS the response to compromise. No `kid` prefix; multi-key rotation deferred with rationale (zero rotation events expected during MVP year). Runbook entry added to `docs/staging-smoke/09-subscribers.md` instructs operator to plan downtime window, communicate to affected owners, and direct them to the UI Refresh URL button (which re-mints with the new key). Verified."
+    },
+    {
+      "id": "F4",
+      "title": "No audit on denied downloads (recon attacks invisible)",
+      "resolution": "Decision 16 (line 145) emits `subscribers_export_download_denied` on EVERY non-200 outcome with full reason enum: `invalid_token` (401), `expired` (410), `rate_limited` (429), `project_unavailable` (410), `purged` (410), `failed` (410), `foreign_owner` (404). Metadata `{reason, projectId, ip, userAgent, exportId?, tokenSegmentPrefix?}`. Token tamper case (no exportId) routes to `events` collection. Audit writes BEFORE returning HTTP response — observability survives downstream failures. AC line 495 lists this as gate. Test `SubscriberExportSignedUrlIT` (line 397) explicitly covers every reason path including cross-project token substitution. Verified."
+    },
+    {
+      "id": "F5",
+      "title": "No rate-limit on POST /messages (compromised-session flood)",
+      "resolution": "Decision 9 (line 110) extends Redis-bucket family with personal-message bucket: key `bf:rate:personal_message:{projectId}`, threshold 60/min, env `SUBSCRIBER_PERSONAL_MESSAGE_RATE_LIMIT_PER_MIN=60`, error code `personal_message_rate_limited` (429, error-codes line 348). Fail-open WARN constant `PERSONAL_MESSAGE_RATE_REDIS_FAIL_OPEN`. Rationale defends per-project flood while keeping cardinality bounded. Test `rate_limited_returns429_andNoSenderCalled` in `SubscriberPersonalMessageIT` (line 390) asserts 61st POST → 429, MockWebServer received only 60 outbound calls. Verified."
+    },
+    {
+      "id": "F6",
+      "title": "Cursor type-validation missing (NoSQL operator injection risk)",
+      "resolution": "`SubscriberListQuery` record (line 298) added with `@Size(max=256) String cursor`. Testing Strategy note (line 305 inline comment) and `SubscriberControllerIT` test `cursor_invalidShape_returns400` (line 388) exercise NoSQL-injection payload `cursor=base64({\"v\":{\"$ne\":null},...})` and assert 400 + zero leaked rows. Verified — though see new finding N1 below (Decision 5 narrative could be more explicit about server-side type validation as a normative requirement rather than only a test assertion)."
+    },
+    {
+      "id": "F7",
+      "title": "Search input cap missing (DoS on text-index)",
+      "resolution": "`SubscriberListQuery.search` (line 299) carries `@Size(min=2, max=120)`. Validated at Bean-Validation boundary by `@ModelAttribute` binding. Verified."
+    },
+    {
+      "id": "F8",
+      "title": "errorMessage may persist sensitive content (raw stack traces / tokens)",
+      "resolution": "`SubscriberExport.errorMessage` field doc-comment (line 274) specifies: scrubbed via `TelegramApiClient.scrubTokens` then truncated to 1024 chars (mirror `ProcessTelegramUpdateJob` FAILED branch per `patterns.md:216`). Test `exportJob_internalError_writesFailedAndEmail` in `SubscriberExportIT` (line 395) asserts both scrub + 1024 truncation. Verified."
+    },
+    {
+      "id": "F9",
+      "title": "CustomFieldDefinition.defaultValue no per-type validation",
+      "resolution": "Data Models commentary (line 251) explicit: `defaultValue` validated against `type` at create + update via same `CustomFieldValueValidator` used for subscriber PATCH (Task 5) — error code `custom_field_type_mismatch` (422). Task 5 description (line 542) lists `CustomFieldValueValidator` build-out. Test `create_stringTypeWithNumericDefault_returns422` in `CustomFieldDefinitionIT` (line 393) covers STRING vs numeric default; spec mentions same for STRING vs DATE, NUMBER vs object. Verified."
+    },
+    {
+      "id": "F10",
+      "title": "GridFS metadata integrity unenforced (orphan-file risk)",
+      "resolution": "`SubscriberExportIT` (line 395) asserts `gridFsOperations.findOne({metadata.exportId: id})` PLUS metadata also contains `projectId` + `rowCount`. GridFS `store` call in Architecture (line 52) explicitly passes `Map.of(\"exportId\", id, \"projectId\", projectId)`. Hard-delete cascade in Decision 8 (line 105) uses `{metadata.projectId: {$in: deletedIds}}` — depends on this metadata being present. Verified."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Refresh-URL endpoint: accepted-status set is ambiguous (DONE/not-PURGED vs DONE-only)",
+      "description": "Decision 15 (line 140) states the refresh-url endpoint 'verifies requireOwned + export status DONE/not PURGED + Redis rate-limit'. Phrasing 'DONE/not PURGED' is ambiguous — it could be read as (a) status == DONE AND != PURGED (redundant tautology since DONE != PURGED by enum semantics), or (b) any status except PURGED, which would include PENDING/RUNNING/FAILED. Re-minting a token for a FAILED export would let owners receive a 'Download' link that immediately returns 410 export_failed (per Decision 16 audit reason `failed`), wasting rate-limit budget. Re-minting for PENDING/RUNNING would expose a token before the file even exists. Spec must explicitly accept ONLY DONE.",
+      "location": "Section: Decisions / Decision 15 (line 140); Section: Testing Strategy / SubscriberExportSignedUrlIT (line 397)",
+      "impact": "Owner UX confusion (token works in URL but download returns 410); minor rate-limit budget waste on FAILED retries; potential premature exposure if PENDING/RUNNING accepted.",
+      "recommendation": "Reword Decision 15 to: 'verifies requireOwned + export status == DONE (rejects PENDING/RUNNING with 409, FAILED/PURGED with 410) + Redis rate-limit ...'. Add explicit test cases in SubscriberExportSignedUrlIT covering refresh-url against each non-DONE status — `refreshUrl_failedExport_returns410`, `refreshUrl_purgedExport_returns410`, `refreshUrl_pendingExport_returns409`.",
+      "cwe": "CWE-840"
+    },
+    {
+      "severity": "minor",
+      "category": "compliance",
+      "title": "Audit metadata stores IP + User-Agent for 365 days (GDPR Article 4 personal data)",
+      "description": "Decision 16 (line 145) writes `{reason, projectId, ip, userAgent, exportId?, tokenSegmentPrefix?}` to the `subscriber_events` collection on every non-200 download outcome. The `subscriber_events` collection carries TTL `expireAfter=365d` (SubscriberEvent entity line 232, Decision 10). IP addresses and User-Agent strings constitute personal data under GDPR Article 4(1) (CJEU C-582/14 Breyer) when linkable to a natural person — which they are here, since events are scoped to a subscriber's project owner. 365-day retention for security-audit data is defensible but should be a deliberate decision, not implicit inheritance from the subscriber-event TTL. The spec does not articulate the legal basis for storing IP for a year nor whether this data appears in any subject-access export.",
+      "location": "Section: Decisions / Decision 16 (line 145); Data Models / SubscriberEvent (line 232)",
+      "impact": "GDPR exposure: subject-access requests, right-to-erasure, data-breach notification scope all expand by including IP+UA. Possible non-compliance with Art. 5(1)(c) data-minimisation if 365d is excessive for fraud-detection purpose.",
+      "recommendation": "Either (a) drop IP+UA from metadata (use only `projectId`, `reason`, `tokenSegmentPrefix`, `exportId?` — sufficient for cross-referencing recon patterns within an owner's surface), OR (b) document explicit legal basis (legitimate interest under Art. 6(1)(f), security-monitoring purpose) and add separate shorter TTL (e.g. 90d) for `subscribers_export_download_denied` events via a `@Indexed(expireAfter=\"90d\")` derived TTL field or routing these audit events to `events` collection (which has unlimited retention but is an existing-platform audit log). Update tech-spec Decisions to call out the retention choice for download-denial audit events.",
+      "cwe": "CWE-359"
+    },
+    {
+      "severity": "minor",
+      "category": "A05: Security Misconfiguration",
+      "title": "Refresh-URL fail-open semantics on Redis outage not explicitly stated",
+      "description": "Decision 15 (line 140) introduces the `bf:refresh:export:{projectId}` 5/hour Redis bucket but does not specify behavior on Redis transport failure. Decision 9 (line 110) covers the other three buckets (start, download, personal_message) with explicit fail-open semantics and named WARN constants — but the refresh bucket is not enumerated there either. If the refresh bucket follows fail-open convention (codebase default per AuthService/BotService precedent), an attacker exploiting a Redis outage window could mint unlimited fresh signed URLs (defeating the 24h TTL reduction from F2). If fail-closed, refresh becomes unavailable during outage (acceptable degradation but should be documented).",
+      "location": "Section: Decisions / Decision 15 (line 140) and Decision 9 (line 110)",
+      "impact": "Undefined behavior during Redis outage. If fail-open (likely per codebase convention), the 24h TTL mitigation from F2 is bypassable — an attacker with a leaked URL whose TTL just expired could re-mint indefinitely. If fail-closed, owners are temporarily blocked from refreshing URLs.",
+      "recommendation": "Extend Decision 9's bucket inventory to include the refresh bucket OR add explicit fail-open/fail-closed clause to Decision 15. Recommend fail-CLOSED for the refresh bucket (return 503 with `service_unavailable` error code) because (a) failure mode is owner-friction-only, not user-facing, (b) fail-open here negates the entire rationale for shortening URL TTL, and (c) refresh is a sensitive privilege-escalation primitive (token re-mint) where fail-closed defense-in-depth is warranted. Add `REFRESH_URL_RATE_REDIS_FAIL_CLOSED` greppable WARN constant if fail-closed chosen, or `..._FAIL_OPEN` if fail-open accepted.",
+      "cwe": "CWE-754"
+    },
+    {
+      "severity": "minor",
+      "category": "A03: Injection",
+      "title": "Cursor server-side type-validation only asserted via test, not normatively required by Decision 5",
+      "description": "F6 resolution added `@Size(max=256)` on `cursor` (good — caps payload size) and a `cursor_invalidShape_returns400` integration test (good — proves runtime behavior). However, Decision 5 (line 90) narrative still reads: 'Server decodes, applies Criteria of (sortField < v) OR (sortField == v AND _id < lastId) to break ties deterministically' — it does NOT mandate that the decoded JSON values pass strict type checks (`v` must be Long-or-instant-epoch-milli, `id` must be 24-char hex ObjectId, no extra keys, no `$`-prefixed BSON operators). The implementation could pass the decoded value directly into a Mongo Criteria builder; if the cursor JSON is `{\"v\": {\"$ne\": null}, \"id\": {\"$gt\": \"\"}}`, Spring Data MongoDB's `Criteria.lt(value)` may accept and serialize the operator-object verbatim depending on the implementation path chosen by the developer. A normative spec requirement would prevent the test from being the only line of defense.",
+      "location": "Section: Decisions / Decision 5 (line 90); Data Models / SubscriberListQuery cursor field (line 305)",
+      "impact": "If a developer skips type-validation during implementation (because the spec is silent and only the test enforces it), the test catches only the specific shape it exercises. Other operator injection variants (`$where`, `$regex`, nested objects, type-coercion abuse like `{\"v\": [1,2,3]}`) could slip through and reach the Mongo Criteria builder.",
+      "recommendation": "Extend Decision 5 with explicit decode-rules: 'After base64url decode and JSON parse, server MUST type-validate: `v` is a primitive scalar (Long for created/lastSeen epoch millis, no Maps/Lists), `id` matches `^[0-9a-f]{24}$` ObjectId hex pattern, JSON object contains exactly the keys {v, id} (no extra keys), no value at any nesting level contains `$`-prefixed keys. Reject with 400 `invalid_cursor` on any violation.' Update SubscriberControllerIT to add cases for `$where`, nested `$gt`, array-as-v, and non-ObjectId `id` payloads.",
+      "cwe": "CWE-943"
+    }
+  ]
+}

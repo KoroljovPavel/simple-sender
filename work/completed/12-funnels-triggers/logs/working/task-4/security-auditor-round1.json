@@ -1,0 +1,49 @@
+{
+  "reviewer": "security-auditor",
+  "task": "4",
+  "round": 1,
+  "commit": "17c5117",
+  "standard": "OWASP Top 10 (2021)",
+  "summary": "Internal subscriber-keyed dispatcher + project-scoped findById boundary + three loop backstops. Anti-IDOR is correctly enforced at the service layer (findById filters by projectId, returns empty on cross-tenant id), the funnel package never touches SubscriberRepository directly, logging is PII-free (ids/codes only), and the Redis-independent depth cap + fan-out ceiling close the fail-open DoS hole. No critical/high findings.",
+  "findings": [
+    {
+      "id": "SEC-1",
+      "severity": "low",
+      "owasp": "A01:2021 Broken Access Control",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberServiceImpl.java",
+      "finding": "findById(projectId, subscriberId) filters SubscriberRepository.findById(...) by projectId and returns Optional.empty() on mismatch. This is the correct anti-IDOR posture: an attacker-influenced subscriberId arriving via the future public /events API (Task 7) cannot resolve another tenant's subscriber. null subscriberId short-circuits to empty.",
+      "recommendation": "No change. Contract is correct and pinned for Task 7 reuse.",
+      "action": "wontfix"
+    },
+    {
+      "id": "SEC-2",
+      "severity": "low",
+      "owasp": "A09:2021 Security Logging & Monitoring Failures",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "finding": "All log sites emit identifiers/codes only (projectId, subscriberId, funnelId, triggerType, depth, error class name). The matchKey, keyword text, and subscriber fields are never logged (Decision 16). Error path logs t.getClass().getSimpleName(), not getMessage(), avoiding accidental leakage.",
+      "recommendation": "No change.",
+      "action": "wontfix"
+    },
+    {
+      "id": "SEC-3",
+      "severity": "low",
+      "owasp": "A04:2021 Insecure Design (DoS / rate-limit bypass)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "finding": "Volume rate-limit is Redis fail-open (availability over hard limit), but the depth cap (drop > 10) and fan-out ceiling (>= max-fanout-per-event) are Redis-independent and gate the dispatch even when Redis is down — closing the fail-open width/depth hole. The external /events ingress (Task 7) is always depth 0, so it is exempt from the auto-enroll limit and bounded instead by the fan-out ceiling and the /events-level global limit Task 7 adds; the auto-enroll limit only applies to depth>0 enrolls that originate INSIDE the engine (not externally reachable).",
+      "recommendation": "No change. Defense-in-depth is intact.",
+      "action": "wontfix"
+    },
+    {
+      "id": "SEC-4",
+      "severity": "low",
+      "owasp": "A03:2021 Injection",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "finding": "Mongo lookups go through Spring Data derived repository methods (Task-1-owned) with bound parameters; no string-concatenated queries. triggerType/matchKey are passed as bound values. Keyword contains-match runs in-memory over the funnel's normalized (lowercase) keywords list — no query interpolation.",
+      "recommendation": "No change.",
+      "action": "wontfix"
+    }
+  ],
+  "verdict": "approve",
+  "dependency_scan": "No new dependencies introduced (Spring Data Mongo/Redis + existing modules only).",
+  "notes": "No hardcoded secrets. Config values are env-var-indirected. The cycle-break has no security impact but was verified. No critical/high/medium issues."
+}

@@ -1,0 +1,19 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "adhoc-preview-step-select",
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practices",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 70,
+      "issue": "previewIndex priority keys off editStep.value (derived from editIndex), and editIndex is never reset to -1 when the edit dialog closes (only editOpen toggles via v-model). After closing the edit dialog, editStep stays truthy, so the preview remains pinned to the last-edited step instead of falling back to the clicked/default step until another row is clicked or the page reloads.",
+      "impact": "Subtle UX quirk: closing the edit dialog leaves the preview pinned to the previously-edited step. Functionally not broken (preview still shows a valid step) and the previewSelectedIndex fallback still recovers on the next row click.",
+      "recommendation": "Out of scope for this commit — the behavior is PRE-EXISTING (the prior previewStep already used `if (editStep.value) return editStep.value` as top priority and editIndex was never reset on close). This commit preserves identical priority semantics. Optionally key the edit branch on editOpen (or reset editIndex on @update:open false) in a follow-up so closing the dialog releases the pin.",
+      "optional": true
+    }
+  ],
+  "notes": "Verified against the methodology dimensions. Selection priority is correct and intact: editStep (edit dialog) > previewSelectedIndex (clicked, guarded by steps.value[previewSelectedIndex] existence check so a stale/out-of-range click falls through) > firstMessageIndex (findIndex over MESSAGE_STEP_TYPES = original default). previewStepNumber is null-safe (returns null when previewIndex < 0). FunnelStepsList: the new `select` emit fires ONLY from the title/summary <button> (data-test funnel-step-select-N); up/down/edit/delete are sibling buttons, NOT nested inside the select button, so no event bubbling can hijack selection — confirmed by the 'action buttons do not hijack selection' test which asserts edit opens the dialog and move triggers store.update while selection stays put. selectedIndex highlight (ring-2 ring-blue-400) applied on the <li>, passed only when previewOpen (undefined otherwise) — type-safe against the `selectedIndex?: number` prop. FunnelMessagePreview: new `stepNumber?: number | null` prop; stepHeading computed shows for BOTH message and non-message focused steps and is null in the empty (no step) state; body render/placeholder/empty paths unchanged; STILL strictly text-only — heading uses {{ stepHeading }}, rendered body uses {{ rendered.rendered }}, NO v-html/innerHTML anywhere (grep-confirmed). i18n: `funnels.editor.previewStepHeading` added to BOTH en.json and uk.json at matching line 722 (parity ✓), uses {number}/{type} ICU args, and {type} reuses existing funnels.steps.type.* keys which exist for every StepType in both locales (no invented keys). Vue idioms sound: computeds pure/reactive, no reactive leaks, debounce timer cleanup intact, auto-save/edit/move/delete untouched. Tests: 49 passed / 0 failed across the two affected specs (FunnelMessagePreview.spec.ts + funnel-editor.spec.ts), including a MIXED_STEPS scenario proving the fallback skips a leading non-message step. No critical or major findings."
+}

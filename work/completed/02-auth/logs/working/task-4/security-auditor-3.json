@@ -1,0 +1,20 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "round2_outcomes": {
+    "BFE-1_brute_force_429_silent_audit_gap": "CLOSED — checkBruteForce() now logs the login_failed event before throwing AppException.tooManyRequests. Verified at AuthService.java:107-114: when either threshold trips, the chain is `Mono.fromRunnable(eventService.logEvent(null, EVENT_LOGIN_FAILED, ip, userAgent, Map.of(\"reason\", \"brute_force\", \"email\", email))).then(Mono.error(AppException.tooManyRequests(...)))`. The Runnable fires before the error signal propagates, so the event is recorded before the caller receives the response. EventService.logEvent (line 22-27) is fire-and-forget (subscribe inside, no return), so wrapping it in fromRunnable is the correct construct. AppException.tooManyRequests maps to HttpStatus.TOO_MANY_REQUESTS (AppException.java:32-33), so the caller still receives 429. Verified by AuthServiceTest::login_emailBruteForceLimitReached_logsBruteForceEvent at AuthServiceTest.java:240-251 — the test asserts both the AppException error AND the event invocation with the correct reason metadata.",
+    "LOC-1_locale_root_canonicalization": "CLOSED — AuthService.java:81 uses `request.getEmail().trim().toLowerCase(Locale.ROOT)`. Locale import added at line 29. The inline comment at line 80 documents the Turkish-locale rationale. The same canonical form is now produced regardless of JVM locale, eliminating the latent re-opener of the case-variant bypass.",
+    "DEP-1_cookie_secure_samesite_defaults": "DEFERRED-by-design (per orchestrator carry-over) — production enforcement via deployment.md (Task 9). No code change required in this round.",
+    "XFF-1_x_forwarded_for_unconditional_trust": "DEFERRED-by-design (per orchestrator carry-over) — documented inline at AuthService.java:244-246. No code change required in this round.",
+    "TTL-1_incr_expire_atomicity": "DEFERRED-by-design (per orchestrator carry-over) — comment at AuthService.java:171-173 acknowledges the race. Lua-script follow-up tracked outside this task.",
+    "ENUM-1_reason_metadata_enumeration": "DEFERRED-by-design (per orchestrator carry-over) — events collection read access treated as a privilege boundary. The new brute_force event includes `email` metadata, which is internally consistent with this decision (insider/breach scenario only — HTTP responses unaffected).",
+    "MIN-DH-1_dummy_hash_visibility": "OPEN as documented minor from round 2 (future-misuse risk, not an active vulnerability)."
+  },
+  "findings": [],
+  "verdict_summary": "Round 2 fixes verified CLOSED: (1) BFE-1 — brute-force threshold-trip now writes a login_failed event with reason=brute_force and email metadata before propagating the 429 error via Mono.fromRunnable(...).then(Mono.error(...)); event ordering and 429 status both preserved, covered by AuthServiceTest::login_emailBruteForceLimitReached_logsBruteForceEvent. (2) LOC-1 — toLowerCase(Locale.ROOT) at AuthService.java:81 closes the Turkish-locale dotless-i variant bypass. No new findings introduced by the round-2 changes; all four carry-overs remain explicitly deferred-by-design as scoped by the orchestrator. Status: approved."
+}

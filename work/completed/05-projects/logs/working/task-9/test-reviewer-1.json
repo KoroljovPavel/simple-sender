@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Task 9 is pure layout composition (10-line insertion into frontend/layouts/default.vue + one-line markdown edit). The task explicitly declares 'No TDD anchor — layout composition only', and that decision is correct per test-master methodology: no new business logic, no data transforms, no decision branches beyond a single v-if guard that reads a store property already covered by Task 2's projects.spec.ts. The referenced specs (Task 5 ProjectSelector.spec.ts, Task 2 projects.spec.ts) exist on disk and were not touched by commit af9d401 (verified via git log + git diff). User confirms full frontend suite ran green (19 files / 171 tests). One optional micro-suggestion below regarding a thin layout spec for the v-if guard — explicitly flagged as a suggestion, not a gap.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/layouts/default.vue:44-50 (sidebar Settings v-if guard)",
+      "issue": "Suggestion only — not a quality gap. The only piece of conditional logic introduced by Task 9 is the v-if=\"projectsStore.currentProject\" on the Settings link plus the href interpolation `/projects/${projectsStore.currentProject.id}/settings`. This behaviour is covered by manual UI verification in the task's 'Verification Steps → User' block (toggle currentProject, observe link visibility, click link → asserts URL), and by Task 2's projects.spec.ts at the store level. A thin layout-spec would add a small amount of regression protection if someone later deletes the v-if (link would render with `undefined` in the href) or swaps the binding. Given the AC explicitly says no new tests required and pure layout composition typically does not warrant a spec per test-master, this is correctly omitted — but if the team wants belt-and-suspenders, a 3-case spec is cheap.",
+      "recommendation": "OPTIONAL (do not block task): If desired, add tests/layouts/default.spec.ts that mounts default.vue with stubs for ProjectSelector / LangSwitcher / NuxtLinkLocale and three Pinia store states: (a) currentProject = null → assert wrapper.find('[data-testid=sidebar-settings]').exists() === false; (b) currentProject = { id: 'p1', ... } → assert link exists and href ends with '/projects/p1/settings'; (c) authStore.user populated → assert user-info span renders. If adding the spec, also add data-testid=\"sidebar-settings\" to the NuxtLinkLocale at default.vue:44-50 to give the test a stable selector without coupling to i18n strings. Skip entirely if the team prefers to rely on the manual UI walkthrough — that posture is defensible for an MVP layout file."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 0,
+      "passed": 0,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

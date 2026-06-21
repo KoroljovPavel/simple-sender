@@ -1,0 +1,23 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 1,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "218,244-255",
+      "issue": "The comment on duplicate() and duplicateName() states the 128-char truncation prevents '@Size(max=128)' from producing a 400. That framing is slightly inaccurate: @Size lives only on CreateFunnelRequest/UpdateFunnelRequest (inbound DTOs). The duplicate path builds a Funnel and persists via funnelRepository.save() with no bean-validation on the entity, so an over-128 name would NOT trigger a 400 here — truncation is a defensive consistency measure, not a 400-avoidance. Behavior is correct; only the rationale comment overstates the mechanism.",
+      "recommendation": "Optional: soften the comment to 'truncate to 128 for consistency with the @Size(max=128) request constraint' rather than implying save-time validation would reject it. No code change needed."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "190-201,176",
+      "issue": "delete()'s bulk-cancel now also scopes by projectId (a hardening), but the two existing delete regression tests (deleteReturns204AndCancelsActiveExecutions, deleteDraftWithoutExecutionsReturns204) only seed same-project executions, so they do not independently exercise the new projectId predicate inside delete(). The scoping is proven for stopAll via stopAllScopedByProjectAndFunnel, and the helper is shared/identical, so this is covered transitively.",
+      "recommendation": "No action required. Optionally note in decisions.md that delete() scoping is covered transitively by the shared helper test."
+    }
+  ],
+  "notes": "Implementation matches tech-spec Decisions 6/7/8 and all task ACs. The shared cancelInFlightExecutions(projectId, funnelId) helper is correctly scoped by BOTH projectId AND funnelId (mirroring FunnelExecutionFactory.cancelExistingForPair), eliminating the funnelId-only tenant-isolation bug the spec warned against; delete() now delegates to it and is behavior-preserving for same-project executions. stepRunStatus=done is set alongside status=cancelled, honoring the claim-CAS contract (Decision 7), and the IT asserts it explicitly via a direct field reload (stepRunStatus(id)) rather than relying on execStatus(). duplicate() forces status=draft + trigger reset to (on_start, \"\"), copies the step graph verbatim via FunnelStep.copyOf (ids/edges preserved, null/empty steps handled without NPE via ArrayList fallback), copies keywords/allowReEnter/description, and truncates the name correctly (128 boundary kept, 129 trimmed, suffix length computed in UTF-16 matching @Size). Both endpoints route through requireFunnel before any side effect (anti-IDOR, uniform 404). Controller handlers mirror the existing activate/create shape (owner from session via currentUserId, correct 201/200 status codes). StopAllResponse is a clean record. Naming, structure, and error handling are consistent with the funnel module. Test coverage is excellent: every TDD anchor present, cross-tenant scoping proven (sibling funnel + foreign project same funnelId both untouched), zero-active and foreign-funnel 404 cases covered. Only two low-severity documentation/coverage nits, neither blocking."
+}

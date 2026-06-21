@@ -1,0 +1,45 @@
+{
+  "status": "approved",
+  "summary": "Task 15 correctly closes both audit findings. F1 mirrors the controller's sole-writer cycle (validateAndNormalize -> applyAll -> recordCustomFieldsSet) with the normalized value, preserving deleted-definition skip and 422-fail behavior. F2 converts all four in-tick engine writes to claim-conditional findAndModify CAS on stepRunStatus=in_progress, and all three cancel writers now set stepRunStatus=done, so a concurrent cancel deterministically wins with no resurrection window. No critical or major issues found.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": 169,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "The persistProgress CONTINUE branch logs LOG_CLAIM_LOST at the call site (line 170) while scheduleDelay/complete/terminate log it internally. Slightly asymmetric — persistProgress returns boolean and the caller logs, the others are void and self-log. Consider moving the persistProgress claim-lost log inside the method for symmetry, or document why it differs (caller needs the boolean to break the loop).",
+      "benefit": "Uniform observability pattern across the four in-tick writers; one place to reason about FUNNEL_CLAIM_LOST emission.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+      "line": 149,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "oldValues is read from the tick-start in-memory subscriber snapshot, not re-read after applyAll. For the documented common case (single SET_CUSTOM_FIELD per key per tick) this is accurate and matches the controller's read-once semantics. If a funnel ever runs two SET_CUSTOM_FIELD steps on the SAME key consecutively within one claim, the second event's oldValues would still reflect the tick-start value, not the value the first step just wrote (the stale-snapshot caveat is already noted in the comment). Acceptable for Phase 1; flagging only so it is a conscious, documented limitation rather than a latent surprise.",
+      "benefit": "Explicit awareness of the snapshot-staleness boundary for any future multi-set-per-key step authoring.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 2,
+    "testCoverageAssessment": "excellent"
+  },
+  "verifiedFindings": {
+    "F2_cas_correctness": "stillClaimed predicate is _id + stepRunStatus=in_progress only (no status clause). Correct: after claim() flips pending->in_progress, the in-memory resume-from-waiting transition (waiting->running, line 128-131) is committed by persistProgress writing status=running; the CAS still matches because it keys solely on stepRunStatus. The three cancel writers (FunnelService.delete, FunnelTriggerServiceImpl.cancelActiveFor, cancelExistingForPair) all set stepRunStatus=done, so once a cancel lands the engine CAS no-ops (returnNew==null) and the caller stops the tick. No resurrection window: claim, every CONTINUE persist, Delay yield, complete, and both terminate paths are all guarded.",
+    "F2_persistProgress_status": "Confirmed persistProgress now persists status (.set(status, exec.getStatus().name())), so resume-from-waiting correctly flips the DB waiting->running on the first advance — previously the blind save(exec) carried it implicitly; the targeted update preserves this.",
+    "F2_cancel_consistency": "All three cancel writers verified to set both status=cancelled and stepRunStatus=done (FunnelService.java:152,156; FunnelTriggerServiceImpl.java:158-159,179-180). Consistent with the new CAS guard. FunnelService.delete comment (lines 142-147) rewritten to state the now-real guarantee.",
+    "F1_normalized_value": "applyAll and recordCustomFieldsSet both receive the NORMALIZED value (validateAndNormalize output, e.g. Double 30.0 from String '30' per CustomFieldValueValidator.validateNumber), not the raw step value. Verified against validator: NUMBER parses String -> Double. Test asserts containsExactly(entry('age', 30.0)).",
+    "F1_old_value_and_null_safety": "currentValue(subscriber, key) null-guards subscriber.getCustomFields()==null -> null. Collections.singletonMap permits null values. recordCustomFieldsSet -> changedKeys uses Objects.equals (null-safe) and nullSafe() swaps only null maps; singletonMap is non-null. No NPE. singletonMap is immutable but recordCustomFieldsSet only reads it (no mutation). Safe.",
+    "F1_preserved_behavior": "Deleted/unknown definition (type==null via resolveFieldType, unchanged) -> silent skip, CONTINUE, no audit (test setCustomFieldDeletedDefinition... verifies applyAll+recordCustomFieldsSet never called). 422 type mismatch -> AppException caught -> StepResult.fail('custom_field_type_mismatch') (test verifies neither applyAll nor recordCustomFieldsSet runs before the throw, since validateAndNormalize is called first).",
+    "F1_sole_writer_preserved": "Engine does NOT write subscriber_events directly; it delegates to subscriberService.recordCustomFieldsSet (the sole writer). Symmetric to ADD_TAG/REMOVE_TAG. Decision 11 upheld.",
+    "decision_14_compliance": "All Mongo criteria/updates use lowercase .name() literals; StepRunStatus enum constants are pending/in_progress/done; no .ordinal() anywhere in com/botfunnel/funnel/. stillClaimed and all four writers use StepRunStatus.in_progress.name()/done.name().",
+    "no_duplicate_resource_init": "No new heavy-resource construction; existing constructor-injected MongoTemplate reused. setCustomField signature change threads the already-loaded Subscriber (no extra DB read).",
+    "cross_file_signatures": "validateAndNormalize(CustomFieldType, Object) and applyAll(String,String,Map) and recordCustomFieldsSet(String,String,Map,Map) signatures match call sites. FunnelStep.customFieldValue is Object -> matches validateAndNormalize(Object). findAndModify(Query,Update,FindAndModifyOptions,Class) used correctly with returnNew(true).",
+    "regression_risk": "Step-loop unchanged except the CONTINUE branch now early-returns on lost claim (line 169-172). Guard ceiling, Delay-exits-loop invariant, and end-of-steps completion logic untouched. New IT (concurrentCancelMidTickWinsOverEngineWrite) covers the race; existing claim-race/Delay-resume/idempotency ITs remain structurally intact. MockWebServer custom Dispatcher is reset in @BeforeEach/@AfterEach, so test isolation holds."
+  }
+}

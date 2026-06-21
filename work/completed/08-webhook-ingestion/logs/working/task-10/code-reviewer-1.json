@@ -1,0 +1,76 @@
+{
+  "severity_counts": {
+    "critical": 0,
+    "major": 1,
+    "minor": 4,
+    "info": 3
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "162-171",
+      "issue": "findExistingRawUpdate uses rawUpdateRepository.findAll().filter(...).next() to locate the row by (projectId, updateId). With the 90-day TTL on raw_updates and PENDING/DONE retained, this collection grows unbounded in steady-state; every DuplicateKeyException self-heal path streams the entire collection through the reactive pipeline to find one row that is uniquely identified by an indexed compound key. The inline comment acknowledges the trade-off (\"more code than value\") but the cost is asymmetric: the query path runs precisely when the system is under retry pressure (i.e. when efficient queries matter most), and the supporting compound unique index (projectId_updateId_unique) is already in place — a derived-query method on the repository is one line and an O(log N) index hit instead of an O(N) scan.",
+      "recommendation": "Add `Mono<RawUpdate> findFirstByProjectIdAndUpdateId(String projectId, Long updateId);` to RawUpdateRepository and call it here. Spring Data MongoDB will route the query through the existing unique compound index. Remove the findAll()+filter scan and the apologetic comment."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "119-123",
+      "issue": "Timer.Sample.stop is only invoked on onNext or onError signals. If the upstream subscriber cancels the request before either terminal signal (e.g. client disconnect under load, server-side abort), the doOnEach lambda never fires for the cancel signal, so the sample is silently abandoned and the timer records nothing for that request. This creates a quiet observability gap precisely on the requests we most want to see in `telegram_webhook_duration_seconds` (slow / cancelled ones).",
+      "recommendation": "Use `doFinally(sig -> sample.stop(durationTimer))` instead of `doOnEach(...)`. doFinally fires on completion, error, AND cancel exactly once, which matches Timer.Sample semantics. Alternatively wrap the entire body with `Mono.using(() -> Timer.start(meterRegistry), m -> ..., s -> s.stop(durationTimer))`."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "111-114, 197",
+      "issue": "The private record `Lookup(Bot bot, Project project)` is constructed inside the flatMap but only `lookup.bot()` is read downstream. The `project` component is captured for no purpose and adds a heap allocation per request plus a fully unused field on the record. Either the project is needed (and should be consumed) or it should not be captured.",
+      "recommendation": "Either drop the Lookup record entirely and replace `.map(p -> new Lookup(bot, p))` with `.map(p -> bot)` (the flow only needs to confirm project existence + soft-delete, not pass the Project further); or, if you want to keep the structural symmetry for future expansion, store only what is consumed (`record Lookup(Bot bot) {}`)."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "188-195",
+      "issue": "extractUpdateId returns null when `update_id` is missing from the payload. The controller then writes a RawUpdate row with `updateId == null`, which makes the unique compound index (projectId, updateId) treat every null-updateId row in the same project as a duplicate (MongoDB indexes nulls). The first malformed payload for a project would be saved silently; the second would self-heal-re-enqueue to the wrong row. Telegram's contract guarantees `update_id` is present, so this is a defensive-completeness issue rather than a live bug — but the input validation pattern in this codebase (see patterns.md → Mass-assignment defense / Fail-fast input validation) is to fail-fast.",
+      "recommendation": "Reject the request as 400 (or 404 to stay anti-enumeration) when `update_id` is null/unparseable, BEFORE save. Counter tick is optional — these payloads are pathological, not part of the Telegram contract. Even simpler: throw an IllegalStateException in extractUpdateId on null and let it propagate as 500; Telegram won't retry a 400/500 indefinitely for malformed bodies and you avoid corrupt rows."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "143-146",
+      "issue": "The success-path counter increment is wrapped in `Mono.fromRunnable(() -> meterRegistry.counter(RECEIVED_TOTAL, \"projectId\", projectId).increment()).then(...)`. The cached counters (rejectedInvalidSecret / rejectedProjectNotFound / rejectedDuplicate) are incremented as plain side-effect calls without any reactive wrapping. The asymmetry is unnecessary — Counter.increment() is non-blocking and side-effect-free from the reactor scheduler's perspective. The `Mono.fromRunnable + .then` here adds a scheduler hop and an extra allocation on the hot path that the @PostConstruct caching pattern was specifically introduced to avoid.",
+      "recommendation": "Inline the increment as a doOnNext or directly in a map step: `.flatMap(saved -> enqueueIdempotent(saved.getId()).thenReturn(saved)).doOnNext(s -> meterRegistry.counter(RECEIVED_TOTAL, \"projectId\", projectId).increment()).map(s -> ResponseEntity.ok().<Void>build())`. Or, given the task hint about high-cardinality concerns, consider caching success counters in a `ConcurrentHashMap<String, Counter>` keyed by projectId, mirroring the @PostConstruct cache pattern."
+    },
+    {
+      "id": "F6",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "93-95",
+      "issue": "Package-private `setEnqueuer(BiConsumer<UUID, String>)` test seam is acceptable. The task explicitly suggests this pattern, the alternative (static BackgroundJob.enqueue) is harder to spy, and the field is initialised with a sane default in production. No state mutation outside of test scope. Visibility is correctly package-private (not public), and the test in the same package exercises it.",
+      "recommendation": "No change. As a future hardening, consider declaring the seam field as `volatile` for memory-visibility guarantees when the test thread sets it and the Netty event-loop thread reads it. Today the JobRunrInMemoryConfig-backed IT runs the swap in @BeforeEach before any request flows, so the happens-before is established by JUnit's lifecycle, but the implicit dependency on that ordering is fragile if a future test sets the enqueuer mid-flow."
+    },
+    {
+      "id": "F7",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "109-118",
+      "issue": "The reactive chain is well-shaped against Decision 1: bot CONNECTED → project (existence + deletedAt) → secret → save+enqueue; switchIfEmpty + Mono.defer correctly defers the counter side-effect until the empty signal actually materialises (no eager increment on every request). onErrorResume against IllegalArgumentException is narrowed exactly to the Spring-Data ObjectId parse failure path and collapses to Mono.empty so the switchIfEmpty 404 branch fires uniformly. No AppException is thrown anywhere, so GlobalErrorHandler stays out of the picture per Decision 3.",
+      "recommendation": "No change. Decision 3 invariant holds."
+    },
+    {
+      "id": "F8",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "44-95",
+      "issue": "Counter wiring and cache pattern in @PostConstruct is correct and matches the documented intent: rejected_* counters are eagerly built so Tag.of allocation stays off the hot path. The DURATION timer is also cached. The trade-off for received_total{projectId} (per-request tag, high cardinality) is explicitly called out in the comment and aligns with the task's documented decision. Token-scrubber sites match the enumerated list in tech-spec.md → Risks → Token-scrubber sites (WARN on DuplicateKeyException carrying projectId+updateId; ERROR on enqueue failure carrying rawUpdateId+message).",
+      "recommendation": "No change."
+    }
+  ],
+  "summary": "Implementation honors Decisions 1, 2, 3, 4, 11, 16 cleanly — bot→project→secret→save+enqueue ordering, Mono<ResponseEntity<Void>> shape with no AppException, deterministic UUID enqueue, and per-call-site token scrubbing all match spec. One material concern: findExistingRawUpdate uses findAll+filter to look up by an indexed unique key (major; add a derived-query method to the repository). Smaller issues: Timer.Sample.stop is not invoked on cancel signals (minor observability gap), the Lookup record carries an unused field, the null-updateId path can corrupt the unique index, and the success counter is unnecessarily wrapped in Mono.fromRunnable.",
+  "verdict": "conditional"
+}

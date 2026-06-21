@@ -1,0 +1,81 @@
+{
+  "status": "changes_required",
+  "summary": {
+    "totalFindings": 7,
+    "critical": 1,
+    "major": 3,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "A05: Security Misconfiguration",
+      "title": "CSRF protection not addressed — will silently break REST API or leave web clients unprotected",
+      "description": "Spring Security 6 for WebFlux enables CSRF protection by default via CsrfWebFilter when @EnableWebFluxSecurity is used. The tech-spec makes no mention of CSRF handling. For a purely stateless REST API with no browser session/cookie auth, CSRF protection must be explicitly disabled; if it is not, all non-GET requests will return HTTP 403 with no clear error until a developer investigates. Conversely, if future epics add cookie-based auth without CSRF re-enablement the application will be genuinely vulnerable. The security decision must be made and documented now to establish the correct baseline. For a REST API (not a web form app), disabling CSRF is correct — but the decision must be explicit and recorded.",
+      "location": "Section: Decisions — Decision 5: SecurityWebFilterChain with @EnableWebFluxSecurity",
+      "impact": "If CSRF is not disabled: all mutating REST calls (POST/PUT/PATCH/DELETE) from the backend integration tests and future API clients will return HTTP 403, breaking the application silently. If CSRF is later bypassed without documentation, future web-client epics may be left without protection when cookie-based sessions are introduced.",
+      "recommendation": "Add an explicit CSRF decision to Decision 5 (or as Decision 11). The SecurityConfig bean must call `.csrf(csrf -> csrf.disable())` because this is a stateless REST API using token/header-based auth (not cookies). Document that when a frontend-integrated SSR flow with cookies is added in a later epic, CSRF must be re-evaluated. Example SecurityConfig skeleton:\n\n```java\n@Bean\npublic SecurityWebFilterChain securityWebFilterChain(ServerHttpSecurity http) {\n    return http\n        .csrf(csrf -> csrf.disable())  // stateless REST API, no cookie auth\n        .authorizeExchange(exchanges -> exchanges\n            .pathMatchers(\"/health\").permitAll()\n            .anyExchange().authenticated()\n        )\n        .build();\n}\n```",
+      "cwe": "CWE-352"
+    },
+    {
+      "severity": "major",
+      "category": "A05: Security Misconfiguration",
+      "title": "Docker Compose port bindings expose MongoDB and Redis to all network interfaces",
+      "description": "The spec defines port mappings as `:27017` and `:6379` without specifying a host bind address. On Linux hosts (including most CI environments and developer machines running Docker natively), Docker maps these ports to `0.0.0.0`, which means the databases are accessible from any machine on the local network — not just localhost. A developer on a shared network (office, coffee shop, university) or a CI runner with network exposure will have their local MongoDB and Redis accessible to other hosts with zero authentication (Decision 9 explicitly has no auth for local dev). This combination — no auth + all-interface binding — is the standard vector for MongoDB ransomware attacks.",
+      "location": "Section: Decisions — Decision 9: MongoDB 8.0 + Redis 7.4 with named volumes; Task 4: Docker Compose",
+      "impact": "On a shared network, any host can connect to the developer's MongoDB (:27017) and Redis (:6379) without credentials. Redis in particular can be used to write files to the host filesystem via CONFIG SET dir/dbfilename if the developer has write permissions. Even for local dev, this violates the principle of least exposure.",
+      "recommendation": "Bind ports explicitly to 127.0.0.1 in docker-compose.yml to restrict access to the local machine only:\n\n```yaml\nservices:\n  mongodb:\n    image: mongo:8.0\n    ports:\n      - \"127.0.0.1:27017:27017\"\n  redis:\n    image: redis:7.4\n    ports:\n      - \"127.0.0.1:6379:6379\"\n```\n\nUpdate Task 4 description to specify `127.0.0.1` binding explicitly. Update Decision 9 rationale to document this choice.",
+      "cwe": "CWE-284"
+    },
+    {
+      "severity": "major",
+      "category": "A04: Insecure Design",
+      "title": "Gitleaks soft-failure (exit 0) provides false security assurance — secret scanning is silently skipped",
+      "description": "Task 6 specifies: 'if gitleaks binary is not found, the hook warns and exits 0 (soft failure, non-blocking).' This means any developer who has not installed gitleaks will commit with zero secret scanning, with only a warning printed to the console that is easy to overlook. The hook is the only automated secret detection gate in the entire pipeline (no CI/CD secret scanning is in scope for Epic 01). A developer may believe the security gate is active when it is not. This is an insecure-by-default design: the secure state (secrets blocked) is opt-in and requires an additional manual install step, while the insecure state (no scanning) is the default for any new developer who skips gitleaks installation.",
+      "location": "Section: Decisions — Decision 7: Gitleaks hook; Task 6: Gitleaks pre-commit hook; Section: Risks — Gitleaks not installed",
+      "impact": "Real credentials (JWT secrets, bot tokens, DB passwords added in future epics) could be committed to the repository and pushed to GitHub without any automated detection. Once in git history, credentials are effectively compromised and require rotation even after removal.",
+      "recommendation": "Two mitigations, implement at least one:\n\n1. Change soft-failure to hard-failure: make the hook exit 1 with a clear installation message if gitleaks is not found. Document this as a required one-time setup step in docs/local-setup.md (alongside prerequisites). A developer cannot skip it accidentally.\n\n2. Add GitHub Actions secret scanning as a CI/CD safety net (deferred epic is acceptable, but note it as a pending risk). GitHub Advanced Security or TruffleHog GitHub Action provides server-side scanning.\n\nIf soft-failure is intentionally retained for DX reasons, the tech-spec must acknowledge this as an accepted risk with a compensating control (e.g., CI-side scanning).",
+      "cwe": "CWE-693"
+    },
+    {
+      "severity": "major",
+      "category": "A01: Broken Access Control",
+      "title": "SecurityWebFilterChain rule ordering not enforced in spec — permitAll path must precede anyExchange",
+      "description": "Spring Security WebFlux evaluates `authorizeExchange` rules in declaration order. The spec states '/health gets permitAll(), all other paths get anyExchange().authenticated()' but does not explicitly specify or enforce the ordering in the DSL call chain. If an implementation agent declares `anyExchange().authenticated()` before `.pathMatchers(\"/health\").permitAll()`, the `/health` endpoint will return 401, and subsequent rules are never reached. This is a known Spring Security footgun that is not called out in the spec despite the spec explicitly acknowledging 'without an explicit SecurityWebFilterChain bean, Spring Boot auto-configuration blocks all endpoints with 401' — the same failure mode applies to incorrect ordering.",
+      "location": "Section: Architecture — Request flow for /health; Section: Decisions — Decision 5",
+      "impact": "If ordering is incorrect, /health returns 401. Integration tests HealthEndpointTest and HealthSecurityTest would fail, catching the issue — but only if tests are run. An implementation agent could produce a broken security config that passes compilation but fails at runtime.",
+      "recommendation": "Add an explicit code skeleton to Decision 5 showing the correct rule ordering (see CSRF finding recommendation above for the full skeleton). Add an acceptance criterion that explicitly reads: 'In SecurityWebFilterChain, pathMatchers(\"/health\").permitAll() is declared BEFORE anyExchange().authenticated().' This prevents implementation ambiguity.",
+      "cwe": "CWE-284"
+    },
+    {
+      "severity": "minor",
+      "category": "A05: Security Misconfiguration",
+      "title": ".gitignore missing critical secret file patterns beyond .env and *.key",
+      "description": "The spec's AC lists .gitignore coverage for: `backend/build/`, `backend/.gradle/`, `frontend/node_modules/`, `frontend/.nuxt/`, `.env`, `*.key`, `secrets/`. This is a reasonable baseline but omits several common secret/credential file patterns that are relevant for a Java Spring Boot project: `*.pem`, `*.p12`, `*.jks`, `*.pfx` (certificate/keystore files), `application-prod.properties`, `application-local.properties`, `application-*.properties` (Spring profile-specific config that developers sometimes create locally with real credentials), `*.crt`, and `serviceAccountKey.json` / `credentials.json` (Google/Firebase service account files common in bot projects). The current root .gitignore also does not contain these project-relevant patterns.",
+      "location": "Section: Acceptance Criteria — .gitignore coverage; Task 1: Monorepo root scaffold",
+      "impact": "A developer could accidentally commit a JKS keystore, a local Spring profile properties file with a real DB password, or a PEM certificate. These would be silently tracked by git.",
+      "recommendation": "Extend the .gitignore spec to include:\n```\n*.pem\n*.p12\n*.jks\n*.pfx\n*.crt\napplication-local.properties\napplication-prod.properties\napplication-*.properties\n!application.properties\ncredentials.json\nserviceAccountKey.json\n```\nUpdate Task 1 description and the .gitignore AC accordingly.",
+      "cwe": "CWE-312"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "No security event logging defined — authentication failures will produce no audit trail",
+      "description": "The spec establishes `anyExchange().authenticated()` which will generate 401 responses for unauthenticated requests to non-health paths. However, there is no specification for logging these security events. Spring Security does not log authentication failures to an audit log by default. While logging infrastructure is out of scope for Epic 01, the absence of any mention of security logging (even as a deferred item) means it may never be added. For a system handling bot funnels and user data, authentication failure logging is a baseline security monitoring requirement.",
+      "location": "Section: Architecture — SecurityConfig; Section: Decisions — Decision 5",
+      "impact": "Without security event logging, failed authentication attempts, unauthorized access attempts, and anomalous traffic patterns are invisible. Incident response and security monitoring are impossible.",
+      "recommendation": "Add a note to Decision 5 (or a new deferred decision) that security event logging (authentication failures, access denied events) will be implemented when the monitoring epic is executed. Add 'Security event logging for auth failures' to the deferred epics list. This ensures it is not forgotten.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "minor",
+      "category": "A06: Vulnerable Components",
+      "title": "No dependency vulnerability scanning defined in the build pipeline",
+      "description": "The spec lists backend dependencies (spring-boot-starter-webflux, spring-boot-starter-security, MongoDB/Redis reactive starters, devtools) but does not include any dependency vulnerability scanning in the build process. There is no OWASP Dependency-Check Gradle plugin, no Dependabot configuration, and no mention of dependency auditing in the testing or CI/CD strategy. Spring Boot 3.4.x manages transitive dependencies via the BOM, but pulled-in transitive dependencies (Netty, Jackson, Lettuce, etc.) may have known CVEs at the time of implementation.",
+      "location": "Section: Dependencies — New packages (backend); Section: Testing Strategy",
+      "impact": "Known-vulnerable transitive dependencies could be included in the project from day one with no automated detection. As the project grows with more dependencies (JobRunr, etc.), the attack surface expands without visibility.",
+      "recommendation": "Add the OWASP Dependency-Check Gradle plugin to build.gradle as a development/CI tool:\n```groovy\nplugins {\n    id 'org.owasp.dependencycheck' version '10.x.x'\n}\n```\nAlternatively, add a Dependabot configuration file (`.github/dependabot.yml`) when the GitHub repository is set up. Note this as a follow-up task in the deferred epics or CI/CD epic.",
+      "cwe": "CWE-1395"
+    }
+  ]
+}

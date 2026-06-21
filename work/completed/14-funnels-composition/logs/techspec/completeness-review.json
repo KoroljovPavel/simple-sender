@@ -1,0 +1,139 @@
+{
+  "verdict": "pass",
+  "meta": {
+    "feature": "14-funnels-composition",
+    "round": 2,
+    "reviewed": "2026-06-08",
+    "user_spec_status": "approved",
+    "tech_spec_status": "draft",
+    "feature_size": "L"
+  },
+  "round1_resolutions": {
+    "F-01": {
+      "severity": "major",
+      "status": "resolved",
+      "evidence": "Architecture §How it works step 3 now reads: 'потім явна fail-closed перевірка targetFunnel.getProjectId().equals(execution.getProjectId()) — це головний IDOR-guard'. Task 3 description repeats the same explicit check. CONST-02 is now fully covered."
+    },
+    "F-07": {
+      "severity": "major",
+      "status": "resolved",
+      "evidence": "Testing Strategy Integration tests now has a dedicated 'rate-limit backstop' bullet: 'понад auto-enroll-rate-per-min enroll'ів за хвилину від одного підписника → наступний enroll skip + WARN, батько не failed (другий per-subscriber бекстоп, Ризик 1 — окремий від depth-cap)'. Both backstops are now tested."
+    },
+    "F-04": {
+      "severity": "minor",
+      "status": "resolved",
+      "evidence": "Task 4 description now includes: 'підказка про патерн повернення (рекомендований endParentAfter=так; якщо ні — повернення в живого батька з allowReEnter=false стане no-op, Ризик 2)'."
+    },
+    "F-09": {
+      "severity": "minor",
+      "status": "resolved",
+      "evidence": "Architecture §How it works now has an explicit Self-target (A→A) paragraph with no-op/restart behavior. Integration tests now has 'self-target (A→A): allowReEnter=false → no-op; allowReEnter=true → перезапуск'."
+    }
+  },
+  "incidental_resolutions": {
+    "F-03": {
+      "severity": "minor",
+      "status": "resolved",
+      "evidence": "Integration test re-enter bullet now reads: 'no-op (без падіння) + окремий greppable-WARN (assert лог)' — log assertion added."
+    },
+    "F-02": {
+      "severity": "minor",
+      "status": "resolved",
+      "evidence": "Testing Strategy Integration tests now has a dedicated 'test-run шлях' bullet: 'HTTP-відповідь підтверджує лише enroll батька; child-send спостерігається наступним sweep'ом'. Clarifies the US-14 test-run semantics that were previously missing."
+    }
+  },
+  "coverage_summary": {
+    "requirements_total": 17,
+    "requirements_covered": 17,
+    "requirements_partial": 0,
+    "requirements_missing": 0
+  },
+  "requirements_map": {
+    "US-01": { "text": "Новий тип кроку 'Почати воронку' з полями: цільова воронка, опційний крок входу, прапорець 'завершити цю воронку після старту'", "status": "covered", "covered_by": "Architecture §Backend FunnelStep/StepType, Task 1" },
+    "US-02": { "text": "Форма підвантажує список воронок проєкту + кроки обраної цільової через наявні endpoints; переюз SearchableSelect", "status": "covered", "covered_by": "Architecture §Frontend FunnelStepForm, Task 4, Dependencies SearchableSelect+fetchOne" },
+    "US-03": { "text": "Форма показує inline-підказку, якщо обрана цільова воронка не active", "status": "covered", "covered_by": "Solution §Фронт inline-підказка; Task 4 Verify-user; Testing §Unit vitest" },
+    "US-04": { "text": "Збереження валідує: ціль вказана/існує в проєкті/крок входу існує; 422 коди funnel_subscribe_*", "status": "covered", "covered_by": "Architecture FunnelService.validateSteps, Decision 6, Task 2, Data Models error codes" },
+    "US-05": { "text": "active-статус НЕ перевіряється при збереженні; активація батьківської воронки блокується якщо ціль не active", "status": "covered", "covered_by": "Decision 6, Architecture FunnelService (активація), Task 2" },
+    "US-06": { "text": "Виконання: enroll того самого підписника в цільову воронку; нова execution зі snapshot; currentStepId=крок входу або старт; telegramBotId від батька; enrollDepth=батько+1", "status": "covered", "covered_by": "Decision 2/4, Architecture enrollSpecificFunnel §5-6, How it works §Виконання; Task 3" },
+    "US-07": { "text": "завершити=ні: батьківська execution продовжує, обидві паралельно", "status": "covered", "covered_by": "Solution §endParentAfter=false → CONTINUE; IT enroll_endParentAfter=ні" },
+    "US-08": { "text": "завершити=так: батьківська execution завершується completed одразу після enroll; кроки після не виконуються", "status": "covered", "covered_by": "Decision 3 Outcome.COMPLETE, Solution §endParentAfter=true → COMPLETE; IT enroll_endParentAfter=так" },
+    "US-09": { "text": "Повернення на меню: B → SUBSCRIBE(A, крок входу=M, завершити=так) → підписник приземляється на крок M воронки A", "status": "covered", "covered_by": "How it works §Батько після enroll, IT повернення на меню, Decision 1" },
+    "US-10": { "text": "Цикл A→B→A: при enrollDepth > max-enroll-depth наступний enroll пропускається з WARN; батьківська не падає", "status": "covered", "covered_by": "Architecture enrollSpecificFunnel §1, Decision 8, IT depth-cap" },
+    "US-11": { "text": "Ціль draft/paused/видалена при виконанні → тихо пропущено + greppable-WARN, батьківська продовжує", "status": "covered", "covered_by": "Decision 7, Architecture enrollSpecificFunnel §3, IT ціль draft/видалена" },
+    "US-12": { "text": "Крок входу видалено в цільовій → child стартує з початку + WARN", "status": "covered", "covered_by": "Architecture enrollSpecificFunnel §4, IT видалений крок входу" },
+    "US-13": { "text": "Re-enter: allowReEnter=false → no-op без падіння + окремий greppable-WARN; allowReEnter=true → перезапуск з кроку входу", "status": "covered", "covered_by": "Architecture enrollSpecificFunnel §5, IT re-enter з (assert лог) для WARN" },
+    "US-14": { "text": "Test for me: HTTP-відповідь підтверджує enroll батька; у БД з'являється нова execution цілі з enrollDepth=батько+1", "status": "covered", "covered_by": "IT test-run шлях: 'HTTP-відповідь підтверджує лише enroll батька; child-send спостерігається наступним sweep'ом'" },
+    "US-15": { "text": "Панель прев'ю для кроку: placeholder non-message", "status": "covered", "covered_by": "Architecture isMessageStep не включає тип, Task 1 FunnelService.previewStep unit test" },
+    "CONST-01": { "text": "Без нового ExecutionStatus / без міграції БД; enroll через non-matching метод FunnelEventService.enrollSpecificFunnel успадковує depth-cap + rate-limit", "status": "covered", "covered_by": "Solution §Жодного нового ExecutionStatus; Decision 2; Acceptance Criteria §4" },
+    "CONST-02": { "text": "Мультитенантність: пошук цілі строго в межах projectId (fail-closed), і при save, і при виконанні", "status": "covered", "covered_by": "Architecture enrollSpecificFunnel §3 explicit targetFunnel.getProjectId().equals(execution.getProjectId()) check; Task 3 description repeats same check; Acceptance Criteria §7" }
+  },
+  "findings": [
+    {
+      "id": "F-05",
+      "type": "scope_creep",
+      "source": "tech-spec",
+      "requirement": "N/A — not in user-spec",
+      "detail": "Tasks 5-7 (Code/Security/Test Audit) and Task 8 (Pre-deploy QA) are engineering process tasks not traceable to a user-spec requirement and have no entry in User-Spec Deviations. They are acceptable as standard engineering additions (not new user-facing functionality) but their presence in Implementation Tasks makes them visible scope items without explicit acknowledgment.",
+      "severity": "minor",
+      "recommendation": "keep — acceptable engineering additions. Optionally add a note in User-Spec Deviations: '[TECHNICAL] Audit tasks (5-7) and Task 8 pre-deploy QA are standard engineering process, not user-facing scope'.",
+      "round1_status": "unchanged"
+    },
+    {
+      "id": "F-06",
+      "type": "shallow_solution",
+      "source": "tech-spec",
+      "requirement": "Обмеження: at-most-once семантика",
+      "detail": "Solution section describes at-most-once in one sentence without detailing the ordering between enroll side-effect and claim-conditional advance, or what happens on crash between enroll and advance. Architecture §How it works does not elaborate. The EMIT_EVENT precedent justifies the approach, but the ordering is not explicit enough for an L-size engine feature.",
+      "severity": "minor",
+      "recommendation": "adjust — in §How it works add: 'enroll виконується ПЕРЕД claim-conditional advance; crash між enroll і advance → retry робить enroll no-op через re-enter guard; at-most-once зберігається'.",
+      "round1_status": "unchanged"
+    },
+    {
+      "id": "F-08",
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "Decision 5: field naming targetEntryStepId vs targetStepId in code-research",
+      "detail": "code-research uses targetStepId throughout (§5, §10 Quick reference). Task 4 includes code-research.md in Files to read. Task 1 description explicitly warns about this discrepancy ('code-research місцями пише targetStepId — використовувати targetEntryStepId, Decision 5'). Task 3 also warns ('НЕ targetStepId як у code-research — див. Decision 5'). However Task 4 description does not contain this warning — only Task 1 and Task 3 do. A frontend developer reading only Task 4 and code-research could use the wrong field name.",
+      "severity": "minor",
+      "recommendation": "adjust — add to Task 4 description: 'code-research вживає targetStepId — використовуй targetEntryStepId відповідно до Decision 5'.",
+      "round1_status": "unchanged"
+    }
+  ],
+  "new_findings_round2": [],
+  "forward_traceability": {
+    "US-01": "covered — Task 1 + StepType/FunnelStep/FunnelStepDto",
+    "US-02": "covered — Task 4 + Dependencies SearchableSelect/fetchOne",
+    "US-03": "covered — Task 4 + vitest",
+    "US-04": "covered — Task 2 + FunnelService.validateSteps + 422 codes",
+    "US-05": "covered — Task 2 + Decision 6",
+    "US-06": "covered — Task 3 + enrollSpecificFunnel + insertExecutionAt",
+    "US-07": "covered — Task 3 + Outcome.CONTINUE + IT",
+    "US-08": "covered — Task 3 + Outcome.COMPLETE + IT",
+    "US-09": "covered — Task 3 + IT повернення на меню",
+    "US-10": "covered — Task 3 + depth-cap + IT",
+    "US-11": "covered — Task 3 + Decision 7 + IT",
+    "US-12": "covered — Task 3 + fallback + IT",
+    "US-13": "covered — Task 3 + IT re-enter with assert лог",
+    "US-14": "covered — IT test-run шлях with explicit HTTP-only-parent semantics",
+    "US-15": "covered — Task 1 isMessageStep",
+    "CONST-01": "covered — Solution + Decision 2 + Acceptance Criteria",
+    "CONST-02": "covered — explicit targetFunnel.getProjectId().equals(execution.getProjectId()) in Architecture §3 and Task 3"
+  },
+  "overengineering_check": {
+    "verdict": "pass",
+    "notes": "No new abstractions introduced by round-2 edits. All additions are clarifications of existing scope (explicit check text, test bullet, task description text). No YAGNI violations, no unnecessary layers."
+  },
+  "solution_depth_check": {
+    "verdict": "adequate",
+    "notes": "Solution section retains concrete technical components. Round-2 edits added specificity (explicit IDOR-guard wording, rate-limit IT bullet, self-target paragraph) without bloating. F-06 (at-most-once ordering detail) remains as a minor note."
+  },
+  "user_spec_deviations_check": {
+    "verdict": "pass",
+    "notes": "User-Spec Deviations: None. No new technical deviations introduced by round-2 edits. The round-2 additions (explicit projectId check text, rate-limit IT, self-target note, allowReEnter hint) are all implementations of existing user-spec requirements, not new functionality."
+  },
+  "structural_integrity_check": {
+    "verdict": "pass",
+    "notes": "Decisions section remains self-contained. Round-2 clarifications added to Architecture §How it works and to task descriptions are scope/implementation notes, not architectural choices. No decision-level content scattered in tasks."
+  },
+  "summary": "17/17 вимог покрито (0 partial, 0 missing). Нуль critical знахідок — verdict pass. Обидва round-1 major знахідки (F-01 tenant isolation, F-07 rate-limit IT) повністю вирішені. Усі чотири round-1 адресовані знахідки (F-01, F-04, F-07, F-09) закриті, плюс інцидентально закриті F-02 і F-03. Залишились 3 minor знахідки (F-05, F-06, F-08) — незмінні з round 1, жодна не є critical. Нових знахідок round-2 не виявлено."
+}

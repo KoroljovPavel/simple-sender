@@ -1,0 +1,46 @@
+{
+  "validator": "test-reviewer",
+  "findings": [
+    {
+      "severity": "high",
+      "gap": "error-isolation (webhook) is NOT in the Testing Strategy. User-spec AC (line 104) requires: if trigger dispatch throws while handling an update, the webhook worker still returns 200 OK (not 5xx), the JobRunr job does not fail, and a greppable WARN is logged. The Integration tests section lists the keyword path and precedence but never the fault-injection case. This is a critical de-risk behavior (a funnel fault must not poison the webhook worker, per code-research §1) and is currently untested by the plan.",
+      "recommendation": "Add an IT (ProcessTelegramUpdateJobTest sibling) that stubs FunnelEventService.dispatchForSubscriber to throw, sends a plain-text keyword update, and asserts: (a) job completes without rethrow / status succeeded, (b) webhook controller returns 200, (c) a greppable WARN marker is logged. Mirror the existing fire(...) try/catch(Throwable) error-isolation tests."
+    },
+    {
+      "severity": "high",
+      "gap": "error-isolation (API engine fault) is missing from the /events code-matrix test. User-spec AC (line 105) and tech-spec AC (line 366, 'never 5xx') require that if the engine throws inside dispatch, POST /api/integrations/v1/events still returns 202 (event accepted), not 5xx. The Integration tests line only enumerates '202 / 404 / 202-no-op / 401 / 429' — the engine-fault→202 branch is a distinct, security-relevant code path that is not called out.",
+      "recommendation": "Extend the EventsController IT with a case where FunnelEventService is stubbed to throw: assert HTTP 202 (not 500), no subscriber/execution side effects leaked, and a greppable WARN. Make 'never returns 5xx' an explicit assertion alongside the 202/404/401/429 matrix."
+    },
+    {
+      "severity": "medium",
+      "gap": "The two loop backstops are listed together ('volume (A→B→A under 20/min) and depth (cap 10 with Redis unavailable)') but the plan does not assert their INDEPENDENCE, which is the whole point of Decision 6. Specifically untested: (a) volume rate-limit fail-OPEN when Redis is down (request passes), and (b) depth-cap still cuts the chain at >10 in that same Redis-down state (where the fail-open rate-limit would otherwise let it through). AC 'анти-цикл (глибина)' (line 101) explicitly requires depth-cap to fire 'even when Redis is unavailable'.",
+      "recommendation": "Split into two ITs. IT-volume: Redis UP, drive >20 auto-enrolls/min for one subscriber, assert enroll #21 is dropped with WARN and no execution created. IT-depth: Redis DOWN (point Redis to a dead port or flush/disable), build an enroll chain to depth 11, assert it is cut at 10 with WARN AND that the rate-limit check fail-opened (did not block earlier). Assert enrollDepth values on the created executions (0 root, parent+1 children)."
+    },
+    {
+      "severity": "medium",
+      "gap": "The volume rate-limit's 'auto-only' semantics are untested. Decision 6 / AC 'анти-цикл (обсяг)': only auto enrolls (depth>0 — step/tag/field/event from inside a running execution) count toward 20/min; human/external roots (manual UI tag-add, /start, keyword, api-event) are depth 0 and must NOT be counted. No test asserts that a burst of human/keyword/api-event roots is exempt from the limit.",
+      "recommendation": "Add an IT that fires >20 keyword/api-event roots (depth 0) for one subscriber within a minute and asserts ALL start (none dropped by the volume limit), then fires >20 funnel-originated (depth>0) enrolls and asserts the 21st is dropped. This pins the depth-based 'auto' definition that reconciles the user-spec ambiguity (tech-spec deviation, line 354)."
+    },
+    {
+      "severity": "medium",
+      "gap": "Two /events behaviors required by user-spec scenario 4 (line 70) are not explicitly tested: (1) the endpoint NEVER auto-creates a subscriber (auto-registration stays only on /start), and (2) the 404 (unknown subscriber) vs 202-no-op (subscriber exists, no listener) distinction. The plan lists the codes but not the 'no subscriber row written' assertion, which is the actual anti-abuse guarantee.",
+      "recommendation": "In the EventsController IT, for the 404 case assert the subscribers collection count is unchanged (no row created for the unknown telegram_user_id). Keep a separate 202-no-op case where the subscriber exists but zero funnels listen, and assert zero FunnelExecution created. Add a subscriber_id-path case (lookup by (projectId, subscriber_id)) alongside the telegram_user_id path."
+    },
+    {
+      "severity": "medium",
+      "gap": "E2E is correctly 'none', but the justification rests on 'Vitest on the trigger-type selector + EMIT_EVENT form is sufficient' — yet the Testing Strategy lists ZERO concrete frontend test cases. For an L feature whose entire new user-facing surface is two Vue forms (FunnelTriggerSettings type-selector + per-type value editor, FunnelStepForm EMIT_EVENT block), 'sufficient' is asserted without specifying what is verified. This is the only thing standing in for E2E.",
+      "recommendation": "Enumerate the Vitest cases in the Unit/frontend section: (a) selecting each trigger type renders the matching value editor (on_start payload, keyword multi-word list, tag/field SearchableSelect, api-event slug input) and the slug input enforces ^[A-Za-z0-9_-]{1,64}$; (b) EMIT_EVENT appears in STEP_TYPES and selecting it shows the event-name field; (c) buildStep emits a step object carrying eventName. Without these named, the E2E-skip justification is unverifiable."
+    },
+    {
+      "severity": "low",
+      "gap": "Keyword precedence is listed but the assertion content for the suppression path is under-specified. AC (line 93): a subscriber in waiting_for_reply who writes a trigger word must NOT start the keyword funnel and the menu must stay. The plan says 'precedence vs waiting_for_reply' but not that the test asserts BOTH no execution created AND the waiting_for_reply execution remains untouched (still in-flight).",
+      "recommendation": "Specify the precedence IT to assert: with an active waiting_for_reply execution, a matching keyword text creates NO new keyword FunnelExecution and leaves the existing waiting_for_reply execution unchanged (status + step unchanged). Pair with the positive case (no in-flight wait → keyword fires, fan-out across N keyword funnels via contains/case-insensitive/any-of-many)."
+    },
+    {
+      "severity": "low",
+      "gap": "copyOf eventName preservation is in the unit list, but the snapshot-isolation guarantee should be tested at the execution boundary too. copyOf preserving eventName (FunnelStepTest) proves the field copies, but not that an EMIT_EVENT step inside a created FunnelExecution.stepsSnapshot actually carries eventName end-to-end (the real regression: a new field dropped from the snapshot, per code-research §2).",
+      "recommendation": "Add a one-line assertion in the EMIT_EVENT integration/firing test that the created execution's stepsSnapshot entry for the EMIT_EVENT step has the expected eventName (round-trip through insertExecution → deepCopySteps), not only the standalone copyOf unit test."
+    }
+  ],
+  "summary": "Testing Strategy for an L feature is mostly well-scoped: the unit/integration split is appropriate, E2E='none' is defensible (only new user-facing surface is two Vue config forms covered by Vitest), and the plan explicitly names each trigger type, fan-out, both backstops, the /events code matrix, key↔session chain isolation, the index-relax migration (both directions), idempotent no-op non-firing, and copyOf. Gaps are concentrated in failure-mode and edge-case coverage rather than happy-path: two HIGH gaps — webhook error-isolation (dispatch throws → 200, job not failed) and API error-isolation (engine fault → 202, never 5xx) — are explicit user-spec/tech-spec ACs absent from the strategy. MEDIUM gaps: the two backstops are not tested as INDEPENDENT (fail-open rate-limit vs Redis-independent depth-cap), the volume limit's 'auto-only/depth>0' semantics are untested, /events 'no subscriber auto-created' and 404-vs-202-no-op distinctions are unasserted, and the Vitest cases the E2E-skip relies on are not enumerated. Two LOW gaps refine the keyword-precedence and snapshot-eventName assertions. By the test-master decision matrix (2 high + multiple medium) this is needs_improvement, not failed — no critical/hidden-bug issues; the missing tests are additive and the named ITs are clear. Recommend adding the two error-isolation ITs and splitting the backstop ITs before decomposition closes."
+}

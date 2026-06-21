@@ -1,0 +1,24 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "11",
+  "round": 2,
+  "status": "passed",
+  "summary": "Round-2 static re-review of Task-11 tests. All five round-1 findings are resolved and no new issues surfaced. (1) The new RecentExportsDialog.spec.ts is meaningful, not false-green: the watch was given { immediate: true } so loadExports fires on already-open mount, and mountWithRows queues the GET response so the row state machine renders from real mocked data. Litmus holds for every test — deleting the download/refresh/progress template branches breaks rowStateMachine; deleting `row.downloadUrl = resp.downloadUrl` breaks the 200-flip test; deleting `if (TERMINAL_REFRESH_CODES.has(...)) row.disabled = true` breaks the terminal-codes test; setting disabled unconditionally breaks the retryable-codes test. The terminal-vs-retryable split (export_purged/export_failed disable; export_in_flight/refresh_rate_limited/service_unavailable stay enabled) matches the backend byte-for-byte: SubscriberExportController maps PURGED/FAILED→410 GONE, in_flight→409, refresh_rate_limited→429, service_unavailable→503, and the asserted endpoint POST /api/v1/projects/p1/subscribers/exports/e2/refresh-url matches @PostMapping(\"/exports/{exportId}/refresh-url\"). The toast.error assertions are real: useApiError is NOT mocked, errors.subscribers.exports.refresh.* is unseeded, so the resolver falls through to the seeded errors.generic (en.json:253 / uk.json) — a non-empty string drives toast.error. statusLabel resolves for every status (exports.status.{pending,running,done,failed,purged} all seeded). (2) AddTagDialog accepts-loop now remounts per slug with unmount + body reset + mockReset; CreateTagDialog has no fetch-on-open so the per-iteration mockResolvedValueOnce is consumed only at submit — clean isolation, no resetForm() dependency. (3) AddCustomFieldDialog typeSwitch now asserts BOOLEAN→<select> via element.tagName === 'SELECT', and the component does render a tri-state <select data-test=custom-field-default-input> for BOOLEAN. (4) E2E export-poll reopen is now idempotent — trigger is clicked only when [role=dialog] count is 0, the dialog is asserted closed after Escape, and the timeout throw is descriptive. (5) E2E step 6 awaits the custom-field PATCH via Promise.all(waitForResponse, click) so a save regression fails at its true locus instead of as a CSV-parse failure in step 7. Pyramid stays healthy: behavioral component specs for all three Task-11 dialogs plus one self-skipping golden-path E2E. Spec ownership respected — only the three Task-11 spec files and RecentExportsDialog.vue are new in the working tree; no i18n/locales edits.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 16,
+      "passed": 16,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 15,
+      "integration": 0,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  },
+  "verdict": "approve"
+}

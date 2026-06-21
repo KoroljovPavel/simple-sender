@@ -1,0 +1,31 @@
+{
+  "status": "passed",
+  "summary": "All five Round 1 findings are correctly addressed in commit b077a60. (1) renameSucceeds_storeReflectsNewName was replaced by renameSucceeds_showsSavedIndicator, which now asserts the [data-test=\"settings-saved\"] indicator and the absence of [data-test=\"settings-error\"] — these elements are owned by the page (settings.vue line 241/244 gated on saveStatus.value === 'saved' set at line 114), so the test now pins page behavior rather than mock wiring. (2) deleteConfirm_redirects_toDashboard_whenNoOtherActive now seeds a leftover deletedAt entry before mount, so the page's `.filter(p => p.deletedAt === null).length === 0` branch at settings.vue line 150-151 is load-bearing — a refactor to `projects.length === 0` would route to /projects and fail the test. (3) deleteConfirm_apiError_showsInlineErrorAndStays exercises the previously uncovered DELETE catch block: rejects softDelete with {statusCode: 404}, asserts [data-test=\"delete-project-error\"] exists with non-empty text, modal stays open, navigateTo not invoked. (4) submitWithoutChanges_doesNotCallUpdate pins the no-PATCH guard at settings.vue line 107-110 (Object.keys(partial).length === 0 short-circuit). (5) timezoneChanged_includesFieldInPartial covers the previously untested positive timezone branch and verifies the strict shape `{ timezone: 'Europe/London' }`, simultaneously locking name/description omission. Bonus: descriptionUnchanged_omitsFieldFromPartial adds symmetric coverage to timezoneUntouched_omitsFieldFromPartial, and the fallback test now also asserts [data-test=\"settings-danger-zone\"] is hidden, confirming both form and danger-zone sit under the v-else. The localePath identity mock is acknowledged as a deliberate test-pragmatic decision and does not block — it was a minor (suggestion) finding in Round 1, not a major one. Litmus check passes for all 13 tests against settings.vue. Excessive-mocking exemption holds: this is a Nuxt page test where composables (useProjectsStore, useRoute, useLocalePath, navigateTo) are stubbed at the framework boundary, which is the normative pattern in this repo (mirrors profile.spec.ts and new.spec.ts).",
+  "findings": [],
+  "verdict": "approve",
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 13,
+      "passed": 13,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 13,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "round1FindingsResolved": {
+      "major1_renameSucceeds_litmusFail": "resolved — replaced with saved-indicator DOM assertion",
+      "major2_deleteRedirect_filterContract": "resolved — leftover deletedAt entry seeded, filter is load-bearing",
+      "major3_DELETE_errorPath": "resolved — added deleteConfirm_apiError_showsInlineErrorAndStays",
+      "major4_noChangesNoPATCH": "resolved — added submitWithoutChanges_doesNotCallUpdate",
+      "major5_positiveTimezoneChange": "resolved — added timezoneChanged_includesFieldInPartial with exact-shape assertion",
+      "minor_descriptionUnchanged_symmetric": "resolved — added descriptionUnchanged_omitsFieldFromPartial",
+      "minor_fallback_dangerZoneHidden": "resolved — fallback test asserts settings-danger-zone absent",
+      "minor_localePath_identityMock": "acknowledged as test-pragmatic; not blocking"
+    }
+  }
+}

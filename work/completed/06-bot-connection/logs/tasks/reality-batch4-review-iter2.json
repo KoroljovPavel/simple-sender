@@ -1,0 +1,78 @@
+{
+  "validator": "reality-checker",
+  "batch": [12, 13],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 references `backend/.env.example` in three places (step 2 What-to-do, AC line 64, Verification Steps grep at line 107). The actual file that Task 1 writes is the root `.env.example` (confirmed: `.env.example` exists at repo root; `backend/.env.example` does not exist and no task creates it). Task 1 Details section line 123 explicitly states 'CURRENT STATE: ends with `PROJECTS_MAX_PER_USER=5`' and 'APPEND a `# Bot module` section' to that root file. Tech-spec line 479 also says 'documented in `.env.example`' (no `backend/` prefix). When the QA agent runs `grep -n '^BOT_TOKEN_ENCRYPTION_KEY' backend/.env.example` it will get 'No such file or directory', triggering a false NO-GO or a confusing filesystem error.",
+      "fix": "Replace every occurrence of `backend/.env.example` in Task 13 with `.env.example` (root path). Affected lines: step 2, AC bullet, Verification Steps grep command, and the AC evidence-table row for that criterion."
+    },
+    {
+      "severity": "major",
+      "category": "security",
+      "task": 13,
+      "issue": "Edge-cases section (line 197) still contains 'ask the user once for a dev-safe value (do not commit) or use the documented local-dev defaults; do not invent secrets.' The 'ask the user once' phrasing was the subject of a batch5 security finding. While the full hint at line 208 correctly says 'Never paste a real `BOT_TOKEN_ENCRYPTION_KEY` value in chat. Export it from your local `.env`', the Edge-cases entry contradicts this by permitting an in-chat ask. The CLAUDE.md security rule is 'NEVER ask user to write secrets in chat'. A QA agent reading the Edge-cases block first will conclude that asking in chat is the sanctioned fallback.",
+      "fix": "Replace line 197 edge-case text with: '`MONGODB_URI` or `BOT_TOKEN_ENCRYPTION_KEY` not set in the QA shell → read from the local `.env` file (e.g. `export BOT_TOKEN_ENCRYPTION_KEY=\"$(grep '^BOT_TOKEN_ENCRYPTION_KEY=' .env | cut -d= -f2-)\"`); if not present in `.env`, instruct the user to add it there. Do NOT ask in chat and do NOT commit the value.' This aligns with the Implementation Hints block at line 208 which already states the correct guidance."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 verify: frontmatter is `verify: []` and the Verification Steps section contains only `### Automated` — no `### Smoke` subsection. This is correct and self-consistent. No finding.",
+      "fix": "No action needed — included for completeness of iteration 2 audit scope coverage."
+    }
+  ],
+  "confirmed_fixes": [
+    {
+      "task": 12,
+      "prior_finding": "batch4 finding: relative paths used `.claude/` without `../../../` prefix",
+      "status": "FIXED",
+      "evidence": "Line 16 now reads `[test-master/SKILL.md](../../../.claude/skills/test-master/SKILL.md)`; lines 60–62 use `../../../.claude/skills/project-knowledge/references/` prefix. All four links corrected."
+    },
+    {
+      "task": 12,
+      "prior_finding": "batch4 finding: frontend bot-spec path `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` inconsistent with project convention",
+      "status": "FIXED",
+      "evidence": "Task 12 now uses `frontend/tests/pages/projects/settings.spec.ts` throughout (lines 20, 29, 51, 70, 99). Consistent with existing project convention and task 9 intent documented in line 70: 'Task 9 extends this file rather than introducing a `[projectId]/settings/bot.spec.ts` path'."
+    },
+    {
+      "task": 13,
+      "prior_finding": "batch5 finding: `./gradlew :backend:test` used as primary command throughout task 13",
+      "status": "FIXED",
+      "evidence": "No executable `./gradlew :backend:test` instruction remains. The sole remaining reference at line 207 is a warning citation: 'commands like `./gradlew :backend:test` from the repo root will fail with \"Project '\\':backend\\'' not found\"'. All canonical commands use `cd backend && ./gradlew test` (Verification Steps line 97, What-to-do step 4 line 33, AC line 67, bootRun lines 36/111/114)."
+    },
+    {
+      "task": 13,
+      "prior_finding": "batch5 finding: env scaffolding AC (BOT_TOKEN_ENCRYPTION_KEY in .env.example, application.properties properties) missing as discrete AC bullets",
+      "status": "FIXED",
+      "evidence": "AC bullets at lines 64–65 explicitly require: `backend/.env.example` placeholder line (path wrong — see critical finding above) and `application.properties` containing all three required properties."
+    },
+    {
+      "task": 13,
+      "prior_finding": "batch5 finding: MockWebServer dep verification not present",
+      "status": "FIXED",
+      "evidence": "Step 3 (line 32) instructs verification of `backend/build.gradle` for `com.squareup.okhttp3:mockwebserver` in `testImplementation` scope. AC bullet at line 66 makes this a gate. Verification Steps grep at line 109 provides the concrete command."
+    },
+    {
+      "task": 13,
+      "prior_finding": "batch5 finding: `verify: [smoke]` frontmatter misaligned with Verification Steps sections",
+      "status": "FIXED",
+      "evidence": "Frontmatter `verify: [smoke]` (line 6) is now aligned: Verification Steps has `### Automated` (line 93) and `### Smoke` (line 102) subsections. The smoke section covers all env/config wiring, boot, curl, and index checks listed in the tech-spec."
+    }
+  ],
+  "notes": [
+    "Task 13 line 197 edge-case and line 208 implementation hint give contradictory guidance on the same scenario (key not in QA shell). Line 208 is correct; line 197 must be updated.",
+    "The backend/.env.example path error (critical finding) is a regressive fix: the batch5 finding said the root .env.example did not yet contain BOT_TOKEN_ENCRYPTION_KEY (expected to be added by Task 1). The fix attempt changed the path to backend/.env.example rather than accepting that the root .env.example is the correct target and documenting that Task 1 must run first.",
+    "Task 12 is clean: all prior batch4 findings are resolved with no new issues introduced. The task is ready for execution once tasks 8–9 complete.",
+    "The batch5 pre-flight check findings (missing pre-flight checks for tasks 1–9 done, missing audit report existence checks, missing spring.data.mongodb.auto-index-creation pre-flight, missing bot package existence check) were not listed as items to verify in iteration 2 scope. These findings remain open from batch5 unless separately addressed."
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 18,
+    "issues_found": 2
+  }
+}

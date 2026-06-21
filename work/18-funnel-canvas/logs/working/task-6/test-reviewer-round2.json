@@ -1,0 +1,57 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 6,
+  "round": 2,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/tests/components/funnels/FunnelCanvasSidePanel.spec.ts:101 and :60",
+      "issue": "The F1 regression test (line 101) and the first MESSAGE test (line 60) both assert `expect(document.querySelector('[data-test^=\"step-menu-target-\"]')).toBeNull()` against the same fixture. The overlap is minor and acceptable given the tests serve different primary purposes (F1 regression vs. picker absence), but the duplicated assertion adds no new failure surface.",
+      "recommendation": "No action required — the duplication is minimal and the different test intents justify separate cases. Low priority cleanup only."
+    }
+  ],
+  "round1_resolution": {
+    "major_vacuous_subscribe_test": {
+      "resolved": true,
+      "evidence": "New test at line 75 uses `subscribeStepWithEntry()` fixture (stepType: SUBSCRIBE_TO_FUNNEL, targetEntryStepId: 's9'). The `step-subscribe-entry-select` picker only renders for SUBSCRIBE_TO_FUNNEL steps; with this fixture the absence assertion is non-vacuous — removing the `v-if=\"!hideTargetPickers\"` guard on that picker would cause the `toBeNull()` to fail. The submit round-trip then asserts `step.targetEntryStepId === 's9'` by value, which would fail if the field were dropped or zeroed."
+    },
+    "subscribe_entry_step_id_carry_through": {
+      "resolved": true,
+      "evidence": "Test at line 75 submits the form and asserts step.targetEntryStepId === 's9', step.targetFunnelId === 'f2', step.stepType === 'SUBSCRIBE_TO_FUNNEL'. All three are value-based; none can pass with an empty or no-op submit handler."
+    },
+    "f1_callback_regression": {
+      "resolved": true,
+      "evidence": "New test at line 101 uses messageStepWithTargets() which seeds a `{type:'callback'}` button. Under the buggy template (v-if='row.type === 'callback' && !hideTargetPickers'), that button fell into the v-else URL branch and rendered `[data-test='step-menu-button-url-0']`. The new assertion `expect(document.querySelector('[data-test=\"step-menu-button-url-0\"]')).toBeNull()` fails against the buggy template, passes against the fixed one (v-if='row.type === 'callback'' with inner v-if='!hideTargetPickers'). Litmus test: restoring the buggy guard breaks this test."
+    },
+    "near_duplicate_tests": {
+      "resolved": true,
+      "evidence": "Old single test collapsed three picker-absence checks into one MESSAGE fixture; now split into three focused tests with distinct fixtures and primary assertions. The MESSAGE test covers button+timeout pickers; a separate SUBSCRIBE test covers the entry picker; the F1 regression test covers URL-input corruption. No real coverage was lost."
+    }
+  },
+  "litmus_check": {
+    "subscribe_picker_absence": "PASSES litmus — picker is conditional on stepType; a MESSAGE fixture would make it vacuous, but the SUBSCRIBE fixture ensures the picker WOULD render if the guard were absent.",
+    "subscribe_entry_carry_through": "PASSES litmus — asserts concrete value 's9'. Removing the carry-through logic in onSubmit or resetting targetEntryStepId would produce undefined/null and fail the toBe('s9') assertion.",
+    "f1_url_input_absence": "PASSES litmus — with the buggy v-if='callback && !hideTargetPickers', a callback button under hideTargetPickers enters v-else and renders the URL input. The toBeNull() would fail against the old code.",
+    "message_carry_through": "PASSES litmus — targetStepId:'s2' and timeoutTargetStepId:'s3' are specific values; zeroing or dropping them fails the toBe() assertions.",
+    "trigger_node": "PASSES litmus — step-form absence is structurally meaningful; step-form is unconditionally mounted for step nodes so its absence for trigger nodes is genuine.",
+    "null_node": "PASSES litmus — both absence assertions are structurally sound for the null branch."
+  },
+  "summary": "All four round-1 findings are resolved. The SUBSCRIBE test is now non-vacuous (correct fixture, value-based carry-through assertion). The F1 regression test would fail against the buggy template (callback button rendering URL input under hideTargetPickers). All assertions are value-based; no test passes with a no-op implementation. The only finding in round 2 is a minor duplicated assertion across two tests, which is acceptable given their different primary intents. No coverage was lost from the refactor.",
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 6,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy for component-level DOM tests; integration/e2e scope is outside this task"
+    }
+  }
+}

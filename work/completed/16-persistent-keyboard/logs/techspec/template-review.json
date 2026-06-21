@@ -1,0 +1,24 @@
+{
+  "validator": "tech-spec-validator",
+  "status": "pass",
+  "findings": [
+    {
+      "severity": "major",
+      "section": "Implementation Tasks / Decisions",
+      "description": "Specific configuration values are duplicated between the Decisions section and task descriptions: Task 2 restates the 10x4 row/button caps (Decision 6), Task 3 restates resize_keyboard:true hardcode and the {\"remove_keyboard\":true} wire shape (Decision 5). Both tasks do reference the decisions explicitly ('per Decision 5/6'), which mitigates drift risk, but the values live in two places.",
+      "recommendation": "Trim the inlined values from Task 2 and Task 3 descriptions, keeping only the decision reference (e.g. 'build reply_markup per Decision 5'). Keep concrete values in one place — the Decisions section."
+    },
+    {
+      "severity": "minor",
+      "section": "Implementation Tasks (Task 6)",
+      "description": "Task 6 (code-writing) lists reviewers 'code-reviewer, test-reviewer', dropping security-auditor from the default code-writing reviewer set. Reasonable for a test-only IT task (the template itself shows a reduced set for a code-writing task), but it deviates from the default mapping in skills-and-reviewers.md.",
+      "recommendation": "Either confirm the reduced set is intentional for test-only scope (acceptable) or add security-auditor to match the default code-writing mapping."
+    },
+    {
+      "severity": "minor",
+      "section": "Implementation Tasks (Task 3)",
+      "description": "Task 3 builds the Telegram wire payload (external API integration shape) but has no Verify-smoke field. Wire-body verification is deferred to Task 6's slow-lane IT Verify-smoke, and the markup captor unit tests cover the builder, so coverage exists — but the task itself is not self-verifiable.",
+      "recommendation": "Optionally add Verify-smoke to Task 3, e.g. `cd backend && ./gradlew test --tests '*FunnelStepExecutorTest*'` -> green, so the task carries its own executable check."
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelStepIdBackfill.java",
+      "line": 60,
+      "issue": "backfillFunnels/backfillExecutions iterate the entire collection via find() with no projection or batching. For very large funnel_executions collections this loads every document (incl. full stepsSnapshot) at startup. Acceptable for a one-time idempotent migration and matches the SuperAdminSeeder simplicity bar, but worth noting.",
+      "suggestion": "If the executions collection is expected to be large, add a projection or a filter on stepsSnapshot existence. Not required for correctness; left as-is for Task 1 scope."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+      "line": 86,
+      "issue": "The MENU switch arm throws UnsupportedOperationException. This is a deliberate placeholder until Task 3 wires park-on-reply; since the editor/validator does not yet emit MENU steps, the arm is unreachable in Phase 1. The throw keeps the switch exhaustive and fails loudly if a MENU step were somehow persisted before Task 3.",
+      "suggestion": "Acceptable. Task 3 replaces this arm with the real park-on-reply output."
+    }
+  ]
+}

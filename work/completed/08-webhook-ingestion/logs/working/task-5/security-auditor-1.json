@@ -1,0 +1,130 @@
+{
+  "verdict": "approved",
+  "status": "approved",
+  "scope": {
+    "task": "5 — RawUpdate entity + repository + status enum",
+    "commit": "6224a67",
+    "files": [
+      "backend/src/main/java/com/botfunnel/webhook/RawUpdate.java",
+      "backend/src/main/java/com/botfunnel/webhook/RawUpdateRepository.java",
+      "backend/src/main/java/com/botfunnel/webhook/RawUpdateStatus.java",
+      "backend/src/test/java/com/botfunnel/webhook/RawUpdateRepositoryTest.java"
+    ],
+    "out_of_scope": [
+      "T9 worker (processingError scrub+truncate path)",
+      "T10 controller (payload binding / log statements / persisted token risk)",
+      "TLS / transport / auth (separate tasks)"
+    ]
+  },
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0,
+    "verdict_rationale": "Entity-layer security checks all pass. payload (org.bson.Document) has no toString/log path inside the entity. processingError is a passive plain String with no scrubbing taken on at this layer (correctly deferred to T9 per Decision 9). The compound unique index projectId_updateId_unique is present with unique=true and is the idempotency contract per Decision 4. The TTL partial-filter literals 'PENDING'/'DONE' are byte-identical to RawUpdateStatus.name() per Decision 8, and a static class-load assertion (RawUpdate.java:27-37) actively guards that invariant against future enum rename. No mass-assignment / deserialization gadget surface: no @JsonCreator, no @TypeAlias polymorphism, no Object/Class<?> fields, no Jackson involvement at this layer (BSON Document round-trips natively via the Mongo driver). Gitleaks-relevant scan: no hard-coded tokens, no API keys, no passwords, no connection strings — only structural string literals (collection name, index names, partial-filter JSON, '90d' duration, enum names)."
+  },
+  "findings": [],
+  "checks_performed": [
+    {
+      "id": "C1",
+      "check": "payload bytes safety — no implicit toString/log path could leak Telegram tokens or PII through the entity",
+      "result": "pass",
+      "evidence": "RawUpdate.java has no logger field declared, no @Override of toString(), no log statement. Default Object.toString() prints 'RawUpdate@<hash>', so even '{}'-formatted logging of the entity does NOT render payload. The setter setPayload(Document) at line 69 simply assigns the reference — no side effects."
+    },
+    {
+      "id": "C2",
+      "check": "processingError is a passive holder — entity does not attempt scrubbing/truncation (Decision 9 places that at T9 worker)",
+      "result": "pass",
+      "evidence": "RawUpdate.java:52 — plain String field, no @Size, no @Max length, no normalization in setter (line 74-75). Inline javadoc at line 51 explicitly documents 'Scrub + truncate ≤1024 chars handled at worker layer (T9)' — entity correctly stays passive, avoiding double-scrubbing or partial-scrubbing footguns."
+    },
+    {
+      "id": "C3a",
+      "check": "Compound unique index is the Decision 4 idempotency contract",
+      "result": "pass",
+      "evidence": "RawUpdate.java:17-21 — @CompoundIndexes one entry, name='projectId_updateId_unique', def=\"{'projectId': 1, 'updateId': 1}\", unique=true. Test duplicateProjectIdUpdateId_throwsDuplicateKey in RawUpdateRepositoryTest.java:42-49 pins the DuplicateKeyException behavior; test compoundIndex_isUnique pins unique=true at index-metadata level. This matches tech-spec Decision 4 verbatim."
+    },
+    {
+      "id": "C3b",
+      "check": "TTL partial-filter UPPERCASE literals match RawUpdateStatus.name() byte-for-byte (completeness F5 / Decision 8)",
+      "result": "pass",
+      "evidence": "RawUpdate.java:54-57 — partialFilter contains 'PENDING' and 'DONE' uppercase. Spring Data MongoDB persists enums via name() by default, so PENDING/DONE rows match the filter and FAILED rows do NOT — which keeps FAILED as the audit trail per user-spec AC13. CRITICAL DEFENSIVE GUARD at RawUpdate.java:27-37: a static initializer block asserts that RawUpdateStatus.PENDING.name() == 'PENDING' (and same for DONE/FAILED). A future rename like @JsonProperty('pending') or enum rename would either fail class load (loud) or be caught by the test ttlIndex_partialFilterIsUppercase. This is best-practice defense-in-depth and goes BEYOND the minimum the task required."
+    },
+    {
+      "id": "C4",
+      "check": "Mass-assignment / deserialization gadget surface",
+      "result": "pass",
+      "evidence": "RawUpdate is constructed via plain JavaBean (no-arg ctor + setters). NO @JsonCreator, NO @JsonTypeInfo, NO @TypeAlias polymorphism, NO @JsonAnySetter, NO Object/Class<?> fields. The entity is NOT bound directly from HTTP input — T10 controller binds its own DTOs and the entity is populated programmatically by trusted server-side code. The payload field is org.bson.Document which is a typed BSON map round-tripped natively by the Mongo driver (NOT Jackson) — no deserialization gadget chain (e.g. no SerializableTypeWrapper, no JNDI lookup) is reachable through this code path. RawUpdateStatus enum is closed (3 constants) with no value-mapping, eliminating @Enumerated drift attacks."
+    },
+    {
+      "id": "C5",
+      "check": "Gitleaks / hard-coded secrets",
+      "result": "pass",
+      "evidence": "Scanned all 4 new files for: API_KEY, SECRET, TOKEN, PASSWORD, base64 high-entropy literals, BEGIN PRIVATE KEY, AWS/GCP key prefixes, JDBC/Mongo connection strings with credentials. Result: zero matches. The only string literals present are: 'raw_updates' (collection), 'projectId_updateId_unique' (index name), 'ttl_createdAt' (index name), \"{'projectId': 1, 'updateId': 1}\" (index def JSON), \"{ 'processingStatus': { $in: ['PENDING', 'DONE'] } }\" (partial filter JSON), '90d' (duration), 'PENDING'/'DONE'/'FAILED' (enum names), 'proj-A'/'proj-B' (test fixture project ids), and human-readable error/assertion messages. None are secrets."
+    },
+    {
+      "id": "C6",
+      "check": "OWASP A01 Broken Access Control — entity-layer scope",
+      "result": "n/a",
+      "evidence": "Entity has no authorization logic. Access control is enforced at controller (T10) layer (out of scope)."
+    },
+    {
+      "id": "C7",
+      "check": "OWASP A02 Cryptographic Failures — entity-layer scope",
+      "result": "pass",
+      "evidence": "Entity persists no crypto material. payload stores raw Telegram updates which may carry user-supplied data; per separate-of-concerns the worker handles scrubbing. No plaintext password / key / secret column."
+    },
+    {
+      "id": "C8",
+      "check": "OWASP A03 Injection — index def / partial-filter strings",
+      "result": "pass",
+      "evidence": "The CompoundIndex.def and @Indexed.partialFilter strings are COMPILE-TIME constants in annotation values — not user-controllable. Mongo parses them once at index-build time. No injection surface."
+    },
+    {
+      "id": "C9",
+      "check": "OWASP A04 Insecure Design — schema-level design risks",
+      "result": "pass",
+      "evidence": "Schema design follows the tech-spec Decisions 4/8/9 verbatim, plus adds a class-load defensive assertion (lines 27-37) that exceeds what the spec required. Idempotency-by-unique-index is the correct design choice (vs Redis-based dedup, which has separate failure modes — explicitly considered & rejected in Decision 4). TTL+partial-filter is the correct retention mechanism (vs @Scheduled cron, which has more failure modes — Decision 8)."
+    },
+    {
+      "id": "C10",
+      "check": "OWASP A05 Security Misconfiguration — Mongo auto-index-creation in production",
+      "result": "informational_only",
+      "evidence": "Inline comment at RawUpdate.java:11 notes 'auto-created via spring.data.mongodb.auto-index-creation=true (dev)'. This is a known dev-vs-prod toggle. NOT a finding against this entity — it's a deployment-configuration concern that belongs to ops/Spring profile setup. Calling it out here for the reviewer's awareness only: in production, indexes are typically built out-of-band or via an explicit migration; auto-create=true in production is acceptable for a small collection but should not block this review. Score: not a finding."
+    },
+    {
+      "id": "C11",
+      "check": "OWASP A06 Vulnerable Components — dependency surface",
+      "result": "pass",
+      "evidence": "Task introduces NO new dependencies (task file line 106 'No new packages'). Imports are all Spring Data MongoDB / org.bson / java.time — all already on the classpath via existing managed Spring Boot version."
+    },
+    {
+      "id": "C12",
+      "check": "OWASP A07 Authentication Failures — entity-layer scope",
+      "result": "n/a",
+      "evidence": "No auth logic in the entity. Webhook secret verification is T2's WebhookSecretVerifier, controller-side."
+    },
+    {
+      "id": "C13",
+      "check": "OWASP A08 Software & Data Integrity — deserialization",
+      "result": "pass",
+      "evidence": "No insecure deserialization. org.bson.Document is a closed type (BSON-typed Map) round-tripped by the Mongo driver — NO Java-native Serializable, NO ObjectInputStream, NO Jackson polymorphic typing, NO YAML/SnakeYAML. Worker (T9) converts Document → TelegramUpdate via ObjectMapper.convertValue (per task notes); that path's safety is T9's audit scope."
+    },
+    {
+      "id": "C14",
+      "check": "OWASP A09 Logging & Monitoring — entity does not log payload",
+      "result": "pass",
+      "evidence": "Entity has zero log statements. No risk of accidentally logging payload contents from the entity. Audit/observability is the controller/worker scope."
+    },
+    {
+      "id": "C15",
+      "check": "OWASP A10 SSRF — n/a at entity layer",
+      "result": "n/a",
+      "evidence": "Entity makes no outbound network calls."
+    }
+  ],
+  "notes_to_followup_audits": [
+    "T9 worker audit (separate scope): verify processingError write path applies scrubTokens AND substring(0, min(len, 1024)) BEFORE persisting — Decision 9 contract. Also verify no log statement renders rawUpdate.getPayload() at info/debug level without explicit field allow-list (raw Telegram updates may contain user PII, contact phone numbers, OAuth deep-link tokens, etc.).",
+    "T10 controller audit (separate scope): verify the controller binds its own request DTO / org.bson.Document and never echoes payload contents back in the HTTP response or error body.",
+    "Ops/profile audit (not a task review item): in production deployments, decide whether spring.data.mongodb.auto-index-creation stays true — the comment at RawUpdate.java:11 says 'dev'; production should either match or have a migration runbook ensuring all three indexes (_id_, projectId_updateId_unique, projectId_1, ttl_createdAt) exist before traffic."
+  ]
+}

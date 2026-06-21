@@ -1,0 +1,23 @@
+{
+  "summary": "Task 11 implements a single 21-LOC Playwright golden-path E2E for i18n locale switching plus two narrowly-scoped Nuxt config changes (disable DevTools to fix the documented dev-mode hydration regression, and silence an upstream v-t deprecation warning). The spec is deterministic (no skip/fixme/retry/fixtures), matches the task contract, and every asserted string/selector resolves to a real dictionary key or DOM hook in the codebase. The two nuxt.config.ts changes are dev/build-time concerns with no production behavioral impact, and `optimizeTranslationDirective: false` is verified safe because the v-t directive is not used anywhere in frontend/**.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "file": "frontend/e2e/i18n.spec.ts",
+      "line": 11,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "Use of `page.waitForLoadState('networkidle')` to gate on hydration. Playwright's own guidance flags `networkidle` as an anti-pattern for modern dev servers because long-lived HMR/WebSocket connections keep the network busy; it works here empirically but is fragile across Vite/Nuxt upgrades.",
+      "recommendation": "Acceptable for now — the task's edge-cases section explicitly allows it and the commit message documents the hydration root cause. As a future hardening, replace with a hydration sentinel (e.g. `await expect(page.locator('[data-test=\"lang-en\"]')).toBeEnabled()` or wait for a `nuxt:hydrated` marker) so the test does not depend on quiescing the dev WebSocket."
+    },
+    {
+      "file": "frontend/e2e/i18n.spec.ts",
+      "line": 14,
+      "severity": "minor",
+      "category": "best-practices",
+      "issue": "`expect.poll(() => page.url(), { timeout: 10_000 }).toMatch(...)` is functionally equivalent to `page.waitForURL(/\\/en\\/auth\\/login/, { timeout: 10_000 })` for this case.",
+      "recommendation": "Non-blocking. `waitForURL` is the more idiomatic Playwright primitive and produces clearer failure diagnostics, but the current `expect.poll` form is correct, gives an explicit timeout, and the commit message justifies the choice for the documented dev-mode hydration timing. Keep as-is unless flakiness emerges."
+    }
+  ],
+  "verdict": "OK"
+}

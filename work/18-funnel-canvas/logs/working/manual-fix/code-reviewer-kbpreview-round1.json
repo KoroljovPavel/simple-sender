@@ -1,0 +1,34 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-keyboard-preview",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "frontend/components/funnels/FunnelCanvasNode.vue",
+      "line": 319,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "Duplicate data-test attribute value on two sibling elements",
+      "detail": "Both the SET_KEYBOARD preview block (line 319) and the CLEAR_KEYBOARD block (line 352) use data-test=\"funnel-canvas-node-keyboard-preview\". Two elements in the same rendered DOM tree can share this value when the funnel somehow contained both types simultaneously (impossible in a well-formed model, but duplicate test IDs in a static analysis or future refactor cause silent test misses — the first match wins).",
+      "recommendation": "Differentiate with data-test=\"funnel-canvas-node-set-keyboard-preview\" and data-test=\"funnel-canvas-node-clear-keyboard-preview\". The inner data-test attributes (funnel-canvas-preview-keyboard-text / funnel-canvas-preview-keyboard / funnel-canvas-preview-keyboard-cleared) are already specific enough, so only the container attribute needs the split. Update the FunnelCanvas.spec.ts test selectors to match."
+    },
+    {
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 84,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "firstMessageIndex fallback does not include SET_KEYBOARD/CLEAR_KEYBOARD in MESSAGE_STEP_TYPES",
+      "detail": "MESSAGE_STEP_TYPES = ['MESSAGE'] is used by firstMessageIndex to pick the default step shown in the preview panel when nothing is explicitly selected (previewSelectedIndex == -1). After this fix, canvas node deselection resets previewSelectedIndex to -1, falling back to the first MESSAGE step. A funnel that starts with a SET_KEYBOARD step and no MESSAGE step will show the panel empty (firstMessageIndex == -1 → previewIndex -1 → previewStep null). This is pre-existing behaviour rather than a regression introduced here, and the fix's own tests don't hit this path. No code change in this commit makes it worse, but it is worth noting as a related paper-cut.",
+      "recommendation": "Consider broadening MESSAGE_STEP_TYPES to cover all step types that the preview panel can usefully render (MESSAGE, SET_KEYBOARD, CLEAR_KEYBOARD) so the default fallback picks the first step of any previewable type. This is a follow-up, not a blocker."
+    }
+  ],
+  "summary": "The change is well-scoped and correctly implements both deliverables. In-card SET_KEYBOARD preview reads the right fields (keyboardText + keyboardRows[].buttons[].text), applies the same TEXT_PREVIEW_MAX truncation used by the MESSAGE branch, filters empty rows and labels, and renders entirely via {{ }} (no v-html, no XSS surface). The CLEAR_KEYBOARD indicator uses an i18n key that is present in both uk.json and en.json and guarded by the required-keys spec. The select-node event reuses the existing selectedNode ref and emits the correct stepIndex for step nodes, null for non-step / deselect; onCanvasSelectNode on the page maps null to -1, which correctly falls through to the firstMessageIndex default. No double-source-of-truth: previewSelectedIndex remains the single driving ref. The FunnelCanvas.spec.ts and funnel-editor.spec.ts tests cover the happy-path (text + chip count), CLEAR_KEYBOARD localisation, XSS escaping, panel-follows-canvas-selection, and deselect-returns-default. SSR safety is preserved: the component is registered under a *.client.vue parent so no server-side DOM access occurs. Two minor findings are noted (duplicate data-test container attribute between SET_KEYBOARD and CLEAR_KEYBOARD blocks; firstMessageIndex fallback not including previewable non-MESSAGE types), neither of which blocks the fix.",
+  "metrics": {
+    "filesReviewed": 8,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 2,
+    "testCoverageAssessment": "excellent"
+  }
+}

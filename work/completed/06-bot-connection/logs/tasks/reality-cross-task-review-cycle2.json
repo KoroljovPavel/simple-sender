@@ -1,0 +1,56 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13],
+  "iteration": "cross-task cycle 2",
+  "prior_report": "logs/tasks/reality-cross-task-review.json",
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 9,
+      "issue": "T9 Implementation hints (line 164) list the key `bot.connectForm.*` — the camelCase compound root that T4 explicitly forbids. T4 is the canonical authority: it states 'no bot.connectForm, no bot.disconnectModal camelCase compound roots anywhere' and documents the canonical path as `bot.connect.form.*`. If a T9 implementer consumes hints before reading T4, they will produce a template that calls `t('bot.connectForm.label')` instead of `t('bot.connect.form.label')`, and the rendered page will show key-literal fallbacks (empty strings in production, raw key in dev) because the key does not exist in either locale file. The same hints block also references `bot.disconnect.modal.*` (dot-segmented, correct) for the modal but contradicts itself for the connect form.",
+      "fix": "In T9 Implementation hints, replace `bot.connectForm.*` with `bot.connect.form.*` (matching T4 canonical naming). The surrounding sentence already says '(dot-segmented, NOT `bot.disconnectModal.*`)' — extend the same explanation to the connect-form key so the implementer sees the rule applied consistently."
+    }
+  ],
+  "cycle2_checks": {
+    "T8_IT_MeterRegistry_removed": {
+      "status": "RESOLVED",
+      "evidence": "T8 TDD Anchor (line 79) explicitly states: 'Do NOT assert a Micrometer counter — Task 6 explicitly does not inject MeterRegistry (project has no actuator dep).' T8 AC (line 102) repeats: 'No Micrometer assertion — Task 6 does not inject MeterRegistry and the project has no actuator dependency.' T8 Details (line 175) confirms: 'Do NOT read a Micrometer counter.' The test method was renamed to `postConnect_redisDown_failsOpen_connectSucceeds_warnLogged` — no `_metricIncremented` suffix. The ListAppender-based WARN log assertion is prescribed as the replacement. The critical finding from cycle 1 is fully resolved."
+    },
+    "T8_AC_event_metadata_shape": {
+      "status": "RESOLVED",
+      "evidence": "T8 AC (line 110) now reads: 'ip and userAgent are TOP-LEVEL fields on the Event document (set by EventService.logEvent(userId, eventType, ipAddress, userAgent, metadata)) — asserted via evt.getIpAddress() / evt.getUserAgent(), NOT via the metadata map.' The same line confirms metadata for bot_connected = {projectId, telegramBotId, telegramUsername} and bot_disconnected = {projectId, telegramBotId, webhookDeleted}. T8 Implementation hints (line 184) repeats the rule verbatim with the top-level assertion pattern. The major finding from cycle 1 is fully resolved."
+    },
+    "T8_techspec_D14_Micrometer_alignment": {
+      "status": "RESOLVED",
+      "evidence": "T8 AC (line 102) contains the normative statement superseding D14 for epic 06. T11 focus area 5 (line 135) explicitly instructs: 'The audit MUST NOT fail the feature for the missing Micrometer counter; record it as Info / deferred only.' No doc still prescribes a live Micrometer assertion. The major finding from cycle 1 is fully resolved."
+    },
+    "T5_depends_on_T4": {
+      "status": "RESOLVED",
+      "evidence": "T5 frontmatter line 3 reads `depends_on: [4]`. The cross-task dependency is declared. The major finding from cycle 1 is fully resolved."
+    },
+    "T9_modal_key_dot_segmented": {
+      "status": "RESOLVED",
+      "evidence": "T9 Implementation hints (line 161) states: 'define the key with the placeholder, then t(\"bot.disconnect.modal.body\", { username: bot.telegramUsername })'. T9 canonical key inventory (line 166) lists `bot.disconnect.modal.{title, body, confirm, cancel}` with the note 'dot-segmented, NOT bot.disconnectModal'. T4 defines keys under `bot.disconnect.modal.*` (dot-segmented). The paths agree across T4 and T9 for the modal key. No residual mismatch."
+    },
+    "T13_mkdir_docs_staging_smoke": {
+      "status": "RESOLVED",
+      "evidence": "T13 What-to-do step 12 (line 56) explicitly states: 'The docs/staging-smoke/ directory does not yet exist in the repo, so run mkdir -p docs/staging-smoke before writing the file.' T13 Verification Steps Smoke section (line 115) repeats: 'mkdir -p docs/staging-smoke && test -f docs/staging-smoke/06-bot-connection.md'. The minor finding from cycle 1 is fully resolved."
+    },
+    "T11_focus_area_5_Micrometer_deferred": {
+      "status": "RESOLVED",
+      "evidence": "T11 focus area 5 (line 135) contains the explicit note: 'D14's Micrometer counter expectation is deferred from epic 06 per Task 6's deviation (no Spring Boot Actuator / Micrometer dependency on the project). The audit MUST NOT fail the feature for the missing Micrometer counter; record it as Info / deferred only.' The T6 deviation is correctly reflected in the T11 audit scope. The major finding from cycle 1 is fully resolved."
+    }
+  },
+  "new_findings_summary": {
+    "T9_connectForm_key_mismatch": "T9 hints list `bot.connectForm.*` (camelCase) but T4's canonical inventory mandates `bot.connect.form.*` (dot-segmented). A T9 implementer reading hints will use the wrong key path. Classified major/hints because the error produces silent i18n failures (empty rendered strings) and would survive pnpm prebuild (parity gate checks key existence in JSON, not key usage in SFCs)."
+  },
+  "stats": {
+    "tasks_checked": 13,
+    "cycle1_findings_resolved": 6,
+    "cycle1_findings_still_open": 0,
+    "new_findings": 1,
+    "issues_found": 1
+  }
+}

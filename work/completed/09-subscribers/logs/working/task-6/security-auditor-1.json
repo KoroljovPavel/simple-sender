@@ -1,0 +1,37 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "verifiedConcerns": [
+    {
+      "concern": "Token-leak on hook-failure WARN log",
+      "verdict": "PASS",
+      "detail": "TelegramSender.java:186-187 logs TelegramApiClient.scrubTokens(hookEx.getMessage()) — the scrubber IS applied per codebase convention (patterns.md:175, 219: 'Wrap every WARN/ERROR line echoing an external description in scrubTokens'). The hook exception originates from SubscriberService/Mongo (findByProjectIdAndTelegramBotIdAndTelegramChatId + findAndModify), so it is very unlikely to carry a Telegram bot token, but the scrubber is correctly applied as the mandated last-mile defense regardless. scrubTokens null-safes (TelegramApiClient.java:217)."
+    },
+    {
+      "concern": "'chat not found' substring match runs on POST-scrub description",
+      "verdict": "PASS",
+      "detail": "toThrowable (TelegramSender.java:303) computes scrubbed = scrubTokens(result.description()) FIRST, then passes scrubbed into terminalReasonFor (lines 317-318). The case-insensitive contains('chat not found') match (lines 329-330) operates on the already-scrubbed string — no raw token can appear in the matched value. The token regex \\d{1,20}:[A-Za-z0-9_-]{30,50} cannot collide with the literal marker, so scrubbing never corrupts the CHAT_NOT_FOUND routing."
+    },
+    {
+      "concern": "Hook must not swallow the original exception (availability / audit-integrity)",
+      "verdict": "PASS",
+      "detail": "dispatchSubscriberHook is invoked at TelegramSender.java:162 and the original send exception is unconditionally re-thrown at line 163. The mark-* call is wrapped in its own try/catch (lines 179-188): any RuntimeException is caught, WARN-logged with the greppable TELEGRAM_SENDER_SUBSCRIBER_HOOK_FAILED constant, and never rethrown. Audit (eventService.logEvent EVENT_TELEGRAM_SEND_FAILED, line 156) fires BEFORE the hook (line 162), so the durable audit record is written even if the CRM flip later fails. Covered by TelegramSenderSubscriberHookIT.hookFailureDoesNotSwallowOriginal."
+    },
+    {
+      "concern": "Subscriber flip uses already-loaded Bot; no attacker-controlled value; idempotent / silent no-op on stranger chatId",
+      "verdict": "PASS",
+      "detail": "bot.getProjectId() + bot.getTelegramBotId() are read from the already-loaded Bot instance (TelegramSender.java:181,183) — no extra findById round-trip and no caller-supplied projectId/botId. chatId is the caller-provided recipient. SubscriberServiceImpl.findByChat (lines 286-290) scopes the lookup by ALL THREE identifiers (projectId, telegramBotId, telegramChatId); markBlockedByChatId/markDeletedByChatId (lines 191-208) return silently when s == null (never-registered/stranger chat) or when already in the target state — documented idempotent/silent-no-op in the SubscriberService interface Javadoc (lines 31-43). A stranger chatId therefore cannot flip a foreign subscriber, cross project/bot boundaries, or cause harm; flip() uses atomic findAndModify (lines 292-297). No injection surface (typed derived-query repository, no string concatenation, no $-operator from user input)."
+    },
+    {
+      "concern": "No new authz surface / system-context model preserved",
+      "verdict": "PASS",
+      "detail": "TelegramSender remains a system-context @Component with no per-request authentication. The hook introduces no new authz decision point; project/bot scope is derived solely from the already-authorized loaded Bot. BotTokenInvalidException extends AppException (NOT TelegramSendException), so the 401 path is naturally excluded by the 'instanceof TelegramSendException' guard at line 171 — confirmed by TelegramSenderSubscriberHookIT.http401DoesNotMark. NPE-safety on null/empty description confirmed (line 329 'description != null' guard; OTHER fallback at line 333). No hardcoded secrets introduced (the IT token at line 35 is a synthetic test fixture, not a real credential). No SSRF, no insecure deserialization, no dependency changes."
+    }
+  ]
+}

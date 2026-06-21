@@ -1,0 +1,16 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": "resumeOnCallback_double_click_advances_once",
+      "issue": "The second resumeOnCallback runs after the first already drove the run to completed, so the no-op is via 'status no longer waiting_for_reply' rather than a truly simultaneous two-thread tap race.",
+      "suggestion": "Acceptable: this is the realistic double-click scenario (sequential taps). The atomic CAS that also covers the simultaneous race is already proven by the Phase-1 atomicClaimRaceAcrossTwoReplicas IT on the same findAndModify primitive. No change.",
+      "status": "accepted (no change)"
+    }
+  ],
+  "notes": "All 13 integration anchors + 3 unit anchors from the task TDD section are present with exact names. Assertions verify real behavior (execution status, currentStepId cursor, send counts via MockWebServer, exact callback_data strings 'exec-1:0'/'exec-1:1', timeout deadline = clock+duration, greppable log markers) -- not mock-call-only. Deterministic via MutableClock + direct engine.sweep()/resumeOnCallback() invocation (no real sleep). Pyramid balanced: unit (StepExecutor MENU build) + IT (engine graph/park/resume/timeout). Phase-1 ITs unchanged and green. Each test catches a distinct failure (park, no-resume, advance, IDOR, idempotency, budget, fan-in, timeout-follow, timeout-null, loop-resend, paused-drain, legacy-index-fallback, blocked-bot-on-resume). No redundancy."
+}

@@ -1,0 +1,92 @@
+{
+  "task": "Task 5 — Code Audit (14-funnels-composition)",
+  "auditor": "code-auditor",
+  "date": "2026-06-08",
+  "scope": "Holistic cross-component code audit of the SUBSCRIBE_TO_FUNNEL feature (Phase 5 composition). Read final state of 8 backend source files (StepType, FunnelStep, FunnelStepDto, FunnelService, FunnelExecutionFactory, FunnelEventService, StepExecutor, FunnelExecutionEngine) + 4 frontend files (types/funnel.ts, FunnelStepForm.vue, uk.json, en.json), 5 test files read as context only, plus tech-spec/code-research/decisions. Focus on stitch-points: bean-cycle safety, backstop reuse, exhaustive-switch coverage, fail-closed projectId scoping, at-most-once ordering, greppable-WARN discipline.",
+  "summary": "Clean. The feature is implemented exactly to Decisions 1-9 and the cross-component invariants hold. No critical or major findings. Bean graph stays acyclic (enroll rides the existing StepExecutor -> FunnelEventService edge; no engine/factory/FunnelService injected into StepExecutor). Both Phase-3 per-subscriber backstops (depth-cap + auto-enroll rate-limit) are reused, not duplicated. All three StepType switches and the engine Outcome switch are exhaustive with explicit SUBSCRIBE_TO_FUNNEL / COMPLETE handling. projectId scoping is fail-closed at save, activation, and runtime. at-most-once ordering matches EMIT_EVENT (side-effect before claim-conditional complete). Logs carry ids/codes only. Two minor / two info observations below, none blocking.",
+  "verdict": "clean",
+  "findings_by_severity": { "critical": 0, "major": 0, "minor": 2, "info": 2 },
+  "dimensions": {
+    "architectural_patterns": {
+      "status": "pass",
+      "notes": "Bean-cycle safety verified. StepExecutor injects only TelegramSender, SubscriberService, SubscriberCustomFieldsService, ProjectRepository, FunnelEventService, Clock (StepExecutor.java:74-86) — NO FunnelExecutionEngine / FunnelService / FunnelExecutionFactory. The enroll rides the pre-existing StepExecutor -> FunnelEventService edge via the new enrollSpecificFunnel (StepExecutor.java:127), and FunnelEventService -> FunnelExecutionFactory already exists; the factory has zero edge into engine/step-executor (FunnelExecutionFactory.java:23-33). No cycle can close — matches Decision 2 / code-research §14.6. Outcome.COMPLETE added to the enum (StepExecutor.java:351) and threaded to the existing complete(exec, now) in the engine (FunnelExecutionEngine.java:288-296)."
+    },
+    "backstop_reuse": {
+      "status": "pass",
+      "notes": "enrollSpecificFunnel applies BOTH Phase-3 backstops in the same order as dispatchForSubscriber and reuses the same fields/method — no forked second limit. Depth-cap: same maxEnrollDepth field, originDepth > maxEnrollDepth (FunnelEventService.java:229 vs dispatcher :142). Rate-limit: same private autoEnrollRateLimitExceeded() + same RATE_KEY_PREFIX 'bf:rate:auto-enroll:' Redis key (FunnelEventService.java:238 reuses :390). No second counter, no copied depth-check, no inlined rate-limit. Correct difference: enrollSpecificFunnel always counts (no originDepth>0 guard) because a SUBSCRIBE enroll is always an auto child (depth = parent+1 >= 1) — documented at :235-237. Fan-out ceiling correctly NOT reused (single explicit target, not N-funnels-per-event)."
+    },
+    "exhaustive_switch": {
+      "status": "pass",
+      "notes": "All StepType decision points handle SUBSCRIBE_TO_FUNNEL with no silent fall-through. (1) StepExecutor.execute switch expression, no default (StepExecutor.java:93-113) — case SUBSCRIBE_TO_FUNNEL -> subscribeToFunnel. (2) FunnelService.validateSteps switch (FunnelService.java:671-692) — case SUBSCRIBE_TO_FUNNEL -> validateSubscribeTarget; deliberately excluded from the generic requireExistingTarget edge-pass (only next/timeoutTargetStepId fed, :696-697), so targetEntryStepId never raises a false funnel_broken_edge. (3) isMessageStep (FunnelService.java:402-403) correctly excludes SUBSCRIBE -> non_message preview placeholder. (4) Engine drive switch (FunnelExecutionEngine.java:257-297) has an explicit case COMPLETE -> complete(exec, now); switch statement, but every Outcome enum value has a branch. Grep over the codebase confirms no other StepType switch exists (FunnelTriggerServiceImpl only does an equality check on MENU)."
+    },
+    "fail_closed_scoping": {
+      "status": "pass",
+      "notes": "projectId scoping is fail-closed in all three places. SAVE: resolveSubscribeTarget (FunnelService.java:780-795) does findById then .filter(projectId.equals(f.getProjectId())) — malformed ObjectId (IllegalArgumentException), missing, and foreign-project all collapse to one funnel_subscribe_target_not_found (no cross-tenant existence oracle). ACTIVATION: requireSubscribeTargetsActive re-resolves via the same helper then requires status=active (:758-769). RUNTIME: enrollSpecificFunnel resolves via FunnelRepository.findById (NOT project-scoped) then an EXPLICIT projectId.equals(target.getProjectId()) check before any side effect (FunnelEventService.java:255-261) — the main IDOR guard. No path resolves a target without the projectId check. Self-target A->A needs no special branch (re-enter guard handles it). No fail-open path observed."
+    },
+    "at_most_once_ordering": {
+      "status": "pass",
+      "notes": "Enroll is a side-effect BEFORE the claim-conditional advance/complete, mirroring EMIT_EVENT. StepExecutor.subscribeToFunnel calls enrollSpecificFunnel first, then returns COMPLETE/CONTINUE (StepExecutor.java:126-131). The engine then applies complete()/advanceToNext()+persistProgress() — all claim-conditional findAndModify on stepRunStatus=in_progress (FunnelExecutionEngine.java:288-296, :265). A crash-replay re-runs the step and re-enrolls, but the target's (funnelId, subscriberId) re-enter guard makes the duplicate a benign no-op (DuplicateKeyException swallowed, FunnelEventService.java:299-308) — effective at-most-once. complete(exec, now) is REUSED, not duplicated."
+    },
+    "architectural_consistency": {
+      "status": "pass",
+      "notes": "insertExecution now delegates to insertExecutionAt(..., null) — single writer, no duplicated insert body (FunnelExecutionFactory.java:76-79); the 5 legacy callsites keep step-0 behaviour via the null start-cursor fallback (resolveStartCursor :117-126). copyOf copies the three new fields field-wise consistent with eventName (FunnelStep.java:115-117); targetFunnelId/targetEntryStepId immutable Strings by ref, endParentAfter boolean by value — snapshot isolation preserved. Naming is targetEntryStepId everywhere (NOT targetStepId) — no collision with Button.targetStepId, kept out of the generic edge-pass (Decision 5). Skip+greppable-WARN precedent (StepExecutor.setCustomField cont()+WARN) mirrored: one distinct LOG_ENROLL_* id per skip reason (FunnelEventService.java:88-95) — missing/wrong-project/inactive target, depth-cap, rate-limit, re-enter no-op, entry-step fallback, swallowed error. endParentAfter=true completes from ANY position via Outcome.COMPLETE (Decision 3), not only end-of-graph."
+    },
+    "error_handling_logging": {
+      "status": "pass",
+      "notes": "enrollSpecificFunnel is error-isolated (try/catch(Throwable) -> greppable LOG_ENROLL_ERROR with exception class only, no message/PII; FunnelEventService.java:279-283) so an enroll fault never fails the parent execution — matches dispatchForSubscriber. WARN logs carry only ids/codes: projectId, targetFunnelId (the caller's own id), subscriberId, originDepth, status enum — NO user-input strings, no target name, no foreign projectId (the wrong-project branch logs only the CALLER's projectId, :256-259). No log-injection vector. No empty catch blocks. Engine COMPLETE path logs LOG_EXECUTION_COMPLETED via the shared complete()."
+    },
+    "type_safety_frontend": {
+      "status": "pass",
+      "notes": "types/funnel.ts StepType union + the three optional fields (targetFunnelId / targetEntryStepId / endParentAfter) mirror the backend DTO; entry field named targetEntryStepId (Decision 5). FunnelStepForm.vue onSubmit switch is exhaustive over StepType (all 9 cases, :531-604), SUBSCRIBE emits { stepType, targetFunnelId, targetEntryStepId, endParentAfter } with the SUBSCRIBE_ENTRY_START sentinel mapped to null and blankToNull on the funnel id. i18n uk/en symmetric for the 4 funnel_subscribe_* codes + type label + form labels + both hints (byte-matched to the backend codes)."
+    }
+  },
+  "findings": [
+    {
+      "id": "MIN-1",
+      "severity": "minor",
+      "dimension": "performance",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "292-297",
+      "title": "Double DB lookup per SUBSCRIBE target at activation",
+      "detail": "activate() calls validateSteps (which runs validateSubscribeTarget -> resolveSubscribeTarget -> funnelRepository.findById per SUBSCRIBE step) AND then requireSubscribeTargetsActive (which calls resolveSubscribeTarget again -> a second findById per SUBSCRIBE step). For N SUBSCRIBE steps this is 2N target lookups at activate time. Functionally correct (idempotent reads, fail-closed each time) and activation is a low-frequency admin action, so impact is negligible; only worth a note.",
+      "recommendation": "Optional: have requireSubscribeTargetsActive reuse the funnels already resolved during validateSteps (e.g. return/collect resolved targets), or fold the active-check into validateSteps behind a flag. Not blocking — leave as-is unless activation latency ever matters."
+    },
+    {
+      "id": "MIN-2",
+      "severity": "minor",
+      "dimension": "code_readability",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": "313-324",
+      "title": "stepExists duplicates the factory's resolveStartCursor scan",
+      "detail": "enrollSpecificFunnel.stepExists() linearly scans target.getSteps() to decide whether to emit the LOG_ENROLL_ENTRY_STEP_FALLBACK WARN, while FunnelExecutionFactory.resolveStartCursor independently scans the (deep-copied) snapshot to pick the start cursor. The two scans are intentionally kept in agreement (commented at :311-312) but are two copies of the same lookup over two representations (live funnel steps vs snapshot). They can only drift if copyOf ever drops the id (it does not). Low risk; the redundancy is the observability tax for keeping the factory log-quiet.",
+      "recommendation": "Acceptable as documented. If consolidating later, have the factory return whether the requested startStepId resolved (e.g. a small result/boolean) so the WARN is driven by the actual cursor decision rather than a parallel scan."
+    },
+    {
+      "id": "INFO-1",
+      "severity": "info",
+      "dimension": "architectural_consistency",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": "238-242",
+      "title": "Rate-limit counter increments even when the target later proves invalid",
+      "detail": "enrollSpecificFunnel runs the auto-enroll rate-limit INCR before resolving/validating the target, so a SUBSCRIBE step pointing at a missing/foreign/inactive target still consumes a slot in the per-subscriber bf:rate:auto-enroll window. This mirrors dispatchForSubscriber (which also rate-limits before match resolution) and is the correct DoS posture — an attacker cannot bypass the limit by pointing at invalid targets. Recorded only so reviewers know it is intentional, not a leak.",
+      "recommendation": "No change. Intended behaviour, consistent with the dispatcher."
+    },
+    {
+      "id": "INFO-2",
+      "severity": "info",
+      "dimension": "architectural_consistency",
+      "file": "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+      "line": "126-131",
+      "title": "endParentAfter=false leaves child enroll and parent advance both committed",
+      "detail": "With endParentAfter=false the parent CONTINUEs and both the child (target) execution and the advanced parent live on in parallel — exactly the spec's fire-and-forget semantics (Decision 1). The 'return to caller menu' constraint (a SUBSCRIBE back into a still-running parent with allowReEnter=false is a no-op) is correctly surfaced to the author via the subscribeReturnHint in the editor (FunnelStepForm.vue:1062-1063, Risk 2). No code issue; documented for completeness.",
+      "recommendation": "No change."
+    }
+  ],
+  "edge_cases_verified": {
+    "self_target_A_to_A": "No dedicated branch — hits the same (funnelId, subscriberId) re-enter guard (FunnelEventService.java:290 comment + insertTargetExecution). Correct per Decision/spec.",
+    "deleted_entry_step": "targetEntryStepId not in snapshot -> factory resolveStartCursor falls back to step 0 (FunnelExecutionFactory.java:117-126) and enrollSpecificFunnel emits LOG_ENROLL_ENTRY_STEP_FALLBACK (FunnelEventService.java:272-275). Correct.",
+    "endParentAfter_from_any_position": "Outcome.COMPLETE -> complete(exec, now) completes from any cursor position, not only end-of-graph (FunnelExecutionEngine.java:288-296). Correct per Decision 3.",
+    "malformed_objectId_target": "Save: IllegalArgumentException caught -> not_found 422 (FunnelService.java:786-791). Runtime: caught by the outer try/catch(Throwable) -> LOG_ENROLL_ERROR no-op (FunnelEventService.java:279-283). Neither 500s. Correct.",
+    "draft_or_paused_or_deleted_target_at_runtime": "status != active -> LOG_ENROLL_SKIP_TARGET_INACTIVE skip, parent continues (FunnelEventService.java:262-267); missing -> LOG_ENROLL_SKIP_TARGET_MISSING. Correct per Decision 7."
+  }
+}

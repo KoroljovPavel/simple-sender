@@ -1,0 +1,15 @@
+{
+  "reviewer": "security-auditor",
+  "scope": "manual-fix-validation-defer",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "The custom-field key injection vector is fully closed. Both the TRIGGER_CUSTOM_FIELD_SET triggerValue and the SET_CUSTOM_FIELD step key now enforce FORMAT-if-present on every save (draft PUT) via dedicated helpers: formatFieldKeyIfPresent → requireFieldKeyValue (trigger path, FunnelService:1024-1039) and requireCustomFieldKeyFormatIfPresent → requireCustomFieldKey (step path, FunnelService:1725-1738). Both call Pattern.compile(\"^[a-z0-9_-]{1,32}$\").matcher(value).matches() — the pattern is anchored (^...$), uses .matches() (full-string match), is bounded at 32 chars (no ReDoS risk, linear), and is lowercase-only with no ambiguous character ranges. It exactly mirrors the SubscriberCustomFieldsService precondition. A present malformed key (x.$where, a.b, over-length) returns 422 on draft save; null/blank defers presence to activate. TriggerDto.triggerValue received @Size(max=128) closing the DoS gap. No bypass paths found: duplicate() resets triggers to a bare on_start (never copies triggers), and copies steps via FunnelStep.copyOf which only carries already-validated stored values. testRun skips trigger validation (enrolls author directly) and runs full content-validation (validateSteps content=true) which calls requireCustomFieldKey for the step key. SUBSCRIBE_TO_FUNNEL targetFunnelId reaches only funnelRepository.findById (ObjectId lookup, no field-path concat). The four new integration tests in FunnelControllerIT are load-bearing: malformed trigger key → 422 (CODE_INVALID_TRIGGER_VALUE), malformed step key → 422 (funnel_step_invalid), valid slug → 200 on draft, null key → 200 draft + 422 on activate. No remaining injection vector, deferred-security path, or hardcoded secret found.",
+  "status": "approved",
+  "summary_counts": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  }
+}

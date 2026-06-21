@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "All 4 required TDD anchors are present (fire_returnsMonoEmpty, cancelActiveFor_returnsMonoEmpty, fire_acceptsNullPayload, fire_acceptsEmptyPayload). Plain JUnit 5 + Reactor StepVerifier, no Spring context, direct constructor instantiation of NoOpFunnelTriggerService. Style mirrors Task 6's NoOpSubscriberServiceTest exactly (identical imports, field, Duration.ofMillis(100), expectComplete().verify(...) pattern). Litmus test passes: replacing Mono.empty() with Mono.never() would timeout the verify, with Mono.error() would fail expectComplete(), with null would NPE at StepVerifier.create — so the assertions genuinely constrain the implementation rather than tautologically agreeing with it. Tests appropriately scoped — cancelActiveFor takes only non-null args (projectId, chatId) so no null-tolerance case is needed there.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/funnel/NoOpFunnelTriggerServiceTest.java:13-38",
+      "issue": "Task description mentions 'returns a non-null Mono'. The current StepVerifier.create(...) form implicitly enforces non-null (passing null throws NPE before any verification runs), so this is covered indirectly but not explicitly named. Not a quality defect — same compromise made in NoOpSubscriberServiceTest — but a one-line assertNotNull on the returned Mono would document the contract explicitly.",
+      "recommendation": "Optional: capture the result first to make the non-null contract explicit, e.g. `Mono<Void> result = service.fire(\"proj-A\", 200L, \"on_start\", \"ref_smoke_001\"); assertNotNull(result); StepVerifier.create(result).expectComplete().verify(Duration.ofMillis(100));`. Skip if Task 6 style consistency is the priority (currently it is, per task `Implementation hints` line: 'Mirror T6 in structure — same patterns, same test style')."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 4,
+      "passed": 4,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 4,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

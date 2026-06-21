@@ -1,0 +1,62 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 2,
+  "status": "approved",
+  "verdict": "approved",
+  "summary": "All five round-1 findings are resolved and verified. The GridFS orphan-blob leak is closed: streamToGridFs now publishes the file id into an AtomicReference the instant store() returns (before the writer-error rethrow), and handleFailure deletes via that holder; SubscriberExportIT.exportJob_internalError_writesFailedAndEmail now asserts no fs.files doc remains. The download session-auth deviation is made internally consistent and explicit (controller Javadoc + SecurityConfig:97 /api/** authenticated + download-path requireOwned(currentUserId()) all agree) and locked by SubscriberExportSignedUrlIT.unauthenticatedDownload_rejectedBySecurity_returns403, whose 403 assertion matches the SecurityBlockTest precedent. The three minor fixes (unused import removed, PipedInputStream in try-with-resources, refresh-url default arm throws IllegalStateException) are all present. compileTestJava is clean; the three affected test classes are green (14 + 5 + 14 = 33 tests, 0 failures, 0 errors).",
+  "priorFindingsResolution": [
+    {
+      "round1Finding": "1 (major) GridFS orphan-blob leak on FAILED path",
+      "status": "resolved",
+      "verification": "ExportSubscribersJob.handle() (line 129) creates AtomicReference<ObjectId> createdFileId and passes it into streamToGridFs (line 131); store()'s return is captured into the holder at line 170 inside the try, BEFORE the writerError rethrow at lines 186-191, so a writer failure that left store() returning a partial/0-byte blob still surfaces the id. handleFailure receives createdFileId.get() (line 134) and deletes it when non-null (lines 245-247). Confirmed the only path that persists a blob is store() returning, which always sets the holder first; if store() itself throws, the holder stays null and the skipped delete is correct (no blob persisted). SubscriberExportIT line 147-150 now asserts gridFsOperations.findOne(metadata.exportId == exportId) is null on the FAILED branch. Test passes."
+    },
+    {
+      "round1Finding": "2 (major) Download endpoint requires session, contradicts tech-spec §146 (HMAC-only)",
+      "status": "resolved-as-documented-deviation",
+      "verification": "Code is now internally consistent: SubscriberExportController Javadoc (lines 64-70) states the endpoint is session-guarded + token-bound (defense-in-depth); the download path runs requireOwned(currentUserId(), projectId, true) at line 247; SecurityConfig.java:97 maps /api/** to .authenticated() with no permitAll for the download path. The deviation from tech-spec §146's 'unauthenticated by session (HMAC only)' phrasing is now explicit in the controller Javadoc and in the new test comment, and is locked by SubscriberExportSignedUrlIT.unauthenticatedDownload_rejectedBySecurity_returns403 (no @WithMockAppUser → 403, matching the SecurityBlockTest /api/** anonymous→403 precedent). Keeping session-auth + an explicit deviation note + a locking test is an acceptable resolution to the task-vs-tech-spec contradiction: the controller's authz model, SecurityConfig, the test, and the Javadoc all now agree, and the product decision is recorded rather than silent. See NEW finding N1 below regarding the decisions.md cross-reference."
+    },
+    {
+      "round1Finding": "3 (minor) Unused StandardCharsets import in ExportSubscribersJob",
+      "status": "resolved",
+      "verification": "Import removed; ExportSubscribersJob no longer imports java.nio.charset.StandardCharsets (the deterministic-UUID computation that needs it lives in the controller, which retains its own import at line 51). compileTestJava clean."
+    },
+    {
+      "round1Finding": "4 (minor) PipedInputStream never closed",
+      "status": "resolved",
+      "verification": "ExportSubscribersJob line 153 now opens the read end in try-with-resources (try (PipedInputStream in = new PipedInputStream(PIPE_BUFFER))), symmetric with the writer's closeQuietly(pipeOut). The added catch for java.io.IOException (lines 182-184) handles the AutoCloseable.close() checked exception correctly."
+    },
+    {
+      "round1Finding": "5 (minor) refresh-url default arm masks future enum value",
+      "status": "resolved",
+      "verification": "SubscriberExportController.refreshUrl default arm (line 342) now throws new IllegalStateException(\"Unhandled export status: \" + export.getStatus()) instead of returning export_failed/410, so an added enum constant surfaces as a runtime error rather than masquerading as a failed export."
+    }
+  ],
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "work/09-subscribers/decisions.md",
+      "line": 0,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Both the SubscriberExportSignedUrlIT test comment (line 213) and the round-2 fix summary point readers to decisions.md as the home of the session-auth-vs-HMAC-only deviation, but decisions.md currently ends at the Task 8 entry — there is no Task 9 section yet. This is expected (the Task 9 entry is written when the task is finalized via the feature-execution/done flow, after reviews pass), so the forward reference is accurate-pending, not broken. Ensure the Task 9 decisions.md entry, when added, includes a Deviations line: 'Kept session-auth on the download endpoint (defense-in-depth: session + HMAC); deviated from tech-spec §146 \\\"unauthenticated by session (HMAC only)\\\" because permitAll-ing a PII endpoint is out of the task's declared scope (SecurityConfig not in the modify list) and step-3 mandates requireOwned(currentUserId()). Locked by unauthenticatedDownload_rejectedBySecurity_returns403.' so the test's 'see decisions.md' pointer resolves to real content.",
+      "benefit": "Closes the documentation loop the test comment promises; keeps the deviation auditable by Task 12/13 (which read decisions.md for per-task deviations).",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/subscriber/jobs/ExportSubscribersJob.java",
+      "line": 196,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The F10 metadata.rowCount back-fill (line 196-199) reads createdFileId.get() again after the writer-error guard. It is correct (only reached on success, where the holder is always set), but a local final ObjectId fileId = createdFileId.get() right after the writer-error check would make the success-path read self-documenting and avoid a second holder dereference. Purely cosmetic.",
+      "benefit": "Marginally clearer that the back-fill operates on the just-stored, guaranteed-non-null id.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 2,
+    "testCoverageAssessment": "excellent"
+  }
+}

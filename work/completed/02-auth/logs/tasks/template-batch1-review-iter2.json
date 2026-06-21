@@ -1,0 +1,66 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "Details",
+      "issue": "Dependencies subsection lists 'Task 3 (EmailService for event notifications)' but Task 4 does not inject or call EmailService anywhere in its implementation. EventService (created in Task 4) writes events to MongoDB only — no email involvement. The note is misleading and may confuse the implementing agent into importing a dependency that doesn't exist yet (Tasks 3 and 4 are in the same wave and run in parallel).",
+      "fix": "Remove 'Task 3 (EmailService for event notifications)' from the Dependencies note in Task 4. Task 4 depends on Task 1 and Task 2 only."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "Tech-spec Task 5 lists 'Files to read: EmailService.java, UserRepository.java' but neither is present in Task 5 Context Files as a linked code file. Task 5's implementation extends AuthService which directly calls EmailService and queries UserRepository — having those files as context would help the implementing agent.",
+      "fix": "Add to Context Files: `- [EmailService.java](../../../backend/src/main/java/com/botfunnel/email/EmailService.java)` and `- [UserRepository.java](../../../backend/src/main/java/com/botfunnel/user/UserRepository.java)`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 1,
+      "section": "Context Files",
+      "issue": "patterns.md is absent from Context Files. The template includes it as a standard project context file. Carry-forward from iteration 1 — not fixed.",
+      "fix": "Add `- [patterns.md](../../.claude/skills/project-knowledge/references/patterns.md)` to Context Files."
+    }
+  ],
+  "resolved_from_iter1": [
+    {
+      "task": "all (1-5)",
+      "section": "Context Files",
+      "issue": "decisions.md was missing from all 5 tasks",
+      "resolution": "FIXED — decisions.md present in all 5 tasks at ../decisions.md"
+    },
+    {
+      "task": 1,
+      "section": "What to do / Details",
+      "issue": "JaCoCo was not in scope",
+      "resolution": "FIXED — Step 5 explicitly adds jacoco plugin, jacocoTestReport config block, and the dep to build.gradle"
+    },
+    {
+      "task": 2,
+      "section": "What to do / Details",
+      "issue": "patterns.md conflict note was absent and /actuator/health concern",
+      "resolution": "FIXED — patterns.md conflict note present (line 120-121, 'Ignore any patterns.md guidance about disabling CSRF'); health path is '/health' (not '/actuator/health') which is correct"
+    },
+    {
+      "task": "all (1-5)",
+      "section": "Details",
+      "issue": "Dependencies subsection was missing from all tasks",
+      "resolution": "FIXED — Dependencies subsection present in all 5 tasks"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3,
+    "criticals": 0,
+    "majors": 0,
+    "minors": 3,
+    "resolved_from_iter1": 4
+  }
+}

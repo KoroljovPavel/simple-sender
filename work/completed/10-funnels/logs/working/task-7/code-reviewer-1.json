@@ -1,0 +1,16 @@
+{
+  "task": "7",
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+      "line": "137-140",
+      "issue": "In cancelActiveFor() the no-CONNECTED-bot branch logs LOG_CANCEL_NO_SUBSCRIBER (\"FUNNEL_CANCEL_SKIP_NO_SUBSCRIBER\"), which is the wrong reason code — the bot was missing, not the subscriber. Both no-bot and no-subscriber paths emit the same code, making the two skip causes indistinguishable in logs.",
+      "fix": "Add a dedicated LOG_CANCEL_NO_BOT constant (e.g. \"FUNNEL_CANCEL_SKIP_NO_CONNECTED_BOT\") and use it in the no-bot branch. Cosmetic / observability only; no behavioral impact and no PII concern."
+    }
+  ],
+  "summary": "Task 7 is approved. The real FunnelTriggerServiceImpl is the single @Service implementing the interface (NoOp class and its test fully deleted; verified no other 'implements FunnelTriggerService' and no NoOp remnants), so there is no NoUniqueBeanDefinitionException risk. fire() wraps its entire body in try/catch(Throwable) with swallow+log and never rethrows (Decision 6) — verified end-to-end by the IT that drives the real ProcessTelegramUpdateJob.handle path and asserts raw_update ends DONE with null error (no retry-storm). Worker ordering is untouched (call sites in ProcessTelegramUpdateJob not modified; reactivationOrdering IT confirms upsert sets status=active before fire()). Re-enter guard relies solely on the unique partial index (funnelId, subscriberId) on status IN [running, waiting] with DuplicateKeyException swallow for allowReEnter=false, and atomic cancel-then-insert for allowReEnter=true — no query-time check, matching Decision 8. stepsSnapshot is a deep copy via FunnelStep.copyOf (Decision 3, covered by snapshotIsDeepCopyDecoupledFromFunnelEdits), telegramBotId is pinned from the CONNECTED bot (Decision 7). Enum statuses in Mongo criteria use lowercase .name() literals (Decision 14), byte-matching the index partialFilter (reinforced by a class-load assertion in FunnelExecution). Subscriber lookup goes through SubscriberService.findByChat (module boundary preserved), never SubscriberRepository directly. Logging uses named constants with identifiers/codes only — no payload/PII (Decision 16). Cross-file checks pass: findByProjectIdAndStatus, findByProjectIdAndTriggerTypeAndTriggerValueAndStatus, findByChat, FunnelStep.copyOf signatures all match call sites; nextRunAt=now is picked up by the engine's nextRunAt<=now claim predicate. Clock is injected and used via Instant.now(clock) for deterministic tests. Test coverage maps 1:1 to the TDD anchor (snapshot+pinned bot, exact/empty/non-empty payload, no-match, draft-not-matched, reenter false/true, cancelActiveFor scope, no-bot/no-subscriber, error isolation through webhook, reactivation ordering). One low-severity logging label inaccuracy noted; non-blocking."
+}

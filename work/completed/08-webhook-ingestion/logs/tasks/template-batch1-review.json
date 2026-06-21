@@ -1,0 +1,142 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 1,
+      "section": "Context Files",
+      "issue": "Mandatory context files missing: project.md and testing.md are not linked (template lists them as mandatory). Only architecture.md, patterns.md, user-spec, tech-spec, decisions are present.",
+      "fix": "Add links to [project.md](../../../.claude/skills/project-knowledge/references/project.md) and [testing.md](../../../.claude/skills/project-knowledge/references/testing.md) in Context Files."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "Mandatory context files missing: project.md and testing.md are not linked (template marks them mandatory).",
+      "fix": "Add [project.md] and [testing.md] links to Context Files."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "Mandatory context files missing: architecture.md, project.md, testing.md are not linked.",
+      "fix": "Add [architecture.md], [project.md], [testing.md] links."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 4,
+      "section": "Context Files",
+      "issue": "Mandatory context files missing: architecture.md, project.md, testing.md are not linked.",
+      "fix": "Add [architecture.md], [project.md], [testing.md] links."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "Mandatory context files missing: architecture.md, project.md, testing.md are not linked.",
+      "fix": "Add [architecture.md], [project.md], [testing.md] links."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "TDD Anchor",
+      "issue": "`verify_usesMessageDigestIsEqual` test relies on MockedStatic introspection of MessageDigest.isEqual usage rather than verifying observable timing/behavior. This is a structural assertion that verifies a method was called rather than what the comparison guarantees. Acceptable but borderline — pin the rationale in the test javadoc as the task already notes.",
+      "fix": "Consider adding at least one observable-behavior test alongside the MockedStatic verification (e.g., that matching/non-matching same-length inputs are both compared in full — currently inferred indirectly). Optional; current approach is documented and acceptable."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "What to do",
+      "issue": "Step 4 references a manually-aged-row TTL test that is marked `@Disabled` because the Mongo TTL monitor is not under test control. While documented, declaring an `@Disabled` test as a TDD anchor (line under TDD Anchor: `failedStatus_excludedFromTtlPartialFilter`) is misleading — a disabled test cannot drive TDD or serve as a verification anchor.",
+      "fix": "Either remove the disabled test from the TDD Anchor list, or replace with a non-disabled assertion that verifies the partial filter expression contains the correct uppercase literals (which is already covered by `ttlIndex_partialFilterIsUppercase`)."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 2,
+      "section": "What to do",
+      "issue": "Task bundles three concerns into one unit: (a) extract Sha256Hex helper from BotService, (b) refactor BotService.connect call site and delete private method, (c) create WebhookSecretVerifier @Component. Files modified: 5 (4 new + 1 refactor). Borderline for the >3 files rule but the changes are logically cohesive (DRY promote + first consumer of the promoted helper) and explicitly justified by Decision 15. Logical cohesion is acceptable; flagging for visibility only.",
+      "fix": "No action required if reviewers accept the cohesion rationale. Otherwise split into (1) extract Sha256Hex + refactor BotService, (2) create WebhookSecretVerifier."
+    },
+    {
+      "severity": "minor",
+      "category": "frontmatter",
+      "task": 1,
+      "section": "frontmatter",
+      "issue": "`teammate_name` field is present but empty (no value after the colon). Template shows the field as optional with no value — acceptable. Same pattern in all 5 tasks.",
+      "fix": "No action required — matches template style. Note for consistency only."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 1,
+      "section": "Verification Steps",
+      "issue": "Verification Steps Automated subsection duplicates Smoke subsection content (both run essentially the same `./gradlew test --tests *MeterRegistryConfigTest`). Smoke is meant for executable end-to-end checks beyond unit tests.",
+      "fix": "Either differentiate Smoke (e.g., boot the app and curl an endpoint that touches the registry) or omit the Smoke subsection if no additional smoke check exists beyond the automated test."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 2,
+      "section": "Verification Steps",
+      "issue": "Smoke subsection only re-runs the automated tests with a different glob pattern — no actual smoke distinction.",
+      "fix": "Differentiate Smoke from Automated or remove the redundant Smoke subsection."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 3,
+      "section": "Verification Steps",
+      "issue": "Smoke subsection only re-runs the automated tests with a slightly different glob — no smoke-specific verification.",
+      "fix": "Differentiate Smoke (e.g., load the parser at boot via a tiny REPL/Probe) or remove."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 4,
+      "section": "Verification Steps",
+      "issue": "Smoke subsection duplicates Automated (same test class via different glob).",
+      "fix": "Differentiate or remove redundant Smoke."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 5,
+      "section": "Verification Steps",
+      "issue": "Smoke includes a useful `mongosh` index inspection step (good) but the first Smoke line just re-runs the Automated test.",
+      "fix": "Remove the duplicate `./gradlew test ...` first line of Smoke; keep only the mongosh inspection as the smoke check."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 5,
+      "section": "What to do",
+      "issue": "Files-to-modify count is 4 (3 new java + 1 new test) — within scope, but the test class covers a lot of ground (duplicate-key, index metadata for 3 indexes, status persistence, plus a disabled TTL test). Each individual test is reasonably scoped; flagging for visibility only.",
+      "fix": "No action required. Task is logically cohesive (entity + enum + repository + their integration test)."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 1,
+      "section": "Acceptance Criteria",
+      "issue": "Task 1 maps to user-spec AC16 (observability counters). The task's AC validates bean registration and `find().counter() == null` behavior. The task does not — and cannot — assert the four production counters tick (that lives with the consumers in T9/T10/T11). This is correct decomposition but worth noting that AC16 closure depends on downstream tasks.",
+      "fix": "No action required. Add a one-liner in the task description that explicitly notes 'AC16 full closure spans T1+T9+T10+T11' to make the cross-task dependency visible."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 16,
+    "critical": 5,
+    "major": 0,
+    "minor": 11
+  }
+}

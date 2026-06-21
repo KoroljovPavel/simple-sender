@@ -1,0 +1,37 @@
+{
+  "task": 9,
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "skill": "code-reviewing",
+  "scope": "git diff HEAD~1 — frontend/types/funnel.ts, FunnelTriggerSettings.vue, FunnelStepForm.vue, [funnelId].vue, uk.json, en.json, specs",
+  "summary": "Frontend-only Phase-3 funnel-editor UI. Portable trigger component, EMIT_EVENT step, type + i18n changes. Clean, follows existing conventions (defineModel, SearchableSelect lazy-fetch + error-swallow, vee-validate schemaFor/onSubmit branch, data-test naming). No security/perf/resource concerns (presentational, no new heavy resources). All 402 frontend tests green; locale parity gate exit 0.",
+  "findings": [
+    {
+      "severity": "minor",
+      "dimension": "Type Safety (5)",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 75,
+      "finding": "res.triggerType is typed string | null; cast `as FunnelTriggerType` is unchecked. A malformed/unknown backend value would render no value editor (selector matches nothing). The ?? 'on_start' only catches null.",
+      "action": "accept-as-is",
+      "reason": "Backend is the contract and only emits the five known values; this is a UX mirror. Same loose-cast idiom the codebase uses elsewhere (e.g. status). Not worth defensive narrowing for an impossible state."
+    },
+    {
+      "severity": "minor",
+      "dimension": "Code Readability (3) / Correctness",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 147,
+      "finding": "The post-load deep-watch on [triggerType, triggerValue, keywords] fires once after seeding (loaded=true is set in the same sync block before the async watch callback), scheduling a debounced no-op PATCH of the just-loaded state.",
+      "action": "accept-as-is",
+      "reason": "Pre-existing behavior: the original watch(triggerValue) had the identical characteristic. Debounced (600ms) no-op re-PATCH of loaded state is harmless and preserves the established auto-save pattern. Changing it would be scope creep beyond the task."
+    },
+    {
+      "severity": "info",
+      "dimension": "Architecture (1) / Separation of Concerns (2)",
+      "file": "frontend/components/funnels/FunnelTriggerSettings.vue",
+      "finding": "Trigger component is self-contained per Decision 11: state via defineModel only, no store coupling beyond the lazy tag/field fetch (same idiom as FunnelStepForm). Migrates unchanged into a future canvas node.",
+      "action": "noted-positive"
+    }
+  ],
+  "verdict": "approve",
+  "unresolved": []
+}

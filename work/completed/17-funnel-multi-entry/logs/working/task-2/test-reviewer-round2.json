@@ -1,0 +1,36 @@
+{
+  "status": "APPROVED",
+  "round": 2,
+  "findings": [
+    {
+      "severity": "INFO",
+      "prior_severity": "MEDIUM",
+      "id": "R1-MEDIUM-1",
+      "resolution": "FIXED",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java",
+      "issue": "MARKER_APPLIED/MARKER_NOOP not asserted via ListAppender — round-1 finding.",
+      "verification": "A @BeforeEach/ListAppender<ILoggingEvent> lifecycle (attachLogAppender / detachLogAppender) is now present. The markerCount() helper filters Level.INFO events with exact message equality (marker.equals(e.getFormattedMessage())), so a reword of either constant breaks the assertion — the whole point of the pin. migrationDropsOldFlatTrioTriggerIndex asserts markerCount(MARKER_APPLIED)==1 AND markerCount(MARKER_NOOP)==0 (cross-asserts both). reconciliationIsIdempotentNoOpOnSecondBoot asserts markerCount(MARKER_NOOP)==1 AND markerCount(MARKER_APPLIED)==0 (cross-asserts both). MARKER_APPLIED and MARKER_NOOP are package-private static constants; the IT is in the same package (com.botfunnel.funnel), so access is valid. The manual runReconciliation() call (a fresh FunnelTriggerIndexReconciliation() instance) fires after the appender is attached, so all marker events ARE captured. Fully resolved.",
+      "residual_gap": "reconciliationNoOpOnFreshDatabase does not assert markerCount(MARKER_NOOP). The fresh-DB path also logs NOOP, so this marker is left unpinned in that specific test. However: (a) the idempotent-second-boot test already pins MARKER_NOOP with an exact count; (b) the task spec's smoke requirement calls out APPLIED by name only; (c) this gap was not present in round-1. Logging as INFO-level note, not a new finding — the NOOP path is pinned through reconciliationIsIdempotentNoOpOnSecondBoot."
+    },
+    {
+      "severity": "INFO",
+      "prior_severity": "LOW",
+      "id": "R1-LOW-1",
+      "resolution": "FIXED",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java",
+      "issue": "reconciliationNeverThrowsOnMongoFault missing isSameAs assertion on returned bean — round-1 finding.",
+      "verification": "Fixed with Object[] returned = new Object[1] capture inside the lambda. assertThat(returned[0]).as('postProcessAfterInitialization must return the unmodified original bean').isSameAs(broken) is present and correct. isSameAs is the right assertion (reference equality, not value equality). The array trick is necessary because lambda closures require effectively-final variables; this is idiomatic Java. Fully resolved."
+    },
+    {
+      "severity": "INFO",
+      "prior_severity": "LOW",
+      "id": "R1-LOW-2",
+      "resolution": "FIXED",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java",
+      "issue": "Cross-element multikey false-positive case untested — round-1 finding.",
+      "verification": "findByTriggersTriggerTypeAndValueExcludesCrossElementMatch added: funnel with triggers=[{keyword,purchase},{event,other}], queries (event, purchase), asserts isEmpty(). Correct negative-case shape. Cleanup via mongoTemplate.remove by projectId. More importantly, the underlying repository method now carries an explicit @Query annotation with $elemMatch (visible in diff-round2.patch), so this IT is testing a real semantic change, not just documenting a potential risk — the $elemMatch guarantees the cross-element case is excluded at the DB layer rather than relying solely on the caller's re-scan. Fully resolved."
+    }
+  ],
+  "new_findings": [],
+  "summary": "APPROVED. All three round-1 findings are resolved. (1) MEDIUM resolved: ListAppender lifecycle is correct, markerCount() uses exact-message equality, both migrationDropsOldFlatTrioTriggerIndex and reconciliationIsIdempotentNoOpOnSecondBoot assert MARKER_APPLIED and MARKER_NOOP with bidirectional cross-asserts. Minor: reconciliationNoOpOnFreshDatabase does not pin MARKER_NOOP — noted as INFO, not a blocking finding, since the NOOP path is already pinned by the idempotent test. (2) LOW-1 resolved: isSameAs(broken) now asserts the BeanPostProcessor return-value contract. (3) LOW-2 resolved: findByTriggersTriggerTypeAndValueExcludesCrossElementMatch correctly tests the cross-element exclusion, and the repository now uses @Query $elemMatch making the test substantive rather than speculative. No new test-quality issues found. Assertion quality across all tests is high: exact counts, exact key/filter equality, reference-identity for the BPP bean, negative cross-asserts for log markers. ITs run deferral to Task 11 (after Tasks 4-5 wire consumers) is expected and not a finding."
+}

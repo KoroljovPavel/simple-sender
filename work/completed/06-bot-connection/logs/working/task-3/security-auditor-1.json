@@ -1,0 +1,51 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 4,
+    "critical": 0,
+    "major": 1,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "A04: Insecure Design",
+      "title": "No @JsonIgnore defense-in-depth on sensitive Bot entity fields",
+      "description": "Bot.java exposes public bean getters for four sensitive fields — encryptedTokenCiphertext, encryptedTokenIv, webhookSecretHash, and tokenSuffix — with no @JsonIgnore (or @JsonProperty(access = WRITE_ONLY)) annotation. Today the codebase mediates HTTP responses through DTOs (BotResponse per D17, mirroring ProjectController -> ProjectResponse), so no leak is happening now. But the entity is one careless future return statement away from serializing the encrypted ciphertext, IV, and webhook secret hash to the wire — e.g. if Task 6's BotService or any downstream controller mistakenly returns Mono<Bot> instead of Mono<BotResponse>. The persistence shape is also reachable from Spring Data REST style endpoints, debug actuators, or default error serialization paths. Given the explicit user-spec stance \"FULL token never round-trips\" (D17) and that webhookSecretHash is treated as security-sensitive (D2), this is exactly the place where defense-in-depth annotation belongs.",
+      "location": "backend/src/main/java/com/botfunnel/bot/Bot.java:41-44, 67-77",
+      "impact": "A future Mono<Bot> return statement (Task 6 / 06b / 06c) would leak encryptedTokenCiphertext + encryptedTokenIv (both Base64 — an attacker with the BOT_TOKEN_ENCRYPTION_KEY can decrypt) and webhookSecretHash (an attacker who recovers the plaintext webhook secret can forge incoming Telegram updates). The class-level annotation cost is one line per field; the cost of catching this in PR review every future task is forever.",
+      "recommendation": "Annotate the four sensitive getters (or fields) with @com.fasterxml.jackson.annotation.JsonIgnore so any accidental Mono<Bot> -> ResponseEntity serialization path strips them. Example:\n\n    @JsonIgnore\n    public String getEncryptedTokenCiphertext() { return encryptedTokenCiphertext; }\n\nApply to encryptedTokenCiphertext, encryptedTokenIv, webhookSecretHash. tokenSuffix is debatable since D17 says it ships to the frontend deliberately — but it should ship via BotResponse, not via accidental Bot serialization, so annotating it too is safer. This does not affect Spring Data MongoDB persistence (which uses its own MappingMongoConverter, not Jackson).",
+      "cwe": "CWE-200"
+    },
+    {
+      "severity": "minor",
+      "category": "A05: Security Misconfiguration",
+      "title": "BotStatus.fromString(null) throws NullPointerException instead of validation error",
+      "description": "BotStatus.fromString calls s.toUpperCase() without a null check. If a JSON payload arrives with status: null (or omits the field but Jackson chooses to invoke the delegating creator with null — version- and config-dependent), the controller emits an uncaught NullPointerException that GlobalErrorHandler then maps to a generic 500 rather than the proper 400 bean-validation response that other malformed-status cases produce via valueOf's IllegalArgumentException. The 500 response is the wrong category for client-supplied bad input, leaks a stack-trace shape in logs, and may give the impression of a service bug to operations.\n\nReachability: in this task BotStatus is not yet bound to an HTTP request body (06's ConnectBotRequest uses token only, not status), so today the only callers are Jackson reading literal status strings inside controllers' request payloads in Tasks 6/7/8/9 — there is no surface where the client supplies a status. But (a) the Jackson behavior is implicit in any future endpoint that accepts a BotStatus in a body or query, and (b) PATCH-style update DTOs that include status: null to mean \"no change\" are a common pattern. Adding the guard now removes a sharp edge before any of those land.",
+      "location": "backend/src/main/java/com/botfunnel/bot/BotStatus.java:19-21",
+      "impact": "500 Internal Server Error for client input that should be 400 Bad Request. Mild operational noise (stack traces in logs for a logical client error). Not exploitable beyond minor information disclosure of internal exception type, but a quality-of-implementation gap worth closing while the file is fresh.",
+      "recommendation": "Add null + blank handling that returns null (Jackson will treat that as \"no value\") or throws a typed validation exception. Example:\n\n    @JsonCreator\n    public static BotStatus fromString(String s) {\n        if (s == null) return null;\n        return BotStatus.valueOf(s.toUpperCase());\n    }\n\nA stricter variant throws IllegalArgumentException with a clear message on null/blank, which GlobalErrorHandler maps to 400 the same way it maps the unknown-value case today.",
+      "cwe": "CWE-476"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Bot entity has no custom toString — default Object.toString is safe today but verify on hot paths",
+      "description": "Bot.java does not override toString(), so the default Object#toString returns class@hash — no field leakage. This is the safe default and matches the Project.java convention. Flagging proactively because (a) it is a common foot-gun for future maintainers to add a Lombok @ToString or hand-written toString that includes all fields, which would expose encryptedTokenCiphertext / encryptedTokenIv / webhookSecretHash in any log line that interpolates the entity (e.g. log.error(\"failed to save {}\", bot)), and (b) Spring's default logging of repository exceptions sometimes includes the document body. Task 6's BotService is the natural place this hazard reappears.",
+      "location": "backend/src/main/java/com/botfunnel/bot/Bot.java",
+      "impact": "Future risk if a maintainer adds toString() including secret fields, or if Spring Data Mongo's DuplicateKeyException error path serializes the document body into a log message. Today: no concrete leak.",
+      "recommendation": "Either (a) explicitly override toString() to exclude the four sensitive fields, e.g. return only id + projectId + telegramBotId + status, or (b) add a code comment on the four sensitive fields warning future maintainers not to include them in toString. Pair with a unit-test guard in Task 6 that asserts log output for a saved Bot does not contain the ciphertext.",
+      "cwe": "CWE-532"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Partial-filter literal hardcoded to enum name() — silent breakage if BotStatus enum is renamed",
+      "description": "Both partial-unique indexes use the string literal 'CONNECTED' in partialFilter. This is correct today because Spring Data MongoDB persists BotStatus as enum.name() ('CONNECTED'), and the tech-spec edge-case note explicitly calls this out. The risk is a future rename or addition of an enum value (e.g. CONNECTED -> ACTIVE, or adding PENDING / SUSPENDED) silently breaking the partial filter: Mongo would happily build an index that matches zero rows, both D1 and D5 race protections would quietly disappear, and the only signal would be a regression in BotIndexTest. The coupling between Java enum name() and a string literal in an annotation is invisible to most IDE refactor tools.\n\nThis is design-level, not a bug in the current code — it is correct as written. Calling it out because the security guarantees of D1 / D5 hinge on this string remaining in sync, and the tech-spec already noted this hazard once (the lowercase-vs-uppercase confusion in Decision 1 prose). Defense: a tiny static-init assertion or a constant.",
+      "location": "backend/src/main/java/com/botfunnel/bot/Bot.java:22, 26",
+      "impact": "If a future change renames BotStatus.CONNECTED without simultaneously updating both partialFilter strings, the partial-unique indexes silently match no rows. The D1 race window (two projects connecting the same Telegram identity) and D5 race window (two concurrent connects to the same project) reopen with no observable failure until BotIndexTest catches it — but only if that test still runs in CI on every change. Severity is minor because the test in this commit does catch it.",
+      "recommendation": "Two options. (a) Add a class-level comment or @SuppressWarnings(\"the literal 'CONNECTED' must match BotStatus.CONNECTED.name()\") so future renames see the contract. (b) Cleaner: extract the literal to a package-private constant in BotStatus, e.g. public static final String PERSISTED_CONNECTED = CONNECTED.name(); — though Spring's @CompoundIndex(partialFilter = ...) requires a compile-time-constant string, so the constant cannot be referenced inside the annotation itself. Practical fix: a static initializer block that asserts BotStatus.CONNECTED.name().equals(\"CONNECTED\") so a rename fails at class-load time, not silently in production.",
+      "cwe": "CWE-665"
+    }
+  ]
+}

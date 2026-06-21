@@ -1,0 +1,97 @@
+{
+  "verdict": "approved",
+  "status": "passed",
+  "summary": "21 tests cover every branch listed in the Task 9 TDD anchor (initial fetch, 404 fallback, paste-enables-button, whitespace-only stays disabled, loading state, swap-to-Connected, AC18 masked-token literal, all 6 connect-error statuses, AC19 modal copy, Cancel-vs-Confirm modal flow, disconnect 404, test-message 422, token-regex negative, Connected initial-render). Litmus test passes on every test: the implementation line each test targets is load-bearing and the assertion fails without it. Error-message regex substrings are individually unique within the bot.* and errors.bot.* sub-tree of uk.json, so cross-resolution regressions (e.g. wrong context key passed to useApiError) are detected. Mock isolation is sound: the reactive(botStoreMock) wrapper is the same object as the hoisted target, mutations trigger re-renders, and resetMock() covers every member that any test mutates. Excessive-mocking rule is not breached (4 auto-imports stubbed; useApiError, useI18n and the real shadcn/reka Dialog all run un-mocked, so the page-error pipeline is exercised end-to-end through real i18n). Minor gaps are listed below — none rise to needs_improvement severity.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts",
+      "location": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts:265-279",
+      "line": 278,
+      "issue": "AC19 modal-copy assertion is a substring (`/Вхідні повідомлення припиняться/i` plus `@SmokeBot`). Task 9 demands the *exact* AC19 copy: 'Disconnect bot @{username}? Incoming messages will stop and the webhook will be removed. You can reconnect anytime.' A copy regression that drops the second half of the sentence (e.g. removes 'а вебхук буде видалено. Підключити знову можна будь-коли.') would still satisfy the current regex. The test does not anchor the full localized body.",
+      "recommendation": "Replace the substring regex with an exact-text assertion against the full uk.json body, e.g. `const expectedBody = 'Відключити бота @SmokeBot? Вхідні повідомлення припиняться, а вебхук буде видалено. Підключити знову можна будь-коли.'; expect(modal.text()).toContain(expectedBody);`. Keep the username sub-assertion as defense in depth, but the full-body assertion is what locks AC19 down.",
+      "suggestion": "Lock the assertion to the full canonical AC19 body string from uk.json (`bot.disconnect.modal.body` with `{username}` interpolated) so any future copy edit that drops a clause fails the test."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts",
+      "location": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts:347-362",
+      "line": 360,
+      "issue": "The AC17 token-leak negative assertion only fires on the connect-422 error path. The Connected view (which intentionally renders the masked-token suffix and is the most realistic place a leak could land — e.g. a future regression that swaps `:•••...${tokenSuffix}` for `:${rawToken}`) is never checked against TOKEN_REGEX. The 'masked token uses literal AC18 form' test (line 170) asserts the exact string but a string `1234567890:rawTokenABCDEFGHIJKLMNOPQRSTUVWXYZ` would not match the AC18 literal *and* would not be caught by AC17, leaving a hole in the contract that the regex is meant to guard.",
+      "recommendation": "Add a regex check inside the Connected-view tests (or extend the existing AC17 test to also mount with `reactiveStore.current = BOT_FIXTURE` and assert `expect(wrapper.text()).not.toMatch(TOKEN_REGEX)` after the masked-token render). Concrete: `it('Connected view text never matches token regex', async () => { reactiveStore.current = BOT_FIXTURE; const wrapper = await mountSuspended(BotPage); await settle(); expect(wrapper.text()).not.toMatch(TOKEN_REGEX); })`. This locks AC17/AC23 on the success path where the partial-token suffix actually appears in the DOM.",
+      "suggestion": "Extend the token-regex negative check to the Connected-view render path so a regression that prints the full token alongside the literal mask is caught even when AC18's exact-form test still passes a degraded variant."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts",
+      "location": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts:281-297",
+      "line": 297,
+      "issue": "The task's edge-case list explicitly calls out 'Modal escape key / backdrop click: shadcn-vue Dialog handles both by default — both must close the modal without triggering Disconnect.' The spec covers explicit Cancel-button click only. The `@update:open` wiring (`(v) => { if (!v) closeDisconnectModal() }`) is load-bearing for escape/backdrop close and is not asserted. A regression that removed the `@update:open` handler would still pass the current suite because the explicit Cancel button uses its own `@click="closeDisconnectModal"`.",
+      "recommendation": "Add a test that exercises the `update:open` event path: `const dialog = wrapper.findComponent({ name: 'Dialog' }); await dialog.vm.$emit('update:open', false); await settle(); expect(botStoreMock.disconnect).not.toHaveBeenCalled(); expect(wrapper.find('[data-test=\"bot-disconnect-modal-confirm\"]').exists()).toBe(false);`. This proves the escape/backdrop close path is wired and does not fire a network call.",
+      "suggestion": "Add a `Dialog @update:open false closes modal without calling disconnect` test that emits the event directly so the escape/backdrop close contract is locked even when reka-ui changes its internal close trigger."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts",
+      "location": "frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts:195-263",
+      "line": 207,
+      "issue": "Inconsistent assertion shape across the connect-error matrix. The 400 case (line 190-192) asserts `err.exists()` THEN `err.text()`; the 409/422/429/500/502 cases skip `.exists()` and rely on `text()` returning empty string when the element is absent. The behaviour is still correct (regex on empty string fails), but the failure message on a regression is less informative — 'expected `` to match /іншого проєкту/i' rather than 'expected `bot-error` to exist'. Minor consistency/diagnostics issue, not a correctness gap.",
+      "recommendation": "Extract a small helper used in every connect-error test: `function assertConnectError(wrapper: VueWrapper, pattern: RegExp) { const err = wrapper.find('[data-test=\"bot-error\"]'); expect(err.exists()).toBe(true); expect(err.text()).toMatch(pattern); }` and call it from each of the six status tests. Improves failure diagnostics and eliminates the 400-vs-rest asymmetry without changing semantics.",
+      "suggestion": "Wrap the connect-error assertions in a shared helper so all six status tests check `.exists()` before `.text()` — uniform diagnostics, same coverage."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "testsAnalyzed": 21,
+    "litmusTest": {
+      "checked": 21,
+      "passed": 21,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 21,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "tddAnchorBranchesCovered": {
+      "mountsAndFetchesOnMount": true,
+      "rendersConnectFormWhenNull": true,
+      "connectButtonEnablesOnToken": true,
+      "loadingStateDisablesBoth": true,
+      "successfulConnectSwapsToConnected": true,
+      "maskedTokenLiteralAC18": true,
+      "connectError400": true,
+      "connectError409": true,
+      "connectError422": true,
+      "connectError429": true,
+      "connectError500": true,
+      "connectError502": true,
+      "disconnectClickOpensModalAC19": true,
+      "cancelInModalNoApiCall": true,
+      "confirmInModalCallsDisconnect": true,
+      "disconnectError404": true,
+      "testMessage422": true,
+      "tokenNeverInDom": true,
+      "whitespaceOnlyKeepsDisabled": true,
+      "initialFetchConnectedView": true,
+      "settingsSubnavAC21": true
+    },
+    "mockIsolation": "sound (reactive proxy preserves identity with hoisted target; resetMock() covers all four action mocks plus current and route params; no shared state across tests)",
+    "errorSubstringUniqueness": {
+      "formatRegexConnect400": "unique within errors.bot.*",
+      "inshogoProyektuConnect409": "unique within errors.bot.*",
+      "nevalidnyiConnect422": "unique within errors.bot.*",
+      "fifteenMinutesConnect429": "unique within errors.bot.*",
+      "vebkukaConnect500": "unique within errors.bot.* (bot.toasts.webhookConfigError lives outside the bot-error data-test scope)",
+      "nedostupnyiConnect502": "matches connect.502 and testMessage.502 and projects.unavailable but each test scopes assertions to [data-test=bot-error] within a single click flow, so cross-resolution is detected",
+      "pidklyuchenogoBotaDisconnect404": "unique within errors.bot.*",
+      "slashStartTestMessage422": "matches testMessage.422 (errors-pane) and bot.connected.testMessageHint (Connected view label); the test asserts on [data-test=bot-error] only, so the hint text does not bleed in"
+    }
+  }
+}

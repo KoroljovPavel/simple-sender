@@ -1,0 +1,30 @@
+{
+  "task": "7",
+  "reviewer": "test-reviewer",
+  "round": 2,
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "medium",
+      "test": "FunnelTriggerServiceIT::snapshotIsDeepCopyDecoupledFromFunnelEdits",
+      "status": "resolved",
+      "issue": "Round-1: the decoupling anchor did not kill a shallow-copy mutant because the mutated test-side funnel and the fire()-snapshotted funnel were separate in-memory instances; replacing deepCopySteps() with `return funnel.getSteps()` would still pass.",
+      "resolution": "Added `assertThat(exec.getStepsSnapshot().get(0)).isNotSameAs(funnel.getSteps().get(0))`. Verified against impl: FunnelTriggerServiceImpl.deepCopySteps() builds a new ArrayList and adds FunnelStep.copyOf(step) per element (line 209-213), so the snapshot holds fresh instances. A shallow mutant (`return steps` or `new ArrayList<>(steps)`) would alias the source list's FunnelStep objects and the isNotSameAs guard would fail — litmus test now passes. FunnelStepTest.deepCopyProducesIndependentStep independently pins per-field bidirectional copy independence (all 11 fields, both directions) plus copyOfNullIsNull. The two tests together fully cover the Decision 3 deep-copy contract: identity decoupling (IT) + field-level independence (unit)."
+    },
+    {
+      "severity": "low",
+      "test": "FunnelTriggerServiceIT::fireCreatesExecutionWithSnapshotAndPinnedBot (Clock)",
+      "status": "resolved",
+      "issue": "Round-1: nextRunAt asserted only isNotNull; the 'deterministic Clock' anchor claim was not enforced, and a null/epoch/far-future mutant survived.",
+      "resolution": "Tightened to `isNotNull().isBetween(before, after)` where before/after bracket the fire() call with Instant.now(). This kills the null/epoch/far-future mutant and proves nextRunAt=fire-time-now (so the nearest sweep picks it up) without introducing flakiness. Declining a full Clock.fixed @TestConfiguration override is acceptable: production ClockConfig is Clock.systemUTC, no exact-instant assertion is made, and the window is wall-clock-tolerant. Acceptable as-is for a low-severity note."
+    },
+    {
+      "severity": "low",
+      "test": "FunnelTriggerServiceIT::reactivationOrderingFirstSendNotSelfCancelled",
+      "status": "resolved",
+      "issue": "Round-1: the 'would pass the engine pre-send gate' claim is inferred from subscriber status rather than exercising the engine gate (which lives in Task 6 / FunnelExecutionEngine).",
+      "resolution": "Accepted as-is. This was flagged as a scope note rather than a defect — the test correctly owns the Task-7 contract (worker upserts status=ACTIVE before fire(); created execution is running and not self-cancelled; subscriberId matches the reactivated subscriber). The comment is honest that the gate itself is engine-scoped. No change required for a trigger-scope IT."
+    }
+  ],
+  "summary": "All three round-1 findings resolved. The medium deep-copy finding is now adequately closed: the new isNotSameAs identity guard in snapshotIsDeepCopyDecoupledFromFunnelEdits kills a shallow-copy mutant (verified against FunnelTriggerServiceImpl.deepCopySteps which uses FunnelStep.copyOf), and FunnelStepTest.deepCopyProducesIndependentStep pins per-field bidirectional independence across all 11 fields — together they fully cover Decision 3. The low clock note is resolved by pinning nextRunAt to a [before, after] window (kills null/epoch/far-future mutants) without unnecessary Clock.fixed wiring; declining the full override is acceptable given Clock.systemUTC and no exact-instant assertions. The low reactivation-ordering note was a scope clarification, correctly left as-is for a trigger-scope IT (engine gate covered elsewhere). The impl-side hardening in the same commit (cancel queries scoped by projectId) is a tenant-isolation improvement that does not weaken any test. Verdict: approve."
+}

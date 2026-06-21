@@ -1,0 +1,131 @@
+{
+  "status": "changes_required",
+  "summary": {
+    "totalFindings": 12,
+    "critical": 4,
+    "major": 5,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "OWASP A07: Auth Failures",
+      "title": "Email enumeration oracle via per-email brute-force counter",
+      "description": "On non-existent emails, AuthService.handleUserNotFound() runs the dummy bcrypt and immediately throws 401 — but it does NOT call registerFailure(), so the per-email Redis counter brute:fail:{email} is never incremented for unknown emails. For existing emails with wrong password, registerFailure() does increment the counter. After 5 attempts, an existing email starts returning 429 while a non-existent email keeps returning 401. An attacker can probe any email with a wrong password 6 times: 6th response of 429 → email exists; 6th response of 401 → email does not exist. This defeats the dummy-bcrypt timing protection by giving an *out-of-band* enumeration channel through HTTP status codes.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:116-120 (handleUserNotFound) vs :128-130 (wrong-password path)",
+      "impact": "Reliable email enumeration in 6 requests/email. Attackers harvest valid accounts for credential stuffing, phishing, password reset abuse. Defeats Decision 13's stated goal of preventing email enumeration.",
+      "recommendation": "Always increment both counters on any failed login, including non-existent email. Move INCR (and EXPIRE-on-first) into a shared failure path before throwing 401:\n\nprivate Mono<User> handleUserNotFound(String password, String emailKey, String ipKey) {\n    return Mono.fromCallable(() -> passwordEncoder.matches(password, DUMMY_HASH))\n            .subscribeOn(Schedulers.boundedElastic())\n            .then(registerFailure(emailKey, ipKey))\n            .then(Mono.error(AppException.unauthorized(\"Invalid credentials\")));\n}\n\nThis also closes a DoS hole: without per-email increment for unknown emails, an attacker could spray through a 5-email rotation forever from one IP without ever tripping the per-email key.",
+      "cwe": "CWE-204"
+    },
+    {
+      "severity": "critical",
+      "category": "OWASP A07: Auth Failures",
+      "title": "Per-email brute-force key bypass via case/whitespace variation",
+      "description": "AuthService.login() and bruteEmailKey() use the raw user-supplied email string as both the MongoDB lookup key (userRepository.findByEmail(email)) and the Redis key (\"brute:fail:\" + email). User.email is documented in tech-spec as 'unique, lowercase' but no normalization is performed at lookup time and Task 5 (registration) is not yet merged. An attacker can rotate variants of the target's email — User@Example.com, USER@example.com, user@example.com, ' user@example.com' (leading space), 'user@example.com ' — each producing a distinct Redis key. Each variant gets its own 5-attempt budget. Across 10 variants the attacker has 50 tries before any 429.\n\nMongoDB's findByEmail will match exactly the stored value (case-sensitive default). If registration eventually stores lowercase only, the password attempts on uppercase variants will hit the non-existent-email path — which (per finding #1) doesn't even increment the counter. So the attacker can attempt thousands of passwords against the lowercase variant by burning the case-variant variants for free reconnaissance.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:73-77, 199-201",
+      "impact": "Per-email brute-force protection becomes meaningless. Targeted account takeover requires only ~5x more attempts per case variant — trivial for a script.",
+      "recommendation": "Canonicalize the email at the controller/service entry before any DB or Redis use:\n\nString email = request.getEmail().trim().toLowerCase(Locale.ROOT);\n\nApply the same normalization in registration, password-reset, forgot-password (Tasks 5/6). Add a unit test that login with 'USER@TEST.COM' shares the same Redis counter as 'user@test.com'.",
+      "cwe": "CWE-178"
+    },
+    {
+      "severity": "critical",
+      "category": "OWASP A02: Cryptographic Failures",
+      "title": "Bcrypt password hash persisted in MongoDB sessions collection",
+      "description": "openSession() constructs `new AppUserDetails(user)` and passes it as the principal of UsernamePasswordAuthenticationToken, then saves the SecurityContext via WebSessionServerSecurityContextRepository. Spring Session serializes the entire WebSession (including the SPRING_SECURITY_CONTEXT attribute) to the MongoDB sessions collection. AppUserDetails is a Java record that holds the entire User object, including User.passwordHash, User.emailVerificationTokenHash, and User.passwordResetTokenHash. Therefore every active session document on disk contains the user's bcrypt password hash (cost 12) AND any active reset/verification token hashes.\n\nWhile bcrypt cost-12 is offline-attack-resistant, storing it in a separate collection violates least-privilege for the data store: a sessions-only DB exfil now also leaks password hashes for every logged-in user. It also leaks reset/verification token hashes — if a token is currently active in the user document, it is duplicated into every active session for that user. SHA-256 token hashes are NOT brute-resistant the way bcrypt is; an attacker with the sessions dump could brute-force the 32-byte raw token only theoretically, but the duplication alone is a cryptographic-storage policy violation.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:174-188 (openSession), backend/src/main/java/com/botfunnel/auth/AppUserDetails.java:13 (record holds full User)",
+      "impact": "Sessions collection becomes a secondary password-hash store. Any read access to sessions (backup theft, ops misconfiguration, query injection in a future analytics endpoint) yields all logged-in users' bcrypt hashes plus active reset/verify tokens. Materially expands blast radius of any sessions-collection compromise.",
+      "recommendation": "Store only the user id (and minimal display fields) in the principal — never the full User entity. Two options:\n\n(1) Make AppUserDetails hold a minimal projection: `record AppUserDetails(String id, String email, String name, UserStatus status) implements UserDetails`. Reconstruct or refetch elsewhere when needed.\n\n(2) Before constructing AppUserDetails, clone User and null out passwordHash, emailVerificationTokenHash, passwordResetTokenHash.\n\nOption (1) is preferred. Update me() to build MeResponse from the projected fields directly. Also reduces session document size and avoids a stale-User-after-DB-update bug.",
+      "cwe": "CWE-522"
+    },
+    {
+      "severity": "critical",
+      "category": "OWASP A09: Security Logging and Monitoring",
+      "title": "login_failed events never written despite spec requirement",
+      "description": "user-spec line 80 explicitly requires 'login_failed' to be persisted in the events collection: 'Наступні події записуються в колекцію events: login_success, login_failed, password_changed, password_reset_requested, email_verified, account_blocked, account_unblocked, account_deleted'. tech-spec line 235 lists login_failed as a valid eventType in the schema. The acceptance criterion at user-spec line 115 reiterates this. Task 4 implementation logs only login_success (AuthService.java:169). There is no eventService.logEvent call on:\n  - wrong password (AuthService.java:127-130)\n  - non-existent email (AuthService.java:116-120)\n  - blocked status (AuthService.java:157-160)\n  - deleted status (AuthService.java:161-163)\n  - brute-force trip (AuthService.java:99-101)\n\nThis means there is no audit trail of credential attacks against the system. SOC alerting, account compromise investigation, and GDPR breach-notification timelines all rely on this audit trail. OWASP A09 (Security Logging and Monitoring Failures) is the compliance gap.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:116-120, 127-130, 157-163, 99-101",
+      "impact": "Brute-force, credential-stuffing, and targeted-account attacks are invisible in audit logs. Cannot detect ongoing attacks, cannot reconstruct timelines after a breach, and the implementation fails the user-spec acceptance criterion.",
+      "recommendation": "Log a login_failed event on every failure path with appropriate metadata:\n\nMap.of(\"reason\", \"wrong_password\")  // wrong password\nMap.of(\"reason\", \"unknown_email\")  // non-existent email — userId=null\nMap.of(\"reason\", \"blocked\")        // blocked user\nMap.of(\"reason\", \"deleted\")        // deleted user\nMap.of(\"reason\", \"brute_force\")    // 429 path — userId=null\n\nFor unknown-email: pass null userId (Event.userId is documented as nullable). Include ip and userAgent. Use fire-and-forget (eventService already does so). Add integration tests asserting the events collection contains the expected eventType+reason after each failure path.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "major",
+      "category": "OWASP A05: Security Misconfiguration",
+      "title": "Session cookie Secure flag defaults to false",
+      "description": "application.properties:15 sets `server.reactive.session.cookie.secure=${SESSION_COOKIE_SECURE:false}`. If SESSION_COOKIE_SECURE is not explicitly set in the production environment, Spring will mint session cookies without the Secure attribute. Browsers will then transmit the SESSION cookie over plain HTTP (e.g., on a misconfigured ingress, internal redirect, or downgrade attack), exposing it to network adversaries.\n\nThe safe default for a production-bound config is true; dev environments override to false. The current default is the unsafe direction — a deployment that forgets to set the env var ships insecure.",
+      "location": "backend/src/main/resources/application.properties:15",
+      "impact": "Session-cookie hijacking on any non-HTTPS path. Combined with HTTP-only=true (already set), this is the second of the cookie security trio; missing Secure = MITM session theft.",
+      "recommendation": "Flip the default and override per profile:\n  server.reactive.session.cookie.secure=${SESSION_COOKIE_SECURE:true}\nIn application-dev.properties (or application-test.properties): set to false.\nAlternatively use Spring profile-conditional config with a comment in deployment.md that prod must inherit `secure=true`.",
+      "cwe": "CWE-614"
+    },
+    {
+      "severity": "major",
+      "category": "OWASP A05: Security Misconfiguration",
+      "title": "SameSite cookie defaults to lax — tech-spec Decision 12 requires Strict in production",
+      "description": "application.properties:16 sets `server.reactive.session.cookie.same-site=${SESSION_COOKIE_SAME_SITE:lax}`. tech-spec Decision 12 explicitly states 'we use SameSite=Strict cookie policy for production (strongest protection)'. The default value if the env var is unset is lax, which permits the cookie on top-level navigations from any origin (including attacker-controlled pages). This contradicts the stated policy.",
+      "location": "backend/src/main/resources/application.properties:16",
+      "impact": "Weaker CSRF mitigation than designed. Cross-site GET/top-level POST with cookie still possible. Note: there is also a CookieServerCsrfTokenRepository in place (defense in depth), but Decision 12 calls for both layers in prod.",
+      "recommendation": "Default to strict; override to lax in dev:\n  server.reactive.session.cookie.same-site=${SESSION_COOKIE_SAME_SITE:strict}\nIn application-dev.properties: lax (so the dev frontend on localhost:3000 keeps working).\nDocument in deployment.md that production deployments must NOT override SAME_SITE.",
+      "cwe": "CWE-1275"
+    },
+    {
+      "severity": "major",
+      "category": "OWASP A05: Security Misconfiguration",
+      "title": "X-Forwarded-For trusted unconditionally — IP-based brute-force can be bypassed",
+      "description": "AuthService.extractIp() reads X-Forwarded-For verbatim from the request and uses the leftmost entry as the client IP. There is no allowlist of trusted upstream proxies, no env-gated toggle, no check that the request actually came from a trusted source. If the backend is ever exposed to direct client traffic (no reverse proxy, misconfigured ingress, internal network scan, container exposed via NodePort, etc.), a malicious client can send `X-Forwarded-For: 1.2.3.4` per request, rotating through millions of values, and the per-IP brute-force key brute:fail:ip:{ip} maps each forged value to its own counter. Threshold 20 is therefore bypassed trivially.\n\ntech-spec acknowledges the risk in a security note (line 137 of task 4) but the code does not gate the behavior on configuration. The default is to trust the header.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:207-218",
+      "impact": "Per-IP brute-force protection (threshold 20) provides zero protection if the backend is reachable without a trusted proxy. Combined with finding #2 (case variants of email), the dual-key brute-force scheme can be defeated end-to-end.",
+      "recommendation": "Gate header trust on a config flag and document the trust requirement:\n\n@Value(\"${app.security.trust-forwarded-headers:false}\") boolean trustXff;\n\nprivate String extractIp(ServerWebExchange exchange) {\n    if (trustXff) {\n        String xff = exchange.getRequest().getHeaders().getFirst(\"X-Forwarded-For\");\n        if (xff != null && !xff.isBlank()) {\n            int comma = xff.indexOf(',');\n            return (comma > 0 ? xff.substring(0, comma) : xff).trim();\n        }\n    }\n    var remote = exchange.getRequest().getRemoteAddress();\n    return remote != null && remote.getAddress() != null ? remote.getAddress().getHostAddress() : \"unknown\";\n}\n\nIn production deploy, set TRUST_FORWARDED_HEADERS=true only when an ingress strips/sets the header. Add Spring's ForwardedHeaderTransformer with a configurable trusted-IP-range filter is an even stronger pattern. Add an integration test that without the flag, a forged header is ignored.",
+      "cwe": "CWE-348"
+    },
+    {
+      "severity": "major",
+      "category": "OWASP A07: Auth Failures",
+      "title": "Timing leak: wrong-password path is measurably slower than non-existent-email path",
+      "description": "Both branches do bcrypt (~250ms), but only the wrong-password branch additionally calls registerFailure() which performs two Redis round trips (INCR on email key + INCR on IP key, plus EXPIRE on first failure — 4 round trips on first failure). On a typical localhost Redis the extra latency is small (~1-2ms) but on a remote/cluster Redis or a slow link it can be 5-50ms — well within the resolution of an attacker measuring p50/p95 over a few thousand requests.\n\nThis is the second of two timing oracles (the first is finding #1's status-code oracle). Even if finding #1 is fixed by always incrementing, the asymmetry in *response timing* between bcrypt-only and bcrypt+2x-Redis still exists if the unknown-email path skips the Redis writes. So the fix for #1 also fixes this — both branches must run the same I/O.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:116-120 vs 122-133",
+      "impact": "Statistical email enumeration via response-time analysis even if HTTP status oracle is closed.",
+      "recommendation": "Make the two failure paths perform identical work: dummy bcrypt (or real bcrypt) + INCR email-key + INCR ip-key + (conditional EXPIRE). Implement as a single registerFailure() called from both handleUserNotFound (once it has emailKey/ipKey) and the wrong-password branch.",
+      "cwe": "CWE-208"
+    },
+    {
+      "severity": "major",
+      "category": "OWASP A04: Insecure Design",
+      "title": "INCR + conditional EXPIRE is not atomic — TTL may never be set under failure or concurrency",
+      "description": "incrementWithTtl() executes INCR, then if the returned count is 1, separately calls EXPIRE. There are two failure modes:\n\n1. Crash/connection drop between INCR and EXPIRE: the key now exists with no TTL → it persists forever (until manual cleanup). Subsequent failed logins return values >= 2 so EXPIRE will never be set on this key. The Redis-side resetBruteCounters DEL on success would clear it, but if the user is being targeted (no successful login), the counter sticks at the latest count permanently. Over time, every targeted account ends up with a stuck counter, indefinitely 429-ing the legitimate user.\n\n2. Concurrent first failures: two parallel failed logins on the same key both call INCR; one gets count=1, the other gets count=2. Only the first sets EXPIRE. Race-OK per design (slight loss of consistency). But under reactive scheduling on boundedElastic, this is more likely than a sync impl.\n\nDecision 4 says fail-open on Redis errors but does not address atomicity within Redis itself. The tech-spec hint at line 142 mentions 'Use Lua or INCR then EXISTS to detect first' — Lua was the recommendation for a reason.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:143-152",
+      "impact": "Permanent lock-out of users whose Redis EXPIRE failed mid-flight. Long-tail DoS against legitimate users. Hard to detect in monitoring.",
+      "recommendation": "Use a Lua script for atomic INCR+EXPIRE-if-new:\n\nlocal v = redis.call('INCR', KEYS[1])\nif v == 1 then redis.call('EXPIRE', KEYS[1], ARGV[1]) end\nreturn v\n\nOr alternatively use SET-with-NX to seed the key with TTL=900 and only INCR after that. Spring Data Redis Reactive supports DefaultRedisScript<Long> for one-shot Lua. Add an integration test: kill the Redis connection after INCR but before EXPIRE; assert the key has a TTL on next inspection (Lua makes this observable).",
+      "cwe": "CWE-367"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "DUMMY_HASH constant is package-private (test visibility) — guard against accidental use",
+      "description": "DUMMY_HASH at AuthService.java:38 is `static final String` (package-private) so AuthServiceTest can reference it. The Javadoc warns 'Never matches any real password — the hash input is unrelated to any real account.' Acceptable. Risk: a future contributor could accidentally write `if (passwordEncoder.matches(input, DUMMY_HASH)) { authenticate }` in a code path that bypasses the user lookup — and the dummy password ('whatever was used to bcrypt this') would be a backdoor. Low risk, but the constant should at least carry a more aggressive name and a SonarLint suppression comment, or be moved to a test-only constant.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:38",
+      "impact": "Future-misuse risk only.",
+      "recommendation": "Rename to TIMING_PROBE_BCRYPT_HASH or NEVER_MATCH_HASH. Add a unit test that asserts the encoded password used to generate this hash is documented in a code comment (so reviewers can verify it's truly throwaway). Optional: store as a String built from a static block calling new BCryptPasswordEncoder(12).encode(UUID.randomUUID().toString()) at class init — no recoverable plaintext exists.",
+      "cwe": "CWE-798"
+    },
+    {
+      "severity": "minor",
+      "category": "OWASP A09: Security Logging and Monitoring",
+      "title": "User-Agent stored in events without length cap or sanitization",
+      "description": "EventService persists the User-Agent header verbatim to MongoDB. A malicious client can submit a 64KB User-Agent (or larger), inflating the events collection. Storage DoS is the primary concern. Secondarily, if an admin UI ever renders events.userAgent without HTML escaping, this is a stored-XSS sink. The events collection is currently write-only from auth flows; flag for downstream consumers.",
+      "location": "backend/src/main/java/com/botfunnel/events/Event.java:20, backend/src/main/java/com/botfunnel/auth/AuthService.java:75",
+      "impact": "Storage DoS via oversized User-Agent. Latent stored-XSS vector if rendered raw in a future admin dashboard.",
+      "recommendation": "Truncate User-Agent at AuthService boundary: `userAgent != null ? userAgent.substring(0, Math.min(userAgent.length(), 512)) : null`. Add a code comment in Event.java requiring HTML escape on render. Optional: same treatment for ipAddress (already short by nature, but X-Forwarded-For chained values can be long).",
+      "cwe": "CWE-1284"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "AppUserDetails.getPassword() returns empty string instead of throwing or returning the hash",
+      "description": "AppUserDetails.getPassword() returns \"\" (empty string). Spring Security contracts expect this to return the credential hash for use by AuthenticationProviders that re-verify. The current code never invokes AuthenticationProvider on this principal (manual auth in AuthService), so the empty string is harmless today. But a future contributor wiring DaoAuthenticationProvider or a re-auth flow would silently always-fail (empty string never matches any hash) — easy to misdiagnose as 'wrong password' when the real cause is broken UserDetails.\n\nAlso, returning an empty string after a session deserialization is an implicit declaration that this UserDetails is non-credential-carrying — but the underlying User entity does carry passwordHash (see finding #3). So getPassword() under-reports while the principal silently over-shares. Inconsistent.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AppUserDetails.java:21-23",
+      "impact": "Maintenance hazard. No active exploit.",
+      "recommendation": "Either return null and document why, or once finding #3 is fixed (no User in principal), return null with a comment '// session-based auth — credential not retained in principal'. Add a unit test that asserts getPassword() never returns user.getPasswordHash().",
+      "cwe": "CWE-668"
+    }
+  ]
+}

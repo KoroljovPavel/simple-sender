@@ -1,0 +1,14 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "feasibility",
+      "severity": "minor",
+      "issue": "The spec now correctly routes enroll through a non-matching enrollSpecificFunnel(...) method on FunnelEventService (inheriting depth-cap + rate-limit), but this path must still start the child execution at targetEntryStepId. Per code-research §14.1, FunnelExecutionFactory.insertExecution hard-codes currentStepId = snapshot.get(0) and has NO start-step parameter; all existing callers (including FunnelEventService.dispatchForSubscriber) pass none. AC line 58 requires currentStepId = entry step. The new collaborator method therefore needs a factory overload/param that does not exist yet.",
+      "why_matters": "This is the single concrete factory change the feature depends on. It is feasible (the factory is the right place and the change is small) and is fundamentally a tech-spec/HOW concern, so it is not blocking at user-spec level — but flagging it ensures it is not lost when the start-at-entry-step requirement is implemented through the dispatcher path rather than a direct factory call.",
+      "fix": "No change required in user-spec (AC line 58 already states the WHAT). Ensure the tech-spec carries the FunnelExecutionFactory start-step overload (and a fallback-to-start when the entry step is missing, per AC line 64) into the implementation plan for the enrollSpecificFunnel path."
+    }
+  ],
+  "worst_category": "feasibility",
+  "summary": "Round-2 re-check: all five round-1 findings are resolved. Runaway safety now inherits BOTH per-subscriber backstops via a non-matching enrollSpecificFunnel method on FunnelEventService (fan-out correctly N/A); stale-target is loud-at-save/activate/test but graceful skip + WARN at runtime preserving snapshot isolation; targetEntryStepId naming is consistent across prose/AC/table; return-path no-op emits a distinct greppable WARN. No new contradictions introduced (bean-cycle, at-most-once, EMIT_EVENT precedents all consistent). Approved — only one minor feasibility note about the factory start-step overload needed on the chosen dispatcher path, which is a tech-spec concern."
+}

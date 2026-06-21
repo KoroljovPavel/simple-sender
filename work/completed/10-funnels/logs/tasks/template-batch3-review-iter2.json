@@ -1,0 +1,62 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Required Skills",
+      "issue": "The link display text reads `[.claude/skills/security-auditor/SKILL.md]` (without the `../../../` prefix), while the href is correctly `(../../../.claude/skills/security-auditor/SKILL.md)`. The href — what actually matters for navigation — is fixed from iteration 1. Only the label text is cosmetically inconsistent with tasks 11, 13, 14 which use `[SKILL.md]` as the display text.",
+      "fix": "Change link display text to `[SKILL.md]` so the Required Skills line reads: `- /skill:security-auditor — [SKILL.md](../../../.claude/skills/security-auditor/SKILL.md)`"
+    }
+  ],
+  "iteration1_fixes_confirmed": {
+    "task12_context_files_paths": "RESOLVED — project.md, architecture.md, patterns.md all use ../../../.claude/skills/project-knowledge/references/ correctly",
+    "task12_required_skills_href": "RESOLVED — href is ../../../.claude/skills/security-auditor/SKILL.md (correct). Display text is cosmetically off (minor, noted above)",
+    "task13_required_skills_href": "RESOLVED — [SKILL.md](../../../.claude/skills/test-master/SKILL.md) correct"
+  },
+  "critical_check": {
+    "description": "Scanned all four task files for any markdown link href starting with ](.claude/ (unqualified relative path)",
+    "result": "PASS — zero occurrences found in tasks 11, 12, 13, 14"
+  },
+  "per_task_summary": {
+    "task11": {
+      "frontmatter": "PASS — status:planned, depends_on:[1..10] array, wave:5, skills:[code-reviewing], reviewers:[], verify:[], no extra fields",
+      "sections": "PASS — all 9 required sections present in correct order; TDD Anchor absent (correct for non-code audit task)",
+      "content": "PASS — all links use ../../../.claude/... prefix; no placeholders; no template markers",
+      "atomicity": "PASS — single responsibility (cross-component code audit)",
+      "consistency": "PASS — skills frontmatter matches Required Skills; reviewers:[] matches Reviewers section"
+    },
+    "task12": {
+      "frontmatter": "PASS — status:planned, depends_on:[1..10] array, wave:5, skills:[security-auditor], reviewers:[], verify:[], no extra fields",
+      "sections": "PASS — all 9 required sections present in correct order; TDD Anchor absent (correct for non-code audit task)",
+      "content": "PASS (with minor cosmetic issue in Required Skills display text noted above); all hrefs correct; no placeholders",
+      "atomicity": "PASS — single responsibility (OWASP security audit)",
+      "consistency": "PASS — skills frontmatter matches Required Skills; reviewers:[] matches Reviewers section"
+    },
+    "task13": {
+      "frontmatter": "PASS — status:planned, depends_on:[1..10] array, wave:5, skills:[test-master], reviewers:[], verify:[], no extra fields",
+      "sections": "PASS — all 9 required sections present in correct order; TDD Anchor absent (correct for non-code audit task)",
+      "content": "PASS — [SKILL.md](../../../.claude/skills/test-master/SKILL.md) correct; all PK links use ../../../.claude/...; no placeholders",
+      "atomicity": "PASS — single responsibility (test quality audit)",
+      "consistency": "PASS — skills frontmatter matches Required Skills; reviewers:[] matches Reviewers section"
+    },
+    "task14": {
+      "frontmatter": "PASS — status:planned, depends_on:[11,12,13] array, wave:6 (>wave 5 of dependencies), skills:[pre-deploy-qa], reviewers:[], verify:[], no extra fields",
+      "sections": "PASS — all 9 required sections present in correct order; TDD Anchor absent (correct for QA/acceptance task)",
+      "content": "PASS — all PK links use ../../../.claude/...; SKILL.md link correct; no placeholders; no template markers",
+      "atomicity": "PASS — single responsibility (pre-deploy acceptance QA)",
+      "consistency": "PASS — skills frontmatter matches Required Skills; reviewers:[] matches Reviewers section; dependency wave logic valid (wave 6 > wave 5)"
+    }
+  },
+  "stats": {
+    "tasks_checked": 4,
+    "issues_found": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  }
+}

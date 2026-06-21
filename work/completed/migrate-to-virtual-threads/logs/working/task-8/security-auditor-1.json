@@ -1,0 +1,75 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 2,
+    "nitpick": 1
+  },
+  "checks_performed": {
+    "tc10_scrubber_preservation": "pass",
+    "plaintext_token_lifetime": "pass",
+    "aes_gcm_decrypt_failure_modes": "pass",
+    "token_shape_precondition": "pass",
+    "401_invalid_bot_token_carveout": "pass",
+    "anti_enumeration_404": "pass",
+    "audit_event_guard": "pass",
+    "retry_after_clamp": "pass",
+    "interrupted_exception_handling": "pass",
+    "no_new_ssrf_rce_log_injection": "pass"
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Pre-HTTP AppException(404) bot-not-found path emits no audit event — confirmed by guard but silently invisible to ops",
+      "description": "When botRepository.findById(botId) returns Optional.empty() OR the bot exists but is not CONNECTED, sendText (lines 122-125) throws AppException.notFound(MESSAGE_BOT_NOT_FOUND). The catch block at line 132-140 then calls isTerminalAuditable(ex), which returns false for AppException (only true for BotTokenInvalidException and TelegramSendException — lines 326-332). This is the documented behaviour (matches the tech-spec error-mapping table and is asserted by tests sendText_botNotFound_throwsNotFound_noHttp and sendText_botDisconnected_throwsNotFound_noHttp), and it is correct for the anti-enumeration goal — but it means an attacker probing for valid botIds (or an internal caller using a stale botId after disconnect) produces zero audit-log evidence. The only signal is whatever the HTTP-layer access log captures.",
+      "location": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java:122-140, 326-332",
+      "impact": "Bot-ID enumeration probing (or accidental use of stale/disconnected bot IDs by upstream services) is undetectable from application-level audit events. This is by design per the anti-enumeration carve-out, but means abuse-detection has to rely on access logs alone. If access-log retention is shorter than audit-log retention, abuse windows shrink.",
+      "recommendation": "No code change required for Task 8 — the behaviour matches the spec's anti-enumeration requirement. Consider adding a separate non-auditable monitoring counter (e.g. a Micrometer counter telegram_send_pre_http_404_total with tag botId=*) at the catch site so SRE can alert on enumeration patterns without breaking the wire-shape invariant. Document the trade-off in decisions.md.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Plaintext token captured by lambda closure in sendOnce's onStatus error-handler — lifetime correct, but worth documenting",
+      "description": "In TelegramSender.sendOnce (line 192-231), the decrypted plaintext token is captured in the local variable `token` (line 206) and embedded in the RestClient URI via the {token} path variable at line 223. The onStatus handler at line 226-228 (`(req, resp) -> { throw map4xx(resp, botId, attempts); }`) does NOT close over the token variable — map4xx only takes the response, botId, and attempts. requireValidTokenShape's lambda body is similarly token-free. The token-shape precondition lambda (line 209-212) does capture `token` but is invoked inline and discarded immediately. No closure captures the plaintext beyond the synchronous sendOnce call. The class-level javadoc (lines 39-42) explicitly states 'Plaintext-token lifetime: decrypted token is captured in a local variable for the duration of one HTTP attempt and reachable until the synchronous call returns. Never stored, never logged, never serialized, never pushed to background schedulers.' All confirmed.",
+      "location": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java:192-231",
+      "impact": "None at present. Risk is that a future refactor could accidentally promote `token` into a field or pass it into a long-lived structure (e.g. a Spring bean cache, an async logger MDC, an exception payload that survives into a global handler). The javadoc helps but is not enforced.",
+      "recommendation": "Consider a compile-time guard: extract the plaintext-handling block (Base64 decode + decrypt + requireValidTokenShape + restClient.post) into a private helper whose contract is documented as 'token plaintext lives ONLY in this stack frame'. Already effectively the case — sendOnce is that helper. Add a brief inline comment near line 206 reinforcing 'do not promote token to a field or close over it from any handler that may outlive sendOnce' for future-maintainer awareness.",
+      "cwe": "CWE-316"
+    },
+    {
+      "severity": "nitpick",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Transport-error exception messages from RestClient may embed the request URI (with token) — relies entirely on scrubTokens regex coverage at the WARN/ERROR log site",
+      "description": "When a transport-level error fires (Connection refused, read timeout, SSL handshake failure), the underlying exception (e.g. ResourceAccessException) typically has a message of the form 'I/O error on POST request for \"https://api.telegram.org/bot{TOKEN}/sendMessage\": Connection refused'. This message reaches the log sites at TelegramSender.java:181 ('Telegram transient retry #{} after error: {}', scrubTokens(ex.getMessage())) and line 134-135 ('Telegram send terminal failure attempts={}: {}', scrubTokens(ex.getMessage())). Both sites correctly wrap ex.getMessage() in TelegramApiClient.scrubTokens(...), and the regex TOKEN_PATTERN = `\\d{1,20}:[A-Za-z0-9_-]{30,50}` will match the standard Telegram bot token shape. The test sendText_tokenInTransportErrorMessage_scrubbed validates this. However: (a) if Telegram ever issues tokens whose shape changes (e.g. >50 chars in the secret part), the regex silently stops matching and tokens leak; (b) the scrubber relies on a token's CURRENT shape, not its identity — if log frameworks (Logback's pattern layout, async appenders) interpolate the URI through a different path before reaching the appender, the scrubber may not run at all. The current implementation passes the scrubbed string directly to log.warn/log.error as a parameter, which Logback formats lazily — and the scrubber HAS run by then. So this is safe today. Calling out for awareness during future maintenance.",
+      "location": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java:134-135, 181; backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java:33, 216-219",
+      "impact": "Today: none — scrubber covers all known token shapes and runs synchronously before logback formats. Future risk: a Telegram API change to token shape, or an unwitting log-pattern refactor that interpolates URIs via Logback's %X{} MDC or a custom encoder, could leak tokens.",
+      "recommendation": "No code change required for Task 8. For future hardening: (1) consider widening the regex shape if Telegram ever publishes a wider format spec — TOKEN_SHAPE strict-anchor regex at line 34 (`^\\d{1,20}:[A-Za-z0-9_-]{30,50}$`) is the precondition; relax both in lockstep if changed; (2) consider adding a Logback turbo-filter or converter as belt-and-suspenders so even unscrubbed paths get redacted at the appender boundary; (3) add a regression test that constructs a synthetic ResourceAccessException whose message embeds a token-shaped substring and asserts no log line contains it (today's transport-error test relies on RestClient's actual exception message, which may not embed the token in all JDK versions).",
+      "cwe": "CWE-532"
+    }
+  ],
+  "verification_notes": [
+    "TC10 enumeration: all 8 enumerated log sites verified scrubbed.",
+    "  - TelegramApiClient line 187: log.warn('Telegram config error: {}', scrubbed) — scrubbed = scrubTokens(description) at line 182. PASS.",
+    "  - TelegramApiClient line 193: log.warn('Telegram client error (status {}): {}', rawStatus, scrubbed) — same scrubbed value reused. PASS.",
+    "  - TelegramSender line 155: log.warn('Telegram 429 — waiting {}s + {}ms jitter', delaySeconds, jitterMs) — no token-bearing data interpolated; only ints. PASS.",
+    "  - TelegramSender line 180-181: log.warn('Telegram transient retry #{} after error: {}', attempt+1, TelegramApiClient.scrubTokens(ex.getMessage())). PASS.",
+    "  - TelegramSender line 265: log.warn('Telegram 429 retry_after={}s: {}', retryAfter, scrubbed) — scrubbed = scrubTokens(result.description()) at line 255. PASS.",
+    "  - TelegramSender line 268: log.warn('Telegram 4xx ({}): {}', rawStatus, scrubbed) — same scrubbed value reused. PASS.",
+    "  - TelegramSender line 276: log.warn('Telegram ok=false or missing message_id: {}', 'null body') — literal string, no token possible. PASS.",
+    "  - TelegramSender line 286: log.warn('Telegram ok=false or missing message_id: {}', scrubbed) — scrubbed = scrubTokens(result.description()) at line 285. PASS.",
+    "  - TelegramSender line 134-135: log.error('Telegram send terminal failure attempts={}: {}', attempts.get(), TelegramApiClient.scrubTokens(ex.getMessage())). PASS.",
+    "Check 2 (plaintext-token lifetime): token captured ONLY in TelegramSender.sendOnce local variable (line 206), used at line 209 (requireValidTokenShape) and line 223 (RestClient URI). No closure outside sendOnce captures it. Class javadoc reinforces. PASS.",
+    "Check 3 (AES-GCM decrypt failure modes): Base64 decode IllegalArgumentException caught at lines 196-202 → BotTokenInvalidException(botId, 'decryption failed') → 422. tokenEncryptor.decrypt called OUTSIDE that catch at line 206, so both IllegalStateException (AEAD-tag failure) and IllegalArgumentException (IV-length failure from TokenEncryptor.java:46-50) propagate uncaught — surface as 500 via GlobalErrorHandler. Test sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid asserts this. PASS.",
+    "Check 4 (token-shape precondition): TelegramApiClient.getMe (line 69), setWebhook (line 92), deleteWebhook (line 108) all call requireValidTokenShape at method entry. TelegramSender.sendOnce calls requireValidTokenShape AFTER AES-GCM decrypt at line 209. PASS.",
+    "Check 5 (401 carve-out): TelegramApiClient.toAppException line 183-185 returns invalid_bot_token before any scrubbed-description branching. TelegramSender.toThrowable line 256-258 returns BotTokenInvalidException(botId, 'Token is invalid or revoked') before 429/4xx branches. Neither is retried (401 is not a 4xx after this point — onStatus handler throws, and the throw is not classified as transient since it's not in the 5xx/IOException/TimeoutException set). PASS.",
+    "Check 6 (anti-enumeration 404): TelegramSender uses AppException.notFound(MESSAGE_BOT_NOT_FOUND) (line 125). MESSAGE_BOT_NOT_FOUND = 'Bot not found' (line 56). BotService.java:61 declares identical MESSAGE_BOT_NOT_FOUND = 'Bot not found' and uses AppException.notFound(MESSAGE_BOT_NOT_FOUND) at line 139. Both produce {status: 404, code: null, message: 'Bot not found'} — wire shapes identical. .filter(b -> b.getStatus() == BotStatus.CONNECTED) (line 124) collapses 'bot exists but disconnected' into the same Optional.empty() path → same 404. PASS.",
+    "Check 7 (audit guard): isTerminalAuditable(Throwable ex) at lines 326-332 returns true only for BotTokenInvalidException and TelegramSendException. AppException(404) returns false → no audit. TelegramRateLimitException returns false → no audit on leak (defence-in-depth). Tests sendText_botNotFound_throwsNotFound_noHttp and sendText_botDisconnected_throwsNotFound_noHttp verify no eventService invocation for AppException(404). PASS.",
+    "Check 8 (retry-after clamp): TelegramSender.sendWithRateLimitRetry line 152-153: Math.max(0, Math.min(rate.getRetryAfterSeconds(), RATE_LIMIT_DELAY_CAP_SECONDS=30)). Defends 999999 → 30, defends -5 → 0. totalSleepMs = delaySeconds * 1000L + jitterMs — long-cast prevents int overflow. PASS.",
+    "Check 9 (InterruptedException handling): TelegramSender.sleepWithDeadline lines 312-317 catches InterruptedException, calls Thread.currentThread().interrupt(), throws TelegramSendException(null, 'interrupted', attempts.get()). TelegramApiClient.executeWithRetry lines 144-152 catches InterruptedException, calls Thread.currentThread().interrupt(), throws AppException(BAD_GATEWAY, 'telegram_unavailable', 'Interrupted while waiting to retry'). Both re-set the interrupt flag AND surface a typed exception. PASS.",
+    "Check 10 (no new SSRF/RCE/log-injection): (a) SSRF — base-url is @Value('${app.telegram.base-url}'), platform-controlled; token-shape regex (line 34) prevents user-controlled values from being injected into the URI path. setWebhook URL parameter is documented as platform-controlled (line 86-90); BotService.java:147 constructs it from appUrl config + projectId, no user input. PASS. (b) RCE — no deserialization of untrusted data with executable hooks; ObjectMapper.readValue at line 246 deserializes into TelegramSendResult<JsonNode>, a plain record. No XStream, no SnakeYAML.load, no JEP-290 ObjectInputStream. PASS. (c) Log-injection — all log calls use parameterized SLF4J ('msg {}', arg) so newline-injection from response bodies cannot create fake log lines (Logback's PatternLayout strips/escapes per encoder config; arg is rendered into a single field, not concatenated into the message format string). PASS."
+  ]
+}

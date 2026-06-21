@@ -1,0 +1,34 @@
+{
+  "verdict": "pass",
+  "iterations": 1,
+  "findings": [
+    {
+      "severity": "medium",
+      "type": "wrong_field",
+      "location": "Implementation Tasks > Task 9 (Frontend layout integration + Project Knowledge alignment)",
+      "issue": "Reviewers list is `code-reviewer, test-reviewer` — missing `security-auditor`. The default reviewer set for `code-writing` per the skills-and-reviewers catalog is `[code-reviewer, security-auditor, test-reviewer]`, and the deviation is not justified inline. This task edits `layouts/default.vue` (auth/session-adjacent topbar wiring of `<ProjectSelector />` + sidebar visibility tied to `currentProject != null`), which is exactly the kind of change security-auditor should see.",
+      "fix": "Add `security-auditor` to the reviewer list, or add a one-line justification for omitting it (e.g., `<!-- security-auditor not needed: pure layout wiring + Markdown text edit -->`)."
+    },
+    {
+      "severity": "medium",
+      "type": "wrong_field",
+      "location": "Implementation Tasks > Task 10 (Playwright golden-path E2E spec)",
+      "issue": "Reviewers list is `code-reviewer, test-reviewer` — missing `security-auditor`. For a `code-writing` skill the default is `[code-reviewer, security-auditor, test-reviewer]`. E2E spec is lower security risk than production code, but the deviation is not justified inline.",
+      "fix": "Either add `security-auditor` for consistency, or document the omission with a short rationale (e.g., `<!-- security-auditor not needed: Playwright spec, no production code path -->`). Test-only deviations are defensible but should be explicit."
+    },
+    {
+      "severity": "low",
+      "type": "wrong_field",
+      "location": "Implementation Tasks > Tasks 3, 4, 7, 8, 10 — Files to modify",
+      "issue": "Tasks list `Files to modify: (new files only)` without enumerating the new file paths. Template asks for concrete file paths. The paths exist elsewhere (in Architecture > What we're building/modifying), but the task field is the canonical pointer used by decomposition / wave-conflict analysis.",
+      "fix": "Replace `(new files only)` with the actual list of new file paths per task. For example, Task 3: `backend/src/main/java/com/botfunnel/project/{ProjectService.java,ProjectController.java}` and `backend/src/test/java/com/botfunnel/project/ProjectControllerIT.java`. Task 10: `frontend/e2e/projects.spec.ts`. This makes wave-conflict detection mechanical and decomposition unambiguous."
+    },
+    {
+      "severity": "low",
+      "type": "task_too_long",
+      "location": "Implementation Tasks > Task 1 (Backend foundation)",
+      "issue": "Description is ~5 sentences and densely packed (AppException factories + entity + repository + DTOs + ValidTimezone + config + .env.example). Borderline for tech-spec brevity guideline (2-3 sentences scope). Acceptable for an L-sized foundation task, but on the long edge.",
+      "fix": "Optional: tighten to 2-3 sentences and let task-decomposition expand sub-items. Or leave as-is — for an L-feature foundation task this density is reasonable since all items are coupled to a single layer (backend persistence/validation primitives)."
+    }
+  ]
+}

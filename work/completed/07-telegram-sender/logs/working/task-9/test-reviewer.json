@@ -1,0 +1,374 @@
+{
+  "task": 9,
+  "feature": "07-telegram-sender",
+  "auditor": "test-reviewer",
+  "verdict": "needs_work",
+  "summary": "All 28 unit scenarios are physically present in TelegramSenderTest.java with strong assertions, explicit retry counts on every retry-semantics test, and ListAppender filtered per log site by level. BotServiceTest split into the three required cases with exact-argument matchers. BotControllerIT carries both the null-branch and the new positive-path test with Awaitility on the async event read. BotRepositoryTest legacy-document case present. Two HIGH-severity findings: in TelegramSenderIT, the two end-to-end scenarios that depend on Task 5 (sendText_endToEndViaBotService_emitsBothEvents and sendText_terminalFailureViaBotService_emitsFailedEventOnly) are @Disabled with empty bodies despite Task 5 being committed — they are present-by-name only, assert nothing, and the catalog is therefore not satisfied. Two MEDIUM-severity findings on missing metadata-shape assertions (okFalse description not pinned in event metadata; overallTimeout failure event presence checked but attempts/errorCode shape not asserted).",
+  "scenarios_audited": [
+    {
+      "name": "sendText_happyPath_returnsSentMessage_attemptsEqualsOne",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:174",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts SentMessage messageId/chatId, MockWebServer request count == 1, request method+path, and full event metadata shape {botId, chatId, messageId} via ArgumentCaptor. Litmus passes."
+    },
+    {
+      "name": "sendText_parseModeNull_omitsFieldFromBody",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:201",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Parses recorded request body as JSON and asserts both negative (no parse_mode key) and positive (text, chat_id) shape. Retry-count irrelevant for this scenario."
+    },
+    {
+      "name": "sendText_parseModeHtml_includesFieldInBody",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:218",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Parses recorded body as JSON; asserts parse_mode == HTML. Retry-count irrelevant."
+    },
+    {
+      "name": "sendText_ownerIdNull_succeeds_eventWrittenWithNullUserId",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:232",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Asserts SentMessage non-null and verify(eventService).logEvent(isNull(), eq(EVENT_TELEGRAM_MESSAGE_SENT), isNull(), isNull(), any()). userId == null propagation is the load-bearing assertion. Metadata payload not pinned but spec only requires null-userId behavior."
+    },
+    {
+      "name": "sendText_5xxThenSuccess_retriesAndReturnsSentMessage_attemptsEqualsTwo",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:246",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts messageId == 42, request count == 2, sent-event metadata DOES NOT contain attempts key (success-shape pin), and no failed event written. Retry-count asserted via MockWebServer getRequestCount()."
+    },
+    {
+      "name": "sendText_5xxRetryExhausted_throwsTelegramSendException_attemptsEqualsFour",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:268",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts TelegramSendException with errorCode == null, attempts == 4, message == 'transient_failure_exhausted'. Request count == 4 verified. Audit event metadata pinned: attempts == 4, errorCode == null. Both retry-count surfaces (audit + MockWebServer) asserted explicitly."
+    },
+    {
+      "name": "sendText_ioExceptionRetriedThenSuccess_attemptsEqualsTwo",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:295",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Uses SocketPolicy.DISCONNECT_AT_START to induce IOException on first attempt, then enqueued 200. Asserts success, request count == 2, no failed event written."
+    },
+    {
+      "name": "sendText_429NormalRetryAfter_waitsAndRetries",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:313",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts success, request count == 2, elapsed wall-clock >= 1000ms and < 3000ms. Wall-clock bound proves the wait actually fired."
+    },
+    {
+      "name": "sendText_429RateLimitExceptionNotPropagated",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:329",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Uses .isInstanceOf(TelegramSendException.class).isNotInstanceOf(TelegramRateLimitException.class) — exactly per AC13 spec text. Internal sentinel exception non-propagation pinned."
+    },
+    {
+      "name": "sendText_429LargeRetryAfter_capsAtOverallTimeout",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:346",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Uses 3s SHORT_OVERALL_TIMEOUT; asserts TelegramSendException with message == 'timeout', elapsed >= 2500ms and < 8000ms. Wall-clock bound proves overall timeout fired (not single-delay clamp)."
+    },
+    {
+      "name": "sendText_429MissingRetryAfter_capsAtOverallTimeout",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:368",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Asserts TelegramSendException with message == 'timeout' within 10s StepVerifier window."
+    },
+    {
+      "name": "sendText_429NegativeRetryAfter_clampsToZero_thenCapsAtOverallTimeout",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:384",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts TelegramSendException with message == 'timeout'. Request count >= 2 AND <= 100 — exact ceiling proves no spin loop (would otherwise exhaust 100 enqueues). Per-test retry-count ceiling pinned exactly as tech-spec line 306 demands."
+    },
+    {
+      "name": "sendText_429And5xxInterleaving_succeeds_attemptsEqualsFour",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:405",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Enqueue [503, 429(retry_after=1), 503, 200]. Asserts success, request count == 4, sent-event metadata does NOT contain attempts (success-shape pin), no failed-event written. Verbatim per AC19 + R3."
+    },
+    {
+      "name": "sendText_401_throwsBotTokenInvalidException_noRetry",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:434",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts BotTokenInvalidException with status 422, code invalid_bot_token, botId populated. Request count == 1 (no retry)."
+    },
+    {
+      "name": "sendText_otherClientError_throwsTelegramSendException_noRetry",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:453",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts TelegramSendException with errorCode == 400, message contains 'chat not found', request count == 1. Event metadata shape not pinned but tech-spec line 311 does not require it for this scenario."
+    },
+    {
+      "name": "sendText_okFalse_throwsTelegramSendException",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:471",
+      "present": true,
+      "assertion_strength": "weak",
+      "retry_count_asserted": false,
+      "notes": "Asserts TelegramSendException with errorCode null and message contains 'something bad happened'. Tech-spec line 312 explicitly says 'scrubbed description preserved in event metadata' — test does NOT verify event metadata shape. Medium finding."
+    },
+    {
+      "name": "sendText_malformedTokenInBot_throwsBotTokenInvalidException_beforeHttp",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:489",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts BotTokenInvalidException with message 'invalid token shape after decrypt', botId populated, request count == 0, and telegram_send_failed event written with metadata {botId, attempts: 0} but WITHOUT errorCode/errorDescription per tech-spec error-mapping table."
+    },
+    {
+      "name": "sendText_invalidBase64Ciphertext_throwsBotTokenInvalidException_beforeHttp",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:522",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts BotTokenInvalidException with message 'decryption failed' and full event metadata shape {botId, attempts: 0} without errorCode/errorDescription. Request count == 0."
+    },
+    {
+      "name": "sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:552",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts IllegalStateException, NOT wrapped in BotTokenInvalidException; request count == 0. Negative-event assertion not present (test does not verify telegram_send_failed is NOT written) but tech-spec line 317 doesn't explicitly require it."
+    },
+    {
+      "name": "sendText_botNotFound_throwsNotFound_noHttp",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:579",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts AppException with status NOT_FOUND, code null, message 'Bot not found'. Request count == 0."
+    },
+    {
+      "name": "sendText_botDisconnected_throwsNotFound_noHttp",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:596",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Asserts AppException with status NOT_FOUND, code null, message 'Bot not found'. Request count == 0."
+    },
+    {
+      "name": "sendText_readTimeout_isTransient_retriedThenTerminal",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:617",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": true,
+      "notes": "Uses 200ms SHORT_RESPONSE_TIMEOUT with 500ms setBodyDelay across 4 enqueues. Asserts TelegramSendException with message 'transient_failure_exhausted', request count == 4. Proves response timeout (10s production / 200ms test) wires through and isTransient catches ReadTimeoutException."
+    },
+    {
+      "name": "sendText_overallTimeout_throwsTelegramSendException",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:636",
+      "present": true,
+      "assertion_strength": "weak",
+      "retry_count_asserted": false,
+      "notes": "Asserts TelegramSendException with message 'timeout', elapsed >= 2500ms and < 8000ms, and verify(eventService, times(1)).logEvent(..., EVENT_TELEGRAM_SEND_FAILED, ..., any()). Event presence checked but metadata shape (attempts, errorCode == null) NOT pinned despite tech-spec line 323 saying 'audit metadata attempts captured'. Medium finding."
+    },
+    {
+      "name": "sendText_tokenIn4xxDescription_scrubbed_warnLevel",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:661",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "ListAppender filtered explicitly to Level.WARN via anyMessageMatches helper; positive [REDACTED_TOKEN] check AND negative raw-token check both present. Level filtering is the spec requirement."
+    },
+    {
+      "name": "sendText_tokenIn5xxRetryLog_scrubbed_warnLevel",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:675",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Filters logAppender.list by Level.WARN; asserts warnMessages.isNotEmpty(), noneMatch(TOKEN), anyMatch([REDACTED_TOKEN]). 5xx retry-observer log site verified independently from the 4xx site."
+    },
+    {
+      "name": "sendText_tokenIn429RetryLog_scrubbed_warnLevel",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:696",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Filters logAppender by Level.WARN; asserts noneMatch(TOKEN), anyMatch([REDACTED_TOKEN]). 429 wait-announcement log site independently verified."
+    },
+    {
+      "name": "sendText_tokenInTerminalFailureLog_scrubbed_errorLevel",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:714",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Filters logAppender by Level.ERROR; asserts errorMessages.isNotEmpty() and noneMatch(TOKEN). Positive [REDACTED_TOKEN] omitted intentionally with documented rationale (terminal log emits 'transient_failure_exhausted' which has nothing token-shaped to redact). Negative assertion is the load-bearing one."
+    },
+    {
+      "name": "sendText_tokenInTransportErrorMessage_scrubbed",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:738",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Closes mockServer port; filters logAppender by WARN OR ERROR; asserts leakSites.isNotEmpty() and noneMatch(TOKEN). Documented rationale for negative-only assertion (WebClientRequestException message format does not embed URI). Transport-error log site independently verified."
+    },
+    {
+      "name": "sendText_endToEndViaBotService_emitsBothEvents",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java:162",
+      "present": false,
+      "assertion_strength": "missing",
+      "retry_count_asserted": false,
+      "notes": "Method exists but is @Disabled with empty body and a comment 'enabled by Task 5 — requires BotService.sendTestMessage to call TelegramSender'. Task 5 IS committed (commits f411283 and 3282b95) yet the test was never enabled. Catalog entry 1 of TelegramSenderIT is not satisfied — the test verifies nothing. HIGH finding."
+    },
+    {
+      "name": "sendText_terminalFailureViaBotService_emitsFailedEventOnly",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java:171",
+      "present": false,
+      "assertion_strength": "missing",
+      "retry_count_asserted": false,
+      "notes": "Method exists but is @Disabled with empty body and a comment 'enabled by Task 5 — requires BotService.sendTestMessage to call TelegramSender'. Task 5 has shipped; the test stub was never converted into a real test. HIGH finding."
+    },
+    {
+      "name": "sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java:178",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Asserts 422 with code=owner_chat_id_unknown, verbatim message string, drainRequests().isEmpty(), and awaitNoEvent settle window using await().during(500ms).atMost(2s) for negative-presence check on telegram_* and bot_test_message_sent events. Settle window correctly applied per tech-spec line 334."
+    },
+    {
+      "name": "sendTestMessage_legacyDocumentReadsAsNull",
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java:201",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Inserts raw Document into bots collection WITHOUT ownerChatId field via mongoTemplate.insert(legacy, 'bots'). Asserts findById returns Bot with ownerChatId == null, status CONNECTED, telegramBotId preserved. First explicit raw-BSON-absent verification in the project."
+    },
+    {
+      "name": "sendTestMessage_whenOwnerChatIdNull_returns422_noTelegramCalls_noEvents",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:563",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Asserts AppException with status UNPROCESSABLE_ENTITY, code owner_chat_id_unknown, verbatim message. verifyNoInteractions on telegramApiClient, telegramSender, eventService — pre-Wave-3 contract preserved byte-identical."
+    },
+    {
+      "name": "sendTestMessage_whenOwnerChatIdPresent_callsSenderAndEmitsEvent",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:591",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Uses exact-argument matchers on telegramSender.sendText: eq(existing.getId()), eq(OWNER_CHAT_ID), eq(BotService.TEST_MESSAGE_BODY), isNull(), eq(OWNER_ID). Full metadata shape pinned: containsOnlyKeys + containsEntry for projectId, telegramBotId, chatId, messageId. No any() matchers on the success path."
+    },
+    {
+      "name": "sendTestMessage_whenOwnerChatIdPresentAndSenderFails_propagatesError_noBotEvent",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java:630",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Asserts .isInstanceOf(TelegramSendException.class) — type pinned, not just 'any error'. verify(eventService, never()).logEvent(any(), eq('bot_test_message_sent'), any(), any(), any()) confirms no double-write of bot event when sender fails."
+    },
+    {
+      "name": "postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java:768",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Existing null-branch case unchanged. Asserts 422 with code+message, drainRequests().isEmpty(), and eventRepository hasElements() returns false for bot_test_message_sent. No Awaitility settle window here (the BotControllerIT version is a non-awaited point check), but the corresponding TelegramSenderIT null-branch DOES use awaitNoEvent — coverage is adequate at the IT layer."
+    },
+    {
+      "name": "postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java:794",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Uses seedConnectedBotWithRealEncryption (real AES-GCM ciphertext), enqueues MockWebServer sendMessage 200. Asserts 200 OK + empty body, awaitEvent for bot_test_message_sent, then findEvent + containsOnlyKeys + containsEntry pin full metadata shape {projectId, telegramBotId, chatId, messageId}. Also asserts MockWebServer received exactly 1 request to /sendMessage with chat_id and the verbatim test-message body. awaitEvent uses await().atMost(5s).pollInterval(100ms) per spec."
+    },
+    {
+      "name": "findById_legacyDocumentWithoutOwnerChatId_readsAsNull",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java:85",
+      "present": true,
+      "assertion_strength": "strong",
+      "retry_count_asserted": false,
+      "notes": "Save Bot without calling setOwnerChatId; reload via findById; assert ownerChatId == null. Pins the wrapper-Long-null contract at the entity layer. Distinct from TelegramSenderIT's raw-BSON-absent test — together they cover both null-entity roundtrip and missing-field-in-BSON behaviors."
+    }
+  ],
+  "cross_cutting": {
+    "list_appender_split_per_log_site": {
+      "ok": true,
+      "details": "Five distinct token-leak tests, one per log site: 4xx WARN (line 661), 5xx-retry WARN (675), 429-wait WARN (696), terminal-failure ERROR (714), transport-error WARN+ERROR (738). Each test filters logAppender.list by explicit Level (WARN vs ERROR) before asserting on messages. The helper anyMessageMatches(level, predicate) at line 164 enforces level filtering at the call site. No umbrella tests."
+    },
+    "awaitility_used_on_async_event_reads": {
+      "ok": true,
+      "details": "TelegramSenderIT.awaitNoEvent (line 147) uses await().during(500ms).atMost(2s) — correct settle-window pattern for negative-presence assertions per tech-spec line 334. BotControllerIT.awaitEvent (line 254) uses await().atMost(5s).pollInterval(100ms) for positive presence on bot_test_message_sent in the new in07 test. The two TelegramSenderIT positive-path scenarios that would exercise Awaitility on the event-read are @Disabled — call site exists but does nothing (HIGH finding tracked separately)."
+    },
+    "bot_controller_it_positive_and_negative_branches": {
+      "ok": true,
+      "details": "Both branches present: existing null-branch postTestMessage_in06 (line 768) unchanged; new positive-path postTestMessage_in07 (line 794) asserts 200 OK + bot_test_message_sent metadata full shape {projectId, telegramBotId, chatId, messageId} via containsOnlyKeys + containsEntry. seedConnectedBotWithRealEncryption used because seedConnectedBot's placeholder bytes fail AES-GCM IV length check."
+    }
+  },
+  "findings": [
+    {
+      "severity": "high",
+      "scenario": "sendText_endToEndViaBotService_emitsBothEvents",
+      "issue": "Catalog scenario 1 of TelegramSenderIT is @Disabled with an empty body and a comment 'enabled by Task 5'. Task 5 has already shipped (commits f411283 'wire TelegramSender into BotService.sendTestMessage' and 3282b95 'address review round 1 for task 5'), so the stub is stale. As written the test asserts nothing — passes regardless of behavior — and the user-spec AC22 end-to-end coverage is therefore not actually verified by any integration test.",
+      "fix": "Remove @Disabled; implement the scenario per tech-spec line 336: seed Bot with encrypted token AND ownerChatId; POST /api/v1/projects/{id}/bot/test-message via webTestClient.mutateWith(csrf()); enqueue mockTelegram with sendMessage 200 {ok:true, result:{message_id:100, chat:{id:ownerChatId}}}; assert expectStatus().isOk(); await().atMost(5s).untilAsserted both telegram_message_sent event (metadata {botId, chatId, messageId:100}) AND bot_test_message_sent event (metadata {projectId, telegramBotId, chatId, messageId:100}) in eventRepository. Use the seedConnectedBotWithRealEncryption pattern from BotControllerIT.java:206 so the AES-GCM decrypt path works end-to-end."
+    },
+    {
+      "severity": "high",
+      "scenario": "sendText_terminalFailureViaBotService_emitsFailedEventOnly",
+      "issue": "Catalog scenario 2 of TelegramSenderIT is @Disabled with an empty body. The end-to-end terminal-failure path (BotService → TelegramSender → 401 → 422 invalid_bot_token to client + telegram_send_failed event present + bot_test_message_sent NOT written) is not exercised by any integration test, leaving the failure-event-only contract unverified at the HTTP+DB layer.",
+      "fix": "Remove @Disabled; implement per tech-spec line 337: seed Bot with encrypted token + ownerChatId; enqueue mockTelegram with 401 {ok:false, error_code:401, description:'Unauthorized'}; POST test-message; assert expectStatus().isEqualTo(422) + jsonPath('$.code').isEqualTo('invalid_bot_token'); await().atMost(5s).untilAsserted that telegram_send_failed event is present in eventRepository; use the awaitNoEvent settle-window pattern to assert bot_test_message_sent is NOT written within 2s."
+    },
+    {
+      "severity": "medium",
+      "scenario": "sendText_okFalse_throwsTelegramSendException",
+      "issue": "Tech-spec line 312 says 'scrubbed description preserved in event metadata'. The test (line 471) only asserts the exception's message contains 'something bad happened' and asserts errorCode is null. It does NOT verify a telegram_send_failed event was written, nor pin the event's metadata.errorDescription value. The description-preservation contract is therefore not actually verified.",
+      "fix": "Add ArgumentCaptor<Map<String,Object>> for the failure-event metadata and assert: verify(eventService).logEvent(eq(OWNER_ID), eq(EVENT_TELEGRAM_SEND_FAILED), isNull(), isNull(), metaCap.capture()); assertThat(meta).containsEntry('errorDescription', 'something bad happened').containsEntry('errorCode', null).containsEntry('attempts', 1).containsEntry('botId', BOT_ID). This pins the ok-false → failure-event mapping byte-exactly."
+    },
+    {
+      "severity": "medium",
+      "scenario": "sendText_overallTimeout_throwsTelegramSendException",
+      "issue": "Tech-spec line 323 says 'audit metadata attempts captured, terminal telegram_send_failed event written'. The test (line 636) calls verify(eventService, times(1)).logEvent(..., any()) — it confirms the event was emitted but uses any() for metadata, so attempts/errorCode shape is not asserted. The 'attempts captured' contract is unverified.",
+      "fix": "Replace the any() metadata matcher with an ArgumentCaptor: ArgumentCaptor<Map<String,Object>> metaCap = ArgumentCaptor.forClass(Map.class); verify(eventService).logEvent(eq(OWNER_ID), eq(EVENT_TELEGRAM_SEND_FAILED), isNull(), isNull(), metaCap.capture()); assertThat(metaCap.getValue()).containsKey('attempts').containsEntry('errorCode', null).containsEntry('botId', BOT_ID). The attempts count under overall-timeout is implementation-dependent (1 if the single delayed response is in-flight when timeout fires), so containsKey('attempts') is the right granularity."
+    }
+  ],
+  "redundant_tests": [
+    {
+      "tests": [
+        "BotRepositoryTest.findById_legacyDocumentWithoutOwnerChatId_readsAsNull",
+        "TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull"
+      ],
+      "reason": "Both verify Bot.ownerChatId reads back as null when the field is absent at write time. The IT version (line 201) inserts a raw BSON Document WITHOUT the ownerChatId key via mongoTemplate.insert(Document, 'bots') — covers 'field absent in BSON'. The repository version (line 85) saves a Bot entity that never calls setOwnerChatId — covers 'wrapper-Long default null roundtrip'. The comment at BotRepositoryTest line 88 explicitly distinguishes the two: 'Raw-BSON-absent coverage lives in TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull (Task 4)'. Not redundant in the strict sense — they protect against different failure modes (entity-layer null preservation vs BSON-codec missing-field handling). Listed here only for transparency; no remediation needed."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "scenariosInCatalog": 38,
+    "scenariosPresent": 36,
+    "scenariosDisabledOrMissing": 2,
+    "highSeverityFindings": 2,
+    "mediumSeverityFindings": 2,
+    "lowSeverityFindings": 0,
+    "listAppenderSitesCovered": 5,
+    "awaitilityCallSites": 3,
+    "botTokenLeakInvariantPreserved": true
+  }
+}

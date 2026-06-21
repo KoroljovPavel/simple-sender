@@ -1,0 +1,42 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "feasibility",
+      "severity": "major",
+      "issue": "The sweep relies on a sub-minute JobRunr recurring cadence (FUNNEL_SCHEDULER_INTERVAL_SECONDS=30, accuracy +/-~30s) and the spec fixes it as a firm constraint ('sweep must be JobRunr @Recurring with distributed lock'). But code-research section 4 states there is NO sub-minute recurring precedent (every existing @Recurring job is daily cron 0 3 * * *) and flags the 30s mechanism as an OPEN QUESTION (cron is minute-granularity; needs JobRunr interval/Duration recurring vs Spring @Scheduled). architecture.md describes the 30s sweep narratively but does not prove JobRunr 7.3.2 honors a 30s interval in this setup.",
+      "why_matters": "This is the highest-uncertainty assumption in the spec and it is treated as settled. If JobRunr 7.3.2 here does not support a 30s interval (or floors it to 1 min), the Delay accuracy AC (+/-~30s) and the 'multiple non-Delay steps in one tick' timing shift. Pre-deciding the mechanism in user-spec risks contradicting tech-spec if the mechanism turns out infeasible.",
+      "fix": "Note in Ограничения that the 30s @Recurring interval is unverified against JobRunr 7.3.2 in this project and the scheduler mechanism is a tech-spec decision (keep the good IT 'sub-minute cadence really fires'). State the WHAT (sweep cadence ~30s, distributed-lock-safe) and let tech-spec pick @Recurring(interval) vs @Scheduled."
+    },
+    {
+      "category": "overengineering",
+      "severity": "major",
+      "issue": "The user-spec carries substantial HOW-level detail belonging in tech-spec: specific primitives and class names (findAndModify CAS pending->in_progress->done, unique partial index (funnelId, subscriberId) as 'the single mechanism, do not duplicate with a query-time check', JobRunr @Recurring vs Spring @Scheduled, CustomFieldValueValidator, SubscriberServiceImpl.addTag/removeTag, ProcessTelegramUpdateJob log constants, auto-index-creation=true with no @PostConstruct ensureIndex, package placement). Sections Ограничения and Технические решения read like a tech-spec. Several of these (re-enter index-vs-query, claim mechanism, scheduler) are still OPEN QUESTIONS in code-research.",
+      "why_matters": "User-spec defines WHAT and WHY. Baking in the exact mechanism pre-commits design before tech-spec evaluates alternatives and can contradict the tech-spec. Re-enter is locked to 'unique partial index as the sole mechanism' although code-research lists index-vs-query-time as undecided.",
+      "fix": "Keep WHAT-level ACs (at-most-once per step, multi-replica safety, re-enter ignore vs cancel+restart semantics, timing tolerance, sole-writer for subscriber mutations) and move the prescribed primitives (findAndModify, unique partial index as sole mechanism, scheduler choice, concrete class names) into tech-spec. Phrase constraints as guaranteed outcomes, not chosen primitives."
+    },
+    {
+      "category": "feasibility",
+      "severity": "minor",
+      "issue": "The Set Custom Field AC and Технические решения assume a new shared service extracted from SubscriberCustomFieldsController. code-research section 2 confirms NO such service exists; the validate->update->recordCustomFieldsSet logic is inline in the controller with request-scope deps, and extract-vs-replicate is an open question. The spec presents extraction as decided.",
+      "why_matters": "This is a real refactor of an existing, tested controller path out of HTTP/request scope into a worker-callable service — feasible but hidden work with regression risk on the live custom-fields endpoint, asserted rather than scoped.",
+      "fix": "Acknowledge that Set-Custom-Field requires extracting existing inline controller logic into a request-scope-free shared service (a refactor of existing code) so tech-spec/sizing accounts for it and its regression surface."
+    },
+    {
+      "category": "sizing",
+      "severity": "minor",
+      "issue": "Size L is correct and scope correctly matches roadmap Phase 1 with deferred features explicitly excluded (no buttons/branches/wait-for-reply/extra triggers/tooling — matches docs/roadmap/funnels.md). However one iteration bundles the full backend engine (concurrency, scheduler, snapshot, claim, re-enter, cascade, new sendPhoto, templating, custom-field service extraction, NoOp replacement) AND the full frontend (list page, vertical step editor, dialogs, Pinia store, i18n parity, E2E), with no internal split note.",
+      "why_matters": "An L of this breadth is buildable but near the upper edge for one cycle; without a deliverable-increment note, decomposition could under-account for the frontend half or the custom-field refactor. Flag for the decomposition step, not a blocker.",
+      "fix": "Optionally note that backend engine + fire() replacement is an independently shippable/testable increment (verifiable via MockWebServer IT) before the editor lands, to guide task decomposition. No scope change required."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "Edge/error coverage is strong (send-failure 403/400/5xx, status gating, bot pinning, fire() isolation, multi-replica race, re-enter, cascade, observability AC). Two residual gaps: (1) Send Image is URL-only but no AC covers an invalid/unreachable/non-image URL or Telegram rejecting the photo URL (only the generic send-failure path implicitly covers it); (2) templating ACs cover unknown/empty/escaping but not an oversized substituted value pushing total text past 4096 (truncate vs 422 vs Telegram 400).",
+      "why_matters": "Image-URL rejection and post-substitution length overflow are realistic runtime failures for a drip engine; leaving them to the generic 'other 4xx -> failed' path may surprise users (a whole execution fails on a typo'd image URL). One explicit line each suffices.",
+      "fix": "Add an AC clarifying Send Image behavior on a URL Telegram rejects (terminal send-failure -> execution failed, no funnel retry) and templating behavior when a substituted value makes text exceed 4096 (define: Telegram 400 -> failed, or truncate). Keeps WHAT explicit without adding scope."
+    }
+  ],
+  "worst_category": "feasibility",
+  "summary": "Round 2: the now-filled user-spec is adequate, feasible on the existing JobRunr+MongoDB stack (matches architecture.md's Funnel Step Execution model and patterns.md sole-writer/requireOwned rules), and correctly right-sized as L within Phase-1 scope with deferred features properly excluded. No critical issues remain. Main flags: the unverified sub-minute sweep cadence assumption and HOW-level mechanism detail (findAndModify, unique partial index as sole mechanism, scheduler choice) that should move to tech-spec rather than being pre-decided here."
+}

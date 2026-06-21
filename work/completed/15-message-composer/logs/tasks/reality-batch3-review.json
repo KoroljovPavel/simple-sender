@@ -1,0 +1,89 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "Task 7 depends_on: [6] and instructs 'read types on startup, not invent them', but Task 6 has NOT yet been executed: frontend/types/funnel.ts has no MESSAGE StepType, no ContentBlock/BlockType/MediaItem interfaces, no FunnelStep.blocks field. The types Task 7 builds against do not exist yet. If Task 7 runs without Task 6 being done first, every import of ContentBlock/BlockType/MessageItem will fail at compile time.",
+      "fix": "Task 6 must reach status=done before Task 7 executes. Validate this pre-condition at task-start (check that 'MESSAGE' appears in frontend/types/funnel.ts before proceeding)."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 8,
+      "issue": "Same root cause as Task 7: Task 8 also depends_on: [6] and imports ContentBlock/BlockType/MediaItem from frontend/types/funnel.ts plus the updated PreviewStepRequest(blocks)/PreviewStepResponse(renderedBlocks). None of these exist yet in the current types file. PreviewStepRequest still has {stepType, text, parseMode} (not blocks); PreviewStepResponse has {rendered, sampleData, kind} (not renderedBlocks[]).",
+      "fix": "Same as Task 7 — gate on Task 6 completion. Additionally: the store spec (tests/stores/funnels.spec.ts:236) tests the OLD preview shape {stepType, text, parseMode} → must be rewritten as part of Task 8 alongside updating the store action."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 7,
+      "issue": "TDD Anchor in Task 7 specifies test file path as 'frontend/components/funnels/__tests__/FunnelStepForm.*.spec.ts' (or 'FunnelStepForm.composer.spec.ts' beside nastavna specs in that dir). No __tests__ subdirectory exists under frontend/components/funnels/ — it does not exist at all. The existing FunnelStepForm tests live in frontend/tests/pages/funnel-editor.spec.ts (not a separate spec file, not in __tests__/). The TDD anchor instructs 'mirror existing spec location — verify actual location before writing', which is correct guidance, but the example path given ('frontend/components/funnels/__tests__/FunnelStepForm.*.spec.ts') is wrong and may mislead the implementer into creating a non-existent directory.",
+      "fix": "The new FunnelStepForm.composer spec should be created at frontend/tests/pages/funnel-editor.spec.ts (appended) OR as a new file at frontend/tests/components/funnels/FunnelStepForm.composer.spec.ts — matching the pattern used by FunnelMessagePreview.spec.ts in that same directory. Clarify the target path in the task."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 Details section claims: 'SEND_MESSAGE lines 624–652, SEND_IMAGE 654–680, MENU 733–911' and 'STEP_TYPES lines 32–42, selectedType line 69, schemaFor lines 371–421, useForm/defineField lines 425–454, onSubmit lines 528–607'. These line references are CORRECT per the current file (verified). However the Details section also says menuButtons is 'рядки 73–182' and menuTimeout* is 'рядки 95–147'. These are within the MENU sub-editor block — actual range starts at line 91 (menuButtons) and 102 (menuTimeoutValue). The discrepancy is minor but the outer '73–182' claim for menuButtons is wrong (line 73 is the ButtonRow type declaration, not menuButtons itself which is at line 91). This is a cosmetic inaccuracy but could confuse an agent scanning for the anchor.",
+      "fix": "Update Details: menuButtons = line 91 (not 73); menuTimeout* starts at line 102 (not 95, that is a comment). Low risk — agent instruction to 'reuse MENU sub-editor as pattern' is correct regardless."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 Details says: 'preview action (lines 217–232) shle payload: PreviewStepRequest body'. Actual code: async function preview starts at line 217, closing brace at line 232 — this is accurate. However the task says 'update() (рядок 65) і syncRow()' — update() actually starts at line 65 correctly, and syncRow() is at line 108. The task instructs to 'verify that update() and syncRow() do not reference deleted flat msg-fields' — confirmed they do NOT (both only touch metadata fields name/description/status/triggerType/triggerValue/allowReEnter/stepCount/updatedAt). This part of the check passes; the line numbers in the hint are accurate enough.",
+      "fix": "No fix needed for the line number references — they match. The cross-check instruction is valid."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 8,
+      "issue": "Task 8 TDD Anchor instructs rewriting the existing FunnelMessagePreview.spec.ts at 'frontend/tests/components/funnels/FunnelMessagePreview.spec.ts'. The existing spec (11.7 KB) tests the OLD single-block model (SEND_MESSAGE/SEND_IMAGE/MENU, flat text/caption/parseMode request shape, single 'rendered' string response). Task 8 rewrites both the spec AND the component. The current store spec at frontend/tests/stores/funnels.spec.ts:235–262 also tests the OLD PreviewStepRequest shape ({stepType, text, parseMode}). Task 8 must also update the STORE spec to match the new blocks-based PreviewStepRequest — this is mentioned ('tests/stores/funnels.spec.ts zелена після оновлення') but not explicitly in the TDD Anchor list of tests to write. The risk is that the agent rewrites the component spec but leaves the store spec testing the old shape, causing a spec pass on mocked but fail on real types.",
+      "fix": "Add to Task 8 TDD Anchor: also update tests/stores/funnels.spec.ts preview test (currently line 235) to send blocks[] in PreviewStepRequest and expect renderedBlocks[] in PreviewStepResponse."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 instructs FunnelMessagePreview.vue to change 'isMessageStep' from the MESSAGE_TYPES array check to 'stepType === MESSAGE'. But at the same time the task tells the implementer to 'delete MESSAGE_TYPES array with old types'. This is correct behavior — however the task's Details section says 'isMessageStep → stepType === MESSAGE (видалити MESSAGE_TYPES масив зі старими типами)'. After Task 6, the only message step type will be 'MESSAGE'. The component's runPreview() currently sends {stepType, text: previewText(step), parseMode} — the new shape will be {stepType, blocks: step.blocks}. The task correctly calls this out, but does NOT mention that the current watch() at lines 108–125 watches [step.text, step.caption, step.parseMode] — these will no longer exist on FunnelStep after Task 1/6. The watch must be changed to watch step.blocks (deep). The task does mention this in the 'What to do' step 2 but omits it from the TDD Anchor test list, increasing the risk of an agent forgetting to cover reactive block changes in the spec.",
+      "fix": "Add a TDD anchor test: 'watch reacts to step.blocks change → schedulePreview called'. This covers the reactive wiring that is load-bearing for the debounce behavior."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 step 4 says 'клієнт-валідація — computed-функції, що повертають локалізований error або null'. The MENU_END_TARGET sentinel (__END__) and associated menuTargetOptions computed are reused for the button/timeout sub-editor. Task 7 instructs to reuse this pattern 1:1, but the initialButtonRows() function on line 80 seeds from 'props.initial?.stepType === MENU' — after Task 7, this must be changed to seed from 'props.initial?.stepType === MESSAGE'. The task mentions this correctly in the 'Edge cases' section (edit existing composer-крок → seed блоків із props.initial.blocks), but the implementation hint does not call out that the initialButtonRows() seed condition must change from MENU to MESSAGE. An agent following the pattern literally may seed buttons from MENU-typed initial steps only.",
+      "fix": "Add to implementation hints or edge-cases: 'in initialButtonRows(), change the seed guard from stepType === MENU to stepType === MESSAGE; similarly for menuTimeoutValue/Unit/Target initialization at lines 102–113'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 step 2 describes the Album type-mixing predicate: 'all photo / all video / mix photo+video — OK; audio or document mixed with others — error'. However the MediaItem interface (to be defined in Task 6) does NOT have a per-item sub-type field based on what's described in the tech-spec Data Models: 'record MediaItem(String mediaUrl, String caption)'. The Edge cases section acknowledges this: 'звірити модель MediaItem/album у типах Task 6: чи несе елемент свій підтип'. If MediaItem has no sub-type, the client-side type-mixing validation is impossible to implement correctly at the album-item level. This is a potential design gap between the task spec and the data model that needs resolution in Task 6.",
+      "fix": "Before Task 7 implements album type-mixing validation, confirm Task 6 adds a mediaType or similar discriminator field to MediaItem, or clarify how the frontend determines per-item photo/video/audio/file classification."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 is a code audit task with no code written. It is sound in structure. However, it references 'decisions.md' to get the final list of created/modified files, but decisions.md is currently empty (only has the template comment block, no Task 1–8 entries). If Tasks 1–8 haven't populated decisions.md by the time Task 9 runs, the audit step that relies on it ('дополнить тем, что зафиксировано в decisions.md') will find nothing to supplement the tech-spec file list. The depends_on: [1,2,3,4,5,6,7,8] correctly enforces ordering, but the post-completion requirement for Tasks 1–8 to write to decisions.md is a soft convention not enforced by the harness.",
+      "fix": "Acceptable risk — clearly documented. No change needed. The grep-based checks in the verification steps are the primary mechanism and don't depend on decisions.md content."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 8,
+      "issue": "Task 8 Implementation hints say 'порядок DOM перевіряти через panelHtml.indexOf(...) (як у наявному SEND_IMAGE-тесті)'. This is an accurate reference to the existing spec (FunnelMessagePreview.spec.ts line 119–122 does use indexOf). Hint is factually correct. However it also says 'referrerpolicy=no-referrer на <img> зберегти (наявний патерн)' — confirmed that the existing spec tests for this attribute implicitly through image rendering but the component HTML at line 192 shows ':src=imageUrl' without a visible referrerpolicy attribute in the first 150 lines read. This may or may not be in the template section (not fully read). If the attribute is not present, the hint is wrong.",
+      "fix": "Read lines 185–218 of FunnelMessagePreview.vue to confirm referrerpolicy attribute exists before implementing. Low risk — if absent, omit from new implementation too."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 11
+  }
+}

@@ -1,0 +1,61 @@
+{
+  "status": "changes_required",
+  "summary": {
+    "totalFindings": 5,
+    "critical": 1,
+    "major": 1,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "A09: Security Logging and Monitoring Failures",
+      "title": "Rethrown exception leaks raw bot token to JobRunr failure log",
+      "description": "handleFailure(...) scrubs the message before persisting it to RawUpdate.processingError, but the rethrow at lines 129-131 propagates the ORIGINAL Throwable t (or wraps it as the cause of a new RuntimeException). t.getMessage() and the cause chain still contain the unscrubbed token text. JobRunr's default failure pipeline writes the rethrown exception's class, message, and full stack trace into the jobrunr_jobs collection (jobHistory.exceptionMessage / stackTrace) and into the JobRunr logger ('Job processing failed' ERROR line). Result: a token-bearing exception message (e.g. a future SubscriberService implementation that string-formats a token into a validation error, or any HTTP client error from a downstream service whose message embeds the bot URL '/bot{token}/...') will be written verbatim to two places we do NOT control: (a) the jobrunr_jobs Mongo collection, (b) the JobRunr default ERROR log line. The task's 'What matters most' item #3 calls this out explicitly: 'The failure handler must NOT leak raw tokens via the rethrown exception's message either (the rethrow propagates to JobRunr's logs).' The current test workerException_writesFailedStatus_scrubbedTruncated_incrementsFailureCounter_rethrows only asserts processingError is scrubbed; it never asserts the rethrown exception's message is scrubbed.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:129-131",
+      "impact": "A bot token leaked into JobRunr's failure store or stdout log grants full takeover of the Telegram bot (message sending, webhook reconfiguration, getMe identity disclosure). The leak surface is exactly the surface the scrub-on-processingError mitigation was designed to close — but routed through a different sink. Operators who tail JobRunr logs or query jobrunr_jobs for debugging will see the raw token. SIEM exports of JobRunr's storage now contain credentials.",
+      "recommendation": "Rethrow a NEW exception whose message is the scrubbed/truncated value and whose cause is suppressed (or a sanitised cause whose getMessage() is also scrubbed). Example: `RuntimeException sanitised = new RuntimeException(truncated); sanitised.setStackTrace(t.getStackTrace()); throw sanitised;`. Critically, do NOT pass `t` as the cause of the new RuntimeException — that re-leaks the unscrubbed message via `getCause().getMessage()`. Stack trace frames are not payload-derived (they are class+method+line), so reusing them is safe. Add a test that throws an exception whose message contains a TOKEN_PATTERN match, catches the rethrown exception in the test, and asserts both `caught.getMessage()` and (if any) `caught.getCause().getMessage()` do NOT match TOKEN_PATTERN.",
+      "cwe": "CWE-532"
+    },
+    {
+      "severity": "major",
+      "category": "A09: Security Logging and Monitoring Failures",
+      "title": "Enumerated token-scrubber sites are missing entirely from the worker",
+      "description": "Tech-spec Risks → Token-scrubber sites enumerates FIVE worker log sites that must exist with scrubbing applied: (1) INFO on worker start, (2) WARN inside per-command branches with command type + chatId + scrubbed payload, (3) ERROR on terminal failure, (4) INFO on ownerChatId populate event, (5) INFO on worker success. Only sites (3) and (4) actually exist (lines 124-125, 215-216). Sites (1), (2), and (5) are absent — there is no INFO on entry, no per-branch WARN, no INFO on success. The task description explicitly flags this as something to confirm: 'INFO on worker start (we don't log start currently — confirm whether that's a gap)'. While absence-of-log is not itself a vulnerability, the SECURITY-relevant consequence is that an operator triaging an incident has no audit trail of WHICH update was being processed at the time of a crash, no per-command WARN to spot anomalies (e.g. an unexpected spike of /start commands from one chat), and no success-side observability beyond the Micrometer counter. For an A09 control (security logging & monitoring) this is a coverage gap against the documented design. Additionally tech-spec line 433 promises 'Per-site ListAppender test asserts no token regex matches' — that test is also missing.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:79-109 (handle), 134-186 (dispatch), 188-243 (handleStart/handleStop) — no entry/branch/success log statements present",
+      "impact": "Reduced incident-response signal. Without per-update entry/exit logs, correlating a JobRunr failure to a specific RawUpdate requires post-hoc DB inspection (the rawUpdateId is only printed on failure today). Without per-branch WARN, abuse patterns (e.g. one chat firing thousands of /start in a tight loop) are only visible via the Micrometer counter, which is aggregate and projectless. Detection latency for a credential-stuffing-style /start flood goes from log-grep-fast to query-DB-slow.",
+      "recommendation": "Add the three missing log sites with scrubbing applied (rawUpdateId / projectId are server-generated and safe but scrub them anyway per the enumerated-sites contract): (1) at line 80 after load, `log.info(\"ProcessTelegramUpdateJob - start (rawUpdateId={}, projectId={})\", TelegramApiClient.scrubTokens(rawUpdateId), TelegramApiClient.scrubTokens(rawUpdate.getProjectId()));`. (2) in each command branch (handleStart, handleStop, default arm), one WARN with command type + chatId — chatId is a Long so trivially safe. (3) after line 105 success-counter increment, `log.info(\"ProcessTelegramUpdateJob - success (rawUpdateId={})\", TelegramApiClient.scrubTokens(rawUpdateId));`. Then add a ListAppender test that drives every enumerated branch and asserts `TOKEN_PATTERN.matcher(allLogLines).find() == false`.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring Failures",
+      "title": "startPayload persisted to audit event without TOKEN_PATTERN guard",
+      "description": "logEventCommandStart at line 250 stores `startPayload` directly into event metadata. startPayload comes from the parser, which extracts it from /start text — fully attacker-controlled. The Telegram Bot API restricts deep-link payloads to [A-Za-z0-9_-] up to 64 chars, which cannot match TOKEN_PATTERN (the pattern requires a literal ':' that is not in the allowed charset). So under spec-conformant input this is safe. However, the worker accepts whatever Telegram sends — Telegram does NOT actually enforce the 64-char/charset rule server-side for arbitrarily-typed /start text from groups or from clients that bypass the official deep-link button — and the worker's TelegramCommandParser does not validate the payload against the deep-link grammar. An attacker who can directly type '/start 1234567890:ABCDEFGHIJKLMNOPQRSTUVWXYZ_-1234567890' into a private chat will have that string persisted verbatim into events.metadata.startPayload, where it could be misread by anyone exporting audit events as a leaked token. Defense-in-depth: scrub startPayload before persisting.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:250 (metadata.put(\"startPayload\", startPayload))",
+      "impact": "An attacker can plant a token-shaped string into the audit event metadata. Anyone (SIEM, support tool, downstream analytics) reading event metadata will treat it as a legitimate token-shaped substring and may auto-quarantine, page operators, or trigger token-rotation workflows. Low real-world impact (the string is attacker-supplied, not a real bot token) but it pollutes audit data and undermines automated token-leak detectors.",
+      "recommendation": "Apply the same scrubber as everywhere else: `metadata.put(\"startPayload\", TelegramApiClient.scrubTokens(startPayload));`. Same fix for any other user-controlled string ever added to event metadata. Add a unit test: payload='1111111111:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' → event.metadata.startPayload == '[REDACTED_TOKEN]'.",
+      "cwe": "CWE-117"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "ownerChatId populate event has no scrubber test coverage even though it does call scrubTokens",
+      "description": "Line 215-216 correctly wraps chatId through scrubTokens — but chatId is `String.valueOf(Long)` which can never contain a colon, so the scrubber is a no-op. Mechanically correct (defense in depth, consistent shape with other sites), but there is no test that asserts the log line stays scrubbed under the malicious-input scenario the scrubber is designed for. This is the same observation as finding #2 — the enumerated sites need a ListAppender test that drives malicious payloads through every site. Listing here separately because this site DOES exist and is just untested, whereas finding #2 covers the sites that don't exist at all.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:215-216 and 124-125",
+      "impact": "No exploit path today (chatId is a Long), but the test gap means a future refactor that introduces a string-formatted payload into one of these log calls would not be caught by CI.",
+      "recommendation": "Either remove the scrubber call on chatId (it is provably a no-op for Long) and document why, OR add a ListAppender test that captures these log lines and asserts no TOKEN_PATTERN match across the captured output. Recommend the latter for forward-compat per the tech-spec contract at line 433.",
+      "cwe": "CWE-1059"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Failure-path findAndModify race with stale enum representation",
+      "description": "Line 120 writes `.set(\"processingStatus\", RawUpdateStatus.FAILED)` — passing the enum value, not its `.name()` string. Spring Data MongoDB enum serialization for `findAndModify` Update specs depends on the configured MongoMappingContext and CustomConversions. Empirically (and per the precedent at line 210 which uses `BotStatus.CONNECTED.name()` explicitly), the convention in this codebase is to pass `.name()` for type-safe matching against the persisted form. If a future Mongo converter change inverts the representation (lowercase via @JsonValue or @WritingConverter), this line would write a stale value that the partial-index `partialFilter: { processingStatus: { $in: ['PENDING', 'DONE'] } }` would no longer match — silently breaking the index and corrupting query plans. Not a security risk per se, but Decision 5 / Decision 9 race-protection ALL rely on the persisted form being exactly 'FAILED' uppercase.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:120",
+      "impact": "If the persistence representation diverges, the failure path stops being observable from the partial index, JobRunr retries land on stale state, and there is a risk of double-firing events (because the re-entry guard checks `== DONE`, not `!= PENDING`). Low likelihood under current config but high blast-radius if triggered.",
+      "recommendation": "Match the line-210 idiom: `new Update().set(\"processingStatus\", RawUpdateStatus.FAILED.name())`. Add the same defensive static block as Bot.java has at lines 34-40, asserting `\"FAILED\".equals(RawUpdateStatus.FAILED.name())` at class load — protects against accidental enum rename. Same fix at line 103 (`rawUpdate.setProcessingStatus(RawUpdateStatus.DONE)` is fine because it goes through the Spring Data converter; but if you switch to a `findAndModify` here for symmetry, use `.name()`).",
+      "cwe": "CWE-1023"
+    }
+  ]
+}

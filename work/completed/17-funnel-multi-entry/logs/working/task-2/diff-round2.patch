@@ -1,0 +1,208 @@
+367da43 fix: address review round 1 for task 2 (36 seconds ago) <johnypashka>
+.../com/botfunnel/funnel/FunnelRepository.java     | 39 ++++++++++---
+ .../funnel/FunnelTriggerIndexReconciliation.java   |  2 +-
+ .../java/com/botfunnel/funnel/FunnelIndexesIT.java | 32 ++++++++++
+ .../funnel/FunnelTriggerIndexReconciliationIT.java | 68 +++++++++++++++++++++-
+ 4 files changed, 129 insertions(+), 12 deletions(-)
+
+backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java
+  @@ -1,6 +1,7 @@
+  +import org.springframework.data.mongodb.repository.Query;
+   
+   import java.util.List;
+   import java.util.Optional;
+  @@ -28,18 +29,38 @@ public interface FunnelRepository extends MongoRepository<Funnel, String> {
+  -    // on_start conflict pre-check (Decision 6): at most one active funnel per (projectId, on_start payload).
+  -    // Keys on the DENORMALIZED onStartTriggerValue scalar — the same field the partial-unique index guards —
+  -    // so a service-level pre-check and the DB constraint agree. Used by FunnelService.checkTriggerConflict
+  -    // (Task 4) and FunnelTriggerServiceImpl.fire's on_start lookup (Task 5).
+  +    /**
+  +     * on_start conflict pre-check (Decision 6): at most one active funnel per (projectId, on_start payload).
+  +     * Keys on the DENORMALIZED {@code onStartTriggerValue} scalar — the same field the partial-unique index
+  +     * guards — so a service-level pre-check and the DB constraint agree. Used by
+  +     * {@code FunnelService.checkTriggerConflict} (Task 4) and {@code FunnelTriggerServiceImpl.fire}'s on_start
+  +     * lookup (Task 5).
+  +     *
+  +     * <p><b>Callers MUST NOT pass {@code null} for {@code onStartTriggerValue}.</b> A {@code null} argument
+  +     * derives a {@code {onStartTriggerValue: null}} predicate that matches every event-only funnel (whose
+  +     * denormalized scalar is null) — a cross-type false positive. The bare {@code /start} payload is the
+  +     * empty string {@code ""}, never null; pass {@code ""} for it.
+  +     */
+       Optional<Funnel> findByProjectIdAndOnStartTriggerValueAndStatus(
+               String projectId, String onStartTriggerValue, FunnelStatus status);
+   
+  -    // Fan-out trigger lookup (Decision 1) — all active funnels whose triggers[] contains an element matching
+  -    // (triggerType, triggerValue), for `event` / `tag_added` / `custom_field_set`. Multikey nested-property
+  -    // derivation over the triggers array: the predicate matches per element, returning the funnel if any
+  -    // element matches. The caller (Task 5) re-scans triggers[] to locate the matched element + its
+  -    // entryStepId. Used by FunnelEventService fan-out (Task 5).
+  +    /**
+  +     * Fan-out trigger lookup (Decision 1) — all active funnels whose {@code triggers[]} contains a SINGLE
+  +     * element matching BOTH {@code triggerType} and {@code triggerValue}, for {@code event} / {@code tag_added}
+  +     * / {@code custom_field_set}.
+  +     *
+  +     * <p><b>Element-scoped semantics ({@code $elemMatch}).</b> This uses an explicit {@code $elemMatch} query,
+  +     * NOT Spring Data's derived two-field array predicate. The derived form
+  +     * ({@code {'triggers.triggerType':?, 'triggers.triggerValue':?}}) evaluates each clause independently
+  +     * across array elements, so a funnel with {@code [{keyword,purchase},{event,other}]} would falsely match
+  +     * {@code (event, purchase)} (type from one element, value from another). {@code $elemMatch} pins both
+  +     * conditions to the SAME element, eliminating that cross-element false positive at the DB.
+  +     *
+  +     * <p>The query still returns the FUNNEL, not the matched element. The caller (Task 5) re-scans the
+  +     * returned funnel's {@code triggers[]} to locate the matched element and read its {@code entryStepId}
+  +     * (start vs redirect routing). Used by {@code FunnelEventService} fan-out (Task 5).
+  +     */
+  +    @Query("{ 'projectId': ?0, 'triggers': { '$elemMatch': { 'triggerType': ?1, 'triggerValue': ?2 } }, 'status': ?3 }")
+       List<Funnel> findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
+               String projectId, String triggerType, String triggerValue, FunnelStatus status);
+   
+  +30 -9
+
+backend/src/main/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliation.java
+  @@ -67,7 +67,7 @@ public class FunnelTriggerIndexReconciliation implements BeanPostProcessor {
+  -    private boolean reconciled = false;
+  +    private volatile boolean reconciled = false;
+   
+       @Override
+       public Object postProcessAfterInitialization(Object bean, String beanName) {
+  +1 -1
+
+backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java
+  @@ -196,6 +196,38 @@ class FunnelIndexesIT extends AbstractIntegrationTest {
+  +    /**
+  +     * Cross-element exclusion: the {@code $elemMatch} fan-out query must NOT return a funnel whose
+  +     * {@code triggerType} and {@code triggerValue} match in DIFFERENT array elements. A funnel
+  +     * {@code [{keyword,purchase},{event,other}]} would be a FALSE POSITIVE under Spring Data's flat
+  +     * two-field derived predicate ({@code type='event'} matches element 1, {@code value='purchase'} matches
+  +     * element 0). The {@code @Query} {@code $elemMatch} pins both conditions to the SAME element, so this
+  +     * funnel is correctly excluded by a {@code (event, purchase)} query.
+  +     */
+  +    @Test
+  +    void findByTriggersTriggerTypeAndValueExcludesCrossElementMatch() {
+  +        String projectId = "proj-" + UUID.randomUUID();
+  +        try {
+  +            // No SINGLE element matches (event, purchase): purchase lives on the keyword element, event on the
+  +            // 'other' element. Flat derived predicates would falsely match; $elemMatch must not.
+  +            Funnel crossElement = activeFunnel(projectId);
+  +            crossElement.setTriggers(List.of(
+  +                    trigger("keyword", "purchase", List.of("purchase")),
+  +                    trigger("event", "other", null)));
+  +            mongoTemplate.insert(crossElement);
+  +
+  +            List<Funnel> found = funnelRepository
+  +                    .findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(
+  +                            projectId, "event", "purchase", FunnelStatus.active);
+  +
+  +            assertThat(found)
+  +                    .as("$elemMatch must NOT return a funnel whose type and value match in different elements")
+  +                    .isEmpty();
+  +        } finally {
+  +            mongoTemplate.remove(new Query(Criteria.where("projectId").is(projectId)), Funnel.class);
+  +        }
+  +    }
+  +
+       /**
+        * {@code findByProjectIdAndOnStartTriggerValueAndStatus} resolves the on_start funnel by the
+        * denormalized scalar (the Task-4 conflict pre-check / Task-5 fire lookup).
+  +32 -0
+
+backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java
+  @@ -1,10 +1,17 @@
+  +import ch.qos.logback.classic.Level;
+  +import ch.qos.logback.classic.Logger;
+  +import ch.qos.logback.classic.spi.ILoggingEvent;
+  +import ch.qos.logback.core.read.ListAppender;
+   import com.mongodb.client.model.IndexOptions;
+   import com.botfunnel.AbstractIntegrationTest;
+   import org.bson.Document;
+  +import org.junit.jupiter.api.AfterEach;
+  +import org.junit.jupiter.api.BeforeEach;
+   import org.junit.jupiter.api.Tag;
+   import org.junit.jupiter.api.Test;
+  +import org.slf4j.LoggerFactory;
+   import org.springframework.beans.factory.annotation.Autowired;
+   import org.springframework.dao.DataIntegrityViolationException;
+   import org.springframework.dao.DuplicateKeyException;
+  @@ -58,6 +65,37 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
+  +    // Captures the reconciliation's startup markers so the greppable APPLIED/NO-OP strings (which Task 12
+  +    // post-deploy verification pins) are asserted, not just inferred from the index side effect. Pattern
+  +    // mirrors ProcessTelegramUpdateJobTest / WebhookSecretVerifierTest.
+  +    private ListAppender<ILoggingEvent> logAppender;
+  +    private Logger reconciliationLogger;
+  +
+  +    @BeforeEach
+  +    void attachLogAppender() {
+  +        reconciliationLogger = (Logger) LoggerFactory.getLogger(FunnelTriggerIndexReconciliation.class);
+  +        logAppender = new ListAppender<>();
+  +        logAppender.start();
+  +        reconciliationLogger.addAppender(logAppender);
+  +    }
+  +
+  +    @AfterEach
+  +    void detachLogAppender() {
+  +        if (reconciliationLogger != null && logAppender != null) {
+  +            reconciliationLogger.detachAppender(logAppender);
+  +            logAppender.stop();
+  +        }
+  +    }
+  +
+  +    // Counts INFO log events whose formatted message equals the given marker (exact-match, so a reword of
+  +    // MARKER_APPLIED / MARKER_NOOP breaks the assertion — the whole point of pinning the greppable string).
+  +    private long markerCount(String marker) {
+  +        return logAppender.list.stream()
+  +                .filter(e -> e.getLevel() == Level.INFO)
+  +                .filter(e -> marker.equals(e.getFormattedMessage()))
+  +                .count();
+  +    }
+  +
+       // A fresh runner per call: the Spring-managed singleton's once-per-boot guard tripped at startup.
+       private void runReconciliation() {
+           new FunnelTriggerIndexReconciliation()
+  @@ -109,7 +147,7 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
+  -    void migrationDropsOldBroadFilterIndex() {
+  +    void migrationDropsOldFlatTrioTriggerIndex() {
+           installOldTrioIndex();
+           assertThat(indexByName(OLD_INDEX_NAME))
+                   .as("old flat-trio index present precondition")
+  @@ -123,6 +161,15 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
+  +        // The greppable APPLIED marker (Task 12 post-deploy grep) must fire exactly once on the migration
+  +        // case — a reword of MARKER_APPLIED breaks this. NO-OP must NOT fire on the drop path.
+  +        assertThat(markerCount(FunnelTriggerIndexReconciliation.MARKER_APPLIED))
+  +                .as("APPLIED marker must be logged once when the old index was present and dropped")
+  +                .isEqualTo(1L);
+  +        assertThat(markerCount(FunnelTriggerIndexReconciliation.MARKER_NOOP))
+  +                .as("NO-OP marker must NOT fire on the migration (drop) path")
+  +                .isZero();
+  +
+           // Simulate auto-index-creation laying the annotation shape; assert its key + partial filter.
+           installNewShapeIndex();
+           Document recreated = indexByName(NEW_INDEX_NAME);
+  @@ -155,6 +202,15 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
+  +
+  +        // The greppable NO-OP marker (Task 12 post-deploy grep) must fire exactly once on the idempotent
+  +        // re-boot case — a reword of MARKER_NOOP breaks this. APPLIED must NOT fire when nothing was dropped.
+  +        assertThat(markerCount(FunnelTriggerIndexReconciliation.MARKER_NOOP))
+  +                .as("NO-OP marker must be logged once when the old index is already absent")
+  +                .isEqualTo(1L);
+  +        assertThat(markerCount(FunnelTriggerIndexReconciliation.MARKER_APPLIED))
+  +                .as("APPLIED marker must NOT fire on the idempotent re-boot (nothing dropped)")
+  +                .isZero();
+       }
+   
+       @Test
+  @@ -182,9 +238,17 @@ class FunnelTriggerIndexReconciliationIT extends AbstractIntegrationTest {
+  -            assertThatCode(() -> faulting.postProcessAfterInitialization(broken, "mongoDatabaseFactory"))
+  +            Object[] returned = new Object[1];
+  +            assertThatCode(() ->
+  +                    returned[0] = faulting.postProcessAfterInitialization(broken, "mongoDatabaseFactory"))
+                       .as("a transient Mongo fault must be swallowed — the app must boot")
+                       .doesNotThrowAnyException();
+  +
+  +            // BeanPostProcessor contract: must return the SAME bean instance — returning null would drop the
+  +            // MongoDatabaseFactory from the context. A swallowed fault must not break this invariant.
+  +            assertThat(returned[0])
+  +                    .as("postProcessAfterInitialization must return the unmodified original bean")
+  +                    .isSameAs(broken);
+           }
+       }
+  +66 -2

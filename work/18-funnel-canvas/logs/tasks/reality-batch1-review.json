@@ -1,0 +1,68 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 1,
+      "issue": "Task 1 Description (seam 4) and Details state that the trigger pass is called 'applyTriggers' and that it 'maps dto.canvasPosition() → each built Trigger'. This is accurate for the method name, but the Details section also asserts that the line numbers for the trigger loop are 'L679-755' and instructs to add canvasPosition mapping 'inside the per-trigger loop (after building each Trigger)'. While the line numbers are roughly correct (L679 is applyTriggers, the loop ends around L750), the task's TDD Anchor names the round-trip IT test class as both FunnelControllerIT and implies FunnelServiceIT will hold round-trip tests. The smoke Verify step (`*FunnelServiceIT*`) explicitly notes 'there is no FunnelServiceIT class today' — however, FunnelTriggerServiceIT.java DOES exist at backend/src/test/java/com/botfunnel/funnel/FunnelTriggerServiceIT.java (33.5 KB). The task's self-note is misleading: '*FunnelServiceIT*' and '*FunnelTriggerServiceIT*' are different globs. The Gradle glob '*FunnelServiceIT*' will NOT match FunnelTriggerServiceIT (the class is FunnelTriggerServiceIT, not FunnelServiceIT). The smoke command therefore matches zero test classes for that glob, as stated — but the explanation in the task incorrectly implies there is no IT at all for the trigger service. This is a documentation error, not a blocker, but the misleading note could cause confusion. Severity kept at major (not critical) — see below for promotion to critical on the equals/hashCode issue.",
+      "fix": "Clarify the smoke note: the glob '*FunnelServiceIT*' intentionally matches nothing because the real class is FunnelTriggerServiceIT; the '*FunnelControllerIT*' glob is the one that matters for round-trip tests. No code change needed."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 1,
+      "issue": "Task 1 instructs: 'Keep [canvasPosition] OUT of equals/hashCode (L56-69) — it is rendering metadata, and 17-funnel-multi-entry relies on structural equality over the four routing fields only.' The actual Trigger.java at lines 57-69 shows equals/hashCode already includes ALL FOUR routing fields including entryStepId. The comment references 'L56-69' for the existing equals block — that is correct. HOWEVER the premise that 17-funnel-multi-entry 'relies on structural equality over the four routing fields only' may be false for Task 3: Task 3 requires adding canvasPosition to Trigger and keeping it OUT of equals. But once Task 3's fire() reads entryStepId from the on_start trigger object, the equals/hashCode including entryStepId means two on_start triggers with different entryStepId values are no longer equal — which IS the desired semantics. The instruction to keep canvasPosition out of equals is correct. The risk is: if the implementor of Task 1 misreads the instruction and accidentally adds canvasPosition to the existing equals block in Trigger.java, the redirect re-scan logic in FunnelTriggerService (which uses Trigger equality) could break. The task correctly says to keep it out, but the rationale cites 'four routing fields' which is correct only if we do NOT count canvasPosition. The instruction itself is sound; the concern is that the code comment to be added must be precise about which four fields are routing-relevant. This is a major concern rather than critical. Demoting from critical.",
+      "fix": "Ensure the code comment added next to Trigger.canvasPosition explicitly states it is excluded from equals/hashCode and lists the four included fields (triggerType, triggerValue, keywords, entryStepId) to make the exclusion unambiguous."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 1,
+      "issue": "Task 1 TDD Anchor references 'FunnelStepTest.java::copyOf_carries_canvasPosition' as a domain unit test. FunnelStepTest.java exists at the correct path and tests copyOf (method deepCopyProducesIndependentStep). The task is correct that this is the right place. However Task 1 also suggests this is a 'focused domain test' separate from the IT tests. This is fine. The issue is: Task 1's Details (L193-211 of FunnelService) refers to adding a notes-forward pass 'invoked from update (the PATCH path)'. Looking at FunnelService, the PATCH path flows through update() → applyTriggers() and toSteps() → funnelRepository.save(). There is no standalone 'update' method that separately handles notes; the flow is: update() at ~L230 calls applyTriggers and toSteps, then saves. A separate 'notes-forward pass' needs to be inserted into the update() method body itself. The task describes this adequately; the risk is that a developer might try to put it inside applyTriggers() (which handles triggers, not notes). This is a feasibility/clarity issue, not a hallucination. Minor.",
+      "fix": "No code change needed. Ensure the notes-forward pass is added directly in the update() method body (around L244, after toSteps) rather than inside applyTriggers() which handles trigger validation only."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 3,
+      "issue": "Task 3 What-to-do step 3 instructs: 'replace both `insertExecution(projectId, funnel, ..., 0)` callsites (the re-enter-restart branch and the re-enter-disabled branch) with `insertExecutionAt(...)`'. However reading FunnelTriggerServiceImpl.fire() lines 169-183: the re-enter-RESTART branch (allowReEnter=true, L170-174) calls executionFactory.insertExecution() ONCE; the re-enter-DISABLED branch (allowReEnter=false, L177) also calls executionFactory.insertExecution() ONCE inside a try block. The task is correct that there are two callsites. HOWEVER the variable name used to inject the factory is 'executionFactory' (not 'funnelExecutionFactory' as named in FunnelService). Task 3 Details says 'funnelExecutionFactory is already the injected FunnelExecutionFactory' — this refers to FunnelService where it IS named funnelExecutionFactory. But in FunnelTriggerServiceImpl it is named 'executionFactory'. A developer following the task's naming hint for the FunnelTriggerServiceImpl file would need to use 'executionFactory', not 'funnelExecutionFactory'. This is a naming hallucination in the implementation hints that could cause a compile error.",
+      "fix": "In Task 3 Details, clarify: in FunnelTriggerServiceImpl the injected factory field is named 'executionFactory' (not 'funnelExecutionFactory'); 'funnelExecutionFactory' is the name used in FunnelService.testRun. Both call the same insertExecutionAt method."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 step 2 instructs changing the TRIGGER_ON_START case in applyTriggers to accept a null entryStepId. The current code at L718 calls 'requireNoEntryStep(dto.entryStepId())' which throws 422 if entryStepId is non-null. After the change, a null entryStepId must be accepted, but a non-null one must validate through stepIds.contains(). The task correctly identifies this. However, the task also states 'A non-null id that does not resolve to a step of this funnel still throws CODE_INVALID_ENTRY_STEP (422)'. The existing requireEventEntryStep method at L770-780 throws 422 on BOTH null AND non-matching id. Task 3 proposes reusing this helper but with a null pass-through. The implementation will need a new helper or an inline null-check before calling requireEventEntryStep, since requireEventEntryStep itself rejects null. The task acknowledges this ('Consider a small private helper optionalEntryStep') — this is feasible but the word 'consider' is weak for a security-relevant validation path. The step should be unambiguous.",
+      "fix": "Change 'Consider a small private helper' to a firm requirement: 'Add a private helper optionalEntryStep(entryStepId, stepIds) that returns null when entryStepId is null, calls stepIds.contains() validation otherwise, throwing CODE_INVALID_ENTRY_STEP on a non-null dangling id — do NOT pass null directly to requireEventEntryStep (it rejects null).' Severity: major because a misread could lead to a security regression (accepting arbitrary entryStepId on on_start)."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 1,
+      "issue": "Task 1 TDD Anchor test 'rejects_non_finite_coordinates' instructs PATCH with 'canvasPosition:{x:NaN}' → 400/422. In JSON, NaN is not a valid JSON value (it is not representable). Jackson by default will throw a parse error before bean validation runs, resulting in a 400 with a different error shape than a business 422. The test should account for this: either test with an out-of-range Double (e.g. a very large number that is still finite — then finite-check validation fires) or document that NaN sent as a JSON string literal 'NaN' triggers a deserialization 400. The task's CanvasPositionDto validation approach ('Double.isFinite(x)') only runs after deserialization; if Jackson cannot deserialize NaN, the test may pass for the wrong reason (400 from JSON parsing, not validation).",
+      "fix": "Update the TDD Anchor test to clarify: test NaN by sending the JSON token 'NaN' if Jackson's ALLOW_NON_NUMERIC_NUMBERS is enabled (check the ObjectMapper config), OR test Infinity as a string sentinel. Also add a test case for a very large but finite Double to confirm the finite check is actually reachable. Document the Jackson deserialization behavior."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 Details for FunnelTriggerServiceImpl.fire() says 'Update the stale comment block at L140-143 / L166-168'. Looking at fire(): L140-143 is the comment 'on_start enrolls always START at step 0 (entryStepId is null for on_start, Decision 10) — never a redirect.' and L166-168 is the Step 4 comment block. These line numbers are accurate. This is a minor positive — the stale comment IS present and the line references are correct. No finding needed. (Recording as confirmed-correct instead.)",
+      "fix": "No action needed — line references are accurate."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 Details says 'CSS Vue Flow підключається через css: [...] в nuxt.config.ts (рядом з існуючим ~/assets/css/tailwind.css)'. However code-research §6 confirmed there are no existing *.client.vue files and no <ClientOnly> usages — the CSS import into nuxt.config.ts will cause the Vue Flow CSS to be included in the SSR bundle. This is fine for styles, but the task should note that the CSS import alone does not make Vue Flow SSR-safe (the component must be client-only, done in Task 5). The TDD Anchor and AC both correctly say 'pnpm build passes with no window is not defined' — but this may pass simply because the CSS import does not trigger SSR issues. The actual window-is-not-defined risk only surfaces when a *.client.vue or <ClientOnly> component is NOT in place. The task should verify this is still caught at build time (may require a minimal import of a Vue Flow component to trigger SSR build validation). This is minor since the task scope is explicitly deps + types, not the component.",
+      "fix": "Add a note in Task 2 that the 'pnpm build' SSR pass for @vue-flow/core only exercises CSS and package resolution — the actual SSR guard for the canvas component is validated in Task 5's smoke. Task 2's build smoke is sufficient for its scope."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 42,
+    "issues_found": 7
+  }
+}

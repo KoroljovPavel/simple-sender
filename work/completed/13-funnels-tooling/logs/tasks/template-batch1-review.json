@@ -1,0 +1,107 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "tasks": [
+    {
+      "task": 1,
+      "verdict": "ok",
+      "findings": []
+    },
+    {
+      "task": 2,
+      "verdict": "ok",
+      "findings": []
+    },
+    {
+      "task": 3,
+      "verdict": "issues",
+      "findings": [
+        {
+          "section": "Context Files",
+          "issue": "project.md / architecture.md / patterns.md links use bare `.claude/skills/...` form (no `../../../` prefix). From a task file at work/13-funnels-tooling/tasks/3.md this path does not resolve to the repo-root .claude folder, unlike Tasks 1/2/4 which correctly use `../../../.claude/...`. Inconsistent and broken relative links.",
+          "severity": "low"
+        }
+      ]
+    },
+    {
+      "task": 4,
+      "verdict": "issues",
+      "findings": [
+        {
+          "section": "TDD Anchor",
+          "issue": "TDD Anchor entries do not follow the `tests/path::test_name — description` format; they describe running the parity-gate script (check-locales.mjs) rather than named tests. This is acceptable for a data-only i18n task (the gate IS the verification), but it is not a true TDD-anchor format. Consider relocating the parity-gate description to Verification Steps and deleting the TDD Anchor section for this non-code data task.",
+          "severity": "low"
+        },
+        {
+          "section": "frontmatter.reviewers",
+          "issue": "reviewers = [code-reviewer, test-reviewer] drops security-auditor from the code-writing default set. Defensible for a pure i18n JSON data file (no security surface), but deviates from the code-writing default mapping. Acceptable; noted for transparency.",
+          "severity": "low"
+        }
+      ]
+    },
+    {
+      "task": 5,
+      "verdict": "issues",
+      "findings": [
+        {
+          "section": "Context Files",
+          "issue": "project.md / architecture.md / ux-guidelines.md / patterns.md links use bare `.claude/skills/...` form (no `../../../` prefix), same broken-relative-link issue as Task 3. Tasks 1/2/4 use the correct `../../../.claude/...` form.",
+          "severity": "low"
+        },
+        {
+          "section": "frontmatter.reviewers",
+          "issue": "reviewers = [code-reviewer, test-reviewer] drops security-auditor. Task 5 is UI wiring (buttons, toast, confirm dialog) with no direct XSS/injection surface (stored-XSS guard lives in Task 6's preview panel), so dropping security-auditor is defensible — but it deviates from the code-writing default trio.",
+          "severity": "low"
+        }
+      ]
+    }
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "project.md/architecture.md/patterns.md links use bare `.claude/skills/...` form without the `../../../` prefix used by sibling tasks; does not resolve from the task file location.",
+      "fix": "Prefix with `../../../` to match Tasks 1/2/4 (e.g. `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "project.md/architecture.md/ux-guidelines.md/patterns.md links use bare `.claude/skills/...` form without the `../../../` prefix; broken relative links.",
+      "fix": "Prefix the Project-Knowledge links with `../../../` to match Tasks 1/2/4."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 4,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor for this i18n-only data task describes running check-locales.mjs rather than named tests in `tests/path::name — description` format. The parity-gate is the real verification, not a TDD anchor.",
+      "fix": "Either delete TDD Anchor (non-code data task) and keep the parity-gate solely under Verification Steps, or reformat as an explicit verification anchor. No functional blocker."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 4,
+      "section": "frontmatter.reviewers",
+      "issue": "reviewers drop security-auditor from the code-writing default set. Defensible for pure i18n JSON, noted for transparency.",
+      "fix": "Optional: keep as-is (no security surface) or restore security-auditor for default-set conformance."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 5,
+      "section": "frontmatter.reviewers",
+      "issue": "reviewers drop security-auditor from the code-writing default set. Defensible for UI-wiring (no injection surface; XSS guard is Task 6).",
+      "fix": "Optional: keep as-is or restore security-auditor."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 5
+  },
+  "notes": "Zero critical findings -> approved. Frontmatter complete and well-typed on all 5 (status=planned, depends_on arrays, wave numbers, skills/reviewers/verify arrays). Wave/deps chain matches tech-spec exactly: T1 w1 deps[], T2 w2 deps[1], T3 w3 deps[2], T4 w3 deps[2], T5 w4 deps[3,4]; every depends_on points to a strictly-lower wave, no cycles. All template sections present, ordered, and filled; no placeholders/TODOs. Reviewers section <-> frontmatter parity holds on every task. AC and TDD carry-forward from tech-spec verified per task: T1 covers duplicate (draft/reset-trigger/verbatim-graph/128-boundary) + stop-all (status+stepRunStatus=done, project+funnel scope, modifiedCount, delete-refactor regression) + anti-IDOR; T2 covers test-run (422 funnel_owner_not_linked, cancelExistingForPair-before-insert InOrder, draft-2xx, validateSteps visibility) + preview (per-parse_mode exact-string escaping, stub subscriber, non_message placeholder, stepId-404, IDOR-precedence, on-the-fly content) — exact-string escaping anchors are behavior-verifying, not string-presence. T3 store-action TDD anchors are correctly formatted and behavior-focused. T5 component/page vitest anchors are concrete. No pseudocode in any 'What to do'; steps stay at WHAT level with shape-by-example references to existing create/activate/delete/pause handlers. Skills correctly code-writing for all five (no prompt-authoring tasks). Shared-resource compliance OK: FunnelExecutionFactory is a Spring singleton consumed (not re-created) by test-run; VariableTemplateRenderer is stateless static; MockWebServer test-singleton owned by the engine IT harness — no competing instances, no missing owners. The 5 issues are all minor: broken relative Project-Knowledge links in T3/T5 (cosmetic but should be fixed for link-resolution), a non-standard TDD-anchor format in the i18n-only T4, and security-auditor omitted from the reviewer trio in T4/T5 (defensible given no security surface). None block execution."
+}

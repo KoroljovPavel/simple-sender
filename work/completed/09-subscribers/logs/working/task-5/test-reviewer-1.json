@@ -1,0 +1,56 @@
+{
+  "status": "passed",
+  "summary": "Strong, behavior-focused test suite for Task 5. All 12 named TDD anchors are present and back real behavioral assertions: every IT verifies persisted DB state (not just HTTP status), the parallel 20-cap race genuinely fires via a CountDownLatch barrier and asserts exactly-20 persisted + exactly-one 422, and the unit validator covers all four types incl. native-value and boundary inputs. The parallel test correctly bypasses the thread-local @WithMockAppUser context with a RequestPostProcessor so auth propagates to the spawned virtual threads. No critical or major defects; only a few uncovered branches and one partial event-metadata assertion, all on non-critical paths.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/project/CustomFieldDefinitionIT.java (CustomFieldsController.update defaultValue branch)",
+      "issue": "The PATCH update happy path only exercises label-only updates (update_labelOnly_returns200_andPersists). The defaultValue-update success branch in CustomFieldsController (lines 145-148: validate(existing.type(), request.defaultValue()) then .set on the array) is only hit by the negative test update_defaultValueWithTypeMismatch_returns422. The positive branch — a valid defaultValue that gets normalized and persisted — has no test, so a regression that drops the .set or skips normalization on update would not be caught.",
+      "recommendation": "Add update_defaultValue_valid_returns200_andPersistsNormalized: seed a STRING def with defaultValue=null, PATCH {\"defaultValue\":\"  Lviv  \"}, assert 200, response $.defaultValue == 'Lviv', then GET/re-read project and assert findDef().defaultValue() equals the trimmed 'Lviv' (proves the validator-normalized value was actually persisted via the positional array set, not just echoed in the response DTO)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/CustomFieldValueValidationIT.java (SubscriberServiceImpl.recordCustomFieldsSet changedKeys-empty branch)",
+      "issue": "No IT exercises the no-actual-change path. recordCustomFieldsSet returns early (no event) when changedKeys is empty (old value == new value). With the controller, PATCHing a field to the value it already holds still runs the persist + calls recordCustomFieldsSet (newValues is non-empty), so the service-level early-return branch is the only thing preventing a redundant event. That branch is untested — a regression that always writes an event on every PATCH (ignoring old==new) would pass every existing test.",
+      "recommendation": "Add patch_valueUnchanged_persistsButEmitsNoEvent: seed subscriber with customFields={city:'Kyiv'}, PATCH {\"values\":{\"city\":\"Kyiv\"}}, assert 200 and customFields still {city:'Kyiv'}, then assert customFieldSetEvents(subscriberId).isEmpty() (proves the old==new diff suppresses the subscriber_custom_field_set event)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/CustomFieldValueValidationIT.java::patch_validValues_persistsNormalized_andEmitsEvent",
+      "issue": "The event-emission assertion is adequate for the headline behavior (event row exists, eventType filtered, projectId correct, changedKeys contains both keys) but does not assert the old->new transition captured in metadata. The implementation writes oldValues and newValues into metadata.put(...) (SubscriberServiceImpl lines 236-237); the test never inspects them. A regression that wrote wrong/empty oldValues or non-normalized newValues into the event would not be caught — the audit trail's actual payload is unverified.",
+      "recommendation": "Extend the existing assertions: also pull metadata.get('oldValues') and metadata.get('newValues'); assert oldValues maps city->null/age->null (the seeded empty map) and newValues maps city->'Kyiv' (trimmed) and age->42.0 (normalized Double, not the raw string '42'). This pins the audit metadata to the persisted, normalized values rather than just key presence."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/project/CustomFieldDefinitionIT.java::delete_removesDefinition_andCascadesValuesFromSubscribers",
+      "issue": "Delete is only tested on the all-subscribers-have-the-value path. Two real branches are uncovered: (1) the custom_field_definition_deleted event with removedValueCount metadata (CustomFieldsController lines 187-189) is never asserted — the count emitted on cascade is unverified; (2) the edge case from the task spec where a definition has no populated values (cascade modifiedCount=0, still returns 204) is not exercised, so a regression that 404s or 500s on an empty cascade would slip through.",
+      "recommendation": "Add an assertion to the existing delete test (or a sibling) reading the custom_field_definition_deleted event and verifying removedValueCount == 12. Add delete_noSubscriberHasValue_returns204_emitsZeroCount: seed the definition but zero matching subscriber values, DELETE, assert 204 and event removedValueCount == 0."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/CustomFieldValueValidationIT.java::patch_clearsValue_whenValueIsNull",
+      "issue": "patch_clearsValue_whenValueIsNull asserts the field is unset (good) but does not assert that the clear emitted a subscriber_custom_field_set event with the old->null transition. Clearing a value is a meaningful audit-worthy change (old='Kyiv', new=null, changedKeys=['city']) and recordCustomFieldsSet should fire for it. The test leaves the clear-path event emission unverified.",
+      "recommendation": "Add to the same test: assert customFieldSetEvents(subscriberId) has size 1 and its metadata changedKeys contains 'city', oldValues.city == 'Kyiv', newValues.city == null — confirming a null-clear is recorded as a real transition (and is not silently swallowed by the changedKeys diff)."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "litmusTest": {
+      "checked": 22,
+      "passed": 22,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 11,
+      "integration": 13,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

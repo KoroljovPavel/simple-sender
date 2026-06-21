@@ -1,0 +1,46 @@
+{
+  "status": "OK",
+  "findings": [],
+  "round1Verification": {
+    "C1_skipped_autowired": {
+      "rationale_accepted": true,
+      "note": "Verified at TelegramApiClient.java:45-51 — class has two constructors (public 2-arg with @Value, package-private 3-arg test seam). Spring 4.3's single-constructor auto-detection requires exactly one constructor; with two, an @Autowired marker is needed to disambiguate the injection target. Removing @Autowired would cause Spring to fail bean construction. Skip is technically correct. The codebase comparison to EmailService.java cited in round-1 C1 does not apply — EmailService has a single constructor."
+    },
+    "C2_method_reference": {
+      "fixed": true,
+      "note": "Verified at lines 68, 94, 106 — all three onStatus calls now use HttpStatusCode::is4xxClientError method reference. Import added at line 14."
+    },
+    "C3_import_ClientResponse": {
+      "fixed": true,
+      "note": "Verified import at line 17 and bare-type usage at line 119."
+    },
+    "C4_non_json_4xx_body": {
+      "fixed": true,
+      "note": "Verified at line 123 — .onErrorResume(ex -> Mono.just(new TelegramResult<>(false, null, null, null))) placed before .defaultIfEmpty, recovering from Jackson decode errors. Covered by new test getMe_4xxNonJsonBody_fallsBackToBadRequest (lines 178-194) using 418 status with HTML body."
+    },
+    "C5_null_guard_getMe": {
+      "fixed": true,
+      "note": "Verified at lines 72-77 — .flatMap branches on r.result() != null, emitting Mono.error(AppException 502 telegram_unavailable) for the null case. Asymmetry with setWebhook/deleteWebhook is acceptable because getMe returns a domain object (must be non-null to be useful) while the boolean methods can safely coerce null to false."
+    }
+  },
+  "newFindingsAnalysis": {
+    "scope": "Round 2 reviewed for regressions introduced by fixes and net-new issues. No critical, major, or minor issues identified.",
+    "considered_but_dismissed": [
+      {
+        "candidate": "requireValidTokenShape throws IllegalArgumentException synchronously, breaking reactive composition",
+        "verdict": "dismissed",
+        "reasoning": "Intentional fail-fast defense-in-depth. Upstream @Pattern bean-validation is the primary boundary; this is a secondary programmer-error guard that should never fire in production. IllegalArgumentException flows to GlobalErrorHandler's Throwable handler (500 generic). Wrapping in Mono.defer would obscure the programmer-error nature. Acceptable trade-off."
+      },
+      {
+        "candidate": "mapClientError onErrorResume silently swallows body-read errors without DEBUG logging",
+        "verdict": "dismissed",
+        "reasoning": "Triggered only on 4xx where the operator-actionable info is the HTTP status, not the body. Status is logged via toAppException's warn line at line 140 with rawStatus context. No diagnostic loss for the documented failure modes (non-JSON body, empty body)."
+      },
+      {
+        "candidate": "MONO_TIMEOUT (10s) duplicates DEFAULT_RESPONSE_TIMEOUT (10s) as separate constants",
+        "verdict": "dismissed",
+        "reasoning": "They serve different layers: DEFAULT_RESPONSE_TIMEOUT is Reactor Netty's per-response timeout (lower-level); MONO_TIMEOUT is the operator-level safety net for cases where Netty's timeout doesn't fire (e.g., body never completes after headers). Same value today, but conceptually independent — separation is intentional per tech-spec edge-case note."
+      }
+    ]
+  }
+}

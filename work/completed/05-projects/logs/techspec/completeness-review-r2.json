@@ -1,0 +1,64 @@
+{
+  "status": "fail",
+  "round": 2,
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 31,
+  "requirements_covered": 31,
+  "requirements_partial": 0,
+  "requirements_missing": 0,
+  "round_1_findings_resolution": {
+    "HIGH_cron_event_survival_ordering": {
+      "status": "addressed",
+      "note": "Architecture 'Hard-delete cron' section now correctly specifies: (1) cascade-delete events first, (2) emit project_hard_deleted events, (3) delete project documents. The accompanying comment confirms the cascade only sweeps pre-existing events because no project_hard_deleted event exists yet at step 1. AC-17b outcome is logically sound with this ordering and the ProjectHardDeleteJobIT assertion (lines 344-348) will pass. However, the unit test description in Testing Strategy (line 298) still says 'cascade order = emit event → delete events → delete projects' — the OLD broken order — contradicting the fixed Architecture. This is a residual inconsistency flagged as a new finding below."
+    },
+    "MEDIUM_PATCH_blank_timezone": {
+      "status": "addressed",
+      "note": "UpdateProjectRequest DTO comment (line 232) now reads 'null OR blank means no change; never persists empty string'. PATCH semantics section (line 239) explicitly maps timezone: null OR blank → no change. IT case 'PATCH /{id} timezone blank → no-op for that field; existing timezone preserved in DB' added at line 337. Fully resolved."
+    },
+    "MEDIUM_SSR_localStorage_test": {
+      "status": "addressed",
+      "note": "stores/projects.spec.ts description (line 301) now includes explicit SSR-context branch: 'with import.meta.client = false (via vi.stubGlobal or equivalent), selectProject does NOT call localStorage.setItem and does NOT throw ReferenceError; store init under SSR skips localStorage.getItem'. Fully resolved."
+    },
+    "MEDIUM_PATCH_DELETE_foreign_malformed_IT": {
+      "status": "addressed",
+      "note": "New 'Anti-enumeration parity across verbs' block added to ProjectControllerIT (lines 324-330): PATCH /{foreign-id} → 404, PATCH /{malformed-id} → 404, DELETE /{foreign-id} → 404, DELETE /{malformed-id} → 404, POST /{foreign-id}/restore → 404, POST /{malformed-id}/restore → 404. Fully resolved."
+    },
+    "MEDIUM_idempotent_DELETE": {
+      "status": "addressed",
+      "note": "IT case 'DELETE /{id} on already-soft-deleted ID (idempotent double-delete) → 404 (guard rejects via requireOwned(includeSoftDeleted=false))' added at line 338. Fully resolved."
+    },
+    "LOW_repository_finder_update_uniqueness": {
+      "status": "addressed",
+      "note": "findByOwnerIdAndNameAndIdNotAndDeletedAtIsNull added to ProjectRepository listing (line 25) with the correct description 'uniqueness pre-check on rename — excludes the project being renamed so AC-12b no-op rename and equivalent-case rename do not falsely collide'. Fully resolved."
+    },
+    "LOW_E2E_stale_state": {
+      "status": "addressed",
+      "note": "'Tests intentionally NOT written' subsection added (lines 350-355). E2E for Scenario 6 explicitly documented as a conscious omission with rationale: covered by composables/useApi-404-interceptor.spec.ts (all 4 path-matching cases); adding Playwright variant would require API-side fixtures or clock-skip helper not in existing harness — disproportionate cost. Fully resolved."
+    },
+    "LOW_AC_T4_quota_injection": {
+      "status": "addressed",
+      "note": "Task 1 description (line 425) now explicitly states: 'the quota will be injected into ProjectService via @Value(\"${app.projects.max-per-user:5}\") in Task 3 (no @ConfigurationProperties class — matches current codebase pattern)'. Fully resolved."
+    }
+  },
+  "findings": [
+    {
+      "type": "structural_gap",
+      "source": "tech-spec",
+      "requirement": "AC-17b: project_hard_deleted event survives cascade; ProjectHardDeleteJobTest verifies correct cascade order",
+      "detail": "The Architecture 'Hard-delete cron' section (lines 82-86) was correctly fixed to: (1) cascade-delete events first, (2) emit project_hard_deleted events, (3) delete project documents. However the Testing Strategy unit test description for ProjectHardDeleteJobTest (line 298) still reads 'cascade order = emit event → delete events → delete projects' — the OLD broken order that was the subject of round-1 finding 1. The unit test description now contradicts the Architecture. A developer implementing the job from the tech-spec will see conflicting instructions: Architecture says delete-events-first, test description says emit-first. If the developer follows the test description, the bug from round 1 is reintroduced. This must be corrected before implementation.",
+      "severity": "critical"
+    },
+    {
+      "type": "partial",
+      "source": "tech-spec",
+      "requirement": "AC-17 / AC-17b: Audit event table comment for project_hard_deleted",
+      "detail": "The Audit event types table (line 269) entry for project_hard_deleted still carries the parenthetical '(event itself survives cascade — written before remove)'. With the corrected Architecture ordering (cascade delete first, then emit, then delete projects), the comment 'written before remove' is now misleading — the event is written AFTER the cascade delete of prior events and BEFORE project document removal, not 'before remove' in the sense originally implied. A reader of the table alone (without reading the Architecture section) could reconstruct the wrong ordering. The parenthetical should be updated to reflect 'written after event cascade, before project document removal' or similar.",
+      "severity": "minor"
+    }
+  ],
+  "summary": "All 8 round-1 findings have been addressed. 31/31 requirements remain covered. One new critical finding was introduced by the fix itself: the Architecture section's corrected cascade ordering (delete events → emit → delete projects) was NOT propagated to the ProjectHardDeleteJobTest description in the Testing Strategy, which still describes the old broken order (emit → delete events → delete projects). This creates a direct contradiction between Architecture and Testing Strategy — a developer following the test description would reintroduce the round-1 bug. One additional minor finding: the Audit event table parenthetical comment for project_hard_deleted still reads 'written before remove', which is now misleading given the corrected ordering. The spec fails on the one remaining critical finding."
+}

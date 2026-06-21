@@ -1,0 +1,35 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 9,
+      "section": "Required Skills",
+      "issue": "Skill link uses an absolute-from-repo-root path `.claude/skills/security-auditor/SKILL.md`, while tasks 6/8/10 use `skills/<name>/SKILL.md` (no leading `.claude`). Inconsistent link form across the batch.",
+      "fix": "Normalize the skill link form across all tasks — either `skills/security-auditor/SKILL.md` to match 6/8/10, or update the others. Cosmetic; both resolve."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "PK references use a relative `../../../.claude/skills/project-knowledge/references/...` path while tasks 6/7/8/10 use `.claude/skills/project-knowledge/references/...`. Inconsistent within the batch.",
+      "fix": "Use the same PK link base as the rest of the batch (`.claude/skills/project-knowledge/references/...`)."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 6,
+      "section": "frontmatter / Reviewers",
+      "issue": "Skill is `code-writing`; the skills↔reviewers rule maps code-writing → {code-reviewer, test-reviewer}. Both are present, so this is compliant. Noted only because security-auditor is intentionally omitted here (no security-sensitive surface in Task 6) — consistent with tech-spec which lists code-reviewer + test-reviewer for Task 6.",
+      "fix": "No change required; omission of security-auditor is justified and matches tech-spec."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3
+  }
+}

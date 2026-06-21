@@ -1,0 +1,45 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 5,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts",
+      "issue": "The on_start broken-edge case (entryStepId == null on an on_start trigger while the start node IS rendered) is not tested as a separate spec. The dangling-next spec covers step-field breakage; the spec TDD anchor calls out 'on_start trigger with entryStepId == null (start node present, edge deleted)' as a distinct broken-edge scenario per tech-spec Testing Strategy. Currently the entry-connection test (line 133) sets entryStepId: null then simulates a draw, but no test mounts with entryStepId: null AND no connection drawn and asserts that the start node gets the broken highlight class.",
+      "recommendation": "Add a spec: mount with `triggers: [{ triggerType: 'on_start', entryStepId: null }]` and one step (so the start node is rendered). Assert `wrapper.find('[data-node-id=\"start\"]').classes()` contains `funnel-canvas-node--broken` and a `[data-test=\"funnel-canvas-broken-edge\"]` element with `data-edge-field=\"entry\"` exists. This is the dedicated broken-entry-edge branch from the tech-spec."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts",
+      "issue": "No test verifies that an event-only funnel (no on_start trigger) does NOT render a start node. Tech-spec Testing Strategy lists 'not rendered for an event-only funnel' as an explicit component-test item for the start-node lifecycle. The current suite only tests that a start node IS present when on_start exists (line 91–95 inside the typed-handles spec). The negative case is untested.",
+      "recommendation": "Add a spec: mount with only an event trigger (e.g. `triggerType: 'event'` or any non-on_start trigger) and one step. Assert `wrapper.find('[data-node-id=\"start\"]').exists()` is `false`. This ensures the start-node-optional logic cannot regress silently."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:56",
+      "issue": "The exit-badge localization assertion (`not.toContain('funnels.canvas')`) is a negative substring check. If the i18n key resolves to a fallback identical to the key (e.g. in test environment with missing translation), the assertion would pass even with a raw key value because the badge text could be the full key path but not matching the literal prefix check. More importantly, the assertion does not verify what the badge DOES say — only that it does not contain a specific prefix string. This is a weak behavioral assertion.",
+      "recommendation": "Add a positive assertion alongside: `expect(wrapper.find('[data-test=\"funnel-canvas-exit-badge\"]').text().trim().length).toBeGreaterThan(0)` to confirm the badge has non-empty text. Optionally import the expected i18n string from the locale file and assert equality, but at minimum assert the text is non-empty and does not equal the key."
+    }
+  ],
+  "summary": "7 specs across a props-in/emits-out component — all four TDD Anchor items from task 5 have substantive coverage. Broken-edge highlight: asserts data-test attribute presence, data-edge-field discriminator, and broken CSS class on the source node — litmus passes (removing brokenEdges logic breaks all three assertions). SUBSCRIBE exit badge: asserts element existence, localized text (via negative prefix check), and absence of cross-funnel node — behavioral. Typed handles: asserts presence/absence of specific data-test selectors per handle type and button index — a mis-wired handle would fail. Drawn connection emits model: drives handleConnect directly (not a mock call), asserts emitted update:steps carries s1.next === 's2' — litmus passes (removing connectEdge write would produce null not 's2'). Unsaved-target rejection: asserts no emit is produced — litmus passes. Entry-connection emit: asserts update:triggers with entryStepId === 's1'. Renders-nodes spec: asserts data-node-id presence per step and start node. Three minor gaps: the on_start broken-entry-edge case (entryStepId null with start node rendered), the event-only funnel no-start-node negative case, and a weak negative-substring localization assertion. No critical or major issues; live drag/zoom correctly deferred to user.",
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 7,
+      "passed": 7,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 7,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,62 @@
+{
+  "summary": "BotControllerIT covers all 22 TDD-anchor scenarios and meaningfully drives the full HTTP → BotService → Mongo + Redis stack against a class-level MockWebServer. Assertions are largely behavioural (status, body shape, persisted Bot fields, audit-event metadata, recorded MockWebServer calls), not just status codes. Per-test isolation of the shared MockWebServer is handled correctly (dispatcher reset + zero-timeout drain) and Mockito.reset() correctly restores spy delegation between tests. BotTokenLeakTest is a tight, future-proof reflective invariant. Three issues warrant fixes: (1) two parallel-Connect race tests assert a fixed setWebhook=2 / deleteWebhook=1 ordering that depends on both threads passing the service-level pre-check before either persists — a real but unguarded race in the test, not the code; (2) the no-token-leak IT scans evt.getIpAddress()/getUserAgent() but never injects a path where the token could plausibly land in a response body, so the negative assertion is structurally vacuous at the IT layer; (3) no unauthenticated-401 coverage for any of the four bot endpoints, the only IT in the project that omits this. Minor doc + assertion-tightening opportunities round out the report. Verdict: fix — no critical correctness defects, but two flake-prone tests and one vacuous negative assertion should be addressed before merge.",
+  "verdict": "fix",
+  "findings": [
+    {
+      "severity": "medium",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 481,
+      "issue": "postConnect_parallelSameToken_exactlyOneSucceeds_otherReturns409 hard-asserts setCount == 2 and delCount == 1. That ordering is only guaranteed when BOTH racers complete the service-level pre-check ensureTelegramBotIdNotConnectedAnywhere() before either persists; if racer A finishes pre-checks → setWebhook → save() before racer B reaches its pre-check, racer B short-circuits at the pre-check with 409 and never calls setWebhook, leaving setCount == 1 and delCount == 0. The Mono.zip + boundedElastic scheduling makes the interleaving probable on a fast machine but does not guarantee it — a slow CI runner or a JVM under load can reorder. The test currently passes only because both racers' getMe + setWebhook stubs return immediately and Mongo's save() round-trip is the slowest step, but that's incidental. Same flake risk applies to postConnect_parallelSameProjectDifferentTokens_exactlyOneSucceeds_otherReturns409 (line 514).",
+      "suggested_fix": "Loosen the recorded-request assertions to the union of legitimate interleavings: assertThat(setCount).isBetween(1L, 2L); assertThat(delCount).isEqualTo(setCount - 1L). Keep the strong assertions — statuses contain exactly {200, 409}, exactly one CONNECTED row — since those are the actual race-correctness invariants. If you specifically want to lock in the 'both pass pre-check' interleaving, add a synchronization barrier (CountDownLatch) shared across both branches and inject it via a test-only hook, but loosening the count is the lower-cost fix. The current MockWebServer enqueue (2 setWebhook + 1 deleteWebhook) is also fragile for the alternative interleaving — enqueue an extra deleteWebhook so the queue can't underflow either way."
+    },
+    {
+      "severity": "medium",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 792,
+      "issue": "noTokenLeak_inAnyResponseBodyOrEventMetadata exercises only the happy-path Connect + Disconnect, where the token would never plausibly reach the response body or event metadata regardless of code (BotResponse has no token field, connectedMetadata/disconnectedMetadata in BotService.java:281-295 explicitly include only projectId/telegramBotId/telegramUsername|webhookDeleted). The negative assertion passes vacuously — deleting the BotService scrub call (TelegramApiClient.scrubTokens at BotService.java:224) would not flip this test to red because the happy path never logs a Telegram error. The unit test BotServiceTest::disconnect_telegramErrorMessageWithTokenInUri_isScrubbedInWarnLog covers the log-scrubbing path, but the IT doesn't cover the response-body equivalent.",
+      "suggested_fix": "Add at least one IT scenario that exercises a code path where the token could realistically appear in an outbound payload, then assert the response body does NOT contain it. Concrete options: (a) Script setWebhook to return a 4xx with a description that quotes the token back, e.g. status(400, \"Bad webhook for bot \" + VALID_TOKEN + \"; HTTPS required\"), then assert the 500 webhook_config_error response body passes assertNoTokenLeak(). (b) Drive the persistFails compensation path (already in postConnect_persistFails) and assert the 500 body passes assertNoTokenLeak(). Either turns the negative assertion from vacuous to meaningful. Drop the evt.getIpAddress() / getUserAgent() scan unless you also add an assertion on a path where ip/UA would carry token-shaped content (currently impossible — WebTestClient ip is null/'unknown', UA is the WebTestClient default)."
+    },
+    {
+      "severity": "medium",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 57,
+      "issue": "No unauthenticated-401 coverage for any bot endpoint. ProjectControllerIT has anyEndpoint_unauthenticatedBareClient_returns401 (ProjectControllerIT.java:455-496) which proves the production filter chain returns 401 for every verb shape. BotControllerIT omits the equivalent. AC16 explicitly says foreign / soft-deleted / malformed projectId all collapse to 404 — but does not exempt the 401 case. Without it, a future security regression (e.g. a misordered SecurityConfig matcher allowing bot endpoints through unauthenticated) would not be caught at the IT layer.",
+      "suggested_fix": "Mirror the ProjectControllerIT pattern: bind a bare WebTestClient to the application context (no @WithMockAppUser), then exercise GET /, POST /connect (with csrf()), POST /disconnect (with csrf()), and POST /test-message (with csrf()) against any projectId and assert .expectStatus().isUnauthorized() on each. Single test method, ~30 LOC."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 108,
+      "issue": "Doc-comment / code mismatch: the comment on line 108 says 'Mockito.reset(botRepositorySpy) in @AfterEach restores real delegation', but the actual reset calls live in @BeforeEach (lines 127-128). Functionally equivalent in this single-class context, but the comment will mislead a future reader hunting for the reset site.",
+      "suggested_fix": "Update the comment: 'Mockito.reset(botRepositorySpy) in @BeforeEach restores real delegation before each test' — or move the resets to @AfterEach to match the comment. @BeforeEach is the safer location (defends against the prior test failing before its @AfterEach ran), so prefer fixing the comment."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 834,
+      "issue": "webhookSecretInMongo_isSha256Hash asserts the persisted hash matches [0-9a-f]{64} but does NOT assert that hash == SHA-256(plaintext_secret_passed_to_setWebhook). BotServiceTest::connect_webhookSecretIsHashedWithSha256_neverPlaintext (BotServiceTest.java:332-353) does this comparison at the unit layer. The IT could harden the AC20 invariant end-to-end by extracting the secret_token form param from the recorded setWebhook request and asserting Mongo's webhookSecretHash equals SHA-256(extracted_secret).",
+      "suggested_fix": "After the connect call, drain the recorded MockWebServer requests, locate the setWebhook RecordedRequest, parse its body for the secret_token form param value (the request body is JSON: {\"url\":\"...\",\"secret_token\":\"<hex>\"}), then assert: assertThat(persisted.getWebhookSecretHash()).isEqualTo(sha256Hex(extractedSecret)). Reuse the sha256Hex helper from BotServiceTest. Adds one parse step + one assertion; turns a regex shape check into a real correctness check."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 730,
+      "issue": "postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents asserts no bot_test_message_sent event exists, but that event has no producer in the codebase — it's only introduced in 06b. The litmus test 'remove the assertion → does the test still catch a regression?' fails today: if a future commit accidentally added an event emit, this assertion would catch it; but if a future commit removed BotService.sendTestMessage's 422 short-circuit entirely, the request would just fail differently, not produce that event. The 422 + code assertion (line 740-741) carries the real weight.",
+      "suggested_fix": "Acceptable as a defense-in-depth guard for 06 → 06b transition, but tag it accordingly: rename or comment to clarify 'regression guard for 06b: this event must NOT be emitted in 06'. Alternative: drop the eventRepository scan and rely on the unit test BotServiceTest::sendTestMessage_returns422_noTelegramCalls_noEvents (BotServiceTest.java:555-573) which already verifies verifyNoInteractions(eventService)."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 601,
+      "issue": "postConnect_redisDown_failsOpen_connectSucceeds_warnLogged stubs only opsForValue() to return broken ops; the success path also calls redisTemplate.delete(BRUTE_KEY) directly (BotService.java:269). With opsForValue() broken, increment fails, fail-open swallows, downstream Connect succeeds, and resetBruteForceCounter then hits real Redis (the spy delegates delete() to the real bean since only opsForValue() is stubbed). That's a correct test of the increment-failure branch, but the 'redis down' framing implies BOTH the increment and the delete should fail. If a regression made the delete-failure path bypass its onErrorResume (BotService.java:271), this test would not catch it — the dedicated unit test BotServiceTest::connect_redisDownOnDelete_failsOpenAndLogsWarn (BotServiceTest.java:303-317) does cover that.",
+      "suggested_fix": "Optional hardening: also stub redisTemplateSpy.delete(BRUTE_KEY) to error and assert two WARN log lines (one from increment, one from delete). Or rename the test to postConnect_redisIncrementFails_failsOpen_warnLogged to match what it actually verifies. Lowest-cost fix is the rename."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotTokenLeakTest.java",
+      "line": 52,
+      "issue": "botEntityDoesNotDeclareToStringExposingEncryptedTokenFields asserts Bot.class.getDeclaredMethods() does not declare a toString. This catches the today-state correctly, but the assertion is binary: any future toString — even one that explicitly excludes the encrypted fields — will fail this test. The error message hints at this ('override with care and exclude ' + FORBIDDEN_BOT_FIELDS), but the test itself does not allow the safe-exclude case.",
+      "suggested_fix": "If a future change adds a Bot toString, the test should still pass when the toString demonstrably does not reference the forbidden field names. Concrete tighter assertion: if a toString is declared, invoke it on a Bot instance with the forbidden fields populated to a sentinel value (e.g. 'SENTINEL_TOKEN_DATA') and assert the returned string does not contain that sentinel. Keep the current 'no toString' assertion as the default — it's strictly safer — but document the upgrade path in a comment so a future reviewer knows the contract is 'no toString OR safe toString', not 'no toString forever'."
+    }
+  ]
+}

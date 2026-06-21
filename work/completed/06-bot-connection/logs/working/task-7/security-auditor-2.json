@@ -1,0 +1,24 @@
+{
+  "status": "changes_required",
+  "summary": "Round 2 verification of Task 7 fixes. SEC-T7-001 was reopened: the redaction guard checks typeof opts.body === 'object', but by the time ofetch's FetchError is constructed the body has already been replaced with a serialized JSON string ('{\"token\":\"<real-token>\"}'), so the guard is falsy and the branch never runs — the token still leaks through err.options.body for any caller that logs the error. response.status and other fields are unaffected by the (no-op) mutation; undefined-body is correctly skipped by the short-circuit. SEC-T7-002 and SEC-T7-003 acknowledged as skipped per Round 1 decisions and not re-litigated.",
+  "totalFindings": 1,
+  "critical": 1,
+  "major": 0,
+  "minor": 0,
+  "findings": [
+    {
+      "id": "SEC-T7-001",
+      "severity": "critical",
+      "owasp": "A09:2021 Security Logging and Monitoring Failures / CWE-532 Insertion of Sensitive Information into Log File",
+      "category": "A09 — Security Logging and Monitoring Failures",
+      "file": "frontend/stores/bot.ts",
+      "line": 52,
+      "title": "Redaction guard never matches — token still leaks in FetchError.options.body",
+      "description": "The fix in commit 7a064dd attempts to redact the token by reassigning opts.body when err.options.body is a plain object: `if (opts && opts.body && typeof opts.body === 'object' && opts.body !== null) { opts.body = { ...(opts.body), token: '[redacted]' } }`. However, ofetch serialises the request body to a JSON string *before* dispatching the underlying fetch() call. Verified in node_modules/.pnpm/ofetch@1.5.1/.../shared/ofetch.CWycOUEr.mjs:236-242: when method is a payload method (POST here) and the body is JSON-serialisable (our `{ token }` is), ofetch executes `context.options.body = JSON.stringify(context.options.body)`. The fetch is then attempted on line 274; any failure (network error path on 278-286, or createFetchError on 191) constructs the FetchError *after* this mutation. FetchError exposes `options` via a getter that returns the live `ctx.options` (lines 24-30), so `err.options.body` is the serialised string '{\"token\":\"<real-token>\"}'. `typeof '...' === 'object'` is false → the redaction branch is skipped → the original (string) body remains on the error and is re-thrown with the secret intact. A caller that does `console.error(err)` or `Sentry.captureException(err)` (which serialises enumerable getters) will log the token verbatim. The fix has no effect on the only realistic failure paths.",
+      "location": "frontend/stores/bot.ts:51-54",
+      "impact": "Bearer-equivalent Telegram bot token (D17 secret) leaks to any error sink that serialises the rejected error — browser console in dev, Sentry/Datadog/LogRocket in prod, custom global error handlers, Nuxt's onErrorCaptured. An attacker with access to one of those sinks (or a developer pasting an error into a ticket) gains full control of the bot account: read all incoming messages, send messages as the bot, change the webhook URL to siphon traffic. Exactly the leak Round 1 set out to close; the Round 2 patch does not close it.",
+      "recommendation": "Handle the string-body case (and defensively the object case as well). Two viable shapes:\n\n```ts\n} catch (err: unknown) {\n  const opts = (err as { options?: { body?: unknown } })?.options\n  if (opts) {\n    if (typeof opts.body === 'string') {\n      // ofetch serialised JSON body — the common case\n      try {\n        const parsed = JSON.parse(opts.body) as Record<string, unknown>\n        if (parsed && typeof parsed === 'object' && 'token' in parsed) {\n          opts.body = JSON.stringify({ ...parsed, token: '[redacted]' })\n        }\n      } catch {\n        // Body is a string but not JSON — overwrite wholesale.\n        opts.body = '[redacted]'\n      }\n    } else if (opts.body && typeof opts.body === 'object') {\n      // Defensive: error thrown before serialisation (shouldn't happen with ofetch ≥1.5)\n      opts.body = { ...(opts.body as Record<string, unknown>), token: '[redacted]' }\n    }\n  }\n  throw err\n}\n```\n\nOr, simpler and strictly safer — just nuke the body field, since the caller cannot use it for anything anyway:\n\n```ts\n} catch (err: unknown) {\n  const opts = (err as { options?: { body?: unknown } })?.options\n  if (opts && 'body' in opts) opts.body = '[redacted]'\n  throw err\n}\n```\n\nAdd a unit test that asserts `JSON.stringify(thrownError.options.body).includes('<the-token>') === false` to lock this down — the current code passes type checks but fails the actual security invariant.",
+      "cwe": "CWE-532"
+    }
+  ]
+}

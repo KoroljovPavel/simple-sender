@@ -1,0 +1,39 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-node-delete",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:940",
+      "issue": "The 'Delete key on a selected node triggers the delete flow' test covers only the Delete key. The implementation (FunnelCanvas.client.vue:onKeydown) also guards Backspace — that branch is untested. Removing the Backspace branch from the implementation would not fail any existing test.",
+      "recommendation": "Add a second assertion in the same test (or a sibling test) that dispatches a Backspace event and verifies the warning appears: `window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Backspace' }))` followed by `expect(wrapper.find('[data-test=\"funnel-canvas-delete-warning\"]').exists()).toBe(true)`. This makes the Backspace path load-bearing."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/FunnelStepsList.spec.ts (entire file)",
+      "issue": "FunnelStepsList gains a `readonly` prop (Task 7 / Decision 2) that suppresses the delete button and move controls when the component is embedded in the canvas editor page. The spec file has zero tests for readonly mode — no assertion that `[data-test=\"funnel-step-delete-*\"]` is absent and `[data-test=\"funnel-steps-readonly-notice\"]` is present when `readonly=true` is passed. This gap means the guard could be quietly removed without any test catching it.",
+      "recommendation": "Add a readonly-mode describe block to FunnelStepsList.spec.ts: mount with `props: { steps: STEPS, readonly: true }`, then assert `wrapper.find('[data-test=\"funnel-step-delete-0\"]').exists()).toBe(false)`, `wrapper.find('[data-test=\"funnel-step-move-up-0\"]').exists()).toBe(false)`, and `wrapper.find('[data-test=\"funnel-steps-readonly-notice\"]').exists()).toBe(true)`. This directly verifies the Decision 2 constraint from the tech-spec and would fail if the v-if guards are removed."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 7,
+      "passed": 7,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 0,
+      "component": 7,
+      "assessment": "healthy — all additions are component tests, appropriate for UI affordance verification"
+    }
+  },
+  "summary": "7 new tests across FunnelCanvas.spec.ts (+5) and FunnelCanvasSidePanel.spec.ts (+3 from diff; 1 pre-existing). All core assertions are value-based and load-bearing: the step-delete test checks exact disconnect count (4), exact field nulling on 3 step edges plus the trigger entry, and exact step-list exclusion; the note-delete test verifies survivor identity (text='keep'); the guard test wires a real DOM input before firing the keydown so removing the isEditableTarget guard would correctly break the test. Two minor gaps found: (1) Backspace key path in onKeydown is not independently exercised; (2) FunnelStepsList readonly mode (delete/move hidden) has no automated assertion despite the readonly prop being implemented. Neither is a blocker. No critical or major findings."
+}

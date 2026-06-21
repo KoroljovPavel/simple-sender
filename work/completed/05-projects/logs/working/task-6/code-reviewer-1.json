@@ -1,0 +1,20 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "nit",
+      "file": "frontend/pages/projects/new.vue",
+      "line": 25,
+      "issue": "Dead clause in Zod description schema. `z.string().max(200).optional().or(z.literal(''))` — the empty string already satisfies `z.string().max(200)`, so `.optional()` (handles `undefined`) plus `.or(z.literal(''))` is redundant. Form initialValues only ever feeds a string, so `undefined` is unreachable too.",
+      "suggestion": "Simplify to `z.string().max(200, t('validation.projectDescriptionMax'))` and rely on the submit-handler's blank→null normalization. If you want to keep the broader contract (optional/undefined) for future programmatic submits, drop only the `.or(z.literal(''))` branch. Behavior unchanged either way; this is purely a readability nit."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/pages/dashboard.vue",
+      "line": 9,
+      "issue": "Fire-and-forget `projectsStore.fetchAll()` on client mount. The store's `fetchAll` has no internal catch (only a `try/finally` that flips `isLoaded=true` regardless), so a backend/network failure becomes an unhandled promise rejection at the page boundary AND leaves the user on the empty-state CTA branch with no error feedback. The store-level swallowing is Task 2 territory; the page-level no-await is consistent with how the rest of the codebase calls `fetchAll`/`fetchUser` in non-await spots, so flagging as nit only.",
+      "suggestion": "Optional: `.catch((err) => console.warn('[dashboard] fetchAll failed', err))` to at least mute the unhandled rejection. Or leave as-is and address holistically when Task 2 store gets a 5xx-recovery story."
+    }
+  ],
+  "notes": "Task 6 implementation is solid and tracks the spec closely. Dashboard adds the 3-branch render (empty-state / welcome / nothing-while-loading) with correct `isLoaded` gating, fires `fetchAll()` only on client to satisfy AC-T6 (no localStorage from the page), and reuses existing `dashboard.*` welcome keys without breakage. `/projects/new` mirrors `pages/auth/register.vue` exactly: reactive Zod via `computed()` passed AS-IS to `useForm` (patterns.md 'Reactive Zod schemas' honored), inline error <p> under each field (patterns.md 'Form validation: inline errors below fields, not toast'), submitError block below the form, `useApiError(e, 'projects.create')` for 400/409/422, blank-description→null normalization before `projectsStore.create`, and `navigateTo(localePath('/dashboard'))` on success. i18n keys (`projects.emptyState.*`, `projects.create.*`, `validation.projectName{Min,Max}`, `validation.projectDescriptionMax`, `validation.timezoneInvalid`, `errors.projects.create.{400,409,422}`) exist in both `uk.json` and `en.json`; locale parity preserved. `.gitignore` anchor change (`projects/` → `/projects/`) correctly unblocks `frontend/pages/projects/` and `frontend/tests/pages/projects/` while still gitignoring the repo-root user-data folder. Cross-file consistency verified against `stores/projects.ts` (`create` signature matches `{name, description: string|null, timezone}`), `useApiError` (`apiError(e, 'projects.create')` resolves through `errors.projects.create.{status}` → `.generic` → `errors.generic`), `useLocalePath`/`navigateTo` (identity under uk-default). No blockers, no majors; two minor nits noted for optional cleanup. Approve."
+}

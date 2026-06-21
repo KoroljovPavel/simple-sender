@@ -1,0 +1,288 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task",
+  "feature_path": "work/03-i18n",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 8,
+      "section": "Context Files",
+      "issue": "Project knowledge file links use incorrect relative path depth (`../../.claude/...` — two levels up). All other tasks (1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14) use `../../../.claude/...` (three levels up: tasks/ → 03-i18n/ → work/ → repo root). Task 8 links to project.md, architecture.md, patterns.md, ux-guidelines.md will resolve to wrong paths and break navigation.",
+      "fix": "Change `../../.claude/skills/project-knowledge/references/{project,architecture,patterns,ux-guidelines}.md` → `../../../.claude/skills/project-knowledge/references/{...}.md` to match the consistent pattern used in 14 other task files."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 8,
+      "section": "Required Skills",
+      "issue": "SKILL link uses tilde-home reference `[SKILL.md](~/.claude/skills/code-writing/SKILL.md)` instead of repo-relative path. Other tasks (1, 2, 3, 4, 5, 6, 7, 9, 10, 11, 12, 13, 14, 15) use `../../../.claude/skills/{name}/SKILL.md` form. Tilde paths do not resolve when rendered through markdown link viewers and are inconsistent with project conventions.",
+      "fix": "Change `[SKILL.md](~/.claude/skills/code-writing/SKILL.md)` → `[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)` matching the pattern in Task 9 line 16 and others."
+    },
+    {
+      "severity": "major",
+      "category": "decomposition",
+      "task": 9,
+      "section": "Description / Acceptance Criteria",
+      "issue": "Task 9 expands Decision 16 / AC18 by adding three NEW authorized test-spec exceptions (`login.spec.ts`, `register.spec.ts`, `reset-password.spec.ts`) for `mockNuxtImport('useLocalePath', ...)` injection. Tech-spec Decision 16 (lines 160-164) only authorizes ONE exception: `auth.global.spec.ts`. The task documents the deviation and instructs the executor to record it in `decisions.md` post-completion, but this is a unilateral expansion of an approved decision, not a pre-authorized scope. The task's logic is sound (identity-passthrough mock preserves uk-default behavior so assertions stay valid), but a downstream Code Audit (Task 12, dimension 8 — D16 conformance) will flag this as a deviation and Task 12 has no instruction to recognize it as approved.",
+      "fix": "Either (a) update tech-spec Decision 16 to pre-authorize these three additional exceptions before execution, OR (b) add a `tech-spec.md:User-Spec Deviations` entry [PROPOSED] noting the three new exceptions with same identity-passthrough rationale, OR (c) instruct Task 12 audit to recognize the four authorized exceptions (auth.global.spec.ts + login.spec.ts + register.spec.ts + reset-password.spec.ts) as approved."
+    },
+    {
+      "severity": "major",
+      "category": "decomposition",
+      "task": 10,
+      "section": "Description / Planned deviations",
+      "issue": "Task 10 introduces THREE planned deviations from tech-spec at execution time, two of which silently expand approved Decisions: (1) it overrides Decision 11 by recommending `useForm({ validationSchema: schemaComputed })` without `unref()` and explicitly calls the spec `text` a 'bug'; (2) it adds `dashboard.spec.ts` and `profile.spec.ts` to the Decision 16 / AC18 authorized-exceptions list. Tech-spec lines 130-134 (Decision 11) explicitly state `toTypedSchema(unref(schemaComputed))`, and Decision 16 lists only `auth.global.spec.ts`. Like Task 9, the deviations are documented inside the task (with strong rationale), but they are not pre-approved in tech-spec; downstream Code Audit (Task 12, D11 + D16 conformance) will flag them as violations because Task 12 reads tech-spec verbatim.",
+      "fix": "Update tech-spec Decision 11 to reflect the corrected reactive pattern (`useForm({ validationSchema: schemaComputed })` direct ref pass-through) BEFORE execution starts; OR add `[PROPOSED]` entries to `tech-spec.md:User-Spec Deviations` for all three deviations and instruct Task 12 audit to recognize them as approved. Same applies to Task 9 expansion of Decision 16."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 3,
+      "section": "Description (wave deviation note)",
+      "issue": "Task 3 frontmatter sets `wave: 3, depends_on: [2]` but tech-spec line 285/295 places it in Wave 2 (parallel with Task 2). The task documents this as intentional execution-safety move (real import dependency on `NON_DEFAULT_LOCALES` from Task 2 makes parallelism impossible). The deviation is well-justified, but tech-spec text remains unchanged — Task 12 audit (dimension 8, Decision 17 / wave structure conformance) will read both and may flag as parity drift.",
+      "fix": "Update tech-spec Implementation Tasks section to move Task 3 from Wave 2 to Wave 3 with explicit note about the import-chain dependency, OR add a User-Spec Deviation entry referencing the wave move. Without spec-side update, the discrepancy will surface as an audit finding."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 0,
+      "section": "Acceptance Criteria coverage",
+      "issue": "Tech-spec AC at line 271 ('Pre-commit hooks (gitleaks) не блокують коміти') is not explicitly assigned to any of the 15 tasks. It is a generic CI/repo-level invariant, but no task contains a smoke-check or AC validating that gitleaks does not block commits in feature scope. Task 15 (Pre-deploy QA) walkthrough covers all tech-spec AC but the explicit gitleaks check is implicit. May surface late if a feature file (e.g., locale JSON with placeholder-looking strings) trips gitleaks.",
+      "fix": "Either drop AC at tech-spec line 271 (it is more of a development-environment hygiene than a feature AC), or add explicit Verify-smoke step to Task 15 ('git commit dry-run on staged feature files passes pre-commit hooks')."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 11,
+      "section": "depends_on",
+      "issue": "Task 11 declares `depends_on: [1, 4, 6, 8, 9, 10]` but does not include Task 2 (i18n module bootstrap) directly. Task 11 relies on `<html lang>` switching, which requires `useLocaleHead` configured in Task 8, which transitively requires Task 2. The transitive chain is sound (8→2 via 4→2 and 6→2), so this is not a real blocker, but for clarity / explicit dependency declaration the list could include 2.",
+      "fix": "Optional: add 2 to Task 11 `depends_on` for explicitness. Not blocking — transitive dependency is satisfied through current chain."
+    }
+  ],
+  "shared_resources_summary": {
+    "package_json": {
+      "owner_create": "Task 1 (Playwright devDep)",
+      "owner_extend": ["Task 2 (i18n dep)", "Task 4 (prebuild script)"],
+      "wave_serialization": "Task 1 (W1) → Task 2 (W2) → Task 4 (W3) — no parallel-wave conflict",
+      "status": "ok"
+    },
+    "nuxt_config_ts": {
+      "owner": "Task 2",
+      "consumers": ["Task 3 (imports NON_DEFAULT_LOCALES re-export)"],
+      "status": "ok"
+    },
+    "shared_i18n_locales_ts": {
+      "owner": "Task 2 (creates frontend/shared/i18n-locales.ts)",
+      "consumers": ["Task 2 itself (routeRules)", "Task 3 (middleware allow-list)"],
+      "depends_on_declared": "Task 3 depends_on: [2] — correct",
+      "status": "ok"
+    },
+    "i18n_locales_uk_en_json": {
+      "owner_stub": "Task 2 (creates with placeholder)",
+      "owner_full": "Task 4 (populates full key-set)",
+      "consumers": ["Task 8 (sanity-check keys)", "Task 9", "Task 10", "Task 11"],
+      "wave_serialization": "Task 2 (W2) creates stub → Task 4 (W3) populates → consumers (W4+) read",
+      "status": "ok"
+    },
+    "i18n_config_ts": {
+      "owner": "Task 2",
+      "consumers": "@nuxtjs/i18n auto-loaded",
+      "status": "ok"
+    },
+    "strip_invalid_locale_middleware": {
+      "owner": "Task 3",
+      "status": "ok"
+    },
+    "lang_switcher_component": {
+      "owner": "Task 6",
+      "consumers": ["Task 8 (mounts in default.vue + auth.vue)"],
+      "depends_on_declared": "Task 8 depends_on: [4, 6, 7] — correct",
+      "status": "ok"
+    },
+    "use_api_error_composable": {
+      "owner": "Task 5",
+      "consumers": ["Task 9 (auth pages catch blocks)", "Task 10 (profile catch blocks)"],
+      "depends_on_declared": "Task 9 deps:[4,5]; Task 10 deps:[4,5] — correct",
+      "status": "ok"
+    },
+    "auth_global_middleware": {
+      "owner": "Task 7",
+      "consumers": ["transitively all protected pages"],
+      "status": "ok"
+    },
+    "app_vue_layouts": {
+      "owner": "Task 8 (modifies app.vue, layouts/default.vue, layouts/auth.vue)",
+      "competing_tasks_in_same_wave": "Task 9 (auth pages), Task 10 (dashboard+profile) — all touch DIFFERENT files in Wave 4",
+      "status": "ok"
+    },
+    "auth_pages_5_files": {
+      "owner": "Task 9",
+      "spec_modifications": "login.spec.ts, register.spec.ts, reset-password.spec.ts (authorized exception expansion — see major finding on Task 9)",
+      "status": "ok"
+    },
+    "dashboard_profile_pages": {
+      "owner": "Task 10",
+      "spec_modifications": "dashboard.spec.ts, profile.spec.ts (authorized exception expansion — see major finding on Task 10)",
+      "status": "ok"
+    },
+    "e2e_i18n_spec": {
+      "owner": "Task 11",
+      "status": "ok"
+    }
+  },
+  "wave_ordering_check": {
+    "wave_1": {
+      "tasks": [1],
+      "deps_violation": [],
+      "status": "ok"
+    },
+    "wave_2": {
+      "tasks": [2],
+      "deps_violation": [],
+      "status": "ok"
+    },
+    "wave_3": {
+      "tasks": [3, 4, 5, 6, 7],
+      "all_depend_on_wave_2": true,
+      "deps_violation": [],
+      "status": "ok"
+    },
+    "wave_4": {
+      "tasks": [8, 9, 10],
+      "deps_check": "Task 8 → [4,6,7] (all W3); Task 9 → [4,5] (W3); Task 10 → [4,5] (W3)",
+      "deps_violation": [],
+      "status": "ok"
+    },
+    "wave_5": {
+      "tasks": [11],
+      "deps_check": "Task 11 → [1,4,6,8,9,10] — Task 1 W1, Task 4/6 W3, Task 8/9/10 W4",
+      "deps_violation": [],
+      "status": "ok"
+    },
+    "wave_6": {
+      "tasks": [12, 13, 14],
+      "deps_check": "all → [11] (W5)",
+      "deps_violation": [],
+      "status": "ok"
+    },
+    "wave_7": {
+      "tasks": [15],
+      "deps_check": "→ [12, 13, 14] (W6)",
+      "deps_violation": [],
+      "status": "ok"
+    }
+  },
+  "competing_instances_check": {
+    "wave_3_parallel_tasks": [3, 4, 5, 6, 7],
+    "wave_3_file_overlap_analysis": {
+      "task_3_files": ["frontend/server/middleware/strip-invalid-locale.ts (new)", "frontend/tests/server/strip-invalid-locale.spec.ts (new)"],
+      "task_4_files": ["frontend/i18n/locales/uk.json (modify stub from T2)", "frontend/i18n/locales/en.json (modify stub from T2)", "frontend/scripts/check-locales.mjs (new)", "frontend/scripts/check-locales.test.mjs (new)", "frontend/package.json (add prebuild script)"],
+      "task_5_files": ["frontend/composables/useApiError.ts (new)", "frontend/tests/composables/useApiError.spec.ts (new)"],
+      "task_6_files": ["frontend/components/LangSwitcher.vue (new)", "frontend/tests/components/LangSwitcher.spec.ts (new)"],
+      "task_7_files": ["frontend/middleware/auth.global.ts (modify)", "frontend/tests/middleware/auth.global.spec.ts (modify)"],
+      "overlaps": [],
+      "status": "ok — no file collision in Wave 3"
+    },
+    "wave_4_parallel_tasks": [8, 9, 10],
+    "wave_4_file_overlap_analysis": {
+      "task_8_files": ["frontend/app.vue", "frontend/layouts/default.vue", "frontend/layouts/auth.vue"],
+      "task_9_files": ["5 auth pages", "3 spec files (login/register/reset-password)"],
+      "task_10_files": ["pages/dashboard.vue", "pages/profile.vue", "2 spec files"],
+      "overlaps": [],
+      "status": "ok — no file collision in Wave 4"
+    }
+  },
+  "ac_carry_forward_check": {
+    "tech_spec_acs_lines_259_271": [
+      {
+        "ac_line": 259,
+        "ac_text": "@nuxtjs/i18n@^9 і @playwright/test додані у frontend/package.json, lockfile оновлений",
+        "covered_by_tasks": [1, 2],
+        "status": "covered"
+      },
+      {
+        "ac_line": 260,
+        "ac_text": "uk.json і en.json мають однаковий набір ключів",
+        "covered_by_tasks": [4],
+        "status": "covered"
+      },
+      {
+        "ac_line": 261,
+        "ac_text": "routeRules ключі обох патернів /auth/** і /en/auth/** з ідентичними headers",
+        "covered_by_tasks": [2],
+        "status": "covered"
+      },
+      {
+        "ac_line": 262,
+        "ac_text": "Cookie config explicit cookieKey i18n_lang, env-conditional Secure, SameSite Lax, TTL ~1y",
+        "covered_by_tasks": [2],
+        "status": "covered"
+      },
+      {
+        "ac_line": 263,
+        "ac_text": "<NuxtLink> → <NuxtLinkLocale>, navigateTo() обгорнуті localePath()",
+        "covered_by_tasks": [7, 8, 9, 10],
+        "status": "covered"
+      },
+      {
+        "ac_line": 264,
+        "ac_text": "Жодних hardcoded UA/EN рядків у pages/layouts/components",
+        "covered_by_tasks": [8, 9, 10, 12],
+        "status": "covered"
+      },
+      {
+        "ac_line": 265,
+        "ac_text": "Vitest test suite (9 існуючих + 4 нові, auth.global.spec.ts оновлений)",
+        "covered_by_tasks": [3, 4, 5, 6, 7],
+        "status": "covered"
+      },
+      {
+        "ac_line": 266,
+        "ac_text": "Playwright E2E i18n.spec.ts проходить",
+        "covered_by_tasks": [11],
+        "status": "covered"
+      },
+      {
+        "ac_line": 267,
+        "ac_text": "pnpm build успішно; rm en.json && pnpm build падає",
+        "covered_by_tasks": [4, 15],
+        "status": "covered"
+      },
+      {
+        "ac_line": 268,
+        "ac_text": "useApiError factory pattern: composable у <script setup>, не у catch",
+        "covered_by_tasks": [5, 9, 10],
+        "status": "covered"
+      },
+      {
+        "ac_line": 269,
+        "ac_text": "Спільний константний список non-default локалей у nuxt.config.ts і у strip-invalid-locale allow-list",
+        "covered_by_tasks": [2, 3],
+        "status": "covered"
+      },
+      {
+        "ac_line": 270,
+        "ac_text": "Vue I18n production-mode silentTranslationWarn + silentFallbackWarn",
+        "covered_by_tasks": [2],
+        "status": "covered"
+      },
+      {
+        "ac_line": 271,
+        "ac_text": "Pre-commit hooks (gitleaks) не блокують коміти",
+        "covered_by_tasks": [],
+        "status": "uncovered — see minor finding on AC line 271 (no task explicitly verifies)"
+      }
+    ]
+  },
+  "stats": {
+    "tasks_checked": 15,
+    "issues_found": 7,
+    "critical_count": 0,
+    "major_count": 2,
+    "minor_count": 5
+  }
+}

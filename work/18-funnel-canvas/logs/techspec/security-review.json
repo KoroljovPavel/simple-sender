@@ -1,0 +1,68 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 6,
+    "critical": 0,
+    "major": 3,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "A03: Injection (Stored XSS)",
+      "title": "Note text rendering not bound by the existing no-v-html guard in the tech-spec",
+      "description": "The feature adds a new author-controlled free-text field Funnel.notes[].text rendered as a new node type on the canvas (FunnelCanvasNode.vue / FunnelCanvasSidePanel.vue). The codebase has a strict, documented 'never v-html' convention enforced across FunnelMessagePreview.vue, FunnelStepForm.vue (every label/text via {{ }} interpolation, explicitly to avoid stored-XSS per OWASP A03). Verified there is zero v-html in source .vue components (only in build artifacts and the explanatory comments themselves). The tech-spec does NOT state that note text MUST follow this same no-v-html guard, and the security-audit task (Task 9) only mentions it as a focus, not as a binding design constraint. A new contributor rendering note text could reach for v-html (e.g., to support markdown/links in a sticky note), reintroducing a stored-XSS sink: author saves note text containing <img src=x onerror=...> / <script>, it round-trips through PATCH/notes[] unescaped, and executes for any user who opens that funnel editor.",
+      "location": "Section: Architecture / Frontend (FunnelCanvasNode.vue, FunnelCanvasSidePanel.vue); Task 5, Task 6",
+      "impact": "Stored XSS in the funnel editor surface — session/token theft, CSRF-on-behalf, account takeover of other authors who open the same funnel. Notes are the only NEW free-text rendered on a NEW surface, so the existing guard does not automatically cover them.",
+      "recommendation": "Add an explicit security constraint to the tech-spec (Decision 7 and/or Tasks 5/6): note text MUST render via {{ }} text interpolation only, NEVER v-html / innerHTML, matching the FunnelMessagePreview/FunnelStepForm convention. Add a component unit test asserting a note containing '<img src=x onerror=alert(1)>' renders as escaped text (textContent contains the literal, innerHTML contains no live <img>). Mirror the existing 'never v-html' code comment on the new note node component.",
+      "cwe": "CWE-79"
+    },
+    {
+      "severity": "major",
+      "category": "A04: Insecure Design / A01: Broken Access Control",
+      "title": "Relaxed on_start entryStepId validation must still resolve to a step of THIS funnel (use requireEventEntryStep, not just drop requireNoEntryStep)",
+      "description": "Decision 5 relaxes FunnelService.validateTriggers (requireNoEntryStep) to allow entryStepId on on_start. In the current code (FunnelService.java applyTriggers, lines 708-746) the on_start branch calls requireNoEntryStep(dto.entryStepId()) which simply rejects any non-null id, while the event branch calls requireEventEntryStep(dto.entryStepId(), stepIds) which enforces 'non-null AND stepIds.contains(entryStepId)' (resolves to a step of THIS funnel, line 770-780). The tech-spec only says the rule 'relaxes' for on_start; it does NOT specify that the relaxed on_start path must run the same 'resolves to a step of THIS funnel' check the event path uses. If relaxation is implemented as 'on_start accepts any entryStepId' (i.e. just skipping requireNoEntryStep without routing through requireEventEntryStep), an attacker who owns funnel A can PATCH an on_start.entryStepId that is a dangling id or a step id belonging to ANOTHER funnel/project, with no 422.",
+      "location": "Section: Decisions / Decision 5; Section: Data Models (entry-field table, 'broken edge -> 422 on activate'); Task 3 (FunnelService.validateTriggers); backend FunnelService.java:718,761-780",
+      "impact": "Cross-funnel/arbitrary id stored on an on_start trigger; data-integrity break and a potential authorization-confusion vector if any future code trusts entryStepId without re-checking membership. Note: runtime blast radius is currently bounded — FunnelExecutionFactory.resolveStartCursor (FunnelExecutionFactory.java:117-126) builds the snapshot from THIS funnel's own steps and falls back to step 0 when the id does not resolve, so fire() cannot enter a cross-funnel step. This is why it is major (insecure design / validation gap) and not critical. But relying on the runtime fallback as the only guard is fragile; the validation layer is the correct place to enforce funnel-scoped resolution.",
+      "recommendation": "In Task 3, implement the relaxation so on_start uses the SAME funnel-scoped resolution as event: when entryStepId != null on on_start, validate it via requireEventEntryStep(dto.entryStepId(), stepIds) (or an equivalent 'stepIds.contains(entryStepId) else 422 funnel_invalid_entry_step') so a dangling/cross-funnel id is rejected (or treated as broken edge -> 422 on activate, consistent with the Data-Models table). Add an engine/round-trip IT: on_start with an entryStepId NOT in this funnel's step set -> 422; on_start with a valid in-funnel step -> accepted and enters that step. Make the tech-spec wording explicit: 'on_start.entryStepId, when present, must resolve to a step of THIS funnel (same check as event); null remains valid (bare start).'",
+      "cwe": "CWE-639"
+    },
+    {
+      "severity": "major",
+      "category": "A04: Insecure Design (Input Validation / DoS)",
+      "title": "No server-side bounds on new fields (note text length, notes[] array size, canvasPosition coordinates)",
+      "description": "The codebase enforces a consistent input-bounds convention on the funnel write path: UpdateFunnelRequest name @Size(max=128), description @Size(max=1024), triggers @Size(max=MAX_TRIGGERS=50) (explicitly 'so the now-repeatable triggers array cannot open a DoS surface'), TriggerDto keywords @Size(max=MAX_KEYWORDS). The new NoteDto.text (free text), the new notes[] array (List<NoteDto> on UpdateFunnelRequest/FunnelResponse), and CanvasPositionDto x/y (Double) have NO proposed @Size / count cap / numeric bound in the tech-spec Data Models. A full-replace PATCH could submit a huge notes[] array or megabyte-scale note text, persisted to Mongo and re-served on every funnel load (storage/bandwidth DoS, document-size blowup). Unbounded/NaN/Infinity coordinate Doubles could also produce malformed payloads or break the frontend layout/serialization.",
+      "location": "Section: Data Models (NoteDto, CanvasPositionDto, UpdateFunnelRequest += List<NoteDto> notes); Task 1; backend UpdateFunnelRequest.java, FunnelStepDto.java",
+      "impact": "Unbounded persisted growth (Mongo 16MB doc-size ceiling risk, slow loads), bandwidth amplification on every funnel read, and malformed-coordinate edge cases. Aligned attacker (an authenticated author) can bloat their own funnel docs; matches the exact DoS class the existing MAX_TRIGGERS / @Size caps were added to prevent.",
+      "recommendation": "Match the existing convention in Task 1's DTOs: NoteDto.text @Size(max=N) (e.g. 2000-4000, sized to the note UI); add a notes[] array cap on UpdateFunnelRequest (e.g. @Valid @Size(max=NOTES_MAX) List<NoteDto> notes, mirroring MAX_TRIGGERS) plus a service-side re-check like the trigger cap; constrain CanvasPositionDto x/y to finite values within sane min/max (reject NaN/Infinity, e.g. @Min/@Max or a service guard). Add an explicit AC: 'note text over the cap and notes[] over the array cap -> 422; non-finite coordinates rejected.'",
+      "cwe": "CWE-770"
+    },
+    {
+      "severity": "minor",
+      "category": "A01: Broken Access Control (positive confirmation)",
+      "title": "Funnel ownership / project isolation on the PATCH path is correctly enforced (no change needed, confirm preserved)",
+      "description": "Verified the full-replace PATCH/PUT path is properly access-controlled and the new fields ride on the SAME path with no new endpoint: FunnelController.patch -> funnelService.update(currentUserId(), projectId, funnelId, request); owner is resolved from the session (SecurityContextHolder), never from the body (FunnelController.java:30-33,131-137). FunnelService.update calls projectService.requireOwned(ownerId, projectId, false) FIRST (anti-IDOR, documented at FunnelService.java:49,190,210,642-651) and proves the funnel belongs to THIS project, with fail-closed cross-tenant anti-enumeration (404 not 403). UpdateFunnelRequest uses @JsonIgnoreProperties(ignoreUnknown=true) as a documented mass-assignment defense (drops hostile fields like {status:...}). Because canvasPosition/notes are additive fields on the same authoritative full-replace body, they inherit this authorization automatically.",
+      "location": "backend FunnelController.java:64-76,131-137; FunnelService.java:49,190,210,642-651; UpdateFunnelRequest.java:21-25",
+      "impact": "No vulnerability — informational. The new persistence does not widen the authorization surface: no new endpoint, owner from session, requireOwned-first, mass-assignment guarded.",
+      "recommendation": "No action required. Ensure Task 1 adds canvasPosition/notes to the EXISTING UpdateFunnelRequest/update path only (it does) and does not introduce a separate notes/coordinate endpoint that would bypass requireOwned. Keep @JsonIgnoreProperties(ignoreUnknown=true) on NoteDto/CanvasPositionDto to preserve the mass-assignment defense (e.g. a hostile note 'id' overwrite should be regenerated/validated server-side, not blindly trusted)."
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design (Input Validation)",
+      "title": "Note id is client-supplied and trusted; no stated uniqueness/format/regeneration rule",
+      "description": "NoteDto carries a client-supplied String id (Data Models: Note { String id; ... }; frontend FunnelNote { id?: string | null }). The tech-spec says new nodes are 'persisted to mint its id' but does not state how note ids are validated/minted server-side. Without a server-side mint/validate rule, a client could submit duplicate note ids, collide with step ids, or supply unbounded/control-char id strings, all persisted verbatim. This is lower severity because notes are never executed by the engine (Decision 7) and do not participate in edge/entry resolution, so a malformed note id cannot redirect execution; impact is data-integrity and possible frontend key collisions.",
+      "location": "Section: Data Models (Note/NoteDto, FunnelNote); Task 1",
+      "impact": "Data-integrity / UI key-collision; no execution impact (notes are out of the engine path). Bounded.",
+      "recommendation": "State explicitly in Task 1 that note ids are minted/validated server-side (regenerate if absent, validate shape/length, ensure intra-funnel uniqueness) on the mapper forward path, matching the FunnelStep stable-id minting precedent (toSteps mints id when absent)."
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice (secrets / data exposure)",
+      "title": "No secrets/tokens introduced or exposed by the feature",
+      "description": "Reviewed the feature surface for secret exposure: the new fields are coordinates (Double x/y) and editorial note text — no API keys, tokens, credentials, or connection strings are added to source, DTOs, payloads, or the frontend types. The PATCH/read round-trip carries only graph layout + author annotations. telegramBotId and execution internals are unchanged and not widened by this feature. No hardcoded secrets found in the proposed files.",
+      "location": "Section: Data Models; whole tech-spec",
+      "impact": "None — informational confirmation that the feature adds no secret-handling surface.",
+      "recommendation": "No action required. Keep note text strictly editorial (the engine never reads notes[], Decision 7), so it never becomes a place authors paste tokens that then render unescaped — reinforces the no-v-html finding above."
+    }
+  ]
+}

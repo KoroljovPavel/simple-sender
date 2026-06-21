@@ -1,0 +1,80 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  },
+  "round": 2,
+  "round1_resolution_review": {
+    "major_1_noindex_and_referrer_policy": "RESOLVED. nuxt.config.ts:19-26 adds routeRules for `/auth/**` emitting two HTTP response headers: `X-Robots-Tag: noindex, nofollow` and `Referrer-Policy: no-referrer`. Nuxt 4 ships SSR-on by default (no `ssr: false` in this config), so Nitro applies these headers on the initial document response for every URL under /auth/, which covers the two token-bearing surfaces /auth/verify-email?token=... and /auth/reset-password?token=... — exactly the surfaces the Round-1 major identified. Both header values are correct: (a) `X-Robots-Tag: noindex, nofollow` is the HTTP-header form of the meta-robots directive; major search engines (Google, Bing, Yandex) honour it, so token URLs scraped from referer logs cannot be indexed; (b) `Referrer-Policy: no-referrer` strips the Referer header from ALL outbound navigation, which closes the cross-site referer-leak vector for any link click from the token-bearing page. The inline comment correctly documents the threat model (crawler caches, browser history sync, cross-site referer chains). One residual gap that is OUT OF SCOPE for this task and does not block approval: history.replaceState scrubbing of `?token=` from the address bar after capture would further reduce sync/screenshot leakage; tracked as defense-in-depth follow-up, not required.",
+    "minor_2_forgot_password_silent_swallow": "DEFERRED — operational/monitoring debt; not a security vulnerability. Re-evaluation: should remain minor. Anti-enumeration UX (always-success) is the correct primary defense; the missing telemetry hook is an ops monitoring gap, not an exploitable flaw. The new test `forgotPassword_backendError_stillShowsSuccessMessage` (forgot-password.spec.ts:34-45) explicitly pins the anti-enumeration invariant — confirming the catch-all is a deliberate choice, not an oversight. Re-flagged below as informational.",
+    "minor_3_hardcoded_60s_cooldown": "DEFERRED — verify-email.vue:96, 102 still pass `60` as a magic number; backend `Retry-After` is not consulted. Re-evaluation: should remain minor. UX-only desync; backend rate limit is the real guard (per Decision 7); cooldown is client-only by design. No promotion warranted.",
+    "minor_4_register_409_reveals_existence": "DEFERRED — register.vue:51-52 unchanged. Re-evaluation: should remain minor. This is a deliberate industry-standard UX tradeoff (Auth0/GitHub/Google all do the same) and the asymmetry with forgot-password is acceptable as long as it is recorded as a deliberate decision. Promoting to major would force a redesign (email-channel disambiguation) that is out of Task-10 scope. Re-flagged below as informational so the team can decide whether to pin it in a Decision.",
+    "minor_5_login_query_reflection_preventive": "DEFERRED — login.vue still does not read `route.query.registered` / `route.query.reset` (no `useRoute()` call, no banner). Forward-looking guardrail only; nothing to fix today. Re-evaluation: should remain minor.",
+    "minor_6_no_error_boundary": "DEFERRED — layouts/auth.vue still has no `<NuxtErrorBoundary>`. Re-evaluation: should remain minor. Generic Nuxt-hardening posture rather than an exploitable bug.",
+    "new_round2_checks": {
+      "routeRules_header_correctness": "PASS. Header names and values are syntactically correct per RFC and per Nuxt 4 / Nitro routeRules schema. `X-Robots-Tag: noindex, nofollow` is the canonical form (lowercase tokens, comma-separated). `Referrer-Policy: no-referrer` is one of the standardised values from the Referrer-Policy spec (W3C). No typos that would cause silent header-drop.",
+      "routeRules_glob_coverage": "PASS. `/auth/**` matches /auth/login, /auth/register, /auth/forgot-password, /auth/reset-password, /auth/verify-email — all five auth pages — and any future child route (e.g. /auth/mfa-setup). Both token-bearing URLs (`/auth/reset-password?token=…`, `/auth/verify-email?token=…`) are covered.",
+      "no_new_attack_surface": "PASS. The two added headers are restrictive (deny indexing, deny referer); they cannot introduce a new vulnerability. The change does NOT modify CSP, CORS, HSTS, X-Frame-Options, X-Content-Type-Options, or Permissions-Policy; existing posture is preserved. No new endpoints, no new env-var reads, no new modules imported.",
+      "test_files_no_secrets": "PASS. All five spec files use synthetic test strings only — `user@example.com`, `Password1`, `valid-token`, `sometoken`, `Different1`, `abcdefgh`. No real API keys, no real JWTs, no copy-pasted production tokens. The `vi.hoisted` mock pattern means no real network requests, no real Pinia/Nuxt runtime — tests are fully isolated.",
+      "test_files_no_dangerous_patterns": "PASS. settle.ts:8 uses `setTimeout` purely for vee-validate microtask flushing; no eval, no Function() constructor, no dynamic require, no fs/child_process imports. Test files only import from `vitest`, `pinia`, `@nuxt/test-utils/runtime`, `@vue/test-utils`, and the SUT pages.",
+      "deserialization_in_tests": "PASS. No JSON.parse / YAML.load / pickle on untrusted input. Mock data is constructed inline as JS object literals.",
+      "headers_only_no_html_change": "PASS. The fix is purely a header-level mitigation; the page templates were intentionally NOT modified, so no risk of accidentally introducing a v-html / template-injection regression.",
+      "ssr_mode_assumption": "PASS. nuxt.config.ts has no `ssr: false` flag, so Nuxt 4 default SSR is active, which means Nitro emits routeRules headers on the initial document response (where they are most needed — at the moment the user first lands on the token-bearing URL). If the project were ever migrated to `ssr: false` (full SPA), routeRules-headers semantics would change; flagged for awareness in case of future config drift, but not actionable now."
+    }
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A09:2021 Security Logging and Monitoring Failures",
+      "title": "forgot-password.vue still swallows ALL errors silently — operational/monitoring blindspot persists from Round 1",
+      "description": "Round-1 minor #2 unchanged. forgot-password.vue:27-29 keeps the bare `try { ... } catch {}` with no logging hook. The new test `forgotPassword_backendError_stillShowsSuccessMessage` (frontend/tests/pages/auth/forgot-password.spec.ts:34-45) confirms the anti-enumeration invariant is intentional: regardless of 500/network/CSRF failure, the user sees the success state. That is the correct UX. The unresolved gap is purely operational — a regression that breaks /api/auth/forgot-password (SMTP outage handled with 503, broken CSRF after a future deploy, CORS misconfig) emits no frontend telemetry. Backend logs are the only signal. Severity remains minor.",
+      "location": "frontend/pages/auth/forgot-password.vue:27-29",
+      "impact": "Monitoring/SIEM blind spot for infrastructure-level failures of the forgot-password flow. No direct security exposure. An attacker cannot exploit the silent catch — the success message is shown for both 200 and 4xx by design (anti-enumeration), so the only divergent case is 5xx/network, which is already invisible to attackers. The cost is purely on the operations side.",
+      "recommendation": "Two non-leaking options remain valid: (a) keep UX identical and emit a frontend telemetry event on catch (`useNuxtApp().$logger?.warn('forgot-password request failed', { code: err?.statusCode })` or future Sentry hook); (b) branch on status code so only 5xx/network errors show a generic 'try again later' message — anti-enumeration preserved because 200 and all 4xx still share the success message. Track in tech-spec Decision 7 vicinity. Either or neither — explicit acceptance is fine.",
+      "cwe": "CWE-778 (Insufficient Logging)"
+    },
+    {
+      "severity": "minor",
+      "category": "A04:2021 Insecure Design",
+      "title": "verify-email cooldown timer hard-coded to 60s — Retry-After header still ignored",
+      "description": "Round-1 minor #3 unchanged. verify-email.vue:96 (success path) and verify-email.vue:102 (429 path) both call `startCooldown(60)` with a magic number; the response's `Retry-After` header is not parsed. Backend rate-limit is the real guard (Redis SET NX EX 60 per Decision 7), so this is UX/desync only — no rate-limit bypass, no security gap. Severity remains minor; rationale unchanged from Round 1.",
+      "location": "frontend/pages/auth/verify-email.vue:96, 102",
+      "impact": "UX desync if the backend window is ever tuned or if a 429 is received mid-existing-lock (timer too long); reverse case (timer too short) is also possible if backend ever shortens. Not a security vulnerability — backend enforces the real limit.",
+      "recommendation": "Read `Retry-After` from the 429 path: `const retryAfter = err?.response?.headers?.get?.('Retry-After'); startCooldown(parseInt(retryAfter, 10) || 60)`. Backend complement: ensure resend-verification 429 emits `Retry-After: <ttl-seconds>` derived from Redis TTL of the rate-limit key. Optional follow-up; current approach is acceptable.",
+      "cwe": "CWE-1287 (Improper Validation of Specified Type of Input)"
+    },
+    {
+      "severity": "minor",
+      "category": "A04:2021 Insecure Design",
+      "title": "register.vue 409 message still reveals account existence — anti-enumeration asymmetry with forgot-password persists",
+      "description": "Round-1 minor #4 unchanged. register.vue:51-52 still emits `'Користувач з таким email вже існує. ...'` on 409. The new test `registerForm_409Response_showsExistingEmailMessage` (frontend/tests/pages/auth/register.spec.ts:85-97) explicitly pins this behaviour, which means the team has acknowledged it as the intended UX. Forgot-password is enumeration-safe (always-success); register telegraphs `409 → email exists`. The asymmetry means a determined attacker can enumerate via the registration form even though the forgot-password form is hardened. Severity remains minor — this is a documented industry-standard tradeoff (Auth0/GitHub/Google), not an oversight, but it should be a deliberate Decision in tech-spec rather than implicit drift.",
+      "location": "frontend/pages/auth/register.vue:51-52; frontend/tests/pages/auth/register.spec.ts:85-97 (test pins the behaviour)",
+      "impact": "Email enumeration via registration form. Mitigated in production by the existence of forgot-password as an alternate enumeration vector — fixing register-side alone would not close the attack. No promotion to major is warranted because: (a) the same enumeration is available through any login attempt with rate-limit observation, (b) the fix would require a heavier UX redesign (email-channel disambiguation: always-200 on /register, with email content branching on 'account exists' vs 'finish setup'), which is out of Task-10 scope.",
+      "recommendation": "Decision-level, not code-level. Pin in tech-spec Decision: 'Registration deliberately reveals account existence on 409 for UX clarity; forgot-password is the anti-enumeration entry point.' Or, if the project later wants full parity, switch /register to always-200 and disambiguate via email. Either is acceptable provided the choice is recorded.",
+      "cwe": "CWE-204 (Observable Response Discrepancy)"
+    },
+    {
+      "severity": "minor",
+      "category": "A05:2021 Security Misconfiguration",
+      "title": "Login page does not read query params today, but ?registered=1 / ?reset=1 reflection guardrail remains relevant for future banner work",
+      "description": "Round-1 minor #5 unchanged. register.vue:47 navigates to `/auth/login?registered=1` and reset-password.vue:50 navigates to `/auth/login?reset=1`. login.vue still does NOT read these query params. The flags are inert — no exploit today. Forward-looking guardrail: when a future task adds banners triggered by these flags, the implementer must NOT reflect arbitrary query content (e.g. `<p>{{ route.query.message }}</p>` is auto-escaped by Vue's `{{ }}` so stored XSS is blocked, but `:href=\"route.query.next\"` patterns or rendering query values as link text are still phishing/open-redirect vectors).",
+      "location": "frontend/pages/auth/login.vue:1-115; frontend/pages/auth/register.vue:47; frontend/pages/auth/reset-password.vue:50",
+      "impact": "No exploit today. Severity remains minor. Preventive note for future maintainers.",
+      "recommendation": "When adding banners triggered by `?registered=1` / `?reset=1`, treat each query value as a boolean flag: `if (route.query.registered === '1') showRegisteredBanner = true`. Render fixed Ukrainian strings keyed by a fixed enum. Optionally strip the query after read with `router.replace({ query: {} })`. Document near tech-spec Decision 9.",
+      "cwe": "CWE-79 (Improper Neutralization of Input During Web Page Generation) — preventive"
+    },
+    {
+      "severity": "minor",
+      "category": "A05:2021 Security Misconfiguration",
+      "title": "Auth pages still render without a top-level error boundary — uncaught render error in vee-validate / zod could leak stack",
+      "description": "Round-1 minor #6 unchanged. layouts/auth.vue does not wrap its `<slot />` in `<NuxtErrorBoundary>`, and app.vue has no top-level error handler. If `@vee-validate/zod` ever throws synchronously during component setup (peer-dep break, version skew during a future bump), Nuxt's default error page renders the error stack to the user. In production builds Nuxt strips most internals, but framework errors may still surface path strings or library internals that aid reconnaissance. Generic Nuxt hardening, not a Task-10 bug.",
+      "location": "frontend/app.vue (no error boundary); frontend/layouts/auth.vue (no error handling); all five frontend/pages/auth/*.vue",
+      "impact": "Reconnaissance aid in error scenarios. Not directly exploitable. Most relevant in dev/staging where stack-trace-rich error pages are common.",
+      "recommendation": "Wrap the slot in layouts/auth.vue with `<NuxtErrorBoundary>` rendering a generic 'Сталась помилка' fallback and emitting the error to telemetry. Verify production deploys set `NODE_ENV=production` so framework error pages are minimised. Low priority but cheap.",
+      "cwe": "CWE-209 (Generation of Error Message Containing Sensitive Information)"
+    }
+  ]
+}

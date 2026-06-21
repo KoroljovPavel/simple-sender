@@ -1,0 +1,58 @@
+{
+  "status": "approved",
+  "summary": "Task 7 correctly migrates the editor page from three flat trigger refs to a single triggers: FunnelTrigger[] ref. The two key safeguards (cancel-pending-timer before gate re-check; applyingResponse re-entrancy guard) are architecturally correct and not papering over deeper issues. No lost-update or missed-autosave risk found from suppressing the watch. All acceptance criteria met. Two minor findings, zero critical/major.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 143,
+      "issue": "applyingResponse is a module-level let (closure variable), not tied to the component instance. In a SSR context or if the same module is somehow reused across concurrent renders, two concurrent applyResponse() calls could corrupt each other's flag. In Nuxt 4's CSR-only path for this page (onMounted guard) this is a non-issue in practice, but the pattern departs from Vue 3 best-practice of scoping reactive state to the component setup closure.",
+      "fix": "No change required for the current CSR-only usage. If SSR is ever enabled for this route, move `let applyingResponse = false` inside the `<script setup>` block (it already IS inside setup — on re-reading, line 143 is inside setup, so the concern is moot). No action needed."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 180,
+      "issue": "sanitizeTrigger() carries entryStepId through as-is for ALL trigger types, including on_start and keyword. The panel never sets entryStepId for non-event triggers so in practice those fields are always null. However if a future panel change accidentally populates entryStepId on a non-event trigger (e.g. a UI copy-paste error), the stale value would propagate to the backend payload. The backend is the final validator (Decision 10), but a defensive null-out here would make the page's PATCH payload honor the spec independently.",
+      "fix": "In sanitizeTrigger(), force entryStepId to null for non-event types: `entryStepId: tr.triggerType === 'event' ? (tr.entryStepId ?? null) : null`. This closes the gap without changing any current behavior since non-event triggers always have null entryStepId today."
+    }
+  ],
+  "detailed_analysis": {
+    "triggers_array_ref": {
+      "verdict": "correct",
+      "notes": "Three flat refs (triggerType, triggerValue, keywords) correctly replaced by single `triggers: Ref<FunnelTrigger[]>`. defaultTriggers() fallback ensures panel always has the main on_start entry. load() delegates to applyResponse() which maps res.triggers with a spread copy, correctly isolating the local ref from the server response object. No stale refs remain — imports and template both updated."
+    },
+    "persist_and_sanitizeTrigger": {
+      "verdict": "correct",
+      "notes": "persist() sends `triggers: triggers.value.map(sanitizeTrigger)` — the flat trio is gone from the payload. sanitizeTrigger() correctly isolates keyword-owned fields (keywords + null triggerValue) from value-owned fields (triggerValue + empty keywords array). entryStepId is carried as-is, which is correct for event triggers and acceptable for non-event (always null in practice). The separation of sanitization from persisting is clean."
+    },
+    "triggerReady_per_element": {
+      "verdict": "correct",
+      "notes": "triggerReady() is correctly refactored to accept a FunnelTrigger parameter rather than reading from refs. Switch covers all 5 types with the correct predicates: on_start uses TRIGGER_VALUE_RE (allows empty), keyword requires ≥1 keyword, tag_added/custom_field_set require non-empty trimmed triggerValue, event requires EVENT_NAME_RE (requires ≥1 char). The default case returns false (unknown types block autosave rather than permitting it — correct fail-safe direction)."
+    },
+    "cancel_pending_timer_safeguard": {
+      "verdict": "correct — not papering over a deeper issue",
+      "notes": "The cancel-before-gate pattern (clearTimeout + null + check every) is the correct sequence. Scenario: user has on_start ready (timer pending at t=0ms), then adds an event trigger at t=300ms. Without the cancel, the t=0ms timer would fire at t=600ms with the incomplete array, producing a 422. With the cancel, the pending timer is cleared, the every() check fails (event trigger has empty slug), and no timer is rescheduled. When the event slug is eventually filled, a fresh 600ms timer starts. This is the correct debounce behavior for an expanding array. The pattern does not hide a race — it is the precise solution for the 'incomplete extension' race."
+    },
+    "applyingResponse_reentrancy_guard": {
+      "verdict": "correct — not papering over a deeper issue",
+      "notes": "The guard suppresses exactly one deep-watch cycle that Vue schedules when applyResponse() assigns a fresh array identity to triggers.value. Without it: persist() → server responds → applyResponse() → triggers.value = new array → watch fires → scheduleTriggerPersist() → if array is ready, new timer → persist() again — an infinite loop. The guard is architecturally sound: (1) applyingResponse is set to true BEFORE the assignment so the watch callback always sees it; (2) the watch callback resets it to false and returns, ensuring subsequent user edits flow normally; (3) since applyResponse() is always called after an await (network settle), Vue flushes watchers on a subsequent microtask, so no user DOM event can race between the flag set and the watch reset. The 'one boolean for one skip' contract holds because Vue deep watchers for a single ref assignment batch into a single callback call. No lost-update risk: a genuine user edit that races with applyResponse would be on a different microtask tick and would see applyingResponse=false."
+    },
+    "vue3_reactivity": {
+      "verdict": "correct",
+      "notes": "watch(triggers, scheduleTriggerPersist, { deep: true }) correctly uses deep mode since mutations happen to fields inside array elements, not the array reference. The panel emits update:triggers with a full replacement array (replaceAt rebuilds the full array), so triggers.value is reassigned on each panel mutation — this means both shallow and deep watch would fire, but deep is semantically correct and future-proof. onBeforeUnmount cleanup of triggerTimer is present. The FunnelTriggersPanel is correctly mounted with v-model:triggers which maps to :triggers + @update:triggers matching the panel's defineEmits contract."
+    },
+    "cross_file_consistency": {
+      "verdict": "correct",
+      "notes": "Panel defineProps: { triggers: FunnelTrigger[], steps: FunnelStep[], botUsername?: string|null, deepLink?: string|null }. Page passes: v-model:triggers='triggers', :steps='steps', :bot-username='botUsername', :deep-link='funnel.deepLink'. All prop names and types match. Panel defineEmits includes 'update:triggers' which v-model:triggers consumes. Store update() accepts UpdateFunnelRequest which carries triggers?: FunnelTrigger[] — matches the persist() payload. FunnelTrigger interface in types/funnel.ts matches the shape used in defaultTriggers() and sanitizeTrigger()."
+    },
+    "naming_and_complexity": {
+      "verdict": "good",
+      "notes": "Names are clear and consistent: triggers, sanitizeTrigger, triggerReady, defaultTriggers, applyingResponse. scheduleTriggerPersist is slightly long but descriptive. The module is appropriately sized — each function has a single responsibility. Comments explain the 'why' for both safeguards, not just the 'what'."
+    },
+    "test_coverage": {
+      "verdict": "adequate for this PR",
+      "notes": "The five TDD anchor tests all present: panel renders, flat trio absent from payload, no PATCH while incomplete, PATCH once ready, every-gate on multiple triggers. The on_start empty/invalid edge case is also covered. The tests use the REAL FunnelTriggersPanel (not stubbed) per task spec, which means they exercise the full component tree. The afterEach uses vi.clearAllTimers() (correct — discards pending debounce) not vi.runOnlyPendingTimers() (which could leak into the next test)."
+    }
+  }
+}

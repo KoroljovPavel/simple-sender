@@ -1,0 +1,83 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 2,
+      "issue": "Task 2 describes adding `reply_markup` to `sendText` as a new parameter. The actual `sendText` signature is `sendText(String botId, Long chatId, String text, String parseMode, String ownerId)` — the 5th parameter is `ownerId` (used for audit event emission via `eventService.logEvent(ownerId, ...)`). Task 2 calls this parameter 'the last parameter' and treats it like `parse_mode` (only-if-non-null idiom), but `ownerId` is a completely different concept from `reply_markup`. The task must choose a concrete strategy: (a) add `reply_markup` as a 6th parameter, (b) add a new overload, or (c) refactor to a builder/parameter-object. If option (a) or (b) is chosen, all 3 existing call-sites (`BotService.java:127`, `SubscriberController.java:250`, `StepExecutor.java:108`) must be updated — the task does not mention this. This is not a minor gap: picking the wrong approach would break compilation.",
+      "fix": "Choose the extension strategy explicitly. If adding a 6th parameter, update the 3 existing call-sites by passing `null` for the new `reply_markup` argument. If adding an overload, ensure the existing callers compile as-is. Update the task description to reflect the chosen strategy and list the call-site files (`BotService.java`, `SubscriberController.java`) in files_to_modify or at minimum note them as compile-time compatibility files."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 1,
+      "issue": "Task 1 instructs adding `waiting_for_reply` to the drift-assertion in `FunnelExecution.java` at 'lines ~34-41'. The actual static block (lines 34-41) only asserts `running` and `waiting`. However, the task also says `ExecutionStatus` currently has `running, waiting, completed, cancelled, failed` — it does NOT have `waiting_for_reply` yet. The task correctly plans to add it, but the drift-block check must also cover the new literal. The real concern: the Details section says 'literal-site 2 is `FunnelExecution.java` static drift-block (lines ~34-41)' — but that block has hardcoded string comparisons (`\"running\".equals(...)`, `\"waiting\".equals(...)`), not `$in`-arrays. This is feasible but the task conflates the drift-block (a startup assertion) with `$in` array sites — developer may misread this as adding `waiting_for_reply` only to the `$in` arrays. This can result in a missed drift assertion for the new status.",
+      "fix": "Clarify that literal-site 2 (FunnelExecution static block) means adding a NEW `if (!\"waiting_for_reply\".equals(ExecutionStatus.waiting_for_reply.name())) throw ...` assertion, separate from the existing running/waiting assertions. The current block structure makes it easy to skip this if the developer reads 'expand the $in' and moves on."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 3,
+      "issue": "The Details section for `StepExecutor.java` prescribes full implementation logic: exact method signature `menu(step, execution, subscriber, bot)`, exact outcome enum value name `WAIT_FOR_REPLY`, exact factory name `StepResult.waitForReply(Instant nextRunAt)`, and the exact field addition `Instant nextRunAt` to the `StepResult` record. The `StepResult` record is currently `record StepResult(Outcome outcome, Duration delay, String reasonCode)` — adding `Instant nextRunAt` as a new component changes the record's canonical constructor and ALL existing `new StepResult(...)` call-sites. The task hints prescribe HOW to modify the record (add a field) rather than pointing to the pattern.",
+      "fix": "Rephrase as a hint: 'Extend StepResult to carry an optional Instant deadline for the park outcome — see how `delay` is currently carried and apply the same pattern. Consider whether a new record component or a static factory wrapping a sentinel Duration is cleaner.' Remove the prescriptive field name and factory name from the hints section."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Tech-spec Data Models specifies `timeoutUnit` as `\"minutes\"|\"hours\"|\"days\"` (lowercase). However, the existing `delayUnit` field on `FunnelStep` uses `\"MIN\"|\"HOUR\"|\"DAY\"` (uppercase abbreviations), as confirmed in `StepExecutor.delayDuration()` which switches on `\"MIN\"`, `\"HOUR\"`, `\"DAY\"`. Task 3 Details says 'Тривалість таймауту — за зразком `delayDuration`, але одиниці `minutes/hours/days`' — this means a NEW `delayDuration`-style method must use a DIFFERENT switch, because the unit strings are different. This is inconsistent within the same model class and will confuse implementers who look at `delayDuration` as the pattern to copy. The inconsistency is in the tech-spec data model (timeoutUnit spec says `\"minutes\"|\"hours\"|\"days\"`) versus the existing code convention.",
+      "fix": "Decide and document in the task which format `timeoutUnit` will use: either align with the existing `delayUnit` abbreviations (`\"MIN\"|\"HOUR\"|\"DAY\"`) for consistency and update the tech-spec Data Models, or keep `\"minutes\"|\"hours\"|\"days\"` and explicitly note that the timeout parser is a new method that does NOT reuse `delayDuration`. The task must not say 'за зразком delayDuration' when the unit strings differ."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 1,
+      "issue": "The TDD Anchor for `FunnelStepIdBackfill` requires a Testcontainers Mongo test (`FunnelStepIdBackfillTest`). However, the task does not specify what base class to use for spinning up Testcontainers. The existing IT tests use `AbstractIntegrationTest` (confirmed by `FunnelIndexesIT extends AbstractIntegrationTest` and `FunnelExecutionEngineIT extends AbstractIntegrationTest`). The reference is 'за зразком FunnelIndexesIT як взірець підняття контейнера' but `FunnelIndexesIT` uses `AbstractIntegrationTest` without showing its setup. If the developer does not look at `AbstractIntegrationTest`, they may duplicate the Testcontainers setup. This is a minor guidance gap but flagged as major because incorrect test setup would mean the IT does not actually test against a real Mongo.",
+      "fix": "Add `AbstractIntegrationTest` to the files-to-read list and note explicitly: '`FunnelStepIdBackfillTest` should extend `AbstractIntegrationTest` (same as `FunnelIndexesIT`, `FunnelExecutionEngineIT`) to reuse the shared Testcontainers context.'"
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 Details for `FunnelExecutionEngine.java` says 'виділити спільний step-loop `drive(exec, now)`, який викликають і `runExecution` (після claim), і `resumeOnCallback` (після claim-CAS)'. The current `runExecution` method is a single private method that also handles the resume-from-delay seam (`if (exec.getStatus() == ExecutionStatus.waiting) { exec.setCurrentStepIndex(+1) }`) and pre-step gates. Extracting a `drive(exec, now)` method requires careful handling of the `waiting`-resume seam that currently lives BEFORE the subscriber/bot gate and BEFORE the loop. If the `waiting_for_reply`-resume seam (advance to `targetStepId`) is also placed before the loop, the refactoring is straightforward. However, the task does not clarify WHERE the resume-seam expansions (for `waiting_for_reply` timeout case) go relative to the pre-step gates. The current `waiting` resume advances `currentStepIndex` before the subscriber/bot gate — the task must confirm whether `waiting_for_reply` timeout resume follows the same ordering.",
+      "fix": "Add a note to the Details section: 'The existing `waiting`-resume seam (advance past the delay step) runs BEFORE the subscriber/bot gate. The new `waiting_for_reply`-timeout seam should follow the same ordering — set `currentStepId = step.timeoutTargetStepId` (or complete) before the pre-step gates. Confirm this ordering matches the at-most-once invariant.'"
+    },
+    {
+      "severity": "minor",
+      "category": "missing_function",
+      "task": 1,
+      "issue": "Task 1's `FunnelStepTest` TDD Anchor references a new test `deepCopyCopiesGraphScalars` that 'extends the existing `deepCopyProducesIndependentStep`'. The actual test is named `deepCopyProducesIndependentStep` (confirmed in `FunnelStepTest.java`). This is correct. However, the task says to add graph scalars (`id`, `next`, `timeout*`) to the EXISTING `deepCopyProducesIndependentStep` test by 'розширити наявний `deepCopyProducesIndependentStep`', but also lists a SEPARATE test `deepCopyCopiesGraphScalars`. The naming is inconsistent — a developer may create a redundant test or skip one.",
+      "fix": "Clarify: either extend `deepCopyProducesIndependentStep` in-place to cover `id`/`next`/timeout fields (no new test needed), or add `deepCopyCopiesGraphScalars` as a distinct test without modifying the existing one. Pick one approach."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 Details says `FunnelStepIdBackfill` should 'інжектити `MongoTemplate` (або наявні funnel/execution-репозиторії — обрати за тим, що вже використовує engine)'. The engine uses `MongoTemplate` directly (not Spring Data repositories) for all its writes. However, `FunnelRepository` and `FunnelExecutionRepository` ARE Spring Data repos available in the context (confirmed in the file listing). The task leaves the choice open, but `MongoTemplate` with `$set` partial-update is the right choice for in-place field backfill (avoids full-document deserialize/serialize cycle that would lose unknown fields). This should be specified rather than left open.",
+      "fix": "Specify that `MongoTemplate` with `$set` partial-update (not full-document save via repositories) is the correct approach for backfill to avoid losing unknown fields on legacy documents."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 2,
+      "issue": "Task 2 Details says `answerCallbackQuery` should reuse `sendWithRateLimitRetry`/`sendWith5xxRetry` seam. These are private methods in `TelegramSender`. Reusing them requires either making them package-private or extracting a shared helper. The task says 'переюз існуючих `sendWithRateLimitRetry`/`sendWith5xxRetry` seam або їх еквівалент — НЕ дублюй loop руками' — but does not note that they are currently `private`. The hint should mention this visibility concern.",
+      "fix": "Add a note: 'Note that `sendWithRateLimitRetry` and `sendWith5xxRetry` are currently `private`. To reuse them, either widen to package-private or extract a shared `sendRaw(endpoint, body, attempts, deadline)` helper that both content-send and ack-send can call.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 3,
+      "issue": "The FunnelStepExecutorTest TDD Anchor for `menu_sends_text_with_reply_markup` verifies that `sender.sendText` is called with non-null `reply_markup`. But the current `FunnelStepExecutorTest` mocks `sender.sendText` with `anyString(), any(), anyString(), any(), any()` (5 args). After Task 2 adds `reply_markup` as a new parameter, the mock matchers must be updated from 5 to 6 args. The task does not mention that the existing mock setups in `FunnelStepExecutorTest` will need updating when Task 2's sendText signature change lands.",
+      "fix": "Note in the TDD Anchor: 'After Task 2 merges, existing `sendText` mock stubs in FunnelStepExecutorTest (currently 5-argument) must be updated to match the new 6-argument signature before writing the new MENU test.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 10
+  }
+}

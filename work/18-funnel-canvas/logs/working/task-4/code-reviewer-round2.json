@@ -1,0 +1,48 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 4,
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "verifications": [
+    {
+      "id": "V1",
+      "roundRef": "F2",
+      "title": "Empty-string target flagged as broken_edge — RESOLVED",
+      "detail": "detectBrokenEdges.flagMissing now guards only on `targetId == null` (line 396). An empty string passes that guard, is not in savedStepIds, and is pushed as reason='missing_target'. Verified in the new test at line 446: `step.s1.next = ''` produces a broken edge with targetStepId='' and reason='missing_target'."
+    },
+    {
+      "id": "V2",
+      "title": "on_start entryStepId='' not double-counted",
+      "detail": "When on_start trigger has entryStepId='': flagMissing pushes exactly one missing_target edge. The on_start_entry_null branch guards with `trig.entryStepId == null`, and `'' == null` is false, so it is not entered. No double-count."
+    },
+    {
+      "id": "V3",
+      "title": "connectEdge/disconnectEdge/PATCH consistency — unchanged and correct",
+      "detail": "connectEdge still throws on null or '' (line 505), ensuring '' is never written as an edge. disconnectEdge still writes null (line 518). No regression."
+    },
+    {
+      "id": "V4",
+      "roundRef": "F3",
+      "title": "F3 (redundant onStartPresent) — not addressed, not a regression",
+      "detail": "The onStartPresent variable remains. The logic is functionally correct: the extra guard is redundant but not harmful. No regression introduced. F3 was minor/optional and was not required to be fixed."
+    },
+    {
+      "id": "V5",
+      "roundRef": "F1",
+      "title": "F1 (degenerate-dagre fallback test) — RESOLVED with a proper spy-based test",
+      "detail": "A new test at line 347 spies on dagre.layout to throw, exercises the catch->gridLayout branch, asserts all nodes have finite coords, and verifies the deterministic grid placement constants (GRID_COLUMNS=4, GRID_GAP_Y=160). The original misleadingly-named test is renamed to 'orphan forest (disconnected nodes) still yields finite coords'. Full coverage of the fallback path is now confirmed."
+    },
+    {
+      "id": "V6",
+      "title": "Test at line 258: connectEdge rejects '' as a target",
+      "detail": "The new test 'connectEdge rejects a non-null but non-saved/unknown target id' asserts that connectEdge throws for both a ghost string and for ''. The original funnel is untouched after the throw. Consistent with the '' == broken-edge semantics."
+    },
+    {
+      "id": "V7",
+      "title": "Sibling-unchanged assertions added for disconnectEdge",
+      "detail": "After disconnecting 'next', the test now also asserts buttons[0].targetStepId and timeoutTargetStepId are unchanged, and vice versa. No applyEdgeValue cross-field bleed."
+    }
+  ],
+  "summary": "The round-1 correctness finding (F2: empty-string silently dropped instead of flagged as broken edge) is fully resolved. flagMissing now treats '' as a non-null non-resolving id and pushes a missing_target broken edge. on_start entryStepId='' is not double-counted. connectEdge/PATCH never writes ''. All three round-1 findings are clean: F1 resolved with a proper spy-based dagre-failure test, F2 resolved with both code and assertion changes, F3 (minor/optional readability) left as-is with no regression. No new issues introduced. Verdict: pass."
+}

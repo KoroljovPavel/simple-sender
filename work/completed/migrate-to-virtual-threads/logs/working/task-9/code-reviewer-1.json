@@ -1,0 +1,77 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 9 production code correctly flips webhook ingestion + JobRunr worker + admin-seed surfaces to the servlet/MVC + virtual-threads stack. All ten critical invariants enumerated in the review brief are preserved: 401-vs-404 carve-out (bot/project lookup before secret verify, both IAE-collapse to 404), outer Throwable→500 catch that bypasses GlobalErrorHandler, DuplicateKey self-heal with WARN log + re-enqueue + 200, BiConsumer<UUID,String> enqueuer test seam intact, worker re-entry guard on DONE status (lines 88-92), event-write-before-status-flip ordering (dispatch fires events before line 104-105 DONE save), CAS first-writer-wins for Bot.ownerChatId with null=benign no-op (no log/no throw), failure-path scrubbed+truncated message via new RuntimeException with NO cause chain and stack-trace copy, ProjectHardDeleteJob cascade order verbatim (events sweep → emit project_hard_deleted → drop projects), and filter retains sole ownership of the payload_too_large reason string (zero matches in controller, verified via grep). Cross-file signatures verified against BotRepository.findByProjectIdAndStatus → Optional<Bot>, ProjectRepository.findById → Optional<Project>, RawUpdateRepository.findById/save/findFirstByProjectIdAndUpdateId, EventService.logEvent(userId, eventType, ip, ua, metadata) → Event, MongoTemplate.findAndModify(Query, Update, Class), UserRepository.findByEmail → Optional<User>. All four grep guards pass: zero .block() / Mono / Flux / ServerWebExchange / WebFilter / ReactiveMongoTemplate symbols left in webhook/jobs/admin trees; zero logEventBlocking references; zero payload_too_large in controller. Findings are minor — a double matchAndExtract call on the filter error path, a comment line-number reference that drifted from the source it cites, and small token-scrubbing inconsistencies in worker INFO/WARN logs (matching pre-task behavior so not a regression).",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": 87,
+      "severity": "minor",
+      "category": "performance",
+      "suggestion": "matchAndExtract(pathContainer) is called twice in the projectId extraction expression — once for the null-guard and once for the get. The first call also cannot return null in practice because the earlier WEBHOOK_PATH.matches(pathContainer) check on line 64 guarantees a match (we early-return on a non-match). Extract the result to a local variable, drop the dead null-check, and replace the ternary with a single .matchAndExtract(...).getUriVariables().get(PROJECT_ID_VAR) call. Defense-in-depth via a try/Objects.requireNonNullElse if a guard is desired.",
+      "benefit": "Avoids a redundant PathPattern.matchAndExtract allocation on the reject path; removes dead defensive code that can mislead readers into thinking the null branch is reachable.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": 96,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The Transfer-Encoding header log argument inlines a ternary inside scrubTokens(...). Pulling the joined header value into a local (e.g. String teHeader = transferEncodings.isEmpty() ? null : String.join(\",\", transferEncodings);) and passing teHeader to scrubTokens makes the log call site read top-to-bottom and matches the style of the projectId extraction above.",
+      "benefit": "Slightly cleaner log call site; trivial cognitive load reduction with no behavior change.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 115,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "When t.getMessage() is null the fallback is t.getClass().getName() (fully-qualified). On line 137 the rethrow prefix uses t.getClass().getSimpleName(). The end result for a null-message Throwable is a rethrow message like 'RuntimeException: java.lang.RuntimeException' — a duplicated class name. Consider either (a) falling back to t.getClass().getSimpleName() on line 115 so the rethrow becomes 'RuntimeException: RuntimeException' (still informative, less noisy) or (b) detecting the null-message case earlier and short-circuiting to a sentinel like '(no message)'.",
+      "benefit": "Slightly cleaner jobrunr_jobs failure row for null-message exceptions; no security impact (class names cannot carry payload tokens), purely cosmetic.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 122,
+      "severity": "minor",
+      "category": "error-handling",
+      "suggestion": "If mongoTemplate.findAndModify(...) itself throws on line 122 (e.g. transient Mongo connectivity loss during the failure-write), the meterRegistry.counter(...).increment() on line 128 and the scrubbed log on line 129 never execute, and the raw exception (with potentially un-scrubbed payload-derived message via t in scope) propagates up to JobRunr's failure pipeline. The pre-task implementation had the same gap, so this is not a regression and may be intentional (rare path, JobRunr retries the whole job). Consider wrapping the FAILED-write in a try/catch that logs the secondary failure separately and still rethrows the original scrubbed exception, so the operational signal isn't lost on a double-fault.",
+      "benefit": "Defense-in-depth: a Mongo blip during the failure write would still surface the scrubbed primary cause to operators and tick the failure counter. Pre-existing behavior; flagged for follow-up consideration.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": 218,
+      "severity": "minor",
+      "category": "error-handling",
+      "suggestion": "Long.valueOf(raw.toString()) on line 220 throws NumberFormatException when update_id is present but not numeric (e.g. a string '\"abc\"' or an object). This unchecked exception falls into the outer Throwable catch on line 183 and produces a 500. Semantically, a malformed update_id is a 400 (bad request) rather than a 500 (server error); the existing null-branch already maps to 400. Catching NumberFormatException (either in extractUpdateId or at the call site) and treating it as the null path (warn + 400) would be more consistent with the Telegram-contract intent. Pre-task code has the same behavior so this is not a regression.",
+      "benefit": "More accurate HTTP semantics for malicious or malformed payloads; slightly fewer noise 500s in production telemetry. Pre-existing behavior; flagged for follow-up.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": 124,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Both the bot-missing branch (line 124) and the project-missing branch (line 136) increment the same rejectedProjectNotFound counter under tag reason=project_not_found. This loses observability of whether the 404 was caused by bot-missing vs project-missing in production telemetry. Pre-task code has the same single-counter behavior; not a regression. If per-reason visibility is desired, consider splitting into rejectedBotNotConnected and rejectedProjectNotFound counters with their own reason tags.",
+      "benefit": "Better observability on the 404 hot path; would help diagnose the bot-vs-project miss-rate ratio under load. Pre-existing behavior; non-blocking.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 30,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The class-level comment on lines 29-35 enumerates three correctness mechanisms (re-entry guard, cascade ordering, failure path) but does not call out the fourth — the atomic findAndModify CAS for Bot.ownerChatId first-writer-wins (lines 222-227). The CAS is a load-bearing invariant per Decision 5 and the patterns.md webhook section. Add a fourth bullet referencing it so a future reader scanning the class header has the full invariant map.",
+      "benefit": "Improved class-level documentation; lowers the risk of a future refactor accidentally collapsing the CAS into a read-then-write race window.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 8,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 7,
+    "testCoverageAssessment": "adequate"
+  }
+}

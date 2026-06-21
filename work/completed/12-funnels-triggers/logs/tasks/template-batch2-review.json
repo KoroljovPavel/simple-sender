@@ -1,0 +1,27 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Context Files",
+      "issue": "Mandatory PK context links use bare paths `.claude/skills/project-knowledge/references/project.md` (also architecture.md, patterns.md). The task file lives at work/12-funnels-triggers/tasks/6.md, so these relative links resolve against the tasks/ directory and do NOT exist there — verified MISSING. Tasks 8/9/10 in the same batch correctly prefix `../../../.claude/...`. The referenced files are present at the repo root, so this is a broken relative link, not a missing doc.",
+      "fix": "Prefix the three PK links with `../../../` to anchor from the tasks directory: `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, likewise architecture.md and patterns.md — matching the resolution used in tasks 8/9/10."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 7,
+      "section": "Context Files",
+      "issue": "Same broken relative-link pattern as Task 6: PK links `[project.md](.claude/...)`, `[architecture.md](.claude/...)`, `[patterns.md](.claude/...)` use bare paths that resolve against tasks/ and do not exist there (verified MISSING). Inconsistent with tasks 8/9/10 which use `../../../.claude/...`.",
+      "fix": "Prefix the three PK links with `../../../` so they resolve from the tasks directory, matching tasks 8/9/10."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 2
+  }
+}

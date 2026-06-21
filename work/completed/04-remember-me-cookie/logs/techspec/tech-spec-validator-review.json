@@ -1,0 +1,36 @@
+{
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "structure",
+      "issue": "Stale Decision reference after renumbering. Line 297 (Testing Strategy → Integration tests) says \"Rationale captured in Decision 6.\" The rationale for skipping a new integration test (WebTestClient.bindToApplicationContext drops Set-Cookie) is documented in Decision 7 (\"Verify cookie behavior via resolver unit test, skip new IT\"). Decision 6 is now the new \"Register auto-login keeps rememberMe=false\" decision and is unrelated to the IT-skip rationale.",
+      "fix": "Replace `Decision 6` with `Decision 7` on line 297."
+    },
+    {
+      "severity": "major",
+      "category": "structure",
+      "issue": "Stale Decision reference after renumbering inside the Risks table. Line 330 maps the risk \"Test infrastructure (`WebTestClient.bindToApplicationContext`) drops `Set-Cookie` headers...\" to \"Decision 6.\" The mitigation described (resolver unit test on `MockServerHttpResponse` + exchange-attribute assertion) is the content of Decision 7, not the new Decision 6 (register auto-login).",
+      "fix": "In the Risks table, change `Decision 6.` to `Decision 7.` on the row about test infrastructure dropping Set-Cookie."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "issue": "User-Spec Deviations paragraph (line 338) lists \"Decisions 1, 2, 6, 7\" as the locations where user-spec gaps (\"конкретні класи, методи override та обраний спосіб тестування\") are filled in. Decision 1 = subclass choice (override method); Decision 2 = attribute channel; Decision 6 = register auto-login behavior; Decision 7 = testing approach. The phrase about user-spec gaps maps cleanly to Decisions 1, 2, 7 (classes/override/testing). Decision 6 (register auto-login) is a separate AC-6 commitment, not part of the listed user-spec gap categories. The list is plausibly correct if read as \"all fill-ins\" but may be a leftover from pre-renumbering when Decision 6 was the testing decision.",
+      "fix": "Confirm whether the list intends \"classes/override/testing\" (then drop 6) or \"all four fill-ins including register auto-login\" (keep as is). Either way, make the intent explicit in the surrounding sentence."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "issue": "Carryover from Round 1: `### Shared resources` is a standalone heading at line 85 between `### How it works` and `## Decisions`. Tech-spec template lists it as an Architecture subsection. Content is correct; heading level is the only issue. Not blocking.",
+      "fix": "Optional: keep `### Shared resources` as a subsection of `## Architecture` (move it directly under `### How it works`). Pure cosmetic alignment with template."
+    },
+    {
+      "severity": "minor",
+      "category": "tasks",
+      "issue": "Carryover from Round 1: Task 1 uses a `Files to create` block (lines 426-428) that is not part of the tech-spec template (template only documents `Files to modify` and `Files to read`). The information is useful and explicit; this is a controlled extension rather than a defect.",
+      "fix": "Optional: fold `Files to create` entries into `Files to modify` or accept the extension. Non-blocking."
+    }
+  ],
+  "summary": "Round 2 finds two MAJOR stale Decision references introduced by inserting the new Decision 6 (\"Register auto-login keeps rememberMe=false\") and pushing the original test-strategy decision to Decision 7. Specifically: (1) line 297 in Testing Strategy → Integration tests still says \"Rationale captured in Decision 6\" — should be Decision 7; (2) the Risks table row about `WebTestClient.bindToApplicationContext` dropping `Set-Cookie` ends with \"Decision 6.\" — should be Decision 7. The user-spec-deviations paragraph listing \"Decisions 1, 2, 6, 7\" is ambiguous (minor). Frontmatter is valid (created 2026-05-09, status draft, branch dev, size S). All required template sections are present. Implementation Tasks: 5 tasks across Wave 1 (1 task), Audit Wave (3 parallel auditors), Final Wave (Pre-deploy QA). No wave file conflicts (Wave 1 single task). Skills (code-writing, code-reviewing, security-auditor, test-master, pre-deploy-qa) and reviewers (code-reviewer, security-auditor, test-reviewer) all match the catalog. No prompt work, no time estimates, no AC/TDD anchors leaked into task descriptions, Verify-smoke on Task 1 is concrete. Two majors block APPROVED status until reference fixes land; once line 297 and the Risks Decision 6→7 are corrected, the spec is approvable."
+}

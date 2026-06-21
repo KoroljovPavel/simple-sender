@@ -1,0 +1,55 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "Spec declares size S but contains 4 user flows (Сценарій 1–4), which exceeds the >3 threshold for a size-check warning. The fourth scenario (pre-fix backward compat) is a single-paragraph non-interactive observation rather than a full interactive flow, so S is still defensible for a targeted bug fix touching 1-2 backend files.",
+      "location": "Як має працювати — Сценарій 1, 2, 3, 4; frontmatter size: S",
+      "fix": "Either relabel Сценарій 4 as a constraint note (it has no user action) and remove it from the Сценарії section, or accept the warning as a known deviation for this bug fix. No size change required."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "Interview error_scenarios ES-4 (openSession throws before setRememberMe attribute is set → no Set-Cookie written, user sees 5xx) was discussed in interview.yml but is absent from the spec. This is existing behavior that is not regressed by the fix, so it is lower-priority — but an explicit note would prevent implementers from wondering whether they need to handle it.",
+      "location": "interview.yml phase2_user_experience.error_scenarios ES-4; user-spec.md has no corresponding note",
+      "fix": "Optional: add one bullet in 'Технічні рішення': 'Якщо openSession кидає виняток до запису exchange-атрибута rememberMe — cookie не пишеться (response без Set-Cookie). Поточна поведінка, не регресуємо.' Not blocking."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "rememberMe=true → Set-Cookie with Max-Age=2592000 (AC-1)",
+      "rememberMe=false → session-only cookie, no Max-Age (AC-2)",
+      "Sliding expiration: approach A — Max-Age set once at login, not renewed (Ограничення + Технічні рішення)",
+      "Pre-fix backward compat: existing cookies not invalidated on deploy (AC-4 + Ограничення)",
+      "Integration test approach: bindToServer+RANDOM_PORT or unit on resolver (Тестування + Ризик 2)",
+      "E2E tests: not done, rationale given (Тестування)",
+      "Incognito mode: documented as known limitation (Ограничення lines 103-105)",
+      "Re-login with changed rememberMe flag (true→false or vice versa): cookie overwrites with correct attributes (AC-7)",
+      "Logout: Max-Age=0 via Spring expireSession (AC-5 + Сценарій 3)",
+      "Auto-login after register: stays rememberMe=false, session-only cookie (AC-6)",
+      "UX-фіча pre-select rememberMe from localStorage: deferred to improvements.md (Технічні рішення last bullet)",
+      "Manual verification flow: docker-compose + bootRun + pnpm dev (Як перевірити / Пользователь проверяет)",
+      "Cookie security flags read from ServerProperties, not duplicated in fix code (Ограничення + Технічні рішення)",
+      "EC-2: terminate-all-sessions / change-password / deleteAccount — cookie survives on device, next request → anon → redirect, no extra cookie-clear added (Ограничення lines 106-111)",
+      "ES-1: null/absent rememberMe exchange attribute → fallback to session-only cookie, no exception thrown (Технічні рішення lines 145-147)",
+      "EC-4: Cookie name configurability — resolver reads name from server.reactive.session.cookie.name (AC-8)",
+      "AC-7 replaced the CI-gate criterion — now a behavioral criterion for re-login with changed rememberMe flag",
+      "AC-4 agent-verifiable step added: seed Mongo session + send pre-fix cookie → 200 OK (Агент перевіряє step 5)",
+      "EC-3: Incognito mode — browser ignores Max-Age, deletes cookie on close, known limitation documented",
+      "EC-5: SecurityContext save order — rememberMe attribute set in exchange before Spring Session calls setSessionId (Ризик 3)"
+    ],
+    "missing": [
+      "ES-4: openSession throws before setRememberMe attribute is set → no Set-Cookie written, user sees 5xx. Discussed in interview.yml error_scenarios, not explicitly documented in spec. Low priority — it is existing behavior, not a regression."
+    ]
+  },
+  "summary": "Всі 5 критичних знахідок раунду 1 усунуто: EC-2 (terminate-all) задокументовано в Ограничення, ES-1 (null-attribute fallback) додано до Технічних рішень, EC-4 (configurability cookie name) закрито через AC-8, AC-7 замінено на поведінковий критерій, AC-4 має agent-verifiable крок у таблиці. Залишилось одне minor-відхилення (ES-4 не задокументовано) та size_check warning (4 сценарії при порозі >3). Специфікацію можна затверджувати."
+}

@@ -1,0 +1,61 @@
+{
+  "status": "findings",
+  "findings": [
+    {
+      "id": "T1",
+      "severity": "medium",
+      "where": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java",
+      "issue": "Missing test for the 4xx-fallback branch explicitly called out in task §What-to-do step 3 and §Edge-cases: '4xx із порожнім description → fallback AppException.badRequest(...) — покрити юніт-тестом окремою гілкою'. The implementation in toAppException(...) has three branches (401 → invalid_bot_token, 4xx-with-description → webhook_config_error, otherwise → AppException.badRequest). Only the first two are exercised. If a regression collapses the fallback branch (e.g. NPE on null description, or routing the empty-description case into webhook_config_error), no test catches it. Litmus test: remove the final `return AppException.badRequest(...)` line and replace with a hardcoded throw — none of the current tests fail.",
+      "suggestion": "Add a test `getMe_4xxWithBlankDescription_fallsBackToBadRequest` (or equivalent on setWebhook/deleteWebhook) that enqueues a 403 (or any non-401 4xx) with `{\"ok\":false,\"error_code\":403,\"description\":\"\"}` (and a sibling with description omitted entirely so `defaultIfEmpty` kicks in). Assert: status == BAD_REQUEST, code == null, message == \"Telegram client error\". This also verifies the null-description guard in toAppException (`scrubbed == null ? \"Telegram client error\" : scrubbed`) — without it a regression that always reads `description` would NPE."
+    },
+    {
+      "id": "T2",
+      "severity": "medium",
+      "where": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java:113-132",
+      "issue": "AC17 / R1 require the scrubber to actually run on Telegram description before it hits the WARN log. The unit test `scrubber_redactsTokenShapedSubstring` proves the function works in isolation, and `setWebhook_4xxConfigError_mapsTo500WebhookConfigError` proves a description hits the WARN log — but no test wires the two together: there is no end-to-end test that a 4xx response whose `description` contains a token-shaped substring results in `[REDACTED_TOKEN]` (not the raw token) appearing on the WARN line. A regression that calls `log.warn(\"... {}\", description)` instead of `log.warn(\"... {}\", scrubbed)` would pass all current tests.",
+      "suggestion": "Extend `setWebhook_4xxConfigError_mapsTo500WebhookConfigError` (or add a new test) where the mocked description is `\"Bad webhook for token 1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789\"`. Assert the WARN line's formatted message contains `[REDACTED_TOKEN]` AND does NOT contain the raw token substring `1234567890:ABCdefGHI_jklMNOpqrSTUvwxYZ0123456789`."
+    },
+    {
+      "id": "T3",
+      "severity": "low",
+      "where": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java:135-148",
+      "issue": "Scrubber boundary cases are missing. The regex is `\\d{1,20}:[A-Za-z0-9_-]{30,50}` — but the test does not pin the boundaries (29-char suffix, 51-char suffix, 21-digit prefix, suffix containing a disallowed char such as `+` or `.`). A regression that broadens the regex (e.g. `{29,}`) and starts matching non-tokens, or narrows it and stops matching legitimate tokens, would not be caught. Also missing: empty-string input (should return empty), and blank-only input (e.g. `\"   \"` — relevant because the production branch `scrubbed != null && !scrubbed.isBlank()` distinguishes blank from null).",
+      "suggestion": "Add boundary cases: (a) suffix exactly 30 chars matches, 29 chars does not; (b) suffix exactly 50 chars matches, 51 chars matches only the first 50 (Java regex is greedy — pin actual behaviour); (c) digits-prefix exactly 20 matches, 21 does not; (d) `scrubTokens(\"\")` returns `\"\"`; (e) `scrubTokens(\"   \")` returns `\"   \"`; (f) `scrubTokens(\"1234567890:short\")` returns unchanged (suffix too short)."
+    },
+    {
+      "id": "T4",
+      "severity": "low",
+      "where": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java:172-199",
+      "issue": "The Netty-read-timeout test uses the package-private 3-arg constructor with `responseTimeout=200ms`, but this constructor also pins `ChannelOption.CONNECT_TIMEOUT_MILLIS = responseTimeout` (i.e. 200ms in the test, 10s in production). Two consequences: (1) the test diverges from the production wiring — production has connect-timeout == response-timeout coincidentally; if a future change decouples them in the production constructor, the test won't notice; (2) on slow CI a 200ms connect to localhost MockWebServer is tight — risk of flakiness as a `ConnectTimeoutException` (which IS an IOException, so retry filter still catches it, but request count assertion of exactly 4 may flake if the first attempt fails on connect instead of read).",
+      "suggestion": "Either: (a) change the 3-arg constructor to accept response-timeout AND connect-timeout separately, set connect-timeout to a higher value (e.g. 5s) in the test, and update the production 2-arg constructor to pass response-timeout for both — documenting the coupling explicitly; or (b) add an explanatory comment in the test that connect-timeout == response-timeout is intentional and the localhost connect is bounded by the OS loopback (<1ms). Option (a) preferred — makes the production invariant visible."
+    },
+    {
+      "id": "T5",
+      "severity": "low",
+      "where": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java:68, 211",
+      "issue": "`mockServer.takeRequest()` without a timeout blocks indefinitely if no request arrived. When a test regression causes the client to short-circuit (e.g. body validation rejects before HTTP fires), the test will hang the Gradle test JVM until CI times out the whole job, rather than failing fast with a clear message. Both happy-path tests use the no-arg form.",
+      "suggestion": "Replace `mockServer.takeRequest()` with `mockServer.takeRequest(2, TimeUnit.SECONDS)` and assert the returned `RecordedRequest` is non-null before further assertions. This converts a 'hang the build' failure into a clean assertion failure with a localised stack trace."
+    },
+    {
+      "id": "T6",
+      "severity": "low",
+      "where": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java:202-218",
+      "issue": "The setWebhook body assertion uses substring `contains(\"\\\"url\\\"\")` and `contains(\"\\\"secret_token\\\"\")` on the raw JSON string. This catches the field names but is fragile: it would also pass if implementation accidentally sent `{\"url\":\"https://example.com/hook\",\"secret_token\":\"secret-xyz\",\"url\":\"https://attacker.com\"}` (duplicate field, last wins server-side). It also doesn't pin association — `body.contains(\"https://example.com/hook\")` and `body.contains(\"secret-xyz\")` could be satisfied even if the fields were swapped. For AC10 contract, parsing the JSON and asserting on the parsed map is sturdier.",
+      "suggestion": "Parse the body via Jackson (`new ObjectMapper().readValue(body, new TypeReference<Map<String,String>>(){})`) and assert: `assertThat(parsed).containsEntry(\"url\", \"https://example.com/hook\").containsEntry(\"secret_token\", \"secret-xyz\").hasSize(2)`. The `hasSize(2)` guards against accidental extra fields (e.g. leaking the bot token if a future refactor adds it to the body)."
+    },
+    {
+      "id": "T7",
+      "severity": "low",
+      "where": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java",
+      "issue": "`deleteWebhook` has no happy-path test — only a 5xx-retry-exhaust test. The TDD anchor list for task 2 is the source of truth and does not require it, so this is genuinely a gap rather than an anchor miss, but: a regression where `deleteWebhook` accidentally calls `/setWebhook` or omits the path token would be caught only by the retry-exhaust test if at all (and that test does not assert path). The integration test for AC13a covers this end-to-end in the controller-IT task downstream, but at the unit level the path/contract of deleteWebhook is unverified.",
+      "suggestion": "Add `deleteWebhook_happyPath_returnsTrueAndHitsCorrectPath`: enqueue `200 {\"ok\":true,\"result\":true}`, assert `client.deleteWebhook(TOKEN).block()` returns `true`, assert recorded request path == `/bot{token}/deleteWebhook`, method == POST."
+    },
+    {
+      "id": "T8",
+      "severity": "low",
+      "where": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java:53-89, 112-132",
+      "issue": "Tests on the 4xx paths (401 and 4xx-config) do not explicitly assert that no retry occurred. They enqueue exactly one response, so a stray retry would surface as a hang or as MockWebServer returning 404 on the second hit — but the explicit-intent assertion `assertThat(mockServer.getRequestCount()).isEqualTo(1)` is only present on the 401 test, not on the 4xx-config test. AC §request-count-for-401-=-1 / request-count-for-5xx-=-4 is partially enforced. The 4xx-config test in particular should pin request count = 1 because the AC explicitly says 4xx must not be retried.",
+      "suggestion": "Add `assertThat(mockServer.getRequestCount()).isEqualTo(1)` at the end of `setWebhook_4xxConfigError_mapsTo500WebhookConfigError`. Cheap, prevents a regression where someone widens the retry filter to also retry 4xx (e.g. by predicating on `WebClientResponseException` without the 5xx guard)."
+    }
+  ]
+}

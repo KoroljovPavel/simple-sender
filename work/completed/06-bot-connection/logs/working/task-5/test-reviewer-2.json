@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "All 4 Round 1 findings are resolved cleanly and no regressions were introduced. (1) i18n labels are now pinned via text() assertions against the spy-returned keys — a hardcoded literal regression fails. (2) Symmetric /en General-active case added, mirroring the existing /en Bot-active case; a regex regression on either branch is caught. (3) bot.spec now asserts the rendered General href is /projects/p1/settings, so dropping the :project-id binding collapses the href and fails the test. (4) Component emits aria-current=\"page\" and tests assert it as the primary behavioural contract, with the Tailwind class kept only as a secondary CSS-regression signal — refactoring the class no longer forces a test rewrite. Bonus: localePathSpy assertion makes the useLocalePath dependency explicit and survives the identity-mock constraint documented in-file. Litmus test passes on every assertion. Pyramid balance unchanged (unit-only, appropriate for a presentational component). Reviewer confirms all 203 vitest tests pass.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 6,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

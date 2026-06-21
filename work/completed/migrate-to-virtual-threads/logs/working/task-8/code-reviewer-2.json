@@ -1,0 +1,23 @@
+{
+  "status": "approved",
+  "summary": "Round 2 of Task 8 cleanly closes the round-1 critical and all six minor findings. The sleepWithDeadline clamp is correct: pre-check guards already-past deadlines, Math.min(durationMs, remainingMs) prevents wall-clock overshoot, and the post-check still fires deterministically at the budget boundary — so the SHORT_OVERALL_TIMEOUT=3s + retry_after=120 scenario now elapses ~3s instead of ~30s. Javadoc/comment scrubs (Decision 2 wording in TelegramRateLimitException, plaintext-token lifetime in TelegramSender, empty-response-body sentinel) and the small stylistic cleanups (Optional<Bot> inlined, unused java.util.Optional import dropped) are correct and introduce no regressions.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 313,
+      "severity": "nitpick",
+      "category": "readability",
+      "suggestion": "There is a tiny TOCTOU window between checkDeadline (line 312) and Duration.between(Instant.now(), deadline) (line 313): if the VT is descheduled for >0ms in between, remainingMs can come back slightly negative. Today's code handles this correctly — Math.min(positiveDurationMs, negativeRemainingMs) yields a negative actualMs, the `if (actualMs > 0)` guard skips the sleep, and the post-check at line 323 throws the timeout exception. So the behavior is correct, but the intermediate negative value is mildly surprising to readers. A `Math.max(0L, ...)` clamp on remainingMs would make the invariant explicit without changing observable behavior:\n\n  long remainingMs = Math.max(0L, Duration.between(Instant.now(), deadline).toMillis());\n  long actualMs = Math.min(durationMs, remainingMs);\n\nStrictly cosmetic — no functional bug.",
+      "benefit": "Makes the invariant `0 ≤ remainingMs ≤ overallTimeout.toMillis()` explicit at the call site; one less mental step for the next reader.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 0,
+    "testCoverageAssessment": "adequate"
+  }
+}

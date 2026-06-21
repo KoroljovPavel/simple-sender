@@ -1,0 +1,115 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14, 15],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "structure",
+      "task": 12,
+      "section": "Verification Steps",
+      "issue": "`## Verification Steps` section is missing. Per validator checklist this section is mandatory for ALL tasks (including audit tasks). The audit task ships its own deliverable (the report), but the task still needs an explicit Verification Steps section that confirms the report was produced, opens, and contains the required structure (e.g. `test -f work/08-webhook-ingestion/logs/audits/code-audit.md` and grep-checks for Summary line).",
+      "fix": "Add `## Verification Steps` after `## Context Files` with at least an Automated subsection: e.g. `- test -f work/08-webhook-ingestion/logs/audits/code-audit.md` → file exists; `- grep -q '^## Summary' work/08-webhook-ingestion/logs/audits/code-audit.md` → Summary section present; `- grep -q 'GO\\|NO-GO' work/08-webhook-ingestion/logs/audits/code-audit.md` → verdict present."
+    },
+    {
+      "severity": "critical",
+      "category": "structure",
+      "task": 13,
+      "section": "Verification Steps",
+      "issue": "`## Verification Steps` section is missing. Per validator checklist this section is mandatory for ALL tasks. The security audit produces a report at `work/08-webhook-ingestion/logs/audits/security-audit.md` but there are no explicit verification steps to confirm the report file exists, covers all 12 scope items, and contains a Summary + verdict.",
+      "fix": "Add `## Verification Steps` with Automated subsection that verifies report file existence + structural completeness (file present, all 12 scope items addressed via grep on `# Finding\\|Verified`, Summary line present)."
+    },
+    {
+      "severity": "critical",
+      "category": "structure",
+      "task": 14,
+      "section": "Verification Steps",
+      "issue": "`## Verification Steps` section is missing. Per validator checklist this section is mandatory for ALL tasks. The test audit produces a report at `work/08-webhook-ingestion/logs/audits/test-audit.md` but there are no explicit verification steps.",
+      "fix": "Add `## Verification Steps` with Automated subsection verifying report file existence, AC→test mapping table presence (grep for `| AC1` ... `| AC19`), and Summary/verdict line present."
+    },
+    {
+      "severity": "critical",
+      "category": "structure",
+      "task": 15,
+      "section": "Verification Steps",
+      "issue": "`## Verification Steps` section is missing. Per validator checklist this section is mandatory for ALL tasks. T15 is a QA task — the `## What to do` block describes verification steps (test suite, mongosh indexes, manual curls) but they are NOT under a dedicated `## Verification Steps` heading; the validator/orchestrator expects the canonical section.",
+      "fix": "Extract verification commands from `## What to do` step 4-6 into a dedicated `## Verification Steps` section (Automated for `./gradlew test`, grep guards, mongosh inspection; Smoke for the curl probes). Keep `## What to do` for the procedural narrative."
+    },
+    {
+      "severity": "major",
+      "category": "content",
+      "task": 11,
+      "section": "Context Files",
+      "issue": "Mandatory context files `project.md` and `architecture.md` are not listed. Validator checklist marks these as critical-if-missing context. (Note: T10 has the same gap, suggesting a project convention — but per validator rules this is still a finding.)",
+      "fix": "Add `[project.md](../../../.claude/skills/project-knowledge/references/project.md)` and `[architecture.md](../../../.claude/skills/project-knowledge/references/architecture.md)` to the Context Files list."
+    },
+    {
+      "severity": "major",
+      "category": "content",
+      "task": 12,
+      "section": "Context Files",
+      "issue": "Mandatory context files `project.md`, `architecture.md`, and `patterns.md` are not listed in Context Files. A cross-component code audit needs these references to evaluate naming conventions, package layout, and adherence to patterns.",
+      "fix": "Add explicit links to project.md, architecture.md, and patterns.md from `.claude/skills/project-knowledge/references/`. patterns.md is especially relevant for naming/conventions audit."
+    },
+    {
+      "severity": "major",
+      "category": "content",
+      "task": 13,
+      "section": "Context Files",
+      "issue": "Mandatory context files `project.md`, `architecture.md`, and `patterns.md` are not listed. Security audit references `patterns.md` Token-scrubber sites (per tech-spec Risks subsection) but the file is not linked in Context.",
+      "fix": "Add links to project.md, architecture.md, and patterns.md from `.claude/skills/project-knowledge/references/`."
+    },
+    {
+      "severity": "major",
+      "category": "content",
+      "task": 14,
+      "section": "Context Files",
+      "issue": "Mandatory context files `project.md`, `architecture.md`, `patterns.md`, and `testing.md` (if present) are not listed. Test audit specifically needs testing conventions reference.",
+      "fix": "Add links to project.md, architecture.md, patterns.md from `.claude/skills/project-knowledge/references/`. If a project-level testing reference exists, link it too."
+    },
+    {
+      "severity": "major",
+      "category": "content",
+      "task": 15,
+      "section": "Context Files",
+      "issue": "Mandatory context files `project.md`, `architecture.md`, `patterns.md` are not listed. T15 also references `docs/staging-smoke/08-webhook-ingestion.md` which is produced in T8 — link is appropriate but worth noting the file may not exist at validation time (created during execution).",
+      "fix": "Add links to project.md, architecture.md, patterns.md from `.claude/skills/project-knowledge/references/`."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 13,
+      "section": "Required Skills",
+      "issue": "Skills frontmatter lists `security-auditor` which resolves to `.claude/agents/security-auditor.md` (an agent definition), not a skill (`SKILL.md` under `.claude/skills/`). The Required Skills section labels it as `/skill:security-auditor` and links to the agent file. This mixes the agent/skill abstraction. Other audit tasks (T12 uses `code-reviewing` skill, T14 uses `test-master` skill) both point to `SKILL.md` files. Verify whether `security-auditor` should be a skill or an agent invocation.",
+      "fix": "Either (a) ensure a `.claude/skills/security-auditor/SKILL.md` exists and link to it, OR (b) label the entry as `/agent:security-auditor` (or whatever the project convention is) to distinguish from skills. Currently the `/skill:` prefix is mis-applied to an agent."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor section is correctly absent for this non-code audit task (per template comment). No finding on absence — this is a confirmation note.",
+      "fix": "No action — confirming compliance."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "What to do",
+      "issue": "Step 3.3 in `## What to do` for the Content-Length=0 edge case is ambiguous: 'log a WARN in that subcase but still reject as \"missing Content-Length\" is the stricter contract; or pass through (decide and document).' The task hands the decision to the implementer rather than deciding upfront, and the Edge cases subsection later recommends pass-through. The two locations should agree before implementation starts.",
+      "fix": "Resolve the ambiguity in the spec: pick one (Edge cases recommendation says pass-through) and update step 3.3 to state the decision unambiguously."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 14,
+      "section": "Acceptance Criteria",
+      "issue": "AC list omits a check that the 12 scope items in `## Description` each receive a Verified-or-Finding entry — the AC says 'All 12 scope items have a Verified entry OR a Finding entry' which is good. However, there is no AC that the report includes the tech-spec AC mapping table (scope item #2 in Description). Minor — could be inferred but better explicit.",
+      "fix": "Add an AC line explicitly stating 'Tech-spec Acceptance Criteria mapping table (scope item #2) is present and covers every bullet in tech-spec § Acceptance Criteria.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 13
+  }
+}

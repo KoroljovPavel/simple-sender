@@ -1,0 +1,25 @@
+{
+  "summary": "Task 9 implementation cleanly translates all 5 auth pages (login, register, forgot-password, reset-password, verify-email) to t()-backed strings with the locale-reactive Zod pattern (computed(() => toTypedSchema(...)) passed AS-IS to useForm, never unref'd) consistent with Task 10's settled contract. useApiError() is correctly invoked at <script setup> top in the 3 files that use it (login, register, reset-password), and is intentionally absent in forgot-password (silent catch for email-enumeration protection) and verify-email (state-machine driven branching). All <NuxtLink> → <NuxtLinkLocale> migrations and navigateTo(localePath(...)) wraps are present. Cyrillic-grep on pages/auth/*.vue returns empty (no residual UA literals outside t() calls). Locale dictionaries (uk.json + en.json) contain every key referenced by the pages, and cooldown placeholder names ({seconds}) match the call sites. The verify-email t-shadow rename to rawToken is in place. The nuxt.config.ts VITEST conditional for detectBrowserLanguage is scoped strictly to the test runner with a clear justifying comment; production behavior is unchanged. The 5 spec files each gained exactly one identity-passthrough useLocalePath mock as authorized by AC18 / Decision 16; no test payloads, assertion strings, or names were altered.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "file": "frontend/pages/auth/forgot-password.vue",
+      "line": 8,
+      "severity": "minor",
+      "category": "task-spec-conformance",
+      "issue": "Task file Step 3 says 'Still inject useApiError() at the top of setup (per Decision 10) so the import is consistent across files' for forgot-password.vue, but Step 6 of the same task contradicts this with 'Add const apiError = useApiError() once at the top of setup (only in files that use it: login, register, reset-password).' The implementation followed Step 6 — useApiError is NOT injected in forgot-password.vue. Acceptance criteria AC11-AC13 do not enforce a 'consistency of imports' rule, only that catch blocks that previously hand-rolled HTTP→message mapping use apiError() (login/register/reset-password). The chosen approach is defensible (no dead-code import, no unused-binding lint), but the task file's own internal contradiction is worth surfacing in the post-completion notes / decisions.md so reviewers downstream don't flag it later.",
+      "impact": "None functional — purely code-style/spec-tracking. Forgot-password's silent catch is preserved as required for email-enumeration protection.",
+      "recommendation": "Either (a) add 'const _apiError = useApiError()' as a no-op consistency anchor (matches Step 3 literal text, but introduces an unused binding) OR (b) leave as-is and note in the task's post-completion section / decisions.md that the implementation followed Step 6 over Step 3 because the AC list does not require the unused injection. Option (b) is recommended."
+    },
+    {
+      "file": "frontend/composables/useApiError.ts",
+      "line": 34,
+      "severity": "minor",
+      "category": "error-handling",
+      "issue": "useApiError() returns an empty string '' when no key matches in the candidates chain (errors.<ctx>.<status> → errors.<ctx>.generic → errors.generic). For the three call sites in scope (login/register/resetPassword), the chain reliably hits at least errors.<ctx>.generic since both uk.json and en.json have it — so the empty-string branch is unreachable in practice from this task's pages. However, the cross-file contract is brittle: if a future contextKey is passed without backing locale entries, the user sees nothing in the submit-error <p>. Out of scope for Task 9 (composable created in Task 5), but flagging since reviewing pages exercise this path. Not a blocker.",
+      "impact": "No user-visible impact in this task's scope — only a contract surface concern for future call sites.",
+      "recommendation": "If touched in a follow-up, return a hardcoded last-resort fallback like 'Error' instead of '' so the <p v-if=\"submitError\"> always renders content when an error occurred. Out of scope for Task 9."
+    }
+  ],
+  "verdict": "OK"
+}

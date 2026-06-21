@@ -1,0 +1,110 @@
+{
+  "status": "needs_improvement",
+  "summary": "Strong test suite: all 11 TDD anchors are covered, plus a useful bonus test for non-404 error propagation. Security-critical invariants (URL contains no token substring, $state contains no TKN_UNIQ_MARK after connect, no localStorage writes) are asserted on real state and meaningful surfaces. Watcher transitions are correctly driven through the projects-store action surface (selectProject) per the task contract. However, four moderate gaps exist: (1) the 404 test starts with current=null so it cannot detect a regression where the handler skips `current.value = null`; (2) the in-flight dedup test verifies first-call uniqueness but never proves `inFlight` is reset (a missing-finally regression after success or after a 404 would pass silently); (3) the watcher mid-fetch staleness edge case from tech-spec is not exercised; (4) sendTestMessage mixes success+failure into one test, weakening isolation. None of these are critical — every existing assertion targets real behavior — but they reduce regression-catching power on paths the tech-spec explicitly calls out.",
+  "findings": [
+    {
+      "id": "f1",
+      "severity": "major",
+      "category": "anti_pattern",
+      "file": "frontend/tests/stores/bot.spec.ts",
+      "location": "frontend/tests/stores/bot.spec.ts:52-60",
+      "line": 52,
+      "description": "404 test cannot distinguish 'handler cleared current' from 'current was already null'. The store is fresh, so `store.current` is null before the fetch. Asserting `store.current).toBeNull()` after the rejection therefore passes even if the implementation forgets `current.value = null` inside the 404 branch — a regression-blind assertion against AC14.",
+      "issue": "Litmus test failure: if you delete `current.value = null` inside the 404 catch branch in stores/bot.ts, this test still passes because the initial state already matches the expected post-state.",
+      "litmusTestFailed": true,
+      "recommendation": "Pre-seed current before the 404 call so the clear is observable. Replace the test body with: `apiMock.mockResolvedValueOnce(BOT_A); const store = useBotStore(); await store.fetch('p1'); expect(store.current).toEqual(BOT_A); apiMock.mockRejectedValueOnce(fetchError(404, 'Not Found')); const result = await store.fetch('p2'); expect(result).toBeNull(); expect(store.current).toBeNull();`. This proves the 404 branch actively clears stale state — exactly what AC14 is asserting at the UX layer."
+    },
+    {
+      "id": "f2",
+      "severity": "major",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/bot.spec.ts",
+      "location": "frontend/tests/stores/bot.spec.ts:70-88",
+      "line": 70,
+      "description": "The dedup test verifies that concurrent calls share a single in-flight promise (apiMock.toHaveBeenCalledTimes(1)) but never verifies that `inFlight` is reset in the finally block. A regression that removed the `finally { inFlight = null }` would silently pass both the dedup test and every other test (because subsequent tests use a fresh store via beforeEach). It also does not verify the stronger identity invariant `resA === resB` (currently uses `.toEqual` only) — that would directly assert dedup returned the same promise reference.",
+      "issue": "Coverage gap: no assertion that subsequent fetch calls after a first-call resolution trigger a fresh apiMock invocation. The finally block in stores/bot.ts:26-28 is untested.",
+      "recommendation": "Add: `it('fetch resets inFlight after success so subsequent calls hit the API again', async () => { apiMock.mockResolvedValueOnce(BOT_A); const store = useBotStore(); await store.fetch('p1'); apiMock.mockResolvedValueOnce(BOT_A); await store.fetch('p1'); expect(apiMock).toHaveBeenCalledTimes(2); });` and a sibling test for the error path: `apiMock.mockRejectedValueOnce(fetchError(500)); await expect(store.fetch('p1')).rejects.toThrow(); apiMock.mockResolvedValueOnce(BOT_A); await store.fetch('p1'); expect(apiMock).toHaveBeenCalledTimes(2);`. Also tighten the existing dedup test by adding `expect(a).toBe(b)` (same promise reference) alongside the .toEqual assertions."
+    },
+    {
+      "id": "f3",
+      "severity": "major",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/bot.spec.ts",
+      "location": "frontend/tests/stores/bot.spec.ts:152-173",
+      "line": 152,
+      "description": "The 'project switch mid-fetch' edge case explicitly called out in tasks/7.md Edge Cases section is not tested. Tech-spec requires: when the watcher fires while a previous fetch is still pending, the older promise must not stomp `current` with stale data. The current watcher test refetches with a never-resolving mock, which prevents observing whether the FIRST fetch (project a's pending promise) would clobber current with project-a data after the project switched to b.",
+      "issue": "Coverage gap: the cross-project stale-write protection is not asserted. A bug where the still-pending fetch('a') resolves AFTER selectProject('b') and writes the old bot into `current` would not be caught.",
+      "recommendation": "Add a test that exercises the resolve-after-switch race: `it('pending fetch for old project does not stomp current after switch', async () => { let resolveA: (v: Bot) => void; apiMock.mockImplementationOnce(() => new Promise<Bot>(r => { resolveA = r })); const projectsStore = useProjectsStore(); projectsStore.selectProject('a'); const botStore = useBotStore(); const pending = botStore.fetch('a'); apiMock.mockImplementation(() => new Promise(() => {})); projectsStore.selectProject('b'); await nextTick(); resolveA!(BOT_A); await pending.catch(() => {}); expect(botStore.current).toBeNull(); });`. If the current implementation does NOT guard against this (it doesn't — there is no captured-projectId check in connect/fetch), this test will fail and surface a real bug or motivate the stronger-fix pattern referenced in tasks/7.md (capture projectId in the action, discard if stale)."
+    },
+    {
+      "id": "f4",
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "frontend/tests/stores/bot.spec.ts",
+      "location": "frontend/tests/stores/bot.spec.ts:137-150",
+      "line": 137,
+      "description": "sendTestMessage success and failure are merged into a single `it` block, violating the 'one concern per test' principle. If the success path breaks, the failure assertions never run; the test name reads as a conjunction.",
+      "issue": "Single test verifies two distinct paths (success path mutation-invariance, failure path mutation-invariance + propagation). Failure messages will be ambiguous.",
+      "recommendation": "Split into two tests: `it('sendTestMessage success does not mutate current', ...)` containing only the success block, and `it('sendTestMessage failure propagates rejection and does not mutate current', ...)` containing only the rejection block. Each can independently pre-seed `current` via `await store.fetch('p1')`."
+    },
+    {
+      "id": "f5",
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/bot.spec.ts",
+      "location": "frontend/tests/stores/bot.spec.ts:90-122",
+      "line": 90,
+      "description": "Token-hygiene assertions are good but do not cover the failure path. If `connect()` were ever changed to include the token in a re-thrown error or log it on failure, the only token-on-state-after-resolution test (line 104-112) would not catch it because it only inspects $state on success. The connect-failure test (line 114-122) asserts no current pollution but does not assert that the rejected Error does not contain TKN_UNIQ_MARK.",
+      "issue": "Coverage gap on the D17/AC17 security invariant for the error path.",
+      "recommendation": "Strengthen the failure test: after `await expect(store.connect('p1', TOKEN)).rejects.toThrow('boom')`, capture the thrown error via `const err = await store.connect('p1', TOKEN).catch(e => e)` and assert `expect(JSON.stringify(err)).not.toContain('TKN_UNIQ_MARK')` and `expect(err.message).not.toContain('TKN_UNIQ_MARK')`. Also assert `JSON.stringify(store.$state)` is token-free after a failed connect."
+    },
+    {
+      "id": "f6",
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/bot.spec.ts",
+      "location": "frontend/tests/stores/bot.spec.ts:124-135",
+      "line": 124,
+      "description": "The disconnect test verifies the success path, but does not verify the failure path. Tech-spec implies disconnect on failure should leave current intact (no mutation occurs because `await` throws before the `current.value = null` line), but this invariant is unasserted. A future refactor that pre-clears current optimistically before the API call would silently flip behavior.",
+      "issue": "Coverage gap: disconnect failure behavior is implementation-derived, not asserted.",
+      "recommendation": "Add: `it('disconnect failure does not mutate current', async () => { apiMock.mockResolvedValueOnce(BOT_A); const store = useBotStore(); await store.fetch('p1'); apiMock.mockRejectedValueOnce(new Error('boom')); await expect(store.disconnect('p1')).rejects.toThrow('boom'); expect(store.current).toEqual(BOT_A); });`. Cheap to add and locks in the documented behavior."
+    },
+    {
+      "id": "f7",
+      "severity": "minor",
+      "category": "missing_coverage",
+      "file": "frontend/tests/stores/bot.spec.ts",
+      "location": "frontend/tests/stores/bot.spec.ts:1-213",
+      "line": 1,
+      "description": "Bot type contract (frontend/types/bot.ts) has no compile-time or runtime test. The wire-format contract section in tasks/7.md is explicit that `status` must be lowercase `'connected' | 'disconnected'` — a contract that crosses three tasks. The BOT_A fixture uses 'connected' (line 18), which exercises the union, but no test asserts the union excludes uppercase. A type-level dts-test or a fixture that uppercased the value with `as BotStatus` cast would catch a casing-drift regression.",
+      "issue": "The cross-task casing invariant (user-spec AC1, Task 3 Jackson serialization, Task 8 controller assertion, Task 7 union) has no direct assertion in this test file.",
+      "recommendation": "Add a minimal type-discrimination test: `it('Bot.status accepts only lowercase wire values', () => { const lower: BotStatus = 'connected'; expect(lower).toBe('connected'); // @ts-expect-error uppercase rejected at compile-time const upper: BotStatus = 'CONNECTED'; void upper; });`. The `@ts-expect-error` directive turns a casing regression in types/bot.ts into a typecheck failure during the test build."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 12,
+      "passed": 11,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 12,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "tddAnchorCoverage": {
+      "total": 11,
+      "covered": 11,
+      "missing": []
+    },
+    "acceptanceCriteriaCoverage": {
+      "total": 10,
+      "directlyTested": 9,
+      "indirectlyTested": 1,
+      "missing": []
+    }
+  }
+}

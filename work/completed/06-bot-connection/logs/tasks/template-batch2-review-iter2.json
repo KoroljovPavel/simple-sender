@@ -1,0 +1,83 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [6, 7, 8, 9, 12],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "decomposition",
+      "task": 12,
+      "section": "Description / Context Files / Details",
+      "issue": "Task 12 still references the audited frontend spec as `frontend/tests/pages/projects/settings.spec.ts` (lines 29, 51, 70, 99), with an explicit comment on line 70: 'Task 9 extends this file rather than introducing a [projectId]/settings/bot.spec.ts path'. However, Task 9 actually creates a NEW file at `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` (Task 9 lines 43, 101, 121, 139) and never modifies `frontend/tests/pages/projects/settings.spec.ts`. Cross-task contract is broken: Task 12 will audit the wrong file (or a non-existent one) when executed. Not flagged in prior iterations.",
+      "fix": "Update Task 12 to reference `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` as the bot-spec audit target (replace all four occurrences). Remove or rewrite the line 70 comment that asserts the opposite convention. Or, if the intent really is to consolidate into `settings.spec.ts`, fix Task 9 instead — but the two tasks must agree."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 6,
+      "section": "Required Skills",
+      "issue": "Link label `skills/code-writing/SKILL.md` does not match the target path `../../../.claude/skills/code-writing/SKILL.md`. Carried over from batch2 iter1 finding — still unaddressed. Not load-bearing (link resolves), but stylistic/consistency.",
+      "fix": "Either match label to target (`[.claude/skills/code-writing/SKILL.md](...)`) or use a friendly label (`[code-writing skill](...)`). Apply the same fix to tasks 7, 8, 9, 12 (same pattern recurs)."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 7,
+      "section": "Required Skills",
+      "issue": "Same label/target mismatch as task 6 (`skills/code-writing/SKILL.md` vs `../../../.claude/skills/code-writing/SKILL.md`). Carried over from batch2 iter1.",
+      "fix": "Align label with target; one form per batch."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 8,
+      "section": "Required Skills",
+      "issue": "Same label/target mismatch as tasks 6 and 7. Carried over from batch2 iter1.",
+      "fix": "Align label with target; one form per batch."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 9,
+      "section": "Required Skills",
+      "issue": "Same label/target mismatch as tasks 6, 7, 8. Carried over from batch2 iter1.",
+      "fix": "Align label with target; one form per batch."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 12,
+      "section": "Required Skills",
+      "issue": "Link label `test-master/SKILL.md` does not match target `../../../.claude/skills/test-master/SKILL.md` (same pattern as the code-writing tasks).",
+      "fix": "Align label with target (`[.claude/skills/test-master/SKILL.md](...)` or `[test-master skill](...)`)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Verification Steps → Automated",
+      "issue": "Carried over from batch3 iter1 (was task-12 finding): wording 'should reveal any sleep usage' describes an expectation, not an executable pass/fail. The file-existence check `test -f work/06-bot-connection/logs/working/task-12/test-audit-report.md` is now added (line 83), which addresses half of the prior finding, but the two `grep` steps are still framed as 'should reveal' rather than asserting an exit-code expectation.",
+      "fix": "Reword the two grep steps to executable assertions: e.g. `grep -rn 'Thread.sleep' backend/src/test/java/com/botfunnel/bot ... | tee /tmp/sleep-hits.txt` and instruct the auditor to enumerate hits in the report. Or leave the wording but mark these as informational, not pass/fail."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 7,
+    "criticals_resolved_from_prior_iteration": 3,
+    "majors_resolved_from_prior_iteration": 1,
+    "minors_resolved_from_prior_iteration": 5,
+    "new_findings_this_iteration": 1
+  },
+  "carry_forward_verification": {
+    "task_6_AC10_AC20_AC23": "fixed — AC10 (line 74), AC20 (line 80), AC23 (line 81) now explicit with TDD-anchor refs",
+    "task_7_PK_references_segment": "fixed — lines 157-159 now use `../../../.claude/skills/project-knowledge/references/...`",
+    "task_7_reviewer_path_style": "fixed — lines 272-274 now use absolute paths consistent with tasks 6/8/9",
+    "task_8_AC23_metadata_shape": "fixed — line 110 now explicit on `bot_connected` keys (`projectId`, `telegramBotId`, `ip`, `userAgent`, `telegramUsername`) + token-regex negative + `bot_disconnected` with `webhookDeleted`",
+    "task_9_PK_references_segment": "fixed — lines 92-93, 96-97 now use `references/` subdir",
+    "task_9_AC21_carry_forward": "fixed — line 72 now explicit AC21 integration bullet",
+    "task_9_context_files_markdown_links": "fixed — lines 100-113 all use `[name](path)` form",
+    "task_12_PK_references_prefix": "fixed — lines 60-62 now use `../../../.claude/skills/project-knowledge/references/...`",
+    "task_12_skill_link_prefix": "fixed — line 16 now uses `../../../.claude/skills/test-master/SKILL.md`"
+  }
+}

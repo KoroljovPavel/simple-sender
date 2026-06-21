@@ -1,0 +1,95 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 6 cleanly implements logout, forgot-password, and reset-password against the WebFlux + spring-session-data-mongodb stack. The terminate-all-sessions risk area (sessions collection field path) is verified at runtime by a dedicated IT, BCrypt is correctly pinned to boundedElastic, and anti-enumeration semantics are preserved end-to-end. Two issues warrant attention before sign-off: (1) the forgot-password anti-enumeration branch persists raw user-supplied emails into the events collection metadata, which itself becomes an enumeration oracle for anyone with read access to events, and (2) reset-password does not gate on user status, so a token issued just before account deletion can still be used to rotate the password.",
+  "critical": [],
+  "major": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 256,
+      "problem": "The forgot-password unknown/deleted-email branch logs the raw email into the events collection (`Map.of(\"email\", email)`), while the known-user branch logs metadata=null. Anyone with read access to the events collection (ops, future admin UI, ad-hoc Mongo query) can now enumerate which emails were tried but are NOT registered (or are deleted) — the log becomes the very oracle the response shape is designed to prevent. It is also a PII record of arbitrary user input that may not have any account on the platform.",
+      "suggestion": "Drop the email field from the metadata map in the unknown/deleted branch (use `null` like the known-user branch). If an attempted-email signal is needed for analytics, store SHA-256(email) instead, matching the token-storage convention in Decision 2."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 289,
+      "problem": "resetPassword performs `findByPasswordResetTokenHash(hash)` and only checks `passwordResetExpiresAt` and `passwordResetUsedAt` — it never checks `user.getStatus()`. If a user with a still-valid reset token transitions to `deleted` (soft-delete), or is `blocked` by an admin, the reset still succeeds: passwordHash is rotated, all sessions are terminated, and the deleted/blocked account remains 'updatable'. The login path correctly returns 401 for deleted and 403 for blocked, but the reset path silently bypasses the status gate.",
+      "suggestion": "After the expiry/usedAt checks, add an explicit `if (user.getStatus() == UserStatus.deleted || user.getStatus() == UserStatus.blocked) return Mono.error(AppException.badRequest(INVALID_RESET_LINK));` so the response stays uniform with the other invalid-token branches and no enumeration leak is introduced. Add an IT seeding a deleted/blocked user with a valid reset token to lock this in."
+    }
+  ],
+  "minor": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 234,
+      "problem": "logout calls `exchange.getSession()` unconditionally — this CREATES a new empty WebSession (and typically a new sessions document via spring-session-data-mongodb) just to invalidate it when there was no prior session. The IT `logout_endpoint_returns200` exercises this path. Functionally harmless but wasteful and pollutes the sessions collection on every unauthenticated logout call.",
+      "suggestion": "Guard with `exchange.getSession().filter(WebSession::isStarted).flatMap(WebSession::invalidate)` (or check `getSession().getAttributes()` non-empty) so logout becomes a true no-op when there is no real session to invalidate."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 251,
+      "problem": "The `Optional` wrapping (`map(Optional::of).defaultIfEmpty(Optional.empty()).flatMap(...)`) reads as a workaround for a `switchIfEmpty` corner case but the inline comment justifies it without showing the failing alternative. Fully-qualified `java.util.Optional` references inside a flatMap reduce readability versus a top-of-file import.",
+      "suggestion": "Either (a) add `import java.util.Optional;` and drop the FQN, or (b) refactor to two `Mono` branches via `userRepository.findByEmail(email).flatMap(handleKnown).switchIfEmpty(handleUnknown)` after extracting `handleKnown(user)` to a method that filters out the deleted case. Either makes the anti-enumeration branching obvious."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 267,
+      "problem": "Reset email dispatch and event logging both happen inside the same `doOnSuccess` after `userRepository.save`. If `sendPasswordResetEmail` throws, the catch swallows it and `logEvent` still fires — fine — but the audit event is misleading because it asserts the user was emailed. Symmetric to the registration path's identical pattern, just calling out the divergence between 'sent' and 'logged-as-sent'.",
+      "suggestion": "Either log a separate `password_reset_email_failed` metadata key when the catch fires, or rename the event metadata to `email_dispatched: true|false` so the audit trail is honest. Optional — non-blocking but reduces incident-response ambiguity later."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 333,
+      "problem": "`terminateAllSessions` returns `Mono<Long>` (deleted count) but the caller in `rotatePasswordAndTerminateSessions` passes the value into a `doOnSuccess(deleted -> ...)` that never reads `deleted`. The return type is dead information.",
+      "suggestion": "Either (a) log `deleted` in the `password_changed` event metadata for audit (`Map.of(\"sessionsTerminated\", deleted)`), or (b) change the method to `Mono<Void>` so the API matches the consumption site. Logging the count would also help future incident response distinguish 'reset on account with no active sessions' from 'reset on account with N sessions'."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 241,
+      "problem": "User-spec line 60 says reset email is sent 'якщо акаунт з таким email існує' (whatever the status, except deleted). The current implementation correctly excludes `deleted` but happily emails `blocked` users — which then hit a 403 wall on subsequent login. From a UX/abuse-vector standpoint, sending a reset email to a blocked user wastes SMTP budget and gives an attacker who guessed a now-blocked email a free signal that it exists (timing/SMTP queue inspection in MITM scenarios).",
+      "suggestion": "Mirror the deleted-user treatment for blocked users: log anonymous event, do not save token, do not dispatch email. Consider also extending the integration test matrix with a `forgotPassword_blockedUser_doesNotEmail` IT."
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "line": 337,
+      "problem": "`logout_endpoint_returns200` is a pure smoke test; the TDD-anchor `logout_invalidatesCurrentSession_otherSessionUnaffected` from the task is explicitly skipped at the IT layer because of WebTestClient cookie-propagation limitations (well documented in comments). The unit-test compensator in `AuthServicePasswordResetTest.logout_invalidatesCurrentWebSession_returnsCompletes` only verifies that `WebSession.invalidate()` is called — it cannot prove that other sessions for the same principal remain in MongoDB. The independent `logout_secondLoginCreatesIndependentSessionsDocument` test verifies multi-session creation but not the post-logout state.",
+      "suggestion": "Add one IT that (1) seeds two sessions directly via `reactiveMongoTemplate.save(...)` into the `sessions` collection with the same `principal`, (2) drives logout for one session id via direct WebSession manipulation or `MongoIndexedSessionRepository.deleteById(id)` from the test, then (3) asserts `count(principal=userId) == 1`. This is the literal acceptance criterion."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 305,
+      "problem": "`rotatePasswordAndTerminateSessions` is a multi-step pipeline (encode → save → terminate sessions → log event). If `terminateAllSessions` fails (Mongo unavailable), the password rotation has already been persisted but the user's old sessions remain valid — the most security-sensitive step (revoking compromised sessions) is exactly the one that becomes a no-op. There is no compensating action and no log line.",
+      "suggestion": "At minimum, wrap the terminate-all step with `.doOnError(err -> log.error(\"Sessions terminate failed AFTER password rotation for user {}: {}\", userId, err.getMessage()))` so an operator can manually purge the affected user's sessions. Optional: surface a 500 instead of returning 200 in this scenario, since the security guarantee is partially violated."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 68,
+      "problem": "`INVALID_RESET_LINK` is the same Ukrainian string for blank-token, unknown-hash, expired, and already-used cases. Good for anti-enumeration, but a logged audit event distinguishing the four cases (in metadata, never in the response) would help detect token-replay attempts vs. lost-link-clicked-too-late.",
+      "suggestion": "Add `eventService.logEvent(null, EVENT_PASSWORD_RESET_FAILED, ip, userAgent, Map.of(\"reason\", \"expired\"|\"used\"|\"unknown\"|\"blank\"))` in each error branch. Symmetric to `login_failed.reason` already implemented in this file."
+    }
+  ],
+  "nitpicks": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/dto/ForgotPasswordRequest.java",
+      "line": 9,
+      "problem": "`@NotBlank` + `@Email` on a single field is fine, but consider also `@Size(max=254)` (RFC 5321 maximum) to bound payload size and prevent oversized inputs from reaching the SHA-256 / Mongo find paths.",
+      "suggestion": "Add `@Size(max=254)` to align with the email format spec and harden against junk payloads. Apply same to other email-bearing DTOs for consistency."
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 252,
+      "problem": "Inline `java.util.Optional::of` cast — see related minor on line 251. Fully-qualified usage is one of two stylistic warts in an otherwise consistent file.",
+      "suggestion": "Add the import; minor stylistic clean-up."
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "line": 53,
+      "problem": "`TOKEN_PATTERN = Pattern.compile(\"token=([A-Za-z0-9_\\\\-]+)\")` is duplicated across this IT and the test-side TokenService usage. Not a defect, but extracting to a shared constant in a test utility avoids regex drift if the token URL format ever changes.",
+      "suggestion": "Move `TOKEN_PATTERN` to a `TestTokenExtractor` helper if other ITs in later tasks need to extract verify/reset tokens from emails. Optional."
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java",
+      "line": 96,
+      "problem": "Two tests use `org.mockito.Mockito.mock(...)` inline rather than `@Mock` field injection used elsewhere in the file. Style inconsistency only.",
+      "suggestion": "Either lift the WebSession + ServerWebExchange mocks to `@Mock` fields, or accept the inline form as deliberate (these are throw-away mocks scoped to one test). Cosmetic."
+    }
+  ]
+}

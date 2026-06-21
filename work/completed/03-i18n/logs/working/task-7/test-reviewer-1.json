@@ -1,0 +1,35 @@
+{
+  "summary": "All 10 TDD-anchor cases from task 7 are present in frontend/tests/middleware/auth.global.spec.ts and exercise the locale-aware refactor of auth.global. Mocks of useRouteBaseName / useLocalePath correctly model the @nuxtjs/i18n v9 contract (composable returns a function), localePathMock per-test impls realistically simulate uk (identity) vs en (prefixing), fail-closed cases would catch a boolean-swap regression, and the en-locale assertions would fail if someone bypassed localePath with a bare path. Test isolation is handled in beforeEach (mocks reset, fresh pinia, useState reset, localePathMock impl restored to identity). Litmus test passes for every case — removing the relevant branch in middleware breaks the corresponding assertion.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/middleware/auth.global.spec.ts:36-43 (unauthenticated_publicAuthRouteByName_passesThrough)",
+      "issue": "Test only asserts navigateToMock not called. Does not verify hydration was attempted (apiMock call) nor that localePath was NOT used. A regression where middleware short-circuits before calling fetchUser would still pass this test, even though the hydration semantics are part of the same handler.",
+      "recommendation": "Add `expect(apiMock).toHaveBeenCalledWith('/api/auth/me')` to confirm that for an unauthenticated user the hydration attempt occurs (matches pattern used in the hydration test). Optional: also `expect(localePathMock).not.toHaveBeenCalled()` to lock in the passthrough contract."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/middleware/auth.global.spec.ts:56-67 (unauthenticated_protectedRouteByName_redirectsToLocaleLogin_en) and 81-91 (authenticated_publicAuthRouteByName_redirectsToLocaleDashboard_en)",
+      "issue": "The en-locale impls use a conditional that returns `path` for any non-matching input. If a future regression passes the wrong literal to localePath (e.g. '/login' instead of '/auth/login'), the conditional silently returns '/login' and the navigateTo assertion would fail — but the failure message would be confusing (looks like a navigateTo bug, not a localePath-arg bug). The authenticated_en case in particular omits an explicit `expect(localePathMock).toHaveBeenCalledWith('/dashboard')` assertion that the uk-counterpart has on line 76.",
+      "recommendation": "Mirror the uk-side pattern in both en cases: add `expect(localePathMock).toHaveBeenCalledWith('/auth/login')` (line 67 area) and `expect(localePathMock).toHaveBeenCalledWith('/dashboard')` (line 90 area). This pinpoints the root cause when a regression sends a wrong path to localePath."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/middleware/auth.global.spec.ts:122-129 (backendError_protectedRouteByName_redirectsToLogin) and 103-111 (failClosed_undefinedBaseName_unauthenticated_redirectsToLogin)",
+      "issue": "Both tests rely on the default identity localePathMock impl restored in beforeEach. They assert `navigateToMock.toHaveBeenCalledWith('/auth/login')` but do not assert `localePathMock` was called. If someone removes the `localePath(...)` wrapper around navigateTo for the login redirect, the test would still pass under uk (identity makes it indistinguishable). The en-variant of the protected redirect (line 56-67) catches this for the unauthed-on-protected branch, but the fail-closed and backend-error branches have no en-coverage and rely solely on the identity impl.",
+      "recommendation": "Add `expect(localePathMock).toHaveBeenCalledWith('/auth/login')` to both tests (line 110, line 128). This guards the localePath wrapping invariant for the fail-closed and 500-error branches even without adding a new en-variant test."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/middleware/auth.global.spec.ts:131-139 (unauthenticatedWithValidSession_publicAuthRouteByName_hydratesAndRedirectsToDashboard)",
+      "issue": "Hydration test asserts navigateTo was called with '/dashboard' but does not assert `localePathMock.toHaveBeenCalledWith('/dashboard')`. As with the previous finding, this branch is uk-only — a missing localePath wrapper for the post-hydration authed-on-public-auth-route redirect would not be detected.",
+      "recommendation": "Add `expect(localePathMock).toHaveBeenCalledWith('/dashboard')` after line 138. Optionally add an en-variant to symmetrically lock in the locale wrapping for the hydration path."
+    }
+  ],
+  "verdict": "OK"
+}

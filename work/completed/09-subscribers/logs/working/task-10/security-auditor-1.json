@@ -1,0 +1,31 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A03: Injection",
+      "title": "Tag slug interpolated into DELETE URL path without encoding or client-side validation",
+      "description": "In SubscriberTagsTab.removeTag(slug) the slug is interpolated directly into the request path: `/api/v1/projects/${projectId}/subscribers/${subscriberId}/tags/${slug}` with no encodeURIComponent() and no SLUG_RE check (unlike addTag, which validates `candidate` against /^[a-z0-9_-]{1,32}$/ before POSTing). The slug source here is `props.tags`, which is server-supplied data already constrained by the backend to /^[a-z0-9_-]{1,32}$/ (TagAssignRequest / CreateTagRequest @Pattern), so in practice every stored slug is URL-safe and the request can never break out of the path segment or inject query/fragment characters. This is therefore a defense-in-depth gap rather than an exploitable injection: the frontend relies implicitly on a backend invariant that lives in a separate module. The export-filter summary and table tag chips render the same slugs through Vue `{{ }}` interpolation (auto-escaped), so there is no XSS path even if a malformed slug were ever returned.",
+      "location": "frontend/components/subscribers/SubscriberTagsTab.vue:54-56",
+      "impact": "None today (slugs are backend-constrained URL-safe). If a future backend change ever relaxed the slug charset, an un-encoded slug containing '/', '?' or '#' could alter the request path/query. Low likelihood, low impact given backend ownership enforcement and the @Pattern guard.",
+      "recommendation": "Wrap the slug in encodeURIComponent() in the DELETE call for symmetry with addTag and to make the component self-contained: `.../tags/${encodeURIComponent(slug)}`. Optionally guard removeTag with the same SLUG_RE used by canAdd.",
+      "cwe": "CWE-20"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Error objects logged to console may include the outbound request URL/body",
+      "description": "Several catch blocks log the raw error object: console.warn('[subscribers] ...', err) in the store, SubscriberCustomFieldsTab, SubscriberTagsTab, SubscriberHistoryTab, SubscribersFilterBar, and the profile page. ofetch error objects can carry request.options.body and the URL. None of the bodies handled in this task are secrets or credentials (message text, tag slugs, custom-field values, segment filters), so this does not violate the patterns.md:182 secret-redaction rule (which applies to stores accepting tokens such as botStore.connect). Custom-field values can be arbitrary PII, but these logs are client-side console only (production builds disable Vue devtools; console output is the user's own browser). Flagging for completeness since the consolidated report should record that PII-bearing custom-field values transit through console.warn on error.",
+      "location": "frontend/components/subscribers/SubscriberCustomFieldsTab.vue:35,61 ; frontend/components/subscribers/SubscriberTagsTab.vue:29,44,60 ; frontend/stores/subscribers.ts (page-level .catch in index.vue:21,25,31)",
+      "impact": "Minimal: client-side console only, no secrets involved. Custom-field values (potential PII) could surface in a user's own browser console on request failure. No server-side log exposure and no third-party leak.",
+      "recommendation": "Acceptable as-is for this trust context. If tightening is desired, log only err?.message / err?.statusCode rather than the full error object in the custom-fields catch block. No action required to ship.",
+      "cwe": "CWE-209"
+    }
+  ]
+}

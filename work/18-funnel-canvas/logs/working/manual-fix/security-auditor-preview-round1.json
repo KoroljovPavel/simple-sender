@@ -1,0 +1,28 @@
+{
+  "reviewer": "security-auditor",
+  "scope": "manual-fix-card-preview",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Test name promises data: URL coverage but only tests javascript: payload",
+      "description": "The test 'a media block with a javascript:/data: url does NOT become an <img src> (icon fallback)' tests only a javascript:alert(1) URL. No test case passes an actual data:image/... or data:text/html payload to previewThumbUrl. The guard itself (HTTP_URL_RE = /^https?:\\/\\//i) correctly rejects data: URLs because they lack the http(s):// prefix, so the production code is sound. However the test's label implies coverage that is not present — a future maintainer may incorrectly believe data: is exercised.",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:730",
+      "impact": "No security impact — the allowlist regex rejects data: correctly. The gap is in test coverage confidence only.",
+      "recommendation": "Add a second parameterized assertion inside the same test (or a dedicated case) with mediaUrl: 'data:image/png;base64,abc' to make the test match its declared scope.",
+      "cwe": null
+    }
+  ],
+  "summary": {
+    "totalFindings": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1,
+    "v_html_assessment": "CLEAN — zero v-html directives in FunnelCanvasNode.vue or FunnelCanvas.client.vue. All user-controlled fields (message text, caption, button labels, note text) are rendered exclusively via {{ }} Vue template interpolation, which HTML-escapes the output. Comments in-code and a dedicated XSS test confirm the convention.",
+    "media_src_assessment": "SOUND — previewThumbUrl is gated by a strict allowlist regex (HTTP_URL_RE = /^https?:\\/\\//i). The guard rejects javascript:, data:, file://, and opaque Telegram file_id tokens (no scheme). The validated URL is bound only to <img :src>; it is NOT propagated to :href, :style, innerHTML, or any other sink. referrerpolicy='no-referrer' is set on the img element. The ALBUM path (block.items[0].mediaUrl) passes through the same isHttpUrl() gate before being stored in previewThumbUrl.",
+    "injection_test_assessment": "LOAD-BEARING and correct — the test at line 701 injects '<img src=x onerror=alert(1)>' into text, caption, and callback button label simultaneously. It asserts: (1) no real <img onerror> element present; (2) &lt;img is present (entity-encoded proof); (3) exactly one real <img> with data-test='funnel-canvas-preview-thumb'. This covers the primary stored-XSS vector. The javascript: scheme test at line 730 verifies src-less fallback. The single gap is no explicit data: URL assertion (minor, not a blocker).",
+    "url_button_assessment": "SAFE — URL buttons (type='url') are rendered as display-only <span> chips. The btn.url field is never read or bound in FunnelCanvasNode.vue; only btn.label is used via truncate() inside {{ }} interpolation. No :href or other URL sink is present."
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "round": 2,
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "notes": [
+    {
+      "category": "A03-XSS",
+      "topic": "New escaping test correctly pins the XSS-escape contract",
+      "detail": "previewSetKeyboardEscapesTextPerParseMode (FunnelControllerIT.java:32-60 of diff) is a faithful mirror of the proven message-branch previewEscapesHostilePayload (FunnelControllerIT.java:756). It seeds firstName='<script>alert(1)</script>', sends keyboardText='<b>{user.first_name}</b>' with keyboardParseMode=HTML, and asserts (1) the rendered text is '<b>&lt;script&gt;alert(1)&lt;/script&gt;</b>' (positive escape assertion identical to the message branch) and (2) the raw response body doesNotContain('<script>') (defense-in-depth negative assertion). This directly exercises FunnelService.renderTextBlock (line 451-455), which threads request.keyboardParseMode() into VariableTemplateRenderer.render(text, parseMode, subscriber) — the exact same escaping call shape as renderBlocks. The test would fail if the keyboard path ever dropped the parseMode argument (the documented regression it guards). The round-1 minor note 'XSS-escape AC for the keyboard branch left unpinned by tests' is now CLOSED."
+    },
+    {
+      "category": "A03-XSS / input-handling",
+      "topic": "Round-1 minor notes status",
+      "detail": "Round 1 raised 2 minor, non-exploitable notes. Note A (keyboard-branch XSS escaping relied on the shared renderer but had no dedicated test pinning it) is now RESOLVED by previewSetKeyboardEscapesTextPerParseMode. The complementary new cases reinforce the security posture: previewSetKeyboardUnlinkedBotUsesStubSubscriber confirms the stub fallback (no NPE/500 on unlinked bot — the same predictable-state hardening as the message branch), and previewSetKeyboardLabelAtCapNotTruncated pins the clamp boundary (label of exactly MAX_KEYBOARD_BUTTON_TEXT=64 is not truncated; truncation is strictly >, line 491). The clamp itself remains the unbounded-payload defense and is unchanged from round 1."
+    },
+    {
+      "category": "no-change-verification",
+      "topic": "FunnelService.java diff is doc-comment-only",
+      "detail": "The only production-code file in the diff (FunnelService.java) changes the clampKeyboardLabels Javadoc (lines 458-469) — expanding the null-vs-empty rationale. Verified against the current file: clampKeyboardLabels body (lines 470-498), renderTextBlock (451-455), the keyboard branch in previewStep (428-441), and the anti-IDOR ordering (requireFunnel first, line 408) are byte-for-byte unchanged. No behavior change, therefore no new attack surface."
+    },
+    {
+      "category": "mandatory-checks",
+      "topic": "OWASP / secrets sweep on the changes",
+      "detail": "Reviewed all mandatory categories against the diff: no hardcoded secrets (test fixtures use synthetic firstName payloads, no credentials); A01 access control / anti-IDOR ordering unchanged; A03 injection/XSS hardened (above); no SSRF (keyboard branch dereferences no URLs — labels and text are rendered/echoed, never fetched); no insecure deserialization introduced; @JsonIgnoreProperties mass-assignment defense on PreviewStepRequest untouched; no identity fields added to the response (keyboardRows carries verbatim labels only — clampKeyboardLabels strips nothing but length). No new dependencies. Backend default lane: FunnelControllerIT BUILD SUCCESSFUL (all preview cases green)."
+    }
+  ]
+}

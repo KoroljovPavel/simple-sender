@@ -1,0 +1,60 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-addnode",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "category": "architecture",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 297,
+      "title": "onCanvasTriggers bypasses stepReady gate",
+      "detail": "onCanvasTriggers calls void persist() directly instead of persistSteps(). Since persist() sends the full-replace PATCH that includes steps.value, a canvas trigger edit that fires while an incomplete step exists will 422 with funnel_step_invalid. The fix correctly guarded onCanvasSteps, onCanvasNotes, and onNodeDragStop, and also extended the deep-watch debounce (scheduleTriggerPersist) — but onCanvasTriggers (line 299) still calls persist() unconditionally. Canvas trigger edits come from the canvas side-panel (edge connect / trigger node move), which are discrete events like step edits, so they should go through persistSteps() for the same reason the note handler does. This is not a data-loss risk (the save just 422s and saveError appears), but it is an inconsistency with the stated goal and the comment on line 303-305 that explicitly justifies gating notes for exactly this reason.",
+      "recommendation": "Change onCanvasTriggers to call persistSteps() instead of void persist(), or — if trigger canvas events can never race an incomplete step node (e.g. they are gated higher up in FunnelCanvas) — add a code comment documenting why this path is exempt, mirroring the rationale already written for onCanvasNotes."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "category": "architecture",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 369,
+      "title": "activate() uses unconditional persist() — correct, but could interact with withhold gate",
+      "detail": "activate() flushes pending edits via await persist() before calling funnelsStore.activate(). persist() is unconditional (no stepReady gate), which is correct: activate must surface any incomplete-step 422 so the author gets actionable feedback rather than a silent withheld state. This is intentionally NOT the same as persistSteps(). The design is sound. Noting for explicitness: a funnel with an incomplete step that the author tries to activate WILL attempt a full PATCH, get a 422 funnel_step_invalid from the backend on the persist() call, and surface it via saveError — the activateError branch is skipped because persist() returns false. The 422 surfaces correctly, just through saveError not activateError. This is acceptable behavior (the author sees the inline error), but it is a subtle UX difference from what the user expects on an Activate click.",
+      "recommendation": "Consider documenting in the activate() comment why persist() is used here and not persistSteps() — the current comment mentions 'flush pending edits' but does not say 'intentionally bypasses the stepReady gate to let the server surface the real 422'. This is a documentation note only, not a code change."
+    }
+  ],
+  "stepReadyVsServerContract": {
+    "verdict": "no_mismatch",
+    "detail": "Each case in stepReady() was traced against the backend requireXxx/validateXxx helpers in FunnelService.validateSteps. All required-field checks are correctly mirrored:\n\n  MESSAGE: client checks blocks.length>=1 and per-block TEXT non-blank / media mediaUrl non-blank / ALBUM items>=2+mediaUrl. Server: validateMessage → blocks non-null/non-empty → validateBlock → TEXT.isBlank() reject / IMAGE+VIDEO+AUDIO+FILE mediaUrl required / ALBUM items>=2+mediaUrl required. MATCH.\n\n  DELAY: client checks delayValue!=null && >=1 && !!delayUnit. Server: requireDelay checks delayValue<1 AND unit in {MIN,HOUR,DAY}. Client correctly requires delayUnit truthy. A blank/null unit or an invalid unit string (not MIN/HOUR/DAY) are blocked at the client; the client does not enumerate unit values so a non-empty but wrong unit (e.g. 'SEC') would pass the client gate but be rejected by server. This is an intentional non-exhaustive gate (the comment says 'this gate only mirrors required-FIELD presence') and is acceptable — the server stays the validator for enumeration. No false-positive/false-negative risk for the targeted scenario (freshly-added node has no delayUnit set at all).\n\n  ADD_TAG / REMOVE_TAG: client checks tagSlug via TAG_SLUG_RE = /^[a-z0-9_-]{1,32}$/. Server: requireTagSlug uses TAG_SLUG_PATTERN = /^[a-z0-9_-]{1,32}$/. EXACT match.\n\n  SET_CUSTOM_FIELD: client checks customFieldKey non-blank. Server: requireCustomFieldKey checks isBlank(). MATCH.\n\n  EMIT_EVENT: client checks eventName via EVENT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/. Server: EVENT_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/. EXACT match.\n\n  SUBSCRIBE_TO_FUNNEL: client checks targetFunnelId non-blank. Server: resolveSubscribeTarget checks isBlank(). MATCH. (The DB-resolve and targetEntryStepId checks are server-only, as documented.)\n\n  SET_KEYBOARD: client checks keyboardText non-blank AND keyboardRows.length>=1. Server: requireKeyboardText (isBlank) + rows non-null/non-empty. MATCH. (Client does not validate per-button text or dup detection — intentional, server stays validator for shape.)\n\n  CLEAR_KEYBOARD: client checks keyboardText non-blank. Server: requireKeyboardText (isBlank). MATCH.\n\n  Unknown/default: client returns false (withholds). Server rejects UNKNOWN type. SAFE — false-negative is impossible (no new type exists), and if a new type were added server-side the client default:false would correctly withhold until the client is updated."
+  },
+  "savePaths": {
+    "verdict": "all_gated_except_onCanvasTriggers",
+    "paths": [
+      { "path": "onCanvasSteps", "gated": true, "via": "persistSteps()" },
+      { "path": "onCanvasNotes", "gated": true, "via": "persistSteps()" },
+      { "path": "onNodeDragStop", "gated": true, "via": "persistSteps()" },
+      { "path": "scheduleTriggerPersist (deep watch)", "gated": true, "via": "steps.value.every(stepReady) check at line 360" },
+      { "path": "onCanvasTriggers", "gated": false, "note": "Calls persist() directly; flagged as F1 (minor, not a data-loss risk — 422 surfaces via saveError)" },
+      { "path": "activate()", "gated": false, "note": "Intentionally bypasses gate to surface server 422; correct by design" }
+    ]
+  },
+  "afterFillPersistence": {
+    "verdict": "correct",
+    "detail": "Once the author fills required fields, the next canvas emit (update:steps) passes stepReady for every step, persistSteps() calls persist(), the PATCH succeeds, applyResponse() re-reads the server response (which mints the id via new ObjectId().toHexString() in toSteps), and steps.value is updated with the minted id. FunnelCanvas receives the updated :steps prop with a non-null id, making the node a wireable edge target. The test at line 855 of the spec file (PATCHes once new MESSAGE step is filled…) validates this round-trip end-to-end."
+  },
+  "activateGate": {
+    "verdict": "correct",
+    "detail": "activate() calls await persist() unconditionally (not persistSteps()), so it will always attempt the PATCH and surface any server-side 422 — including funnel_step_invalid on an incomplete step. The fix does not mask genuine activation validation. Note (F2 above): the 422 appears in saveError, not activateError, which is a minor UX subtlety but not a bug."
+  },
+  "reactivity": {
+    "verdict": "no_issues",
+    "detail": "All array reassignments use immutable patterns (steps.value = next; map/spread). No direct prop mutation detected. The applyingResponse guard correctly suppresses the re-entrancy loop. The timer is cleared in onBeforeUnmount. SSR-safety is preserved via *.client.vue + ClientOnly wrapper (no window access on SSR path)."
+  },
+  "silentDataLoss": {
+    "verdict": "no_risk",
+    "detail": "The withhold-while-incomplete design can theoretically cause a valid node move (onNodeDragStop on a valid node) to be suppressed if a concurrent incomplete node exists. However: (a) position is kept in local model regardless (line 331-332 sets steps.value before the persistSteps() call), so the position is not lost from the client state; (b) the next save that does fire (once the incomplete node is filled) will carry the updated position in the full-replace PATCH. This is the same trade-off as the triggerReady gate. No already-valid data is silently lost — it is deferred, not dropped."
+  },
+  "summary": "The fix correctly introduces a stepReady() gate that mirrors the backend validateSteps required-field contract for all 8 step types. No mismatch found between client gate and server validation for the targeted scenario (freshly-added incomplete node). All principal save paths (onCanvasSteps, onCanvasNotes, onNodeDragStop, trigger debounce) are gated. One minor inconsistency: onCanvasTriggers still calls persist() directly (F1), which can cause a 422 saveError when a trigger canvas event fires while an incomplete step exists — not a data-loss risk, but inconsistent with the stated design. activate() correctly bypasses the gate to surface server 422. No reactivity bug, no re-entrancy regression, no SSR regression, no silent data loss. Verdict: PASS with two minor findings."
+}

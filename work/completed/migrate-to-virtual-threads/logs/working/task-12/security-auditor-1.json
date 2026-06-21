@@ -1,0 +1,97 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  },
+  "scope": {
+    "commit": "ab2c51858b725e6cde376083db007742967f54e3",
+    "task": "work/migrate-to-virtual-threads/tasks/12.md",
+    "files_audited": [
+      "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+      "backend/src/test/java/com/botfunnel/security/SecurityConfigTest.java"
+    ],
+    "production_code_changed": false,
+    "owasp_top_10_2021_coverage": "Full sweep against test-only diff. No injection / SSRF / deserialization / auth-bypass / secrets-leak vectors introduced. Findings below are about whether the asserted invariants adequately enforce the security contract the user-spec / tech-spec promise, not about new vulnerabilities."
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A04 Insecure Design / best-practice",
+      "title": "AC18 SESSION cookie attribute assertions follow configuration rather than enforce a security floor",
+      "description": "assertCookieAttributesMatchConfig in AuthControllerIT reads @Value-bound configured values (cfgCookieHttpOnly, cfgCookieSecure, cfgCookieSameSite) and asserts the SESSION Set-Cookie attributes match the *current* configured values. The defaults in application.properties resolve to httpOnly=true, secure=${SESSION_COOKIE_SECURE:false}, same-site=${SESSION_COOKIE_SAME_SITE:lax} — and the test profile (backend/src/test/resources/application-test.properties) does not override them. Because the assertion adapts to whatever the env says, a future operator change (e.g. accidentally unsetting SESSION_COOKIE_SECURE in prod-like profile, or setting same-site=None) would NOT fail this test. AC18 in the user-spec (line 65) and tech-spec line 451 framed AC18 as a remember-me cookie *security* assertion (Max-Age, HttpOnly, Secure, SameSite). What is asserted today is 'serializer faithfully propagates configured values' — useful for regression of RememberMeCookieSerializer wiring, but does NOT enforce a security floor.",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:66-79, 680-696",
+      "impact": "A misconfiguration that silently relaxes SESSION cookie hardening in a production-like profile (e.g. Secure=false on HTTPS, SameSite=None without Secure) would pass this test and would only be caught by manual review of application.properties / env vars. No active vulnerability — the current prod defaults are already weak by design (SESSION_COOKIE_SECURE defaults to false, SESSION_COOKIE_SAME_SITE defaults to lax) because the project documents the production hosting as TBD. This finding flags the gap between 'asserted invariant' and 'security floor', not a present-day exploit.",
+      "recommendation": "Either (a) accept the documented deviation — task 12 spec explicitly endorses the env-bound approach (lines 79-83 of tasks/12.md: 'read the configured value via @Value... and assert against it') — and add a follow-up AC in a separate task to assert a 'production profile security floor' (e.g. an @ActiveProfiles(\"prod-like\") IT that overrides SESSION_COOKIE_SECURE=true + SESSION_COOKIE_SAME_SITE=strict and asserts cookies enforce those literally); or (b) add a parallel assertCookieFloor() helper called only by a single profile-gated test that hard-codes Secure=true, HttpOnly=true, SameSite!=none. Either way: surface as a Task 15 (full-feature security audit) input rather than a Task 12 blocker.",
+      "cwe": "CWE-614 (Sensitive Cookie Without Secure Attribute), CWE-1004 (Sensitive Cookie Without HttpOnly Flag)"
+    },
+    {
+      "severity": "minor",
+      "category": "A04 Insecure Design / best-practice",
+      "title": "AC18 rememberMe=true Max-Age assertion has no upper bound",
+      "description": "login_rememberMeTrue_setsAllSessionCookieAttributes_andCoEmitsXsrfToken computes expectedMaxAge = cfgRememberMeDays * 86400L and asserts equality. cfgRememberMeDays is bound via @Value(\"${app.session.ttl-remember-me-days:30}\"). If a future operator misconfigures app.session.ttl-remember-me-days (or SESSION_TTL_REMEMBER_ME_DAYS env var) to, e.g., 3650 (10 years), this test would still pass — there is no assertion that the Max-Age is BOUNDED by a sensible upper limit. AC18 in the tech-spec asserts the contract 'Max-Age=rememberMeDays*86400' literally, not 'rememberMeDays is bounded' — so this is not a spec violation, but it is a missed defence-in-depth opportunity for a security-sensitive cookie lifetime.",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:617-619",
+      "impact": "An unbounded rememberMe cookie lifetime increases exposure window for stolen cookies. Not a current-day exploit — the default of 30 days is reasonable — but the test would not catch a regression to a much longer lifetime.",
+      "recommendation": "Add a sanity assertion alongside the equality check, e.g. assertThat(cfgRememberMeDays).isLessThanOrEqualTo(60) — a soft cap that fails CI if anyone bumps the default beyond two months without explicit review. This is a one-liner and stays within Task 12 scope. If the project intentionally supports longer-lived remember-me, the cap can be raised with explicit reviewer sign-off.",
+      "cwe": "CWE-613 (Insufficient Session Expiration)"
+    },
+    {
+      "severity": "minor",
+      "category": "A05 Security Misconfiguration / best-practice",
+      "title": "TC11 coverage by csrfCookie_writtenOnSafeVerbRequest does not assert XSRF-TOKEN cookie security attributes",
+      "description": "The deviation in login_rememberMeTrue_... defers TC11 (XSRF-TOKEN co-emission) to SecurityConfigTest.csrfCookie_writtenOnSafeVerbRequest (line 64). That test asserts the XSRF-TOKEN cookie exists and has a non-blank value on a safe-verb GET to /health — sufficient to prove the CsrfCookieMaterializer filter writes the cookie. However, the security invariants the XSRF-TOKEN cookie must satisfy for the SPA double-submit pattern to work are: (a) HttpOnly=false (so JS can read it), (b) Path=/ or compatible, (c) SameSite compatible with API origin, (d) Secure attribute consistent with the SESSION cookie's hardening profile. None of these are asserted. CookieCsrfTokenRepository.withHttpOnlyFalse() in SecurityConfig.java line 67 is the only thing guaranteeing HttpOnly=false today — a regression to plain withHttpOnly(true) (or accidental return type change) would not be caught.",
+      "location": "backend/src/test/java/com/botfunnel/security/SecurityConfigTest.java:63-75; SecurityConfig.java:67 (production wiring under test)",
+      "impact": "If a future refactor of SecurityConfig.csrf() accidentally drops the .withHttpOnlyFalse() wrapper, the SPA's CSRF-token round-trip breaks AND no test fails. The break would manifest as a runtime 403 on POSTs, but a CI-time signal is cheaper and matches the security-auditor's role of catching missing assertions.",
+      "recommendation": "Strengthen csrfCookie_writtenOnSafeVerbRequest with assertThat(xsrf.isHttpOnly()).as(\"SPA double-submit requires JS-readable token\").isFalse(); assertThat(xsrf.getPath()).isNotNull(); — both are one-liners, both lock the security contract that AC18 / TC11 imply. This is a strengthening of an existing test, not a new test method, so it stays compatible with the Task 12 deviation note in decisions.md.",
+      "cwe": "CWE-352 (Cross-Site Request Forgery)"
+    },
+    {
+      "severity": "minor",
+      "category": "A09 Security Logging and Monitoring / best-practice",
+      "title": "parseSetCookie helper accepts malformed Set-Cookie headers without validation (informational)",
+      "description": "parseSetCookie at AuthControllerIT.java:719 is permissive — header.split(\";\") and parts[0].split(\"=\", 2) tolerate edge inputs like missing '=' (treated as empty value), empty segments (skipped), or duplicate attribute keys (later overwrites earlier in LinkedHashMap). This is acceptable for a test helper consuming server-generated headers, but the helper's defensiveness means a future SESSION cookie regression that emits a malformed Set-Cookie (e.g. trailing ';' with empty SameSite due to a config null) might be silently parsed as 'attribute present, value empty' rather than raising an assertion failure. parseSetCookieHeaderFor at line 709 uses header.startsWith(cookieName + \"=\") which would also match a cookie name that is a prefix of another (e.g. \"SESSION\" would match a hypothetical \"SESSIONALT\") — not currently exploitable because Spring Session emits exactly one SESSION cookie, but worth noting.",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:709-732",
+      "impact": "Test-only helper. Worst case: a malformed Set-Cookie regression in the server slips through Task 12's AC18 tests because the parser absorbed the malformation. Not an exploitable runtime issue.",
+      "recommendation": "Optional: tighten parseSetCookieHeaderFor's prefix check to header.startsWith(cookieName + \"=\") AND ensure no '=' before cookieName in the same header. Optional: have parseSetCookie reject duplicate attribute keys with an AssertionError — that would surface a Set-Cookie regression as a clear test failure rather than a silent overwrite. Both are quality-of-implementation polish; neither is required for AC18 acceptance.",
+      "cwe": "CWE-20 (Improper Input Validation, informational scope)"
+    },
+    {
+      "severity": "minor",
+      "category": "A07 Identification and Authentication Failures / best-practice",
+      "title": "Session-continuity test relies on the test's own login round-trip without re-verifying session-fixation guard",
+      "description": "changePassword_sessionContinuity_principalLookupTerminatesOtherSessions performs a real POST /api/auth/login + cookie capture, then issues POST /api/profile/change-password with the captured SESSION cookie, then asserts the same SESSION cookie's session id survives in the sessions collection. This is the intended assertion (b) of AC16. However, it ALSO implicitly assumes the change-password handler does NOT rotate the SESSION id of the acting session — which is a desirable session-fixation defence-in-depth on a sensitive operation. The test does not assert WHICH behaviour is in effect: it asserts the acting session id survives, which would fail if a session-rotation guard were ever introduced. If a future change adds session rotation on change-password (a CWE-384 mitigation), this AC16 (b) assertion would break and would have to be revised — the test pins 'no rotation' as the contract.",
+      "location": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java:283-329",
+      "impact": "Locks an authentication-flow design decision (no session-id rotation on change-password) into a test without any companion comment explaining the security trade-off. A future security improvement (session-id rotation post-change-password) would surface as a 'test breakage' rather than a feature toggle. The current behaviour is consistent with the existing terminate-all-sessions-except-current pattern in ProfileService — terminating other sessions IS the chosen credential-rotation mitigation, which is acceptable — but the test should make the deliberate omission of id-rotation visible.",
+      "recommendation": "Add a one-line comment above the (b) assertion noting that 'the current contract terminates *other* sessions but does NOT rotate the acting session id; if a future change introduces session-id rotation as a CWE-384 defence, this assertion needs to flip to assert a NEW session-id is issued and the OLD one is invalidated.' Pure documentation — no behavioural change. Surfaces the security trade-off for future maintainers and for Task 15 (full security audit).",
+      "cwe": "CWE-384 (Session Fixation, defence-in-depth note)"
+    }
+  ],
+  "owasp_top_10_2021_findings_by_category": {
+    "A01_Broken_Access_Control": "No findings. AC16 cross-user invariant (sessions for principal != acting user must survive) is correctly asserted at ProfileControllerIT.java:319-324. No new endpoints / RBAC code introduced.",
+    "A02_Cryptographic_Failures": "No findings. No cryptographic code touched. BCryptPasswordEncoder unchanged in SecurityConfig.",
+    "A03_Injection": "No findings. All Mongo queries use Criteria builder (parameterized). No raw query strings. JSON payloads built via Map.of + ObjectMapper (no string concatenation).",
+    "A04_Insecure_Design": "Two minor findings (AC18 cookie attribute floor, rememberMe upper bound) — see findings 1 and 2 above. Both are gaps in what the tests *enforce*, not active design flaws.",
+    "A05_Security_Misconfiguration": "One minor finding (XSRF-TOKEN attribute assertions) — see finding 3 above. CSRF + CORS + cookie wiring in SecurityConfig.java is sound; tests just don't fully pin its security attributes.",
+    "A06_Vulnerable_Components": "No findings. No new dependencies added (per task 12 AC: 'No new dependencies added to backend/build.gradle'). Existing spring-security-test, spring-boot-starter-test, hamcrest, AssertJ, jakarta.servlet covers the additions.",
+    "A07_Auth_Failures": "One minor finding (session-fixation note on change-password) — see finding 5 above. Test credentials are test-only fixtures ('Strong1Pass', 'NewStr0ngPass') and do not leak via logs (Spring Test default does not echo request bodies).",
+    "A08_Software_Data_Integrity": "No findings. AC16 BSON fixture uses minimal Document with only top-level scalar fields (_id, principal, created, expireAt) — no SPRING_SECURITY_CONTEXT BSON Binary fabricated. No insecure deserialization surface introduced (per task 12 spec edge-case note: 'Populate principal + _id + created + expireAt only; leave attributes empty or omit'). CI pipeline integrity unchanged.",
+    "A09_Security_Logging_and_Monitoring": "One informational finding (parseSetCookie permissiveness) — see finding 4 above. Test code does not introduce any new audit-log emission or suppression in production code.",
+    "A10_SSRF": "Not applicable. No URL handling or outbound HTTP introduced. RememberMeCookieSerializer / SecurityConfig / GlobalErrorHandler — none take user-controlled URLs."
+  },
+  "hardcoded_secrets_scan": {
+    "result": "clean",
+    "notes": "Test fixtures use plaintext literals 'Strong1Pass' / 'NewStr0ngPass' / 'test-admin-password' (already in application-test.properties) — these are documented test-only values, not production credentials. No real API keys, tokens, or connection strings introduced. All Mongo / Redis URIs in application-test.properties are localhost defaults."
+  },
+  "invariant_coverage_assessment": {
+    "AC16_session_continuity": "Adequately asserted. Three-way invariant (sibling session deleted, current session survives, other-user session untouched) is explicit at ProfileControllerIT.java:313-324. Real-login round-trip approach correctly avoids the MockHttpSession-id-not-honored gotcha documented in the test's own comment.",
+    "AC16_pre_flip_BSON_fixture": "Adequately asserted. Minimal Document shape correctly exercises the post-flip MongoIndexedSessionRepository's principal-keyed query path without coupling to SecurityContext byte-shape (per tech-spec R5 + task 12 edge-case guidance).",
+    "AC17_validation_400_shape": "Adequately asserted. The regex ^email: .+(, .+: .+)*$ correctly pins the joiner shape for security-relevant body structure (no leakage of unexpected fields, code:null guaranteed) while remaining locale-tolerant — matches the task spec intent. Not a security weakening.",
+    "AC18_SESSION_cookie_attributes": "Adequately asserted for regression of RememberMeCookieSerializer's PropertyMapper wiring, but does NOT enforce a security floor — see finding 1. The deviation is documented and spec-endorsed; flag for Task 15.",
+    "AC18_rememberMe_Max_Age": "Adequately asserted that Max-Age matches configured value; no upper-bound sanity check — see finding 2.",
+    "TC5_bean_type": "Adequately asserted. assertThat(cookieSerializer).isInstanceOf(RememberMeCookieSerializer.class) is the correct contract.",
+    "TC11_XSRF_co_emission": "Deferred to SecurityConfigTest.csrfCookie_writtenOnSafeVerbRequest. The deferral is structurally necessary and well-explained in the test comments. The existing test proves the cookie is materialized but does not lock its security attributes — see finding 3."
+  }
+}

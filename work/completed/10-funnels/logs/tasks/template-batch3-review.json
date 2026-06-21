@@ -1,0 +1,35 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 12,
+      "section": "Context Files",
+      "issue": "Three project-knowledge links use a broken relative path. The file sits at work/10-funnels/tasks/12-security-audit.md, so references to .claude/ must be prefixed with ../../../. The current paths — `.claude/skills/project-knowledge/references/project.md`, `.claude/skills/project-knowledge/references/architecture.md`, `.claude/skills/project-knowledge/references/patterns.md` — resolve to non-existent locations. Tasks 11, 13, and 14 all use `../../../.claude/skills/...` correctly.",
+      "fix": "Replace `.claude/skills/project-knowledge/references/project.md` → `../../../.claude/skills/project-knowledge/references/project.md`, and apply the same `../../../` prefix to architecture.md and patterns.md entries."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 12,
+      "section": "Required Skills",
+      "issue": "The Required Skills skill path also uses `.claude/skills/security-auditor/SKILL.md` without the `../../../` prefix. Tasks 11 and 14 use the correct relative path `../../../.claude/skills/...`.",
+      "fix": "Change `[.claude/skills/security-auditor/SKILL.md](.claude/skills/security-auditor/SKILL.md)` to `[.claude/skills/security-auditor/SKILL.md](../../../.claude/skills/security-auditor/SKILL.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 13,
+      "section": "Required Skills",
+      "issue": "The Required Skills skill path uses `.claude/skills/test-master/SKILL.md` without the `../../../` prefix. The link name and display text include the path but the href is relative to a wrong base.",
+      "fix": "Change the href to `../../../.claude/skills/test-master/SKILL.md` to match the pattern used in tasks 11 and 14."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 4,
+    "issues_found": 3
+  }
+}

@@ -1,0 +1,512 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-05-16 00:00:00"
+  last_updated: "2026-05-16 00:05:00"
+  status: "completed"
+  can_resume: false
+  current_question_num: 5
+  feature_size: "L"  # bumped from M during round-1 quality validation: 20 ACs + 8 new files + SecurityConfig edit + Micrometer dep introduction + 16 tech decisions
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-05-16 00:01:00"
+    topic: "scope_confirm + success_criteria + testing_strategy + local_dev"
+    agent_question: |
+      Batch 1 (4 питання):
+      Q1. Розмір і scope confirmation: 1 controller, raw_updates entity+repo, JobRunr job, 2 stub-сервіси (Subscriber/Funnel) з інтерфейсами, парсер /start /stop, SecurityConfig edit, метрики. Baseline з notes.md (idempotency через (projectId, updateId), TTL 90 днів, 401 на bad secret, 404 на soft-deleted) прийняти?
+      Q2. User problem / success: до 04b сервіс не ловить /start → Epic 05/06 не стартує. Також 04b дописує Bot.ownerChatId при першому /start → закриває staging-smoke 04c.
+      Q3. Testing strategy: unit (парсер, idempotency, secret-hash), integration (@SpringBootTest + real Mongo) повний контур + raw_updates insert + JobRunr job + events + idempotency + 401/404 + ownerChatId populate, E2E staging-smoke через ngrok + BotFather, race-test на (projectId, updateId).
+      Q4. Local dev: без polling-режиму, ngrok інструкція в docs/staging-smoke/.
+    user_answer: |
+      рухаємось з цим, success ок, тести ок, без polling
+    summary: "User confirms baseline scope, success formula (unlocks 05/06 + closes 04c smoke), testing matrix, no polling."
+  - question_num: 2
+    timestamp: "2026-05-16 00:02:00"
+    topic: "constraints: payload_size + concurrency + DLQ + metrics"
+    agent_question: |
+      Batch 2 (4 питання):
+      Q5. Webhook payload size limit: явний 1 MB через ServerCodecConfigurer (default 256KB). 413 при перевищенні.
+      Q6. Worker concurrency + per-chat ordering: лишаємо JobRunr default concurrency, БЕЗ per-chat ordering в 04b. Документуємо як known compromise, ordering deferred до Epic 05/06.
+      Q7. DLQ: A — JobRunr Failed queue (built-in) + raw_updates.processingStatus={pending|done|failed} + raw_updates.processingError. Без окремої колекції.
+      Q8. Metrics: mini-набір — telegram_webhook_received_total{projectId}, telegram_webhook_duration_seconds, telegram_webhook_rejected_total{reason}. Без Prometheus exporter тут (Epic 09).
+    user_answer: |
+      Q5 ok
+      Q6 згоден
+      Q7 A
+      Q8 згоден
+    summary: "Payload 1MB cap, default JobRunr concurrency w/o per-chat ordering (deferred to 05/06), DLQ via processingStatus + JobRunr Failed queue, 3 micrometer counters only."
+  - question_num: 3
+    timestamp: "2026-05-16 00:03:00"
+    topic: "post-code-research: Micrometer dep, ownerChatId rule, edge cases, verification/deploy"
+    agent_question: |
+      Batch 3 (4 питання):
+      Q9. Micrometer dependency (А — io.micrometer:micrometer-core, B — actuator, C — log counters). Recommend A.
+      Q10. ownerChatId trigger rule: first private-chat /start to a CONNECTED bot with ownerChatId IS NULL wins. Atomic findAndModify. Accept threat model (fast attacker race) without UI mitigations.
+      Q11. Edge cases в worker: (1) non-message updates (callback_query, edited_message) → silent ignore + event telegram_update_other; (2) /start в group/supergroup → write event БЕЗ populate ownerChatId, БЕЗ Subscriber upsert; (3) невідома команда /foo → event telegram_message_received only; (4) звичайний текст → Subscriber upsert + event ТІЛЬКИ для private chats.
+      Q12. Verification/staging-smoke + deploy + manual actions: docs/staging-smoke/08-webhook-ingestion.md з ngrok+BotFather; CI/CD як попередні; zero manual user actions для 04b сам по собі (юзер просто пише /start боту після 04a Connect).
+    user_answer: |
+      Q9 A, Q10 згоден без mitigations, Q11 всі 4 ок, Q12 згоден
+    summary: "Micrometer A (micrometer-core only); ownerChatId first-private-/start-wins, accepted threat; edge cases all 4 rules confirmed (private-only Subscriber upsert); staging-smoke ngrok+BotFather, CI/CD, zero manual actions."
+  - question_num: 4
+    timestamp: "2026-05-16 00:04:00"
+    topic: "completeness gaps: inbound DTO shape, worker threading, update_id monotonicity"
+    agent_question: |
+      Batch 4 (3 питання — закриваємо completeness-checker gaps):
+      Q13. Inbound Telegram DTO: A — типізований record TelegramUpdate(...) зі snake_case-полями (mirror TelegramResult/TelegramUser precedent); B — raw Map<String,Object>; C — гібрид. Recommend A.
+      Q14. Worker threading: ProcessTelegramUpdateJob.handle() слідує precedent HardDeleteJob/ProjectHardDeleteJob — реактивні методи через .block() усередині worker body (JobRunr thread, не Netty event-loop)?
+      Q15. update_id monotonicity: Telegram гарантує per-bot Long-ове монотонне зростання → unique index (projectId, updateId) достатній. Приймаємо як fact без додаткових перевірок.
+    user_answer: |
+      Q13 A, Q14 так, Q15 приймаємо
+    summary: "Typed TelegramUpdate record with snake_case fields (mirror existing TelegramResult precedent); worker uses .block() per HardDeleteJob precedent; update_id monotonicity accepted as Telegram-guaranteed."
+  - question_num: 5
+    timestamp: "2026-05-16 00:05:00"
+    topic: "post-validation: actuator vs micrometer-core reconsideration"
+    agent_question: |
+      Post-validation question: user asked "може заведемо весь актуатор?" — reconsidering option B (full spring-boot-starter-actuator) vs current A (micrometer-core only). Trade-offs presented: actuator pulls /actuator/health migration from Epic 01 (scope creep), needs security config for endpoints, deferred per patterns.md ("Full Actuator deferred to monitoring epic"). Recommended A (status quo).
+    user_answer: |
+      давай A
+    summary: "Confirmed option A (micrometer-core only). Full actuator/Prometheus exporter remains Epic 09 scope."
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "08-webhook-ingestion"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 95
+    status: "complete"
+    value: "Інфраструктурний шар прийому Telegram webhooks. POST /webhooks/telegram/{projectId} з secret-token-перевіркою, swift persisting raw update у MongoDB, async обробка через JobRunr-worker з заглушками інтеграційних точок у Epic 05 (Subscriber) і 06 (Funnel). Парсинг команд /start (з payload) і /stop. Idempotency через unique index (projectId, updateId). TTL 90 днів. Останній з 3 під-епіків 04. Також 04b дописує Bot.ownerChatId при першому /start власника — закриває production observability для 04c sendTestMessage."
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: "Без 04b сервіс не може ловити жодного вхідного повідомлення → Epic 05 (Subscribers, auto-registration через /start) і Epic 06 (Funnels, trigger on /start) фізично не запускаються. Також 04c TelegramSender має невидиму в production happy-path галузь (sendTestMessage стопориться у 422-стабі поки Bot.ownerChatId=null) — 04b закриває цей gap, заповнюючи ownerChatId при першому /start власника бота."
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 70
+    status: "complete"
+    value: "Прямих UI-користувачів немає (це інфра-шар). Непрямі: (1) End-subscriber, що пише боту → стає Subscriber у проекті; (2) Project owner, який після підключення бота 04a очікує побачити субʼєктів у CRM (Epic 05) і запуск воронок (Epic 06); (3) Operator/dev під час тестування — staging-smoke runbook для 04b."
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 85
+    status: "complete"
+    value: "1. POST /webhooks/telegram/{projectId} з валідним secret token → 200 OK за <100ms P99. 2. Той самий (projectId, update_id) двічі → один запис у raw_updates, один job, один event. 3. Bad/missing secret → 401 без тіла. 4. Soft-deleted/відсутній projectId → 404. 5. /start від власника бота → Bot.ownerChatId записався. 6. /start ref_X → events.metadata.startPayload=ref_X. 7. /stop → виклик заглушок markUnsubscribed + cancelActiveFor (verifiable через interaction). 8. JobRunr job ставиться в чергу і виконується (не падає). 9. TTL 90 днів на raw_updates встановлено."
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 95
+    status: "complete"
+    value: "P99 <100ms response SLA. HTTPS-only (Telegram requires). ngrok для local dev. SecurityConfig: /webhooks/telegram/** permitAll ПЕРЕД /api/**, CSRF disabled тільки для webhook. Integration tests з real Mongo (Testcontainers, як 04a/04c). Payload max 1 MB через ServerCodecConfigurer; 413 на overflow. JobRunr default concurrency без per-chat ordering — known compromise, ordering deferred до Epic 05/06. DLQ через JobRunr Failed queue + raw_updates.processingStatus={pending|done|failed} + raw_updates.processingError. Metrics: 3 micrometer counters (telegram_webhook_received_total{projectId}, telegram_webhook_duration_seconds, telegram_webhook_rejected_total{reason}). MVP: 1-on-1 DM only — без груп/каналів/inline_query/payment."
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: "Unit: парсер команд (`/start ref_123`, `/start`, `/stop`, edge cases), idempotency-логіка, secret-hash compare. Integration (@SpringBootTest + RANDOM_PORT + WebTestClient + real embedded MongoDB через Testcontainers як у 04a/04c): повний контур POST → 200 + raw_updates insert + JobRunr enqueue + stub services interaction (verify via Mockito spies) + events write; idempotency (дубль update_id); 401 без тіла; 404 для soft-deleted; ownerChatId populate; CSRF/SecurityConfig path order. Race: 2 паралельні POST з тим самим (projectId, updateId) → один запис (per patterns.md adapted). Без MockWebServer — outgoing Telegram API не дзвонимо. E2E staging-smoke: ngrok + BotFather throwaway bot → docs/staging-smoke/08-webhook-ingestion.md."
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 90
+    status: "complete"
+    value: |
+      Story 1 (Telegram → Service): Subscriber пише `/start` боту. Telegram POST-ить update на /webhooks/telegram/{projectId}. Service за <100ms відповідає 200 OK, raw update збережений, JobRunr-job у черзі.
+      Story 2 (Worker → Stubs): JobRunr забирає job, парсить `/start [ref_123]`, викликає `SubscriberService.upsertFromTelegramUpdate` (no-op у 04b), `FunnelTriggerService.fire("on_start", "ref_123")` (no-op), пише event telegram_command_start з metadata.startPayload="ref_123".
+      Story 3 (Owner self-attach): Project owner після Connect-bot пише `/start` зі свого Telegram. Worker детектує (private-chat /start + ownerChatId IS NULL + CONNECTED) → атомарно populate Bot.ownerChatId. У UI на Settings → Bot тепер "Send test message" реально щось пише в Telegram.
+      Story 4 (Idempotency): Telegram повторно надсилає той самий update_id (бо наш 200 затримався). Service за <100ms знов відповідає 200 OK, але raw_updates лишається з одним документом, новий job НЕ ставиться, event НЕ дублюється.
+      Story 5 (Unsubscribe): Subscriber пише `/stop`. Worker викликає no-op stubs (markUnsubscribed + cancelActiveFor), пише event telegram_command_stop.
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 95
+    status: "complete"
+    value: |
+      AC1. POST /webhooks/telegram/{projectId} з валідним SHA-256-hashed secret token → 200 OK за <100ms P99 (load-test проти Testcontainer Mongo, 100 sequential POSTs).
+      AC2. Bad/missing X-Telegram-Bot-Api-Secret-Token → 401, БЕЗ тіла (ResponseEntity.status(401).build()).
+      AC3. Неіснуючий / soft-deleted / без CONNECTED-бота projectId → 404 (uniform anti-enumeration, без тіла або з generic shape).
+      AC4. Payload > 1 MB → 413 Payload Too Large.
+      AC5. Той самий (projectId, update_id) двічі (parallel або послідовно) → один документ у raw_updates, один JobRunr job, один event. Race-test: 2 паралельні POST → status pair {200, 200}, exactly 1 row, exactly 1 enqueued job.
+      AC6. /start від власника у private-chat коли Bot.ownerChatId IS NULL → ownerChatId записаний атомарно (findAndModify); другий /start від іншого користувача → ownerChatId НЕ перезаписується.
+      AC7. /start ref_X у private-chat → events.metadata.startPayload="ref_X"; виклик SubscriberService.upsertFromTelegramUpdate + FunnelTriggerService.fire("on_start", "ref_X") (заглушки).
+      AC8. /stop у private-chat → виклик заглушок markUnsubscribed + cancelActiveFor; event telegram_command_stop.
+      AC9. Будь-який /start у group/supergroup/channel (chat.type != "private") → event записаний, АЛЕ ownerChatId НЕ populate-иться, Subscriber stub НЕ викликається.
+      AC10. Звичайний текст у private-chat → SubscriberService.upsertFromTelegramUpdate stub + event telegram_message_received. У не-private — лише event, без upsert.
+      AC11. Non-message update (callback_query, edited_message тощо) → silent ignore: raw_update збережений, event telegram_update_other, без виклику stubs.
+      AC12. Невідома команда (/foo bar) → event telegram_message_received тільки, без stubs.
+      AC13. raw_updates.createdAt має TTL index 90 днів (MongoDB native, не cleanup-job).
+      AC14. Worker exception → raw_updates.processingStatus="failed" + raw_updates.processingError записаний; JobRunr Failed queue ловить через built-in retry; після N retries — лог + admin може redrive вручну через JobRunr dashboard (deferred enable у Epic 09/10).
+      AC15. SecurityConfig: pathMatchers("/webhooks/telegram/**").permitAll() ПЕРЕД /api/**.authenticated(); CSRF disabled через requireCsrfProtectionMatcher exclusion (НЕ глобальний disable). Тест: /api/** все ще вимагає авторизацію.
+      AC16. 3 micrometer counters написані: telegram_webhook_received_total{projectId}, telegram_webhook_duration_seconds, telegram_webhook_rejected_total{reason=invalid_secret|project_not_found|duplicate|payload_too_large}.
+      AC17. Bot.ownerChatId не індексований; додавання поля БЕЗ Mongo migration (nullable wrapper, legacy docs читаються як null).
+      AC18. Token-scrubber застосовується до всіх лог-сайтів у webhook handler + worker (повторне використання TelegramApiClient.scrubTokens).
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 90
+    status: "complete"
+    value: |
+      1. Telegram retry duplicate update_id → idempotency (AC5).
+      2. Non-message updates (callback_query, edited_message, my_chat_member, etc.) → silent ignore (AC11).
+      3. /start у group → подія записана, але ownerChatId не populate (AC9).
+      4. /start@botname (Telegram suffixes в груп-чатах) → парсер strip-ає @botname.
+      5. /start без payload → payload="" в events.metadata (не null).
+      6. /start з multi-word payload (/start ref_a b c) → payload — все після першого whitespace, trimmed.
+      7. message.from відсутнє (рідко, для channel posts) → safe-навігація (Optional / null-check), event telegram_update_other.
+      8. message.chat.type не "private" — group/supergroup/channel — обмежений процессінг (AC9, AC10).
+      9. Two concurrent /start від двох різних users у private-chat, ownerChatId IS NULL → findAndModify атомарно вибере одного. Threat model: швидкий атакер може race-нути; accepted.
+      10. Bot DISCONNECTED після того, як webhook вже зареєстрований у Telegram (delete order: Telegram deleteWebhook → Mongo erase secret). Якщо update прийшов після erase secret → bot не CONNECTED → 404.
+      11. Malformed projectId (не ObjectId hex) → onErrorMap IllegalArgumentException → 404 (uniform anti-enumeration).
+      12. JobRunr storage Mongo вниз при enqueue → 500 (рідкісно; fall back на JobRunr's own retry).
+      13. Worker exception при mid-flight (наприклад, NPE в parsing) → processingStatus=failed; JobRunr retry; після exhaustion — DLQ-like видимість через jobrunr dashboard + raw_updates row.
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 90
+    status: "complete"
+    value: |
+      ER1. Invalid/missing secret token → 401 no body (AC2). Counter rejected{reason=invalid_secret} +1.
+      ER2. Project not found / soft-deleted / bot disconnected → 404 (AC3). Counter rejected{reason=project_not_found} +1.
+      ER3. Payload > 1 MB → 413 (AC4). Counter rejected{reason=payload_too_large} +1.
+      ER4. Duplicate (projectId, update_id) → 200 OK silent (AC5). Counter rejected{reason=duplicate} +1, але saved=false (важливо щоб юзер-метрика отримання Telegram-у не падала).
+      ER5. Mongo вниз при raw_updates insert → 500 (Telegram повторно надішле через свій retry). НЕ ловимо це як rejected, а як internal error.
+      ER6. JobRunr storage Mongo вниз при enqueue → 500 (rare; same retry mechanism).
+      ER7. Worker exception → processingStatus=failed + processingError; JobRunr retry exhausted → manual redrive операторами (admin tools deferred).
+      ER8. Token leak risk у логах → token-scrubber wrap (AC18).
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      During development (no deploy needed):
+      - Unit tests: TelegramCommandParserTest, WebhookSecretVerifierTest (constant-time).
+      - Integration tests (@SpringBootTest + Testcontainers Mongo): TelegramWebhookControllerIT з усіма AC1-AC18 covered. Race-test через Flux.range(0,2).parallel(2). Token-leak invariant tests з ListAppender. ownerChatId atomic-write test з паралельним викликом.
+      - ProcessTelegramUpdateJobTest: invoke worker directly (як HardDeleteJobTest).
+      - WebhookSecurityBlockTest: slice-style — webhook permitAll, /api/** все ще auth-required.
+      - SecurityConfig rule-order test (existing pattern в SecurityBlockTest).
+
+      After deploy to staging:
+      - docs/staging-smoke/08-webhook-ingestion.md (нова: 10-15 хв checklist):
+        1. Створити test bot через BotFather (`SmokeTest_XYZ_bot`)
+        2. У staging UI: Settings → Bot → Connect (04a flow)
+        3. Перевірити Telegram getWebhookInfo → url=https://staging-host/webhooks/telegram/{projectId}
+        4. Зі свого Telegram написати боту /start ref_smoke_001
+        5. mongosh: db.raw_updates.find({projectId}) → один документ
+        6. mongosh: db.events.find({eventType:"telegram_command_start"}) → один event, metadata.startPayload="ref_smoke_001"
+        7. mongosh: db.bots.findOne({projectId}).ownerChatId → not null
+        8. У UI клікнути "Send test message" → отримати повідомлення в Telegram (закриває 04c gap!)
+        9. Написати /stop → event telegram_command_stop у Mongo
+        10. Disconnect bot, видалити test bot через BotFather
+
+      MCP-based verification (post-deploy QA): використовувати Playwright MCP для UI flow + Telegram MCP для send/check messages (можлива опція — за rules user can specify).
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 100
+    status: "complete"
+    value: "N/A — інфраструктурний шар, без UI-зміни. Side-effect: 'Send test message' button (04c) починає працювати у production happy path."
+    gaps: ""
+    required: false
+
+  risks:
+    score: 90
+    status: "complete"
+    value: |
+      R1. <100ms P99 SLA з greenfield JobRunr-enqueue-from-WebFlux. Mitigation: load-test (100 sequential POSTs) в AC; Mono.fromCallable(...).subscribeOn(boundedElastic()) для enqueue. Якщо load-test показує >100ms, додаємо Caffeine cache для Bot lookup (deferred per patterns.md).
+      R2. ownerChatId race: швидкий атакер може claim'нути ownerChatId перед оператором. Mitigation: accepted threat per Q10; staging-smoke runbook instructs "/start first thing"; UI mitigations deferred.
+      R3. CSRF matcher syntax у Spring Security 6.5.x може мати тонкощі (negated matcher API). Mitigation: cross-check у tech-spec через Context7 + integration test "POST /api/v1/... без X-XSRF-TOKEN → 403".
+      R4. Token leak в логах. Mitigation: AC18 + ListAppender tests на кожен лог-сайт окремо.
+      R5. JobRunr Failed queue UX: dashboard поки disabled (application.properties:34). Якщо payload зламається на production, видимість тільки через Mongo query. Mitigation: явно прописати в runbook + Epic 10 (admin panel) увімкне dashboard.
+      R6. Duplicate-detection через DuplicateKeyException — reactive save повинен propagate; підтверджено precedent BotService.connect. Mitigation: integration test покриває.
+      R7. Bot.deletedAt cascade — якщо проект soft-deleted, але bot row не зачеплений, ми все ж дамо 404 (CONNECTED-only lookup). Якщо bot row залишився CONNECTED після project soft-delete (bug) — тоді ми приймемо update. Mitigation: tech-spec має перевірити ProjectHardDeleteJob cascade behavior; додати integration test "soft-delete project → next webhook → 404".
+      R8. Micrometer dep adoption: перший раз додаємо micrometer-core у проект — потенційний side-effect на startup performance / metrics namespacing. Mitigation: за Q9 додаємо тільки micrometer-core (не actuator), без endpoints. Tech-spec ratify.
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 85
+    status: "complete"
+    value: |
+      TD1. Webhook responds <100ms P99 SLA. (Q3, AC1)
+      TD2. Idempotency via unique compound index (projectId, updateId) + DuplicateKeyException catch + silent 200. (notes.md, Q1, AC5)
+      TD3. Anti-enumeration uniform 404 — single botRepository.findByProjectIdAndStatus(projectId, CONNECTED) lookup collapses missing-project / soft-deleted / disconnected / malformed. (code-research §1, AC3)
+      TD4. SHA-256 hash of secret stored, verifier re-hashes + constant-time compare (MessageDigest.isEqual). Promote sha256Hex helper до common/crypto/ якщо tech-spec. (patterns.md, AC18 indirect)
+      TD5. Payload 1 MB cap через ServerCodecConfigurer global override (просте) АБО WebFilter тільки для webhook path (selective). Tech-spec decides. (Q5, AC4)
+      TD6. JobRunr concurrency default; БЕЗ per-chat ordering. Known compromise, deferred 05/06. (Q6)
+      TD7. DLQ: JobRunr Failed queue + raw_updates.processingStatus + processingError. Без окремої колекції. (Q7, AC14)
+      TD8. Micrometer-core dep (option A) — 3 counters; без actuator endpoints. (Q9, AC16)
+      TD9. ownerChatId trigger: first private /start to CONNECTED bot with ownerChatId IS NULL wins. Atomic findAndModify. Accepted threat model. (Q10, AC6)
+      TD10. Edge cases: non-message ignore; group/supergroup без populate; невідома команда — silent; private-only Subscriber upsert. (Q11, AC9-AC12)
+      TD11. Stub services live у фінальних пакетах subscriber/ і funnel/ (no _stubs/ subpackage). 04b commits no-op impl; Epic 05/06 replace.
+      TD12. 401 no body via ResponseEntity.status(401).build() (НЕ через AppException, бо GlobalErrorHandler завжди пише body). (code-research §1, AC2)
+      TD13. No local polling fallback. ngrok-based staging-smoke. (Q4)
+      TD14. CSRF disabled via requireCsrfProtectionMatcher exclusion для /webhooks/telegram/** ONLY. (patterns.md, AC15)
+      TD15. Schema: Bot.ownerChatId без index/migration (nullable wrapper precedent). raw_updates: unique compound (projectId, updateId) + TTL 90d на createdAt. (AC13, AC17)
+      TD16. JobRunr enqueue from WebFlux wrapped у Mono.fromCallable.subscribeOn(boundedElastic) (greenfield pattern). (code-research R1)
+      TD17. EventService.logEvent з userId=null (system context, precedent TelegramSender).
+      TD18. Inbound Telegram payload = типізований record TelegramUpdate (snake_case fields, mirror TelegramResult precedent). Nested records: Message, Chat, User, CallbackQuery — обмежені тим, що реально читаємо. Jackson читає by field name; @JsonIgnoreProperties(ignoreUnknown=true) на класі для forward-compat. (Q13)
+      TD19. Worker body виконує реактивні calls через .block() (per HardDeleteJob/ProjectHardDeleteJob precedent — JobRunr-thread, не Netty). (Q14)
+      TD20. update_id monotonicity per-bot — Telegram-guaranteed. Unique index (projectId, updateId) на Long достатній. (Q15)
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 90
+    status: "complete"
+    value: "CI/CD only — GitHub Actions як для попередніх епіків (per CLAUDE.md). PR → main → automated deploy. Жодних нових env vars (APP_URL вже HTTPS у production, webhook URL формується автоматично через 04a setWebhook-flow). Жодних додаткових Docker / infra змін."
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 95
+    status: "complete"
+    value: "Жодних. 04b — інфра. End-user (subscriber) пише /start як завжди. Project owner просто йде в Settings → Bot → Connect (04a, вже зроблено) і потім пише /start своєму боту (щоб ownerChatId populate-нувся для 04c smoke). Це частина UX 04a, не нові кроки для 04b."
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 95
+    status: "complete"
+    value: |
+      Inbound:
+      - Telegram Bot API → POST /webhooks/telegram/{projectId}. URL setWebhook-ed у 04a flow.
+
+      Read-side (читаємо існуючі дані):
+      - bots.findByProjectIdAndStatus(projectId, CONNECTED): отримуємо webhookSecretHash, telegramBotId, ownerChatId.
+      - (опціонально, якщо tech-spec вирішить розділити) projects.findById для явного soft-delete check; РЕКОМЕНДАЦІЯ — single bots-lookup collapse all 404 cases.
+
+      Write-side (нові + існуючі колекції):
+      - raw_updates (нова) — insert.
+      - bots.ownerChatId (existing field) — atomic update (findAndModify) тільки коли null.
+      - events (existing) — write telegram_message_received | telegram_command_start | telegram_command_stop | telegram_update_other.
+      - jobrunr_jobs (managed by JobRunr) — enqueue ProcessTelegramUpdateJob.
+
+      Outbound (заглушки):
+      - SubscriberService.upsertFromTelegramUpdate(projectId, telegramBotId, chatId, fromUser): no-op у 04b, real у Epic 05.
+      - FunnelTriggerService.fire(projectId, chatId, triggerType, context): no-op у 04b, real у Epic 06.
+
+      Закриває gap для:
+      - 04c TelegramSender.sendTestMessage success-branch (ownerChatId populate).
+      - Epic 05 (Subscribers) і Epic 06 (Funnels) можуть стартувати.
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 95
+    status: "complete"
+    value: |
+      Hard:
+      - 04a (06-bot-connection, completed): bots.webhookSecretHash, bots.telegramBotId, bots.ownerChatId field shape.
+      - 03 (05-projects, completed): Project entity, soft-delete semantics (через bots.status=CONNECTED proxy).
+      - 01 (foundation): SecurityConfig, Mongo Testcontainers, JobRunr setup.
+
+      Stub interfaces вводимо тут, реальна реалізація:
+      - Epic 05 (Subscribers): SubscriberService.upsertFromTelegramUpdate + markUnsubscribed.
+      - Epic 06 (Funnels): FunnelTriggerService.fire + cancelActiveFor.
+
+      Closes:
+      - 04c (07-telegram-sender, completed): ownerChatId populate робить success-branch sendTestMessage observable в production.
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 95
+    status: "complete"
+    value: |
+      Captured у constraints (Phase 1 item) повністю:
+      - <100ms P99 response SLA
+      - HTTPS only (Telegram requires), ngrok для dev
+      - SecurityConfig path order, CSRF scoped disable
+      - Real Mongo у integration tests (Testcontainers)
+      - 1 MB payload cap
+      - Default JobRunr concurrency без per-chat ordering
+      - DLQ через JobRunr Failed queue + processingStatus
+      - 3 micrometer counters (через micrometer-core, без actuator)
+      - MVP: 1-on-1 DM only
+      - No outbound Telegram API в 04b (тільки inbound; outbound — 04c)
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 95
+    status: "complete"
+    value: |
+      Нова колекція raw_updates:
+      - _id: String (ObjectId hex)
+      - projectId: String (indexed via compound)
+      - updateId: Long (Telegram update_id; indexed via compound)
+      - payload: Document/Map<String,Object> (raw Telegram update, без редагування)
+      - processingStatus: enum String (pending | done | failed)
+      - processingError: String (nullable; останнє повідомлення)
+      - createdAt: Instant
+      Indexes:
+      - Unique compound (projectId, updateId)
+      - TTL on createdAt, expireAfterSeconds=7776000 (90d)
+
+      Schema-add on bots (existing field):
+      - ownerChatId: Long (nullable wrapper, no index, no migration script — written first time by 04b).
+
+      Existing events колекція:
+      - Нові eventType: telegram_message_received, telegram_command_start, telegram_command_stop, telegram_update_other.
+      - metadata schema: {projectId, telegramBotId, chatId, updateId, startPayload?, chatType}.
+      - userId=null (system context).
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 100
+    status: "complete"
+    value: "Жодного migration скрипта. raw_updates — нова колекція (індекси auto-created спрингом). Bot.ownerChatId — Java-field-only schema-add (nullable wrapper, legacy docs читаються як null, precedent Bot.disconnectedAt). Микрометер dep — змінює тільки build.gradle."
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/08-webhook-ingestion/user-spec.md"
+  status: "approved"
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase1_feature_overview"
+  questions_asked: 0
+  last_question: ""
+  total_required_score: 0
+  total_optional_score: 0
+  completion_estimate: "0%"
+  user_detail_level: "unknown"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Free-form notes:
+  - Important insights
+  - Areas of uncertainty
+  - Pivot points
+  - Scope changes
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

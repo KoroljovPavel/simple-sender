@@ -1,0 +1,29 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 4,
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/tag/TagServiceTest.java",
+      "test": "incrementCounter_atomicallyIncrements",
+      "finding": "The name promises atomicity but the test never exercises concurrency. It seeds count=5, calls +1 (re-read=6), then -1 (re-read=5). This proves the increment EFFECT, but a non-atomic load-modify-save implementation would pass it identically. The task explicitly mandates atomic findAndModify ('never load-modify-save'), so the atomicity guarantee is asserted in the test name only, not in behavior. Litmus passes (remove $inc => re-read stays 5 => fails), so this is not a hidden-bug risk — only a naming/coverage gap.",
+      "suggestion": "Either rename to incrementCounter_appliesDelta to match what is verified, or add a ConcurrencyTestUtils.parallelInvoke(N, () -> incrementCounter(p, 'vip', 1)) test asserting the final count == seed + N (a load-modify-save impl would lose updates and fail this). The race primitive is already in the file's imports, so the cost is low."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/tag/TagServiceTest.java",
+      "test": "findOrCreate_newTag_createsAndReturns",
+      "finding": "Does not assert label is null on the find-or-create path. findOrCreate inserts with label=null (insert(projectId, slug, null)), which is the contract Task 8 relies on, but the test only checks id/slug/subscriberCount. A regression that started defaulting label to slug would go uncaught here.",
+      "suggestion": "Add assertThat(result.getLabel()).isNull(); — cheap and pins the documented null-label contract for the auto-create path."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/tag/TagControllerIT.java",
+      "test": "delete_existingTagWithSubscribers_cascadesAndRemoves",
+      "finding": "Strong test, but it does not assert the subscriber_events collection is untouched, even though the task AC and Decision 10 taxonomy explicitly require tag_deleted to land in the platform 'events' collection and NOT in subscriber_events. The TagServiceTest counterpart also omits this. Without the negative assertion, a regression that wrote the event to the wrong collection would only be caught indirectly.",
+      "suggestion": "Optional hardening: inject SubscriberEventRepository and assert subscriberEventRepository.count() == 0 (or unchanged) after the delete, mirroring the Decision 10 taxonomy boundary the task calls out. Low priority because TagService injects EventService and never SubscriberEventRepository, so the wiring already structurally prevents the misroute."
+    }
+  ]
+}

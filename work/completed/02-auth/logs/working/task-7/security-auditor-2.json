@@ -1,0 +1,69 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": {
+    "totalFindings": 4,
+    "critical": 0,
+    "major": 0,
+    "minor": 4
+  },
+  "round": 2,
+  "round1_resolution_review": {
+    "critical_1_status_gate": "RESOLVED. ProfileService.loadActiveUser (ProfileService.java:150-165) rejects users whose status is not active|pending with 401, mirroring AuthService.login. All five service entry points (getProfile, updateProfile, changePassword, deleteAccount via loadActiveUser; terminate-all-sessions is invoked only from authenticated controller code) flow through the gate. Unit tests cover blocked, deleted, and unknown user → 401.",
+    "major_2_delete_kills_all_sessions": "RESOLVED. ProfileService.deleteAccount (ProfileService.java:127-146) calls terminateAllSessions(userId) BEFORE session.invalidate(). Verified by ProfileServiceTest.deleteAccount_setsStatusDeleted_terminatesAllSessions_invalidatesSession_logsEvent and ProfileControllerIT seeding sibling + unrelated-user sessions and asserting sibling sessions removed, unrelated user untouched, GET /api/profile after delete → 401.",
+    "major_3_failed_change_password_audit": "PARTIALLY RESOLVED. The Round-1 finding asked for either (a) a 'password_change_failed' audit event OR (b) rate limiting. Round-2 implements (b) — Redis brute-force counter per userId — but does NOT add the dedicated audit event. The team's note explicitly asks whether this is acceptable. SECURITY VERDICT: acceptable for this round given the rate limiter cuts the BCrypt-grinding attack window from 'unlimited' to 5 attempts / 15 min, which is the dominant risk; however, monitoring/alerting visibility into hijacked-session credential-guessing is now reduced compared to AuthService.login (which logs a login_failed event with reason=brute_force when the threshold trips). See finding 1 below — minor.",
+    "major_4_change_password_rate_limit": "RESOLVED. ProfileService.checkChangePwdRate (ProfileService.java:167-181) uses Redis INCR/EXPIRE keyed on change-pwd:fail:{userId}, threshold 5 / 900s, fail-open per Decision 4. Counter resets on success (line 199-206), increments on every failed verify (line 89-90). Threshold check uses >= so 5 failures consume BCrypt then 6th request short-circuits before BCrypt — correctly closes the cost-12 grinding window. Pinned by ProfileServiceTest.changePassword_overRateLimit_returns429_skipsBcryptAndDb (verifies userRepository.findById and passwordEncoder.matches are NEVER called when over threshold).",
+    "minor_5_hard_delete_id_log": "DEFERRED — accepted, GDPR audit-trail per spec.",
+    "minor_6_same_password_change": "DEFERRED — accepted, task spec permits.",
+    "minor_7_super_admin_password_no_default": "DEFERRED — not changed in this round (still flagged below as informational).",
+    "new_round2_checks": {
+      "brute_force_window_closure": "PASS. With threshold=5, the attacker on a hijacked session can run BCrypt verify at most 5 times before the rate limit short-circuits at the userId key for 15 minutes. Mirrors AuthService.login per-email policy. UserId-keyed (not IP) is correct because the attacker IS the authenticated user — IP-hopping does not bypass.",
+      "status_gate_sufficiency": "PASS. active + pending allowed; blocked, deleted, and any future status (suspended, etc.) denied with 401. Centralised in loadActiveUser; all service paths funnel through it. No bypass.",
+      "mass_assignment": "PASS. UpdateProfileRequest still only exposes name; ProfileService.updateProfile (line 64-67) explicitly assigns name + updatedAt only. No DTO surface change in this commit.",
+      "race_terminate_then_invalidate": "PASS. Order terminateAllSessions(userId) → session.invalidate() is correct: deleting the Mongo session docs by principal removes the current session's row too, after which session.invalidate() is a no-op at the persistence layer but still triggers the WebSession lifecycle (Set-Cookie removal). A concurrent request on a sibling session that races between the soft-delete save and the session-doc delete would still be rejected by loadActiveUser (status=deleted) on the next service call. No exploitable race.",
+      "log_pii_or_token_leak": "PASS. New log lines (Redis warning at lines 180, 193, 203) emit only the Redis exception message — no userId, no password, no hash. The userId-keyed Redis key is constructed in changePwdKey but never logged. HardDeleteJob.java:53 still logs user-id list at INFO (deferred — GDPR audit trail per spec, internal IDs not directly PII).",
+      "bcrypt_megabyte_dos": "PASS. ChangePasswordRequest has @Size(max=200) on both currentPassword and newPassword — input is bounded before reaching BCrypt. Validation runs at controller entry (Bean Validation triggered by @Valid in ProfileController), so BCrypt encode/verify is never called with an oversize string. Note: ValidPassword regex on newPassword also enforces complexity but does not bound length on its own; @Size is the load-bearing constraint."
+    }
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A09:2021 Security Logging and Monitoring Failures",
+      "title": "Change-password rate-limit trip is not audited — divergent from AuthService.login policy",
+      "description": "ProfileService.checkChangePwdRate (ProfileService.java:167-181) emits 429 when the userId counter reaches CHANGE_PWD_THRESHOLD but does not log a security event. AuthService.checkBruteForce (AuthService.java:480-487) DOES log a login_failed event with reason=brute_force on the same condition: 'Audit the threshold-trip — this is the highest-signal attack indicator.' That comment applies word-for-word here. Without the event, a hijacked session running 5 failed change-password attempts then being throttled is invisible to ops/SIEM. Note: the related Round-1 major #3 (per-failure audit event) was answered with rate limiting alone — accepting that trade-off, the threshold-trip event is a low-cost addition that recovers the SIEM signal without expanding the closed event-type list with a new category (it can reuse a generic event-name already permitted, or be added once the closed list is reviewed).",
+      "location": "backend/src/main/java/com/botfunnel/profile/ProfileService.java:172-175 (the count >= threshold branch)",
+      "impact": "SIEM/monitoring blindspot: brute-forcing the current-password gate from a hijacked session produces no audit trail beyond ordinary 4xx HTTP logs. AuthService treats the threshold-trip as the single most important attack signal; ProfileService does not.",
+      "recommendation": "Inside the count >= CHANGE_PWD_THRESHOLD branch, emit eventService.logEvent(userId, <existing-event-type>, ip, userAgent, Map.of('reason', 'change_password_brute_force')) before returning the 429. If extending the closed event-type list is out of scope, re-use an existing audit category. Alternative compromise: log.warn with userId at SLF4J level so log-shipper SIEM rules can fire on the string. Either is sufficient.",
+      "cwe": "CWE-778 (Insufficient Logging)"
+    },
+    {
+      "severity": "minor",
+      "category": "A04:2021 Insecure Design",
+      "title": "Change-password rate-limit counter has no IP key — distributed multi-victim brute-force across stolen sessions has no global ceiling",
+      "description": "checkChangePwdRate is keyed only on userId. AuthService.login uses dual keys (per-email AND per-IP, with separate thresholds: 5/email, 20/IP). For change-password the attacker is already authenticated as one specific user, so a per-userId key is the correct PRIMARY defense and userId-only is a defensible trade-off. However: an attacker who has compromised N session cookies for N different users can issue 5 wrong-current attempts against EACH user from a single IP without ever tripping a rate limit, because there is no IP key. AuthService's IP key catches exactly this distributed pattern. Severity is minor because (a) compromising N sessions is itself a breach and (b) the attacker still needs to guess the current password 5 times per victim (BCrypt-verifiable but bounded by complexity policy).",
+      "location": "backend/src/main/java/com/botfunnel/profile/ProfileService.java:167-181 (single-key brute-force gate)",
+      "impact": "Cross-victim distributed brute-force from one IP is not throttled. Only relevant in a mass-session-compromise scenario.",
+      "recommendation": "(a) Add a parallel IP-keyed counter mirroring AuthService — bruteIpKey('change-pwd:ip:' + ip), threshold ~20/15min. checkChangePwdRate then trips on EITHER key. (b) Or document this as a deliberate scope limit (ratelimit-userId is the dominant defense; IP-key is left for a future hardening pass). Either is acceptable as long as the choice is recorded in the tech-spec.",
+      "cwe": "CWE-307 (Improper Restriction of Excessive Authentication Attempts)"
+    },
+    {
+      "severity": "minor",
+      "category": "A05:2021 Security Misconfiguration",
+      "title": "SUPER_ADMIN_PASSWORD env var still required at every startup (deferred from Round 1)",
+      "description": "Round-1 finding #7 unchanged: application.properties:35 declares app.super-admin.password=${SUPER_ADMIN_PASSWORD} with no default, so Spring fails to start unless the env var is present even after first-run seeding has completed. The seeder code already gracefully handles blank values (SuperAdminSeeder.java:50-53). Operators may keep the password in process env / docker-compose / CI long after seeding, broadening secret-exposure surface. Re-flagging as informational — the team has explicitly deferred this; if the deferral is approved by a tech-spec decision record, this finding can be dismissed.",
+      "location": "backend/src/main/resources/application.properties:35",
+      "impact": "Secrets-management hygiene; not directly exploitable. Increases probability of credential exposure via env dumps or container manifests.",
+      "recommendation": "Apply the one-character change `${SUPER_ADMIN_PASSWORD:}` (matches the SUPER_ADMIN_EMAIL line above and the @Value default in SuperAdminSeeder). Document in the deployment runbook: 'set SUPER_ADMIN_PASSWORD on first boot only; remove from environment after seeding.' If deferred deliberately, record the rationale in the tech-spec decisions section.",
+      "cwe": "CWE-798 (Use of Hard-coded Credentials)"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "INCR-then-EXPIRE race in registerChangePwdFailure can produce a counter without TTL on first-attempt crash",
+      "description": "registerChangePwdFailure (ProfileService.java:183-197) increments the Redis key, then sets the TTL only when the returned count == 1. If the process crashes between INCR and EXPIRE, the key persists indefinitely with count=1 and no TTL. The same race exists in AuthService.incrementWithTtl (line 541-552) and is explicitly acknowledged there: 'Crash between INCR and EXPIRE is a known small race (no Lua); on next failure the counter just keeps growing without TTL — Redis MEMORY-policy still bounds it.' Behaviour is identical in ProfileService but the comment is missing. Operationally low-impact (the next failure increments past threshold and locks the user out for 15min worth of clock time, but TTL never set means lockout is permanent until manual key delete or memory-policy eviction). If AuthService's accepted trade-off applies here too, this is fine — but worth flagging because for change-password a stuck counter locks legitimate password changes, not logins (more user-visible).",
+      "location": "backend/src/main/java/com/botfunnel/profile/ProfileService.java:185-191",
+      "impact": "On a JVM/Redis crash between INCR and EXPIRE, a user can be permanently locked out of changing their password until the Redis key is manually deleted. Probability: very low (millisecond window per attempt). Severity: minor.",
+      "recommendation": "Either (a) accept the same trade-off documented in AuthService and copy the explanatory comment to registerChangePwdFailure for symmetry, or (b) replace INCR+EXPIRE with a single Lua script (atomic), or (c) use SET key 1 NX EX 900 then INCR — the SET NX guarantees TTL if key absent. Option (a) is the lowest-risk consistency fix.",
+      "cwe": "CWE-367 (Time-of-check Time-of-use Race Condition)"
+    }
+  ]
+}

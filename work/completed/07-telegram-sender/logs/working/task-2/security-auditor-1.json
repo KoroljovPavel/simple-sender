@@ -1,0 +1,29 @@
+{
+  "summary": {
+    "scope": "Task 2 adds a single nullable Long ownerChatId field on the Bot entity (Bot.java:51 plus paired getter/setter at Bot.java:81-82) and one BotRepositoryTest case. No new endpoints, no DTO changes, no logging changes, no index changes, no toString override.",
+    "checks_performed": [
+      "BotResponse DTO unchanged — verified the record at backend/src/main/java/com/botfunnel/bot/dto/BotResponse.java exposes 6 explicit fields and ownerChatId is NOT among them; BotController.toResponse(...) at BotController.java:70-78 hand-picks fields, so the new entity field cannot leak via any of the 4 endpoints (GET, /connect, /disconnect, /test-message).",
+      "BotTokenLeakTest invariant still holds — the test filters Bot.class.getDeclaredMethods() for method name 'toString' with 0 parameters. The new getter (getOwnerChatId, 0 params, name 'getOwnerChatId') and setter (setOwnerChatId, 1 param, name 'setOwnerChatId') do not match either predicate. No custom toString was added.",
+      "No @Indexed on the new field — confirmed at Bot.java:51 the field has no @Indexed and is absent from the @CompoundIndexes block at Bot.java:18-28. No new query path filters by ownerChatId; sender will use findById per Decision 14.",
+      "No log/toString call on the Bot entity touches ownerChatId — grep across com.botfunnel.bot for ownerChatId/OwnerChatId returns only the entity itself and the new test. Existing log sites (BotService.java:167/224/262/272, TelegramApiClient.java:140/146) route external strings through scrubTokens(...) and never serialize the Bot entity.",
+      "OWASP A01 (broken access control) — ownerChatId is not used in any authorization decision. BotController.currentUserId() resolves authenticated principal id and authorization happens via botService.getByProject(ownerId, projectId) on the projectId fence, independent of ownerChatId. A01 unaffected by this diff.",
+      "OWASP A03 (injection) — n/a; no new query, no user-controlled string flowing into Mongo or Telegram.",
+      "OWASP A09 (logging) — ownerChatId is not referenced by any log statement (grep confirmed)."
+    ],
+    "totalFindings": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "owasp_category": "A09:2021 Security Logging and Monitoring Failures (informational / forward-looking)",
+      "finding": "ownerChatId is end-user PII at rest. Project tech-spec R12 already classifies a Telegram chatId in events.metadata as PII and explicitly defers data-retention policy: 'events collection has no platform-wide retention policy yet'. Adding ownerChatId to the bots collection extends the same un-policied PII surface to a second collection. This task does not introduce a new leak (BotResponse omits it, no logger touches it, no @Indexed, no toString), but the project still owes a cross-collection PII retention/erasure policy. Worth flagging explicitly so a future GDPR / right-to-erasure request against a bot owner does not miss the bots.ownerChatId field alongside events.metadata.chatId.",
+      "suggestion": "Add bots.ownerChatId to the list of PII fields tracked by the future analytics/compliance epic that tech-spec R12 already defers to. No change required for Task 2 itself — the comment in Bot.java:51 already notes the field's role ('populated by Epic 04b webhook ingestion'), and the implementation correctly avoids the obvious leak paths (toString, BotResponse, logs, indexes). When the retention/erasure policy is written, a right-to-erasure operation must NULL both events.metadata.chatId (for that user) AND bots.ownerChatId (for any bot owned by that user), not just one.",
+      "location": "backend/src/main/java/com/botfunnel/bot/Bot.java:51 (and cross-reference work/07-telegram-sender/tech-spec.md line 388, Risks R12)"
+    }
+  ],
+  "verdict": "approved",
+  "rationale": "Zero critical or major findings. The diff is the smallest possible change that satisfies tech-spec Decision 14: nullable wrapper Long, no migration, no index, no toString, no DTO change. All three leak surfaces explicitly required to stay closed by the prior security posture (BotResponse fields, Bot#toString, log statements) are verified untouched. The one minor finding is a forward-looking PII-retention note that already aligns with tech-spec R12's existing deferral — not a Task 2 regression."
+}

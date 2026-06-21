@@ -1,0 +1,33 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 5,
+  "round": 1,
+  "commit": "7f3cf50",
+  "verdict": "approve",
+  "summary": "Funnel-step trigger integration is correct and idiomatic. Tag/field triggers fire after the idempotency guard + audit write (no-op writes do not fire); EMIT_EVENT returns CONTINUE and dispatches at child depth; depth is an explicit int parameter (no ThreadLocal), 0 from manual controllers and enrollDepth+1 from StepExecutor. Cross-file signatures all align (5-arg dispatchForSubscriber, 4-arg addTag, 5-arg recordCustomFieldsSet). No backstop/Redis logic added in SubscriberServiceImpl or StepExecutor. No PII in new logs (no new log lines added in the hot paths; eventName is the matchKey, never logged).",
+  "findings": [
+    {
+      "severity": "minor",
+      "dimension": "Architecture / circular dependency",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberServiceImpl.java",
+      "finding": "Task 5 introduces a real 2-node bean cycle SubscriberServiceImpl <-> FunnelEventService (FunnelEventService injects SubscriberService for findById; now SubscriberServiceImpl injects FunnelEventService). Resolved with @Lazy on the constructor param. This is a separate edge from the StepExecutor->FunnelEventService edge the task discusses (which the Task-4 factory structurally breaks). @Lazy is the idiomatic break here and is NOT the prohibited StepExecutor workaround; a clear comment documents the distinction. Context-load is proven by SubscriberServiceImplIT + SubscriberTagAssignmentIT booting the full graph with both injections present (no BeanCurrentlyInCreationException).",
+      "action": "accepted-as-designed"
+    },
+    {
+      "severity": "minor",
+      "dimension": "Cross-file consistency / DRY",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "finding": "Trigger-type literals exposed as public constants on FunnelEventService that mirror the package-private FunnelService.TRIGGER_* (same module). This avoids re-typing magic strings cross-package without widening FunnelService (owned by another task). Single source of truth preserved (the public constants reference the FunnelService ones).",
+      "action": "accepted-as-designed"
+    }
+  ],
+  "verified": [
+    "dispatchForSubscriber called with exact Task-4 signature (projectId, subscriberId, triggerType, matchKey, originDepth) at all 3 new call sites",
+    "addTag/recordCustomFieldsSet signature change + every call-site updated atomically (controllers->0, StepExecutor->enrollDepth+1, tests)",
+    "tag_added / custom_field_set fire AFTER writeSubscriberEvent; idempotent no-op branches return before firing",
+    "custom_field_set dispatched once per changed key (loop over changedKeys)",
+    "EMIT_EVENT returns StepResult.cont() with no added try/catch (dispatcher owns isolation)",
+    "REMOVE_TAG / removeTag unchanged (non-triggers)",
+    "no rate-limit/depth-cap/fan-out/Redis logic added outside FunnelEventService"
+  ]
+}

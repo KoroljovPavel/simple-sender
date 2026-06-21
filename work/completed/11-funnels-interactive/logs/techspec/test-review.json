@@ -1,0 +1,51 @@
+{
+  "verdict": "pass",
+  "summary": "Round 2 re-validation of the Testing Strategy after fixes. All previously-flagged gaps are now mapped to explicit test scenarios: both HIGH (paused-drain L307; blocked-bot-during-waiting L308-309), all four MED (legit loop-resend L310; {user.first_name} render + parse_mode escaping L311; in-range-but-invalid button L304; currentStepId-mismatch L303), both LOW (backfill double-run idempotency L313; answerCallbackQuery 5xx best-effort L315), and the new IDOR cross-subscriber test (L301-302). Every stated AC (lines 368-376) maps to at least one scenario. Pyramid balance remains sound: unit-heavy on pure logic (copyOf, validateSteps, callback_data parse, reply_markup mapping, drift, stepById), integration covering every engine/webhook/DTO/index seam with deterministic Clock + Testcontainers + MockWebServer, and a single Playwright happy-path with vitest for the rest of the frontend. Two minor coverage observations remain; neither blocks pass.",
+  "findings": [
+    {
+      "severity": "low",
+      "gap": "Positive analytics assertion not stated as its own scenario. AC L209 'натиск кнопки записує подію funnel_button_clicked + lastButtonClicked' appears in the AVP (L333) but no Integration-test bullet explicitly asserts that a SUCCESSFUL resumeOnCallback writes the funnel_button_clicked event AND lastButtonClicked on the execution. The park-on-reply bullet (L295) asserts branch advance only; the IDOR bullet asserts the opposite (execution did NOT move), so the positive write path is implied but unanchored.",
+      "suggestion": "Add an Integration bullet: 'valid click -> resumeOnCallback advances branch AND asserts funnel_button_clicked event persisted (funnelId/executionId/step/button, ids-only, no PII per Decision 9) AND execution.lastButtonClicked set.' Assertions: captured event type==funnel_button_clicked with correct executionId; execution.lastButtonClicked == clicked button; event payload carries no from.first_name/username."
+    },
+    {
+      "severity": "low",
+      "gap": "Strict URL-scheme rejection asserted only positively. Unit list (L286) and Task 4 (L426) cover 'URL http(s)' / strict URI parse, but Decision 10 (L211-219) and the scheme-injection risk (L353) call out rejecting javascript:/data:/tg://, leading-whitespace, startsWith-bypass and empty-host; no negative scenario enumerates these in the test list.",
+      "suggestion": "Add to validateSteps unit (or FunnelControllerIT Task 4) negative cases asserting 422 funnel_broken_edge / reject for url in {'javascript:alert(1)','data:text/html,...','tg://resolve?...',' https://x' (leading ws),'httpsx://evil' (startsWith bypass),'http://' (empty host)}. Assert each is rejected, not merely that valid http(s) passes."
+    }
+  ],
+  "confirmedCovered": {
+    "previousHigh": {
+      "paused_funnel_drain": "L307 (paused-drain -> in-flight advances to completed, Decision 11)",
+      "blocked_bot_during_waiting": "L308-309 (resumeOnCallback -> branch send -> 403 -> cancelled, re-exercise F1 blocked-flow)"
+    },
+    "previousMed": {
+      "legit_loop_resend": "L310 (loop button -> menu re-sent, next click works, no hang)",
+      "user_first_name_render_escaping": "L311 ({user.first_name} substitution + parse_mode escaping)",
+      "in_range_but_invalid_button": "L304 (URL-button index, out-of-range, snapshot-vs-live mismatch -> no-op)",
+      "currentStepId_mismatch_rejection": "L303 (callback on already-passed step -> no-op, Decision 6)"
+    },
+    "previousLow": {
+      "backfill_double_run_idempotency": "L313 (re-run does not duplicate id)",
+      "answerCallbackQuery_5xx_isolation": "L315 (5xx -> best-effort, branch advance not blocked, WARN log)"
+    },
+    "new": {
+      "idor_cross_subscriber": "L301-302 (callback with foreign executionId, subscriber A -> execution B, rejected on subscriberId/projectId mismatch, B untouched)"
+    }
+  },
+  "acCoverage": {
+    "broken_edge_422_and_menu_no_callback_422": "covered (unit L285-286; FunnelControllerIT Task4 L432-433; Verify-smoke)",
+    "waiting_for_reply_all_literal_sites_drift": "covered (unit drift L289; FunnelIndexesIT L318; cancel paths L306)",
+    "copyOf_deep_copy_buttons": "covered (unit L284; snapshot-isolation IT L305)",
+    "backfill_idempotent": "covered (migration IT L312-313)",
+    "callback_data_64_malformed_oversized_foreign_noop": "covered (unit parse L287; in-range-but-invalid L304; IDOR L302)",
+    "idor_rejected_answerCallbackQuery_all_noop": "covered (IDOR L301-302; answerCallbackQuery L315)",
+    "all_tests_green_no_f1_regressions": "process-level (Task 11 pre-deploy QA L507-512)",
+    "url_buttons_http_https_strict": "covered positively (unit L286; Task4 L426); negative scheme-injection cases flagged low above"
+  },
+  "pyramidBalance": {
+    "unit": 6,
+    "integration": 19,
+    "e2e": 1,
+    "assessment": "healthy"
+  }
+}

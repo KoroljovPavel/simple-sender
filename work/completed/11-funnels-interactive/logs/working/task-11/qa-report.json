@@ -1,0 +1,197 @@
+{
+  "feature": "11-funnels-interactive",
+  "headSha": "c0fdd15",
+  "verdict": "PASS",
+  "summary": {
+    "totalChecks": 25,
+    "passed": 22,
+    "failed": 0,
+    "notVerifiable": 3,
+    "criticals": 0,
+    "majors": 0,
+    "minors": 0
+  },
+  "backend": {
+    "total": 974,
+    "passed": 971,
+    "failed": 1,
+    "skipped": 2,
+    "knownFlake": "TelegramWebhookP99IT.p99Latency_under100msAt100ParallelRequests — cold-JVM perf benchmark, measured p99=107ms vs 100ms SLA. Documented workstation-flaky; sole failure, not a feature regression. Skipped(2): TelegramSenderIT.sendText_terminalFailureViaBotService_emitsFailedEventOnly, TelegramSenderIT.sendText_endToEndViaBotService_emitsBothEvents (pre-existing conditional skips). Command: ./gradlew test -PrunSlow=true (Testcontainers Mongo + JobRunr + MockWebServer + MutableClock)."
+  },
+  "frontend": {
+    "vitest": "PASS — 391 tests in 48 files, 0 failed (npx vitest run)",
+    "playwright": "SKIPPED — 2 tests in e2e/funnels.spec.ts gracefully skipped (backend not running on localhost:8080). funnels_goldenPath_buildAndActivate + funnels_menuGoldenPath_buildAndActivate. Skip, not fail.",
+    "build": "PASS — npx nuxt build complete, no typecheck/compile errors (Total 8.46 MB)"
+  },
+  "acceptanceCriteria": [
+    {
+      "id": "US-1 MENU step with callback/url buttons",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelStepExecutorTest.menu_sends_text_with_reply_markup, menu_callbackButtons_encodeCorrectCallbackData; FunnelControllerIT.menuButtonsRoundTripThroughPatchAndGet; vitest funnel-editor.spec.ts (MENU form). URL http(s)-only: FunnelControllerIT.activateMenuUrlButtonRejectsNonHttpScheme."
+    },
+    {
+      "id": "US-2 loop-back button + fan-in",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.fan_in_multiple_buttons_one_target, loop_resend_menu_works; FunnelControllerIT.menuFanInAndLoopTargetsValidate, reorderPreservesButtonTargetsById."
+    },
+    {
+      "id": "US-3 /start delivers MENU keyboard with {user.first_name}",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.menu_parks_on_reply (sends menu, status=waiting_for_reply); VariableTemplateRendererTest covers {user.first_name} substitution; TelegramSenderIT.sendText_withReplyMarkup_includesInlineKeyboardInBody. Live Telegram render is deferred-to-user."
+    },
+    {
+      "id": "US-4 callback click clears spinner + correct branch",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.resumeOnCallback_advances_into_button_branch, advanceOnCallback_validClick_advancesBranch_writesEvent; answerCallbackQuery via TelegramSenderIT.answerCallbackQuery_postsToAnswerCallbackQueryEndpoint."
+    },
+    {
+      "id": "US-5 loop branch re-sends menu, repeat clicks work",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.loop_resend_menu_works."
+    },
+    {
+      "id": "US-6 URL button opens link, does not advance funnel",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.advanceOnCallback_urlButtonOrOutOfRange_noOp (URL button index -> no advance)."
+    },
+    {
+      "id": "US-7 stale/old button -> answerCallbackQuery + silent no-op",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.advanceOnCallback_staleOnCompleted_noOp, advanceOnCallback_currentStepIdMismatch_noOp."
+    },
+    {
+      "id": "US-8 double click -> branch runs once (atomic claim)",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.resumeOnCallback_double_click_advances_once, advanceOnCallback_doubleClick_advancesOnce."
+    },
+    {
+      "id": "US-9 /stop during wait -> waiting_for_reply executions cancelled",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelTriggerServiceIT.cancelActiveForCancelsRunningAndWaiting; ProcessTelegramUpdateJobTest.stopPrivate_callsMarkUnsubscribedAndCancel_writesEvent."
+    },
+    {
+      "id": "US-10 blocked bot during wait -> first send in branch cancels execution",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.blocked_bot_during_wait_cancels_on_resume."
+    },
+    {
+      "id": "US-11 edit funnel while waiting -> drains on old graph (snapshot isolation)",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.editingFunnelDuringWait_doesNotChangeInFlightExecution; FunnelStepTest.deepCopyButtonsAreIndependent."
+    },
+    {
+      "id": "US-12 paused funnel -> no new starts; in-flight waiting advances to completed",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.paused_funnel_in_flight_resumes_to_completed, advanceOnCallback_pausedFunnel_drainsToCompleted (Decision 11)."
+    },
+    {
+      "id": "US-13 timeout -> follows timeout target; unset -> waits unbounded",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.timeout_resume_follows_target, timeout_null_target_completes, sweep_does_not_resume_menu_without_timeout."
+    },
+    {
+      "id": "US-14 loop without wait -> step budget trips -> failed with greppable log marker",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.loop_without_wait_trips_step_budget (FUNNEL_STEP_BUDGET_EXCEEDED marker, Decision 4)."
+    },
+    {
+      "id": "US-15 activate with edge to deleted step -> 422 funnel_broken_edge; MENU without callback -> 422",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelControllerIT.activateBrokenEdgeReturns422, activateBrokenNextEdgeReturns422, activateMenuWithoutCallbackReturns422."
+    },
+    {
+      "id": "US-16 click records funnel_button_clicked + lastButtonClicked",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.advanceOnCallback_validClick_advancesBranch_writesEvent; ProcessTelegramUpdateJobTest.callbackQuery_callsAdvanceOnCallback_writesEvent, callbackQuery_eventCarriesNoPii."
+    },
+    {
+      "id": "US-17 Phase-1 funnels + in-flight executions not broken (id backfilled, linear runs drain)",
+      "source": "user-spec",
+      "status": "PASS",
+      "evidence": "FunnelStepIdBackfillTest (6 tests, idempotent, in-flight snapshots); FunnelExecutionEngineIT.legacy_linear_run_drains_via_index_fallback; full Phase-1 suite green (no regressions)."
+    },
+    {
+      "id": "TS-1 waiting_for_reply in re-enter partialFilter, sweep/claim $in, all cancel paths; drift-assertion + FunnelStatusEnumTest + FunnelIndexesIT green",
+      "source": "tech-spec",
+      "status": "PASS",
+      "evidence": "FunnelStatusEnumTest.statusEnumsArePersistedLowercase (drift); FunnelIndexesIT (4 tests green); FunnelTriggerServiceIT.cancelActiveForCancelsRunningAndWaiting + reEnterTrueCancelsAndRestarts; sweep_does_not_resume_menu_without_timeout proves $in+nextRunAt predicate."
+    },
+    {
+      "id": "TS-2 FunnelStep.copyOf deep-copies button list",
+      "source": "tech-spec",
+      "status": "PASS",
+      "evidence": "FunnelStepTest.deepCopyButtonsAreIndependent, deepCopyProducesIndependentStep, copyOfNullButtonsStaysNull (Decision 5)."
+    },
+    {
+      "id": "TS-3 backfill ApplicationRunner idempotent; restart does not duplicate id",
+      "source": "tech-spec",
+      "status": "PASS",
+      "evidence": "FunnelStepIdBackfillTest.backfillIsIdempotentAndNeverOverwritesExistingIds, backfillLeavesAlreadySeededExecutionUntouched."
+    },
+    {
+      "id": "TS-4 callback_data <=64 bytes; malformed/oversized/foreign -> answerCallbackQuery + no-op",
+      "source": "tech-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.advanceOnCallback_malformedOrOversizedData_noOp, advanceOnCallback_urlButtonOrOutOfRange_noOp; FunnelStepExecutorTest.menu_callbackButtons_encodeCorrectCallbackData (<=64); answerCallbackQuery always called (Decision 6)."
+    },
+    {
+      "id": "TS-5 IDOR foreign executionId rejected; answerCallbackQuery on all no-op paths",
+      "source": "tech-spec",
+      "status": "PASS",
+      "evidence": "FunnelExecutionEngineIT.resumeOnCallback_rejects_foreign_subscriber, advanceOnCallback_foreignExecution_idorRejected_noAdvance, advanceOnCallback_answerCallbackQuery5xx_advanceNotBlocked (Decision 6 subscriberId-scoped CAS)."
+    },
+    {
+      "id": "TS-6 all tests green (unit+IT+1 e2e); no Phase-1 regressions",
+      "source": "tech-spec",
+      "status": "PASS",
+      "evidence": "Backend 971/974 passed (sole failure = known P99 perf flake, not a regression); vitest 391/391; nuxt build green. Playwright e2e skipped (no live backend) -> deferred-to-user. No Phase-1 module failures."
+    },
+    {
+      "id": "TS-7 no new secrets; URL buttons http(s) only (strict URI scheme + host parse)",
+      "source": "tech-spec",
+      "status": "PASS",
+      "evidence": "Only new config app.funnel.max-steps-per-tick=100 (no secret). FunnelControllerIT.activateMenuUrlButtonRejectsNonHttpScheme, activateMenuUrlButtonRejectsLeadingWhitespace, activateMenuUrlButtonRejectsEmptyHost (Decision 10)."
+    },
+    {
+      "id": "US-LIVE Live Telegram inline-keyboard walkthrough (/start menu, click callback -> spinner clears + correct branch, loop button re-shows menu, URL button opens link no advance)",
+      "source": "user-spec",
+      "status": "DEFERRED",
+      "evidence": "Real Telegram inline-keyboard behavior is not covered by webhook simulation; explicit manual user check per task scope. Webhook-simulation paths covered indirectly by FunnelExecutionEngineIT.advanceOnCallback_* + ProcessTelegramUpdateJobTest.callbackQuery_*."
+    },
+    {
+      "id": "AVP curl 422 funnel_broken_edge + MENU-without-callback 422 against live backend",
+      "source": "tech-spec",
+      "status": "DEFERRED",
+      "evidence": "No live backend/Mongo/Redis stack stood up in QA env; covered pre-deploy by FunnelControllerIT.activateBrokenEdgeReturns422 + activateMenuWithoutCallbackReturns422 (same controller path) as indirect proof. Curl confirmation deferred to live."
+    },
+    {
+      "id": "AVP webhook callback_query simulation (stale/foreign/malformed/oversized -> no-op; valid -> funnel_button_clicked + lastButtonClicked) against live Mongo",
+      "source": "tech-spec",
+      "status": "DEFERRED",
+      "evidence": "Requires live backend+Mongo+Redis not stood up in QA env. Covered pre-deploy by FunnelExecutionEngineIT.advanceOnCallback_* (Testcontainers Mongo) + ProcessTelegramUpdateJobTest.callbackQuery_* as indirect proof. Live curl/Mongo confirmation deferred."
+    }
+  ],
+  "deferredToUser": [
+    "Live Telegram walkthrough on test bot: /start -> menu keyboard; click callback -> spinner clears + correct branch arrives; loop button -> menu re-appears; URL button -> link opens, funnel does not advance.",
+    "Live curl activate: broken-edge -> 422 funnel_broken_edge; MENU without callback -> 422 (covered indirectly by FunnelControllerIT).",
+    "Live webhook callback_query simulation + Mongo assertions for stale/foreign/malformed/oversized no-op and valid-click event write (covered indirectly by engine ITs on Testcontainers Mongo)."
+  ],
+  "regressions": [],
+  "notes": "QA local-only, no deploy. Gradle ran on Liberica JDK 21 toolchain (JDK 25 on PATH not used for tests). Sole backend failure is the documented cold-JVM P99 perf flake (107ms vs 100ms SLA) — classified as known flake, not a feature regression, per task instructions; does not fail QA. Playwright e2e gracefully skips without a running backend (skip, not fail). All 17 user-spec ACs + all 7 tech-spec ACs verified PASS pre-deploy; 3 criteria DEFERRED to the user's manual live Telegram/curl check (each backed by indirect integration-test evidence). Zero criticals -> verdict PASS."
+}

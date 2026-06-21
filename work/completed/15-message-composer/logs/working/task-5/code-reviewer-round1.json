@@ -1,0 +1,31 @@
+{
+  "task": 5,
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "mode": "self-applied (nested sub-agent spawn restricted)",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerServiceIT.java"
+  ],
+  "summary": "advanceOnCallback Step 7 guard flipped from 'cursor must be MENU' to positive 'stepType == MESSAGE' with menu->step rename; Step 8 still resolves the keyboard from step-level getButtons() (Decision 2). Strict parse, IDOR/owner+project checks, range-check, recordButtonClick coordinate, answerCallback finally invariant, log markers all preserved. IT migrated to composer seed helpers + full callback negative matrix + positive park/branch. Minimal, focused diff (+14/-8 prod).",
+  "verified_cross_file": [
+    "FunnelStep.getStepType()/getButtons()/getBlocks()/setBlocks() exist post-Task1",
+    "StepType.MESSAGE exists, MENU removed",
+    "FunnelExecutionEngine.resumeOnCallback(String,String,String) signature unchanged; null targetStepId => End/complete; DELAY target => waiting",
+    "FunnelExecution.getLastButtonClicked()/getCurrentStepId() exist",
+    "EVENT_FUNNEL_BUTTON_CLICKED constant referenced from IT compiles",
+    "ContentBlock(BlockType,text,parseMode,mediaUrl,caption,items) / Button(type,label,targetStepId,url) record ctors match test usage",
+    "Bot unique-CONNECTED index on telegramBotId honored (cross-project test uses distinct bot id)"
+  ],
+  "findings": [],
+  "good_practices": [
+    "Positive guard (stepType==MESSAGE) is fail-closed: null cursor or any non-MESSAGE step rejects, never silently advances",
+    "Log marker renamed to FUNNEL_CALLBACK_CURRENT_STEP_NOT_MESSAGE keeps grep semantics aligned with the new guard",
+    "Comments explain WHY index-addressing stays on step-level getButtons() under Decision 2",
+    "Tests assert no-advance via concrete state (waiting_for_reply preserved + lastButtonClicked null + zero events), not just absence of exception",
+    "Event-once test exercises real CAS double-click path",
+    "IDOR cross-subscriber and cross-project are distinct tests; cross-project uses a separate bot id to respect the unique index"
+  ],
+  "verification": "Isolated: main compiles (gradlew compileJava BUILD SUCCESSFUL); FunnelTriggerServiceIT compiles + runs green (25 tests, 0 failures) with sibling Task3/4 test files temporarily stashed then restored. Siblings excluded by scope (owned by parallel teammates).",
+  "result": "pass"
+}

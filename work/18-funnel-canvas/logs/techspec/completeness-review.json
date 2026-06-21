@@ -1,0 +1,40 @@
+{
+  "status": "pass",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": true
+  },
+  "requirements_total": 21,
+  "requirements_covered": 21,
+  "requirements_partial": 0,
+  "requirements_missing": 0,
+  "findings": [
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "Decision 8 [TECHNICAL] — no-migration posture has no User-Spec Deviations entry",
+      "detail": "Decision 8 is tagged [TECHNICAL] but has no corresponding Deviations entry. The infrastructure exemption applies (schema-evolution posture, not new functionality), so this is not a hard violation. Flagged for awareness only.",
+      "severity": "minor"
+    },
+    {
+      "type": "documented_deviation",
+      "source": "tech-spec",
+      "requirement": "testRun honours on_start entry step — [PENDING USER APPROVAL]",
+      "detail": "FunnelService.testRun aligned to start at the on_start entry step instead of array[0]. Documented in User-Spec Deviations as PENDING USER APPROVAL. Intentional — awaiting user approval. No action needed.",
+      "severity": "minor"
+    }
+  ],
+  "previously_flagged_items": {
+    "note_id_minting_strategy": "FIXED — Decision 7 and Task 1 now explicitly specify server-minted ObjectId hex; frontend sends id: null for new notes; IT scope covers new-note-id round-trip.",
+    "start_node_edge_deletion_broken_edge": "FIXED — Decision 5 covers entryStepId == null as a broken-edge state (not a hard validation error); Testing Strategy unit tests include explicit broken-edge detection for on_start with deleted edge; component tests cover the full start-node lifecycle including edge-only deletion.",
+    "cycle_round_trip_test": "FIXED — Testing Strategy unit tests explicitly include cycle (return-to-menu) maps to nodes+edges and serializes without infinite recursion.",
+    "422_funnel_broken_edge_regression": "FIXED — Engine IT list now explicitly includes: existing funnel_broken_edge 422 still fires on activate with a dangling edge (regression).",
+    "loop_backstop_preservation": "FIXED — Engine IT list now explicitly includes: step-budget loop backstop still terminates a cyclic funnel (Phase 2-3 regression, given the advanceToNext rewrite).",
+    "mixed_coordinates_test": "FIXED — Testing Strategy unit tests now explicitly include mixed-coordinates scenario (some nodes positioned, some null).",
+    "negative_validation_entryStepId": "FIXED — Engine IT list includes negative case (rejects entryStepId on non-event trigger); AC section confirms negative case asserted.",
+    "searchable_select_removal_mechanism": "FIXED — Decision 10 now specifies the hideTargetPickers boolean prop (default false) that conditionally hides target SearchableSelects; Task 6 references it explicitly; component tests cover FunnelStepForm with hideTargetPickers active.",
+    "dagre_error_handling": "FIXED — Risks table now includes: dagre throws on malformed/degenerate graph — wrap the layout call; on failure fall back to simple grid/stacked placement so canvas still renders (never a blank screen)."
+  },
+  "summary": "21/21 requirements covered. All 9 previously flagged critical/major items are resolved. 2 minor informational findings remain: Decision 8 [TECHNICAL] without a Deviations entry (infrastructure exemption applies — not a violation) and the testRun deviation intentionally PENDING USER APPROVAL. No scope creep, overengineering, or shallow solution identified. PASS."
+}

@@ -1,0 +1,20 @@
+{
+  "status": "approved",
+  "summary": "Round 2 fixes confirmed: Decision 12 + Task 1 + Architecture 'Modified files' all now list DEFAULT_RESPONSE_TIMEOUT and CONNECT_TIMEOUT alongside the two helpers, and Decision 15 title now says BotController.testMessage. The three new edits (NPE/IllegalStateException unit test, negative-retry-after concrete bound 2..100, SocketPolicy.DISCONNECT_AT_START usage) all check out — no new mirages introduced. Note: The actual TelegramApiClient source is still private static — that is correct (Task 1 has not been executed yet); spec self-consistency is what was checked.",
+  "findings": [],
+  "stats": {
+    "total_claims_checked": 8,
+    "confirmed": 8,
+    "mirages_found": 0,
+    "verified_claims": [
+      "Decision 12 (line 162-166) lists all four: requireValidTokenShape, isTransient, DEFAULT_RESPONSE_TIMEOUT, CONNECT_TIMEOUT — fixed",
+      "Task 1 (line 417-419) lists all four members for promotion — fixed",
+      "Architecture line 36 (Modified files) lists all four for visibility change — fixed",
+      "Architecture line 72 'WebClient construction' references TelegramApiClient.DEFAULT_RESPONSE_TIMEOUT and TelegramApiClient.CONNECT_TIMEOUT.toMillis() — now consistent with Decision 12",
+      "Decision 15 title (line 180) reads 'BotController.testMessage HTTP contract preserved' — fixed",
+      "Architecture step 3 (line 56) NPE/IllegalStateException contract is paired with unit test sendText_tokenEncryptorMisconfigured_propagatesAsInternalError_notBotTokenInvalid at line 317 — coverage exists",
+      "sendText_429NegativeRetryAfter_clampsToZero_thenCapsAtOverallTimeout (line 306) has concrete '>= 2 AND <= 100' ceiling and references the Math.max(0, Math.min(retryAfter, 30)) clamp from Architecture step 11",
+      "SocketPolicy.DISCONNECT_AT_START exists in mockwebserver 4.12.0 jar (verified by unzipping ~/.gradle/caches mockwebserver-4.12.0.jar — enum constant present alongside DISCONNECT_AT_END, DISCONNECT_AFTER_REQUEST etc.); build.gradle line 38 confirms the testImplementation pin"
+    ]
+  }
+}

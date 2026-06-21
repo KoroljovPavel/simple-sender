@@ -1,0 +1,107 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 1,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is a mandatory feature-level context file required in every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is a mandatory feature-level context file required in every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is a mandatory feature-level context file required in every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 4,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is a mandatory feature-level context file required in every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "decisions.md is missing from Context Files. It is a mandatory feature-level context file required in every task.",
+      "fix": "Add `- [decisions.md](../decisions.md)` to the Context Files section."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 1,
+      "section": "Details",
+      "issue": "Details section is missing the mandatory **Dependencies:** subsection. Template requires: Files, Dependencies, Edge cases, Implementation hints.",
+      "fix": "Add a **Dependencies:** subsection listing task dependencies (none for Wave 1) and new Gradle packages added."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "Details",
+      "issue": "Details section is missing the mandatory **Dependencies:** subsection. Template requires: Files, Dependencies, Edge cases, Implementation hints.",
+      "fix": "Add a **Dependencies:** subsection listing depends_on tasks (none) and relevant Spring/library deps used in this task."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Details",
+      "issue": "Details section is missing the mandatory **Dependencies:** subsection. Template requires: Files, Dependencies, Edge cases, Implementation hints.",
+      "fix": "Add a **Dependencies:** subsection listing depends_on tasks (Task 1 for build.gradle mail dep, Task 2 for UserService) and spring-boot-starter-mail."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "Details",
+      "issue": "Details section is missing the mandatory **Dependencies:** subsection. Template requires: Files, Dependencies, Edge cases, Implementation hints.",
+      "fix": "Add a **Dependencies:** subsection listing depends_on tasks (Task 1, Task 2) and spring-data-redis-reactive, spring-session-data-mongodb."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Details",
+      "issue": "Details section is missing the mandatory **Dependencies:** subsection. Template requires: Files, Dependencies, Edge cases, Implementation hints.",
+      "fix": "Add a **Dependencies:** subsection listing depends_on tasks (Task 3 for EmailService, Task 4 for TokenService skeleton, EventService) and spring-boot-starter-validation."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor test `verifyEmail_expiredToken_400WithTokenExpiredCode` tests for a specific HTTP response code and error code string, which is close to structural assertion rather than pure behavioral verification. Acceptable but borderline.",
+      "fix": "Optionally enhance description to specify that the assertion checks both the response body code field AND that the user's token fields remain unchanged in MongoDB — making it a state-based assertion."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 1,
+      "section": "Context Files",
+      "issue": "patterns.md is absent from Context Files. While not strictly mandatory for infra tasks, the task-creator spec recommends including patterns.md for code tasks and it aids the implementing agent.",
+      "fix": "Consider adding `- [patterns.md](../../.claude/skills/project-knowledge/references/patterns.md)` — at minimum for consistency, even if less critical for a config-only task."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 12
+  }
+}

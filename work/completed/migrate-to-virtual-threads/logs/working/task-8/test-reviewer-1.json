@@ -1,0 +1,123 @@
+{
+  "status": "needs_improvement",
+  "summary": "All three test files compile cleanly off Reactor (no StepVerifier/Mono/Flux/reactive csrf imports), Mockito stubs correctly return Optional<Bot>/Optional.empty(), and the critical invariants from tech-spec (attempts==4 interleaving, overall-timeout, pre-HTTP 422 audit shape, per-site scrubber coverage) all hold. Two TDD-anchor gaps remain: (1) the explicit error-log-before-audit-event ordering test specified in TDD anchor #11 is absent — there are zero InOrder assertions in TelegramSenderTest despite the task spec calling them out for both success and terminal-failure paths, and (2) the TDD anchor #3 5xx-then-200 retry-success scenario for TelegramApiClient is missing (only the 5xx-exhausted variant is present). Minor gap: bot-not-found / disconnected tests assert no HTTP traffic but never assert no audit event was emitted, leaving a hole in the 'pre-HTTP AppException is not auditable' invariant.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java (no test exists)",
+      "issue": "TDD anchor #11 `sendText_terminalFailure_emitsErrorLogBeforeAuditEvent` is missing. Task spec line 93 explicitly requires: '401 → log.error emitted before eventService.logEvent(...EVENT_TELEGRAM_SEND_FAILED...). Verify ordering via InOrder on the appender + eventService.' The post-flip file has ZERO InOrder usages. The existing `sendText_401_throwsBotTokenInvalidException_noRetry` test asserts the exception but never verifies the audit event was emitted at all, let alone its ordering relative to the error log. The implementation at TelegramSender.java:133-137 does emit log.error before eventService.logEvent, but that invariant is not guarded by any test — a future refactor that reorders the two lines would not fail any test.",
+      "recommendation": "Add a dedicated test enqueuing a 401 response, capturing log events via the existing logAppender, and using `InOrder inOrder = inOrder(logAppender, eventService)` style verification. Concrete shape: (a) stubFindReturns(connectedBot()); (b) mockServer.enqueue(jsonResponse(401, ...)); (c) assertThatThrownBy(...).isInstanceOf(BotTokenInvalidException.class); (d) capture the ERROR-level log message via logAppender.list filter; (e) verify(eventService).logEvent(eq(OWNER_ID), eq(EVENT_TELEGRAM_SEND_FAILED), ...); (f) assert that the timestamp/index of the ERROR ILoggingEvent in logAppender.list is less than the relative ordering of the eventService invocation — practical approach: use an Answer on eventService.logEvent that captures `logAppender.list.size()` at call time, then assert the captured size > 0 AND that the last entry before that size was the ERROR-level terminal-failure log. Mirror the same shape for the success path: capture `logAppender.list.size()` snapshot when eventService.logEvent fires on success and assert sm reference is non-null but RETURN has not yet completed — or simpler, use `verifyNoMoreInteractions` after the explicit logEvent verification to ensure no later log/event was emitted post-return."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramApiClientTest.java (no test exists)",
+      "issue": "TDD anchor #3 `getMe_5xx_then_200_succeedsAfterRetry` is missing. Task spec line 85 calls for: 'MockWebServer 500, 500, 200 → succeeds, mockServer.getRequestCount() == 3.' The post-flip file covers `getMe_5xxRetryExhausted_returns502TelegramUnavailable` (4 × 500 → exhausted) but never exercises the success-after-retry branch. This leaves the retry loop's happy-recovery path unverified — a regression that always returns on the FIRST failure (no continue in the loop) would pass `5xxRetryExhausted` but break this missing test. The litmus test is decisive: if you replace the `for(attempt=0..3)` body with a single attempt + immediate rethrow, the exhausted test still passes (still surfaces telegram_unavailable after 1 attempt with a wrong requestCount, but the count check would catch only that one regression — and the exhausted test asserts count==4 explicitly, so it WOULD fail). However the inverse — a regression that breaks the retry continue logic but keeps retrying on the first transient failure — is uncaught.",
+      "recommendation": "Add a test: (a) enqueue 500, 500, 200 (matching scrubber test pattern); (b) call `TelegramUser user = client.getMe(TOKEN);`; (c) assert user is non-null with expected id; (d) assert `mockServer.getRequestCount() == 3`. Backoff is 200ms + 400ms ≈ 600ms total, well under the 10s response timeout. Verifies the loop's `continue` semantics post-sleep."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:551-583 (sendText_botNotFound_throwsNotFound_noHttp + sendText_botDisconnected_throwsNotFound_noHttp)",
+      "issue": "Per task spec check #8 + TDD anchor #10: bot-not-found / disconnected scenarios must assert NO audit event is emitted. The post-flip tests assert the exception, status, code, message, and `mockServer.getRequestCount().isZero()`, but never `verify(eventService, never()).logEvent(...)`. The invariant being protected — pre-HTTP `AppException` is not auditable (`isTerminalAuditable` returns false at TelegramSender.java:326-332) — is not guarded by either of these tests. Pre-flip had the same gap; the migration was a 1:1 carry-over rather than a fix, but the task spec called this out specifically.",
+      "recommendation": "Add `verify(eventService, never()).logEvent(any(), any(), any(), any(), any());` at the end of both `sendText_botNotFound_throwsNotFound_noHttp` and `sendText_botDisconnected_throwsNotFound_noHttp`. Cheap to add, protects the `isTerminalAuditable` carve-out for pre-HTTP AppExceptions."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:174-198 (sendText_happyPath_returnsSentMessage_attemptsEqualsOne)",
+      "issue": "The happy-path test verifies eventService.logEvent was invoked and that sm was returned, but does not assert the ordering invariant from acceptance criteria 'success event AFTER body-parse + BEFORE return' (task spec line 49, acceptance criterion 'Audit-event emission preserves ordering: success event AFTER body-parse + BEFORE return'). Because the test runs sequentially and the implementation at TelegramSender.java:129-131 is `eventService.logEvent(...); return sm;`, any test that observes both effects after the call effectively confirms both happened — but the test cannot distinguish 'event-before-return' from 'event-after-return' without explicit ordering instrumentation. This is acceptable for normal regression coverage but leaves the documented invariant under-asserted.",
+      "recommendation": "Optional improvement: stub eventService.logEvent with a `doAnswer(...)` that records `Thread.currentThread().getStackTrace()` (or simpler — sets a flag), then after `sender.sendText(...)` returns, assert the flag was set. More direct: throw a sentinel RuntimeException from the eventService.logEvent stub and assert sendText propagates that exception (proving the event fires BEFORE return; if it fired AFTER return, sm would already be returned and the throw would be unobservable from sendText's caller). This is sufficient evidence the event is on the pre-return path. Equivalent to TDD anchor #11 InOrder shape but for the success path."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:417-432 (sendText_401_throwsBotTokenInvalidException_noRetry)",
+      "issue": "The 401 test asserts the BotTokenInvalidException shape but never verifies eventService.logEvent(...EVENT_TELEGRAM_SEND_FAILED...) was invoked. Per `isTerminalAuditable` (TelegramSender.java:330), BotTokenInvalidException IS auditable, so the audit event SHOULD fire. A regression that drops the audit emission for BotTokenInvalidException would pass this test silently. Pre-flip had the same gap; the migration carried it over.",
+      "recommendation": "Add to `sendText_401_throwsBotTokenInvalidException_noRetry`: `verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED), isNull(), isNull(), any());` after the assertThatThrownBy block. Better: capture metadata and assert `attempts == 1` (since 401 fires after the first HTTP attempt), `errorCode == 401`, `botId == BOT_ID` — pins the failure-metadata shape end-to-end for the auditable-4xx branch. If the audit ordering test (Finding #1) is added as a separate 401 scenario, this assertion can fold into that test."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java:163-177 (two @Disabled tests)",
+      "issue": "Both `@Disabled` tests have empty method bodies (just a comment). Per project convention these are placeholders re-enabled by Task 7. The Wave 2 commit body claims Task 7 has already landed (commit 56c9506 'fix: address review round 1 for task 7' precedes this commit), so the rationale 'enabled by Task 7' is now historically stale — Task 7 has shipped, yet these tests remain @Disabled and empty. Either Task 7's BotService.sendTestMessage rewrite is genuinely not yet integrated with TelegramSender in a way that makes these scenarios exercise-able, or the comment/disabled state is now out of date.",
+      "recommendation": "Verify whether Task 7's BotService.sendTestMessage now invokes TelegramSender. If yes: implement the two scenarios (happy path via HTTP + terminal failure via HTTP, both asserting bot_test_message_sent / telegram_send_failed event emission via eventRepository.findAll() polling). If no: update the @Disabled message to reflect the remaining blocker (e.g. 'enabled by Wave 3 — requires <future task> wiring'). The current state — empty bodies with a 'Task 7 will enable this' message after Task 7 has already shipped — is misleading."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:704-734 (sendText_tokenInTransportErrorMessage_scrubbed)",
+      "issue": "Test shuts down mockServer then re-initializes it later (line 721-722) to keep @AfterEach happy. The comment at 719-723 explains the workaround. This creates a fragile flow: if the test throws between mockServer.shutdown() at line 708 and the re-init at line 721-722, the @AfterEach's try/catch swallow path executes. The current shape works but couples test cleanup correctness to assertion ordering. The transport-error case is intrinsically awkward (you need a closed port to trigger ResourceAccessException), so some workaround is required.",
+      "recommendation": "Optional: wrap the assertion block in try/finally so the re-init runs before any assertion failure propagates: `try { assertThatThrownBy(...) ...; List<String> leakSites = ...; assertThat(leakSites)...; } finally { mockServer = new MockWebServer(); mockServer.start(); }`. Keeps the test self-cleaning regardless of assertion outcome and removes the dependency on the @AfterEach try/catch's defensive behaviour."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 32,
+      "passed": 30,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 31,
+      "integration": 4,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "scenarioParity": {
+      "telegramApiClientTest": {
+        "preFlipCount": 12,
+        "postFlipCount": 13,
+        "added": ["(none — all 12 pre-flip scenarios carried over; TDD anchor #3 5xx-then-200-success remains missing in both versions)"],
+        "dropped": []
+      },
+      "telegramSenderTest": {
+        "preFlipCount": 26,
+        "postFlipCount": 26,
+        "added": [],
+        "dropped": []
+      },
+      "telegramSenderIT": {
+        "preFlipCount": 4,
+        "postFlipCount": 4,
+        "added": [],
+        "dropped": []
+      }
+    },
+    "tddAnchorCoverage": {
+      "totalAnchors": 12,
+      "fullySatisfied": 9,
+      "partiallySatisfied": 2,
+      "missing": 1,
+      "details": {
+        "getMe_happyPath_returnsPopulatedTelegramUser": "satisfied",
+        "getMe_401_mapsToInvalidBotToken": "satisfied",
+        "getMe_5xx_then_200_succeedsAfterRetry": "missing",
+        "getMe_5xx_persistent_retriesExhausted": "satisfied (as getMe_5xxRetryExhausted_returns502TelegramUnavailable)",
+        "scrubber_4xx_redactsTokenInLog": "satisfied (as setWebhook_4xxConfigError_scrubsTokenInWarnLog)",
+        "sendText_happyPath_returnsSentMessage_emitsSuccessEvent": "satisfied (returns SentMessage + verifies EVENT_TELEGRAM_MESSAGE_SENT invocation; ordering not explicitly asserted but implicit from sequential code)",
+        "sendText_5xx429_5xx_200_succeeds_attemptsEquals4": "satisfied",
+        "sendText_overall_timeout_throwsTelegramSendException": "satisfied (asserts timeout message + verifies EVENT_TELEGRAM_SEND_FAILED invoked)",
+        "sendText_429_negativeRetryAfter_clampedToZero": "satisfied (as sendText_429NegativeRetryAfter_clampsToZero_thenCapsAtOverallTimeout)",
+        "sendText_botNotFound_throws404_noAuditEvent": "partial — throws 404 + zero HTTP traffic, but no `verify(eventService, never()).logEvent(...)` assertion",
+        "sendText_terminalFailure_emitsErrorLogBeforeAuditEvent": "missing — no InOrder verification anywhere in TelegramSenderTest; 401 test does not even verify audit event is emitted",
+        "sendText_4xxDescription_redactsTokenInLog": "satisfied (as sendText_tokenIn4xxDescription_scrubbed_warnLevel)"
+      }
+    },
+    "reactiveImportPurge": {
+      "stepVerifierImports": 0,
+      "monoFluxImports": 0,
+      "webClientImports": 0,
+      "reactiveCsrfImports": 0,
+      "assessment": "complete — no lingering reactive symbols in any of the three test files"
+    },
+    "mockitoStubMigration": {
+      "monoJustStubs": 0,
+      "monoEmptyStubs": 0,
+      "optionalOfStubs": "all findById stubs use Optional.of(bot) or Optional.empty()",
+      "assessment": "complete"
+    }
+  }
+}

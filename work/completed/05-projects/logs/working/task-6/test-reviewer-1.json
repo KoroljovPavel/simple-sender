@@ -1,0 +1,41 @@
+{
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/tests/pages/projects/new.spec.ts",
+      "line": 139,
+      "issue": "Test names `new_serverError409_showsApiErrorToast` and `new_serverError422LimitReached_showsApiErrorToast` say \"Toast\" but the implementation uses an inline `[data-test=\"submit-error\"]` block (which is what the AC and patterns.md require: inline, not toast). The names are misleading and contradict the very contract being verified.",
+      "suggestion": "Rename to `new_serverError409_showsInlineSubmitError` and `new_serverError422LimitReached_showsInlineSubmitError`. Body of the tests is correct — only the identifiers drift from the AC vocabulary."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/pages/dashboard.spec.ts",
+      "line": 125,
+      "issue": "`dashboard_mount_callsFetchAll` is a mock-only assertion (`expect(projectsStoreMock.fetchAll).toHaveBeenCalled()`) with no payload check and no behavioural follow-up. It is the weakest test in this spec — it would still pass if `fetchAll` were called with wrong arguments or with the wrong number of times. Also, this test is NOT listed in the TDD Anchor for Task 6 (the anchor only requires the 3 empty/welcome/loading tests and that the 2 existing tests stay green).",
+      "suggestion": "Either (a) tighten the assertion to `expect(projectsStoreMock.fetchAll).toHaveBeenCalledTimes(1)` and `expect(projectsStoreMock.fetchAll).toHaveBeenCalledWith()` so a regression to passing wrong args is caught, or (b) drop this test entirely — the three branch tests already exercise the `isLoaded`/`projects` contract, and the `import.meta.client` gating around `fetchAll` is implementation detail that does not require its own assertion. Recommended: keep it but tighten to `toHaveBeenCalledTimes(1)`."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/pages/projects/new.spec.ts",
+      "line": 91,
+      "issue": "`new_invalidTimezone_showsValidationError` bypasses Vue's v-model binding by mutating `select.value` directly and dispatching raw `input`/`change` events. This works today, but it is brittle: any future change to vee-validate's `defineField` attrs (e.g. `update:modelValue` instead of `input`) silently turns the test into a no-op that still passes because the original valid default remains in the model and the form submits successfully — `create` would be called and the negative assertion `not.toHaveBeenCalled()` would flip from passing-for-the-right-reason to passing-for-the-wrong-reason. The TDD anchor calls this case \"через прямий запис у поле\" so the approach is sanctioned, but the safety net is weak.",
+      "suggestion": "Add one tighter assertion to lock in the cause-of-failure: read back `(select as HTMLSelectElement).value` after the dispatch and assert it equals `'Mars/Olympus_Mons'` BEFORE the submit. That way, if a future framework upgrade makes the dispatch ineffective, the test fails at the precondition rather than producing a misleading green."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/tests/pages/projects/new.spec.ts",
+      "line": null,
+      "issue": "No test covers the reactive-Zod / locale-switch behaviour explicitly called out as an AC (\"Reactive Zod: live re-validation при перемиканні локалі\"). The schema is built inside `computed()` and passed AS-IS to `useForm`, but no test asserts that switching `useI18n` locale re-runs validation with the new message strings. This is the one AC from Task 6 that has zero test coverage — manual verification step #6 is the only safety net.",
+      "suggestion": "Optional add-on: `new_localeSwitch_reValidatesWithNewMessages` — mount with default locale, set `name='ab'`, submit, capture error text; then swap `useI18n` locale (or remount with a different mocked t() that returns a sentinel string) and re-submit, assert the error text changes without remounting the form. If keeping the spec lean is preferred, this is acceptable to defer — the rest of the spec is solid and the contract is structurally enforced by `computed()` + passing schema by ref."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/tests/pages/projects/new.spec.ts",
+      "line": 78,
+      "issue": "`new_descriptionTooLong_showsValidationError` tests 201 chars but not the boundary at exactly 200 (valid) or 199 (valid). Same for `new_nameTooShort` (tests 2, not 3) and `new_nameTooLong` (tests 51, not 50). Boundary-off-by-one regressions in the Zod schema (`.min(2)` instead of `.min(3)`) would slip through.",
+      "suggestion": "Optional: add one positive-boundary assertion per field — e.g. extend `new_validSubmit_callsStoreCreateAndRedirects` (or add a sibling) using exactly 3-char name and exactly 200-char description and assert `create` IS called. Low priority because the positive valid-submit test already exercises a name inside the range; the off-by-one risk is small but non-zero."
+    }
+  ],
+  "notes": "All 9 new tests in `projects/new.spec.ts` and all 4 new tests in `dashboard.spec.ts` pass the litmus test — each one would fail if the corresponding implementation line were removed. Every TDD anchor named in task 6 has a matching test with meaningful assertions (not just mock-call checks). Every AC has at least one structural test: AC-18 (empty-state CTA + href to /projects/new), AC-19 (welcome shown when projects exist, empty-state absent), AC-22c partial (timezone default + IANA validation), AC-T6 (no localStorage mock needed; dashboard reads only from store mock), form validation 3-50/≤200/IANA (3 inline-error tests + 1 invalid-tz test), submit-error mapping for 409/422 (2 dedicated tests), description-blank→null contract (dedicated test + reinforced in valid-submit test), and the dashboard-mock-required AC (the spec genuinely uses the new mock and both legacy tests stay green). Mock surface is minimal and appropriate for unit tests of a page component: only `useProjectsStore`, `useAuthStore`, `useLocalePath`, `navigateTo` — no excessive mocking, no integration territory leaked in. Use of the shared `settle()` helper between `setValue` and assertions is consistent with the existing auth-page test pattern and is correct for vee-validate+zod async validation. The `Europe/Berlin` substitution for `Europe/Kyiv` in `new_validSubmit_callsStoreCreateAndRedirects` is documented inline and is the right call given Node ICU's `Europe/Kiev` legacy — it avoids cross-platform flakiness without weakening the contract assertion. Findings are all minor/nit polish; none block approval."
+}

@@ -1,0 +1,56 @@
+{
+  "status": "changes_required",
+  "findings": [
+    {
+      "category": "better_alternative",
+      "severity": "critical",
+      "issue": "Session storage choice — `spring-session-data-mongodb` reactive vs `spring-session-data-redis` reactive — is decided in user-spec without weighing the well-known reactive limitation of the MongoDB module. Spring Session's official docs and the project's own reactive examples show first-class WebFlux support only for `ReactiveRedisSessionRepository` / `@EnableRedisWebSession`. The reactive MongoDB session repository exists but has an open, long-standing issue (spring-projects/spring-session-data-mongodb #226) about WebSessions not being cleaned up in reactive mode — directly affecting TTL/expiration semantics this spec depends on (24h, 30d, 'remember me'). Redis is already in the stack and already used in this epic for brute-force counters; adding a sessions namespace there is essentially free. Choosing MongoDB sessions buys nothing concrete for this MVP and walks into a known reactive defect.",
+      "why_matters": "If session expiration silently fails to clean up in MongoDB-reactive mode, the 24h/30d TTL acceptance criteria are not actually enforced and stale sessions accumulate. This is a correctness issue, not a performance one. The spec frames this as a documentation update to architecture.md (`Redis scope`), but the architectural rationale ('Redis вже є, session storage у MongoDB природно') is weaker than the alternative ('Redis вже є, session storage також у Redis — нативно підтримується реактивно').",
+      "fix": "Either (a) switch to `spring-session-data-redis` with `@EnableRedisWebSession` — both brute-force and sessions live in Redis, MongoDB stays clean, reactive support is first-class; or (b) keep MongoDB sessions but add an explicit risk + spike task to verify reactive session cleanup works on Spring Boot 3.5.x and document the workaround if it does not. Current spec wording does neither — it presents MongoDB sessions as a settled decision. Re-open this decision in user-spec or escalate to a tech-spec spike with go/no-go criteria."
+    },
+    {
+      "category": "overengineering",
+      "severity": "major",
+      "issue": "User-spec contains implementation-level details that belong in tech-spec. Examples: bcrypt cost factor 12; SHA-256 hashing strategy for verification/reset tokens; specific frontend dependency names and packages (`@pinia/nuxt`, `@tanstack/vue-query`, `vee-validate`, `zod`, `shadcn-vue`); Spring `ApplicationRunner` as the implementation mechanism for super-admin seed; `Redis atomic INCR` as the brute-force mechanism; explicit file-level fix in `application.properties` for env binding; precise list of doc files to update (`architecture.md`, `deployment.md`, `ux-guidelines.md`).",
+      "why_matters": "User-spec defines WHAT and WHY, tech-spec defines HOW. Mixing them locks in implementation choices before the design review and makes later trade-offs harder (e.g. if Bucket4j is preferable to manual Redis INCR, the user-spec already constrains it). It also makes the spec harder to read for non-technical stakeholders.",
+      "fix": "Move the following to tech-spec / Технічні рішення of tech-spec: bcrypt cost, SHA-256 hashing approach, specific frontend libraries, ApplicationRunner mechanism, Redis INCR algorithm choice, file-level fixes. In user-spec leave only behavioural requirements (e.g. 'паролі хешуються', 'токени не зберігаються в plaintext', 'frontend має stack для форм/state/UI', 'super admin створюється автоматично при старті'). The `application.properties` env-binding bug fix is a legitimate part of scope, but its phrasing should be a behavioural acceptance criterion ('MONGODB_URI/REDIS_URL працюють у dev і prod'), not a file-level edit."
+    },
+    {
+      "category": "sizing",
+      "severity": "major",
+      "issue": "Declared size is L and the scope is wide: backend auth (8+ endpoints), frontend bootstrap (Pinia, Vue Query, shadcn-vue, vee-validate/zod, layout shell, auth middleware, login/register/forgot/reset/profile pages), Mailpit infra addition, Testcontainers wiring, JobRunr recurring hard-delete job, super admin seed, Epic 01 env-binding bug fix, three project-knowledge doc updates. Many items are independently shippable. The 'frontend bootstrap' alone is comparable in size to a small standalone feature.",
+      "why_matters": "L epics that bundle unrelated foundations make code review, rollback, and parallel work harder. If the frontend bootstrap slips (a Pinia + Nuxt 4 + auth middleware + SSR hydration combination is non-trivial), it blocks shipping the backend auth which is otherwise complete. Risk #3 (Nuxt 4 SSR auth hydration) acknowledges this implicitly.",
+      "fix": "Either (a) explicitly accept L as an integrated foundation epic and document that this is the only epic where backend+frontend are bundled (one-time bootstrap), keeping later epics smaller; or (b) split into 02a (backend auth + Mailpit + Testcontainers + super-admin seed + env-binding fix) and 02b (frontend bootstrap + auth UI). Option (a) is acceptable if the spec calls out 'this is a deliberate one-time foundation epic, not a template for future epic sizing'. Option (b) is safer but adds coordination overhead. Current spec implicitly chose (a) but does not justify the size."
+    },
+    {
+      "category": "underengineering",
+      "severity": "major",
+      "issue": "Edge cases for individual flows are thin. Examples not covered: what happens if email send fails after registration succeeds (user is in pending with no email — retry? user-visible error?); what if Mailpit/SMTP is down during password reset; concurrent registration of the same email (race between two POST /register); user clicking verification link while already verified (status=active); user clicking expired verification link after admin had already manually activated them; reset-password flow when account became `blocked` or `deleted` between request and submission; logout while session was already invalidated by 'terminate all sessions' from another device; super admin seed when MongoDB is unreachable at startup (does the app fail to start, or start without super admin?).",
+      "why_matters": "Auth is the foundation of every later epic; silent failures here corrupt user-visible state and trust. The spec lists a generous main-path criteria set, but auth is precisely where the 5% edge cases produce most production incidents.",
+      "fix": "Add an 'Edge Cases' subsection per flow (registration, verification, login, reset, profile actions, super-admin seed) with at minimum: external dependency failure (SMTP, MongoDB, Redis), concurrent/duplicate requests, status transitions during in-flight operations, idempotency of links. Aim for 3–5 edge cases per flow. The current spec has zero per-flow edge case sections."
+    },
+    {
+      "category": "underengineering",
+      "severity": "major",
+      "issue": "Observability and audit logging are not mentioned for auth flows. Per `architecture.md` the data model includes an `events` collection ('append-only audit log for security and analytics events'), but the user-spec does not specify which auth events are logged (registration, login success/failure, password reset request, password change, account deletion, brute-force lockout, super-admin seed run). PII handling is mentioned only in one sentence ('Паролі, токени та session ID — ніколи не потрапляють у логи та Sentry') with no positive list of what IS logged.",
+      "why_matters": "Without audit events, blocked accounts cannot be investigated, brute-force patterns cannot be traced, and Super Admin (Epic 10) cannot show meaningful audit views. Adding audit fields retroactively is much harder than emitting them from day one — every later epic will write to `events` and they need a precedent.",
+      "fix": "Add an 'Audit logging' subsection listing which auth actions emit `events` records, with the minimum field set (actor user id, action type, IP, user agent, timestamp, outcome). Tie this to the existing `events` collection from architecture.md. This is a behavioural requirement, not implementation detail."
+    },
+    {
+      "category": "feasibility",
+      "severity": "minor",
+      "issue": "Spec says JWT is replaced by sessions but does NOT state how the documented `JWT_SECRET`, `JWT_ACCESS_TTL_MINUTES`, `JWT_REFRESH_TTL_DAYS` env vars from `deployment.md` are removed/migrated. Spec mentions 'оновлення `deployment.md`: прибрати JWT vars, додати SESSION_TTL_*' which is good — but does not list the new env-var contract precisely (what are the names? defaults? where do they live in `.env.example`?). This is the same kind of bug that Epic 01 left behind (MONGODB_URI/REDIS_URL not bound) and that this epic is fixing.",
+      "why_matters": "If `.env.example` and `deployment.md` go out of sync with `application.properties`, the next developer hits the same class of issue this epic is supposed to repair.",
+      "fix": "List the new session-related env vars (e.g. `SESSION_TTL_DEFAULT_HOURS=24`, `SESSION_TTL_REMEMBER_ME_DAYS=30`, `SUPPORT_EMAIL`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`, `MAIL_*`, `APP_URL`) as a concrete acceptance criterion, including 'all are present in `.env.example`, none are committed with real values, all are bound in application.properties'."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "Risk #1 ('spring-session-data-mongodb + WebFlux') has a vague mitigation ('перевірити сумісність під час реалізації, написати smoke-тест першим'). The actual known issue — open GitHub issue #226 (reactive WebSessions not cleaned up in MongoDB) — is not referenced. Risk #2 ('Mailpit Testcontainer не в Maven Central') is now answerable: `ch.martinelli.oss:testcontainers-mailpit:1.3.1` IS in Maven Central, so the alternative paths (GreenMail, mock JavaMailSender) are unnecessary risk-mitigation.",
+      "why_matters": "Risks that aren't pinned to concrete checks block early validation; risks that are already resolved waste reviewer attention.",
+      "fix": "Risk #1 — add a concrete spike acceptance: 'before merging Epic 02, verify session cleanup works on Spring Boot 3.5.x reactive: create session, expire TTL, confirm document is deleted from `sessions` collection within X minutes'. Reference issue #226 explicitly so the spike author knows what they're hunting. Risk #2 — remove (Mailpit Testcontainer is on Maven Central as `ch.martinelli.oss:testcontainers-mailpit`)."
+    }
+  ],
+  "worst_category": "better_alternative",
+  "summary": "Epic 02 is feasible and correctly scoped as the foundational auth + frontend bootstrap epic, but two issues block approval: (1) session storage on `spring-session-data-mongodb` reactive carries a known cleanup defect (issue #226) and the simpler `spring-session-data-redis` reactive option is dismissed without weighing it — Redis is already in scope for brute-force; (2) edge cases, observability/audit events, and per-flow failure handling are absent. Plus the user-spec leaks implementation choices (bcrypt cost, library names, file paths, ApplicationRunner) that belong in tech-spec. Sizing is L-but-justifiable as a one-time foundation, but should be explicitly framed that way."
+}

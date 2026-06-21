@@ -1,0 +1,29 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 1240,
+      "description": "validateSetKeyboard reports the same generic message 'SET_KEYBOARD row requires at least one button' for three distinct null-shape causes (null row element, null buttons list, empty buttons list). For a row with null buttons or a null row element, the message slightly misleads an API client (the row is not merely empty — it is structurally null). validateButtons/validateAlbum precedent does not face this because the mappers there never inject null elements, whereas toKeyboardRows deliberately carries null rows/buttons through so validation can 422 them.",
+      "recommendation": "Optional: keep the single message (it still correctly yields 422 funnel_step_invalid and the duplicate-row-shape collapse is acceptable per the 'one code, varying message' contract). If you want sharper diagnostics, split the null-row / null-buttons branch into a distinct message (e.g. 'SET_KEYBOARD row is malformed'). Not required for correctness."
+    },
+    {
+      "severity": "info",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 1232,
+      "description": "Duplicate detection runs in the same loop as per-button shape validation and trims only for the HashSet key (button.text().trim()). This correctly implements Decision 6 (trimmed, case NOT folded). One consequence worth noting: the over-64 length check uses the raw (untrimmed) text while the duplicate key uses the trimmed text — a button text of '  x...x  ' (63 visible + 2 spaces = 65) would be rejected as over-cap even though its trimmed keyword form (63) is within cap. This matches the stored verbatim value (what Telegram echoes), so it is the correct behavior, just an asymmetry worth being aware of.",
+      "recommendation": "No change. Length-on-raw / dedup-on-trimmed is internally consistent (Telegram echoes the verbatim label, so cap must apply to the stored value). Documented here only for traceability."
+    },
+    {
+      "severity": "info",
+      "file": "/Users/pavlokorolov/IdeaProjects/simple-sender/backend/src/test/java/com/botfunnel/funnel/FunnelServiceKeyboardStepTest.java",
+      "line": 158,
+      "description": "Test coverage is thorough and maps 1:1 to Decision 6 (all caps boundaries, blank/over-cap, 0/>10 rows, 0/>4 buttons, blank/over-64 button text, trimmed-duplicate, null row element, null button element, all three CLEAR_KEYBOARD strict-rejection fields incl. empty-list-as-present). One small gap relative to the task's edge-case list: a KeyboardRow with a null buttons list reaching validateSetKeyboard is exercised at the DTO layer via new KeyboardRowDto(null) in setKeyboard_rowWithNoButtons_rejected — good — but there is no assertion on the *message* text of any 422 (only code + status). That is consistent with existing FunnelService tests, which also assert only the code.",
+      "recommendation": "No change required. Message-text assertions are intentionally avoided project-wide (messages are plain-English, not a contract). Coverage is adequate."
+    }
+  ],
+  "summary": "Task 1 (backend keyboard step model + validation) is production-ready. All three wiring points per field (DTO record + toSteps + toStepDto) are present and mirror the established toButtons/toBlocks idiom; copyOf carries every new field with a defensive new-list copy for keyboardRows and null-stays-null, with accurate javadoc updates. Validation implements Decision 6 exactly: text non-blank with a HARD <=4096 cap, parse-mode reuse, 1..10 rows x 1..4 buttons, button text non-blank <=64 (= MAX_KEYWORD_LENGTH), trimmed (non-folded) duplicate blocking via HashSet, and CLEAR_KEYBOARD strict rejection of keyboardRows/isPersistent/oneTimeKeyboard including the empty-non-null-list-as-present case. Null row/button elements are carried verbatim through the mappers and rejected with 422 (never NPE) — more defensive than the validateButtons precedent, which is correct here. StepType ordering (sentinel UNKNOWN last) and the StepExecutor compile-fix terminal-fail stub are exactly per the task's out-of-scope contract. Positional FunnelStepDto call sites and the emitStep order comment are updated. Targeted lanes (FunnelStepTest, FunnelServiceKeyboardStepTest, FunnelControllerIT, FunnelServiceEmitEventTest) build green. Zero blocking and zero major findings; three minor/info notes are advisory only.",
+  "status": "approved"
+}

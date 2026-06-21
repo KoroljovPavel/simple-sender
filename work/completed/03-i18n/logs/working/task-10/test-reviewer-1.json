@@ -1,0 +1,42 @@
+{
+  "summary": "Task 10 spec changes are minimal and correct: each of the two spec files received exactly one new line (`mockNuxtImport('useLocalePath', () => () => (path: string) => path)`), placed adjacent to existing `mockNuxtImport` calls. No test names, no UA-literal regex assertions, no test cases were modified, added, or removed. The 14 existing cases (2 dashboard + 12 profile) remain wired to their original behaviors and continue to assert against the Ukrainian dictionary entries from `frontend/i18n/locales/uk.json`. Identity passthrough for `useLocalePath` is the correct shape — under `defaultLocale: 'uk'` + `strategy: 'prefix_except_default'`, `localePath('/auth/login')` returns `/auth/login` unchanged in the default locale, so `navigateToMock` assertions on lines 185 and 234 still match. `<NuxtLinkLocale to=\"/profile\">` continues to render `<a href=\"/profile\">` in the test env (default locale, no prefix), so the `dashboard.spec.ts:44` selector `banner.find('a[href=\"/profile\"]')` still resolves. Locale stability under Vitest is guaranteed by `nuxt.config.ts:40` (`detectBrowserLanguage: process.env.VITEST ? false : {...}`). All UA-literal regex assertions verified against `uk.json`: `Підтвердіть email`, `Перейти до профілю`, `Ласкаво просимо, {name}`, `Паролі не співпадають`, `Введіть поточний пароль`, `цифр`, `Невірний поточний пароль`, `проекти/ботів/підписників` — every regex matches the corresponding key value exactly. The Decision-16 authorized exception is faithfully respected.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/profile.spec.ts:26 and frontend/tests/pages/dashboard.spec.ts:18",
+      "issue": "The new `mockNuxtImport('useLocalePath', () => () => (path: string) => path)` is undocumented in-file. While the rationale is recorded in the task file and (per Post-completion checklist) `decisions.md`, a future reader scanning only the spec sees three identity-style `mockNuxtImport`s without context for why `useLocalePath` is mocked while other Nuxt composables are not. This is purely cosmetic — does not affect correctness or assertions.",
+      "recommendation": "Optional: add a one-line comment above the `useLocalePath` mock referencing AC18 / Decision 16 (e.g., `// AC18-authorized: identity passthrough — default locale 'uk' + prefix_except_default returns path unchanged`). Skip if the team prefers spec files free of cross-doc references — `decisions.md` is the canonical record and the task file is sufficient context."
+    }
+  ],
+  "verdict": "OK",
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 14,
+      "passed": 14,
+      "failed": 0,
+      "note": "All 14 cases test real behavior: DOM render under conditions (banner visibility, modal contents, readonly attribute), real form validation messages from the live Zod schema (lines 100-145 — text comes from t() inside computed schema, not from a mock), real `apiMock` rejections triggering real `useApiError`-resolved messages (line 168 asserts the actual `errors.profile.changePassword.400` translation, not a mocked string), and real store mutations through the auth store mock object. Mock-return anti-pattern is absent."
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 14,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy",
+      "note": "Component-level Vitest with `mountSuspended` — appropriate for page templates. E2E coverage is deferred to Task 11 (Playwright), per tech-spec."
+    },
+    "scopeChecks": {
+      "diffShapeMatchesAC": true,
+      "exactlyOneAddedLinePerFile": true,
+      "noUaLiteralChanges": true,
+      "noTestRenames": true,
+      "noAddedOrRemovedCases": true,
+      "navigateToAssertionsCompatibleWithIdentityMock": true,
+      "nuxtLinkLocaleHrefRendersAsRootInDefaultLocale": true,
+      "vitestLocaleStaysUk": true,
+      "allUaRegexesMatchDictionary": true
+    }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "verdict": "approve_with_minor_findings",
+  "summary": "Implementation faithfully matches tech-spec lines 199-234 and the Bot.java precedent: class-level @CompoundIndexes, UPPERCASE partial-filter literals on the TTL index (Decision 8 / completeness F5 regression guard correctly applied), and a defensive class-load assertion mirroring Bot.java's BotStatus.CONNECTED.name() check. One unused private helper in the test file is the only nit.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/RawUpdateRepositoryTest.java",
+      "line": 121,
+      "issue": "Private static helper `indexNames(List<IndexInfo>)` is declared but never called from any test method. Dead code.",
+      "suggestion": "Delete the `indexNames` helper (lines 121-123). If kept for future debugging diagnostics, add a brief comment explaining intent; otherwise remove to keep the test class tight."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/RawUpdate.java",
+      "line": 16,
+      "issue": "Uses inline fully-qualified `@org.springframework.data.mongodb.core.mapping.Document(...)` to disambiguate against the `org.bson.Document` import for `payload`. Functionally correct, but stylistically diverges from Bot.java (which imports the mapping `Document` directly because it has no `org.bson.Document` field).",
+      "suggestion": "Optional: import `org.springframework.data.mongodb.core.mapping.Document` as `MongoDocument` via an alias is not supported in Java, so the current FQN-on-annotation form is the cleanest solution. No change required — keep the FQN to make the asymmetry with `org.bson.Document` explicit. Logging this purely so the next reviewer knows it was a deliberate choice, not an oversight."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/RawUpdateRepositoryTest.java",
+      "line": 128,
+      "issue": "`findByName` calls `match.get()` after `assertThat(match).isPresent()`. AssertJ's `isPresent()` failure does throw, so the subsequent `.get()` is safe in practice, but IDE/static-analysis tools (IntelliJ, SpotBugs) may flag `Optional.get()` without explicit `isPresent()` in the same conditional.",
+      "suggestion": "Replace `match.get()` with `match.orElseThrow()` or refactor to `assertThat(match).isPresent().get(InstanceOfAssertFactories.type(IndexInfo.class))` to silence the warning without changing semantics. Strictly cosmetic."
+    }
+  ]
+}

@@ -1,0 +1,89 @@
+{
+  "validator": "reality-checker",
+  "batch": [13],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 uses `./gradlew :backend:test` and `./gradlew :backend:bootRun` from the repo root, but there is NO root-level `gradlew` wrapper. The only Gradle wrapper lives at `backend/gradlew`. Furthermore, `backend/settings.gradle` declares the project as a standalone root named `bot-funnel-backend` — there is no `:backend:` subproject task prefix. Commands like `./gradlew :backend:test` from the repo root will fail with 'command not found' (no gradlew) or with 'task not found' if the agent somehow finds it.",
+      "fix": "Replace all occurrences of `./gradlew :backend:test` → `cd backend && ./gradlew test` (or `./backend/gradlew test` with explicit path). Replace `./gradlew :backend:bootRun` → `cd backend && ./gradlew bootRun`. The task already acknowledges the `cd backend && ./gradlew bootRun` form as an alternative in step 5 but incorrectly treats it as secondary — the `cd backend` form is the ONLY working form. Update the canonical command in step 2, AC bullet, Verification Steps section, and Implementation Hints section to use `cd backend && ./gradlew test` consistently."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 Step 8 and the TDD Anchor table reference test classes `BotControllerIT`, `BotServiceTest`, `TelegramApiClientTest`, `TokenEncryptorTest`, and `BotTokenLeakTest`, and the frontend spec `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts`. NONE of these files exist in the codebase yet: `find backend/src/test -name '*Bot*'` and `find backend/src/test -name '*Token*'` return zero results; the bot package does not exist under `backend/src/main` or `backend/src/test`. This is expected if tasks 1–9 have not yet been executed, but the task does not declare any verification that these files exist before running. If the QA agent runs before implementation tasks complete, every AC mapping step will fail to find evidence.",
+      "fix": "Add an explicit pre-flight check at the top of the 'What to do' section: verify that `backend/src/test/java/com/botfunnel/bot/` exists and contains `BotControllerIT.java`, `BotServiceTest.java`, `TelegramApiClientTest.java`, `TokenEncryptorTest.java`, `BotTokenLeakTest.java`; and that `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` exists. If any are absent, emit a NO-GO immediately citing missing implementation artifacts, rather than discovering the absence mid-step and producing a confusing failure report. The depends_on [10, 11, 12] is correct for audit tasks, but the task should also note that tasks 1–9 are prerequisite implementations."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Tech-spec Acceptance Criteria bullet (line 479) states: '`BOT_TOKEN_ENCRYPTION_KEY` is documented in `.env.example`'. The actual `.env.example` at the repo root does NOT contain `BOT_TOKEN_ENCRYPTION_KEY` or `TELEGRAM_BASE_URL`. The QA agent will verify this AC bullet by grepping `.env.example` and find it absent, causing a mandatory NO-GO. Additionally, `backend/src/main/resources/application.properties` has no `app.bot.token-encryption-key` or `app.telegram.base-url` properties. These are expected to be added by Task 1, but since no task entries exist in `decisions.md` (the file shows the template with no completed tasks), Task 1 has not run yet.",
+      "fix": "The task's depends_on should include task 1 (not just 10, 11, 12). As currently structured `depends_on: [10, 11, 12]` is insufficient — it assumes tasks 1–9 are done, but does not enforce it. Add a note to the pre-flight check to verify `.env.example` contains `BOT_TOKEN_ENCRYPTION_KEY` before running the tech-spec AC verification."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 step 7 (Mongo index sanity check) references `mongosh` directly and the tech-spec AC requires both partial unique indexes (`telegramBotId_unique_connected`, `projectId_unique_connected`) to exist. However, the `bots` collection and its indexes are only created at backend bootup in dev profile (`spring.data.mongodb.auto-index-creation=true`). Since no Bot entity, BotRepository, or application.properties with `spring.data.mongodb.auto-index-creation=true` exists in the current codebase, the step will fail unless tasks 1–3 have completed. More critically, `application.properties` currently has no `spring.data.mongodb.auto-index-creation` property; the QA agent must verify this was added by Task 3.",
+      "fix": "Add to the pre-flight checklist: confirm `spring.data.mongodb.auto-index-creation=true` is present in `application.properties` (or in a dev profile `application-dev.properties`) before the boot + mongosh index check. If absent, NO-GO with a reference to Task 3 as the owner."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 references audit reports from tasks 10, 11, 12 under paths like `work/06-bot-connection/logs/working/task-{N}/{reviewer}-{round}.json`. The `logs/working/` directory is currently empty — no task entries exist in `decisions.md` confirming any task completed. The QA agent is told to read these audit reports in step 1, but they do not exist. If the agent proceeds without finding them, step 1 will silently fail to locate findings.",
+      "fix": "Add an explicit check in step 1: verify that the working log directories for tasks 10, 11, and 12 exist and contain at least one JSON review file each. If any are missing, treat it as a blocker and emit NO-GO immediately: missing audit reports mean the QA gate cannot be applied."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 references the frontend spec at `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts`. The actual frontend test directory structure only has `frontend/tests/pages/projects/` (flat — no `[projectId]/` or `settings/` subdirectory). The existing spec for settings is at `frontend/tests/pages/projects/settings.spec.ts` (for the current `settings.vue`). The bot.spec.ts would be a new file expected at `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts`, but this path implies a nested directory structure that does not currently exist. The QA agent needs to be aware that the expected test file path may differ from convention if tasks 8–9 created it at a different path.",
+      "fix": "Clarify the expected path for the bot settings spec. Given the existing test structure (flat under `frontend/tests/pages/projects/`), the likely actual path would be `frontend/tests/pages/projects/settings/bot.spec.ts` or similar. The QA agent should grep for bot.spec.ts under `frontend/tests/` rather than assume the exact path, and report the actual location found."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Tech-spec AC bullet (line 482) states: '`MockWebServer` lives in `testImplementation` scope only — not present in the built production jar.' The current `backend/build.gradle` has NO `mockwebserver` dependency at all (neither `testImplementation` nor any scope). This dependency is expected to be added by Task 2. The QA agent step 9 is asked to verify `build.gradle` scope, but if Task 2 has not run, this check will fail with 'dependency not found' — which is a valid NO-GO signal, but the QA agent must handle this case explicitly rather than mis-reporting it as a scope error.",
+      "fix": "The pre-flight checklist should include: verify `build.gradle` contains `testImplementation \"com.squareup.okhttp3:mockwebserver\"` before proceeding to the scope-check AC verification. Absence of the entry → NO-GO citing Task 2 as the responsible implementation task."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 cites `docs/staging-smoke/06-bot-connection.md` as the manual staging smoke checklist path. The `docs/` directory at the repo root contains only `docs/local-setup.md`. No `staging-smoke/` subdirectory exists. This file is referenced as a deliverable produced by a prior task (likely Task 12 or a documentation task), but since no tasks have completed, it does not exist.",
+      "fix": "Add a note that if `docs/staging-smoke/06-bot-connection.md` does not exist, the QA report should flag it as a missing artifact. The sign-off report should reference the actual file path once created; if absent, it is a minor gap (the manual smoke checklist is post-deploy and human-run, not a blocker for the GO verdict, but its absence should be noted)."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 step 5 instructs the QA agent to boot the backend with `BOT_TOKEN_ENCRYPTION_KEY` set to 'a throwaway key for QA — never commit'. The task says to 'use a throwaway key for QA'. However, the CLAUDE.md security rule states 'NEVER ask user to write secrets in chat'. The QA agent must either source this value from `.env` (local dev file) or ask the user once out-of-band. The edge-case block at the bottom notes 'ask the user once for a dev-safe value', which is correct. However, asking in chat conflicts with the project's security rule about secrets in chat. The task should specify to read from a local `.env` file or environment, not to ask the user in chat.",
+      "fix": "Replace 'ask the user once for a dev-safe value' with 'read from the local `.env` file; if not set there, instruct the user to add `BOT_TOKEN_ENCRYPTION_KEY=<64-hex-chars>` to their local `.env` file (do not ask in chat)'. This aligns with the project's security rule in CLAUDE.md."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "The `i18n` locale check (step 4) asserts that both `uk.json` and `en.json` contain `bot.*` and `errors.bot.*` keys. Currently, neither file contains any `bot.*` keys (en.json has only a lowercase 'bots' string inside existing keys, uk.json has none). This is expected — Task 9 (i18n) hasn't run yet. The QA step is correctly designed to catch this via `pnpm prebuild` exit code, but the task's context files list mentions the locale files as 'existing', which may mislead the QA agent into thinking they are already populated.",
+      "fix": "Minor clarification: note explicitly in the context files section that `uk.json` and `en.json` are expected to have `bot.*` keys ADDED by Task 9; the QA agent verifies their presence post-implementation, not their pre-existence."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "The `git diff` command for SecurityConfig verification in implementation hints uses `git diff $(git merge-base HEAD main) -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java`. Since the current branch is `main` (per git status), `git merge-base HEAD main` will always return HEAD itself, making the diff empty regardless of whether SecurityConfig was changed in this feature's commits. The correct command for verifying this feature didn't touch SecurityConfig is `git log main..HEAD -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java` or diffing against the commit before the feature started.",
+      "fix": "Replace the SecurityConfig diff hint with: `git log --oneline $(git log --format='%H' main | head -1)..HEAD -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java` (if working on a feature branch), or advise the QA agent to use `git log --oneline -20 -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java` and verify none of the feature's commits touch that file. Since the branch IS main, the agent should identify the feature's first commit hash and diff from there."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 1,
+    "claims_verified": 28,
+    "issues_found": 11
+  }
+}

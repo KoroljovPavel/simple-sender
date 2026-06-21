@@ -1,0 +1,96 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "validation_type": "cross-task",
+  "iteration": "final",
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 11,
+      "section": "Details / Dependencies",
+      "issue": "Task 11 declares depends_on [8] but its Details section lists Task 10 as a dependency ('Task 10 (auth pages pattern reference)'). Both tasks are in wave 6 and run in parallel, so Task 11 cannot reliably read Task 10's output during execution. The dependency is described as advisory (copy the vee-validate pattern), not a hard code dependency — no file from T10 is imported by T11. But if an executor treats the Details mention as a real dependency, the parallel execution model is violated.",
+      "fix": "Either add 10 to depends_on (which would force T11 into wave 7 — probably undesirable) or clarify in Details that T10 is purely a reference pattern, not a runtime dependency. If T11 truly only needs to follow the same vee-validate pattern established in T8, the mention of T10 should be rephrased to 'follow the same pattern as T10, which is also available in T8's test examples'."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 9,
+      "section": "Details / Dependencies",
+      "issue": "Task 9 depends_on [7] only, but its Details section says 'Runs in wave 6, after Task 8 (frontend bootstrap) completes.' Task 8 is wave 5. Because T9 is wave 6 and all wave 5 tasks (T7 + T8) complete before wave 6 starts, the wave ordering enforces this constraint automatically. However, if the executor uses depends_on rather than wave numbers for strict scheduling, T9 could theoretically start after T7 while T8 is still running. Adding T8 to depends_on would make the intent explicit without changing wave placement.",
+      "fix": "Add 8 to Task 9's depends_on: [7, 8]. The wave remains 6 (wave 6 > wave 5). This makes the dependency explicit for any executor that uses depends_on for scheduling rather than wave numbers."
+    },
+    {
+      "severity": "minor",
+      "category": "resource-sharing",
+      "task": 4,
+      "section": "Details / Implementation hints",
+      "issue": "Task 4 (wave 2) includes an ambiguous instruction about AbstractIntegrationTest: 'for now, create a minimal base class stub or write tests without it; refactor when AbstractIntegrationTest is available.' Task 5 (wave 3) is the designated creator of AbstractIntegrationTest. If T4 creates a stub file at src/test/java/com/botfunnel/AbstractIntegrationTest.java, and T5 also creates the full version at the same path, T5 will overwrite T4's stub. This is a sequential handoff, not a true competing creation (T5 is after T4), but the ambiguity in T4's wording could cause confusion about file ownership.",
+      "fix": "Clarify Task 4's instruction to: 'Do NOT create AbstractIntegrationTest.java — that file is owned by Task 5. Write integration tests without inheriting a base class, or skip IT tests entirely; they will be completed in Task 5 when AbstractIntegrationTest is created.' This eliminates any risk of stub-then-overwrite confusion."
+    },
+    {
+      "severity": "minor",
+      "category": "resource-sharing",
+      "task": 7,
+      "section": "Details / Terminate-all sessions",
+      "issue": "Both Task 6 (AuthService.terminateAllSessions) and Task 7 (ProfileService.terminateAllSessions + terminateAllSessionsExcept) implement separate but logically identical ReactiveMongoTemplate queries for session termination. Task 12 (Code Audit) explicitly lists 'terminate-all-sessions logic reused between AuthService and ProfileService' as a review dimension, suggesting the intent is code reuse. Two separate implementations of the same query increase the risk of the verified field path (sessions collection schema) diverging between the two services. If Task 6 discovers the field path is 'principalName' rather than 'principal', Task 7 must also update its implementation — but has no automated mechanism to ensure this.",
+      "fix": "Extract terminate-all-sessions logic into a shared SessionService or a utility method in a base class that both AuthService and ProfileService inject. Alternatively, have ProfileService delegate to AuthService's terminateAllSessions(). Document the chosen approach in decisions.md so both Task 6 and Task 7 implementers use the same entry point. Note: Task 12 will flag this if the duplication remains — treating it here as an advance warning."
+    }
+  ],
+  "checks_performed": {
+    "wave_validity": {
+      "status": "pass",
+      "detail": "All task waves are strictly greater than the maximum wave of their declared dependencies. No wave violations found across all 15 tasks."
+    },
+    "dependency_cycles": {
+      "status": "pass",
+      "detail": "Directed graph of depends_on: 1→[], 2→[], 3→[1,2], 4→[1,2], 5→[3,4], 6→[5], 7→[5,6], 8→[6], 9→[7], 10→[8], 11→[8], 12→[10,11], 13→[10,11], 14→[10,11], 15→[12,13,14]. No cycles detected. DAG is valid."
+    },
+    "shared_resource_ownership": {
+      "status": "pass",
+      "detail": "All shared resources from tech-spec table have exactly one owner task: UserRepository owned by T2; EventRepository owned by T4; EmailService owned by T3; spring-session configuration owned by T1+T2; Redis brute-force logic owned by T4; Redis rate-limit logic owned by T5. All consumer tasks declare depends_on on owner tasks (directly or transitively)."
+    },
+    "competing_instances_same_wave": {
+      "status": "pass",
+      "detail": "Wave 1 (T1, T2): no file overlap. Wave 2 (T3, T4): no file overlap — T3 owns email package, T4 owns events + auth skeleton. Wave 5 (T7, T8): T7 is backend only, T8 is frontend only — no overlap. Wave 6 (T9, T10, T11): T9 modifies docs, T10 creates auth pages, T11 creates dashboard/profile pages — no overlap. Wave 7 (T12, T13, T14): all read-only audits writing to separate report paths — no overlap."
+    },
+    "dependency_completeness": {
+      "status": "pass_with_minors",
+      "detail": "All hard code dependencies are covered by depends_on (directly or transitively). Two minor advisory-style dependencies are declared in Details sections but not in depends_on: T9 mentions T8 (covered by wave ordering), T11 mentions T10 (pattern reference only, not a code dependency). No critical missing dependencies found."
+    },
+    "abstractintegrationtest_ownership": {
+      "status": "pass_with_minor",
+      "detail": "Task 5 (wave 3) is the sole declared owner of AbstractIntegrationTest.java. Task 4 (wave 2) ambiguously suggests creating a stub. Since T4 precedes T5, any stub T4 creates will be overwritten by T5's full implementation. No competing creation in the same wave."
+    },
+    "tokenservice_ownership": {
+      "status": "pass",
+      "detail": "TokenService skeleton created in T4 (wave 2); finalized in T5 (wave 3). T5 depends_on [3,4]. Sequential handoff with proper dependency declaration."
+    },
+    "authcontroller_authservice_extension": {
+      "status": "pass",
+      "detail": "AuthController/AuthService created in T4 (wave 2), extended in T5 (wave 3) and T6 (wave 4). All extensions are sequential with proper depends_on chain: T5→[3,4], T6→[5]."
+    },
+    "terminate_all_sessions_duplication": {
+      "status": "minor_flag",
+      "detail": "AuthService (T6) and ProfileService (T7) both implement separate ReactiveMongoTemplate queries for terminate-all-sessions. T7 explicitly coordinates with T6 for the verified field path. T12 code audit checks for this pattern. Flagged as minor resource-sharing concern."
+    }
+  },
+  "wave_layout_validated": {
+    "wave_1": [1, 2],
+    "wave_2": [3, 4],
+    "wave_3": [5],
+    "wave_4": [6],
+    "wave_5": [7, 8],
+    "wave_6": [9, 10, 11],
+    "wave_7": [12, 13, 14],
+    "wave_8": [15]
+  },
+  "stats": {
+    "tasks_checked": 15,
+    "issues_found": 4,
+    "critical": 0,
+    "major": 0,
+    "minor": 4
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Automated Verification Step specifies `./gradlew :backend:test -PrunSlow=true`. There is no root-level gradlew and no `:backend` subproject — the Gradle build is a single project whose `gradlew` lives in `backend/` with `rootProject.name = 'bot-funnel-backend'`. Running `./gradlew :backend:test` from any directory would fail: from the repo root because no `gradlew` exists there, and from `backend/` because `:backend` is not a recognised subproject task path.",
+      "fix": "Replace with `cd backend && ./gradlew test -PrunSlow=true` (or equivalently `./gradlew test -PrunSlow=true` when CWD is already `backend/`). Remove the `:backend:` subproject prefix entirely."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Automated Verification Step specifies `cd frontend && npm run test` and `npm run test:e2e`. The project declares `\"packageManager\": \"pnpm@10.33.2\"` in `frontend/package.json` and has only `pnpm-lock.yaml` (no `package-lock.json`). Using `npm run` instead of `pnpm run` (or plain `pnpm test`) is inconsistent with the project's enforced package manager and will fail on environments where Corepack enforces the declared packageManager.",
+      "fix": "Replace `npm run test` with `pnpm test` and `npm run test:e2e` with `pnpm test:e2e`, matching the pattern already used correctly in task 11's Automated section."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "The Automated section marks both commands as `(опційно)` (optional), meaning the executor may skip test execution entirely. For a Test Audit task whose acceptance criteria include confirming the test suite is green and non-flaky, omitting execution makes several AC items unverifiable — specifically 'повторний запуск стабільний (не flaky)'. The optional qualifier de-risks the wrong thing.",
+      "fix": "Consider making at least a single backend test run non-optional, or explicitly note that flakiness verification requires a run (even if the audit agent cannot always do it)."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Automated Verification Step says `./gradlew test` with the note 'или таргетно по модулям funnel/webhook/bot, если поддерживается фильтр'. The project is a single Gradle project — there are no named submodules to filter by package name as 'modules'. The correct targeted form would be `./gradlew test --tests 'com.botfunnel.funnel.*'` etc. The current phrasing could mislead an executor into trying a non-existent module syntax.",
+      "fix": "Clarify: 'або таргетно: `./gradlew test --tests \"com.botfunnel.funnel.*\"`'. Remove the ambiguous 'якщо підтримується фільтр' qualifier since `--tests` is always supported."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 22,
+    "issues_found": 4
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": "203-225 (pre-fix)",
+      "issue": "Initial implementation stashed the resolved subscriber/bot on singleton instance fields (driveSubscriber/driveBot) to hand off from preStepGates to drive. The engine is a singleton; runExecution (sweep thread) and resumeOnCallback (Task 5 webhook worker thread) run on different threads concurrently, so the shared mutable fields could cross-talk and send to the wrong subscriber/bot.",
+      "suggestion": "Pass the resolved (subscriber, bot) by value. Fixed pre-commit: introduced a private record StepContext returned by preStepGates and threaded as a drive(...) parameter, so the singleton holds no per-execution state.",
+      "status": "fixed pre-commit"
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": "147-156",
+      "issue": "Timeout-resume seam treats a broken cursor (menuStep == null) identically to 'no timeout target' -> complete(). The broken-cursor edge case elsewhere is terminate(failed)+marker. On a timeout, the cursor was just resolved at park time, so a dangling cursor here is only reachable via snapshot corruption; completing is a safe terminal state.",
+      "suggestion": "Acceptable: completing on timeout when the menu cannot be resolved is a benign terminal outcome and avoids a confusing 'failed' for a run that already sent its menu. Left as-is by design; documented in code comment.",
+      "status": "accepted (no change)"
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": "advanceToNext / indexOfStep",
+      "issue": "indexOfStep uses reference-identity (==) to locate the current step in the snapshot for default-next resolution.",
+      "suggestion": "Correct in context: the step always comes from currentStep(exec), which returns the live snapshot element, so identity holds. Private method, single caller. No change.",
+      "status": "accepted (no change)"
+    }
+  ],
+  "notes": "11 dimensions reviewed. At-most-once invariant preserved: every state write (persistProgress/scheduleDelay/parkForReply/complete/terminate) is a stillClaimed CAS by _id+stepRunStatus (NOT by index); claimForCallback is scoped by subscriberId (anti-IDOR). Lowercase .name() literals throughout. No PII in logs (ids/codes only). Observability log constants added. waiting_for_reply $in literals verified present in sweep/claim (added by Task 1)."
+}

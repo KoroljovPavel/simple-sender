@@ -1,0 +1,72 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14, 15],
+  "iteration": 2,
+  "status": "approved",
+  "resolved_since_iter1": [
+    "Task 11: decisions.md added to Context Files",
+    "Task 11: architecture.md added to Context Files",
+    "Task 11: TDD Anchor test paths corrected to frontend/tests/pages/",
+    "Task 11: Dependencies subsection added to Details",
+    "Task 12: decisions.md added to Context Files",
+    "Task 12: Verification Steps now includes report-written check",
+    "Task 13: decisions.md added to Context Files",
+    "Task 14: frontmatter skills corrected from [test-reviewing] to [test-master]",
+    "Task 14: decisions.md added to Context Files",
+    "Task 15: decisions.md added to Context Files",
+    "Task 15: JaCoCo pre-flight check added to What to do step 1"
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 11,
+      "section": "Details",
+      "issue": "Details subsection order does not match template. Template order is: Files, Dependencies, Edge cases, Implementation hints. Current order is: Dependencies (line 108), Files (line 111), shadcn-vue components (unlabeled extra subsection), Edge cases, Implementation hints.",
+      "fix": "Reorder subsections to: Files, Dependencies, Edge cases, Implementation hints. The 'shadcn-vue components to use' block can be folded into Implementation hints."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 12,
+      "section": "Details",
+      "issue": "Details section does not use the template's required subsection labels: Files, Dependencies, Edge cases, Implementation hints. The section has a single '**Known risk areas to focus on (from tech-spec):**' block instead. Missing explicit Files subsection (list of packages/dirs to read) and Dependencies subsection (depends on tasks 1-11).",
+      "fix": "Restructure Details into: **Files:** (list all backend packages and frontend dirs to read), **Dependencies:** (depends on tasks 1-11), **Edge cases:** (session fixation race condition, fire-and-forget swallow risk), **Implementation hints:** (move current 'Known risk areas' content here)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 13,
+      "section": "Details",
+      "issue": "Details section does not use the template's required subsection labels: Files, Dependencies, Edge cases, Implementation hints. The section uses '**OWASP mapping for this feature:**' and '**Critical checks (highest risk):**' headings instead. Missing explicit Files and Dependencies subsections.",
+      "fix": "Restructure Details into: **Files:** (files to audit by package), **Dependencies:** (depends on tasks 1-11), **Edge cases:** (move Critical checks here — DUMMY_HASH malformation, session fixation ordering, SET NX timing), **Implementation hints:** (move OWASP mapping table here)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 14,
+      "section": "Details",
+      "issue": "Details section does not use the template's required subsection labels: Files, Dependencies, Edge cases, Implementation hints. The section uses custom headings: 'What the tech-spec requires', 'Assertion quality scale', 'Testcontainers singleton pattern', 'Mailpit token extraction', 'Output file path'. Missing explicit Files and Dependencies subsections.",
+      "fix": "Restructure Details into: **Files:** (test files to audit), **Dependencies:** (depends on tasks 1-11, Testcontainers suite), **Edge cases:** (timing test flakiness, singleton vs per-class restart, withReuse CI caveat), **Implementation hints:** (move code snippets, quality scale, Mailpit pattern, output path here)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 15,
+      "section": "Details",
+      "issue": "Details section does not use the template's required subsection labels: Files, Dependencies, Edge cases, Implementation hints. The section uses custom headings: 'Test suite structure', 'Brute-force test edge cases', 'Session TTL verification', 'Sessions collection field path', 'Super Admin seed', 'JobRunr job trigger', 'Frontend check', 'Known risks from tech-spec'.",
+      "fix": "Restructure Details into: **Files:** (files and packages to verify), **Dependencies:** (depends on tasks 12-14), **Edge cases:** (move 'Known risks from tech-spec' and 'Brute-force test edge cases' here — DUMMY_HASH malformation, auto-index-creation=false, per-IP test IP control), **Implementation hints:** (move all remaining subsection content here: session TTL MongoDB query, sessions field path, SuperAdmin idempotency, JobRunr trigger, frontend manual fallback)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "critical_resolved": 7,
+    "minor_resolved": 4,
+    "issues_remaining": 5,
+    "issues_remaining_by_severity": {
+      "critical": 0,
+      "major": 0,
+      "minor": 5
+    }
+  }
+}

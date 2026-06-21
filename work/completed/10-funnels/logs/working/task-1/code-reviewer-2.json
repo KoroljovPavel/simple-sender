@@ -1,0 +1,37 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 1,
+  "round": 2,
+  "verdict": "OK",
+  "findings": [
+    {
+      "id": "R1-F1",
+      "status": "resolved",
+      "severity": "major",
+      "category": "architecture",
+      "original_issue": "FunnelStep.copyOf reference-copies customFieldValue:Object — no defensive copy for a loosely typed field.",
+      "resolution": "accepted",
+      "resolution_notes": "Fix kept Object + reference copy but documented the validated-immutable-scalar contract at two layers: the field Javadoc (FunnelStep.java lines 33-40) and the copyOf Javadoc (lines 46-56). The contract states that customFieldValue is always one of Double / Boolean / Instant / String (all immutable JVM types), enforced by CustomFieldValueValidator in Task 4/5. Because the value is always an immutable scalar, a reference copy is a genuine deep copy. The architectural boundary and responsibility delegation are explicit and accurate. Resolution is acceptable."
+    },
+    {
+      "id": "R1-F2",
+      "status": "resolved",
+      "severity": "minor",
+      "category": "performance",
+      "original_issue": "Redundant @Indexed on Funnel.projectId — already covered by the (projectId, status) compound index prefix.",
+      "resolution": "fixed",
+      "resolution_notes": "Standalone @Indexed removed from Funnel.projectId. An inline comment (Funnel.java lines 41-43) explains why it is absent here vs retained on FunnelExecution.projectId (where the other compound is partial, so it does not serve as a cascade lookup). Clear and correct."
+    },
+    {
+      "id": "R1-F3",
+      "status": "resolved",
+      "severity": "minor",
+      "category": "testing",
+      "original_issue": "FunnelStepTest.deepCopyProducesIndependentStep did not cover customFieldValue or several other fields.",
+      "resolution": "fixed",
+      "resolution_notes": "Test now populates all 11 fields including customFieldValue, asserts field-equality after copy, then asserts independence in both directions (copy mutation and source mutation) for every field. Coverage is comprehensive. The copyOfNullIsNull guard test is also retained."
+    }
+  ],
+  "new_findings": [],
+  "summary": "All three round-1 findings are resolved. Finding 1 (major) was resolved by documentation rather than a defensive copy: the immutable-scalar contract on customFieldValue is clearly stated at both the field and the copyOf method, making a reference copy a correct deep copy. The resolution is acceptable. Findings 2 and 3 were fixed directly. No new issues were identified in the five changed files (Funnel.java, FunnelExecution.java, FunnelStep.java, FunnelIndexesIT.java, FunnelStepTest.java)."
+}

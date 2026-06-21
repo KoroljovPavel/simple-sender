@@ -1,0 +1,16 @@
+{
+  "reviewer": "security-auditor",
+  "scope": "adhoc-preview-image",
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "owasp": "A10:2021 SSRF / Privacy",
+      "severity": "low",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue:189-197",
+      "issue": "The author-controlled imageUrl is fetched directly by the editor's browser when previewing. A malicious or compromised author could point imageUrl at an attacker-controlled host that logs the previewing user's IP / loads on render (no server-side SSRF — the backend preview endpoint is unchanged and the browser fetches the URL). This is author-scoped content the author already controls, so the exposure is limited and the existing http(s)-only save validation plus referrerpolicy=no-referrer already mitigate referrer leakage.",
+      "recommendation": "Accept as-is for this change. No action required now; if funnels later become multi-tenant/shared-editable, consider proxying preview images through a same-origin backend fetch with allowlist/size limits. Documenting only — not a blocker."
+    }
+  ],
+  "notes": "A03/XSS confirmed safe: the image renders via Vue attribute binding :src=\"imageUrl ?? undefined\" (FunnelMessagePreview.vue:192), NOT v-html/innerHTML. Grep for v-html|innerHTML|outerHTML|insertAdjacentHTML|dangerouslySet|document.write|eval over the component returns ONLY documentation comments — no actual HTML sink exists. An <img src> cannot execute JS, and onerror cannot be injected through a :src binding because the URL is the attribute VALUE, not markup; the @error handler is a static Vue event binding to a local ref (imageLoadFailed), with the fallback placeholder text coming from static i18n (previewImageUnavailable) — no server string rendered as HTML. The caption remains text-only {{ rendered.rendered }} (line 214). Scheme-bypass check: imageUrl reaches ONLY an <img src> sink — not a link href, window.location, or eval — so even a javascript:/data: URL would be inert here; additionally the value is validated http(s)-only at save (FunnelService.java:760 requireImageUrl rejects anything not starting with http:// or https://), so data:/javascript:/file: never persist — defense in depth. referrerpolicy=no-referrer reduces referrer leakage. No server-side SSRF introduced (backend preview endpoint unchanged; the browser loads the image). The panel's stored-XSS invariant is intact: no new HTML sink, caption stays {{ }}, image is attribute-bound. Zero critical/high/medium findings; one low informational privacy note. Approved."
+}

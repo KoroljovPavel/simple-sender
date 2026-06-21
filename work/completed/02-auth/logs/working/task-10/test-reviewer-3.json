@@ -1,0 +1,56 @@
+{
+  "status": "passed",
+  "summary": "Round 3 closes the round-2 mock-only finding and the carry-over .exists()-only minor. verify-email valid-token test now pins URL '/api/auth/verify-email', method 'GET', and query { token: 'sometoken' } — replacing the useApi() call body in verify-email.vue with bare 'state.value = \"success\"' would now fail (litmus passes). forgot-password invalid-email test now asserts error text matches /коректний email/i (matches 'Введіть коректний email' in forgot-password.vue:9). reset-password mismatch test now asserts /не співпадають/i (matches 'Паролі не співпадають' in reset-password.vue:25). Both regex assertions guard against future renders of empty <p data-test=\"...\"></p>. All 14 tests in the auth-pages suite pass the litmus test. Five round-2 minors remain explicitly deferred by the task owner: (1) login 403 / generic-500 branches uncovered, (2) register 400 / 429 branches uncovered, (3) cooldown setInterval lifecycle untested, (4) reset-password digit-only password rule untested, (5) settle()'s setTimeout(50) still costs ~700ms wall-clock across the suite. None block merge — they are non-security-sensitive coverage gaps and a perf/flake concern rather than correctness defects. Verdict elevates from needs_improvement to passed because the only mock-only test was the highest-leverage gap and is now closed; the remaining items are low-priority improvements suitable for a follow-up.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/auth/login.spec.ts (deferred from round 2)",
+      "issue": "login.vue lines 42-50 map four status codes to four distinct messages: 429 (covered), 401 (covered), 403 → 'Доступ заборонено. Зверніться до підтримки' (NOT covered), else/500 → 'Не вдалося увійти. Спробуйте пізніше' (NOT covered). Litmus: changing the 403 branch text to the 401 text leaves the suite green. The privacy-sensitive 401 differential is covered, so severity stays minor.",
+      "recommendation": "Add loginForm_403Response_showsAccessDeniedMessage (apiMock.mockRejectedValueOnce({ statusCode: 403 }); assert text matches /доступ заборонено/i; navigateToMock not called) and loginForm_500Response_showsGenericMessage (assert text matches /спробуйте пізніше/i). ~15 lines. Optional follow-up; not a blocker."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/auth/register.spec.ts (deferred from round 2)",
+      "issue": "register.vue lines 51-58 cover 409 (verified) but not 400 → 'Перевірте правильність даних...' or 429 → 'Забагато спроб реєстрації...'. Tech-spec line 35 explicitly lists the 429 branch. Messages are non-security-sensitive (no credential differential) so severity stays minor.",
+      "recommendation": "Add registerForm_400Response_showsValidationMessage (assert text matches /перевірте правильність/i) and registerForm_429Response_showsRateLimitMessage (assert text matches /спробуйте через хвилину/i). ~15 lines. Optional follow-up."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/auth/verify-email.spec.ts (cooldown setInterval lifecycle — deferred)",
+      "issue": "verify-email.vue starts a setInterval in startCooldown (called on resend success and on resend 429), decrements cooldownSecondsLeft, and clears in onBeforeUnmount. None of (a) decrement-over-time, (b) button-disabled state during cooldown, (c) resend 429 → cooldown branch, (d) onBeforeUnmount clearInterval cleanup is covered. Removing the clearInterval in onBeforeUnmount leaks timers across test runs but no test fails today.",
+      "recommendation": "Add (with vi.useFakeTimers): verifyEmail_resend429_showsCooldownAndDisablesButton — TOKEN_EXPIRED state, fill email, apiMock.mockRejectedValueOnce({ statusCode: 429 }) for the resend, settle, assert [data-test=\"resend-cooldown\"].exists() AND resend-button [disabled] AND text contains '60'. Then vi.advanceTimersByTimeAsync(30000); assert text contains '30'. Then vi.advanceTimersByTimeAsync(31000); assert button re-enabled. Add verifyEmail_unmount_clearsTimer: trigger cooldown; wrapper.unmount(); assert vi.getTimerCount() === 0. ~30 lines. Note: enabling fake timers may interact with settle()'s setTimeout — adopting flushPromises-only settle (see below) unlocks this cleanly."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/auth/reset-password.spec.ts (digit-only password rule — deferred)",
+      "issue": "reset-password.vue:20 has a .refine rule requiring at least one digit in newPassword (matching register.vue's policy). Mismatch test, valid-submit test, and 400-response test all use 'Password1' which already satisfies the rule, so deleting the .refine line keeps the suite green.",
+      "recommendation": "Add resetPassword_noDigitPassword_showsError mirroring register.spec.ts's existing digit test: setValue 'Password' (no digit) for both newPassword and confirmPassword, submit, settle, assert wrapper.find('[data-test=\"new-password-error\"]').text() matches /цифр/i, expect apiMock not called. ~10 lines."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/helpers/settle.ts:1-11 (setTimeout(50) still in place — deferred)",
+      "issue": "Centralized helper still uses setTimeout(50) followed by flushPromises + nextTick. With 14 tests now in the auth suite (some calling settle() twice), wall-clock cost is ~700ms+. On CI under sustained load the 50ms can be insufficient if scheduling jitters, producing intermittent failures with no obvious cause. No actual flake reported, so severity stays minor — but this is the single highest-leverage fix in the file.",
+      "recommendation": "Try the timer-free version: 'await flushPromises(); await nextTick(); await flushPromises(); await nextTick();' and run the suite 5 times. If green, ship it (eliminates 50ms penalty and CI-load flake risk in one change). If red, document which test breaks and reduce setTimeout to 0ms or adopt vi.useFakeTimers({ shouldAdvanceTime: true }). The fake-timers route also unlocks the cooldown-lifecycle tests above without real waits."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 11,
+    "litmusTest": {
+      "checked": 14,
+      "passed": 14,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 21,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "unbalanced"
+    }
+  }
+}

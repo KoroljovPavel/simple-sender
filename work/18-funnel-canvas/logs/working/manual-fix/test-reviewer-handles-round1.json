@@ -1,0 +1,8 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-handles",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "The handles-visibility-fix test is load-bearing and value-based. It asserts funnel-handle + funnel-handle--<kind> classes on each of the five handle kinds (next, button, timeout, target/input, entry) and checks localized title attributes ('Наступний крок', 'Вхід') for the two handles that carry titles. Removing the class additions from FunnelCanvasNode.vue would break every classes() assertion, satisfying the litmus test. Coverage spans all handle kinds across both node types (step node and start node). The required-keys spec correctly enumerates funnels.canvas.handle.input alongside the four pre-existing handle keys, enforces both uk.json and en.json presence, and validates non-empty values via the NON_EMPTY_REQUIRED_KEYS filter — so parity is enforced. No existing assertions were weakened; the prior 'renders typed output handles per node type' test is complementary (existence checks) and untouched. One narrow observation (minor, informational): button-0 and timeout class assertions in the new test omit the shared funnel-handle base class check, and the target handle omits a title assertion — the implementation adds :title='funnels.canvas.handle.input' to the target handle but the test does not verify it. These are minor gaps in completeness, not correctness blockers; the critical path (funnel-handle class + kind class on at least two handles, both titles for next and entry) is fully covered and load-bearing."
+}

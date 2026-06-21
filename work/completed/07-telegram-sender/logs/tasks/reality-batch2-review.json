@@ -1,0 +1,76 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "The 'What to do' step 6 and the 'Details' section for BotControllerIT.java instruct the implementer to 'extend the local seedConnectedBot(...) helper (or write a sibling like seedConnectedBotWithOwnerChatId(projectId, telegramBotId, ownerChatId))'. The existing seedConnectedBot helper (BotControllerIT.java:182-195) stores fake placeholder ciphertext: encryptedTokenCiphertext='Zm9v' (Base64 of 3-byte 'foo') and encryptedTokenIv='YmFy' (Base64 of 3-byte 'bar'). When TelegramSender.sendText calls tokenEncryptor.decrypt(iv, ct) with these fake values, the IV is 3 bytes (not 12), so TokenEncryptor.decrypt throws IllegalArgumentException at line 47 ('AES-GCM IV must be exactly 12 bytes'). This propagates as a 500 (not caught per Risk R7 policy), and postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent would receive 500 instead of 200 OK, causing the test to fail. Neither the 'What to do' text nor the implementation hints in Task 5 mention that the positive-path BotControllerIT test requires REAL encrypted ciphertext. Task 4 defines seedConnectedBotWithOwnerChatId (line 261) with real encryption (tokenEncryptor.encrypt), but that helper lives in TelegramSenderIT. Task 5 does not reference it for BotControllerIT. An implementer following Task 5 literally would produce a broken test.",
+      "fix": "Update Task 5 step 6 to explicitly state: the BotControllerIT sibling helper for the positive-path test must store REAL encrypted ciphertext — NOT the fake 'Zm9v'/'YmFy' bytes used by seedConnectedBot. Reference either: (a) BotControllerIT.persistRealConnectedBot (lines 955-970) which drives a real Connect flow and stores proper AES-GCM ciphertext, then sets ownerChatId on the persisted doc; or (b) inject TokenEncryptor into BotControllerIT and call tokenEncryptor.encrypt(token) to produce real IV+CT, mirroring Task 4's seedConnectedBotWithOwnerChatId pattern. The implementation hint at line 138 should also note: 'the seeded bot must have REAL AES-GCM ciphertext; the fake-ciphertext variant from seedConnectedBot will cause TokenEncryptor.decrypt to throw IllegalArgumentException (bad IV length), producing a 500 instead of 200 OK.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 4,
+      "issue": "Tech-spec Implementation Tasks Task 9 description (line 493) still says 'Verify all 18 unit scenarios + 4 integration scenarios from Testing Strategy are present and meaningful'. The tech-spec Testing Strategy section already lists 28 unit scenarios (4+3+6+3+5+2+5), and Task 4 (iteration 2) correctly states '28 scenarios' throughout. The stale '18' in the Task 9 description is a leftover from before iteration 1 and will mislead the Test Audit agent into checking for only 18 unit tests when 28 are actually expected. This finding is cross-task (affects task 9 description in tech-spec), surfaced here because tasks 4-6 are the batch being validated.",
+      "fix": "Update tech-spec Implementation Tasks Task 9 description to say 'Verify all 28 unit scenarios + 4 integration scenarios'. No change needed to tasks 4, 5, or 6."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "TokenEncryptor.decrypt (line 47) throws IllegalArgumentException for a valid-Base64 IV whose decoded length is not 12 bytes (e.g., an IV encoded as Base64 of 10 bytes). This IllegalArgumentException comes from INSIDE tokenEncryptor.decrypt, not from Base64.getDecoder().decode. Per Task 4's narrow-catch policy (wrap ONLY Base64.decode), this IllegalArgumentException from decrypt propagates as a 500 — consistent with the stated design, but not called out anywhere in the task. An implementer who scopes try/catch only to Base64.decode will correctly let this propagate. However, if an implementer mistakenly writes a catch(IllegalArgumentException) that wraps the ENTIRE decrypt block (Base64.decode + tokenEncryptor.decrypt), they would incorrectly map a bad-IV-length error from tokenEncryptor.decrypt into a BotTokenInvalidException (422) instead of 500. The edge-case note in Task 4 (line 188) covers NPE from null encryptedTokenCiphertext/encryptedTokenIv but does not call out the TokenEncryptor.decrypt IllegalArgumentException for wrong IV length. The error mapping table (line 241) only lists 'Base64 decode fails' as the IllegalArgumentException catch source, which is correct but may not be obvious enough.",
+      "fix": "Add a sentence to the edge cases section (or the catch-scope note at line 34): 'Note: TokenEncryptor.decrypt also throws IllegalArgumentException for a Base64-decoded IV of wrong length (not 12 bytes). Per the narrow-catch policy, this IllegalArgumentException is NOT caught by the Base64 try/catch block — it propagates as 500. Only the IllegalArgumentException thrown by Base64.getDecoder().decode() itself is caught and mapped to BotTokenInvalidException.'"
+    }
+  ],
+  "resolved_from_iteration_1": [
+    {
+      "task": 4,
+      "was": "critical: TokenEncryptor exception mismatch — catch block catching AEADBadTagException/GeneralSecurityException would never fire",
+      "resolution": "Task 4 now correctly states: catch ONLY IllegalArgumentException from Base64.getDecoder().decode(); do NOT catch IllegalStateException from TokenEncryptor.decrypt; both tampered-ciphertext and misconfigured-bean scenarios propagate as 500. Error mapping table updated accordingly. Unit test sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid covers both failure modes."
+    },
+    {
+      "task": 4,
+      "was": "major: extractChatId hint used null-check on JsonNode.get() which returns MissingNode, not null",
+      "resolution": "Hint step 9 now says: use node.has('chat') && node.get('chat').has('id') guards; explicitly notes 'do NOT null-check node.get(\"chat\") — JsonNode.get(String) returns MissingNode, not Java null'."
+    },
+    {
+      "task": 4,
+      "was": "major: map4xx fallback used 4-arg TelegramResult precedent; TelegramSendResult has 5 fields",
+      "resolution": "Hint step 8 explicitly states: 'the fallback shape here is new TelegramSendResult<>(false, null, null, null, null) — five null/false args (ok=false, result=null, error_code=null, description=null, parameters=null)'."
+    },
+    {
+      "task": 4,
+      "was": "major: scenario count said '18 unit scenarios' but TDD Anchor listed 28",
+      "resolution": "Task 4 description now says '28 scenarios: 4 happy + 3 5xx + 6 429 + 3 4xx/payload + 5 pre-wire guards + 2 timeouts + 5 token-leak'; TDD Anchor header also says '28 tests'."
+    },
+    {
+      "task": 4,
+      "was": "major: TelegramRateLimitException package-private scope not documented in AC",
+      "resolution": "AC now explicitly states: 'TelegramRateLimitException (created in Task 3) is package-private (no public modifier) per Decision 5'. Dependencies section also notes this."
+    },
+    {
+      "task": 4,
+      "was": "minor: no package-private constructor with short overallTimeout for long-running timeout tests",
+      "resolution": "Task 4 now describes a package-private secondary constructor accepting both responseTimeout and overallTimeout Duration parameters (lines 197, 267-269). Production constructor hardcodes 30s; test constructor allows shortened cap (e.g. 3s) to keep unit suite fast."
+    },
+    {
+      "task": 5,
+      "was": "minor: verbatim message string not asserted in sendTestMessage_whenOwnerChatIdNull test",
+      "resolution": "TDD Anchor for Task 5 now explicitly says to add assertion on verbatim message string: assertThat(ex.getMessage()).isEqualTo('Send /start to your bot in Telegram first, then try again')."
+    },
+    {
+      "task": 6,
+      "was": "minor: broken skill path — '.claude/skills/...' instead of '../../../.claude/skills/...'",
+      "resolution": "Task 6 Required Skills now uses correct relative path: [skills/documentation-writing/SKILL.md](../../../.claude/skills/documentation-writing/SKILL.md)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 58,
+    "issues_found": 3
+  }
+}

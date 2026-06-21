@@ -1,0 +1,70 @@
+{
+  "validator": "reality-checker",
+  "mode": "cross-task-integration",
+  "iteration": "cross-task-1",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 6,
+      "issue": "Task 6 drain-warning is accurate but misdirected. The engine IT @AfterEach drain() resets the response-queue dispatcher (QueueDispatcher reset) but does NOT consume recorded requests from the MockWebServer request log. Task 6 correctly identifies this and instructs 'every test that calls takeRequest() must consume all requests it caused'. However the instruction relies on the implementor understanding that existing engine IT tests do NOT call takeRequest() at all — so the new tests adding takeRequest() need to drain their own recorded requests per-test, beyond what the @AfterEach handles. This is accurate but not explicitly cross-referenced: the existing @AfterEach comment says 'Consume any responses a test enqueued' (response side), not the recorded-request side. A future implementor could misread the existing drain() and think it also drains recorded requests. No code problem, but the hint in Task 6 Details should be the only guidance and it is sufficient.",
+      "fix": "No change required. Task 6 Details already says 'every test that calls takeRequest() must consume all requests it caused, like FunnelTestRunSendIT line 174 does'. The existing FunnelExecutionEngineIT @AfterEach drain() is not extended by this task — the per-test takeRequest() calls are the correct pattern. No cross-task dependency or resource conflict."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 6,
+      "issue": "Task 6 instructs adding @Autowired FunnelEventService to FunnelExecutionEngineIT. The class already imports com.botfunnel.funnel.FunnelEventService indirectly (via log-capture at line 1162 using LoggerFactory.getLogger(FunnelEventService.class)) but does NOT have a bean-injected @Autowired FunnelEventService field. Adding one is the correct approach and is feasible — this is not a conflict with any existing Task 1-5 changes. Confirmed no duplicate @Autowired FunnelEventService in the class.",
+      "fix": "No change needed. Task 6 correctly identifies that the class does not yet have an @Autowired FunnelEventService and instructs adding one. The existing log-based reference uses the class literal only, which is compatible with adding a proper @Autowired injection alongside it."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 1,
+      "issue": "Task 1 TDD Anchor and Details refer to 'PATCH→GET round-trip' for the FunnelControllerIT test. The FunnelControllerIT exclusively uses PUT (not PATCH) for funnel updates — confirmed at lines 134, 884, 965 etc. Both verbs share the same FunnelController handler (@PutMapping / @PatchMapping both call funnelService.update), so this works at runtime. However the task's instruction ('follow updateRewritesStepOrderByIndex for the PUT + jsonPath shape' in Implementation hints) correctly says PUT. The body text inconsistency ('PATCH→GET' vs 'PUT' in hints) is an authoring inconsistency — no impact on the implementation since the hint is the actionable instruction.",
+      "fix": "No code change needed. The Implementation hints in Task 1 correctly say 'PUT' and reference updateRewritesStepOrderByIndex. The 'PATCH' in the description block is a documentation inconsistency only. Task 4 description header also says 'PATCH a funnel' — same harmless inconsistency."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "Task 3 specifies handling null isPersistent/oneTimeKeyboard in the StepExecutor builder with a comment 'decide explicitly how the builder emits them (e.g. apply the documented defaults is_persistent:true / one_time_keyboard:false when null) and assert that choice in a test; never emit a JSON null'. The tech-spec Data Models section shows the Telegram wire shape as is_persistent: true and one_time_keyboard: false (hardcoded examples). Task 1 form defaults (isPersistent=true, oneTimeKeyboard=false) are form-level defaults, and the backend stores what it receives (nullable Boolean). The executor's null-handling is deliberately left to the implementor to decide and document. This is an intentional design gap between Wave 1 (Task 1 stores null-able) and Wave 2 (Task 3 must decide the null-default) — they depend_on correctly (Task 3 depends_on [1]), so parallel execution is NOT an issue. The contracts are consistent because Task 3 explicitly requires the implementor to document the choice in decisions.md.",
+      "fix": "No change needed. The depends_on chain [1]→[3] ensures Task 3 sees the actual null-handling behavior Task 1 implemented. Task 3 Details explicitly flags this as a decision point with required test assertion. The implementation is sequential by design."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 instructs using validation-cap constants from Task 1 in the clamp logic: 'reference the same constants in FunnelService (do not duplicate literals)'. The constants Task 1 defines (MAX_KEYBOARD_TEXT=4096, MAX_KEYBOARD_ROWS=10, MAX_KEYBOARD_ROW_BUTTONS=4, MAX_KEYBOARD_BUTTON_TEXT=64) are private static constants in FunnelService. The clamp logic also lives in FunnelService.previewStep (same class), so direct constant reuse is possible. However the clamp helper produces List<List<String>> raw labels, while the constants are private — within-class access makes this a non-issue. Confirmed: FunnelService already has TEXT_WARN_LIMIT=4096 and MAX_KEYWORD_LENGTH=64 as package-private/private statics; Task 1 adds the keyboard-specific ones in the same class. No cross-file constant drift risk.",
+      "fix": "No change needed. All cap constants (MAX_KEYBOARD_ROWS=10, MAX_KEYBOARD_ROW_BUTTONS=4, MAX_KEYBOARD_BUTTON_TEXT=64) are defined in Task 1 inside FunnelService and consumed in Task 4's clamp helper within the same class. The dependency is satisfied by depends_on [1]."
+    }
+  ],
+  "cross_task_axes": {
+    "duplicate_heavy_resource": {
+      "verdict": "clean",
+      "detail": "No heavy resource (ObjectMapper, MockWebServer, DB pool) is initialized in multiple tasks. Task 6 adds a plain new ObjectMapper() constant to FunnelExecutionEngineIT — identical to TelegramSenderIT's idiom and the only new instance. Tech-spec states 'Shared resources: None'. Task 1 and Task 4 both modify FunnelControllerIT but in disjoint sections: Task 1 adds round-trip IT cases to the step-CRUD section, Task 4 adds preview IT cases to the existing preview section (lines 606-865). No conflict: the helpers added differ (previewKeyboardBody in Task 4 vs keyboardStep seeding in Task 1)."
+    },
+    "hidden_dependencies": {
+      "verdict": "clean",
+      "detail": "Task 2 emits a FunnelStep with keyboard fields; Task 1 defines those fields. Both are Wave 1 and intentionally parallel — Task 2's type definitions come from the tech-spec Data Models section, not from Task 1's compiled output. The JSON field names (keyboardText, keyboardParseMode, keyboardRows, isPersistent, oneTimeKeyboard) and the KeyboardRow/KeyboardButton shapes are pinned identically in both tasks from the same tech-spec source (Data Models, frontend block). Parallel execution is safe: Task 2 mirrors the spec, Task 1 implements to the spec. Task 5 depends_on [2,4] — correct; it reads Task 4's PreviewStepResponse contract and Task 2's type definitions. Task 7 depends_on [3] — Task 7 is a documentation task (smoke.md) that describes Task 3's execution behavior; it does not import or compile Task 2's artifacts. Task 7's description says it also uses Task 2's editor labels informally for the checklist, but these come from decisions.md (text), not from a code dependency. No code dependency on Task 2 is required for Task 7's deliverable (smoke.md)."
+    },
+    "inconsistent_approaches": {
+      "verdict": "clean",
+      "detail": "Cap values are consistent across all tasks: 4096 (keyboard text), 10 (rows), 4 (buttons/row), 64 (button text = MAX_KEYWORD_LENGTH). Task 1 defines these as backend constants; Task 2 mirrors them client-side with comment 'mirror backend FunnelService byte-for-byte'; Task 4 reuses the same FunnelService constants for the clamp; Task 6's IT fixtures assert the same caps implicitly. Wire shape for keyboard is consistent: Task 3 builds {keyboard:[[{text:...}]], is_persistent:..., resize_keyboard:true, one_time_keyboard:...}, Task 6 asserts the exact same structure via JsonNode body walk. KeyboardRowDto JSON shape ({buttons:[{text:...}]}) is used consistently in Task 1 (DTO definition), Task 4 (previewKeyboardBody helper), and Task 6 (setKeyboard builder). CLEAR_KEYBOARD wire {remove_keyboard:true} is consistent across Tasks 3 and 6. null-handling of is_persistent/one_time_keyboard: Task 3 requires the implementor to document defaults; Task 6's wire assertions will pin down whatever Task 3 decides — sequential by depends_on, not a parallelism hazard."
+    },
+    "numbers_and_paths": {
+      "verdict": "clean",
+      "detail": "Report paths: Tasks 8/9/10 all write to work/16-persistent-keyboard/logs/working/audit/{code-auditor,security-auditor,test-auditor}.json. Task 11 reads exactly those three paths (lines 144-146 of task 11.md). Consistent. Pre-deploy QA report path: work/16-persistent-keyboard/logs/working/qa/pre-deploy-qa-report.json — consistent between Task 11 description, Acceptance Criteria, and Verification Steps. Cap numbers 10/4/64/4096 are consistent: tech-spec Decision 6, Task 1 constants, Task 2 frontend mirror, Task 4 clamp logic, Task 6 fixture documentation all cite the same values. FunnelStepDto positional record: Task 1 appends 5 components at end (positions 18-22 after the current 17-component record ending in endParentAfter). Task 4 extends PreviewStepRequest (2-component) and PreviewStepResponse (3-component) — different records, no positional conflict."
+    }
+  },
+  "stats": {
+    "tasks_checked": 11,
+    "claims_verified": 47,
+    "issues_found": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  }
+}

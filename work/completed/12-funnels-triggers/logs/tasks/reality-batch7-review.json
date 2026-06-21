@@ -1,0 +1,50 @@
+{
+  "validator": "reality-checker",
+  "batch": [9, 13],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task states spec file FunnelTriggerSettings.spec.ts already exists — confirmed at frontend/tests/components/FunnelTriggerSettings.spec.ts. Task also references AddStepDialog.spec.ts and EditStepDialog.spec.ts at the flat root. Both files exist at that flat path (not under funnels/). The TDD Anchor note is accurate. No issue with file layout.",
+      "fix": "No action needed — layout description is correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 instructs the auditor to look for FunnelIndexesIT asserting the OLD partial filter (status='active' only) and confirm it was updated to include triggerType:'on_start'. The current FunnelIndexesIT (line 76) still asserts ONLY `pfe.getString(\"status\").isEqualTo(\"active\")` — it has not yet been updated. This is expected pre-execution state and the task's audit checkpoint is correctly framed. However, the task text says 'confirm FunnelIndexesIT was UPDATED for Phase 3' — at wave-7 audit time this should already have been done by Wave 1-6 tasks. No task in waves 1-6 explicitly lists FunnelIndexesIT as a file to modify. This creates a gap: the migration index update (adding triggerType:'on_start' to the partial filter) has no owning task in waves 1-6 that writes it. Task 13 is read-only and will correctly flag this as a finding — so the audit checkpoint is valid — but the gap itself is a structural issue in the decomposition.",
+      "fix": "Verify that one of Tasks 1-6 (likely Task 1 or a migration task) includes FunnelIndexesIT in its files-to-modify. If none does, add an explicit step to the appropriate task to update FunnelIndexesIT's partial-filter assertion to match the relaxed index. Task 13 will then confirm it was done."
+    }
+  ],
+  "verified": {
+    "task_9_spec_paths": {
+      "AddStepDialog.spec.ts": "EXISTS at frontend/tests/components/AddStepDialog.spec.ts (flat, not under funnels/)",
+      "EditStepDialog.spec.ts": "EXISTS at frontend/tests/components/EditStepDialog.spec.ts (flat, not under funnels/)",
+      "FunnelTriggerSettings.spec.ts": "EXISTS at frontend/tests/components/FunnelTriggerSettings.spec.ts (flat, not under funnels/)",
+      "funnels_subdir_only_has": "frontend/tests/components/funnels/CreateFunnelDialog.spec.ts — confirms flat layout claim is accurate"
+    },
+    "task_9_funnelId_vue": {
+      "file_exists": "YES — frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "triggerType_hardcoded": "CONFIRMED — line 104: triggerType: 'on_start' is hard-coded in persist()",
+      "keywords_ref_absent": "CONFIRMED — no keywords ref at all; only triggerValue = ref('') at line 24",
+      "file_in_files_to_modify": "CONFIRMED — task explicitly lists it under Files-to-modify with accurate description of current state"
+    },
+    "task_13_FunnelIndexesIT": {
+      "file_exists": "YES — backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java",
+      "current_partial_filter_assertion": "line 76: assertThat(pfe.getString(\"status\")).isEqualTo(\"active\") — OLD status-only filter, no triggerType clause",
+      "audit_checkpoint_present": "CONFIRMED — task explicitly states the audit must verify the old status-only assertion is gone and three new assertions are present",
+      "tagged_slow": "CONFIRMED — @Tag(\"slow\") at line 30"
+    }
+  },
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 14,
+    "issues_found": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  }
+}

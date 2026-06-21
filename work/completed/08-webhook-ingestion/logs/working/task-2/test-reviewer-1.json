@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "summary": "All 9 TDD anchors from tasks/2.md map 1:1 to @Test methods in Sha256HexTest and WebhookSecretVerifierTest. Naming follows methodUnderTest_state_expectedOutcome consistently, each test has a single primary AssertJ assertion, and edge cases (null header, empty header, null storedHash, odd-length hex, non-hex chars) are all covered. The MockedStatic-based verify_usesMessageDigestIsEqual test correctly pins the constant-time primitive without a CI-flaky timing assertion; Mockito 5.x inline mocking is available transitively via spring-boot-starter-test (Spring Boot 3.5.0 -> Mockito 5.x), so no separate mockito-inline artifact is required. Both files compile and pass under ./gradlew test (verified after stashing an unrelated broken file from a sibling task). One minor and one low-severity observation below, neither blocking.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/common/crypto/Sha256HexTest.java:14-24",
+      "issue": "hex_knownInput_matchesProducerSide re-implements the same primitive chain (MessageDigest.getInstance(\"SHA-256\") + UTF-8 + HexFormat.of()) inside the test and asserts equality with itself. This is a self-consistency check, not a true static parity vector — if both producer and Sha256Hex were silently switched to e.g. UTF-16 or uppercase hex together, the test would still pass. The task description explicitly calls it a 'known-vector parity' test.",
+      "recommendation": "Replace the in-test recomputation with a hard-coded expected hex literal computed once (e.g. `echo -n 'test-webhook-secret-deadbeef' | shasum -a 256`) and inline as a String constant. Example:\n  String input = \"test-webhook-secret-deadbeef\";\n  String expected = \"<paste 64-char lowercase hex from sha256sum>\";\n  assertThat(Sha256Hex.hex(input)).isEqualTo(expected);\nThis turns the test into a true parity guard against algorithm/encoding drift."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/common/crypto/Sha256HexTest.java:26-34",
+      "issue": "hex_utf8Input_isDeterministic fails the litmus test: if Sha256Hex.hex were stubbed to return any constant (e.g. \"\"), both calls would still be equal and the test would still pass. The test name promises UTF-8 byte handling but only proves call-stability.",
+      "recommendation": "Strengthen with a hard-coded SHA-256 hex for the UTF-8 bytes of \"кіт\" so the assertion catches both non-determinism AND encoding drift in a single test. Example:\n  String expected = \"<sha256 of 'кіт' UTF-8 bytes>\"; // hex literal\n  assertThat(Sha256Hex.hex(\"кіт\")).isEqualTo(expected);\nThen this test can also be renamed hex_utf8Input_matchesKnownVector and the parity test in the previous finding can stand on its own for the ASCII case."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/webhook/WebhookSecretVerifierTest.java",
+      "issue": "No test pins the no-logging contract from acceptance criterion 'Verifier does NOT log the header value or the stored hash at any level'. Future maintainers could add a logger.debug(headerSecret) without any red signal in the unit test suite. Acceptance criteria 5 (line 75 of tasks/2.md) lists this as a hard requirement.",
+      "recommendation": "Add one focused test using a Logback ListAppender attached to the WebhookSecretVerifier logger (or the package logger), invoke verify() with a recognizable plaintext + hash, and assert that no log event's formatted message contains the plaintext, the storedHashHex, or the candidate hash. Example skeleton:\n  Logger log = (Logger) LoggerFactory.getLogger(WebhookSecretVerifier.class);\n  ListAppender<ILoggingEvent> appender = new ListAppender<>(); appender.start(); log.addAppender(appender);\n  verifier.verify(\"sentinel-PLAINTEXT-xyz\", Sha256Hex.hex(\"sentinel-PLAINTEXT-xyz\"));\n  assertThat(appender.list).allSatisfy(e -> assertThat(e.getFormattedMessage()).doesNotContain(\"sentinel-PLAINTEXT-xyz\"));\nThis turns a documented invariant into a regression guard."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 12,
+      "passed": 11,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 12,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

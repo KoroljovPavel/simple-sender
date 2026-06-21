@@ -1,0 +1,54 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Task 10 'Details' section contains wrong parenthetical descriptions for depends_on tasks: 'Завдання залежить від 7 (Pinia store + composables), 8 (UI: pages + ProjectSelector + i18n keys), 9 (layout integration)'. Task 7 is '/projects index page (active + recently deleted)', not 'Pinia store + composables' (that is Task 2). Task 8 is 'project settings page', not 'UI: pages + ProjectSelector + i18n keys' (that is Task 5).",
+      "fix": "Correct the parenthetical descriptions: '7 (frontend /projects index page), 8 (project settings page), 9 (layout integration)'."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 12,
+      "issue": "Task 12 Description cites '(Decision 1, AC-T6)' for the 'Single ownership entry point' invariant. AC-T6 in tech-spec is specifically about 'pages/dashboard.vue does NOT call localStorage directly' — it has nothing to do with the ownership guard. The correct reference for the ownership entry point is Decision 1 alone (no tech-spec AC directly covers it as a formal criterion).",
+      "fix": "Change '(Decision 1, AC-T6.)' to '(Decision 1.)' in the Single ownership entry point bullet in Task 12 Description."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 Verification Steps instructs: 'git diff main -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java → must be empty (AC-T7 zero-touch)'. The feature is developed on the 'main' branch (there is no 'dev' branch — the tech-spec front-matter says 'branch: dev' but the repo only has 'main'). Running 'git diff main -- <file>' on the current branch (main) always produces empty output regardless of whether the file was modified, making this check a no-op that can never catch a violation.",
+      "fix": "Replace with 'git log --oneline <merge-base>..HEAD -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java → must be empty', where <merge-base> is the SHA before this feature's first commit. Or use 'git log --oneline --all -- SecurityConfig.java | head -5' to see recent touches and manually verify no feature commit appears."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 Implementation hints instructs: 'Use git log --oneline -- backend/src/main/java/com/botfunnel/security/ since this feature's branching point — must be empty.' Without a commit range (e.g. '<base>..<HEAD>') this command shows the full repository history for that path, not just feature-branch commits. There is no 'dev' branch to establish a branching point, making the instruction ambiguous and likely to be mis-executed.",
+      "fix": "Specify a concrete range: 'git log --oneline <feature-base-sha>..HEAD -- backend/src/main/java/com/botfunnel/security/' or document that the auditor should identify the first feature commit SHA manually."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 11,
+      "issue": "Task 11 'Required Skills' section contains an incorrect relative link path: '[skills/code-reviewing/SKILL.md](.claude/skills/code-reviewing/SKILL.md)'. The href '.claude/skills/code-reviewing/SKILL.md' resolves relative to the task file at 'work/05-projects/tasks/11.md', so it would look for 'work/05-projects/tasks/.claude/skills/code-reviewing/SKILL.md' which does not exist. The Context Files section correctly uses '../../../.claude/skills/code-reviewing/SKILL.md'.",
+      "fix": "Update the Required Skills link to: '[skills/code-reviewing/SKILL.md](../../../.claude/skills/code-reviewing/SKILL.md)' to match the working relative path used in Context Files."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 10,
+      "issue": "Task 10 TDD Anchor acknowledges there is no classical TDD cycle for E2E, instructing the agent to manually explore UI via 'pnpm dev + browser' before writing the spec. This is valid for E2E tests but the anchor only names the scenario title without listing the selector contract (which data-test attributes are expected on Wave 1-3 pages). If Wave 3 pages (tasks 7, 8, 9) were implemented without the required data-test attributes, the E2E spec author will discover this only at writing time. No pre-verification of selector existence is prescribed.",
+      "fix": "Add a note to coordinate with task 7/8/9 implementations to ensure data-test attributes are added for the key interactive elements: empty-state CTA, project selector dropdown, selector items, settings rename form, danger-zone modal input, recently-deleted section, and restore button."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 6
+  }
+}

@@ -1,0 +1,132 @@
+{
+  "status": "needs_improvement",
+  "reviewer": "test-reviewer",
+  "commit": "64ee8bd",
+  "summary": "The redirect/start suite covers the most dangerous invariants well: one-execution-per-pair (redirect_mutatesExistingRow_noSecondExecutionInserted), anti-IDOR CAS (redirect_mismatchedSubscriber_isNoOp), CAS-loss no-op with a real ListAppender WARN assertion (redirect_casLost_isNoOp_andEmitsWarn), broken-cursor terminal-fail with a live 'other execution still runs' control (redirect_brokenCursor_terminalFailsOnlyThatExecution), and the EMIT_EVENT self-loop budget gate (emitEventTriggerSelfLoop_terminatesAtBudgetOrMenuPark). DB assertions read actual Mongo state, not mock returns. Two findings prevent a 'passed' verdict: (1) redirect_ofRunningAndWaiting_movesCursor has a litmus-test failure — the assertion proves completion but not that the cursor actually moved to the redirect target (removing the claimForRedirect .set('currentStepId') line leaves the test green); (2) the allowReEnter=false active-in-flight no-op path required by the TDD anchor and acceptance criterion is not covered — the existing test that claims to cover it drives the redirect branch, not the insertAtEntryStep swallow path.",
+  "findings": [
+    {
+      "id": "TR-1",
+      "severity": "high",
+      "category": "anti_pattern",
+      "location": "FunnelExecutionEngineIT.java::redirect_ofRunningAndWaiting_movesCursor",
+      "issue": "Litmus test failure. The test iterates over [running, waiting] statuses and asserts only reload(execId).getStatus()==completed and sentCount()-before==1. However, the seed graph is s1=sendMessage('orig', next=null) and entry=sendMessage('redirected', next=null), both with no downstream steps. If claimForRedirect does NOT move currentStepId (or moves it to the wrong step), drive() starts at s1, sends 'orig', hits next=null, and completes with exactly one send. So the assertion passes even with a broken claimForRedirect. Deleting the '.set(\"currentStepId\", entryStepId)' line from the CAS update (FunnelExecutionEngine.java line ~416) leaves both loop iterations green — the test does not prove the cursor moved.",
+      "litmusTestFailed": true,
+      "replacement": {
+        "approach": "Shape s1 --next--> tail (two sends if drive() starts at s1) vs entry --> End (one send). The cursor-move is then provable by send count AND the terminal currentStepId.",
+        "concreteChange": "Change: FunnelStep s1 = sendMessageStep(\"s1\", \"orig\", \"tail\"); FunnelStep tail = sendMessageStep(\"tail\", \"orig-tail\", null); FunnelStep entry = sendMessageStep(\"entry\", \"redirected\", null). Seed cursor on s1, enqueueOk(2) as buffer. After redirectExecution: assert sentCount()-before == 1 (entry only, NOT s1+tail) AND reload(execId).getCurrentStepId() == null (entry had no next -> End). This makes the .set(currentStepId) CAS the lone gate between 1 vs 2 sends.",
+        "assertions": [
+          "assertThat(reload(execId).getStatus()).isEqualTo(ExecutionStatus.completed)",
+          "assertThat(reload(execId).getCurrentStepId()).isNull() // entry had no next -> End",
+          "assertThat(sentCount() - before).isEqualTo(1)         // entry only, NOT s1+tail"
+        ]
+      }
+    },
+    {
+      "id": "TR-2",
+      "severity": "high",
+      "category": "missing_coverage",
+      "location": "FunnelEventServiceIT.java — allowReEnter=false active in-flight start path (TDD anchor: event_noInFlight_startsFreshAtEntryStep_respectingAllowReEnter)",
+      "issue": "The TDD anchor and task-5 acceptance criterion both require: 'allowReEnter=false with an active in-flight execution -> no-op (swallow)'. No test exercises this path. The existing test event_noInFlight_allowReEnterFalse_terminalRowDoesNotBlockFreshInsert uses a terminal (completed) execution — which does NOT hold the running|waiting partial-unique re-enter index — so insertExecutionAt SUCCEEDS (returns true, line ~348), and the swallow catch at line ~349 is never reached. This is the only gap in the start-branch coverage. The dispatch comment and Edge-cases note confirm terminal rows do NOT hold the index, so the swallow is only reachable via a concurrent insert or an active (running|waiting|waiting_for_reply) duplicate row.",
+      "recommendation": "Option A (IT): seed an event funnel with allowReEnter=false. Seed a RUNNING execution for (funnelId, subscriberId) via seedInFlightExecution. The in-flight probe will find it → the code takes the REDIRECT branch, not the start branch. To force the start-path swallow, the test must ensure inFlightExecutionId returns null (e.g., set the existing row to a terminal status after seeding so the probe misses it), then call dispatchForSubscriber. The concurrent duplicate-key that fires on insertExecutionAt cannot be driven deterministically in an IT. Option B (unit, recommended): in FunnelEventServiceTest add a test: stub eventFunnel('ev','purchase','entry') with allowReEnter=false, mongoTemplate.findOne returns null (no in-flight), doThrow(new DuplicateKeyException(\"race\")).when(executionFactory).insertExecutionAt(any(), any(), any(), any(), anyInt(), eq(\"entry\")). Dispatch event 'purchase'. Assert: (a) LOG_DISPATCH_REENTER_IGNORED logged at WARN or INFO, (b) no exception escapes, (c) fan-out counted=false (redirectOrStart returned false). This locks the entry-step swallow contract symmetrically with the existing step-0 swallow test (reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches).",
+      "note": "The existing unit test reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches stubs insertExecution (the step-0 insertOneFunnel path) on a funnel with triggers==null, so matchedEntryStepId returns null and routing takes insertOneFunnel, NOT insertAtEntryStep. The two LOG_DISPATCH_REENTER_IGNORED emission sites (lines ~492 and ~350) are structurally distinct and both should be locked."
+    },
+    {
+      "id": "TR-3",
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "FunnelEventService.java::matchedEntryStepId LOG_DISPATCH_NO_MATCHED_TRIGGER_ELEMENT branch",
+      "issue": "The defensive WARN at the bottom of matchedEntryStepId (fired when a multikey-matched funnel has no in-memory trigger element that re-scans — an unexpected drift) is never tested. It is a greppable operator signal whose logic contains a .equals comparison that could silently regress (e.g. a type-check typo). No test seeds a funnel that is returned by the repository query but whose triggers[] does not match on re-scan.",
+      "recommendation": "Add a small unit test in FunnelEventServiceTest: stub funnelRepository to return a funnel whose triggers list has only a 'tag_added' element (triggerType mismatch), then dispatch an 'event' type query. Assert LOG_DISPATCH_NO_MATCHED_TRIGGER_ELEMENT WARN fires and insertExecution is called once (fallback start-from-step-0, because entryStepId == null). Ten lines, no new dependencies."
+    }
+  ],
+  "techSpecCoverageAssessment": {
+    "redirect_in_flight_incl_unpark_waiting_for_reply": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_movesCursorToEntryStep_andUnparksWaitingForReply",
+      "quality": "strong — status==completed + sentCount==1 proves park cleared and branch ran"
+    },
+    "redirect_running_waiting": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_ofRunningAndWaiting_movesCursor",
+      "quality": "WEAK — proves drive ran but not that cursor moved (litmus-test failure, TR-1)"
+    },
+    "redirect_mutates_existing_row_no_second_doc": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_mutatesExistingRow_noSecondExecutionInserted",
+      "quality": "strong — asserts exactly 1 row with same id"
+    },
+    "fresh_start_at_entryStepId": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::event_noInFlight_startsFreshAtEntryStep",
+      "quality": "strong — asserts size==1 and currentStepId==entry"
+    },
+    "allowReEnter_respected_completed_cancelled": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::event_noInFlight_allowReEnterFalse_terminalRowDoesNotBlockFreshInsert",
+      "quality": "adequate — covers the success path (terminal row does not block); active-row swallow not tested (TR-2)"
+    },
+    "allowReEnter_false_active_inflight_noop": {
+      "covered": false,
+      "gap": "TR-2 — no test drives insertAtEntryStep DuplicateKeyException swallow when an active row exists"
+    },
+    "broken_cursor_terminal_fail_isolated": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_brokenCursor_terminalFailsOnlyThatExecution",
+      "quality": "strong — asserts this=failed, other=completed, sweep still runs"
+    },
+    "cas_loss_noop_row_untouched_AND_warn_emitted": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_casLost_isNoOp_andEmitsWarn",
+      "quality": "strong — asserts currentStepId unchanged, stepRunStatus unchanged, sentCount==0, ListAppender WARN"
+    },
+    "mismatched_subscriber_redirect_noop_anti_idor": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_mismatchedSubscriber_isNoOp",
+      "quality": "strong — asserts cursor unchanged, status unchanged, no send"
+    },
+    "cross_funnel_isolation": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::event_crossFunnelIsolation_startsTriggerFunnel_leavesOtherUntouched",
+      "quality": "strong — A starts, B status and cursor asserted unchanged"
+    },
+    "one_event_two_funnels_decided_independently": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::oneEvent_twoFunnels_decidedIndependently",
+      "quality": "strong — redirect row same id + cursor, start row new + cursor"
+    },
+    "emit_event_self_loop_terminates_at_budget_or_menu_park": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::emitEventTriggerSelfLoop_terminatesAtBudgetOrMenuPark",
+      "quality": "adequate — asserts failed status + LOG_STEP_BUDGET_EXCEEDED; log check has a redundant OR clause but both arms check the same constant, so assertion is real"
+    }
+  },
+  "conventionsCheck": {
+    "listAppender_used_for_warn": true,
+    "tag_slow_on_engine_IT": true,
+    "no_vacuous_assertions": true,
+    "inflight_seedHelper_stepRunStatus_pending": true,
+    "notes": "The emitEventTriggerSelfLoop test uses warn(appender).stream().anyMatch() || appender.list.stream().anyMatch() — the OR is redundant (both scan the same list for the same constant) but harmless. The LOG_REDIRECT_BROKEN_CURSOR check uses appender.list.anyMatch() without filtering on WARN level — acceptable since the constant is unique."
+  },
+  "taskRequired": {
+    "needed": true,
+    "reason": "Two high-severity findings: TR-1 (litmus-test failure on redirect_ofRunningAndWaiting_movesCursor) and TR-2 (missing allowReEnter=false active-inflight no-op coverage required by TDD anchor and acceptance criterion). Both are one-test fixes but must be verified green before the task closes."
+  },
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTestChecked": 11,
+    "litmusTestPassed": 10,
+    "litmusTestFailed": 1,
+    "findingsBySeverity": {
+      "critical": 0,
+      "high": 2,
+      "medium": 0,
+      "minor": 1
+    },
+    "pyramidBalance": {
+      "unit": "FunnelEventServiceTest (+6 new stubs/assertions)",
+      "integration": "FunnelExecutionEngineIT (+7 redirect ITs) + FunnelEventServiceIT (+6 redirect-vs-start ITs)",
+      "e2e": 0,
+      "assessment": "healthy — correct test type for each concern"
+    }
+  }
+}

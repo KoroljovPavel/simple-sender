@@ -1,0 +1,59 @@
+{
+  "validator": "tech-spec-validator",
+  "findings": [
+    {
+      "severity": "high",
+      "section": "Implementation Tasks / Wave 4 conflict",
+      "issue": "Wave 4 has three parallel tasks (10, 11, 12) that all modify the same i18n locale files `frontend/i18n/locales/uk.json` and `frontend/i18n/locales/en.json`. Tasks run in parallel, so all three editing the same JSON files will collide on merge.",
+      "fix": "Either serialize the i18n edits (one task owns locale files, others request keys), split the locale work into a dedicated task that runs after 10/11/12, or move 11 and 12 to later waves. At minimum, document the locale files as a shared resource and assign a single owner."
+    },
+    {
+      "severity": "high",
+      "section": "Implementation Tasks / Wave 4 conflict",
+      "issue": "Within Wave 4, Task 10 and Task 11 both modify `frontend/types/funnel.ts` in parallel (Task 10 adds trigger-type unions, Task 11 adds the EMIT_EVENT StepType union + buildStep branch). Same file in the same wave = merge conflict.",
+      "fix": "Move Task 11 to a wave after Task 10, or merge the two `types/funnel.ts` edits into one task, or split the type definitions into a separate prerequisite task that both depend on."
+    },
+    {
+      "severity": "medium",
+      "section": "Decisions",
+      "issue": "Decisions 4, 10, and 11 are missing the `Alternatives considered:` line required by the tech-spec template (every Decision must record Decision + Rationale + Alternatives). Decision 4 (shared event namespace), Decision 10 (reuse Redis fail-open counter), and Decision 11 (portable trigger form) jump from Rationale straight to Serves.",
+      "fix": "Add an `Alternatives considered:` line to Decisions 4, 10, 11 (e.g. for 4: separate namespaces for API-event vs EMIT_EVENT — rejected because job-to-be-done is identical; for 10: dedicated bucket4j/library limiter — rejected as new dep; for 11: inline ad-hoc fields per type — rejected as throwaway on canvas migration)."
+    },
+    {
+      "severity": "low",
+      "section": "User-Spec Deviations",
+      "issue": "Section is filled with three entries, but the 'Auto-enroll definition (Decision 6)' deviation is marked [PENDING USER APPROVAL] and is a genuine behavioral reconciliation of an ambiguous user-spec requirement. The tech-spec status is `draft`, which is correct, but this pending item must block promotion to `approved` until the user signs off.",
+      "fix": "Keep status `draft` and surface the [PENDING USER APPROVAL] item to the user explicitly before approval. No spec text change required."
+    },
+    {
+      "severity": "low",
+      "section": "Implementation Tasks / Task descriptions",
+      "issue": "A few task descriptions carry trailing decision references plus a compressed rationale clause (e.g. Task 4 'counts depth>0 only ... Decisions 2, 6, 10'; Task 6 'Mirror the existing ADD_TAG case'). These are borderline — they reference Decisions correctly rather than duplicating full rationale, so this is informational, not a blocker.",
+      "fix": "No change required. Optionally trim the inline parenthetical limits (20/min, depth 10) from task descriptions and rely on the Decisions section reference to avoid value duplication during decomposition."
+    }
+  ],
+  "wave_conflicts": [
+    {
+      "wave": "Wave 4",
+      "file": "frontend/i18n/locales/uk.json",
+      "tasks": ["Task 10", "Task 11", "Task 12"],
+      "severity": "high",
+      "note": "Three parallel tasks edit the same locale file."
+    },
+    {
+      "wave": "Wave 4",
+      "file": "frontend/i18n/locales/en.json",
+      "tasks": ["Task 10", "Task 11", "Task 12"],
+      "severity": "high",
+      "note": "Three parallel tasks edit the same locale file."
+    },
+    {
+      "wave": "Wave 4",
+      "file": "frontend/types/funnel.ts",
+      "tasks": ["Task 10", "Task 11"],
+      "severity": "high",
+      "note": "Two parallel tasks edit the same TypeScript types file."
+    }
+  ],
+  "summary": "Tech-spec is structurally strong: frontmatter valid (draft/dev/L, size matches user-spec), all template sections present and filled with no placeholders, Decisions reference user-spec requirements, every task has Description/Skill/Reviewers/Files and valid skills, audit wave (code-reviewing + security-auditor + test-master, reviewers none) and final wave (pre-deploy-qa + post-deploy-qa) are correct, 12 implementation tasks (<=15, no split needed), Verify-smoke/Verify-user present where external/API/UI/migration is involved. Two HIGH issues are Wave 4 file conflicts: Tasks 10/11/12 all modify the same i18n locale files and Tasks 10/11 both modify types/funnel.ts in parallel — these will cause merge conflicts and must be serialized or merged. Three Decisions (4, 10, 11) are missing the required 'Alternatives considered' line. A pending user-approval item (Decision 6 auto-enroll definition) must be resolved before promotion to approved."
+}

@@ -1,0 +1,42 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "underengineering",
+      "severity": "major",
+      "issue": "The spec generalizes MENU's keyboard onto the composer's last block but does not address the MENU timeout triplet (timeoutValue/timeoutUnit/timeoutTargetStepId). Today MENU parks with nextRunAt = timeout deadline (or null = wait forever) and the sweep follows timeoutTargetStepId on elapse (engine L141-157, code-research §4). A composer-with-buttons that drops timeout support is a behavioral regression vs MENU; if timeout is in scope it is missing from the AC and constraints.",
+      "why_matters": "MENU is being deleted and the composer must 'cover the deleted behavior' (the spec's own R1 mitigation). Existing funnel ITs assert timeout-resume behavior. If the composer cannot express a wait-for-reply timeout + target, those ITs break with no replacement and authors lose a shipped capability. Silent omission will surface as a failing test suite mid-implementation, not a design choice.",
+      "fix": "Add an explicit decision: either (a) the last block's button config carries the same optional timeout triplet (timeoutValue/timeoutUnit/timeoutTargetStepId) as MENU — and add it to AC + the ContentBlock/buttons data shape — or (b) consciously drop timeout and state it as a known behavioral break with the ITs to be removed/rewritten."
+    },
+    {
+      "category": "underengineering",
+      "severity": "major",
+      "issue": "The callback wire contract '{executionId}:{buttonIndex}' and the analytics coordinate 'currentStepId:buttonIndex' (lastButtonClicked, funnel_button_clicked) are not mentioned in the spec, yet advanceOnCallback currently reads buttons from menu.getButtons() and must instead resolve them from the parked step's LAST block while keeping index addressing 1:1 (code-research §4, §9). The AC says 'paritет із MENU' but does not pin the wire-format/index-stability invariant.",
+      "why_matters": "This is the highest-risk integration seam of the whole MENU fold-in. parseCallbackData is a strict ≤64-byte parser with anti-IDOR checks; if button-index → button lookup drifts (e.g. blocks before the keyboard block shift the index space) a callback either no-ops or branches to the wrong target. An adequacy reader cannot confirm the design is sound because the invariant is unstated.",
+      "fix": "Add a constraint/AC line: the keyboard lives only on the last block, button indices remain 0-based positions in that block's button list, and the existing callback_data format + lastButtonClicked 'currentStepId:buttonIndex' coordinate are preserved unchanged. Confirm the parked-step's button resolution moves from menu.getButtons() to lastBlock.buttons with stable indexing."
+    },
+    {
+      "category": "feasibility",
+      "severity": "minor",
+      "issue": "The spec says 'no inter-block pacing; rely on the existing per-send 429 loop' and treats 429-spike as a low risk. Code-research §3/§9 notes the 429 loop serializes WITHIN one send only, and a per-chat ~1 msg/sec limit makes an N-block node far more 429-prone than today's single send. The shared 30s overall timeout per send is per-send, so N blocks each consume their own retry budget sequentially with no coordination.",
+      "why_matters": "A 6-block node under per-chat throttling could spend several seconds of retry/backoff inside one claim, lengthening time-in-progress and increasing the mid-node crash window that strands the node (the accepted at-most-once risk). It is feasible, but the interaction between per-send 429 backoff and the per-node at-most-once stranding window is unexamined.",
+      "fix": "Acknowledge in Risks that per-send 429 retries accumulate across blocks under one claim, widening the in_progress window; confirm the 30s-per-send timeout and 3x 5xx retry are acceptable per block, and note that adding inter-block pacing is the fallback if engine ITs show stranding under throttle."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "The preview redesign is named (multi-block stacked preview replacing the single-string panel) but the backend preview contract is not addressed. The current /preview endpoint and PreviewStepRequest/PreviewStepResponse are built around ONE rendered string for isMessageStep = {SEND_MESSAGE, SEND_IMAGE, MENU} (code-research §6). All three of those types are being deleted, so isMessageStep, the request/response DTOs, and FunnelMessagePreview.vue's MESSAGE_TYPES all break.",
+      "why_matters": "Phase 4 shipped backend-rendered preview specifically to avoid frontend re-implementing parseMode escaping (XSS/markup drift, OWASP A03). If the composer preview silently moves rendering to the frontend, that guard is lost. The spec lists frontend vitest for 'multi-block preview' but does not say whether the backend /preview endpoint is extended to N blocks or retired.",
+      "fix": "Add a line clarifying the preview path: either extend /preview + the DTOs to return an ordered list of rendered blocks (keeping backend-side parseMode escaping), or explicitly accept frontend-side rendering with the stored-XSS guard (text-only {{ }}, never v-html) restated as a constraint. State that isMessageStep / MESSAGE_TYPES are updated to the composer type."
+    },
+    {
+      "category": "sizing",
+      "severity": "minor",
+      "issue": "Size L is correct, but the spec acknowledges a very large blast radius (Decision-12 break across FunnelStep/copyOf, StepType, two exhaustive switches, full DTO chain, the 1086-line FunnelStepForm.vue, preview, plus deleting 3 step types that break many Phase 1-5 ITs) while the only sizing guidance is 'cut work into sequential tasks'. There is no proposed split into independently-deliverable increments, and several sub-pieces (backend content model + sender methods; MENU fold-in/callback; frontend block editor; preview) are separable.",
+      "why_matters": "An L feature this wide with a destructive data wipe and a one-shot 'delete old types' step is hard to land or review as a single increment; the existing ITs go red the moment old types are removed and stay red until the composer fully covers them, removing the test safety net mid-flight. A decomposition seam would let the suite stay green longer.",
+      "fix": "In tech-spec/decomposition, propose an explicit task ordering that keeps the suite green as long as possible — e.g. land TelegramSender methods + ContentBlock model + executor behind the new type FIRST (old types still present and tested), then fold MENU + delete old types + rewrite the broken ITs as the cutover task, then frontend. Note this is a tech-spec concern; flag here only to ensure the L is consciously stage-able, not big-bang."
+    }
+  ],
+  "worst_category": "underengineering",
+  "summary": "The idea is reasonable, feasible on the current stack (Java 21 + Spring MVC/VT + MongoDB + JobRunr; Nuxt), and the key decisions are sound and well-grounded in deep code research: the clean-break + manual wipe is safe pre-production with an understood blast radius, per-node at-most-once is the right call (per-block would need new currentBlockIndex CAS state — justified YAGNI), the Decision-12 break to List<ContentBlock>+discriminator with immutable blocks + copyOf deep-copy is correct, the 6-block scope (deferring location/contact/invoice/delay/input) is right-sized, and the sendMediaGroup array-mapper / buttons-on-last-block / no-SSRF URL-only constraints are accurately scoped. No over-engineering, no critical gaps. The findings are non-blocking refinements: the spec should pin the MENU timeout-triplet treatment and the callback wire/index-stability invariant (the two riskiest MENU-fold-in seams), clarify the preview backend contract, and note the per-send-429-across-N-blocks interaction. Verdict: adequate / approved."
+}

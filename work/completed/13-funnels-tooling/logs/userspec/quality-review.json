@@ -1,0 +1,62 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "19 acceptance criteria exceed the >10 warning threshold. Size L is declared and the scope (4 tools, BE+FE each) genuinely justifies L — this is not an inconsistency. The warning is informational and inherited from round 1.",
+      "location": "Frontmatter size: L / Критерії приймання",
+      "fix": "No action needed — size L is correct for this 4-tool bundle. Warning is expected."
+    }
+  ],
+  "round2_verification": {
+    "fixed_findings": [
+      {
+        "original_issue": "Async delivery semantics missing — 2xx = enroll, not delivery",
+        "status": "resolved",
+        "evidence": "Blockquote added after Test-for-me step 3 (line 36-37): 'Доставка асинхронна. Успішна HTTP-відповідь означає лише, що запуск зареєстровано...' + AC line 67: 'Успішний виклик повертає 2xx = enroll зареєстровано (не гарантія доставки); подальший збій Telegram-send переводить execution у failed асинхронно, HTTP-виклик при цьому лишається 2xx.'"
+      },
+      {
+        "original_issue": "No FE error-state acceptance criterion (422 inline vs network toast)",
+        "status": "resolved",
+        "evidence": "Спільне criterion added (line 88): '422 з бізнес-кодом показується inline біля контролу (resolveFunnelError), а не toast; мережева/непередбачена помилка → toast (за конвенцією проєкту).' Testable with vitest component test."
+      },
+      {
+        "original_issue": "funnel_invalid_trigger_type / funnel_invalid_keywords codes listed without explanation",
+        "status": "resolved",
+        "evidence": "Parenthetical added (line 89): '(ці коди вже є на бекенді, але відсутні в errors.funnels — спливуть при pre-validate під час test-run, тож parity-gate впаде без них).' Rationale now self-contained."
+      },
+      {
+        "original_issue": "UI button placement absent from 'Як має працювати'",
+        "status": "resolved",
+        "evidence": "New subsection 'Розміщення кнопок в UI' added (lines 55-57) specifying: Duplicate + Stop-all in both list row and editor header; Test-for-me + Preview toggle only in editor header."
+      }
+    ],
+    "regressions": []
+  },
+  "interview_coverage": {
+    "covered": [
+      "All 4 tools in one spec, agreed build order (Cycle 1 Q1)",
+      "ownerChatId as test recipient, no Manychat code-linking (Cycle 1 Q2)",
+      "No acute pain; value = iteration speed + no local tunnel for linear funnels (Cycle 1 Q3)",
+      "Testing strategy: IT per BE tool + vitest on components, no new Playwright E2E (Cycle 1 Q4)",
+      "Tool 4 scope = preview panel only; validation left as-is (Cycle 2 Q1)",
+      "Test-for-me policies: restart on re-click, pre-validate, draft testable, 422 remediation (Cycle 2 Q2)",
+      "Duplicate trigger policy: reset to on_start/'' defaults (Cycle 2 Q3)",
+      "No deploy pipeline; local verification only (Cycle 2 Q4)",
+      "Preview is per-step POST /{funnelId}/steps/{stepId}/preview; neutral placeholder for non-message steps (Cycle 3 A)",
+      "Error code for owner-not-linked = funnel_owner_not_linked 422 (Cycle 3 B)",
+      "Async delivery semantics: 2xx = enroll, not delivery; Telegram send failure → execution=failed async (was missing in round 1, now covered)"
+    ],
+    "missing": []
+  },
+  "summary": "Всі чотири знахідки першого раунду усунені без регресій. Специфікація не має критичних або major-проблем; залишається лише інформаційне size_check-попередження (19 критеріїв > порогу 10, але розмір L обґрунтований 4 інструментами). Документ готовий до переходу на tech-spec."
+}

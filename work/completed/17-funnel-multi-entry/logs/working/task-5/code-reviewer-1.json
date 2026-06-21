@@ -1,0 +1,41 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "The redirect-or-start dispatcher, engine redirectExecution, and on_start lookup switch are implemented correctly and faithfully to the task spec. All high-risk invariants verified: CAS double-bound by subscriberId AND funnelId, wider in-flight status set, snapshot-isolated broken-cursor terminal-fail of only the affected execution, CAS-loss no-op + greppable WARN with no retry, executionId sourced only from the trusted in-flight probe, @Lazy breaking the bean cycle, and per-funnel error isolation that never throws outward. All TDD-anchor tests are present in both EngineIT and EventServiceIT. The deviation in FunnelTriggerServiceImpl (array-aware $elemMatch instead of the literal onStartTriggerValue scalar lookup) is correct and well-justified inline. Findings are minor: one test asserts a weaker invariant than its name claims, and a couple of small consistency/robustness observations.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelEventServiceIT.java",
+      "line": 203,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "event_noInFlight_startsFreshAtEntryStep_respectingAllowReEnter does not actually exercise the allowReEnter=false duplicate-swallow path it names. After the first dispatch starts a fresh execution, that execution is in-flight, so the second dispatch takes the REDIRECT branch (as the inline comment admits), not the start-with-DuplicateKeyException-swallow branch. The hasSize(1) assertion passes for both branches, so the allowReEnter no-op in insertAtEntryStep (FunnelEventService.java:342-350) has no direct IT coverage. Add a case where a SECOND funnel with allowReEnter=false already has a terminal-status row (or seed a concurrent active row in a different way) so insertExecutionAt actually throws DuplicateKeyException and the LOG_DISPATCH_REENTER_IGNORED swallow is asserted.",
+      "benefit": "Closes a coverage gap on the re-enter swallow branch that is otherwise only exercised by the unit test indirectly; protects the allowReEnter=false start semantics from regression.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": 295,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "matchedEntryStepId returns trigger.getEntryStepId() for a matched keyword trigger element. Per Decision 10 keyword/tag/field triggers are start-from-beginning and should carry a null entryStepId, so today this correctly yields null. However the method makes redirect-vs-start hinge implicitly on a data invariant (keyword triggers never persist a non-null entryStepId) enforced elsewhere. If a future write path ever lets a keyword/tag/field Trigger carry an entryStepId, this code would silently redirect a non-event trigger. Consider gating the entryStepId return on triggerType being TRIGGER_EVENT (return null for any non-event type) to make the start-from-beginning rule explicit at the decision point rather than relying on the persisted data shape.",
+      "benefit": "Makes Decision 10 (only event triggers redirect) explicit and locally enforced, removing a latent coupling to a write-side invariant.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "line": 297,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "In matchedEntryStepId the exact-trigger branch coerces null triggerValue to \"\" before comparison, mirroring matchingFunnels/fire coercion — good and consistent. Minor: exactValue is computed as (matchKey == null ? \"\" : matchKey) and then exactValue.equals(...) is called, which is safe because exactValue is never null in the non-keyword branch. The keyword/exactValue split via two nullable locals (lowered / exactValue) with one always null is slightly harder to read than two small private helpers (matchedExactEntryStep / matchedKeywordEntryStep). Optional extraction would lower the cognitive load of the loop body.",
+      "benefit": "Improves readability of the re-scan loop; no behavior change.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 8,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "adequate"
+  }
+}

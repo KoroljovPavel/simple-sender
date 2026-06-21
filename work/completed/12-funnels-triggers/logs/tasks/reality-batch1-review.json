@@ -1,0 +1,40 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 3,
+      "issue": "Task 3 cites BotService.connectAfterPreChecks (lines ~142-146) as the '≥32 bytes → ≥256 bits' idiom to mirror, but the actual constant is WEBHOOK_SECRET_BYTES = 16 (only 128 bits). The task correctly states ApiKeyService must use 32 bytes — the referenced 'pattern' does not demonstrate that byte count and could mislead the implementer into mirroring the wrong size.",
+      "fix": "Reword the hint: 'BotService.connectAfterPreChecks uses the same SecureRandom→nextBytes→HexFormat.formatHex→Sha256Hex.hex plumbing, but ApiKeyService must use 32 bytes (not 16) to achieve ≥256 bits of entropy — the byte count differs from the webhook-secret example.'"
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 2,
+      "issue": "Task 2 hints say to use 'FunnelIndexesIT.indexes(...)' method pattern for listIndexes, but FunnelIndexesIT.indexes() is a private method (not a utility helper accessible from outside the class). The new FunnelTriggerIndexReconciliationIT would need to replicate or inline that pattern, not call it directly.",
+      "fix": "Clarify hint: 'replicate the same mongoTemplate.getCollection(...).listIndexes().into(result) call as used in FunnelIndexesIT — the method is private there; inline it in the new IT.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 1,
+      "issue": "TDD Anchor lists test classes FunnelExecutionTest (enrollDepth_defaultsToZero) and StepTypeTest (emitEvent_present) as sibling test files to create, but neither class currently exists in the test directory. This is expected (greenfield tests), but the 'sibling' framing implies joining existing files — the implementer should know they are creating brand-new test classes, not adding methods to existing ones.",
+      "fix": "Minor wording: clarify these are new test classes to create, not extensions of existing files (unlike FunnelStepTest and FunnelStatusEnumTest which do exist)."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "FunnelStepDto, FunnelResponse, FunnelSummaryResponse, and UpdateFunnelRequest are all Java records (immutable). Task 1 says to 'thread keywords through... update request DTOs, toResponse/toSummary, and FunnelStepDto (eventName) as needed'. Adding fields to Java records requires reconstructing the entire constructor — not a setter call — which is a non-trivial change that the task hints do not acknowledge. The risk is forgetting to update all call-sites of the record constructors.",
+      "fix": "Add a hint noting that FunnelStepDto, FunnelResponse, FunnelSummaryResponse and UpdateFunnelRequest are records — adding fields requires updating every constructor call site (FunnelService.toStepDto, toResponse, toSummary, the test assertions in FunnelControllerIT, FunnelStepExecutorTest, etc.)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 42,
+    "issues_found": 4
+  }
+}

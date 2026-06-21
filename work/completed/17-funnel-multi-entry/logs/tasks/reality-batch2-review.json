@@ -1,0 +1,54 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 5,
+      "issue": "Task 5 Details cites 'hasWaitingForReplyExecution-idiom' as existing in FunnelEventService and suggests extending it for the in-flight probe. That method does NOT exist in FunnelEventService — it lives in ProcessTelegramUpdateJob (L262), a webhook class in a different package. The task must implement the in-flight probe from scratch via MongoTemplate inside FunnelEventService (as the hint already implies with the 'findOne/find' Criteria snippet), but framing it as 'extending' a method in FunnelEventService is incorrect and could mislead the implementer into looking for it there.",
+      "fix": "Rewrite the Details hint to say: 'The hasWaitingForReplyExecution idiom exists in ProcessTelegramUpdateJob (different package, not injectable). Add an analogous private probe method directly in FunnelEventService using MongoTemplate.findOne with Criteria on projectId+funnelId+subscriberId+status.in(running,waiting,waiting_for_reply).'"
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 5,
+      "issue": "Task 5 Details states 'Добавить инъекцию FunnelExecutionEngine в FunnelEventService (engine НЕ создаёт цикл — StepExecutor → FunnelEventService единственное новое ребро, см. FunnelExecutionFactory doc L23-30)'. The actual bean dependency chain after this injection would be: FunnelEventService → FunnelExecutionEngine → StepExecutor → FunnelEventService — this IS a cycle and Spring will throw BeanCurrentlyInCreationException. The FunnelExecutionFactory doc at L23-30 documents the FunnelExecutionFactory cycle-break pattern, not the FunnelExecutionEngine one. The engine injects StepExecutor (verified L75-89), StepExecutor injects FunnelEventService (verified L87+L94). Task must use @Lazy or restructure to avoid this cycle.",
+      "fix": "The task must annotate one injection with @Lazy (e.g. @Lazy FunnelExecutionEngine in FunnelEventService constructor) or pass the engine as a method parameter instead of a field, to break the cycle. The Details note claiming 'no cycle' is wrong and must be corrected before implementation begins."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 Details section says 'redirect через engine, start через executionFactory.insertExecutionAt' and instructs injecting FunnelExecutionEngine into FunnelEventService. But FunnelEventService currently has NO dependency on FunnelExecutionEngine (only FunnelExecutionFactory). Injecting FunnelExecutionEngine closes the cycle FunnelEventService → FunnelExecutionEngine → StepExecutor → FunnelEventService (same as finding above). The implementer must use @Lazy injection; the task does not call this out as a required step, creating an ambush during Spring context startup.",
+      "fix": "Add an explicit instruction in What-to-do: 'Inject FunnelExecutionEngine with @Lazy to avoid the circular bean dependency (FunnelEventService → FunnelExecutionEngine → StepExecutor → FunnelEventService). Verify the application context starts by running any IT that boots Spring.'"
+    },
+    {
+      "severity": "minor",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 Details states applyTrigger is at L611-640 in FunnelService.java — confirmed accurate (L611). It also says duplicate is at L273-293 — confirmed (L273). checkTriggerConflict is at L337-344 — confirmed (L337). saveHandlingTriggerConflict is at L350-357 — confirmed (L350). Line numbers are accurate. However, the task references 'create (L169-184)' which starts at L169 — confirmed. The reference to validateSteps (L885-931) and SUBSCRIBE_TO_FUNNEL at L906-912 is accurate (validateSteps at L885; the SUBSCRIBE_TO_FUNNEL case comment at L907-912). All line number claims for Task 4 are valid within normal drift margin.",
+      "fix": "No action needed — informational only."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "Task 6 Details states 'subscribeEntryOptions, строки ~528-540' — confirmed at exactly L528-540 in FunnelStepForm.vue. The task instructs to copy this builder. However, in FunnelStepForm the builder reads `subscribeTargetSteps` (a separate ref populated by a watch that fetches the target funnel's steps), while in FunnelTriggersPanel the steps are the SAME funnel's own steps passed as a prop. The sentinel constant is SUBSCRIBE_ENTRY_START = '__START__' (L89). The task is feasible but the implementer must adapt the builder to use the prop-sourced steps rather than the async-fetched subscribeTargetSteps ref. The task's hint 'copy the builder' is directionally correct but may lead to a naively broken copy.",
+      "fix": "Add a note in implementation hints: 'subscribeEntryOptions in FunnelStepForm reads from subscribeTargetSteps (async-fetched). In FunnelTriggersPanel the steps come from the prop directly — no fetch needed. The computed should map over the steps prop, not a separate ref.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "Task 6 mentions that FunnelTriggersPanel.vue should use sentinel null/__START__ for the entry-step picker, and the implementation hint correctly flags that the backend requires non-null entryStepId for event triggers (Decision 10 / Task 4 validation). The task says 'СВЕРИТЬ с Task 4 валидацией' and 'зафиксировать в отчёте' — this is delegated to the implementer's judgment at runtime. The contradiction between 'sentinel from start' and 'backend requires non-null for event' is acknowledged but left unresolved in the task, which is acceptable as a deferred decision. Not a blocker.",
+      "fix": "No structural fix needed. Implementer should read the Task 4 decisions.md entry before wiring the sentinel."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 6
+  }
+}

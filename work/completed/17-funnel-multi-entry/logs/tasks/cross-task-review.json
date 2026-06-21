@@ -1,0 +1,79 @@
+{
+  "validator": "reality-checker",
+  "mode": "cross-task",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "T3 Details section instructs touching FunnelService.java (minimal compile stub), but FunnelService.java is not listed in the tech-spec 'Files to modify' for Task 3 — only UpdateFunnelRequest.java, FunnelResponse.java, FunnelSummaryResponse.java appear there. This under-reports T3's actual file scope in the spec. No same-wave conflict exists (T3 is wave 2, T4 is wave 3), but the discrepancy means a team-level tracking tool would not know T3 touches FunnelService.java.",
+      "fix": "Add FunnelService.java to the tech-spec Task 3 'Files to modify' list with a note '(compile stub only — full rewrite in Task 4)'. Alternatively, keep the current task file's Details section as the authoritative scope and accept the tech-spec omission as intentional brevity."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "T8 (Code Audit) bean-cycle check explicitly names only the OLD Phase-3 cycle ('FunnelEventService → FunnelTriggerServiceImpl → StepExecutor → FunnelEventService'). The NEW cycle introduced by T5 ('FunnelEventService → FunnelExecutionEngine → StepExecutor → FunnelEventService'), and the @Lazy break declared in T5 AC, are not explicitly named in T8's audit checklist. A future auditor reading T8 in isolation might miss verifying the @Lazy annotation is present.",
+      "fix": "Add to T8's bean-cycle audit bullet: 'Also verify the NEW cycle FunnelEventService → FunnelExecutionEngine → StepExecutor → FunnelEventService is broken via @Lazy on FunnelExecutionEngine in FunnelEventService (T5 AC requirement); context starters without BeanCurrentlyInCreationException.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "The tech-spec Verify-smoke for Task 7 includes 'pnpm lint && pnpm typecheck && pnpm test ...' but T7.md's Verification Steps explicitly notes these scripts do NOT exist in frontend/package.json and must not be run. T11's verification steps are already correct (no lint/typecheck). The discrepancy is between the tech-spec and T7.md — the task file wins, but leaves the tech-spec stale.",
+      "fix": "Update the tech-spec Task 7 Verify-smoke to 'cd frontend && pnpm test tests/pages/funnel-editor.spec.ts && node scripts/check-locales.mjs', removing the non-existent 'pnpm lint && pnpm typecheck' commands."
+    }
+  ],
+  "cross_task_checks": {
+    "shared_resource_ownership": {
+      "status": "PASS",
+      "detail": "Trigger.java owned exclusively by T1 (creates). TriggerDto.java owned exclusively by T3 (creates, depends_on T1). FunnelTriggersPanel.vue owned exclusively by T6 (creates), consumed by T7 (depends_on [6]). onStartTriggerValue field owned by T1 (shape), reconciliation owned by T2 (depends_on [1]). No two tasks create the same artifact. Every consumer declares the correct depends_on."
+    },
+    "no_competing_same_wave_file_writes": {
+      "status": "PASS",
+      "detail": "Wave 1 — T1 owns {Trigger.java, Funnel.java}; no other tasks. Wave 2 — T2 owns {FunnelRepository.java, FunnelTriggerIndexReconciliation.java}; T3 owns {TriggerDto.java (new), UpdateFunnelRequest.java, FunnelResponse.java, FunnelSummaryResponse.java} plus FunnelService.java minimally (compile stub, no overlap with T2). Wave 3 — T4 owns {FunnelService.java}; T5 owns {FunnelExecutionEngine.java, FunnelEventService.java, FunnelTriggerServiceImpl.java} — no overlap. Wave 4 — T6 alone. Wave 5 — T7 alone. No same-wave file conflicts."
+    },
+    "hidden_dependencies": {
+      "status": "PASS",
+      "detail": "T5 (wave 3) does not depend on T4 (wave 3): T5's FunnelEventService reads Funnel.getTriggers() from DB (validated at save by T4) without calling applyTrigger, and its FunnelTriggerServiceImpl.fire change only rewires the repository lookup (T2 output). T5 is correctly declared depends_on [1,2,3] and is genuinely independent of T4 in the same wave. T7 correctly depends_on [6] for FunnelTriggersPanel.vue, types/funnel.ts, and stores/funnels.ts — all T6 outputs."
+    },
+    "single_execution_writer": {
+      "status": "PASS",
+      "detail": "Decision 11 is respected: redirect/start logic centralized in FunnelEventService (T5). FunnelExecutionEngine.redirectExecution is the only new execution-mutation entry point (T5). FunnelExecutionFactory.insertExecutionAt is the existing start primitive reused by the dispatcher. No second execution writer introduced in any task. T8 audit explicitly checks for this."
+    },
+    "lazy_bean_cycle_break": {
+      "status": "PASS",
+      "detail": "@Lazy on FunnelExecutionEngine injection in FunnelEventService is explicitly required in T5 AC and Implementation hints. It is declared in exactly one task (T5, which owns FunnelEventService.java). T8 audit mentions the old Phase-3 cycle check but its general clause covers architectural consistency; T5 reviewers (code-reviewer, security-auditor) also verify the @Lazy. Minor gap noted in findings."
+    },
+    "audit_report_path_consistency": {
+      "status": "PASS",
+      "detail": "T8 writes to logs/working/audit/code-auditor.json. T9 writes to logs/working/audit/security-auditor.json. T10 writes to logs/working/audit/test-auditor.json. T11 writes to logs/working/task-11/qa-report.md. T12 writes to logs/working/task-12/. All paths are distinct and consistent with the feature log structure."
+    },
+    "verify_command_consistency": {
+      "status": "PASS",
+      "detail": "Backend: T2 uses ./gradlew test (non-slow, index ITs only). T4 uses ./gradlew test (non-slow). T5 uses ./gradlew test -PrunSlow=true for FunnelExecutionEngineIT. T11 runs full slow-lane. No contradictions. Frontend: T6 uses 'pnpm test + node scripts/check-locales.mjs'. T7 uses 'pnpm test + node scripts/check-locales.mjs' (correctly omits non-existent pnpm lint/typecheck). T11 uses the same. One minor: tech-spec Task 7 verify-smoke still mentions non-existent pnpm lint/typecheck (flagged in findings)."
+    },
+    "duplicate_heavy_resource_init": {
+      "status": "PASS",
+      "detail": "Tech-spec Shared Resources table confirms 'None new'. The feature reuses existing singletons (MongoTemplate, JobRunr sweep, telegramBotId). No task introduces a new heavy singleton, and no two tasks initialize the same resource independently. Confirmed across all 12 task files."
+    },
+    "onStartTriggerValue_single_owner": {
+      "status": "PASS",
+      "detail": "T1 owns the field shape (Funnel.onStartTriggerValue). T2 owns the index reconciliation and repository lookup. T4 owns the sync logic (onStartTriggerValue kept in sync from on_start element on every save path). T5 owns the FunnelTriggerServiceImpl.fire lookup switch. No second sync writer. T2 explicitly scopes itself: 'Do not re-declare the index here — auto-index-creation builds it from the annotation; this task only retires the stale one.'"
+    },
+    "sentinel_entryStepId_semantic_gap": {
+      "status": "PASS",
+      "detail": "T6 notes the potential conflict between 'sentinel __START__ maps to null' and T4's 'event requires non-null entryStepId', and explicitly instructs the implementing agent to verify against T4's actual output (decisions.md) before deciding. This is a documented, self-aware interface contract point — not a hidden cross-task conflict. Decisions.md is the resolution channel."
+    }
+  },
+  "stats": {
+    "tasks_checked": 12,
+    "cross_task_claims_verified": 10,
+    "issues_found": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 3
+  }
+}

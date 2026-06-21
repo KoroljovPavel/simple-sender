@@ -1,0 +1,26 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 8,
+  "round": 1,
+  "commit": "9f031a4",
+  "verdict": "approved",
+  "summary": "ApiKeyControllerIT covers all six TDD anchors plus three extra anti-enumeration branches (missing/malformed/soft-deleted). Correct test type (IT with real Mongo + real security chain via MockMvc). Assertions are behavior-focused and meaningful (hash=SHA256(plaintext), old hash no longer resolves on regenerate, exactly one row, GET body asserted free of plaintext). No redundancy, no gaps.",
+  "findings": [
+    {
+      "id": "TR-1",
+      "severity": "info",
+      "category": "anchor-deviation",
+      "finding": "Unauthenticated test asserts 403, not the 401 named in the task's TDD anchor.",
+      "action": "keep",
+      "reason": "403 is the verified project-wide convention for anonymous on authenticated() /api/** routes (ProjectControllerIT.anyEndpoint_unauthenticated_returns403). The task's 401 was an assumption inconsistent with the session chain's AuthorizationFilter behavior. Documented in a test comment and in decisions.md Deviations."
+    },
+    {
+      "id": "TR-2",
+      "severity": "info",
+      "category": "coverage",
+      "finding": "Regenerate test asserts the OLD hash no longer resolves (findByKeyHash empty) and exactly one row exists, beyond just 'second plaintext != first'.",
+      "action": "none",
+      "reason": "Strong invalidation/overwrite assertion — exactly what the AC requires."
+    }
+  ]
+}

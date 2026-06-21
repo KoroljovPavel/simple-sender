@@ -1,0 +1,33 @@
+{
+  "summary": "Task 2 implements the nullable Long ownerChatId field on Bot.java exactly per Decision 14 (correct placement between telegramFirstName and status, wrapper type, no @Indexed, no toString, one-line accessor style) and adds the mandated BotRepositoryTest case with the spec-prescribed name and shape. The diff is minimal (4 production lines, 12 test lines) and touches only the two files in scope; BotRepository.java, BotResponse.java, indexes, and application.properties are untouched. One minor documentation-accuracy nit on the test comment — it overstates what a save+findById round-trip actually proves about BSON-absent fields — but the task spec explicitly mandates this exact shape, and the stronger raw-BSON insert test is correctly deferred to TelegramSenderIT in a later task.",
+  "findings": [
+    {
+      "severity": "minor",
+      "area": "test-documentation",
+      "finding": "The new test's leading comment states it covers documents 'persisted before this field existed' that 'are absent in BSON', but the test path is save(bot)+findById(savedId) where the in-memory Bot has ownerChatId == null. Depending on Spring Data MongoDB's null-handling, the saved BSON document may contain `ownerChatId: null` rather than omit the field entirely, so the round-trip technically proves 'null in entity round-trips to null' rather than 'field absent in BSON deserializes to null'. The truly absent-field case (raw Document insert without the key) is covered by a different test (`sendTestMessage_legacyDocumentReadsAsNull` in tech-spec line 339, scheduled for TelegramSenderIT in a later task).",
+      "suggestion": "Optional, no behavior change needed: soften the comment to something like 'Documents without ownerChatId set must round-trip as null without deserialization error (wrapper-Long contract; primitive long would default to 0).' This keeps the regression value the task spec asks for while not over-claiming what one assertion proves. The stronger raw-BSON case is correctly deferred and noted in tech-spec Risks R6.",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java:86-88"
+    }
+  ],
+  "verdict": "approved_with_suggestions",
+  "checklist": {
+    "field_placement_between_telegramFirstName_and_status": "pass — Bot.java:50-52",
+    "wrapper_Long_not_primitive_long": "pass — Bot.java:51",
+    "no_Indexed_annotation": "pass",
+    "no_toString_override": "pass — BotTokenLeakTest reflection check unaffected (filters by method name 'toString' with 0 params; new getter/setter pair does not match)",
+    "accessor_style_matches_existing_one_liner_no_javadoc": "pass — Bot.java:81-82 mirrors getDisconnectedAt/setDisconnectedAt shape",
+    "test_name_matches_spec": "pass — findById_legacyDocumentWithoutOwnerChatId_readsAsNull",
+    "test_uses_newBot_helper_without_setOwnerChatId": "pass — BotRepositoryTest.java:89 calls newBot(...) which does not touch ownerChatId",
+    "test_uses_findById_and_StepVerifier_null_assertion": "pass — BotRepositoryTest.java:91-93",
+    "no_changes_to_BotRepository_BotResponse_indexes_application_properties": "pass — git show HEAD touches only Bot.java and BotRepositoryTest.java",
+    "newBot_helper_signature_unchanged": "pass — helper is identical to pre-task version",
+    "diff_size_minimal": "pass — 4 production lines, 12 test lines"
+  },
+  "metrics": {
+    "filesReviewed": 2,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 1,
+    "testCoverageAssessment": "adequate"
+  }
+}

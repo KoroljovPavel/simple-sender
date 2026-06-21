@@ -1,0 +1,102 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-preview-dropzone",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F-01",
+      "severity": "minor",
+      "category": "types",
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "line": 260,
+      "title": "connectionLinePath parameter type could be narrower — optional fields always provided by slot",
+      "detail": "connectionLinePath declares sourcePosition and targetPosition as optional (? modifier) to tolerate callers that omit them. At the only real call site (:d=\"connectionLinePath(cl)\"), the slot argument cl is typed ConnectionLineProps which always provides both fields — no optional handling is actually needed. The ?? fallbacks (Position.Right, Position.Left) are harmless but dead code for the slot path. For the defineExpose/test path the call supplies both fields explicitly. The discrepancy is only cosmetic but can confuse a future reader about whether the function is ever called without positions.",
+      "recommendation": "Remove the ? modifiers and ?? defaults, or document with a comment that the optionals exist solely for test call-site convenience (the actual slot always provides both). Not a runtime risk.",
+      "blocker": false
+    },
+    {
+      "id": "F-02",
+      "severity": "minor",
+      "category": "readability",
+      "file": "frontend/components/funnels/FunnelCanvasNode.vue",
+      "line": 665,
+      "title": "Scoped CSS for .funnel-handle--card-target removes right/left — width+left load-bearing inline-only",
+      "detail": "The scoped rule for .funnel-handle--card-target intentionally omits 'right' (removed from prior rule) and 'left'/'width' (moved to inline style). The comment documents this correctly. If the inline style binding is ever stripped during refactoring, the overlay silently returns to zero width with no scoped-CSS fallback. The inline left + width are the sole mechanism for the extended drop zone.",
+      "recommendation": "Consider adding a CSS custom property fallback (e.g. left: var(--drop-left-extend, 0px)) in the scoped rule so a removed binding degrades visibly. Minor — current arrangement is correct and documented.",
+      "blocker": false
+    },
+    {
+      "id": "F-03",
+      "severity": "minor",
+      "category": "testing",
+      "file": "frontend/tests/components/funnels/FunnelCanvas.spec.ts",
+      "line": 412,
+      "title": "at-rest inertness test verifies CSS precondition but cannot assert computed pointer-events in happy-dom",
+      "detail": "The test correctly asserts that the node does NOT carry 'funnel-canvas-node--droppable', which is the structural precondition for pointer-events:none via the scoped CSS chain. happy-dom/jsdom do not compute styles, so pointer-events:none on the element itself cannot be directly asserted. The test approach is correct for the environment but the comment 'pointer-events gated' implies CSS computation is verified — it is not.",
+      "recommendation": "Add an inline comment: '// jsdom does not compute styles; we assert absence of --droppable which is the CSS gate for pointer-events:none on the overlay (see .funnel-handle--card-target rule)'.",
+      "blocker": false
+    },
+    {
+      "id": "F-04",
+      "severity": "minor",
+      "category": "architecture",
+      "file": "frontend/components/funnels/FunnelCanvasNode.vue",
+      "line": 69,
+      "title": "DROP_LEFT_EXTEND = 28 is a sibling constant to CONNECTION_RADIUS = 28 in FunnelCanvas.client.vue — no cross-file enforcement",
+      "detail": "Both values are 28 and both comments document the '> 12 (old radius miss window)' constraint. They are semantically coupled: the overlay extension must cover the radius miss window. They live in separate files with no shared import or type-level link. A future maintainer raising one value may not update the other.",
+      "recommendation": "Extract both to a shared constants module (e.g. ~/composables/useFunnelCanvas.ts or a dedicated canvas-config.ts) so the relationship is machine-visible. Alternatively the inline comments are sufficient for this scope — acceptable as-is.",
+      "blocker": false
+    }
+  ],
+  "confirmations": [
+    {
+      "aspect": "Custom #connection-line slot — correct Vue Flow slot contract",
+      "verdict": "PASS",
+      "detail": "Verified in node_modules/@vue-flow/core/dist/vue-flow-core.iife.js: the slot receives {sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition, sourceNode, sourceHandle, targetNode, targetHandle, markerEnd, markerStart, connectionStatus}. The slot is rendered inside Vue Flow's SVG <g class='vue-flow__connection'> wrapper — the bare <path> element is valid SVG in that context. connectionLinePath(cl) reads exactly {sourceX, sourceY, sourcePosition, targetX, targetY, targetPosition} from cl, all guaranteed present. markerEnd and connectionStatus bindings are correctly wired."
+    },
+    {
+      "aspect": "Preview draws to cursor (no center snap)",
+      "verdict": "PASS",
+      "detail": "Vue Flow passes targetX/targetY from connectionPosition (cursor in viewport coords) directly to the slot. These are the cursor coordinates, not a handle center. The custom slot uses these directly in getBezierPath, so the preview bezier endpoint follows the cursor. The built-in center-snap occurred inside Vue Flow's own getHandlePosition(center=true) call — the custom slot entirely bypasses that code path."
+    },
+    {
+      "aspect": "Final rendered edge still anchors to left border",
+      "verdict": "PASS",
+      "detail": "flowEdges pins targetHandle:'in' for every edge. The 'in' handle (id='in', Position.Left, 10x10px at left:0 top:50%) remains unchanged. handleConnect/resolveEdgeRef never read conn.targetHandle — they route by conn.target (node id). The 'in-drop' overlay (id='in-drop') is explicitly excluded as an edge endpoint. The final arrowhead always lands at the left-border anchor."
+    },
+    {
+      "aspect": "Drop overlay pointer-events inert at rest — no click/drag interception",
+      "verdict": "PASS",
+      "detail": ".funnel-canvas-node :deep(.funnel-handle--card-target) { pointer-events: none } is the base rule. The --droppable override (pointer-events:all) only applies when isConnecting (connectionStartHandle != null) AND node is not entry/note. At rest connectionStartHandle is null → isConnecting false → --droppable absent → the widened left:-28px area is completely inert. No click, node-move, or canvas interaction is intercepted outside an active connection drag."
+    },
+    {
+      "aspect": "Overlap risk: wrong-card drop with close neighbours",
+      "verdict": "PASS — acceptable risk",
+      "detail": "Default dagre/grid layout: GRID_GAP_X=280, NODE_WIDTH=220 → 60px horizontal gap between adjacent column nodes. DROP_LEFT_EXTEND=28px leaves a 32px dead zone at default spacing. For user-dragged nodes closer than 28px: both cards are in --droppable state during a connection drag; Vue Flow resolves to the nearest valid target handle via connectionRadius snap. Strict mode ensures only target handles are valid. Wrong-card snap would only occur if two node target handles are within 28px of each other AND the cursor is ambiguously placed — an extreme edge case that requires the author to drag nodes into a heavily overlapping layout. Assessed not a blocker."
+    },
+    {
+      "aspect": "connectionRadius 28 + Strict mode — no cross-node output snap regression",
+      "verdict": "PASS",
+      "detail": "ConnectionMode.Strict categorically rejects source handles as drop targets regardless of connectionRadius. Output dots are source-type handles. A larger radius cannot cause the cursor to snap to a neighbouring source dot. The radius increase only widens the pull toward valid target handles. The cross-node output snap bug cannot be reintroduced."
+    },
+    {
+      "aspect": "SSR safety",
+      "verdict": "PASS",
+      "detail": "FunnelCanvas.client.vue is *.client.vue — excluded from SSR. getBezierPath is a pure math function. DROP_LEFT_EXTEND is a plain constant. No window/document access introduced."
+    },
+    {
+      "aspect": "Handle ids, connect logic, isValidConnection, Strict mode all unchanged",
+      "verdict": "PASS",
+      "detail": "No handle id renamed. handleConnect, resolveEdgeRef, handleFieldKind, isValidConnection logic unchanged. 'in-drop' id distinct from 'in'. flowEdges targetHandle:'in' unchanged. Output gating (hasNextHandle, hasTimeoutHandle, callbackButtons) unchanged."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 4,
+    "testCoverageAssessment": "adequate"
+  },
+  "summary": "Both fixes are correct and safe. The custom #connection-line slot properly consumes Vue Flow's cursor-position slot props (targetX/targetY from ConnectionLineProps), bypassing the built-in center-snap path — confirmed against Vue Flow dist. The widened drop overlay (left:-28px, width:calc(100%+28px)) is definitively inert at rest via the pointer-events gate; during a drag the 32px dead zone at default node spacing and Strict mode prevent wrong-card snaps. The final rendered edge anchor ('in' handle + targetHandle:'in') is untouched. Four minor findings (type optionality, inline-style fragility, test comment, cross-file constant coupling) — zero blockers. Verdict: pass."
+}

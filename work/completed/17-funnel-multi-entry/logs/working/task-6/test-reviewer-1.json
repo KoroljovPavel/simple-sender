@@ -1,0 +1,49 @@
+{
+  "status": "needs_improvement",
+  "summary": "Tests are behavior-focused and assert the whole-array emit contract correctly via real payload inspection (length, triggerType, entryStepId). The duplicate-event-name guard test is NOT false-green — it genuinely fails if the guard is removed, and also proves the first occurrence is not flagged. The keyword-hint migration in FunnelStepForm.keyboard.spec.ts still genuinely exercises the matching path (positive + negative + paused cases). Two real gaps: (1) the sentinel->step-1-id EMIT direction of the entry-picker is never tested (only the display direction is), and (2) addEvent's defaulting of entryStepId to the first step (the core 'event requires non-null entryStepId' invariant) is not asserted. The 'null/__START__ maps to step 1' test is also under-specified (negative-only assertion).",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelTriggersPanel.spec.ts (no test for sentinel->firstStepId emit)",
+      "issue": "The entry-picker 'from start === step 1 id' semantics is only proven in ONE direction. 'null/__START__ entry maps to step 1' proves DISPLAY (stored s1 -> shows sentinel). 'picking a step projects entryStepId' picks s2 (a non-first step), so modelToEntry returns the id verbatim and never exercises the sentinel branch. The contract-critical reverse mapping (author picks the '__START__' sentinel -> emitted entryStepId === firstStepId, NOT null) is untested. Litmus: if modelToEntry were changed to 'return model === ENTRY_START ? null : model' (emitting null for an event trigger, which the backend rejects per Decision 14), every current test still passes — a real bug ships green.",
+      "recommendation": "Add a test: mount [onStart(), event('purchase','s2')]; focus '[data-test=\"funnel-trigger-entry-1-input\"]'; click (mousedown) '[data-test=\"funnel-trigger-entry-1-option-__START__\"]'; assert lastTriggers()[1].entryStepId === 's1' (the first step's id, NOT null). This proves modelToEntry maps the sentinel to firstStepId and locks in the event-only non-null-entry invariant."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelTriggersPanel.spec.ts:63 (adds an event trigger)",
+      "issue": "The 'adds an event trigger' test asserts triggerType and triggerValue of the appended row but NOT entryStepId. addEvent() defaults the new trigger's entryStepId to firstStepId.value (line 109 of the component) precisely because mid-entry is event-only and the backend requires a non-null entry step. That defaulting is the core behavioral guarantee of the add path, and it is silently unasserted. Litmus: if addEvent set entryStepId to null (a backend-422 bug), the test still passes green.",
+      "recommendation": "Extend the existing assertions in 'adds an event trigger': add `expect(next[1].entryStepId).toBe('s1')` (firstStepId from STEPS). Optionally add a variant mounting with steps=[] (no saved step) asserting entryStepId === null to lock the documented fallback in addEvent/modelToEntry."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/components/funnels/FunnelTriggersPanel.spec.ts:115 (null/__START__ entry maps to step 1)",
+      "issue": "The assertion is negative-only: `expect(input.value).not.toContain('1. ')`. It proves the input does NOT show the step-1 label, but does not positively prove the sentinel label IS shown. It would also pass if the input were empty, showed a placeholder, or showed any unrelated string — weaker than the litmus the test name promises.",
+      "recommendation": "Make the assertion positive: assert the closed input shows the sentinel label, e.g. `expect(input.value).toBe('From the start')` (or match against the i18n value used in test env). This proves entryToModel('s1') === ENTRY_START AND that the sentinel option's label is rendered, rather than merely that the step label is absent."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelTriggersPanel.spec.ts:125 (flags a duplicate event name)",
+      "issue": "The duplicate guard test only covers exact-string duplicates ('purchase' vs 'purchase'). The component's duplicateIndices normalizes with .trim() (line 89), and the component doc + task notes (Edge cases, line 136 of 6.md) mention case-preserving comparison mirroring the backend. The trim normalization is unverified, so a regression removing .trim() (e.g. 'purchase' vs 'purchase ') would not be caught. Note: this is not false-green for the exact-match case (that case is correctly proven), just incomplete on normalization.",
+      "recommendation": "Add a case with whitespace-only difference, e.g. mount [onStart(), event('purchase'), event('purchase ')] and assert '[data-test=\"funnel-trigger-duplicate-2\"]' is present (trim-normalized match). This pins the documented trim behavior. Also consider an empty-value case (two blank event rows) asserting neither is flagged, matching the `if (!key) continue` branch."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 9,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 7,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-addnode",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "F1-resolved",
+      "severity": "info",
+      "category": "architecture",
+      "finding": "F1 RESOLVED. onCanvasTriggers now calls persistSteps() (line 303) instead of void persist(). persistSteps() gates on steps.value.every(stepReady) (line 290) before calling persist(). All four canvas emit handlers — onCanvasSteps (line 295), onCanvasTriggers (line 303), onCanvasNotes (line 309), onNodeDragStop (line 340) — route through persistSteps(). No ungated canvas→persist() path remains. The scheduleTriggerPersist deep-watch also checks steps.every(stepReady) (line 364). The only direct await persist() call is in activate() (line 385), which is correct by design: it bypasses the canvas gate intentionally to surface real server 422s."
+    },
+    {
+      "id": "F2-resolved",
+      "severity": "info",
+      "category": "error-handling",
+      "finding": "F2 RESOLVED. In activate() (lines 385-390): if persist() returns false AND saveError.value is non-null, the message is promoted to activateError.value and saveError is cleared. This means a PATCH 422 during activate lands in the activate-error banner (data-test='funnel-activate-error'), not in a separate save-error banner. The genuine activate() 422 path (funnelsStore.activate rejection, line 395) is unaffected — it still writes to activateError directly. The activateError.value = null reset at line 374 ensures a clean slate before each attempt, so stale error state cannot mask fresh ones."
+    },
+    {
+      "id": "TEST-regression-loadbearing",
+      "severity": "info",
+      "category": "testing",
+      "finding": "Regression test added at lines 886-912 (funnel-editor.spec.ts). Structure is load-bearing: (1) emits incomplete step → expects no PATCH; (2) emits trigger while step still incomplete → expects no PATCH; (3) fills step, clears call count, emits trigger → expects exactly one PATCH carrying the trigger array with correct triggerValue. The test comment explicitly documents it fails against the pre-fix code path (onCanvasTriggers→void persist). emitTriggers helper uses $emit('update:triggers') matching the canvas component's event name."
+    },
+    {
+      "id": "OBS-F2-no-new-test",
+      "severity": "minor",
+      "category": "testing",
+      "finding": "No new test for the F2 saveError→activateError promotion path (persist fails during activate). The existing activate tests (lines 97-116, 327-347) use storeMock.update.mockResolvedValue so persist() always succeeds; they exercise the funnelsStore.activate rejection branch only. The promotion branch (persist fails → saveError promoted to activateError) has no direct assertion. This is a gap in test coverage for the F2 fix specifically. Not a blocker — the fix logic is straightforward and the existing tests confirm the activate-error banner wiring is correct — but a test covering storeMock.update.mockRejectedValue followed by an activate click, asserting activateError shown and saveError hidden, would make F2 regression-proof."
+    }
+  ],
+  "summary": "Both round-1 findings are resolved. F1: the trigger canvas path is now gated behind persistSteps() alongside all other canvas paths — no ungated canvas→persist() call remains. F2: the persist-failure error is correctly promoted from saveError to activateError during activate(), with saveError cleared. The new regression test is load-bearing and correctly targets the pre-fix code path. One minor observation: no new test covers the F2 saveError→activateError promotion path explicitly, but this does not warrant a fail verdict."
+}

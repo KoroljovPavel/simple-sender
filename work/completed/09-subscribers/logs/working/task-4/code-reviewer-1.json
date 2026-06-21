@@ -1,0 +1,29 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 4,
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/tag/TagService.java",
+      "line": "84-89",
+      "finding": "incrementCounter returns void and silently no-ops when findAndModify matches no tag (returns null is discarded). The task explicitly accepts this (delta=-1 on count 0 is 'OK', no guard, no false 4xx), but a counter mutation that targets a non-existent (projectId, slug) leaves no trace at all — no log, no signal. If a future Task 8 add/remove path passes a stale slug, the denormalized count silently desyncs with zero observability.",
+      "suggestion": "Optional and out-of-scope for Task 4: consider a DEBUG/WARN log when the findAndModify return is null so a desync between Subscriber.tags[] and Tag.subscriberCount is at least greppable. Acceptable to defer to Task 8 where the real caller lands. No change required now."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/tag/TagControllerIT.java",
+      "line": "47",
+      "finding": "The IT instantiates its own `new ObjectMapper()` rather than autowiring the Spring-configured bean. Here it is only used to serialize Map request bodies (no Instant/JavaTime round-trip on the write path), so behavior is correct, but it diverges from the convention of reusing the application's mapper and could mask a future JSR-310 serialization mismatch if a test ever serializes an Instant-bearing object through it.",
+      "suggestion": "Optional: `@Autowired ObjectMapper objectMapper;` to align with the Spring-configured serializer. Non-blocking — current usage is limited to plain Maps."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/tag/TagController.java",
+      "line": "78-83",
+      "finding": "currentUserId() is duplicated verbatim from ProjectController (lines 125-131). The task hints permit this duplication for now (2 controllers, HttpRequestUtils has no such helper — verified), so this is a known, ratified deviation rather than a defect.",
+      "suggestion": "None required. Flagging only so a future third controller triggers extraction into a shared helper (e.g. HttpRequestUtils.currentUserId or a SecurityUtils) per the task's own note."
+    }
+  ]
+}

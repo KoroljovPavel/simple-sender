@@ -1,0 +1,30 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "changes_requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/export/SubscriberExportIT.java",
+      "line": 134,
+      "finding": "FAILED-path email assertion is a mock-only / litmus failure. exportJob_internalError_writesFailedAndEmail only awaits MAILPIT.getClient().getMessageCount() >= 1 with no recipient/subject/body check. MAILPIT is a JVM-wide static singleton (AbstractIntegrationTest:59-66) and this class never clears it in @BeforeEach (cleanAndSeed at line 66 resets Mongo/Redis but NOT Mailpit). happyPath_donePersistedFileEmailEvent and any prior IT (e.g. AuthControllerIT before it cleans) leave messages behind, so getMessageCount() >= 1 is already true before sendExportFailedEmail ever fires. Litmus test: delete the emailService.sendExportFailedEmail(...) call from ExportSubscribersJob.handleFailure and this assertion still passes on a leftover message — it proves nothing about the failed-export email. (The status=FAILED, scrubbed errorMessage, and subscribers_export_failed event assertions are real and correct; only the email assertion is hollow.)",
+      "recommendation": "Add MAILPIT.getClient().deleteAllMessages() to the @BeforeEach (mirror AuthControllerIT:101 which already does this), then assert the actual failed-export email: await until getMessageCount() == 1, fetch getAllMessages().get(0), assert recipient == owner@test.com and the HTML body matches the subscribers-export-failed template (e.g. .contains(\"не вдався\") or a stable marker from buildExportFailedBody) and does NOT contain a download token. This makes the assertion fail if the wrong email (or no email) is sent."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/export/SubscriberExportIT.java",
+      "line": 105,
+      "finding": "happyPath email await (getMessageCount() >= 1) runs against the uncleared shared Mailpit singleton, so it can return immediately on a stale message from a prior test before the export-ready email actually arrives. The follow-up content assertions read getAllMessages().get(0) (Mailpit returns newest-first) and assert .contains(\"download?token=\").contains(exportId), which guards against a false positive, but the early-return creates a timing window where get(0) could be a stale newest message and the test flakes intermittently rather than failing deterministically.",
+      "recommendation": "Same fix as the major finding — call deleteAllMessages() in @BeforeEach and await getMessageCount() == 1 (exact) so the await blocks until exactly the export-ready message lands. This removes the cross-test ordering dependency and the flake window."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/export/SubscriberCsvWriterTest.java",
+      "line": 110,
+      "finding": "formulaInjection_customFieldsCell_prefixed does not exercise the neutralization path it is named for. It seeds custom_fields={city:\"+1+1\"}, but the serialized JSON {\"city\":\"+1+1\"} starts with '{' (not a trigger char), so the test asserts the cell is emitted verbatim with NO apostrophe — it is effectively a second control case, identical in coverage to formulaInjection_controlCase. It never proves a customFields cell whose serialization begins with a trigger char (=,+,-,@,\\t,\\r) gets prefixed. The TDD anchor explicitly permits the whole-cell interpretation, and the implementation (SubscriberCsvWriter.neutralizeFormula on the whole JSON string) matches this, so this is a naming/coverage observation rather than a behavior gap.",
+      "recommendation": "Either rename to formulaInjection_customFieldsObjectCell_notPrefixed to reflect what it actually verifies, or add a positive case that drives the serialized customFields cell to begin with a trigger — e.g. assert the writer's neutralizeFormula contract for the whole-cell case directly, or accept the documented whole-cell limitation. Low priority; the F1 string-cell cases (equals/at/minus/tab/CR) already cover the dangerous identity-field paths."
+    }
+  ],
+  "summary": "Comprehensive, high-quality suite: every TDD anchor is covered with real byte-level CSV, GridFS metadata (F10), audit-event (F4), token-scrub (F8), fail-open/fail-closed Redis, concurrency-race, and recurring-job-drift assertions that genuinely prove the acceptance criteria. The only material defect is email-delivery assertions that lean on an uncleared shared Mailpit singleton — the FAILED-path email check is a litmus failure (passes on leftover messages even if no failed-email is sent) and the happy-path email await is a flake source.",
+  "missing_coverage": []
+}

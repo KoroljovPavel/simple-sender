@@ -1,0 +1,45 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-connect-precision",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "line": 235,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "connectionConfig object stores mode as a plain string literal 'strict' instead of ConnectionMode.Strict",
+      "detail": "The template correctly binds :connection-mode=\"ConnectionMode.Strict\" (line 485). The connectionConfig object (line 235) is separate and only exists for test assertion via defineExpose — it stores mode: 'strict' as a raw string. This is not a runtime bug (ConnectionMode.Strict === 'strict'), but the object is not type-safe and the dual representation (enum in template, string in object) is an inconsistency that could mislead a future reader. If the VueFlow enum value ever changed the object would silently diverge.",
+      "recommendation": "Use ConnectionMode.Strict in the connectionConfig object: const connectionConfig = { mode: ConnectionMode.Strict, radius: CONNECTION_RADIUS } — or annotate the type as { mode: ConnectionMode; radius: number }."
+    }
+  ],
+  "checklist": {
+    "ConnectionMode_import": "PASS — imported from @vue-flow/core at line 2 alongside MarkerType",
+    "Strict_mode_template_binding": "PASS — :connection-mode=\"ConnectionMode.Strict\" at line 485, evaluated against VueFlow source which confirms ConnectionMode.Strict = 'strict' and that Strict mode restricts valid drop targets to handles of the OPPOSITE type only (source drag can only end on a target handle, never another source)",
+    "connectionRadius_small": "PASS — CONNECTION_RADIUS = 12, bound at line 486; sufficiently small relative to the whole-card target handle which covers the full node area",
+    "isValidConnection_logic": "PASS — rejects missing target (!!conn.target) and self-loop (conn.target !== conn.source); accepts valid cross-node target. Defense-in-depth layer on top of Strict mode.",
+    "targetHandle_in_is_inert": "PASS — handleConnect (line 166) passes only conn.source + conn.sourceHandle to resolveEdgeRef; conn.target is used only as a savedStepId lookup key. conn.targetHandle is never read anywhere in the connect path, so 'in' vs null is completely inert to the resolution logic.",
+    "source_resolution_next": "PASS — resolveEdgeRef maps sourceHandle='next' → EdgeRef{fieldKind:'next'} regardless of targetHandle",
+    "source_resolution_btn_i": "PASS — resolveEdgeRef maps sourceHandle='btn:<i>' → EdgeRef{fieldKind:'button',buttonIndex:i} regardless of targetHandle",
+    "source_resolution_timeout": "PASS — resolveEdgeRef maps sourceHandle='timeout' → EdgeRef{fieldKind:'timeout'} regardless of targetHandle",
+    "source_resolution_entry": "PASS — resolveEdgeRef for source='start' or 'trigger:<n>' → EdgeRef{fieldKind:'entry'} regardless of targetHandle",
+    "saved_node_only_target": "PASS — handleConnect line 173 rejects conn.target not in savedStepIds before calling connectEdge; targetHandle plays no role",
+    "card_target_handle_id_in": "PASS — Handle in FunnelCanvasNode.vue has id='in' and data-handle-id='in'; only rendered for !isEntry && !isNote nodes",
+    "pointer_events_gating": "PASS — funnel-handle--card-target has pointer-events:none at rest; only pointer-events:all under .funnel-canvas-node--droppable which activates when isConnecting (connectionStartHandle != null)",
+    "click_select_not_regressed": "PASS — pointer-events:none at rest means the card-target handle never intercepts clicks; node-click handler on VueFlow is unchanged",
+    "node_move_not_regressed": "PASS — card-target Handle carries the Vue Flow nodrag class (per comment and VueFlow default-on-handles behavior); pointer-events:none at rest also prevents drag interference",
+    "SSR_regression": "PASS — component uses *.client.vue suffix (Decision 12); it is never rendered on the server; ConnectionMode import is a pure JS enum value with no DOM/window dependency",
+    "monochrome_stacked_outputs": "PASS — outputs section and funnel-handle--output styles are unchanged by this diff",
+    "arrows": "PASS — default-edge-options markerEnd unchanged",
+    "preview": "PASS — FunnelCanvasNode preview section unchanged",
+    "gated_outputs": "PASS — hasNextHandle/hasTimeoutHandle computed logic unchanged",
+    "broken_edges": "PASS — brokenEdges/brokenSourceIds unchanged",
+    "tests_connection_config": "PASS — test asserts cfg.mode === 'strict' (matches string value) and cfg.radius <= 12",
+    "tests_isValidConnection": "PASS — three cases covered: valid cross-node, self-loop, null target",
+    "tests_card_target_handle_id": "PASS — asserts data-handle-id === 'in' via DOM query",
+    "tests_handleConnect_with_in_targetHandle": "PASS — both next-source and entry-source paths tested with targetHandle='in'; assert correct emit payload",
+    "tests_unsaved_target": "PASS — existing test at line 399+ still covers unsaved-node rejection"
+  },
+  "summary": "The connect-precision change is correct and safe. ConnectionMode is properly imported and the enum value ('strict') matches VueFlow's internal constant. Strict mode correctly limits valid drop targets to opposite-type handles only, eliminating the cross-node output-dot snap. The card-target handle id='in' is inert to the connect resolution path because handleConnect/resolveEdgeRef never read conn.targetHandle — destination is resolved solely by conn.target (node id). All source handle paths (next/btn:<i>/timeout/entry) are unaffected. The isValidConnection guard is a sound defense-in-depth layer. Pointer-events gating preserves click-select and node-move. SSR is not affected. The only minor finding is that the connectionConfig test-exposition object stores mode as a plain string literal rather than the enum value, creating a type-unsafe dual representation that is inconsequential at runtime but could mislead."
+}

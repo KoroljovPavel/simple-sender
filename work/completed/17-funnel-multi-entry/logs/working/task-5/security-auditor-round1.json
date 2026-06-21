@@ -1,0 +1,91 @@
+{
+  "auditor": "security-auditor",
+  "task": "5",
+  "feature": "17-funnel-multi-entry",
+  "commit": "64ee8bd",
+  "status": "approved",
+  "summary": {
+    "verdict": "APPROVED — no blocking security issues found",
+    "totalFindings": 3,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "informational": 2,
+    "owasp_coverage": [
+      "A01 (Broken Access Control) — PASS",
+      "A04 (Insecure Design / DoS) — PASS",
+      "A09 (Security Logging / PII) — PASS with 1 low note"
+    ]
+  },
+  "audit_areas": {
+    "anti_idor_redirect": {
+      "status": "PASS",
+      "detail": "executionId for redirect originates exclusively from inFlightExecutionId(), which is scoped by (projectId, funnelId, subscriberId) — never from request input. The claimForRedirect CAS re-checks _id + subscriberId + funnelId + status-in(running,waiting,waiting_for_reply) + stepRunStatus=pending atomically. A mismatched subscriber or funnelId deterministically loses the CAS and returns null → no-op + LOG_REDIRECT_CLAIM_LOST WARN. Anti-IDOR is enforced by TWO independent layers: the trusted probe and the atomic CAS predicate. Test coverage: redirect_mismatchedSubscriber_isNoOp (EngineIT) + redirect_casLost_isNoOp_andEmitsWarn (EngineIT)."
+    },
+    "fail_closed_projectId": {
+      "status": "PASS",
+      "detail": "dispatchForSubscriber receives projectId from a trusted caller (pinned by ApiKeyAuthFilter in EventsController; execution.getProjectId() from the claimed doc in StepExecutor emitEvent path). matchingFunnels() calls funnelRepository.findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus(...) with projectId as the first filter — all matched funnels are guaranteed same-project. inFlightExecutionId() includes .and('projectId').is(projectId) in its criteria, so the returned executionId is scoped to the same project+funnel+subscriber triple. No cross-project execution can be redirected even if an attacker constructs a crafted event payload. enrollSpecificFunnel() performs an explicit projectId equality check on the resolved target funnel before any enroll action (line 408: !projectId.equals(target.getProjectId()))."
+    },
+    "log_injection_pii": {
+      "status": "PASS with 1 low note",
+      "detail": "All new LOG_* constants (LOG_REDIRECT, LOG_REDIRECT_CLAIM_LOST, LOG_REDIRECT_BROKEN_CURSOR, LOG_DISPATCH_REDIRECT, LOG_DISPATCH_NO_MATCHED_ELEMENT, LOG_DISPATCH_FUNNEL_ERROR) log only ids (executionId, funnelId, projectId) and exception class names — never event_name, triggerValue, matchKey, subscriber names, or any PII. Verified all log.warn/log.error/log.info call sites in both FunnelExecutionEngine and FunnelEventService for the new redirect path. matchedEntryStepId() warns with triggerType (a fixed taxonomy code, not the runtime event_name). FunnelTriggerServiceImpl logs only projectId and triggerType (not payload/triggerValue). No log injection surface from attacker-controlled string interpolation into log messages."
+    },
+    "dos_loop_bound": {
+      "status": "PASS",
+      "detail": "redirectExecution mutates an existing row — it does NOT create a new funnel_executions row and does NOT reset enrollDepth. The existing execution's enrollDepth is inherited unchanged, so the depth-cap backstop (originDepth > maxEnrollDepth) still applies to any auto-enroll chain spawned by redirect. A redirect-driven loop (EMIT_EVENT -> trigger -> redirect -> EMIT_EVENT ...) is bounded by the SAME drive() loop guards: (a) per-tick budget maxStepsPerTick trips FUNNEL_STEP_BUDGET_EXCEEDED → terminate(failed); (b) a MESSAGE step parks waiting_for_reply, requiring a human button press to continue. No new path around either guard was introduced. Fan-out ceiling (maxFanoutPerEvent) counts redirects and starts equally (handled++ in both branches). Test coverage: emitEventTriggerSelfLoop_terminatesAtBudgetOrMenuPark (EngineIT)."
+    },
+    "error_isolation": {
+      "status": "PASS",
+      "detail": "redirectOrStart() wraps the entire per-funnel redirect/start decision in try/catch(Throwable) that logs LOG_DISPATCH_FUNNEL_ERROR (ids/codes only) and returns false — one funnel fault never aborts the fan-out loop or escapes dispatchForSubscriber. dispatchForSubscriber itself has an outer try/catch(Throwable) (LOG_DISPATCH_ERROR) so the webhook job and the /events API endpoint are never 5xx'd. The redirectExecution() method in the engine has no unchecked throws; broken-cursor terminal-fail is handled explicitly before drive() so it never propagates. CAS-loss is a no-op return, not an exception. EventsController has a belt-and-braces try/catch around the dispatch call. No new path introduces an unguarded throw."
+    }
+  },
+  "findings": [
+    {
+      "id": "SEC-T5-001",
+      "severity": "low",
+      "category": "A09 — Security Logging and Monitoring Failures",
+      "cwe": "CWE-532",
+      "title": "LOG_DISPATCH_NO_MATCHED_ELEMENT logs triggerType — confirm it stays a category code and never includes matchKey",
+      "location": "FunnelEventService.java:308 (matchedEntryStepId, LOG_DISPATCH_NO_MATCHED_ELEMENT)",
+      "code_snippet": "log.warn(\"{} funnelId={} triggerType={}\", LOG_DISPATCH_NO_MATCHED_ELEMENT, funnel.getId(), triggerType);",
+      "description": "The WARN log for a missed re-scan includes triggerType (e.g. 'event'). triggerType is a fixed 5-value taxonomy (on_start/event/keyword/tag_added/custom_field_set) chosen by the funnel author at design time, not a runtime user value — it classifies as a code per Decision 16, not PII or a business secret. However, if this log line is ever extended to also emit matchKey/triggerValue to aid debugging, it would leak the event_name (a business-defined slug) to logs, violating Decision 16 and potentially leaking internal event taxonomy to log aggregators.",
+      "impact": "No current PII or business-secret leakage. Risk is forward-looking only: a careless future edit could add matchKey to this log line.",
+      "recommendation": "No code change required. Add a comment at the log site explicitly noting that matchKey/triggerValue MUST NOT be added here (same guard comment pattern as the existing 'never the event_name/triggerValue' comment block at L89-94 of FunnelEventService). Current code is compliant.",
+      "blocking": false
+    },
+    {
+      "id": "SEC-T5-002",
+      "severity": "informational",
+      "category": "A01 — TOCTOU on redirect path (benign by design)",
+      "cwe": "CWE-367",
+      "title": "Two-step probe+CAS for redirect is a documented TOCTOU — confirmed benign, defense-in-depth holds",
+      "location": "FunnelEventService.java:258-261 (inFlightExecutionId -> redirectExecution) + FunnelExecutionEngine.java:405-420 (claimForRedirect)",
+      "description": "inFlightExecutionId() performs a findOne (read), then redirectExecution() performs a separate findAndModify (write). A row visible in the probe could be claimed by the sweep or otherwise mutated between the two operations. This is NOT a vulnerability: (1) the executionId is sourced from a project+funnel+subscriber-scoped trusted probe, not from request input; (2) the CAS re-verifies _id, subscriberId, funnelId, status-in(running,waiting,waiting_for_reply), and stepRunStatus=pending atomically — no state corruption is possible even if the probe's snapshot is stale; (3) worst case is a no-op redirect (logged as LOG_REDIRECT_CLAIM_LOST), which is the explicitly designed outcome per Decision 4.",
+      "impact": "None. At most an occasional no-op redirect under concurrency, fully covered by the CAS + WARN log. This is the intended best-effort-no-op design.",
+      "recommendation": "No change required. Document this as a known-benign TOCTOU with defense-in-depth. The CAS is the authoritative security gate. Test redirect_casLost_isNoOp_andEmitsWarn confirms the no-op property under concurrency.",
+      "blocking": false
+    },
+    {
+      "id": "SEC-T5-003",
+      "severity": "informational",
+      "category": "A01 — inFlightExecutionId probe does not filter stepRunStatus",
+      "cwe": "CWE-362",
+      "title": "inFlightExecutionId can return an in_progress (sweep-owned) execution id — confirmed safe by CAS design",
+      "location": "FunnelEventService.java:321-328 (inFlightExecutionId)",
+      "description": "The inFlightExecutionId query filters status IN (running, waiting, waiting_for_reply) but does NOT filter on stepRunStatus. This means it can return the id of a row currently owned by the sweep (stepRunStatus=in_progress). The subsequent claimForRedirect CAS requires stepRunStatus=pending, so such a row will lose the CAS, logging LOG_REDIRECT_CLAIM_LOST — a no-op. This is the correct and intended behavior per Decision 4 (CAS-loss is best-effort no-op). The probe not filtering stepRunStatus is consistent with the intent: 'does a row exist for this (project, funnel, subscriber) triple in an in-flight status?' — the CAS is the only place that actually gates on pending.",
+      "impact": "No security impact. The probe being wider than the CAS is the design: it identifies the candidate row; the CAS decides whether the redirect can proceed atomically. No state corruption possible.",
+      "recommendation": "No change required. This is a documented design choice. The CAS is the authority. The no-op + WARN path is tested in redirect_casLost_isNoOp_andEmitsWarn.",
+      "blocking": false
+    }
+  ],
+  "verified_properties": {
+    "executionId_source": "executionId passed to redirectExecution comes ONLY from inFlightExecutionId() trusted probe — verified no request-input path",
+    "cas_predicate_binding": "claimForRedirect binds _id + subscriberId + funnelId + status IN (...) + stepRunStatus=pending — all 5 conditions verified in code at lines 407-412 of FunnelExecutionEngine.java",
+    "cross_project_enrollment": "dispatchForSubscriber receives projectId from trusted caller; matchingFunnels pins projectId as first filter; inFlightExecutionId includes projectId; enrollSpecificFunnel does explicit projectId equality check — no cross-project execution path found",
+    "pii_in_logs": "All 6 new LOG_* constants emit ids/codes only — verified all log call sites in FunnelEventService and FunnelExecutionEngine; no event_name/triggerValue/matchKey/subscriber field logged on any redirect path",
+    "dos_no_new_row": "redirectExecution calls findAndModify (no insert); enrollDepth unchanged; fan-out ceiling counts redirects; drive() budget and menu-park gate unchanged — no new path around loop bounds",
+    "error_isolation": "redirectOrStart() try/catch(Throwable) + dispatchForSubscriber outer try/catch(Throwable) — redirect fault cannot escape to webhook/API; verified no unchecked throws in redirectExecution",
+    "bean_cycle": "@Lazy on FunnelExecutionEngine in FunnelEventService constructor — Spring deferred proxy breaks the FunnelEventService→FunnelExecutionEngine→StepExecutor→FunnelEventService cycle; context startup is safe"
+  }
+}

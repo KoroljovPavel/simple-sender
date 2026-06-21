@@ -1,0 +1,52 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "3",
+  "round": 1,
+  "commit": "14c400a5d1e66a6257b879430ab21aa0900d7008",
+  "scope": "Engine enroll path for SUBSCRIBE_TO_FUNNEL — focus: bean-cycle safety, no duplicated backstops, exhaustive switch, Outcome.COMPLETE correctness.",
+  "summary": "Implementation is correct and idiomatic to the existing funnel module. The SUBSCRIBE_TO_FUNNEL case rides the pre-existing StepExecutor -> FunnelEventService edge (no new injection of the factory/engine/FunnelService into StepExecutor), so no bean cycle is introduced. Backstops (depth-cap, auto-enroll rate-limit) reuse the existing maxEnrollDepth field and the private autoEnrollRateLimitExceeded method rather than forking new ones. The exhaustive return-switch in StepExecutor.execute now covers SUBSCRIBE_TO_FUNNEL; Outcome.COMPLETE was added to the enum and an explicit case COMPLETE branch was added to the drive switch STATEMENT (which the compiler does NOT enforce), calling the existing claim-conditional complete(exec, now) and returning. No findings requiring code changes.",
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "info",
+      "dimension": "Architecture / bean-cycle safety",
+      "file": "StepExecutor.java",
+      "finding": "subscribeToFunnel calls the already-injected funnelEventService; no FunnelExecutionFactory/FunnelExecutionEngine/FunnelService injection added. The enroll uses the existing StepExecutor -> FunnelEventService edge and FunnelEventService -> FunnelExecutionFactory edge, neither of which edges back into the engine. No new cycle is possible.",
+      "action": "none — verified safe"
+    },
+    {
+      "id": "CR-2",
+      "severity": "info",
+      "dimension": "No duplicated backstops",
+      "file": "FunnelEventService.java",
+      "finding": "enrollSpecificFunnel reuses maxEnrollDepth and the private autoEnrollRateLimitExceeded (same Redis key bf:rate:auto-enroll:, fail-open) — no second/forked limit. Order mirrors dispatchForSubscriber: depth-cap -> rate-limit -> resolve+fail-closed projectId -> active-check -> entry-step fallback WARN -> re-enter/factory. The single-dispatcher-owns-backstops invariant holds.",
+      "action": "none"
+    },
+    {
+      "id": "CR-3",
+      "severity": "info",
+      "dimension": "Outcome.COMPLETE correctness",
+      "file": "FunnelExecutionEngine.java",
+      "finding": "drive is a switch STATEMENT, so a missing case COMPLETE would silently no-op (leaving the row in_progress). The branch was added explicitly and is terminal (calls complete(exec, now) then returns), matching CANCEL/FAIL structure. complete() is claim-conditional (stillClaimed CAS), preserving the concurrent-cancel-wins invariant. No further steps execute after COMPLETE.",
+      "action": "none"
+    },
+    {
+      "id": "CR-4",
+      "severity": "info",
+      "dimension": "DRY / factory refactor",
+      "file": "FunnelExecutionFactory.java",
+      "finding": "insertExecution is now a thin delegate to insertExecutionAt(..., null); the body is not duplicated. resolveStartCursor returns startStepId only when it resolves in the snapshot, else step 0 (or null for empty) — preserving the legacy step-0 fallback for the 5 unchanged callsites. MongoTemplate.insert and LOG_EXECUTION_STARTED retained.",
+      "action": "none"
+    },
+    {
+      "id": "CR-5",
+      "severity": "info",
+      "dimension": "Error handling / observability",
+      "file": "FunnelEventService.java",
+      "finding": "Whole method wrapped in try/catch(Throwable) with a greppable LOG_ENROLL_ERROR (exception class only). Each skip reason has its own distinct greppable id. Logs carry only ids/codes/enum-status — no subscriber field or target name (Decision 16, anti-log-injection).",
+      "action": "none"
+    }
+  ],
+  "tests_status": "FunnelStepExecutorTest + FunnelExecutionEngineIT + FunnelTestRunSendIT green; full com.botfunnel.funnel.* green (runSlow).",
+  "verdict": "approved — no changes required"
+}

@@ -1,0 +1,54 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 says the new stopAllExecutions should add projectId scoping to 'mirror' delete(), but the actual FunnelService.delete() at line 181 scopes bulk-cancel by `funnelId` ONLY (not by `projectId`). The task then correctly says to ADD projectId — this is the right thing to do — but the phrase 'mirror delete()' in the Acceptance Criteria and implementation comment is misleading: mirroring delete() verbatim would produce an under-scoped query missing projectId. The implementation hints correctly point to FunnelExecutionFactory.cancelExistingForPair (lines 55-68) as the true scoping reference (includes projectId). An agent that interprets 'mirror delete()' literally will produce a tenant-isolation bug.",
+      "fix": "Change the AC/hints wording: 'mirror cancelExistingForPair (not delete) for the projectId+funnelId scoping pattern'. Clarify that delete() is the refactor target (its own bulk-cancel will be extracted into the new shared helper), not the scope template."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 1,
+      "issue": "TDD Anchor test stopAllScopedByProjectAndFunnel (Task 1) verifies cross-funnelId isolation but does not assert stepRunStatus=done on the cancelled executions — it only checks status=cancelled. The claim-CAS correctness (Decision 7) is the load-bearing part of the stop-all feature, yet the IT anchor does not have an explicit stepRunStatus assertion. The existing deleteReturns204AndCancelsActiveExecutions test also has no stepRunStatus check (line 159: execStatus returns ExecutionStatus only). A future agent may omit the stepRunStatus=done set because the TDD test does not catch it.",
+      "fix": "Add a stepRunStatus reload assertion to stopAllCancelsActiveAndSetsStepRunDone: after stop-all, reload each cancelled execution and assert stepRunStatus == done. The IT helper execStatus() only returns ExecutionStatus; add a helper or inline mongoTemplate.findById check for stepRunStatus."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 2,
+      "issue": "FunnelServiceTest does not exist (no such file found). Task 2 mentions 'FunnelServiceTest::testRunCancelBeforeInsertInOrder — InOrder assert cancelExistingForPair BEFORE insertExecution (depth=0) — if FunnelServiceTest doesn't exist — prove via repository state in IT.' The fallback is sound, but proving order via IT state is less deterministic (timing-sensitive) than a Mockito InOrder check. The IT path (testRunRestartCancelsPrevious) checks state correctly, but the InOrder assertion in a unit test would be stronger.",
+      "fix": "Acceptable as written — the fallback IT path is sufficient. Optionally note that the InOrder unit-test goal can be achieved by creating FunnelServiceTest as a new Mockito-based test class alongside the existing FunnelServiceKeywordTest / FunnelServiceTriggerTypeTest pattern."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "The seedConnectedBot() helper in FunnelControllerIT (line 856) does NOT set ownerChatId on the bot — it only sets telegramBotId, telegramUsername, status, projectId. Task 2 tests that use a 'linked' bot (testRunLinkedBotSends, testRunRestartCancelsPrevious, testRunDraftFunnelReturns2xx) require a CONNECTED bot with a non-null ownerChatId AND an ACTIVE subscriber at that chatId. The task correctly describes needing to seed these, but it references the existing seedConnectedBot helper as if it is sufficient. Agents will need to extend this helper or add a separate seeding step to set ownerChatId and create the matching subscriber.",
+      "fix": "Add a note that seedConnectedBot must be extended (or a new overloaded version created) to accept ownerChatId. The linked-bot test fixture also requires a Subscriber document with matching (projectId, telegramBotId, chatId, status=ACTIVE)."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 2,
+      "issue": "Implementation hint in Task 2 says 'enum name() (lowercase: running/cancelled/done)'. StepRunStatus.done.name() returns 'done' (lowercase), correct. But ExecutionStatus enum values are named lowercase (running, cancelled, waiting, etc.) which is confirmed in the code. This is accurate — no fix needed — but the note conflates status enum values with stepRunStatus, which could confuse an agent into thinking all enum name() values are lowercase by Java convention (they're lowercase here by project decision, not Java convention). Low risk.",
+      "fix": "Clarify: 'these enums use lowercase names() by project Decision 14 — not standard Java convention; do not rename them.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3's depends_on: [2] is declared for the live-endpoint dependency, and the task body correctly notes the store can be verified with mocked useApi without the real backend. However, the task is in Wave 3 (parallel with Task 4) and the wave description says it runs after Wave 1+2 backend tasks complete. This sequencing is correct for the do-feature skill's wave-based execution. No technical issue — just noting the dependency is on backend contract (shapes), not running code.",
+      "fix": "No change needed. The task is clear that vitest with mocked useApi can verify the store independently."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 5
+  }
+}

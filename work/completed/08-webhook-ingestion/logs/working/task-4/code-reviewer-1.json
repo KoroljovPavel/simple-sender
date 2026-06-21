@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": "Task 4 fully complies with Decision 6 (records + JsonNode stubs + @JsonIgnoreProperties), uses snake_case record components per existing project precedent (TelegramSendResult.error_code, TelegramUser.is_bot), and the package boundary com.botfunnel.webhook.dto cleanly resolves the name collision with com.botfunnel.user.User. Test suite covers all 9 task-listed cases plus slot independence, with appropriate exception class pinning (MismatchedInputException, JsonProcessingException). No critical or major findings.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/test/java/com/botfunnel/webhook/dto/TelegramUpdateDeserializationTest.java",
+      "line": 5,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Import order: com.fasterxml.jackson.databind.exc.MismatchedInputException is imported before com.fasterxml.jackson.core.JsonProcessingException, which inverts Java's typical lexicographic order (core < databind). Cosmetic only; no functional impact and not enforced by a project linter that I can see.",
+      "benefit": "Consistency with idiomatic Java import grouping.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/dto/Chat.java",
+      "line": 11,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Chat record exposes only id/type/title/username, but private-chat updates also carry first_name/last_name. This is intentional per task scope (worker only consumes these four), and @JsonIgnoreProperties hides the rest — but a one-line javadoc note such as 'private-chat first_name/last_name are intentionally not modelled; added on demand by future epics' would prevent a future maintainer from concluding the record is incomplete.",
+      "benefit": "Reduces ambiguity for future contributors reading the DTO.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/dto/User.java",
+      "line": 12,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "User record component naming uses snake_case (id, is_bot, first_name, ...). This is deliberate per Decision 6 (snake_case binding without @JsonProperty) and matches existing precedent (TelegramUser.is_bot). It is, however, the project's only DTO style that visibly diverges from Java naming conventions. Worth keeping a single ADR/decision pointer in a class-level javadoc on TelegramUpdate.java that links to Decision 6 — already done implicitly via the 'Jackson 2.12+ record support — no @JsonProperty required' line, so this is informational.",
+      "benefit": "Future readers immediately understand the snake_case choice was intentional.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "excellent"
+  }
+}

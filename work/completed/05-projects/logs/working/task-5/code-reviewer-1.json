@@ -1,0 +1,103 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 5 round 1 delivers a clean ProjectSelector + a strict path-scoped 404 interceptor. Cross-file consistency with Task 2's store is correct, ARIA wiring matches AC, the 404 interceptor regex is properly anchored and exercises all four Risk R7 cases plus extras (URL instance, query string, non-404 status, collection path). One genuine semantic gap: both the listing and the limit check use raw projectsStore.projects.length without filtering deletedAt === null, which becomes incorrect the moment the selector is mounted on a page that called fetchAll(true) (e.g. /projects in Task 6); business rule per AC-30 / tech-spec is 5 active. The rest are minor a11y/UX polish items (keyboard arrow nav, focus return after select, link-vs-anchor disabled distinction).",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "frontend/components/ProjectSelector.vue",
+      "line": 15,
+      "category": "cross-file-consistency",
+      "description": "sortedProjects computes over projectsStore.projects directly without filtering deletedAt === null. The store contract (Task 2) exposes projects as 'active + soft-deleted' depending on the most recent fetchAll call: fetchAll() loads active only; fetchAll(true) (used by /projects list page — Task 6) loads soft-deleted too. Task 9 injects this selector into the global layout, so when the user navigates from /dashboard to /projects (which triggers fetchAll(true)) the dropdown will start listing soft-deleted projects. Task spec is explicit: 'list active projects sorted createdAt desc' (description line 40) and AC-19 'renders active projects sorted createdAt desc'.",
+      "impact": "User can see and click a soft-deleted project name in the selector after visiting /projects — selectProject() then sets currentProjectId to a soft-deleted ID, which the next single-resource hit will 404 on, triggering the very stale-cleanup interceptor this task wires up. Self-correcting but a poor UX and a contract violation.",
+      "suggestion": "Filter inside the computed: `[...projectsStore.projects].filter((p) => p.deletedAt === null).sort(...)`. Add a spec case: when projects contains a mix of active + soft-deleted, only active items render in the dropdown."
+    },
+    {
+      "severity": "major",
+      "file": "frontend/components/ProjectSelector.vue",
+      "line": 21,
+      "category": "cross-file-consistency",
+      "description": "atLimit uses raw projects.length, not active count. Same root cause as the previous finding. The literal AC text on line 83 of the task says 'projectsStore.projects.length >= 5' — but the user-spec AC-30 (and the 5-active business rule everywhere else in the feature: backend countByOwnerIdAndDeletedAtIsNull, store.runAutoSelect's filter) is consistently about active. After visiting /projects with 4 active + 2 soft-deleted in the store, the create button would show as disabled with the limitReachedTooltip even though only 4 active projects exist — a false positive against AC-30.",
+      "impact": "Users who legitimately can create a 5th project see the button disabled and the i18n tooltip 'You've reached the limit of 5 active projects'. Mismatch with the backend quota (which only counts active) — backend would happily 201 the create.",
+      "suggestion": "Replace with `const activeCount = computed(() => projectsStore.projects.filter((p) => p.deletedAt === null).length); const atLimit = computed(() => activeCount.value >= ACTIVE_LIMIT)`. Add a spec case: 4 active + 2 soft-deleted → create button enabled. The literal AC text is best read as shorthand for 'active projects'; surface this in the round-1 report so the deviation is logged."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/ProjectSelector.vue",
+      "line": 45,
+      "category": "best-practices",
+      "description": "Menu keyboard pattern is partially implemented. The task notes 'consult Context7 (/w3c/aria-practices) if uncertain' and lists 'Esc closes, ArrowDown moves focus into the panel, etc.' as the menu-button pattern. Only Esc-close + focus-restore-to-trigger is wired; ArrowDown/ArrowUp/Home/End/Tab item navigation is not. AC line 91 requires only the role/aria-haspopup attributes, so this does not fail acceptance — but the spec explicitly points at the APG and 'manual-ARIA dropdown pattern' in ux-guidelines.",
+      "impact": "Keyboard-only users can open the menu with Enter on the trigger but cannot move between items without Tab, which leaves the menu role (no Tab is the APG convention).",
+      "suggestion": "Either (a) add ArrowDown/ArrowUp roving focus among items + Home/End shortcuts per the APG menu-button pattern, or (b) explicitly note in decisions.md that arrow-key nav is deferred to a follow-up and document the rationale. Cheapest fix: a single keydown handler on the panel that scans data-test='project-selector-item-*' buttons and focuses next/prev."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/ProjectSelector.vue",
+      "line": 33,
+      "category": "best-practices",
+      "description": "onSelect does not restore focus to the trigger after closing. APG menu-button pattern recommends returning focus to the invoking button when the menu closes via item activation (matches Esc-close behaviour at line 50). Inconsistency is small but visible to keyboard users — Esc returns focus, click-on-item does not.",
+      "impact": "Minor a11y/UX inconsistency: keyboard tab order after picking a project lands on the next element after the panel rather than the trigger.",
+      "suggestion": "Add `triggerRef.value?.focus()` inside onSelect after `close()`. Same one-liner as the Esc branch."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/ProjectSelector.vue",
+      "line": 120,
+      "category": "best-practices",
+      "description": "Disabled 'Create' element uses a <span> with role='menuitem' and aria-disabled='true'. role='menuitem' on a non-focusable span will not appear in the menu's roving focus order; screen readers may announce it correctly, but keyboard users skip it. The enabled version is a <NuxtLinkLocale> (renders <a>) — focusable. The disabled version is intentionally not focusable to block navigation, which is fine, but aria-disabled='true' on a non-tabbable element is redundant unless the element is otherwise reachable.",
+      "impact": "Mild a11y oddity. APG specifically suggests for disabled menu items: keep them in the focus order with aria-disabled='true' so users discover the disabled state and the tooltip. As implemented, the tooltip (title attribute) requires hover to surface — keyboard users get no signal.",
+      "suggestion": "Make the disabled element focusable: render as `<button type='button' :disabled='true'>` (or a `<span tabindex='-1' role='menuitem' aria-disabled='true'>` that the menu's roving focus visits). Or surface the limit message inline below the create row instead of relying on a hover-only title attribute. Tooltip-via-title is non-discoverable on touch/keyboard."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/ProjectSelector.vue",
+      "line": 54,
+      "category": "best-practices",
+      "description": "Document-level listeners are registered unconditionally in onMounted (mousedown + keydown). They fire on every click anywhere in the document while the component lives, even when the panel is closed (the handlers early-return on `!open.value`, but the listener is still called). Cheap, but a slightly nicer pattern is to register only while open (via a watch on `open`) — saves N×handler invocations per session and isolates the cross-cutting effect.",
+      "impact": "Negligible performance / no correctness issue. Minor code-style comment.",
+      "suggestion": "Optional: `watch(open, (v) => { if (v) { document.addEventListener(...); ... } else { document.removeEventListener(...); ... } })`. Lifecycle cleanup in onBeforeUnmount stays the same. Skip if you prefer the current shape."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/composables/useApi.ts",
+      "line": 50,
+      "category": "types",
+      "description": "ResponseErrorCtx is hand-rolled with `request: unknown` and `response: { status: number } | undefined`. ofetch ships a FetchContext type from its public surface. Aligning the parameter type with the ofetch type would catch shape drift if ofetch changes the context payload across versions.",
+      "impact": "Future ofetch upgrades could silently break the helper (e.g. if response becomes Response | null with a different access pattern). The current shape happens to be compatible.",
+      "suggestion": "Either keep the local type (it is intentionally narrow and exists for the test seam — fine), or import ofetch's FetchContext: `import type { FetchContext } from 'ofetch'; export function handleApiResponseError(ctx: FetchContext): void`. Either is acceptable; the narrow local type is also defensible for testability."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/composables/useApi.ts",
+      "line": 70,
+      "category": "best-practices",
+      "description": "Writing `projectsStore.pendingBannerKey = 'errors.projects.unavailable'` directly mutates the store ref from a cross-cutting layer. The store does not expose a setter for this slot; the comment in stores/projects.ts:41-44 documents the slot but the mutation is via direct ref assignment from outside. A tiny setter (e.g. `setPendingBanner(key)`) would (a) keep the surface symmetric with selectProject / handleStaleCurrent, (b) make this side effect grep-able, (c) leave room for instrumentation (logging, dedupe) without touching call sites.",
+      "impact": "Stylistic. The setup-store + reactive() mock both make the direct assignment work correctly. Not a bug.",
+      "suggestion": "Optional. Add `function setPendingBanner(key: string | null) { pendingBannerKey.value = key }` to the store, expose it in the return, and call `projectsStore.setPendingBanner('errors.projects.unavailable')` from the interceptor. Skip if you prefer the slot-as-public-field shape (it is documented in the store)."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/composables/useApi-404-interceptor.spec.ts",
+      "line": 60,
+      "category": "testing",
+      "description": "The URL-instance case is the only test that uses an absolute URL (and via the URL constructor). On SSR the actual request shape is an absolute-URL STRING (because baseURL = apiBaseSsr 'http://localhost:8080'), which exercises a different branch of extractPath (the `new URL(request).pathname` fallback). Both branches are exercised, but adding a dedicated case 'absolute URL string with query string' would lock the SSR path normalization explicitly and matches the 'Request URL forms' edge case enumerated in the task spec.",
+      "impact": "Coverage gap for the most likely production failure mode (SSR request shape).",
+      "suggestion": "Add one case: `handleApiResponseError(makeCtx('http://localhost:8080/api/v1/projects/' + CURRENT_ID + '?x=1', 404))` → asserts handleStaleCurrent fires. Three lines."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/ProjectSelector.vue",
+      "line": 76,
+      "category": "best-practices",
+      "description": "Trigger button uses `t('layout.projectSelector.placeholder')` when currentProject is null. The task description (line 40) names this the 'empty-state label'. Verified the key exists in both en.json (line 18) and uk.json (line 18). Spec text says noActive applies when projects.length === 0 (which is rendered in the panel correctly at line 105). Naming-wise, `placeholder` (trigger) and `noActive` (panel) are both fine and i18n parity is intact. No issue — flagged only because the two related keys are subtly different and easy to mix up in future edits.",
+      "impact": "None.",
+      "suggestion": "No action. Note for future maintainers: 'placeholder' = trigger empty-state, 'noActive' = panel empty-state. A short JSDoc above each i18n key in the dictionary or a comment in the component could prevent a future swap."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 2,
+    "minorIssuesCount": 8,
+    "testCoverageAssessment": "adequate"
+  }
+}

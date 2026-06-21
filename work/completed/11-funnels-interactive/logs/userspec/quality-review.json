@@ -1,0 +1,100 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "pass"
+  },
+  "findings": [
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "«Зачем» описує дві ролі абстрактно — «автор» і «підписник» — але не іменує конкретний persona/роль власника проєкту (small-business owner / marketer) явно. Фраза «це той рівень, заради якого користувач і приходить у продукт» не уточнює, який саме користувач і яку конкретну задачу вирішує (хоча вниз по тексту зрозуміло).",
+      "location": "## Зачем",
+      "fix": "Додати одне речення: «Цільова аудиторія — власники малого бізнесу та маркетологи, що будують Telegram-воронки (Epic 06 project.md).» Це фіксує WHO без переробки всього розділу."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "Сценарій 3 (підписник проходить воронку) не описує поведінку для випадку, коли підписник не активний (статус не ACTIVE) або бот відключений — хоча ці кейси є в критеріях. Сценарії охоплюють happy path і таймаут, але не згадують відмовні гілки в тексті сценаріїв. Це не впливає на completeness критично (є в AC і Ризиках), але ускладнює читання.",
+      "location": "## Как должно работать — Сценарій 3",
+      "fix": "Можна додати коротку примітку: «Якщо підписник заблокував бота або він не ACTIVE → execution cancelled (аналогічно Фазі 1).» або покинути як є — покривається AC."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "major",
+      "issue": "Критерій «Воронка `paused` → нові executions не стартують; активні (включно з `waiting_for_reply`) дограють» описує бажану поведінку, але не задає спостережуваний тест-сценарій: як перевірити, що вже-припарковані executions справді «дограють» (що саме побачить тестувальник після resume)? Формулювання є технічно вірним, але межить з неперевірюваним без конкретики очікуваного результату.",
+      "location": "## Критерии приёмки — пункт «Воронка `paused`»",
+      "fix": "Уточнити: «Воронка `paused` → нові `/start` не стартують (новий execution не з'являється в БД); existing `waiting_for_reply` execution при натисканні кнопки — просувається далі й доходить до `completed`.»"
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "Критерій «Натиск кнопки записує подію `funnel_button_clicked`» перераховує поля події, але не вказує, де і як агент може перевірити, що подія справді записана (яке сховище, яка команда). «Як проверить → Агент» цей крок не покриває.",
+      "location": "## Критерии приёмки — пункт `funnel_button_clicked`",
+      "fix": "Додати до таблиці «Агент проверяет» крок: «Виконати callback, перевірити events-колекцію» + MongoDB-запит або виклик API. Або в самому критерії додати: «(перевіряється через MongoDB events-колекцію після натискання).»"
+    },
+    {
+      "check": "edge_cases",
+      "severity": "minor",
+      "issue": "Ризик «Битий граф у активній воронці» покритий для моменту активації, але не описує поведінку, якщо ціль кнопки стає недоступною після активації (теоретично не можливо без редагування, але snapshot-ізоляція — саме про це). Поведінка в такому крайньому випадку виводиться із snapshot-ізоляції, але явно не сформульована.",
+      "location": "## Риски — Ризик: битий граф",
+      "fix": "Додати: «Snapshot-ізоляція гарантує, що in-flight execution ніколи не торкнеться зміненого графа — активований snapshot незмінний на весь час виконання.» (одне речення)."
+    },
+    {
+      "check": "contradictions",
+      "severity": "major",
+      "issue": "«Ограничения» пункт snapshot-ізоляції (розділ «Ограничения») стверджує: «список кнопок — мутабельний, тож для нього потрібна явна глибока копія». При цьому «Технические решения» стверджує: «Snapshot-ізоляція kept (no versioning). in-flight дограють на своїй версії». Це не суперечить, але «Ограничения» описує необхідну зміну коду (глибока копія ще НЕ зроблена), тоді як «Технические решения» говорить про неї як про вже діючу властивість системи. Читач може неправильно сприйняти поточний стан — що snapshot-ізоляція вже надійна.",
+      "location": "## Ограничения (snapshot-ізоляція кнопок) та ## Технические решения (snapshot-ізоляція kept)",
+      "fix": "В «Технические решения» уточнити формулювання: «Snapshot-ізоляція зберігається (потребує явної глибокої копії buttons-list у `FunnelStep.copyOf` — зараз reference-copy); in-flight runs дограють на своєму snapshot.»"
+    },
+    {
+      "check": "template_compliance",
+      "severity": "minor",
+      "issue": "Секція «Тестирование» використовує мішаний стиль: перший рядок (Unit) — українською, далі слова «делаются», «делаем мінімально» — частково мовою шаблону (рос./укр. мікс). Це не впливає на якість змісту, але порушує загальний стиль документу.",
+      "location": "## Тестирование",
+      "fix": "Замінити «делаются всегда» → «робляться завжди», «делаем мінімально» → «робимо мінімально» для узгодженості з рештою документа."
+    },
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "18 acceptance criteria для size L — на верхній межі, але прийнятно для L-фічі з новою state-machine, 4+ integration points, і migrations. Thresholds (>10 AC → warning) перевищені; однак декларований розмір L обґрунтовує цю кількість.",
+      "location": "## Критерии приёмки (18 пунктів)",
+      "fix": "Не потребує виправлення. Зафіксовано як інформаційний запис — при наступному size-review якщо ≥20 AC, розглянути декомпозицію."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "Composite MENU step (one node: msg+buttons+wait+branch), no separate Wait/Branch types",
+      "Free-text reply deferred to roadmap",
+      "Cross-funnel jump deferred",
+      "Button schema: callback-only (Phase 2), ≤8, 1/row, label ≤64 chars",
+      "Double-click/stale-button idempotency: answerCallbackQuery + silent ignore",
+      "Graph data model: stable step ids, MENU buttons carry targetStepId edges",
+      "Vertical-list editor kept, no canvas (canvas = 12-nice-to-have)",
+      "Loops (return-to-menu) and fan-in enabled in Phase 2",
+      "Loop-back variant: re-send menu (variant a, user chose)",
+      "Optional timeout with optional target, off-by-default",
+      "Broken-edge 422 on activate, inline in editor, draft can save",
+      "Local-only verification (no deploy infra)",
+      "One new config: app.funnel.max-steps-per-tick (loop guard)",
+      "Step-id backfill migration — automatic",
+      "URL button type (label + http(s) link, no flow advance)",
+      "≥1 callback button required per MENU step",
+      "Analytics hook: funnel_button_clicked event + lastButtonClicked on execution",
+      "Versioning deferred",
+      "/stop cancels waiting_for_reply executions",
+      "Snapshot isolation: in-flight runs use their own snapshot",
+      "answerCallbackQuery best-effort (do not block branch advance on failure)",
+      "paused funnel drains active executions including waiting_for_reply",
+      "Backfill id for Phase-1 funnels + support both index/id during drain",
+      "currentStepIndex → currentStepId navigation",
+      "guard=size+1 replaced by per-tick step-limit"
+    ],
+    "missing": []
+  },
+  "summary": "Специфікація якісна, повна і самодостатня — усі теми інтерв'ю відображені, критерії приймання в цілому конкретні та перевірювані. Виявлено два major-знахідки (нечіткий критерій для paused+waiting, потенційно оманливе формулювання snapshot-ізоляції у «Технические решения»), що варто виправити до затвердження, але жодних critical-блокерів немає."
+}

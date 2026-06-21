@@ -1,0 +1,118 @@
+{
+  "task": "Task 10: Security Audit (15-message-composer)",
+  "auditor": "security-auditor (independent)",
+  "date": "2026-06-10",
+  "methodology": "OWASP Top 10 (2021), full-file review of final state of all changed source files",
+  "verdict": "PASS",
+  "counts": { "critical": 0, "major": 0, "minor": 0, "info": 6 },
+  "scope_reviewed": [
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+    "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+    "backend/src/main/java/com/botfunnel/funnel/VariableTemplateRenderer.java",
+    "backend/src/main/java/com/botfunnel/funnel/ContentBlock.java",
+    "backend/src/main/java/com/botfunnel/funnel/MediaItem.java",
+    "backend/src/main/java/com/botfunnel/funnel/BlockType.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelStep.java",
+    "backend/src/main/java/com/botfunnel/funnel/StepType.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelController.java",
+    "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+    "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java",
+    "backend/src/main/java/com/botfunnel/bot/dto/AlbumItem.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/FunnelStepDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/ContentBlockDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/MediaItemDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/PreviewStepRequest.java",
+    "frontend/components/funnels/FunnelMessagePreview.vue",
+    "frontend/components/funnels/FunnelStepForm.vue",
+    "frontend/types/funnel.ts",
+    "frontend/stores/funnels.ts"
+  ],
+  "findings": [],
+  "confirmed_invariants": [
+    {
+      "id": "INV-1",
+      "title": "Anti-SSRF — backend never dereferences media URL/file_id (Decision 6)",
+      "owasp": "A10:2021 Server-Side Request Forgery",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "FunnelService.requireMediaSource (FunnelService.java:1073-1081): null/blank rejected; looksLikeUrl routes any scheme-bearing value to requireUrl; bare token accepted as opaque file_id with NO dereference.",
+        "FunnelService.requireUrl (FunnelService.java:1043-1065): parses via java.net.URI, requires scheme EXACTLY equalsIgnoreCase http|https (not startsWith), non-empty host; leading/trailing whitespace rejected pre-parse (url.equals(url.strip())); malformed URI -> 422 not 500. Rejects file://, data:, javascript:, tg://, and empty-host URLs.",
+        "looksLikeUrl + URI_SCHEME_PREFIX regex ^[A-Za-z][A-Za-z0-9+.-]*:.* (FunnelService.java:1089-1099): a value with any scheme separator is forced through requireUrl, so 'javascript:...'/'data:...' cannot masquerade as a file_id. Leading-whitespace value is also forced to requireUrl (which rejects it). Applied uniformly to single-media (validateBlock:861) AND every album item (validateAlbum:899).",
+        "StepExecutor.sendBlock/buildAlbum (StepExecutor.java:203-253): media value (block.mediaUrl / item.mediaUrl) passed verbatim to TelegramSender — no HTTP fetch, no open(), no proxy on the backend. Telegram fetches it.",
+        "TelegramSender.sendSingleMedia/buildMediaArray (TelegramSender.java:236-293): media value placed into the request body as-is; the only outbound HTTP is to the Telegram base-url. No user URL is ever dereferenced.",
+        "Album per-item correction (MediaItem.type / AlbumItem.type): added a closed BlockType discriminator only; albumElementType maps it to a Telegram media-group type string. It opened NO dereference path — mediaUrl still passes through verbatim."
+      ]
+    },
+    {
+      "id": "INV-2",
+      "title": "XSS in preview — backend-side parseMode escaping, no v-html sink (Decision 8)",
+      "owasp": "A03:2021 Injection (XSS)",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "FunnelMessagePreview.vue: zero v-html / innerHTML / domProps. grep over frontend/components/funnels + stores + types finds only comments and a HTTP_URL_RE constant. All text/caption rendered exclusively via {{ }} (lines 202, 229, 261, 294, 310).",
+        "Media bound via :src (img, lines 211/276) and :href (FILE, line 239); both are scheme-guarded by isHttpUrl (HTTP_URL_RE = /^https?:\\/\\//i, lines 23-26) — a non-http(s) value (file_id, javascript:, data:, file:) falls back to a neutral icon and gets NO clickable href/src. VIDEO/AUDIO never render a link at all. URL keyboard buttons render label-only (line 310), no href.",
+        "Backend escaping preserved: previewStep -> renderBlocks -> VariableTemplateRenderer.render with the block's own parseMode (FunnelService.java:438-439,462). Media URLs pass through verbatim and are NEVER dereferenced server-side (FunnelService.java:413-414,463).",
+        "VariableTemplateRenderer.escape (VariableTemplateRenderer.java:168-211): HTML mode escapes & < > and \" (attribute-breakout defense); MarkdownV2 escapes the full official special set incl. backslash, single-pass over the original to avoid double-processing. Only substituted values are escaped (author markup untouched) — unchanged from the engine path, so preview is byte-faithful to runtime."
+      ]
+    },
+    {
+      "id": "INV-3",
+      "title": "Callback IDOR / owner checks — strict parse before DB lookup, fail-closed positive guard (Decision 2)",
+      "owasp": "A01:2021 Broken Access Control",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "FunnelTriggerServiceImpl.parseCallbackData (lines 345-372): runs BEFORE any DB lookup. >64 UTF-8 bytes rejected (Telegram hard ceiling); split(\":\", -1) requires EXACTLY 2 parts (a:b: / a: / :b all rejected); left segment must match OBJECT_ID_HEX ^[0-9a-fA-F]{24}$ (non-hex rejected); right segment parsed as int, range 0..MAX_BUTTON_INDEX(7) enforced.",
+        "Owner authorization (Step 5, lines 254-258): execution must match BOTH subscriber.getId()==exec.getSubscriberId() AND projectId==exec.getProjectId() — cross-subscriber AND cross-project IDOR closed. Mismatch -> silent no-op (no existence leak). resumeOnCallback CAS is scoped by subscriberId as a second atomic layer (Step 9).",
+        "Order of checks: bot -> strict parse -> subscriber -> load exec -> owner check -> waiting_for_reply state -> positive stepType==MESSAGE guard -> per-step buttons range + callback-type check. The new positive guard (Step 7, lines 273-277) is fail-closed: null cursor OR any non-MESSAGE step -> reject. It REPLACED the former 'must be MENU' guard without weakening any authorization step — IDOR/owner/range checks are all still present and ordered before/independent of it.",
+        "Per-step range re-check (Step 8, lines 283-293): idx >= buttons.size() rejected against the snapshot's authoritative button list; non-callback (url) button rejected. So a valid-shape index beyond the actual button count or pointing at a URL button does NOT advance.",
+        "answerCallbackQuery in finally on every resolved-bot exit path; no payload/subscriber field is ever logged (codes/ids only)."
+      ]
+    },
+    {
+      "id": "INV-4",
+      "title": "Token scrubbing — new sender methods + album mapper error/log paths run raw responses through scrubTokens (Decision 5)",
+      "owasp": "A09:2021 Security Logging and Monitoring Failures",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "sendVideo/sendAudio/sendDocument (TelegramSender.java:212-230) delegate to sendSingleMedia -> send -> sendMapped, the SAME shared pipeline as sendText/sendPhoto. They inherit the terminal-failure scrub (sendMapped catch: scrubTokens on ex.getMessage(), line 340) and the toThrowable scrub (line 491) with zero new log sites.",
+        "sendMediaGroup (line 263) uses the same sendMapped seam; the ONLY delta is mapBodyToSentAlbum.",
+        "mapBodyToSentAlbum (lines 549-574): EVERY error/WARN path runs the raw description through TelegramApiClient.scrubTokens before logging/throwing — element-missing-message_id (line 561), ok=false/non-array/empty (line 571), empty-body (line 553, no description). Parity with mapBodyToSentMessage confirmed.",
+        "TelegramApiClient.scrubTokens (line 216-219) TOKEN_PATTERN \\d{1,20}:[A-Za-z0-9_-]{30,50} -> [REDACTED_TOKEN]. Decrypted token lifetime confined to sendOnce local (TelegramSender.java:441), never a field, never logged. No bot-token leakage site found in any new method."
+      ]
+    },
+    {
+      "id": "INV-5",
+      "title": "Mass-assignment / privilege fields not body-bound (patterns.md DTO whitelist)",
+      "owasp": "A08:2021 / A01:2021",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "FunnelController: projectId/funnelId/stepId from @PathVariable; ownerId from currentUserId() (SecurityContextHolder -> AppUserDetails.id(), lines 131-137) — never from the request body.",
+        "All new/changed DTOs (FunnelStepDto, ContentBlockDto, MediaItemDto, PreviewStepRequest) carry @JsonIgnoreProperties(ignoreUnknown=true) and contain NO ownerId/projectId/order fields. order is server-authoritative (toSteps: step.setOrder(i), FunnelService.java:672).",
+        "previewStep authorization: requireFunnel (FunnelService.java:512) calls requireOwned FIRST then resolves the funnel scoped by project -> cross-project/missing collapses to uniform 404 (anti-IDOR, no existence leak)."
+      ]
+    },
+    {
+      "id": "INV-6",
+      "title": "Injection via variable substitution / insecure deserialization / over-logging",
+      "owasp": "A03:2021 / A08:2021 / A09:2021",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "Variable substitution ({user.*}/{custom.*}) is single-pass and non-recursive (VariableTemplateRenderer.java:90-108): a substituted value containing braces is NOT re-parsed, so a value cannot inject a new placeholder. Substituted values are parseMode-escaped; this is the same renderer used by preview and the engine.",
+        "Deserialization: ContentBlock/MediaItem persisted flat with NO _class discriminator (Decision 1) — no polymorphic Jackson type info, no gadget-chain surface. BlockType is a closed enum; parseBlockType uses valueOf with try/catch returning null (lenient -> 422, never 500). MediaItemDto.type is the BlockType enum so an invalid value fails at deserialization, not at runtime.",
+        "Logging: over-length WARN (FunnelService.warnIfOverLength:956 and StepExecutor.renderTrimmed:263) logs field + length only, never the value (no PII / no token). Callback/fire/cancel logs use named code constants + ids only. No payload, caption, or token-bearing string is logged anywhere in the changed code."
+      ]
+    }
+  ],
+  "deviations_from_spec": [],
+  "notes": [
+    "Album type-mixing predicate (Decision 5) is now enforced on save (validateAlbum, FunnelService.java:873-916) after the album-typer correction — closes the earlier Task 3/4 deferral. This is a correctness/validation concern, not a security gap; the predicate is fail-closed (unknown/null item kind -> 422).",
+    "FunnelStepForm.vue client-side IMAGE_URL_RE (line 71) is UX-only; the authoritative anti-SSRF gate is the backend requireMediaSource/requireUrl. Client validation being bypassed does not weaken the security posture."
+  ]
+}

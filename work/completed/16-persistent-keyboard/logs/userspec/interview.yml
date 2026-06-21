@@ -1,0 +1,490 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-06-10 18:20:47"
+  last_updated: "2026-06-10 20:00:00"
+  status: "completed"  # not_started | in_progress | completed
+  can_resume: true
+  current_question_num: 4
+  feature_size: "M"  # per Epic 7 complexity call in funnels-future-epics.md, confirm with user
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-06-10 18:30:00"
+    topic: "tap_semantics, use_case, step_model, size_testing"
+    agent_question: |
+      Batch 1: (1) Tap semantics — in-execution text-branch (a) vs keyword-funnel routing (b);
+      proposed buttons work via existing Phase-3 keyword mechanism. (2) Author's concrete use-case.
+      (3) Model: separate SET_KEYBOARD/CLEAR_KEYBOARD steps (text mandatory — reply_markup attaches
+      to a message) vs option on MESSAGE composer. (4) Size M + integration tests (sender wire format,
+      webhook dispatch, engine) in slow lane, no E2E.
+    user_answer: |
+      1. Достатньо "клавіатура + keyword-воронки" (no in-execution text-wait branching this phase).
+      2. Приклад: є клавіатура з кнопками, одна "Згенерувати бонус" → перекидає на воронку, де
+         генерується бонус; там СВОЯ клавіатура, користувач проходить декілька ходів; після
+         успішного або неуспішного результату повертається у воронку до (головної) клавіатури.
+      3. Те що пропонуєш (окремі кроки SET_KEYBOARD / CLEAR_KEYBOARD).
+      4. Погоджуюсь (M, integration у slow lane, без E2E).
+    summary: "Keyword-routing only; bonus-game use-case with nested keyboards + return; separate set/clear steps; size M agreed"
+  - question_num: 2
+    timestamp: "2026-06-10 18:45:00"
+    topic: "return_pattern, button_wiring, keyword_quirks, success_criteria"
+    agent_question: |
+      Batch 2: (1) Return to main keyboard = authoring pattern (SET_KEYBOARD at end of both
+      branches), no engine keyboard-stack. (2) Button→funnel wiring: A pure convention vs
+      B convention + editor hint (warning when no active keyword funnel matches button text).
+      (3) Keyword quirks as conscious constraints: contains-match false positives on free text,
+      menu precedence (waiting_for_reply suppresses keyword dispatch → bottom-keyboard taps
+      ignored while an inline menu is parked), fan-out (one text may start N funnels).
+      (4) Success criteria (a)-(e) + keyboard limits ≤10 rows × ≤4 buttons.
+    user_answer: |
+      1. Так, все правильно (authoring pattern, без стеку).
+      2. Давай B (editor hint).
+      3. Все нормально — приймаємо as-is; доведемо до логічного в процесі. Автор потестить на
+         своїх реальних воронках і тоді скаже точно, чи все добре.
+      4. Так, все підходить (критерії + ліміти).
+      Додатково: по суті це має вийти "нескінченна воронка" (постійне меню, навігація без кінця),
+      але є й кейси з кінцем (пройти тест тощо). Будуватимуть багато сценаріїв; приклади
+      накидає пізніше, зараз під рукою немає.
+    summary: "B wiring with editor hint; keyword quirks accepted as-is; criteria+limits approved; endless-menu + finite-quiz scenarios"
+  - question_num: 3
+    timestamp: "2026-06-10 19:10:00"
+    topic: "preview, step_text_shape, keyboard_options, dead_button"
+    agent_question: |
+      Batch 3 (code-informed): (1) Extend preview (backend + frontend panel) to render keyboard
+      steps' text via VariableTemplateRenderer + buttons list, vs neutral placeholder.
+      (2) Step text = single text field (not composer blocks) with {user.*}/{custom.*} variables,
+      parse_mode, 4096 cap; CLEAR_KEYBOARD text also mandatory (Telegram can't remove a keyboard
+      without a message). (3) Keyboard options: resize=true hardcoded; form exposes two checkboxes —
+      "Постійна" (is_persistent, default on) and "Сховати після натискання" (one_time, default off).
+      (4) Dead button at runtime (keyword funnel deactivated later) → silent no-op, accept as-is.
+    user_answer: |
+      1. Розширити прев'ю на обидва нові кроки (текст через VariableTemplateRenderer + кнопки списком).
+      2. Ок.
+      3. У формі два чекбокси: "Постійна" (is_persistent, default on) і "Сховати після натискання"
+         (one_time, default off).
+      4. Згоден.
+    summary: "Preview extended; single text field + variables + parse_mode; two option checkboxes; dead button silent no-op accepted"
+  - question_num: 4
+    timestamp: "2026-06-10 19:30:00"
+    topic: "button_cap, duplicates, error_mapping, manual_checklist + deploy (user preempted)"
+    agent_question: |
+      User preempted between batches: "деплою немає, перевіряю все в ручну" (no deploy, manual
+      verification). Batch 4: (1) Button text cap 64 chars (aligns with keyword ≤64 and inline
+      MAX_BUTTON_LABEL=64). (2) Duplicate button labels within one keyboard — block at validation
+      (422 + form mirror) vs allow. (3) Send errors: same mapping as all send steps
+      (blocked → cancelled, other Telegram errors → failed), nothing special. (4) Written manual
+      checklist (staging-smoke style) or author verifies his own way?
+    user_answer: |
+      1. Ок (cap 64).
+      2. Блокуй (validation 422 + form mirror).
+      3. Так (existing mapping, nothing special).
+      4. Так — створити smoke.md прямо в корені задачі (work/16-persistent-keyboard/smoke.md).
+    summary: "Cap 64; duplicates blocked; existing error mapping; smoke.md checklist in feature root; no deploy, manual verification"
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 95
+    status: "complete"
+    value: "16-persistent-keyboard (roadmap Phase 7, Epic 7 in funnels-future-epics.md)"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 90
+    status: "complete"
+    value: >
+      Persistent bottom reply keyboard (ReplyKeyboardMarkup, NOT inline). Two new fire-and-forget
+      step types: SET_KEYBOARD (mandatory text + reply_markup.keyboard rows; checkboxes
+      is_persistent/one_time, resize hardcoded) and CLEAR_KEYBOARD (mandatory text +
+      remove_keyboard). NO in-execution text-wait branching — taps route via existing Phase-3
+      keyword funnels. Wiring = text convention + non-blocking editor hint. Return-to-menu =
+      authoring pattern. TelegramSender needs NO change (sendText already takes replyMarkup).
+      Preview extended for both steps.
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 95
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 85
+    status: "complete"
+    value: >
+      Concrete author use-case (bonus game): main persistent keyboard with buttons incl.
+      "Згенерувати бонус" → tap routes to a bonus-generation funnel which sets ITS OWN
+      keyboard; subscriber makes several moves; on success or failure returns to the main
+      keyboard funnel. Persistent menu = always-available navigation (inline MENU scrolls away).
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Who specifically will use this"
+    required: false
+
+  success_criteria:
+    score: 85
+    status: "complete"
+    value: >
+      (a) Author adds SET_KEYBOARD step (button rows, ≤10 rows × ≤4 buttons) in the editor;
+      (b) subscriber sees the persistent bottom keyboard, it survives execution completion;
+      (c) button tap starts the matching keyword funnel; (d) CLEAR_KEYBOARD removes it;
+      (e) the bonus-game scenario assembles end-to-end from existing primitives
+      (keyword funnels + SET_KEYBOARD at end of both success/failure branches).
+      Both endless-menu navigation and finite (quiz-like) funnels must be buildable.
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: >
+      Consciously accepted as-is (author will validate on real funnels): contains-match
+      false positives on free text; menu precedence (parked waiting_for_reply suppresses
+      keyword dispatch → keyboard taps ignored while an inline menu is parked); fan-out
+      (one text may start N keyword funnels). reply_markup attaches only to a message →
+      both steps send mandatory text. Limits: ≤10 rows × ≤4 buttons, button text ≤64
+      (= keyword cap), duplicates blocked. No keyboard stack/auto-restore. Re-enter
+      resolved: repeat tap with allowReEnter=false = benign no-op, =true = restart.
+      No deploy environment — manual verification only.
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 85
+    status: "complete"
+    value: >
+      Size M. Integration tests mandatory: TelegramSender wire format (reply_markup.keyboard,
+      ReplyKeyboardRemove), webhook text-dispatch to keyword funnels, engine step execution —
+      engine ITs in slow lane (@Tag("slow"), like Phase 6). No E2E — frontend covered by
+      Vitest component specs of the step form. User agreed.
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 85
+    status: "complete"
+    value: >
+      (1) Author adds SET_KEYBOARD to a main-menu funnel: text + button rows + two checkboxes
+      (persistent on, one-time off); activates; subscriber gets the message and a persistent
+      bottom keyboard. (2) Subscriber taps "Згенерувати бонус" → text goes to webhook →
+      keyword funnel (bonus game) starts; that funnel sets ITS OWN keyboard; at the end of
+      both success/failure branches a SET_KEYBOARD restores the main menu. (3) Author adds
+      CLEAR_KEYBOARD ("Меню сховано") → keyboard disappears for the subscriber.
+      (4) While editing, author sees a non-blocking warning on buttons whose text matches
+      no active keyword funnel. (5) Both endless-menu and finite quiz funnels buildable.
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 90
+    status: "complete"
+    value: >
+      From batches 2-4: (a) SET_KEYBOARD step in editor: text (≤4096, variables, parse_mode),
+      ≤10 rows × ≤4 buttons, button text ≤64, duplicate labels blocked (422 + form mirror),
+      checkboxes is_persistent (default on) / one_time (default off), resize hardcoded true;
+      (b) subscriber sees persistent bottom keyboard surviving execution completion;
+      (c) tap starts matching keyword funnel via existing dispatch; (d) CLEAR_KEYBOARD
+      (mandatory text) removes keyboard; (e) bonus-game scenario buildable end-to-end;
+      (f) preview renders both steps (rendered text + buttons list); (g) editor hint
+      (non-blocking) when button text matches no active keyword funnel; (h) smoke.md
+      manual checklist in feature root.
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 70
+    status: "partial"
+    value: >
+      Covered: repeat tap while in-flight (re-enter guard no-op / restart); dead button after
+      funnel deactivation (silent no-op, accepted); tap suppressed while parked on inline menu
+      (menu precedence, accepted); fan-out N funnels per tap (accepted); emoji in button text
+      (just text, matches if keyword set accordingly); CLEAR with no keyboard set (harmless);
+      duplicate button labels in one keyboard → blocked at validation; button text cap 64 =
+      keyword cap 64 (a button text can always be an exact keyword).
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 90
+    status: "complete"
+    value: >
+      Confirmed by user: Telegram send failure on keyboard steps follows existing StepExecutor
+      mapping (BLOCKED_BY_USER/CHAT_NOT_FOUND → cancelled; other Telegram errors → failed;
+      invalid_bot_token → failed). Validation errors → 422 funnel_step_invalid (mirrored in
+      form). Editor hint non-blocking. Dead button at runtime → silent no-op.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 90
+    status: "complete"
+    value: >
+      No deploy environment — author verifies everything MANUALLY on his own setup
+      (real Telegram bot; reply keyboard renders only in a real client). Agent-side
+      verification during development: unit tests (StepExecutor reply_markup map,
+      validateSteps, copyOf), slow-lane engine ITs asserting the /sendMessage wire body
+      (reply_markup.keyboard / remove_keyboard), frontend Vitest specs. "Test for me"
+      (Phase 4 test-run) works for keyboard steps too. Deliverable: smoke.md manual
+      checklist in the feature root (work/16-persistent-keyboard/smoke.md) — connected bot →
+      activate menu funnel → tap → bonus scenario → CLEAR.
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 85
+    status: "complete"
+    value: >
+      Step form follows existing FunnelStepForm idioms (local reactive rows array like
+      menuButtons/blocks, hand-validated on submit, inline errors, i18n uk+en).
+      Two checkboxes: "Постійна" (is_persistent, default on), "Сховати після натискання"
+      (one_time, default off); resize_keyboard hardcoded true. Non-blocking per-button hint
+      when no active keyword funnel matches (computed client-side from funnels store).
+      Preview panel renders text + buttons list for both steps. Desktop-first editor (existing).
+    gaps: ""
+    required: false
+
+  risks:
+    score: 85
+    status: "complete"
+    value: >
+      (1) FunnelStep.copyOf misses new fields → keyboard silently dropped from snapshot/duplicate
+      — mitigated by copyOf unit tests (load-bearing, flagged in code research).
+      (2) Contains-match false positives: free text containing a keyword starts a menu funnel —
+      accepted as-is; author validates on real funnels and reports.
+      (3) Menu precedence: keyboard taps suppressed while parked on an inline menu — accepted,
+      documented.
+      (4) Hint can mislead if author renames button after wiring — hint recomputes live from
+      store, non-blocking by design.
+      (5) Reply keyboard renders only in real clients → manual smoke.md pass is the final gate.
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 90
+    status: "complete"
+    value: >
+      D1: New step types SET_KEYBOARD/CLEAR_KEYBOARD (not riding MESSAGE — inline buttons
+      couple to park-on-reply, opposite semantics). D2: No new branching — taps route via
+      Phase-3 keyword dispatch (contains-match). D3: No keyboard stack/auto-restore — return
+      is an authoring pattern (SET_KEYBOARD at end of branches). D4: Button→funnel wiring =
+      text convention + non-blocking client-side editor hint (no new endpoint). D5: Steps are
+      fire-and-forget (Outcome CONTINUE, never park). D6: TelegramSender unchanged (6-arg
+      sendText Object replyMarkup). D7: Single text field + VariableTemplateRenderer +
+      parse_mode (not composer blocks). D8: resize=true hardcoded; is_persistent/one_time
+      exposed. D9: Caps: ≤10 rows, ≤4 buttons/row, button text ≤64 (= keyword cap),
+      duplicates blocked. D10: Preview extended for both steps. D11: No migration (additive
+      nullable fields). D12: No E2E; unit + slow-lane ITs + Vitest; manual smoke.md.
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 85
+    status: "complete"
+    value: >
+      No deploy (user: "деплою немає, перевіряю все в ручну"). Same situation as Phase 6 —
+      no target environment yet; code lands on main. Unlike Phase 6, NO data wipe / migration
+      needed: new step types are additive nullable fields, existing funnels unaffected.
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 85
+    status: "complete"
+    value: >
+      No new env vars, no new external services. To verify manually the author needs his
+      existing connected Telegram bot (+ ngrok/local webhook as in existing runbooks) and
+      keyword funnels wired to button texts. Author will assemble his real funnels and test
+      on his own conditions (stated in batch 2).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 90
+    status: "complete"
+    value: >
+      Per code-research.md: StepType enum (+2 constants), FunnelStep (+nullable fields, copyOf!),
+      StepExecutor (+2 switch cases, reply-keyboard Map builder, CONTINUE outcome),
+      FunnelService.validateSteps/toSteps (+2 cases, field wiring), FunnelStepDto,
+      preview endpoint + PreviewStepRequest/Response (extended per batch 3), frontend
+      types/funnel.ts, FunnelStepForm.vue (picker, form blocks, validation mirror, hint from
+      funnels store — no new endpoint), FunnelMessagePreview.vue, i18n uk+en.
+      TelegramSender: NO change (6-arg sendText already takes Object replyMarkup).
+      Webhook/keyword dispatch: NO change (tap = ordinary text → existing path).
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 90
+    status: "complete"
+    value: >
+      Phase 3 keyword funnels (done) — routing mechanism. Phase 4 test-run (done) — manual
+      verification. Phase 6 composer conventions (done) — form/preview/validation idioms.
+      No dependency on Phase 8 multi-entry.
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 80
+    status: "partial"
+    value: >
+      reply_markup only attaches to a message → both steps send a mandatory text.
+      Reply keyboard renders only in real Telegram clients (manual verification).
+      Keyword matching: contains, case-insensitive, keyword ≤64 chars — button text cap
+      should align (64) so a button text can be an exact keyword. Menu precedence and
+      fan-out backstops unchanged. No new indexes/collections.
+    gaps: "Button text cap to confirm with user in Cycle 3"
+    required: false
+
+  data_requirements:
+    score: 85
+    status: "complete"
+    value: >
+      New nullable per-type fields on embedded FunnelStep docs (flat, no _class — Decision 12
+      lineage): keyboard rows (list of rows of {text}), isPersistent, oneTimeKeyboard, text.
+      Carried through FunnelStep.copyOf (snapshot + duplicate). No new collections/indexes.
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 90
+    status: "complete"
+    value: >
+      None. Additive nullable fields; existing funnels/executions read them as null.
+      No startup hook, no data wipe (unlike Phase 6).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/16-persistent-keyboard/user-spec.md"
+  status: "approved"  # pending | created | approved
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "completed_cycles_1_2_3"
+  questions_asked: 4
+  last_question: "Batch 4: button cap, duplicates, error mapping, smoke.md checklist"
+  total_required_score: 88
+  total_optional_score: 87
+  completion_estimate: "95%"
+  user_detail_level: "moderate"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Free-form notes:
+  - Important insights
+  - Areas of uncertainty
+  - Pivot points
+  - Scope changes
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

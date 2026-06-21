@@ -1,0 +1,29 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "scope": "UX-fix: hide internal Mongo step id / __END__ sentinel suffix in MENU target picker dropdown",
+  "commit": "69f895d",
+  "files_reviewed": [
+    "frontend/components/funnels/SearchableSelect.vue",
+    "frontend/components/funnels/FunnelStepForm.vue",
+    "frontend/tests/components/SearchableSelect.spec.ts",
+    "frontend/tests/pages/funnel-editor.spec.ts"
+  ],
+  "verdict": "approved",
+  "summary": "Minimal, correct fix. New optional prop showValue (default true) gates the value-suffix span; only the two menuTargetOptions pickers opt out via :show-value=\"false\". Tag picker (~588) and custom-field picker (~786) untouched, so their meaningful slug/field-name suffix is preserved. The default-true behavior is implemented with withDefaults rather than `props.showValue ?? true` because Vue coerces an absent declared Boolean prop to false (this was caught by the round-of-testing and fixed). No v-html introduced; option labels/values still rendered via {{ }} interpolation, so no XSS surface change. Markup/a11y (role=option, aria-selected, listbox ids) unchanged.",
+  "findings": [],
+  "dimensions_checked": {
+    "architecture_soc": "Presentational prop; parent owns the show/hide decision. OK.",
+    "readability": "WHY-comment documents the Boolean-coercion footgun and the rationale for withDefaults. OK.",
+    "type_safety": "showValue?: boolean typed; no any; default true via withDefaults makes runtime value deterministic.",
+    "cross_file_consistency": "Verified tag picker and custom-field picker SearchableSelect instances do NOT pass show-value, so default true keeps their suffix. Only the two menuTargetOptions pickers set false.",
+    "security": "No v-html. Interpolation only. Fix narrows displayed text; no new injection path.",
+    "testing": "Default-true regression test (caught the real Boolean-default bug), false-case test, plus two FunnelStepForm assertions (callback + timeout target pickers) that the raw id / __END__ no longer renders while the step number+name stays.",
+    "a11y_markup": "Conditional gate added to an existing inner span; surrounding ARIA/markup unchanged."
+  },
+  "tests": {
+    "targeted": "tests/pages/funnel-editor.spec.ts + tests/components/SearchableSelect.spec.ts — 29 passed",
+    "full_suite": "48 files, 395 tests passed",
+    "build": "nuxt build complete"
+  }
+}

@@ -1,0 +1,59 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "blocking": 0,
+    "major": 0,
+    "minor": 0,
+    "info": 0
+  },
+  "scope": "StepExecutor SET_KEYBOARD/CLEAR_KEYBOARD execution (diff d4fb7f6 / HEAD~1..HEAD): setKeyboard, clearKeyboard, sendKeyboardText, buildReplyKeyboardMarkup, isEmptyRow, REMOVE_KEYBOARD_MARKUP, switch cases + FunnelStepExecutorTest additions.",
+  "findings": [],
+  "verifiedControls": [
+    {
+      "concern": "A09 / PII in logs (project rule: ids/codes only — never rendered text or button labels)",
+      "result": "PASS",
+      "detail": "No log/logger/System.out/printStackTrace statements were added in any of the new methods (setKeyboard, clearKeyboard, sendKeyboardText, buildReplyKeyboardMarkup). The only log on these paths is the pre-existing LOG_TEXT_TRIMMED WARN inside the reused renderTrimmed (StepExecutor.java:278-279), which emits only executionId, stepIndex, originalLength, trimmedTo — no rendered text, no keyboardText, no button labels. Compliant with the stated PII rule."
+    },
+    {
+      "concern": "A03 / Injection via subscriber variables into the rendered keyboardText wire body",
+      "result": "PASS",
+      "detail": "keyboardText flows through renderTrimmed -> VariableTemplateRenderer.render(text, keyboardParseMode, subscriber) (StepExecutor.java:367), identical to the MESSAGE TEXT path. Substituted subscriber values are escaped per parseMode (HTML escapes & < > \"; MarkdownV2 escapes the full special set incl. backslash; None = plain text). Author template markup is intentionally not escaped (Decision 10), consistent with existing behavior. setKeyboard_rendersVariablesAndParseMode asserts '<b>' -> '&lt;b&gt;' under HTML. No new injection surface introduced by this diff."
+    },
+    {
+      "concern": "A03 / Injection via author button labels into the reply_markup wire body",
+      "result": "PASS",
+      "detail": "buildReplyKeyboardMarkup (StepExecutor.java:396-414) places button.text() into an object-form {\"text\": label} entry inside a LinkedHashMap/List structure serialized verbatim by Jackson. Jackson JSON-escapes string content, so a label cannot break out of the JSON wire body. ReplyKeyboardMarkup button labels are plain-text on the Telegram side (parse_mode does not apply to reply-keyboard button text), so labels are not a markup-injection vector. Labels are author-authored only and are NOT passed through the subscriber renderer, so no subscriber PII is interpolated into labels. Input validation (caps/duplicates) is Task 1 scope, correctly excluded here."
+    },
+    {
+      "concern": "A10 / SSRF and URL dereference",
+      "result": "PASS / N/A",
+      "detail": "Reply-keyboard button labels are plain text; the builder emits only {\"text\": ...} entries (no url/web_app/login_url fields). CLEAR_KEYBOARD markup is the constant {\"remove_keyboard\": true}. No URL is read from the step or dereferenced server-side. The markup is handed to TelegramSender (untouched), and Telegram performs any fetch — the backend never dereferences a user-controlled URL on these paths."
+    },
+    {
+      "concern": "Insecure-design / NPE-loop DoS via malformed snapshot (defensive guard)",
+      "result": "PASS",
+      "detail": "setKeyboard guards null rows, empty rows, AND rows containing a null/empty-button row (rows.stream().anyMatch(isEmptyRow), StepExecutor.java:345; isEmptyRow at 381-383) -> terminal StepResult.fail(\"empty_keyboard_rows\") before any send. This is stronger than message()'s empty_message_blocks guard (also covers blank rows), preventing both an empty wire keyboard and an NPE on sourceRow.buttons() that would otherwise re-throw every sweep tick and leave the execution stuck in_progress (log-spam / wedged row). setKeyboard_nullOrEmptyRows_failsTerminally covers both null and empty cases and asserts sendText is never called. CLEAR_KEYBOARD intentionally has no rows guard (validation rejects rows) and uses an immutable constant map — correct."
+    },
+    {
+      "concern": "A09 / Error mapping leaking sensitive content",
+      "result": "PASS",
+      "detail": "The try/catch in sendKeyboardText (StepExecutor.java:372-378) is byte-for-byte identical to message(). fromTerminalReason returns only TerminalReason enum constant names (BLOCKED_BY_USER / CHAT_NOT_FOUND / OTHER); codeOrStatus returns an AppException code or numeric HTTP status. Raw exception messages, chat IDs, rendered text, and labels are never propagated into the StepResult reason code. No sensitive data leakage in error paths."
+    },
+    {
+      "concern": "Hardcoded secrets",
+      "result": "PASS",
+      "detail": "No API keys, passwords, tokens, connection strings, or private keys in the diff. Grep matches for 'token' are the reason-code string \"invalid_bot_token\" and the BotTokenInvalidException type reference, not credentials. Test fixtures use placeholder labels (\"A\", \"B\", \"C\", \"Меню\") and synthetic ids — no real credentials."
+    },
+    {
+      "concern": "A08 / Data integrity (deserialization / shared mutable state)",
+      "result": "PASS",
+      "detail": "REMOVE_KEYBOARD_MARKUP is an immutable Map.of single-entry constant shared across CLEAR_KEYBOARD sends (Jackson reads, never mutates) — safe under concurrent virtual-thread sweeps. SET_KEYBOARD builds a fresh LinkedHashMap/List per call (no shared mutable state). No untrusted deserialization (JSON.parse/pickle/YAML.load) introduced."
+    }
+  ],
+  "notes": [
+    "Per orchestrator instruction, input validation (keyboard caps/duplicate-label rejection) is Task 1 scope and was NOT evaluated as a finding for this diff.",
+    "Per orchestrator instruction, parallel-agent build-infra collisions were treated as environmental and not flagged.",
+    "is_persistent / one_time_keyboard null-coalesce to documented defaults (true/false) and resize_keyboard is hardcoded true — no JSON null emitted (asserted by setKeyboard_persistentAndOneTimeNullDefaults). Not a security concern, noted for completeness."
+  ]
+}

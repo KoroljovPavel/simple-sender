@@ -1,0 +1,58 @@
+{
+  "round": 2,
+  "status": "approved",
+  "summary": "Round-2 fixes are documentation-only (clampKeyboardLabels doc comment) plus 4 additive IT cases; no production logic changed. Both round-1 minor findings are adequately resolved by accurately documenting the intentional null-vs-empty contract, and the new tests each pin a real behavioral contract whose assertions match the actual code. No new issues introduced; FunnelControllerIT (including all 4 new cases) is green.",
+  "criticalIssues": [],
+  "suggestions": [],
+  "round1FollowUp": [
+    {
+      "finding": "clampKeyboardLabels empty-input → [] vs null inconsistency (round-1 minor)",
+      "resolution": "Resolved (documentation). Doc comment now states the contract precisely: null input → null (\"author typed no rows\"); non-null input is echoed as a clamped structure even when it flattens to empty, because preview faithfully mirrors in-progress form state and the SET_KEYBOARD discriminator (keyboardRows null-vs-present) is load-bearing for the frontend. Comment matches code: `if (rows == null) return null;` then always builds/returns `out`. Behavior intentionally unchanged.",
+      "status": "adequately_resolved"
+    },
+    {
+      "finding": "Empty inner row when all buttons skipped (round-1 minor)",
+      "resolution": "Resolved (documentation). Same rationale now documented (\"a row whose buttons all dropped → an empty inner []\"). Code confirms a non-null row with all-null/blank buttons produces an empty `labels` list that is still added via `out.add(labels)`. Accurate.",
+      "status": "adequately_resolved"
+    }
+  ],
+  "newChangesAssessment": {
+    "docComment": "clampKeyboardLabels doc comment expanded with null-vs-empty contract. Accurate against implementation; no behavioral drift.",
+    "newTests": [
+      {
+        "test": "previewSetKeyboardEscapesTextPerParseMode",
+        "verdict": "valid",
+        "note": "Asserts <b>&lt;script&gt;alert(1)&lt;/script&gt;</b> for parseMode=HTML. Verified against VariableTemplateRenderer: only substituted values are escaped (escapeHtml on the resolved firstName), literal <b> template tags pass through. Plus a defense-in-depth body.doesNotContain(\"<script>\") assert. Correct and security-relevant."
+      },
+      {
+        "test": "previewSetKeyboardBlankTextStillReturnsOneTextBlockNullRows",
+        "verdict": "valid",
+        "note": "3-arg previewKeyboardBody(...) resolves via varargs to zero rows → keyboardRows omitted from body → request.keyboardRows() null → clampKeyboardLabels returns null → $.keyboardRows absent. Null keyboardText renders to \"\" (renderer null-tolerant). Matches code."
+      },
+      {
+        "test": "previewSetKeyboardUnlinkedBotUsesStubSubscriber",
+        "verdict": "valid",
+        "note": "No linked owner → resolveOwnerSubscriber empty → stubSubscriber() with firstName \"Іван\" (verified line 579), sampleData=true. Asserts \"Привіт Іван\" + sampleData=true. Correct, mirrors message-branch stub fallback."
+      },
+      {
+        "test": "previewSetKeyboardLabelAtCapNotTruncated",
+        "verdict": "valid",
+        "note": "Pins the off-by-one boundary: MAX_KEYBOARD_BUTTON_TEXT=64 and clamp uses strict `>` (text.length() > MAX), so a 64-char label is echoed untruncated. Asserts exactly64 round-trips. Correct."
+      }
+    ]
+  },
+  "crossFileChecks": {
+    "previewKeyboardBody": "varargs (String,String,String,Map...) — 3-arg and 4-arg calls in new tests resolve correctly.",
+    "setKeyboardStep": "(String id, String text) → SET_KEYBOARD FunnelStep with a valid saved row. Matches usage.",
+    "keyboardRow": "(String... labels) → {buttons:[{text}]} map. Matches usage.",
+    "seedConnectedBotWithOwner / seedOwnerSubscriber / previewUrl": "signatures match new-test call sites.",
+    "verdict": "no signature/import mismatches"
+  },
+  "metrics": {
+    "filesReviewed": 2,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 0,
+    "testCoverageAssessment": "excellent"
+  }
+}

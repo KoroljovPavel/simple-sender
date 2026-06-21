@@ -1,0 +1,124 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14, 15],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 lists post-flip source files to read for accurate signatures: RememberMeCookieSerializer.java, SecurityConfig.java (post-flip), AuthService.java (post-flip), EmailService.java (post-flip), ProjectService.java (post-flip), TelegramApiClient.java (post-flip), TelegramSender.java (post-flip). None of these files exist in their post-flip form yet — the codebase is still 100% reactive WebFlux (confirmed: SecurityConfig.java still contains @EnableWebFluxSecurity, UserRepository still extends ReactiveMongoRepository, GlobalErrorHandler still uses WebExchangeBindException). Specifically, RememberMeCookieSerializer.java does not exist at all (only RememberMeWebSessionIdResolver.java exists). Task 13 instructs the agent to 'READ the source file... do not extrapolate from tech-spec prose. The tech-spec describes intent; the source is ground truth.' The ground truth is the pre-migration reactive stack, which is the opposite of what Task 13 should document.",
+      "fix": "Task 13 has a hard dependency on Wave 2 completion (Tasks 3–10). The depends_on field lists only [11], but Task 11 itself depends_on [3,4,5,6,7,8,9,10], so the transitive chain is correct. However, the task instructions must make explicit that the agent CANNOT execute until RememberMeCookieSerializer.java, HttpRequestUtils.java, and all other post-flip production files physically exist. Add a pre-condition check to the What to do section: verify that backend/src/main/java/com/botfunnel/security/RememberMeCookieSerializer.java exists before proceeding; if absent, abort with 'Wave 2 not yet landed'."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 14,
+      "issue": "Task 14 lists 27 production-source files to audit across Phase A + Phase B. Of these, the following do not yet exist in the codebase (Wave 2 not landed, checkpoint shows last_completed_wave: 0, tasks: {}): common/SessionAttributes.java, common/HttpRequestUtils.java, security/RememberMeCookieSerializer.java. Additionally, the post-flip versions of all existing files are absent — SecurityConfig.java, GlobalErrorHandler.java, all repositories, all services, all controllers, TelegramApiClient.java, TelegramSender.java, TelegramWebhookController.java, WebhookPayloadSizeFilter.java, ProcessTelegramUpdateJob.java still contain reactive WebFlux code. Running the audit now would audit the pre-migration reactive code, producing a meaningless and misleading report.",
+      "fix": "Task 14 correctly declares depends_on: [3,4,5,6,7,8,9,10,11,12,13]. The dependency graph is accurate. No fix to task structure required — this is a runtime state issue (no tasks are done yet). The task is valid but cannot execute until all precursor tasks complete. Consider adding an explicit guard step at the top of 'What to do': run 'grep -c ReactiveMongoRepository backend/src/main/java/com/botfunnel/user/UserRepository.java' and abort if result > 0 (pre-flip state detected)."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 15,
+      "issue": "Same pre-flip state issue as Task 14. Security audit source scope includes RememberMeCookieSerializer.java (Task 3, NEW) and references it for focus area (7). The file does not exist. The task also requires reading the post-flip AuthService.java for session fixation analysis and post-flip TelegramSender.java for token scrubber sites — both are still in their reactive WebFlux state. TokenEncryptor.java path is correct (common/crypto/TokenEncryptor.java exists), but all other post-flip files are absent. Running the security audit now would produce false positives for every reactive symbol it finds (which are intentional pre-flip).",
+      "fix": "Same as Task 14: the depends_on chain is correct but the codebase is not in the expected state. Add an explicit guard in step 1: verify RememberMeCookieSerializer.java exists at backend/src/main/java/com/botfunnel/security/RememberMeCookieSerializer.java before proceeding."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 15,
+      "issue": "Task 15 lists TokenEncryptor.java audit-scope path as 'backend/src/main/java/com/botfunnel/bot/TokenEncryptor.java' — but the actual file lives at backend/src/main/java/com/botfunnel/common/crypto/TokenEncryptor.java. This is a wrong path. The agent following Task 15 will not find the file at the stated location, may conclude it was deleted, and raise a spurious Critical finding, OR will search and find it at the wrong module reference (bot/ vs common/crypto/).",
+      "fix": "Change the path in Task 15 Details → Source files from 'backend/src/main/java/com/botfunnel/bot/TokenEncryptor.java' to 'backend/src/main/java/com/botfunnel/common/crypto/TokenEncryptor.java'. Also update the git diff instruction in Implementation hints which says 'Diff TokenEncryptor against the pre-migration version... the pre-flip commit is the parent of the Wave 2 atomic-flip commit' — the path used in that git diff command also needs to be the correct common/crypto/ path."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 states that Task 11 will have appended a 'Virtual Threads' section to patterns.md and instructs Task 13 to cross-link to it by its 'exact heading text'. At execution time (pre-Task-11), patterns.md has no Virtual Threads section. The task body has a correct note: 'Task 11 must be merged first' and depends_on: [11]. However, the instruction 'note its exact heading text and anchor' in What to do step 2 cannot be executed yet — there is nothing to read. This is a sequencing documentation gap rather than a structural error, but the agent must be warned it will fail at step 2 if Task 11 has not run.",
+      "fix": "No structural change required — depends_on [11] enforces the ordering. Add a guard in step 2: if no 'Virtual Threads' section heading is found in patterns.md, abort with 'Task 11 output not found — patterns.md has no Virtual Threads section'."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 instructs reading 'backend/src/main/java/com/botfunnel/security/RememberMeCookieSerializer.java (created/finalized in Wave 2 + Task 12)' to capture 'the real signature — do not guess'. This file does not exist (confirmed via filesystem check). If the agent reaches this step it will read the non-existent file and either error out or fall back to guessing from the tech-spec — which Task 13 explicitly forbids.",
+      "fix": "The fix is the same pre-condition guard described in finding #1. Additionally, the parenthetical '(created/finalized in Wave 2 + Task 12)' is slightly misleading: RememberMeCookieSerializer.java is created in Task 3 (Wave 2). Task 12 does not create or modify it — Task 12 only adds a test assertion. Fix the parenthetical to '(created in Task 3, Wave 2)'."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 automated verification step uses the grep pattern: grep -E \"^### Focus Area [1-7]\" to count focus area sections. However, the required report structure uses a single section named 'Focus Area Verdicts' containing sub-sections for each of the 7 areas — the task description does NOT prescribe the format '### Focus Area N' for each sub-section. The grep will likely return 0 or fewer than 7 matches if the agent follows the report structure as described, causing the verification step to fail even for a correctly-written audit report.",
+      "fix": "Either: (a) prescribe the exact heading format '### Focus Area 1: CSRF Wiring' through '### Focus Area 7: RememberMeCookieSerializer' in the report structure section so the grep matches; or (b) change the verification grep to 'grep -cE \"^### (Focus Area|[1-7]\\.)\" ... | grep -qE \"[7-9]|[1-9][0-9]+\"' or use a simpler prose check. The current grep is likely to fail on a correct report."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 automated verification uses: grep -cE \"^- A0[1-9]|^- A10\" to count OWASP entries. The required report structure says 'OWASP Top 10 Sweep — one row per A01–A10', which naturally maps to a Markdown table (| A01 | ... |) or a definition list. If the agent uses a table format, lines start with '|' not '-', and the grep returns 0. If the agent uses a bullet list starting with '- A01:' the grep would match. The format is underspecified, creating a brittle verification gate.",
+      "fix": "Prescribe the exact OWASP section format in the report structure: either require a Markdown table with columns (| Category | Verdict | Justification |) and update the grep to match table rows, or require '- A01: ...' bullet format explicitly and keep the grep as-is."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 automated verification uses: grep -cE \"^(Critical|High|Medium|Low):\" to count findings and requires the count to match Executive Summary tally. However the required report structure says 'Findings — one entry per finding, severity-graded (Critical / High / Medium / Low)'. This is underspecified — if the agent writes '**Critical:** ...' or '### Critical Findings' or uses a table, the grep returns 0. The verification gate will produce false failures on correctly-written reports.",
+      "fix": "Prescribe the exact finding header format. Example: require each finding to start with 'Critical:', 'High:', 'Medium:', or 'Low:' on its own line (matching the grep). Add this format requirement to the report structure section."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 14,
+      "issue": "Task 14 skill path in the Required Skills header reads: '/skill:code-reviewing — [skills/code-reviewing/SKILL.md](.claude/skills/code-reviewing/SKILL.md)'. The relative link in the markdown points to '.claude/skills/code-reviewing/SKILL.md'. Relative to the task file location (work/migrate-to-virtual-threads/tasks/14.md), this resolves to 'work/migrate-to-virtual-threads/tasks/.claude/skills/code-reviewing/SKILL.md' which does not exist. The correct relative path from the task file should be '../../../.claude/skills/code-reviewing/SKILL.md'. Compare with Task 15 which correctly uses '../../../.claude/skills/security-auditor/SKILL.md'.",
+      "fix": "Change the markdown link in Task 14 Required Skills from '[skills/code-reviewing/SKILL.md](.claude/skills/code-reviewing/SKILL.md)' to '[.claude/skills/code-reviewing/SKILL.md](../../../.claude/skills/code-reviewing/SKILL.md)' to match the pattern used in Task 15."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 14,
+      "issue": "Task 14 audit scope includes test files implicitly via the production scope (it says 'read every file in scope limited to backend/src/main/java/**'). However, the audit focus area (1) checks 'IP/UA extraction patterns in backend/src/main/java/' — the grep gate for this is 'grep -rE \"X-Forwarded-For|getHeader(\\\"User-Agent\\\")\" backend/src/main/java/ → matches only inside HttpRequestUtils.java'. This grep is correct. But BotTokenLeakTest.java and other token-scrubber tests mentioned in Task 15's audit scope are test files. Task 14 explicitly defers scrubber tests to Task 15 (sibling audit). This is coherent and correct, but the text 'Out of scope for this audit: security analysis... lives in Task 15' should mention the test file scope boundary explicitly. This is a documentation minor — not a critical error.",
+      "fix": "Minor: add a note to Task 14 Details → Edge cases: 'Test files are not in scope for Task 14 (production-source only). Security-related test files (BotTokenLeakTest, SecurityConfigTest) are covered by Task 15.' This prevents the agent from second-guessing the scope boundary."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 13,
+      "issue": "Task 13 Details section states 'patterns.md (42 KB)'. The actual file size is 43,296 bytes (~42.3 KB). This is accurate. However, Task 13 also says 'architecture.md (14 KB)' (actual: 14,757 bytes ~14.4 KB) and 'deployment.md (9 KB)' (actual: 9,352 bytes ~9.1 KB). All size estimates are correct. No action needed — flagged as a minor note only.",
+      "fix": "No fix required. File sizes match the stated values."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 line references for patterns.md are stated as approximate ('line ~31', 'line ~38', 'line ~40-46', 'line ~53-58', 'line ~78-80', 'line ~84', 'line ~96-104'). Verification shows these are approximately correct: WebTestClient is at line 31, mock-triple at line 38, Spring Security WebFlux at line 40, Auth & Sessions block at lines 52-58, ProjectService.requireOwned at line 78, ReactiveSecurityContextHolder at line 84, WebClient at line 96, compensating action at ~99, MockWebServer at ~103, race-condition at line 104. The ~ notation is appropriate and the line numbers are close enough to be useful. No issue.",
+      "fix": "No fix required."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13 What to do step 3, Auth & Sessions block fire-and-forget bullet instructs: 'read EmailService / AuthService in the post-flip codebase to capture the real shape — do not invent a recipe outside what Wave 2 actually implemented'. However, D15 in the tech-spec precisely defines the shape: try { JavaMailSender.send(...) } catch (Exception e) { log.error(...) }. The instruction to read the source is correct, but the tech-spec already tells Task 13 exactly what was implemented. This is not an error — it's good discipline — but the task's emphasis on 'do not invent' is slightly redundant given D15's specificity.",
+      "fix": "No fix required. The instruction is correct and conservative."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Tech-spec Task 10 description (line 435) says 'parallelInvoke available for Wave 7 + 9'. There is no Wave 7 or Wave 9 in this feature (waves are: Wave 1, Wave 2, Wave 3, Audit Wave, Final Wave). This appears to be a copy-paste artifact from another feature's task numbering. Task 14 references 'tech-spec line 474' which correctly refers to the Task 14 description in tech-spec. The Task 10 description's 'Wave 7 + 9' language appears in Task 14's audit scope context file (tech-spec.md) and could confuse the auditor but does not affect audit feasibility.",
+      "fix": "Minor: correct tech-spec line 435 from 'parallelInvoke available for Wave 7 + 9' to 'parallelInvoke available for Tasks 7 + 9' (referring to sub-task numbers within Wave 2, which use ConcurrencyTestUtils). This is a tech-spec fix, not a task-14 fix."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 15,
+      "issue": "Task 15 references 'All per-site BotTokenLeakTest-style log-scrubber tests (Task 8 + Task 9)' in its test file scope. The existing BotTokenLeakTest.java (currently pre-migration) tests structural properties of BotResponse records and Bot entity toString, NOT per-site log scrubber behavior via ListAppender. Task 15 implies there will be per-site ListAppender-based tests created in Task 8/9 for TelegramSender/WebhookPayloadSizeFilter/etc. These tests do not yet exist and the existing BotTokenLeakTest does not cover this. This is correct to flag as a test scope note — the per-site tests will be created by Tasks 8 and 9 and Task 15 correctly waits for them. No structural issue, but the test names for the new per-site scrubber tests are not specified, making the 'All per-site BotTokenLeakTest-style' reference ambiguous.",
+      "fix": "Add a note in Task 15 Details → Edge cases listing the expected per-site test class or method names that Tasks 8 and 9 will create for the log scrubber assertions, so Task 15 knows what to look for (e.g. 'TelegramSenderTokenLeakTest', 'WebhookPayloadSizeFilterTokenLeakTest', or methods added to BotTokenLeakTest)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 15
+  }
+}

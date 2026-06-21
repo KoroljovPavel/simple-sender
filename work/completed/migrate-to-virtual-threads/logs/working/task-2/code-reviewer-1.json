@@ -1,0 +1,20 @@
+{
+  "summary": "Task 2 lands cleanly. Both stub interfaces (SubscriberService, FunnelTriggerService) and their NoOp implementations flip to void with no behavioural change. Exactly five .block() suffixes are removed from ProcessTelegramUpdateJob at the five intended stub-service sites (pre-commit lines 195, 241, 242, 253, 254); the worker's remaining 12 live .block() sites on rawUpdateRepository/botRepository/projectRepository/reactiveMongoTemplate/eventService are untouched. Audit-event cascade ordering is preserved verbatim (logEventMessageReceived after upsert in dispatch, logEventCommandStart after fire in handleStart, logEventCommandStop after cancelActiveFor in handleStop). NoOp* unit tests are rewritten to AssertJ assertThatCode(...).doesNotThrowAnyException() with all 7 original scenarios and the spec-mandated method names. ProcessTelegramUpdateJobTest line 400-402 already uses Mockito doThrow(...).when(spy).upsertFromTelegramUpdate(...) — the correct (and only valid) form for stubbing void methods on a spy; the test class compiles unchanged against the new void signatures and its verify(...) interaction assertions retain identical semantics. No other .block() site, import, or statement was incidentally touched. Two non-blocking notes below.",
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/ProcessTelegramUpdateJobTest.java",
+      "line": 47,
+      "issue": "Class-header comment still says: \"@MockitoSpyBean wraps the real no-op stubs so call-counts can be asserted while the real Mono.empty() returns flow through.\" After this commit the stub methods return void, not Mono.empty(); the wording is factually drifted. The comment is pre-existing (committed in 7d9a343 as part of Task 9) and not in Task 2's modify list, so it is correctly left alone here — but the user explicitly asked to confirm that the Mockito interactions still mean what they used to, and this comment now misrepresents the spy's contract.",
+      "suggestion": "Out of scope to fix in this commit. In a follow-up touch-up commit (or as part of the Wave 2 atomic flip when the same comment will need a second edit anyway), reword to something like \"@MockitoSpyBean wraps the real no-op stubs so call-counts can be asserted while the real (now void) implementations execute their // no-op bodies\"."
+    },
+    {
+      "severity": "low",
+      "file": "work/migrate-to-virtual-threads/tasks/2.md",
+      "line": 24,
+      "issue": "Task description states \"the 17 .block() budget … drops to 13 (4 sites removed here; remaining 13 …)\". Actual count: pre-commit 17 live .block() sites → post-commit 12 live sites (delta 5, not 4). The task itself acknowledges the 4-vs-5 bucketing ambiguity at line 40 and at §Edge-cases line 123, but the explicit \"remaining 13\" number is now off-by-one against the real file. The Post-completion checklist at line 141 already prescribes the fix: \"Обновить tech-spec, если в процессе обнаружится, что реальное количество .block() сайтов на стаб-сервисах отличается от заявленного «4»\".",
+      "suggestion": "When recording the decisions.md entry for Task 2, capture the actual delta (17 → 12 = 5 sites removed; remaining live .block() budget for Wave 2 atomic flip = 12, not 13) and update tech-spec §5(d) accordingly. No code change required."
+    }
+  ]
+}

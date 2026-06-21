@@ -1,0 +1,46 @@
+{
+  "summary": "Audited Task 10 (commit c3b1521) — dashboard.vue + profile.vue + uk/en locale files. Verified all five focus areas: (1) zero raw-error leaks via apiError handler; (2) clear-store-before-navigate ordering preserved in both terminate-sessions and delete-account flows; (3) onResend generic branch routes through useApiError, and the page does not bypass the handler; (4) every navigateTo wrapped in localePath — no hardcoded /auth/login literal reaches navigateTo; (5) modal aria-labelledby preserved as a literal ID, all visible modal text routed through t(). OWASP Top 10 mandatory pass: no hardcoded secrets; no injection sinks introduced (no v-html, no dangerously rendered user content); no SSRF (all useApi() URLs are static literals); no insecure deserialization; cryptography unchanged (handled in backend); auth & access control flow integrity preserved. No blocking findings.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design — defense-in-depth",
+      "title": "Auth-store-clear ordering rationale is not strictly accurate (informational; behavior is still safe)",
+      "description": "The inline comment in profile.vue:176-177 (`// Clear store before navigating so the auth middleware does not trigger an extra GET /api/auth/me`) implies the ordering avoids an extra /api/auth/me call. However, `middleware/auth.global.ts:17-24` calls `authStore.fetchUser()` whenever `user === null` — so clearing the store BEFORE navigating actually causes that call (returns 401, swallowed). Conversely, navigating BEFORE clearing would still trigger the same call on the destination route because `/auth/login` is a public route and the store would briefly carry a stale user object in memory. The current ordering IS correct from a security standpoint (no stale identity rendered post-logout/post-delete), but the comment misstates the mechanism. Not exploitable, not a regression introduced by this task — pre-existing pattern preserved. Flag for future cleanup; not a security issue.",
+      "location": "frontend/pages/profile.vue:176-179, 207-208",
+      "impact": "None. The current order achieves the security goal (no stale user identity in the UI after irreversible account changes). The misleading comment could lead a future maintainer to swap the order based on a faulty assumption; recommend a brief follow-up to align the comment with actual middleware semantics.",
+      "recommendation": "Reword the comment to: `// Clear store before navigating so no stale user identity is briefly rendered on the destination route during async transition.` No code change required.",
+      "cwe": "CWE-1059 (Insufficient Technical Documentation)"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Account deletion / session termination not surfaced to a client-side audit signal",
+      "description": "Both `confirmDelete` (DELETE /api/profile) and `onTerminateAllSessions` (POST /api/profile/terminate-all-sessions) are high-impact destructive operations. The frontend has no client-side audit hook (no analytics event, no Sentry breadcrumb, no console-level audit signal) on success/failure. This is acceptable if the backend logs these events authoritatively (which is the expected source of truth), but it means a frontend-only investigation of suspected misuse has no breadcrumb trail. Not a regression introduced by this task — pre-existing posture. Confirm backend audit-log coverage exists for these endpoints (out of scope for this task).",
+      "location": "frontend/pages/profile.vue:171-184 (terminate-sessions), 201-213 (confirmDelete)",
+      "impact": "Frontend-only forensic investigations would not see these events. Backend audit logs (if present) remain the authoritative trail; recommend a backend-side check that `DELETE /api/profile` and `POST /api/profile/terminate-all-sessions` produce audit-log entries with user ID, timestamp, source IP.",
+      "recommendation": "Out of scope for Task 10. Track as a follow-up: confirm the Spring WebFlux backend emits audit-log entries (structured logging or dedicated audit table) for both endpoints. No frontend change recommended for this task.",
+      "cwe": "CWE-778 (Insufficient Logging)"
+    }
+  ],
+  "verdict": "OK",
+  "checks_performed": {
+    "information_disclosure_via_apiError": "PASS — useApiError (composables/useApiError.ts) only resolves localized i18n keys (errors.<context>.<status>, errors.<context>.generic, errors.generic). It never reads error.message, error.data, response body, or stack trace. All 5 catch blocks (saveName L59-62, onChangePassword L161-164, onResend generic L103-106, onTerminateAllSessions L180-183, confirmDelete L209-212) consume only the handler's return value. No bypass path: the page never reads err.message or stringifies err elsewhere.",
+    "delete_account_clear_store_ordering": "PASS — confirmDelete (L205-208) calls await useApi()('/api/profile', { method: 'DELETE' }), then authStore.user = null, then await navigateTo(localePath('/auth/login')). Store cleared before navigation. No stale identity exposure during route transition.",
+    "terminate_sessions_clear_store_ordering": "PASS — onTerminateAllSessions (L174-179) calls await useApi()('/api/profile/terminate-all-sessions'), then authStore.user = null, then await navigateTo(localePath('/auth/login')). Same correct ordering as confirmDelete.",
+    "onResend_no_raw_error_leak": "PASS — onResend catch block (L97-107) extracts only the numeric status code from err. The generic-error branch sets resendErrorText.value = apiError(err, 'profile.resend') (handler returns localized string). The template at L304-306 renders {{ resendErrorText }} verbatim — but resendErrorText is the handler return value, never the raw err. No bypass.",
+    "locale_aware_navigation": "PASS — both navigateTo calls (L179, L208) wrapped in localePath('/auth/login'). No bare-string /auth/login passed to navigateTo. dashboard.vue has no navigateTo at all (NuxtLinkLocale on L18-23 is the only link, correctly using locale-aware component).",
+    "delete_modal_a11y_and_i18n": "PASS — aria-labelledby='delete-modal-title' (L437) is a literal element-ID reference (correctly NOT translatable). All visible modal text routed through t() — title L441, intro L444, list items L446-448, irreversibility note L450, cancel L464, confirm/deleting L473. role='dialog' and aria-modal='true' static, correct.",
+    "hardcoded_secrets": "PASS — no API keys, tokens, passwords, or credentials in any of the changed files. Password-related strings in profile.vue are field labels/i18n keys, not values.",
+    "owasp_a01_access_control": "PASS — destructive operations rely on backend session check (cookie/JWT). Frontend correctly clears local state on success. No client-side privilege check bypass introduced.",
+    "owasp_a02_crypto": "N/A — no cryptographic operations in this scope.",
+    "owasp_a03_injection": "PASS — no v-html, no dynamic template strings, no eval/Function. All user input flows through Vue's auto-escaping interpolation. Zod schema sanitizes change-password payload via static regex /[A-Za-z]/ and /\\d/. No SQL/NoSQL/command injection sinks.",
+    "owasp_a04_insecure_design": "PASS — destructive ops gated by explicit modal (delete-account) or button (terminate-sessions); no business-logic flaw introduced. See non-blocking finding #1 re: comment accuracy.",
+    "owasp_a05_misconfig": "PASS — no security headers, CORS, or feature-flag changes in this task.",
+    "owasp_a06_vulnerable_components": "N/A for this task — no dependency changes (vee-validate/zod/@vee-validate/zod versions unchanged; pure code-level refactor).",
+    "owasp_a07_auth_failures": "PASS — change-password schema validates min 8 chars + has letter + has digit (matches existing policy); current-password required; passwords-must-match confirmation. Server-side validation remains authoritative. No weakening of frontend validation.",
+    "owasp_a08_integrity_deserialization": "PASS — no JSON.parse with untrusted input, no eval, no dynamic imports, no postMessage handler.",
+    "owasp_a09_logging": "See non-blocking finding #2 (informational).",
+    "owasp_a10_ssrf": "PASS — all useApi() URLs are static string literals (/api/profile, /api/profile/change-password, /api/profile/terminate-all-sessions, /api/auth/resend-verification). No user-controlled URL construction."
+  }
+}

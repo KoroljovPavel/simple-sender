@@ -1,0 +1,50 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 6 cleanly migrates the frontend trigger contract to the FunnelTrigger[] array model and adds a well-structured, well-tested FunnelTriggersPanel. Types, store pass-through, keyword-hint scan, i18n parity and all 50 affected tests (incl. the new 7-test panel spec) pass; locale parity check exits 0. No critical or major issues; the editor page's stale flat-trigger usage is explicitly Task 7 scope and breaks no automated gate (no typecheck/CI), so it is tracked as an observation rather than a finding.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "frontend/components/funnels/FunnelTriggersPanel.vue",
+      "line": 156,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "The on_start 'main entry' section mounts FunnelTriggerSettings, which exposes the full 5-type selector (on_start/keyword/tag_added/custom_field_set/event). The author can therefore change the main entry's type away from on_start, contradicting the file-level comment that on_start 'is never deletable from this panel' and potentially leaving the funnel with zero on_start element. Consider pinning the main-entry row to triggerType=on_start (hide/disable the type select for this slot, e.g. a `lockType` / `hideTypeSelect` prop on FunnelTriggerSettings) or guarding onTypeChange(onStartIndex, ...) to ignore non-on_start values.",
+      "benefit": "Prevents the author from accidentally removing the funnel's main entry from the UI; aligns runtime behaviour with the component's documented invariant. Server-side ≤1 on_start is enforced (Task 4) but a missing on_start is not clearly rejected, so the client guard avoids a confusing state.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/funnels/FunnelTriggersPanel.vue",
+      "line": 78,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "modelToEntry(ENTRY_START) returns firstStepId.value, which is null when the funnel has no saved step yet; addEvent() then creates an event trigger with entryStepId=null. Per Decision 14 the backend requires a non-null entryStepId for event, so this row will 422 on save. The component relies on the server backstop + advisory, which is acceptable per spec, but consider surfacing an inline advisory when an event row resolves to a null entry (no saved steps) so the author understands the save will be rejected before hitting the server.",
+      "benefit": "Closes the loop between the 'mid-entry is event-only / requires a step' rule and the author's mental model when the funnel has no persisted step, reducing surprise 422s. Purely advisory — does not gate save.",
+      "optional": true
+    },
+    {
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 141,
+      "severity": "minor",
+      "category": "cross-file-consistency",
+      "suggestion": "OBSERVATION (explicitly Task 7 scope, not a Task 6 defect): the editor page still reads res.triggerType/res.triggerValue/res.keywords and sends triggerType/triggerValue/keywords in UpdateFunnelRequest — fields removed from FunnelResponse/UpdateFunnelRequest by this task. This is a type-level mismatch only; it compiles at runtime (esbuild strips types) and its 46 tests pass. There is no typecheck script and no CI workflow under .github/workflows, so no automated gate fails. Ensure Task 7 migrates this page to mount FunnelTriggersPanel and use the triggers array; until then a `vue-tsc` run would report errors here.",
+      "benefit": "Documents the known deferred breakage so it is not lost; confirms it is contained to one file and gated only by Task 7, not by Task 6 acceptance.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/funnels/FunnelTriggersPanel.vue",
+      "line": 113,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "addEvent() sets selectedIndex.value = props.triggers.length optimistically, but the panel is prop-driven (parent owns the array via update:triggers) so the row at that index only exists after the parent re-passes the prop. The optimistic selection is harmless today, but if the parent debounces/rejects the update the highlight points at a non-existent row. Consider deriving selection from the emitted array length or letting the parent confirm before highlighting.",
+      "benefit": "Avoids a transient selected-index pointing past the rendered rows in the (Task 7) autosave/parent-controlled flow.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 10,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 4,
+    "testCoverageAssessment": "excellent"
+  }
+}

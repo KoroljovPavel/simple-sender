@@ -1,0 +1,56 @@
+{
+  "status": "passed",
+  "summary": "Iteration 2 verification: all 8 previous-iteration findings have been addressed in the tech-spec — most concretely, two (M1, M2) explicitly per ratified user-spec decisions. The previous major findings M3 (AC6 second-/start no-overwrite assertion), M4 (AC11 full 10-type enumeration), M5 (TelegramUpdate malformed/empty/type-mismatch edges), M7 (AC4 three sub-cases with per-case counter assertion), and M8 (Decision 11 enqueue-failure self-heal test) all now have explicit, prescriptive entries in the Testing Strategy section. The four new iteration-2 additions (worker re-entry guard test, MeterRegistryConfigTest, enumerated token-scrubber sites, self-heal enqueue test) are present and meaningful. The 404 AC3 still keeps all four cases (missing project / soft-deleted / DISCONNECTED bot / malformed ObjectId) with per-case counter assertion — fully addresses the previous minor finding. RawUpdateRepositoryTest correctly reclassified to Integration block (line 373) and now asserts uppercase `['PENDING','DONE']` in partial-filter expression. /foo in non-private explicitly covered. Five minor residual items remain — none rise above minor severity, none gate implementation: (1) line 347 self-heal test mislabelled as 'AC11' instead of 'Decision 11' (cosmetic), (2) AC14 JobRunr retry integration follow-up is noted but not assigned to a concrete task/file or paired with the JobRunrTestRunningConfig (or equivalent) needed to actually execute jobs, (3) WebhookSecretVerifierTest still missing null-header and oversized-header edges, (4) MeterRegistryConfigTest's second assertion (`find(...).counter() == null`) tests Micrometer library behavior not our config, (5) WebhookSecurityBlockTest slice-style still lacks the per-feature justification that patterns.md line 32 (Epic-01-only scope) would require. None of these are blocking; all are documentation/test-completeness polish that can be handled inside implementation tasks (T9, T10, T11) without re-iterating the tech-spec.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy → TelegramWebhookControllerIT, line 347",
+      "issue": "Self-heal enqueue-failure recovery test is labelled `AC11` in the bullet header, but its content (spy `BackgroundJob` to throw on first call, second POST hits DuplicateKey + re-enqueue succeeds) is the Decision 11 / previous-iteration M8 invariant, NOT AC11 (non-message update types — which is correctly covered by ProcessTelegramUpdateJobTest line 360). A reader scanning AC coverage would either think AC11 has two tests (one here, one in worker test) or miss the Decision 11 test entirely.",
+      "recommendation": "Rename the bullet from `AC11 — payload_too_large enqueue-failure recovery test` to `Decision 11 — enqueue-failure self-heal recovery test`. Also clarify the assertion list to match the invariant: (a) first POST returns 5xx (enqueue spy threw — verifies the failure was NOT swallowed by `.onErrorResume`), (b) second POST returns 200 + hits the DuplicateKey path + re-enqueues with same deterministic UUID, (c) `rawUpdateRepository.count() == 1`, (d) `StorageProvider.getJobs(ENQUEUED, ...).size() == 1` (idempotent re-enqueue, not duplicate). Without (a), the test does not prove enqueue failures propagate — the load-bearing assertion for Decision 11."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → ProcessTelegramUpdateJobTest AC14, line 364",
+      "issue": "AC14 entry now reads `Integration follow-up: spy JobRunr StorageProvider to confirm retry actually fires (verify getJobs(FAILED) after exhaustion)`. This addresses previous M6 in principle but leaves three gaps: (a) `JobRunrInMemoryConfig` per tech-spec line 335 is the configured test storage but tech-spec does not state whether it executes jobs or just accepts them — if it only accepts (per typical inmemory config patterns), the retry assertion cannot run under the current IT setup, (b) the follow-up is not assigned to a Wave/Task, so an implementer may skip it, (c) no specific assertion shape is given (e.g. `Awaitility.await().atMost(...).until(() -> storageProvider.getJobById(jobId).getJobStates().size() >= 11)` — the 11 = 1 initial + 10 retries from Decision 9).",
+      "recommendation": "Either (a) add a new task to Wave 3 — `ProcessTelegramUpdateJobIT` with `JobRunrTestRunningConfig` (or equivalent that actually executes jobs in a background thread) + `Awaitility` retry assertion, listed under T9 Files-to-create — OR (b) explicitly defer the JobRunr retry verification to staging-smoke runbook (T8) and document in the tech-spec that 'AC14 retry behavior is verified manually via JobRunr Failed-queue inspection in staging; integration test verifies only the worker-side processingStatus=FAILED + processingError + rethrow contract'. Either choice is fine; the open-endedness is the gap."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests → WebhookSecretVerifierTest, line 330",
+      "issue": "Test list now includes `match, mismatch, empty header, null stored hash, malformed hex stored hash` — addresses one of the four previous minor edges (malformed stored hash). Still missing: (a) `null` incoming header (defensive — should return false, not NPE — the verifier is called from controller before any other path), (b) oversized header (e.g. 10KB random — should fail fast, not allocate unbounded memory; constant-time bound relative to stored-hash length not header length).",
+      "recommendation": "Add two test methods: `nullHeader_returnsFalse_noException` and `oversizedHeader_returnsFalse_boundedTime`. The null-header case is the load-bearing one — Spring's `@RequestHeader(required=false)` injects `null` when the client omits the header, and the controller path `WebhookSecretVerifier.verify(headerSecret, bot.webhookSecretHash)` would NPE on the first byte access. Without this test, the 401-no-body path on missing header (AC2) silently degrades to a 500 from an unhandled NPE."
+    },
+    {
+      "severity": "minor",
+      "category": "empty_test",
+      "location": "Section: Testing Strategy → Unit tests → MeterRegistryConfigTest, line 333",
+      "issue": "Test description says `bean registered, find('any.metric').counter() returns null (not NPE)`. First assertion is meaningful — `applicationContext.getBean(MeterRegistry.class) != null` proves Decision 10's explicit-bean wiring. Second assertion (`find('any.metric').counter() returns null`) is testing Micrometer library behavior, not our config — Micrometer's `Search.counter()` always returns null when no counter with that name is registered. Litmus test: if our `MeterRegistryConfig` is deleted, the second assertion still passes (Spring Boot context fails at startup, but if we remove only the @Bean and keep the class, `MeterRegistry` injection succeeds only if actuator is on classpath — which Decision 10 explicitly forbids). The second assertion adds no coverage.",
+      "recommendation": "Replace the second assertion with a meaningful one: register a counter via `meterRegistry.counter('test.metric').increment()`, then `find('test.metric').counter().count() == 1.0`. This proves the registered bean is a functional registry, not a null-object stub. Alternatively, drop the second assertion and add `applicationContext.getBean(MeterRegistry.class).getClass().getName().equals('io.micrometer.core.instrument.simple.SimpleMeterRegistry')` — proves the bean type matches Decision 10 (SimpleMeterRegistry specifically, not some accidentally-autoconfigured CompositeMeterRegistry from a future actuator addition)."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy → WebhookSecurityBlockTest, line 367",
+      "issue": "Slice-style test with `@MockitoBean MongoClient/RedisConnectionFactory/ReactiveRedisConnectionFactory` is still used without a per-feature justification, despite patterns.md line 32 scoping this exception to Epic 01 only. Previous iteration flagged this; new tech-spec keeps the structure but does not add a rationale paragraph.",
+      "recommendation": "Add a one-line justification inline in the bullet at line 367: `Slice-style chosen because this test verifies SecurityConfig.pathMatchers ordering and CSRF-matcher scoping ONLY (no controller body, no DB interaction); full @SpringBootTest + Testcontainers adds 8+ seconds for zero added coverage. Acceptable extension of patterns.md line 32 exception because the test's scope is provably independent of DB/Redis state.` Alternatively, lift patterns.md's Epic-01 scoping to allow slice tests for any pure SecurityConfig-only verification. Either path documents the exception explicitly so Epic 09/10/etc. don't keep silently extending it."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 28,
+      "passed": 26,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 5,
+      "integration": 4,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

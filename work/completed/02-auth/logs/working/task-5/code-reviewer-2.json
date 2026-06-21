@@ -1,0 +1,68 @@
+{
+  "status": "approved",
+  "summary": "Round 1 critical fix is verified end-to-end: BCrypt encoding in registration is now offloaded to Schedulers.boundedElastic via Mono.fromCallable in applyRegistrationAsync (AuthService.java line 247-248), mirroring the login path. The previously unused exchange parameter is now consumed for per-IP rate limiting. The resend audit-event finding is reasonably deferred. The commit also goes beyond the round 1 list with strong defense-in-depth additions: per-IP register rate limit with fail-open on Redis errors, superAdmin flag reset on >30-day repurpose, end-to-end event-collection assertion in IT, and HTML-escape on {APP_URL}.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 295,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "checkRegisterRate fail-open returns Mono.fromRunnable(...) which produces Mono<Object>, not Mono<Void>. The chain still completes empty (so the runtime semantic is correct: log the warning, allow the registration through), but a future refactor that adds an operator after onErrorResume could be surprised by the Object generic. Consider `.then()` on the fromRunnable for an explicit Mono<Void>, matching incrementWithTtl/registerFailure style elsewhere in the file.",
+      "benefit": "Type clarity and consistency with the rest of the service; defends against subtle future regressions in the operator chain.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 281,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Magic literal `1L` in `count != null && count == 1L` is repeated in checkRegisterRate (line 281) and incrementWithTtl (line 385). Same suggestion as round 1 against incrementWithTtl: extract `private static final long FIRST_INCREMENT = 1L;` once, reuse in both places. Pre-existing in part — but the round 1 fix added a fresh occurrence.",
+      "benefit": "Single source of truth for the first-increment-sets-TTL idiom.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 285,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "checkRegisterRate's downstream `.flatMap(count -> count > REGISTER_IP_THRESHOLD ...)` will NPE if `count` is null (defensive belt only — Redis INCR returns the new value, so null is not expected in practice). The `count != null` check on line 281 hints the author already considered the null case; mirror it on line 287 with `count != null && count > REGISTER_IP_THRESHOLD`, or unbox at the top of the chain via `.defaultIfEmpty(0L)`.",
+      "benefit": "Eliminates a latent NPE if Lettuce ever returns an empty Mono on a transient state.",
+      "optional": true
+    },
+    {
+      "file": "work/02-auth/decisions.md",
+      "line": 0,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "The deferral rationale mentions 'events enum schema needs extension', but Event.eventType is a free-form String (no enum). The actual cross-task concern is taxonomy consistency (which event-type names exist project-wide and how they map to alerting). Reword the deferral rationale so future readers do not look for an enum that does not exist.",
+      "benefit": "Avoids documentation drift; correctly captures why register/resend audit events are out of scope (cross-task taxonomy decision, not a code-level schema change).",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+      "line": 283,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`Thread.sleep(500)` in resendVerification_unknownEmail_returns200_andSendsNoEmail_andSetsRedisKey is a fixed wait. Awaitility is already in use elsewhere in this class (line 26 import, lines 165-171). Switching to `await().during(...)` would assert 'no message arrived for 500ms' more idiomatically and would fail faster if something unexpected publishes.",
+      "benefit": "Consistent test idiom across the file; slightly faster CI when no message arrives.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 297,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The fail-open onErrorResume pattern is now duplicated three times (checkBruteForce line 329, resendVerification line 187, checkRegisterRate line 293). Each has the same logic: AppException re-throws, anything else logs warn + completes empty. Consider extracting `private static <T> Mono<T> failOpenOnRedisError(String op, Mono<T> source, T defaultValue)` to centralize the pattern. Not a blocker — three is the threshold where DRY starts paying off.",
+      "benefit": "Single point of change for fail-open semantics (Decision 4); fewer chances of one branch drifting.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 6,
+    "testCoverageAssessment": "excellent"
+  }
+}

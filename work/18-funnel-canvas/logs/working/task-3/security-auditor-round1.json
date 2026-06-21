@@ -1,0 +1,40 @@
+{
+  "reviewer": "security-auditor",
+  "task": 3,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "test_run_enters_on_start_entryStepId test lives in FunnelServiceTriggerTypeTest, not FunnelExecutionEngineIT as the TDD Anchor prescribes",
+      "description": "The task's TDD Anchor specifies 'FunnelExecutionEngineIT::test_run_enters_on_start_entryStepId'. The implemented test is in FunnelServiceTriggerTypeTest (a service-level IT without the engine sweep). The test verifies currentStepId on the created execution document — it does NOT verify that the engine actually executes the correct step (no sweep, no sentCount assertion). This is not a security vulnerability but is noted because the spec's test placement exists to ensure full-path engine coverage, which is missing.",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelServiceTriggerTypeTest.java:333",
+      "impact": "No exploitation surface. The behaviour is correctly implemented and a different test validates fire()-level entry. The gap is audit trail completeness rather than security.",
+      "recommendation": "Add a companion test in FunnelExecutionEngineIT that seeds an on_start funnel with entryStepId != array[0], calls testRun, then sweeps and asserts the engine executed the entry step (not array[0]) — mirroring the on_start_enters_entryStepId_regardless_of_order shape.",
+      "cwe": null
+    }
+  ],
+  "owasp_coverage": {
+    "A01_broken_access_control": "PASS — requireFunnel(ownerId, projectId, funnelId) enforces ownership before applyTriggers, testRun, and all mutation paths. The funnel-scoped stepIds set is derived from the SAME funnel's persisted steps, making cross-funnel entryStepId injection structurally impossible at the validation layer.",
+    "A02_cryptographic_failures": "PASS — no new cryptographic surface introduced.",
+    "A03_injection": "PASS — entryStepId is stored as a plain string and consumed only as a lookup key in stepIds.contains (a Java HashSet) and in MongoDB field value writes via Spring Data (parameterized). No dynamic query construction, no eval, no command interpolation.",
+    "A04_insecure_design": "PASS — requireOnStartEntryStep is a dedicated private static helper (not inlined); the null-tolerant path is explicit and returns null rather than accepting arbitrary strings; cross-funnel ids are rejected because stepIds is built from THIS funnel's toSteps() output. fire() and testRun read entryStepId from a previously-validated Trigger document (not from the request body at execution time). resolveStartCursor provides a defence-in-depth fallback to step 0 for null/dangling ids.",
+    "A05_security_misconfiguration": "PASS — no new config surface.",
+    "A06_vulnerable_components": "PASS — no new dependencies introduced in this commit.",
+    "A07_auth_failures": "PASS — no new auth surface. fire() is an internal service method invoked by the webhook worker, not a public HTTP endpoint.",
+    "A08_software_data_integrity": "PASS — no deserialization of untrusted input in the changed code. Snapshot deep-copy via FunnelStep.copyOf is unchanged.",
+    "A09_security_logging": "PASS — fire() and testRun use existing greppable log constants; the entryStepId value is not echoed in log messages (PII-safe, id/code-only convention upheld).",
+    "A10_ssrf": "PASS — no user-supplied URL is passed to any HTTP client in the changed paths.",
+    "hardcoded_secrets": "PASS — no credentials, tokens, or secrets found in the diff."
+  },
+  "key_security_checks": {
+    "on_start_entryStepId_validation": "PASS — requireOnStartEntryStep(entryStepId, stepIds): null → accepted (returns null); non-null not in stepIds → 422 CODE_INVALID_ENTRY_STEP; non-null in stepIds → accepted. stepIds is built from stepIdsOf(steps) where steps is THIS funnel's validated toSteps() output. Cross-funnel or arbitrary ids are structurally rejected.",
+    "non_event_non_on_start_types_still_reject": "PASS — TRIGGER_KEYWORD, TRIGGER_TAG_ADDED, TRIGGER_CUSTOM_FIELD_SET cases all call requireNoEntryStep(dto.entryStepId()) unchanged (L754, L759, L764).",
+    "fire_execution_entry_point": "PASS — onStartEntryStepId(funnel) scans the funnel document's own triggers[] list (read from DB, not from the HTTP request body). A subscriber cannot influence entryStepId at fire() time; it is fixed at the funnel's last-saved value, which was validated by applyTriggers.",
+    "testRun_execution_entry_point": "PASS — same pattern as fire(): onStartEntryStepId(funnel) reads from the requireFunnel()-loaded document after ownership check.",
+    "cross_funnel_entry": "PASS — insertExecutionAt passes startStepId to resolveStartCursor which matches against the funnel's own deep-copied stepsSnapshot. Even if a stale/cross-funnel id somehow reached resolveStartCursor, the linear scan would miss it and fall back to step 0 — no arbitrary step entry.",
+    "loop_backstop": "PASS — advanceToNext rewrite does not remove the maxStepsPerTick budget guard in the drive loop."
+  },
+  "summary": "No critical or major security findings. The implementation correctly scopes on_start entryStepId validation to THIS funnel's step set, rejects cross-funnel and arbitrary ids with 422, accepts null (broken-edge state), and keeps all non-event/non-on_start types rejecting any entryStepId. The fire() and testRun execution entry points read entryStepId from a previously-validated Trigger document rather than from the request body, eliminating runtime injection of an arbitrary step. One minor finding: the test_run_enters_on_start_entryStepId test was placed in FunnelServiceTriggerTypeTest rather than FunnelExecutionEngineIT (as the TDD Anchor specifies), so engine-sweep coverage for testRun's entry path is absent — not a security issue."
+}

@@ -1,0 +1,21 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Register per-IP rate-limit threshold is 10/minute (≈600/hour) — looser than the round-1 recommendation of 10/hour",
+      "description": "checkRegisterRate uses REGISTER_RATE_TTL = 60s with REGISTER_IP_THRESHOLD = 10 (AuthService.java:54-56). Effectively a single IP can sustain 10 registrations every 60 seconds = 600 verification emails / 600 BCrypt cost-12 hashes per hour from one IP. The round-1 recommendation was '10 per hour' (TTL 3600s). Both the email-bomb risk vector and the CPU-DoS vector are reduced relative to the unbounded baseline but remain meaningful.\n\nBack-of-the-envelope: 1 BCrypt cost-12 ≈ 250ms CPU. 600 BCrypt/hour = 150s CPU/hour from a single IP. A botnet of 100 IPs × 600 reg/h = 60,000 reg/h, each producing one outbound verification email — enough to exhaust a typical transactional-email quota and harm sender reputation.\n\nThe round-1 critical (privilege-escalation via soft-delete repurposing) and round-1 major (BCrypt-CPU DoS / email-flood from un-throttled register) findings ARE resolved in their respective primary attack vectors:\n  • setSuperAdmin(false) is now invoked on every register path (AuthService.java:272) and is regression-tested at unit (register_softDeletedSuperAdmin_olderThan30Days_doesNotInheritSuperAdminFlag) and IT (register_softDeletedEmail_olderThan30Days_succeeds_andRepurposesDocument) levels.\n  • checkRegisterRate runs BEFORE BCrypt via Mono.defer chaining (AuthService.java:130-132) and is regression-tested by register_perIpRateLimit_returns429_andSkipsBcrypt (asserts passwordEncoder.encode is never invoked on the 429 path).\n  • {APP_URL} is now htmlEscaped in EmailService.java:60,69.\n  • resendVerification Redis SET NX call now fails open (AuthService.java:187-190).\n\nThis finding is the residual gap: the chosen threshold materially under-enforces the original recommendation.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:54-56 (REGISTER_RATE_TTL/REGISTER_IP_THRESHOLD); :277-297 (checkRegisterRate)",
+      "impact": "(1) Email-bomb against transactional SMTP quota and sender reputation: 60k reg/h is achievable from a small botnet and each registration triggers one verification email to whatever address the attacker chose. (2) CPU exhaustion at scale: every accepted register burns ~250ms BCrypt on boundedElastic. The boundedElastic pool size is bounded but a sustained 600 hashes/hour/IP × N IPs can starve other Mono.fromCallable consumers (login authentication, the dummy-hash path in handleUserNotFound, etc.).",
+      "recommendation": "Two complementary tightenings:\n\n(a) Raise the TTL toward the round-1 recommendation. Either:\n    - Keep current 60s window but lower threshold to 3 per minute (180/hour), or\n    - Switch to the recommended 1-hour window: REGISTER_RATE_TTL = Duration.ofHours(1), REGISTER_IP_THRESHOLD = 10.\n\n(b) Add a per-email cap orthogonal to per-IP, e.g., 'register:rate:email:{email}' with INCR + EXPIRE 3600s, threshold 3, to prevent an attacker from spamming verification emails to a single victim address from rotated IPs.\n\nDocument the chosen value in decisions.md alongside Decision 4 so future readers understand the trade-off (60s window matches the resend cooldown style; 1h window matches the brute-force window style — they intentionally serve different purposes).\n\nFinal note: this is a tuning concern, not a correctness defect. The mechanism is wired in correctly and the test coverage is adequate for the chosen threshold. Approve and ship; treat the threshold review as a follow-up tuning task.",
+      "cwe": "CWE-770"
+    }
+  ]
+}

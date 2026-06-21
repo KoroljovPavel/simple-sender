@@ -1,0 +1,40 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 3,
+      "issue": "Details section says to 'parametrize existing sendWith*Retry/sendOnce тілом+URI' as one approach. These private methods have a fixed signature tied to text/parseMode. Changing them would break the existing call sites without a proper refactor. The hint offers both 'extract generic helper' and 'parametrize existing methods' as alternatives — the latter is unsafe if taken literally without a full signature change.",
+      "fix": "Reword to make 'extract a generic helper that accepts endpoint-path + body supplier' the primary (preferred) approach, and demote in-place signature parametrization to a secondary option with an explicit note that it requires touching the sendText call chain."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task says 'Дзеркаль анотаційний стиль Bot.java/RawUpdate.java' for static-assert, but both reference files use UPPERCASE enum constants in their partialFilter literals (e.g. 'CONNECTED', 'PENDING'). For FunnelExecution the partialFilter literals must be lowercase ('running', 'waiting'). The structural pattern is reusable, but the static-assert comparison direction is inverted: the assert checks that the literal (lowercase) equals .name() (also lowercase). The task body does explain this correctly in 'Edge cases' and 'What to do', but the hint's 'copy structurally from Bot/RawUpdate' may mislead an implementer into asserting UPPERCASE literals.",
+      "fix": "Add a clarifying note in implementation hints: 'The static-assert structure mirrors Bot/RawUpdate, but here the literals are lowercase — assert that FunnelStatus.active.name().equals(\"active\"), not \"ACTIVE\". Reason: Spring Data persists lowercase enums (Decision 14) via .name(), unlike BotStatus/RawUpdateStatus which are UPPERCASE.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 1,
+      "issue": "TDD anchor describes FunnelIndexesIT testing partialFilter for 'status IN [running, waiting]' via mongoTemplate.getCollection(...).listIndexes(). The $in partial filter on a @CompoundIndex uses partialFilter string syntax '{ status: { $in: [\"running\", \"waiting\"] } }'. The project already has a working example in SubscriberExport.java. The test should verify the partialFilterExpression document structure contains '$in' — this is non-trivial to assert from listIndexes() since Mongo returns it as a BSON Document. The anchor should note to use Document.get('partialFilterExpression') and check for the $in operator, not just key presence.",
+      "fix": "Add a note to the TDD anchor: 'For the $in partial filter, inspect the partialFilterExpression BSON Document: assert it contains key \"status\" with a sub-document containing \"$in\" with values [\"running\", \"waiting\"]. See SubscriberExport @CompoundIndex as a working $in partial-filter example.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 context path reference '.claude/skills/project-knowledge/references/project.md' is given as a relative path from the task file location without the leading '../../../' prefix (unlike other context file paths in the same task). The path 'project.md' and 'architecture.md' in the Context Files section use a non-prefixed relative path that differs from the pattern used in Task 1 (which correctly uses '../../../.claude/skills/...').",
+      "fix": "Fix the context paths for project.md and architecture.md in Task 2 to use the same prefix as Task 1: '../../../.claude/skills/project-knowledge/references/project.md' and '../../../.claude/skills/project-knowledge/references/architecture.md'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 4
+  }
+}

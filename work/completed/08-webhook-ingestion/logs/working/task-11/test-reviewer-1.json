@@ -1,0 +1,52 @@
+{
+  "severity_counts": {
+    "critical": 0,
+    "major": 0,
+    "minor": 3,
+    "info": 2
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/webhook/WebhookPayloadSizeFilterTest.java",
+      "line": "22-162",
+      "issue": "TDD anchor coverage complete. All 6 anchor tests present and one bonus zeroContentLength_passesThrough boundary test (justified by task edge-case note that CL:0 is valid and must pass through). Each filter test passes the litmus test: removing the matching branch in WebhookPayloadSizeFilter would cause the corresponding assertion to fail (status=null on rejection cases, downstream=false on pass-through cases, counter check would fail on either). Filter is exercised directly with MockServerWebExchange / MockServerHttpRequest as specified — no @SpringBootTest overhead.",
+      "recommendation": "No change required. The bonus zeroContentLength test is a positive — exercises the Spring HttpHeaders contract where getContentLength()==0 (valid empty body) is distinct from -1 (missing/unparseable)."
+    },
+    {
+      "id": "F2",
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/webhook/WebhookSecurityBlockTest.java",
+      "line": "29-110",
+      "issue": "All 4 TDD anchor cases covered. WebTestClient is rebound via bindToApplicationContext in @BeforeEach so SecurityMockServerConfigurers.mockUser()/csrf() mutators are honoured (the autowired RANDOM_PORT client is bind-to-server and silently ignores them — comment correctly explains the AbstractIntegrationTest precedent). csrf() mutator on the bare-auth /api test isolates the auth filter from the CSRF filter; mockUser() (no csrf()) on the authed CSRF test confirms CSRF baseline still rejects on /api/**. Test names diverge from anchor names by minor clarifying renames (postApiAuthedWithoutXsrfToken_…) but the behaviour is identical.",
+      "recommendation": "No change required. Renames add clarity over the original anchor strings."
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/WebhookSecurityBlockTest.java",
+      "line": "60-65, 104-109",
+      "issue": "Weak negative assertion on the two webhook-CSRF-skip tests: the assertion is 'status != 403'. This silently passes for any non-403 response — including an accidental 200 OK leaked from the controller, a 5xx from unmocked downstream calls, or a 401 if the security chain regressed in some other direction. The comments correctly document the intent ('controller-side behaviour depends on Mongo state, only the 403 absence is load-bearing'), but the assertion does not catch regressions where the security chain rejects with a different status (e.g. an Authorization filter starts gating the webhook path with 401 in the future).",
+      "recommendation": "Tighten to a positive lower-bound assertion such as `.expectStatus().value(s -> assertThat(s).isNotEqualTo(403).isNotEqualTo(401))` — proves both 'CSRF skipped' AND 'auth filter skipped (permitAll worked)'. Alternatively, if the controller is deterministic for this slice (no Mongo write attempted before validation), assert the exact expected status from TelegramWebhookController. The wider AC ('reaches controller') is implicit but not directly asserted."
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/WebhookPayloadSizeFilterTest.java",
+      "line": "31, 43",
+      "issue": "Test calls filter.cacheCounter() manually because @PostConstruct is not triggered when the filter is instantiated outside Spring. This couples the test to a package-private lifecycle method. If cacheCounter() is ever renamed, every test setup breaks even though production code is unchanged. The package-private visibility is itself a small implementation-coupling smell driven by the test.",
+      "recommendation": "Either (a) accept the coupling and add a brief comment explaining the @PostConstruct simulation, or (b) reorganise the filter so the counter is built in the constructor (current MeterRegistry is already injected there). Option (b) eliminates @PostConstruct entirely and lets the test rely on the constructor alone — removes the cacheCounter() seam. Not blocking — current state is functional."
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/webhook/WebhookPayloadSizeFilterTest.java",
+      "line": "67-77, 79-87",
+      "issue": "chunkedEncoding_rejects413_incrementsCounter and missingContentLength_rejects413_incrementsCounter do not assert that downstream chain.filter() was NOT invoked. The oversize and boundary tests do assert this; the chunked and missing tests should be symmetric to provide the same short-circuit guarantee. Currently if the filter regressed such that it both 413-set the status AND forwarded to the chain (a real bug — double-write in WebFlux is an IllegalStateException), the chunked/missing tests would still pass because they only check status + counter.",
+      "recommendation": "Add `AtomicBoolean downstream = new AtomicBoolean(false);` + `assertThat(downstream.get()).as(\"chain.filter must NOT be invoked when rejecting\").isFalse();` to both tests, mirroring the oversizedContentLength_rejects413_incrementsCounter pattern at lines 56-63."
+    }
+  ],
+  "summary": "All 10 TDD anchor tests are present, each passes the litmus test (removing the corresponding branch in the implementation causes the assertion to fail), and the slice-test wiring is correct: filter test uses direct WebFilter invocation via MockServerWebExchange and avoids @SpringBootTest, security block test rebinds WebTestClient to ApplicationContext so csrf()/mockUser() mutators actually take effect, and the csrf()-vs-mockUser() split on the two /api tests correctly isolates the auth filter from the CSRF filter. Three minor improvements remain: (a) tighten the two 'not 403' assertions on the webhook-CSRF tests to a stronger positive lower-bound, (b) add the downstream-not-invoked assertion to the chunked and missing rejection tests for symmetry, (c) consider moving counter registration from @PostConstruct to constructor to eliminate the package-private cacheCounter() seam.",
+  "verdict": "go"
+}

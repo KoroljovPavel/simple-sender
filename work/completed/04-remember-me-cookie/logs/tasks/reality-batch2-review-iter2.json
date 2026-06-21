@@ -1,0 +1,71 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [],
+  "resolved_from_iter1": [
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 4,
+      "iter1_issue": "Task 4 did not mention AuthServiceRegistrationTest.java as an audit target; register auto-login regression case was only expected in AuthServiceTest, risking false-positive blocker if Task 1 places it in AuthServiceRegistrationTest.",
+      "resolution": "RESOLVED. Task 4 now explicitly lists AuthServiceRegistrationTest.java as an audit target in Context Files (line 86). Description item 7 reads 'новий кейс у AuthServiceTest АБО у AuthServiceRegistrationTest'. AC checklist (line 61) mandates auditor to search both files. Details section (lines 113-119) instructs to check AuthServiceRegistrationTest first and explicitly says 'НЕ маркувати як missing, якщо знайдено у AuthServiceRegistrationTest'. Iter1 finding is fully addressed."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 4,
+      "iter1_issue": "Task 4 did not contain an audit item for the mock-extension gap: mockExchangeWithSessions (line 119, AuthServiceTest) does not stub exchange.getAttributes(), which Task 1 must add. Without this stub, verify(attrs).put(REMEMBER_ME_ATTR, ...) would silently no-op.",
+      "resolution": "RESOLVED. Task 4 Description item 8 (lines 34-35) now explicitly mandates checking mockExchangeWithSessions at approximately line 119 for correct getAttributes() stubbing. It specifies acceptable forms (when(exchange.getAttributes()).thenReturn(...) with real Map or RETURNS_DEEP_STUBS) and declares severity 'major' if stub is absent but tests pass. AC checklist item (line 62) requires this check. Details section (lines 108-113 and 131-133) repeats the requirement with exact test method names. Iter1 finding is fully addressed."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 5,
+      "iter1_issue": "AC-4 smoke used endpoint /api/me which does not exist; AuthController maps to /api/auth/me.",
+      "resolution": "RESOLVED. Task 5 line 95 now uses http://localhost:8080/api/auth/me. Line 99 adds an explicit note: 'Примітка: ендпоінт мапиться через AuthController @RequestMapping(\"/api/auth\") + @GetMapping(\"/me\") → повний шлях /api/auth/me. Шляху /api/me у проекті не існує.' Verified against AuthController.java which has @RequestMapping(\"/api/auth\") at line 25 and @GetMapping(\"/me\") at line 40."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "iter1_issue": "AC-5 logout smoke did not include CSRF token, would return 403.",
+      "resolution": "RESOLVED. Task 5 AC-5 block (lines 101-115) now contains a full two-step curl recipe: step 1 mints XSRF-TOKEN by doing GET /api/auth/me with -c cookies.txt, step 2 POSTs /api/auth/logout with cookie jar (-b cookies.txt) and X-XSRF-TOKEN header. The explanation names CookieServerCsrfTokenRepository.withHttpOnlyFalse() and ServerCsrfTokenRequestAttributeHandler. A fallback one-liner is provided for dev stacks where CSRF is disabled. Iter1 minor finding is fully addressed."
+    }
+  ],
+  "not_reflagged_false_positives": [
+    {
+      "task": 4,
+      "iter1_finding": "critical/missing_file — RememberMeWebSessionIdResolverTest.java and RememberMeWebSessionIdResolver.java do not exist",
+      "reason": "Pre-execution state: these are Task 1 deliverables. Task 4 correctly declares depends_on: [1]. Audit tasks legitimately target files that Wave 1 will create. Not a task-file defect."
+    },
+    {
+      "task": 4,
+      "iter1_finding": "critical/missing_function — REMEMBER_ME_ATTR assertions absent from AuthServiceTest",
+      "reason": "Pre-execution state: Task 1 has not yet run. These assertions are Task 1 deliverables. Task 4 depends_on: [1] correctly models the dependency. Not a task-file defect."
+    },
+    {
+      "task": 5,
+      "iter1_finding": "critical/missing_file — Task 1 artifacts absent, Task 5 cannot proceed",
+      "reason": "Pre-execution state: implicit dependency through Tasks 2/3/4 → Task 1 chain is correct. Not a task-file defect."
+    }
+  ],
+  "new_findings": [],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 28,
+    "issues_found": 0,
+    "iter1_criticals_resolved": 1,
+    "iter1_majors_resolved": 2,
+    "iter1_minors_resolved": 1,
+    "iter1_false_positives_excluded": 3
+  },
+  "notes": {
+    "api_auth_me_verified": "AuthController.java confirmed: @RequestMapping(\"/api/auth\") at line 25, @GetMapping(\"/me\") at line 40. Full path /api/auth/me is correct. Task 5 AC-4 smoke now uses this exact URL.",
+    "authserviceregistrationtest_exists": "backend/src/test/java/com/botfunnel/auth/AuthServiceRegistrationTest.java confirmed present in codebase. Task 4 now references it as an audit target for the register auto-login regression case.",
+    "mock_extension_obligation_still_valid": "mockExchangeWithSessions (AuthServiceTest line 119-128) currently stubs only getRequest() and getSession(). No getAttributes() stub exists. This is expected pre-Task-1. Task 4 correctly mandates auditor to verify this stub exists after Task 1 runs. The obligation is real, not a false positive.",
+    "csrf_recipe_correctness": "Task 5 AC-5 smoke now uses CookieServerCsrfTokenRepository pattern (GET to mint XSRF-TOKEN, then POST with X-XSRF-TOKEN header). This matches the SecurityConfig pattern described in tech-spec and the comment at SecurityConfig. Smoke will succeed against the real local stack.",
+    "task4_dependency_chain": "Task 4 depends_on: [1], wave: 2. Task 5 depends_on: [2, 3, 4], wave: 3. Chain is correct and unchanged."
+  }
+}

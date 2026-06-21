@@ -1,0 +1,23 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 2,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "stubSubscriber()",
+      "issue": "Inline fully-qualified java.util.Map.of() is used in stubSubscriber() while java.util.List/Optional are imported at the top. Slightly inconsistent — a java.util.Map import would read cleaner.",
+      "recommendation": "Optional: add `import java.util.Map;` and use Map.of(). Pure style, no behavior impact."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "line": "previewIdorPrecedenceOver422AndStepId404 (~811)",
+      "issue": "The IDOR-precedence test asserts 404 for foreign-funnel + unknown-stepId, but since both the requireFunnel branch and the stepId branch collapse to 404, the test cannot positively prove that requireFunnel ran FIRST (a regression that moved the step lookup before requireFunnel would still pass). The comment honestly acknowledges this.",
+      "recommendation": "Optional hardening: also assert that for a foreign funnel with a VALID-looking stepId the result is still 404 (not 200/422), or assert requireFunnel ordering at the service level. Current coverage is acceptable for round 1."
+    }
+  ],
+  "notes": "Verified cross-file signatures against source: insertExecution(projectId, funnel, subscriberId, telegramBotId, enrollDepth) and cancelExistingForPair(projectId, funnelId, subscriberId) match call sites exactly; cancel runs BEFORE insert (load-bearing for the re-enter unique index, also asserted by testRunRestartCancelsPrevious). SubscriberService.findByChat(projectId, telegramBotId, chatId) and VariableTemplateRenderer.render(template, parseMode, subscriber) match. New constructor deps wire cleanly: FunnelExecutionFactory is @Component package-private in the same com.botfunnel.funnel package (injectable), SubscriberService is a public interface bean; no manual `new FunnelService(...)` callers exist. validateSteps visibility raised private->package-private with body unchanged (diff confirms modifier-only). resolveOwnerSubscriber is a single shared helper consumed by both testRun (maps empty -> 422 funnel_owner_not_linked) and previewStep (empty -> stub + sampleData=true) — no duplication. requireFunnel runs FIRST in both methods (anti-IDOR 404 precedence). All three owner-unresolved branches (no bot / ownerChatId null / no-or-inactive subscriber) collapse to 422 via orElseThrow — never 500. Preview renders on-the-fly request.text()/parseMode() not the saved step; non-message steps return kind=non_message with rendered=\"\"; unknown stepId -> AppException.notFound (404); stub prevents render() NPE since requireNonNull(subscriber). DTOs are exactly {stepType,text,parseMode} and {rendered,sampleData,kind} with @JsonIgnoreProperties mass-assignment defense on the request. Draft test-runnable confirmed (no status gate). Send-assertion IT faithfully reuses the engine MockWebServer harness (singleton MockWebServer, DynamicPropertySource base-url, enqueueOk, engine.sweep, request-count delta). i18n key funnel_owner_not_linked added to both en/uk matching the backend message. `./gradlew compileTestJava` passes clean. Only two minor/optional nits; no critical or major findings."
+}

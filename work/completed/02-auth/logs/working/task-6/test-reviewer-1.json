@@ -1,0 +1,78 @@
+{
+  "status": "passed",
+  "summary": "Strong test suite for Task 6. 14 unit tests in AuthServicePasswordResetTest + 9 new ITs in AuthControllerIT cover all 8 TDD anchors with mostly strong, behavior-focused assertions. The reset-password happy path test (allSessionsInvalidated + old-password rejected + new-password accepted) is a model end-to-end verification. The risk-area diagnostic (sessionsCollection_principalFieldPath_isAtTopLevel) directly addresses the Task 6 spec lines 116-121 concern. All tests pass the litmus test except one minor case where assertion name overstates what is verified. The cookie-propagation trade-off (logout's other-session-untouched behavior split between unit + sessions-model IT) is reasonable and well-documented inline.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java:309",
+      "issue": "Test name `resetPassword_runsBcryptOnBoundedElastic_doesNotBlockEventLoop` claims to verify boundedElastic scheduling but only asserts `verify(passwordEncoder).encode(...)`. The actual scheduler the encode runs on is never inspected. A regression that runs encode() on the event loop would still pass this test. The inline comment acknowledges this (\"other tests verify boundedElastic via the same pattern as register\") — but the test name promises more than it delivers, which is misleading for future readers.",
+      "recommendation": "Either (a) rename to `resetPassword_validToken_invokesPasswordEncoderOnce` to accurately describe what it verifies, or (b) wrap encoder mock with `Answers` that captures `Thread.currentThread().getName()` and assert it starts with `boundedElastic-`. Option (a) is cheaper and matches the pattern already used in the registration tests."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:531",
+      "issue": "`resetPassword_invalidToken_400NotServerError` only asserts `expectStatus().isBadRequest()`. The parallel verifyEmail test (line 252) locks in identical message + missing TOKEN_EXPIRED code so the response cannot become an invalid-vs-expired enumeration oracle. The reset-password endpoint has the same enumeration concern (the implementation returns the same `INVALID_RESET_LINK` message for both invalid and expired, but the test does not lock that contract in). A future change that adds a distinguishing error code to the expired branch would silently introduce an enumeration oracle.",
+      "recommendation": "Add: `.expectBody().jsonPath(\"$.message\").isEqualTo(\"Посилання недійсне або прострочено\").jsonPath(\"$.code\").doesNotExist()` to both `resetPassword_invalidToken_400NotServerError` and `resetPassword_expiredToken_400`. This locks in response parity between invalid and expired branches."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java:184",
+      "issue": "`forgotPassword_emailDispatchFailure_doesNotPropagate_returnsComplete` only asserts `verifyComplete()` after smtp throws. It does not verify that the audit event is still logged when email dispatch fails — yet the implementation's `doOnSuccess` block fires the event AFTER the email try/catch. A regression where the catch block accidentally re-throws would skip the event log AND fail the test, but a regression that swallowed the exception and skipped the event log entirely would still pass.",
+      "recommendation": "Add `verify(eventService).logEvent(eq(\"user-id-1\"), eq(\"password_reset_requested\"), eq(IP), eq(\"JUnit\"), any());` and `verify(userRepository).save(any(User.class));` after `verifyComplete()`. This locks in: even when email dispatch throws, the user record is still saved and the audit event is still logged."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java:78-82",
+      "issue": "Test setup constructs `AuthService` with hardcoded constants (`SUPPORT_EMAIL`, `24L`, `30L`) without naming them. The numeric literals `24L` (defaultHours) and `30L` (rememberMeDays) are magic values that will be opaque if AuthService constructor signature ever changes. Low impact in this file because none of the tests exercise session TTL behavior, but it adds friction for reviewers tracking what each constructor arg is.",
+      "recommendation": "Extract to named constants at the top of the class: `private static final long DEFAULT_TTL_HOURS = 24L; private static final long REMEMBER_ME_DAYS = 30L;` — or use Java named-record-style local vars in setUp(). No assertion change needed."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 23,
+      "passed": 22,
+      "failed": 1
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 14,
+      "integration": 9,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "critical": [],
+  "major": [],
+  "minor": [
+    {
+      "category": "anti_pattern",
+      "location": "AuthServicePasswordResetTest.java:309 — resetPassword_runsBcryptOnBoundedElastic_doesNotBlockEventLoop",
+      "issue": "Test name claims to verify boundedElastic scheduling but only asserts encode() was called.",
+      "recommendation": "Rename to resetPassword_validToken_invokesPasswordEncoderOnce, or capture Thread.currentThread().getName() in encoder mock and assert it starts with 'boundedElastic-'."
+    },
+    {
+      "category": "missing_coverage",
+      "location": "AuthControllerIT.java:531 — resetPassword_invalidToken_400NotServerError",
+      "issue": "Does not lock in response parity with the expired-token branch — future divergence could create an invalid-vs-expired enumeration oracle.",
+      "recommendation": "Assert .jsonPath(\"$.message\").isEqualTo(\"Посилання недійсне або прострочено\").jsonPath(\"$.code\").doesNotExist() on BOTH the invalid-token and expired-token IT tests."
+    },
+    {
+      "category": "missing_coverage",
+      "location": "AuthServicePasswordResetTest.java:184 — forgotPassword_emailDispatchFailure_doesNotPropagate_returnsComplete",
+      "issue": "Only asserts verifyComplete(); does not verify audit event still fires after smtp failure (currently relies on doOnSuccess running after the try/catch).",
+      "recommendation": "Add verify(eventService).logEvent(...) and verify(userRepository).save(any()) after verifyComplete() to lock in: smtp failure does not skip persistence or audit logging."
+    },
+    {
+      "category": "anti_pattern",
+      "location": "AuthServicePasswordResetTest.java:78-82 — setUp()",
+      "issue": "Magic numbers 24L (defaultHours) and 30L (rememberMeDays) in AuthService constructor call.",
+      "recommendation": "Extract to named constants DEFAULT_TTL_HOURS / REMEMBER_ME_DAYS at the top of the class for readability."
+    }
+  ],
+  "nitpicks": []
+}

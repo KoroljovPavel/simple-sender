@@ -1,0 +1,457 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-06-09 00:00:00"  # Timestamp (YYYY-MM-DD HH:MM:SS)
+  last_updated: "2026-06-09 00:00:00"
+  status: "completed"  # not_started | in_progress | completed
+  can_resume: true
+  current_question_num: 3
+  feature_size: "L"  # S | M | L — new content model + UI block editor + ~7 sender methods
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-06-09 00:10:00"
+    topic: "scope / backward-compat / MENU folding / media source"
+    agent_question: |
+      Batch 1: (1) block-type scope — IN: text/image/video/audio/file/album+buttons; DEFER:
+      location/contact/invoice/delay/input/receipt/print/animation. (2) backward-compat — new
+      composer StepType coexists with old SEND_MESSAGE/SEND_IMAGE/MENU, migration optional? or
+      full replace? (3) MENU folds into "composer node whose last block carries inline keyboard"
+      (park-on-reply reused)? (4) media source — URL/file_id only (preserve no-SSRF), no upload?
+    user_answer: |
+      (1) agreed. (2) "do whatever is more convenient so it doesn't hurt later — I'm ready to
+      delete everything to avoid a migration." (3) ok. (4) no upload now; later via S3 in final steps.
+    summary: |
+      Clean replacement chosen: composer REPLACES SEND_MESSAGE/SEND_IMAGE/MENU, old types deleted,
+      NO migration — willing to wipe existing funnel/execution data. MENU fully folds in (not kept).
+      Media via URL/file_id only, no upload this phase. Block scope locked to 6 types + buttons.
+  - question_num: 2
+    timestamp: "2026-06-09 00:30:00"
+    topic: "data wipe / partial-send / buttons placement / limit validation"
+    agent_question: |
+      Batch 2: (5) wipe mechanism — (A) idempotent startup runner deleteMany vs (B) manual one-off?
+      (6) at-most-once per NODE (one claim, mid-node crash strands node, no resend)? (7) buttons only
+      on LAST block and last-block-with-buttons cannot be Album? (8) validate per-type Telegram limits
+      at save/activate + support caption on media blocks?
+    user_answer: |
+      (5) "no prod, so I'd delete by hand" → manual one-off (B). (6) agreed. (7) OK. (8) yes.
+    summary: |
+      Manual data wipe (no prod data → just deleteMany at deploy, no runner). Per-node at-most-once
+      confirmed. Buttons last-block-only, never on Album. Limits validated on save + captions on media.
+  - question_num: 3
+    timestamp: "2026-06-09 00:45:00"
+    topic: "testing strategy / success criteria / block rules"
+    agent_question: |
+      Batch 3: (9) testing — executor unit, sender unit (mockwebserver, album array mapper), engine IT
+      (per-node at-most-once, snapshot, buttons-park/resume), controller IT (save validation), frontend
+      vitest; NO E2E? (10) success criteria draft (4-block node renders N msgs in order; buttons branch;
+      old types deleted). (11) ≥1 and ≤10 blocks/node; caption+parseMode on media blocks, album caption
+      on first item, parseMode on text; variable substitution on text + all captions; block reordering.
+    user_answer: "(9) ok. (10) sufficient. (11) ok."
+    summary: |
+      Testing scope agreed (no E2E). Success criteria confirmed. Block rules locked: 1-10 blocks/node,
+      captions+parseMode on media, album caption on first item, variables on text+all captions, reorder.
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "15-message-composer (Epic 6 — Message composer / multi-block message node)"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 90
+    status: "complete"
+    value: |
+      Introduce ONE composer message step holding an ORDERED List<ContentBlock> that REPLACES the
+      three legacy message step types (SEND_MESSAGE, SEND_IMAGE, MENU) — old types deleted, NOT kept.
+      Block types IN scope: Text, Image, Video, Audio, File(document), Album(media group, 2-10 items
+      = "Карусель"). Inline buttons attach to a block (last block) → reuses Phase-2 MENU park-on-reply
+      + resumeOnCallback + branch-by-button (composer-with-buttons = the new "rich menu"). One node
+      emits N Telegram messages in sequence; graph model unaffected.
+      DEFERRED: location, contact, invoice/receipt (Telegram Payments — separate), delay (stays its
+      own DELAY step), input (= existing wait/MENU), print, animation.
+      Decision 12 (flat per-type fields, no _class) is intentionally REPLACED by List<ContentBlock>
+      with a type discriminator. NO migration: willing to wipe existing funnels/funnel_executions to
+      avoid a backfill (acceptable pre-production). Media via URL/file_id only — no upload (S3 later).
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature (new content model + UI block editor + ~7 new TelegramSender methods)"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 85
+    status: "complete"
+    value: |
+      Author can today send only a single text (SEND_MESSAGE) or single image (SEND_IMAGE) per node.
+      Real funnels need richer messages — a video + caption, an album/carousel, a file, mixed media
+      followed by buttons. The competitor models a message as an ordered list of content blocks, which
+      matches the author's mental model 1:1; our flat one-field-per-step model forces chaining many
+      steps for what is conceptually one message and supports no video/audio/file/album at all.
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 60
+    status: "partial"
+    value: "Funnel authors (small-business owners / marketers building Telegram flows). Desktop funnel editor (≥1024px)."
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 90
+    status: "complete"
+    value: |
+      - A composer node with text/image/video/audio/file/album blocks renders as N sequential Telegram
+        messages in author order, each media block fetched by Telegram from its URL/file_id.
+      - Inline buttons on the LAST (non-album) block park-on-reply and branch by button (MENU parity).
+      - Variable substitution ({user.*}/{custom.*}) works in text and all captions.
+      - Per-type limits validated at save/activate (1-10 blocks, album 2-10 photo/video, text ≤4096,
+        caption ≤1024, buttons last-block-only & not on album) → inline 422 codes, not runtime failures.
+      - Legacy SEND_MESSAGE/SEND_IMAGE/MENU step types are removed from code; funnels build only on the
+        composer. Mid-node crash strands the node (at-most-once per node), never double-sends.
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 88
+    status: "complete"
+    value: |
+      - Replaces Decision 12 (flat per-type fields, no _class) with List<ContentBlock> + type
+        discriminator. Confirmed clean break, NO migration — wipe existing funnel/execution data.
+      - TelegramSender today has only sendText/sendPhoto; needs sendVideo/sendAudio/sendDocument/
+        sendMediaGroup (album). Each a distinct Bot API method/payload/limits. (Location/contact/
+        invoice senders are DEFERRED with their blocks.)
+      - Snapshot isolation (FunnelStep.copyOf deep-copy) must extend to the blocks list.
+      - One node emits N messages → partial-send semantics on crash/retry (at-most-once granularity).
+      - Large blast radius: deleting SEND_MESSAGE/SEND_IMAGE/MENU breaks many existing funnel ITs
+        (Phases 1-5) + frontend FunnelStepForm/preview/validateSteps — composer must re-cover them.
+      - Media URL/file_id only — preserves the no-SSRF invariant (Telegram fetches, backend never
+        dereferences). No file upload/storage this phase.
+      - Funnel editor desktop-first; UI block editor is net-new, the largest UI surface yet.
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      - Executor unit (FunnelStepExecutorTest): block order, variable substitution in text+all captions,
+        per-type trim, album build.
+      - Sender unit (TelegramSenderTest, mockwebserver): each new method (sendVideo/sendAudio/sendDocument/
+        sendMediaGroup) happy-path + inherited retry/429; dedicated album array-mapper test.
+      - Engine IT (FunnelExecutionEngineIT, real Mongo): per-node at-most-once (mid-node crash → no resend),
+        snapshot isolation with List<ContentBlock>, buttons-on-last-block park + resumeOnCallback branch.
+      - Controller IT (FunnelControllerIT): save validation (empty composer, album <2/>10, buttons on
+        non-last/album block, over-length).
+      - Frontend vitest: block editor (add/move/remove, per-type widget), multi-block preview.
+      - NO E2E (no funnel E2E suite exists; engine ITs cover the golden path).
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 88
+    status: "complete"
+    value: |
+      As a funnel author I add a "Message" (composer) step, then add an ordered list of blocks
+      (text/image/video/audio/file/album), each with its content + optional caption, reorder them
+      up/down, optionally attach inline buttons to the last block, preview the stacked result, and
+      save. At runtime the subscriber receives the blocks as sequential Telegram messages; pressing a
+      button on the last block branches the funnel.
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 88
+    status: "complete"
+    value: "See success_criteria + edge/error below; encoded as testable AC list in user-spec.md."
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 85
+    status: "complete"
+    value: |
+      - Empty composer (0 blocks) → 422 on save. >10 blocks → 422.
+      - Album with <2 or >10 items → 422; album mixing audio/document with photo/video → 422.
+      - Buttons on a non-last block or on an album block → 422.
+      - text >4096 / caption >1024 → trimmed + WARN at runtime (not a failure), but flagged at save.
+      - Last block is album + author wants buttons → must add a trailing text block to carry buttons.
+      - Mid-node crash after block K → node stranded in_progress, blocks 1..K already delivered, no resend.
+      - Subscriber blocks the bot mid-node → CANCEL (handled like today's single send).
+      - N sequential sends hit Telegram per-chat rate → shared 429 retry loop per send (no inter-block pacing).
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 85
+    status: "complete"
+    value: |
+      - Invalid media URL → Telegram rejects on fetch → terminal TelegramSendException → execution failed
+        (same as today's sendPhoto). No backend dereference (no SSRF).
+      - Album partial-failure: sendMediaGroup is one API call (all-or-nothing per album block).
+      - Bot disconnected/reconnected mid-run → pinned telegramBotId → failed (existing semantics).
+      - Validation errors surfaced as inline funnel error codes (errors.funnels.<code>), not toasts.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 85
+    status: "complete"
+    value: |
+      Pre-deploy: full backend test suite (executor/sender/engine IT/controller IT) + frontend vitest.
+      Author-side manual: build a multi-block composer, use "Test for me" (Phase 4 test-run) to receive
+      the sequence on the author's own Telegram, press a button to verify branch. No automated E2E.
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 80
+    status: "complete"
+    value: |
+      Funnel editor desktop-first (≥1024px). New block-list sub-editor inside FunnelStepForm: add-block
+      picker, per-type block widget (URL/file_id + caption + parseMode; album = list of media items;
+      text = textarea + parseMode), move up/down/delete per block, buttons sub-editor on last block
+      (reuses MENU button editor + SearchableSelect target picker). Multi-block preview panel replaces
+      the single-string preview; text-only {{ }} render (never v-html), :src for media. i18n via t().
+    gaps: ""
+    required: false
+
+  risks:
+    score: 85
+    status: "complete"
+    value: |
+      - R1 (high): Decision-12 break blast radius — touches FunnelStep/copyOf, StepType, both switches,
+        DTO chain, frontend form/preview, plus deletes legacy types → breaks many existing funnel ITs.
+        Mitigation: composer must re-cover deleted behaviors; large but mechanical; staged tasks.
+      - R2 (med): per-node at-most-once means a mid-node crash delivers a partial message with no resend.
+        Accepted consciously (consistent with current send semantics); documented limitation.
+      - R3 (med): sendMediaGroup array response needs a bespoke mapper distinct from the shared send path.
+      - R4 (low): N sequential sends raise 429 likelihood; no inter-block pacing added (rely on per-send
+        429 loop). Revisit pacing if it bites.
+      - R5 (low): destructive manual data wipe — only safe because no production data exists yet.
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Key decisions (what we do/don't, why)"
+    required: false
+
+  deploy_approach:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "How to deploy: CI/CD, manual, Docker? What needs setup?"
+    required: false
+
+  manual_user_actions:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Steps user must do manually (create bot, get API keys, configure service)"
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 75
+    status: "partial"
+    value: |
+      (from code-research.md) Composer touches every Decision-12 enumeration site:
+      - FunnelStep POJO + copyOf (must defensively deep-copy List<ContentBlock>; blocks immutable).
+      - StepType enum + TWO exhaustive switches: StepExecutor.execute, FunnelService.validateSteps.
+      - DTO chain: FunnelStepDto, toSteps/toStepDto, FunnelResponse.
+      - Engine: claim-CAS is PER-STEP (FunnelExecutionEngine), one step→one side effect→one commit.
+      - MENU reuse: buildReplyMarkup + callback wire "{executionId}:{buttonIndex}" (strict ≤64B parse
+        in FunnelTriggerServiceImpl.parseCallbackData) + advanceOnCallback + resumeOnCallback. Keyboard
+        currently read from menu.getButtons(); composer must read from the LAST block, keeping index
+        addressing + lastButtonClicked "currentStepId:buttonIndex" coordinate stable.
+      - TelegramSender has a SHARED send(...) path → sendVideo/sendAudio/sendDocument are thin additions
+        (inherit retry/429/audit/scrub). sendMediaGroup(album) is the EXCEPTION: returns an ARRAY, not a
+        single message_id → needs a different result mapper than the shared path.
+      - Frontend: types/funnel.ts, FunnelStepForm.vue (1086 lines, per-type sub-editors — biggest UI
+        surface), FunnelMessagePreview.vue + /preview endpoint (built around ONE rendered string).
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 85
+    status: "complete"
+    value: |
+      Engine (Phase 1, done), MENU/graph + callback wakeup (Phase 2, done), TelegramSender (Epic 04b).
+      No dependency on Phases 3/4/5. VariableTemplateRenderer (text/caption only). SearchableSelect
+      reusable as-is. No new external service (no S3 this phase).
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 70
+    status: "partial"
+    value: |
+      - sendMediaGroup returns array → bespoke mapper (the one non-trivial sender).
+      - Album: 2-10 items, only photo/video may mix, caption on first item only, NO reply_markup on a
+        media group → a last block carrying buttons cannot be an Album.
+      - reply_markup attaches to exactly ONE message → buttons on the LAST block only.
+      - Per-node N sequential sends → no inter-block pacing; far more likely to hit Telegram per-chat
+        ~1 msg/sec → 429. Shared 429 loop serializes WITHIN one send, not across blocks.
+      - At-most-once is per-step (claim-CAS); per-block partial-send would need NEW currentBlockIndex
+        state on FunnelExecution + claim-conditional writes between blocks (does not exist).
+      - Media URL/file_id only → preserves no-SSRF (Telegram fetches, backend never dereferences).
+      - Preview: text-only {{ }}, never v-html (stored-XSS guard); :src binding for media.
+    gaps: "Confirm partial-send granularity (per-node accepted?) and limit-validation timing (save vs runtime)."
+    required: false
+
+  data_requirements:
+    score: 60
+    status: "partial"
+    value: |
+      New embedded shape: FunnelStep gains List<ContentBlock> (block = {type discriminator + per-type
+      fields: text/parseMode | url/caption | mediaItems[] for album | buttons on last block}). Stored
+      embedded in funnels.steps AND funnel_executions.stepsSnapshot. No new top-level collection.
+      ContentBlock must be immutable (snapshot isolation). Media is a URL/file_id string, not a blob.
+    gaps: "Exact ContentBlock schema (finalize in tech-spec); whether legacy flat fields are removed entirely."
+    required: false
+
+  migration_needs:
+    score: 95
+    status: "complete"
+    value: |
+      NO data migration, NO backfill, NO startup runner. No production data exists → existing funnels +
+      funnel_executions are wiped MANUALLY (one-off deleteMany at deploy time, mechanism B). Spec states
+      this as a manual operational step, not code. Mongock irrelevant here (no migration written).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/15-message-composer/user-spec.md"
+  status: "approved"  # pending | created | approved
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase4_completion"
+  questions_asked: 3
+  last_question: "Batch 3: testing strategy / success criteria / block rules"
+  total_required_score: 88
+  total_optional_score: 76
+  completion_estimate: "100%"
+  user_detail_level: "detailed"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Free-form notes:
+  - Important insights
+  - Areas of uncertainty
+  - Pivot points
+  - Scope changes
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

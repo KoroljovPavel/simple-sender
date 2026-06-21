@@ -1,0 +1,63 @@
+{
+  "status": "needs_improvement",
+  "summary": "Solid, well-reasoned strategy for an L feature. Pyramid is correctly shaped for a UI-mapping + backend-semantics feature: heavy Vitest units for the pure model<->graph mapping (the real logic), targeted backend ITs for the two genuine regression classes (silent reverse-mapper drop, execution-navigation change), and a defensible E2E omission. The E2E drop is justified and reasonably mitigated. However the strategy under-specifies behavioral component tests for several authoring ACs (start-node lifecycle, broken-edge highlight, side-panel/SearchableSelect-absent, copyOf), leaving them to manual-only verification despite being deterministically testable with the existing mountSuspended + mockNuxtImport harness. None critical, but enough coverage gaps to warrant tightening before implementation.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy -> Unit tests (component); user-spec AC lines 126-129 (start node lifecycle)",
+      "issue": "The start-node lifecycle ACs are not covered by any enumerated automated test. Three distinct behaviors are specified and only manually verified: (a) start node renders only when the funnel has an on_start entry and is absent for event-only funnels (AC 124-126); (b) deleting the start node removes the on_start entry like deleting a trigger, while deleting only its outgoing edge leaves on_start without an entry step = broken edge (AC 127-129); (c) re-adding on_start from the palette is disabled when on_start already exists (AC 129). These are pure component/mapping logic, fully testable, and are exactly the kind of branchy state machine where manual check misses a case.",
+      "recommendation": "Add to the unit/component test list (Task 6 component spec + Task 4 mapping spec): (1) mapping unit — given a funnel with an on_start trigger, the node set includes one start node; given an event-only funnel, the node set contains zero start nodes. Assert node ids/types, not just count. (2) component — render FunnelCanvasPalette with on_start present, assert the on_start palette item carries disabled state (data-test attribute + disabled prop); with no on_start, assert it is enabled. (3) mapping unit — deleting the start node produces a model with the on_start trigger removed (assert triggers array no longer contains the on_start entry); deleting only its edge produces on_start with entryStepId == null AND that edge flagged broken (assert brokenEdges includes it)."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy; user-spec AC lines 131-132 (broken-edge highlight)",
+      "issue": "The unit list covers broken-edge DETECTION (Task 4: 'broken-edge detection') but no test covers the broken-edge HIGHLIGHT rendering on the canvas surface (AC: 'Биті ребра ... підсвічуються на canvas'). Detection returning a flag and the surface actually rendering a visually distinct edge are two different things; the AC is about the latter. This is currently only manually verified.",
+      "recommendation": "Add a FunnelCanvas component test (Task 5 spec): mount the canvas with a model containing an edge whose target id does not exist (deleted step). Assert the rendered edge for that connection carries the broken class/attribute (e.g. wrapper.find('[data-test=\"edge-broken\"]').exists() or the edge element has the broken style class). This is a litmus-passing assertion: remove the highlight wiring in the component and the test fails. Keep the detection unit test separate (it tests the mapping layer's brokenEdges output)."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy; user-spec AC lines 118-119 (side panel + SearchableSelect absent on canvas)",
+      "issue": "AC requires that clicking a node opens the step/trigger form in the side panel AND that target selection via SearchableSelect is absent on the canvas (replaced by drawn edges). Neither behavior is in the enumerated test list. Task 6 is described as having component tests but the strategy does not name these assertions. The 'SearchableSelect absent' guarantee is a regression-prone integration point (FunnelStepForm is 1757 lines and the canvas hides specific sub-widgets) and silently breaking it would let two editing surfaces drift — the exact desync risk Decision 2 exists to prevent.",
+      "recommendation": "Add a FunnelCanvasSidePanel/FunnelStepForm component test (Task 6 spec): (1) click a node -> assert the side panel mounts FunnelStepForm for that node's type (assert a form field unique to the type is present). (2) Within the canvas-mounted form, assert the target SearchableSelect widgets are NOT rendered (wrapper.findAll('[data-test=\"target-select\"]').length === 0 / the menuTargetOptions combobox is absent) while non-target fields remain. Litmus: re-enable the dropdowns and the second assertion fails."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy -> Integration tests; user-spec line 148-149 + code-research §7.2 (copyOf seam)",
+      "issue": "The round-trip IT is described as covering 'forward + reverse mapper + copyOf', but a PATCH<->read round-trip exercises the two mappers, not FunnelStep.copyOf. copyOf is a distinct seam used by the duplicate path and execution snapshot (code-research §7.2 explicitly flags it as a field that 'will NOT be copied unless explicitly added'). A PATCH round-trip can be green while copyOf silently drops canvasPosition, surfacing only on funnel duplication. The tech-spec lists copyOf as one of the five seams that must each be carried, so it deserves its own assertion.",
+      "recommendation": "Add a dedicated assertion in the backend round-trip IT (Task 1): duplicate a funnel whose steps have canvasPosition set (or call FunnelStep.copyOf directly in a focused unit test) and assert the copy's canvasPosition equals the source's x/y. This is cheap (one extra assertion or a 5-line pure-Java unit test) and closes the only one of the five seams not covered by the PATCH round-trip."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy; user-spec AC line 109 (exactly-one-next + cycles saved without error)",
+      "issue": "AC requires 'exactly one default next per node' and 'cycles allowed and saved without error'. The unit list covers edge->field mapping generally but does not name the single-default-next invariant or the cycle round-trip. The engine loop-backstop is pre-existing (out of scope), but the canvas-side guarantee that a node yields exactly one next edge and that a cyclic graph (return-to-menu) serializes cleanly is new logic worth pinning.",
+      "recommendation": "Add two mapping unit assertions (Task 4): (1) building edges for a node with a next set produces exactly one default-next edge (and drawing a second next either replaces or is rejected — assert the chosen contract). (2) A model with a cycle (step A.next -> B, B.next -> A) maps to nodes+edges without throwing and round-trips back to the same next fields. Litmus passes: break the single-next handling and (1) fails."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy -> Unit tests ('Model -> Vue Flow nodes/edges ... correct node set')",
+      "issue": "Several unit bullets risk shallow structural assertions (e.g. asserting only node/edge COUNTS or that a key/field name 'appears') rather than behavioral correctness. 'produce the correct node set and edges with the correct fields' must assert the actual field VALUES on the right model object, not just that an edge object exists. Count-only or presence-only assertions pass even when an edge is wired to the wrong field (e.g. a button edge writing next instead of Button.targetStepId).",
+      "recommendation": "Specify in Task 4 that each edge->field test asserts the concrete target: e.g. drawing from a callback-button handle to node X sets steps[i].buttons[j].targetStepId === X.id AND leaves steps[i].next unchanged; drawing from the timeout handle sets timeoutTargetStepId === X.id and not next. Assert both the field that should change and a sibling field that should NOT, so a mis-wired handle fails the test."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 14,
+      "passed": 11,
+      "failed": 3
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 7,
+      "integration": 2,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

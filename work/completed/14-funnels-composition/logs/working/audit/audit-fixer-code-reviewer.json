@@ -1,0 +1,27 @@
+{
+  "reviewer": "code-reviewer",
+  "agent": "audit-fixer",
+  "feature": "14-funnels-composition",
+  "scope": "Audit fixes — re-enter WARN level + SUBSCRIBE non_message preview pin",
+  "commit": "f1c6512d7824937cfbf72180051e30269836767a",
+  "round": 1,
+  "files_reviewed": [
+    "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java"
+  ],
+  "dimensions_focus": [
+    "4-error-handling-logging",
+    "6-testing",
+    "10-cross-file-consistency"
+  ],
+  "findings": [],
+  "notes": [
+    "FIX 1: log.info -> log.warn for LOG_ENROLL_REENTER_IGNORED aligns the re-enter no-op with the greppable-WARN spec (tech-spec line 170) and matches sibling LOG_ENROLL_ERROR WARN. Message content and constant unchanged. No PII beyond existing funnelId/subscriberId pattern.",
+    "Test assertion tightened from infoAndWarn() to warn(); now-unused infoAndWarn helper removed (no dead code).",
+    "FIX 2: previewSubscribeToFunnelStepReturnsNonMessagePlaceholder mirrors the existing DELAY non_message test exactly. setTargetFunnelId/setStepType/setId confirmed on FunnelStep; StepType.SUBSCRIBE_TO_FUNNEL exists. One focused assert, matching style.",
+    "Cross-file: warn() helper returns WARN-level-only messages; all referenced symbols verified to exist."
+  ],
+  "verdict": "approved",
+  "summary": "No findings. Both fixes are minimal, follow existing patterns, and all cross-file references verified."
+}

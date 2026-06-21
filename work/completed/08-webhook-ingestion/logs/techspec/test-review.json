@@ -1,0 +1,140 @@
+{
+  "status": "needs_improvement",
+  "summary": "Testing strategy for 08-webhook-ingestion is structurally strong: unit + integration + manual staging-smoke split is appropriate for an L-sized greenfield ingestion surface, Testcontainers convention is honored, ListAppender per-site precedent is correctly invoked, AC1-AC19 are explicitly mapped to test files, and race-conditions plus idempotency invariants have first-class tests. However, several concrete gaps weaken meaningful-assertion coverage: AC1 P99 measurement methodology has flake risk on shared CI runners, AC5 race-test sample size (parallel=2) is too small to prove first-wins atomicity, AC6 lacks an explicit second-/start-from-different-chat assertion that ownerChatId is NOT overwritten, AC11/AC11a edge enumeration is incomplete (only callback_query named; my_chat_member, edited_message, channel_post, edited_channel_post per user-spec AC11 are missing), AC14 worker-retry-after-rethrow has no integration assertion that JobRunr actually retries, AC16 counter assertions risk under-specification (the rejected_total reason='payload_too_large' tag path is not exercised by AC4's 413 test), AC18 token-scrubber test sites are not enumerated per call site, and there is no test for the WebFlux→JobRunr enqueue boundary failure (Decision 11 explicitly forbids fire-and-forget but no test guards it). Missing edge cases around malformed JSON, empty body, and null TelegramUpdate fields require explicit unit coverage. None of these are critical (no AC is fully unmapped), but three are major and warrant strengthening the strategy before implementation begins.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy → Integration tests → AC1 latency",
+      "issue": "P99 latency measurement via `Flux.range(0, 100).parallel(10).flatMap(...)` + per-request `System.nanoTime()` against Testcontainer Mongo on CI runners is a classic flake-prone pattern. Testcontainers Mongo startup jitter, container CPU throttling on shared CI, JIT warm-up effects, and Netty event-loop scheduling on a 2-vCPU GitHub runner can spike one request to >300ms purely from infra noise, not regression. The test will randomly fail without code change.",
+      "recommendation": "Restructure as: (a) JIT warm-up phase — run 20 requests sequentially and discard timings, (b) measurement phase — run the 100-request parallel load, collect timings, (c) assert on P95 (not P99 of 100 samples — statistically meaningless), or assert P99 with a generous bound (e.g. <500ms with `@Tag(\"performance\")` + `@DisabledIfEnvironmentVariable(named=\"CI\", matches=\"true\")` so CI skips and local-dev still catches order-of-magnitude regressions). Document explicitly in tech-spec that AC1's <100ms P99 is a production SLA verified by staging-smoke + Micrometer Timer histogram in Epic 09, NOT by this integration test. Then this test only needs to assert: no 5xx, exactly 100 successful responses, mean latency <100ms (much stabler statistic on 100 samples)."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests → AC5 race-test",
+      "issue": "`Flux.range(0, 2).parallel(2).flatMap(...)` with parallel=2 is the smallest possible race window and is dominated by JVM thread-scheduling noise — the two requests may serialize on the same boundedElastic worker before they hit Mongo, hiding the race rather than proving idempotency. The user-spec AC5 calls for `Flux.range(0, 2).parallel(2)` but the AC's intent is to prove the unique-index defense holds; the integration test should stress it harder.",
+      "recommendation": "Bump to `Flux.range(0, 10).parallel(10).flatMap(...)` with the same `(projectId, updateId)`. Assert: (1) 10 responses with status==200, (2) `rawUpdateRepository.count() == 1`, (3) `meterRegistry.find(\"telegram_webhook_rejected_total\").tag(\"reason\",\"duplicate\").counter().count() == 9`, (4) `inMemoryStorageProvider.getJobs(StateName.ENQUEUED, ...).size() == 1`. Counter assertion (3) is the strong invariant — proves 9 collisions were caught by `DuplicateKeyException`, not silently absorbed."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests → AC6 ownerChatId race",
+      "issue": "Strategy says \"two parallel `/start` POSTs from different chats → `bot.ownerChatId == firstChatId`\". This asserts the winner but NOT the invariant from user-spec AC6 line 65: \"Второй `/start` от другого пользователя → `ownerChatId` НЕ перезаписывается\". The first-wins assertion only verifies the initial write; it does not prove the second findAndModify is a no-op (the predicate `ownerChatId=null` filtered it out). Without a separate assertion, a bug where the second worker silently overwrites would pass the test (the timing might land the \"first\" chatId last).",
+      "recommendation": "Split into two distinct test methods: (1) `parallelStartFromTwoChats_atomicFirstWins` — fire 2 parallel POSTs from chats A and B, assert `bot.ownerChatId IN (A, B)` (either may win, atomicity is the invariant), assert exactly one of the two `findAndModify` calls populated the field (use `@MockitoSpyBean` on `ReactiveMongoTemplate` and assert spy returned Mono<Bot> once and Mono.empty() once). (2) `sequentialStartFromTwoChats_secondNoOps` — POST `/start` from chat A, await processing, then POST `/start` from chat B, assert `bot.ownerChatId == A` (unchanged). The sequential test is what actually proves \"НЕ перезаписывается\"."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests → ProcessTelegramUpdateJobTest AC11/AC11a",
+      "issue": "User-spec AC11 enumerates non-message updates as `callback_query`, `edited_message`, `channel_post`, `my_chat_member`, etc. — all must produce `event telegram_update_other` with `metadata.updateKind=<field name>`. The tech-spec Testing Strategy line 337 names ONLY `callback_query`. The other update kinds (`edited_message`, `channel_post`, `edited_channel_post`, `my_chat_member`) are unmapped. `my_chat_member` is especially important — it's the field Telegram sends when the bot is added/removed from a chat or when an owner blocks the bot; Epic 05 will need this signal later, and silently dropping it in 04b (or worse, NPE-ing on it because it's not in the `TelegramUpdate` record at line 222-230) is a regression risk.",
+      "recommendation": "Add explicit AC11 test methods: `callbackQuery_eventOnly_noStubCalls`, `editedMessage_eventOnly`, `channelPost_eventOnly`, `editedChannelPost_eventOnly`. Each parses a representative JSON, asserts `events` collection has exactly one `telegram_update_other` row with the expected `metadata.updateKind`, asserts spies on `subscriber` and `funnel` services were NOT called. Note for `my_chat_member`: the `TelegramUpdate` record at tech-spec line 222-230 does NOT have a `my_chat_member` field — `@JsonIgnoreProperties(ignoreUnknown=true)` will silently drop it, so the worker's `updateKind` resolution will fall through to `\"unknown\"` per AC11a. This is a tech-spec gap: either add `my_chat_member` to the record or document that ALL fields not explicitly declared collapse to `updateKind=\"unknown\"`, and write a regression test for that behavior."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests → TelegramUpdateDeserializationTest",
+      "issue": "Test list covers happy-path snake_case mapping, unknown-field swallowing, missing nested `message`, and `message.from == null`. Missing edge cases that the worker explicitly safe-navigates: (a) entirely empty JSON `{}` (no update_id even — should deserialize without exception, `update_id == null`), (b) malformed JSON (e.g. truncated payload `{\"update_id\":42,\"message\":{`) — Jackson should throw `JsonParseException`, not silently succeed, (c) `update_id` as String instead of Long (Telegram occasionally violates own schema in edge cases) — should fail deserialization deterministically, (d) deeply nested unknown fields (e.g. `message.entities` array of unknown shape) — should ignore without affecting parent.",
+      "recommendation": "Add unit test methods: `emptyJson_allFieldsNull_noException`, `truncatedJson_throwsJsonParseException`, `updateIdAsString_throwsDeserializationException` (proves type-safety, prevents silent String→Long coercion regression), `unknownNestedArray_ignored_parentFieldsPreserved`. Reason: the worker at tech-spec line 67-69 does `bot.ownerChatId == null` checks but assumes `update.message().chat().type() == \"private\"` chain doesn't NPE — these tests confirm the parsing layer holds the contract the worker relies on."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests → AC14 worker failure",
+      "issue": "`AC14 — worker exception → processingStatus=failed, processingError non-null, rethrows (test asserts thrown)` covers the worker's own failure-write path but does NOT verify the JobRunr retry behavior promised in Decision 9 (\"rethrows to invoke JobRunr's default retry, 10 attempts, exponential backoff\"). Without a test, a future refactor that swallows the rethrow (e.g. catches `Exception` for log-only) would silently break the retry contract. The DLQ behavior — JobRunr marks job FAILED after retries exhausted — is also untested.",
+      "recommendation": "Add `ProcessTelegramUpdateJobIT` (integration variant with real `JobRunrInMemoryConfig` that actually executes jobs, not just accepts them): seed a `RawUpdate` whose payload triggers a deterministic worker exception (e.g. `subscriber.upsertFromTelegramUpdate` mock returns `Mono.error(new RuntimeException(\"injected\"))`), enqueue via `BackgroundJob.enqueue(...)`, use `Awaitility.await().atMost(5, SECONDS).until(() -> rawUpdateRepository.findById(id).block().getProcessingStatus() == FAILED)`, then assert `inMemoryStorageProvider.getJobById(jobId).getJobStates()` contains the expected retry transitions (PROCESSING → FAILED → SCHEDULED → PROCESSING → ... → FAILED-terminal). If `JobRunrInMemoryConfig` doesn't execute jobs by design (tech-spec line 301 says \"accepts but does not execute enqueued jobs\"), then this integration test needs a different config (`JobRunrTestRunningConfig`) — flag this as a config gap during implementation."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests → AC4 + AC16 payload_too_large counter",
+      "issue": "AC4 asserts 413 for >1MB payload. AC16 lists `telegram_webhook_rejected_total{reason=invalid_secret|project_not_found|duplicate|payload_too_large}` as 4 reason tags to verify. But the AC4 test as currently described (line 324) only asserts 413 status + empty body — it does NOT assert the `payload_too_large` counter increment. This means one of the 4 counter-reason tags is unverified. Since `WebhookPayloadSizeFilter` runs BEFORE the controller (Decision 13, `@Order(HIGHEST_PRECEDENCE + 10)`), the counter increment must happen IN THE FILTER, not the controller — but that wiring decision isn't called out in tech-spec, and without a test the filter could ship without counter integration.",
+      "recommendation": "Two fixes: (1) Add to tech-spec Architecture section: `WebhookPayloadSizeFilter` injects `MeterRegistry`, increments `telegram_webhook_rejected_total{reason=payload_too_large}` on the 413 short-circuit path. (2) Strengthen AC4 test assertion: after POST 1MB+1 byte payload returns 413, assert `meterRegistry.find(\"telegram_webhook_rejected_total\").tag(\"reason\",\"payload_too_large\").counter().count() == 1`. Without this, AC16's \"all 4 counters\" claim is unverified for one of the four reasons."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests → Decision 11 enqueue-failure path",
+      "issue": "Decision 11 explicitly states \"Enqueue failure must propagate — otherwise a 200 response with no enqueued job is silent data loss\" and rejects `Mono.fromRunnable(...)` (fire-and-forget). However, no integration test verifies this invariant. A future refactor that wraps the enqueue in `.onErrorResume(e -> Mono.empty())` for \"resilience\" would return 200 + lose the message, and no test would catch it.",
+      "recommendation": "Add `TelegramWebhookControllerIT.enqueueFailure_responseIs5xx_noSilentDataLoss`: use `@MockitoSpyBean` on the JobRunr `JobScheduler` (or `BackgroundJob` static — likely needs a wrapper bean, flag during implementation), make `enqueue` throw `StorageException(\"injected\")`, POST a valid webhook, assert response status is 500 (NOT 200), assert `rawUpdateRepository.count() == 1` (raw row persisted before the enqueue failure — by design), assert NO success counter incremented. The 500 status is the load-bearing assertion — proves the failure propagated through the reactive chain instead of being swallowed."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests → AC18 token-scrubber per-site",
+      "issue": "AC18 mandates token-scrubber on \"every webhook + worker log site\" with per-site `ListAppender` filtering. The strategy line 329 says \"split per call site, no combined assertion\" but does NOT enumerate the call sites the test must cover. By contrast, the precedent for the send path (patterns.md line 122) explicitly lists 7 scrubber sites. Without enumeration in tech-spec, the implementer may add 2 ListAppender tests and the reviewer cannot verify completeness.",
+      "recommendation": "Enumerate scrubber sites in the Testing Strategy section, mirroring patterns.md line 122 style: (a) controller — 401/404/duplicate WARN log (if any), (b) worker — exception ERROR log in catch-and-rethrow, (c) worker — every event's payload-derived metadata if logged (e.g. `startPayload` value if INFO-logged for diagnostics), (d) worker — `processingError` value when writing failed status. Each site gets one ListAppender test with explicit `Logger.getName()` filter. Add a count-based audit assertion in `Task 13 Test Audit` (line 493): `grep -rn \"log\\.\\(warn\\|error\\|info\\).*payload\\|chat\\|text\" backend/src/main/java/com/botfunnel/webhook/` returns same number of hits as ListAppender test sites — protects against future log site added without scrubber."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy → Integration tests → AC16 counter assertion shape",
+      "issue": "Line 328 says \"assert `meterRegistry.find(name).tag(k,v).counter().count()` exactly matches expected for each of the 4 counters\". `meterRegistry.find(...)` returns `Search`, which can return `null` from `.counter()` if no counter with that name+tag is registered yet — calling `.count()` on null NPEs. This is a common Micrometer testing pitfall. Also \"exactly matches expected\" is under-specified: in race tests, ordering uncertainty may produce ranges (e.g. duplicate counter could be N-1 or N depending on whose request lost the race), not exact values.",
+      "recommendation": "Specify the helper pattern: `private double counter(String name, String tag, String value) { Counter c = meterRegistry.find(name).tag(tag, value).counter(); return c == null ? 0.0 : c.count(); }`. Use this in every assertion so absence of counter == 0.0 (not NPE). For race-test counters, assert `counter(\"telegram_webhook_rejected_total\", \"reason\", \"duplicate\") == 9` only when the test fires exactly 10 parallel duplicates and asserts `rawUpdateRepository.count() == 1` — those two together pin the deterministic outcome."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests → TelegramCommandParserTest",
+      "issue": "Listed edge cases (line 313) cover the common ones but miss: (a) `/start  ref_X` (double-space between command and payload) — does parser trim or include the leading space in payload?, (b) `/start ref_X ` (trailing whitespace on payload) — payload value contract?, (c) `/START ref_X` (case-sensitivity — Telegram bot commands are documented as case-insensitive client-side but our parser sees whatever raw text comes), (d) `/start\\nref_X` (newline as separator), (e) `start ref_X` (no leading slash — should be `NONE`), (f) `/start@SomeBot@OtherBot ref_X` (multiple `@` — malformed but possible). User-spec AC7 line 69 says payload is \"всё после первого whitespace, trimmed\" — multiple of these are direct contract questions.",
+      "recommendation": "Add unit test methods for each case above. The `/START` case-sensitivity test is the most important — if the parser does case-sensitive match on `/start`, an iOS Telegram client that auto-capitalizes (rare but documented) would route `/START` to the `NONE` branch and the funnel trigger silently never fires. Either explicitly enforce case-insensitive match in parser + test it, or document case-sensitive behavior in tech-spec (rejecting `/START`) and test the `NONE` outcome. Either choice is fine; the lack of explicit decision is the gap."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests → WebhookSecretVerifierTest",
+      "issue": "Test list line 314 names \"match, mismatch, empty header, null stored hash\". Missing: (a) `null` header (incoming request without `X-Telegram-Bot-Api-Secret-Token` — should NOT NPE, must return false), (b) header with non-ASCII characters (Telegram never sends these but defensive — should hash deterministically), (c) header much longer than the typical secret (e.g. 10KB random) — should not allocate unbounded memory, should return false in constant time relative to stored-hash length, not header length, (d) `MessageDigest.isEqual` arrays-of-different-length path — when hex decoding the stored hash and the freshly-computed hash, both should be 32 bytes; if `storedHashHex` is malformed (e.g. 31 bytes), the verifier must return false safely, not throw `IllegalArgumentException` from `HexFormat.of().parseHex(...)`.",
+      "recommendation": "Add test methods: `nullHeader_returnsFalse_noException`, `malformedStoredHash_returnsFalse_noException`, `oversizedHeader_returnsFalse_boundedTime`. The malformed-storedHash case is the most important — if a Mongo document has a corrupted `webhookSecretHash` (manual edit, partial write), the verifier should fail closed (return false → 401), NOT throw an unhandled exception that propagates as 500 and reveals existence of the document."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy → Integration tests → WebhookSecurityBlockTest slice-style",
+      "issue": "Line 341 invokes the slice-style test with `@MockitoBean MongoClient/RedisConnectionFactory/ReactiveRedisConnectionFactory` per patterns.md line 38. patterns.md line 32 explicitly scopes this exception: \"This exception is scoped to Epic 01 only.\" The tech-spec extends the exception to Epic 04b without justifying why a security-only slice test for webhooks cannot be a regular `@SpringBootTest` with `AbstractIntegrationTest` like every other integration test in the codebase. Reasoning is needed because the codebase convention is real Testcontainers Mongo.",
+      "recommendation": "Either: (a) Justify the exception inline in the Testing Strategy section — e.g. \"slice-style chosen because this test verifies SecurityConfig.pathMatchers ordering ONLY (no controller body, no DB interaction); booting full container adds 8+ seconds for zero added coverage\", and update patterns.md line 32 to lift the Epic-01-only scoping. OR (b) Convert `WebhookSecurityBlockTest` to a regular `@SpringBootTest extends AbstractIntegrationTest` test. Option (a) is preferable given the test's narrow scope, but the rationale must be on the page so future epics don't keep extending the exception silently."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Integration tests → AC3 malformed-ObjectId case",
+      "issue": "AC3 line 323 says \"4 cases (missing project, soft-deleted project, project with DISCONNECTED bot, malformed-ObjectId projectId) all → 404 with empty body\". The malformed-ObjectId case is interesting because tech-spec line 59 says `onErrorMap(IllegalArgumentException → notFound)` — but `BotRepository.findByProjectIdAndStatus` may not throw `IllegalArgumentException` directly; the exception may originate from Spring Data MongoDB's `ObjectId` coercion in the query builder. If the path-variable binding throws BEFORE the controller method body runs (e.g. via `@PathVariable ObjectId projectId` if anyone refactors that way), the `onErrorMap` won't catch it.",
+      "recommendation": "Explicit test: `malformedProjectId_404_handledByOnErrorMap_notFrameworkLevel`. POST to `/webhooks/telegram/not-an-objectid` with valid secret + body, assert (1) status 404, (2) body empty, (3) NO `GlobalErrorHandler` JSON body (i.e. response is truly empty, not `{\"message\":\"...\",\"code\":null}`). The third assertion is the load-bearing one — proves the exception was caught at the controller layer per Decision 1, not propagated to the framework which would emit a JSON body and leak the failure path. Additionally, tech-spec should clarify that `projectId` parameter is bound as `String` (not `ObjectId`), and the repository call is what triggers the `IllegalArgumentException`."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → Unit tests → RawUpdateRepositoryTest",
+      "issue": "Line 317 says \"StepVerifier on second insert with same `(projectId, updateId)` → DuplicateKeyException. TTL+partialFilter index visible via IndexOperations.getIndexInfo()\". Missing: the partial-filter expression CONTENT must be verified, not just the index name. A regression where someone changes `partialFilter` to filter on `processingStatus IN (pending)` only (dropping `done`) would still produce an index named `ttl_createdAt` but would violate AC13 (\"Partial-filter: TTL применяется ТОЛЬКО к строкам processingStatus IN (pending, done)\").",
+      "recommendation": "Add explicit assertion: parse the `IndexInfo.getPartialFilterExpression()` (returns `org.bson.Document`), assert it equals `Document.parse(\"{ 'processingStatus': { '$in': ['pending', 'done'] } }\")`. Also assert `expireAfterSeconds == 7776000` (not just \"TTL exists\"). Both protect AC13 from silent regression. Similarly, assert the unique compound index has `unique == true` AND `def` matches expected — not just presence."
+    },
+    {
+      "severity": "minor",
+      "category": "pyramid_violation",
+      "location": "Section: Testing Strategy → Unit tests overall",
+      "issue": "User-spec Тестирование section line 154 marks `RawUpdateRepositoryTest` as \"опционально\" (optional), but tech-spec line 317 promotes it to mandatory and asserts DuplicateKeyException + index inspection. `RawUpdateRepositoryTest` against a real Mongo (Testcontainers) is by definition an integration test, not unit — Spring Data MongoDB cannot be meaningfully unit-tested. Mis-classifying it inflates the \"unit\" count and understates the integration footprint.",
+      "recommendation": "Move `RawUpdateRepositoryTest` from Unit tests block to Integration tests block in the tech-spec Testing Strategy section. The test itself is correct and necessary; it's just shelved under the wrong heading, which affects pyramid-balance assessment in Task 13's audit (line 493 — \"test-pyramid balance (unit/integration ratio sane for L-feature)\"). After move: Unit tests = 4 (parser, verifier, sha256, deserialization), Integration tests = 4 (controller IT, worker test, repo test, slice security test) + DLQ retry IT if added. Healthy ratio for L feature."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → ProcessTelegramUpdateJobTest AC12 + plain text non-private",
+      "issue": "AC10 line 336 covers \"plain text private → upsert + event\" and \"plain text in group → event only\". AC12 line 339 covers \"/foo bar private → event, no stub calls\". Missing pairing: `/foo bar` in group/supergroup/channel — what's the expected event? The user-spec AC11 catch-all (\"non-message updates\") doesn't apply (it IS a message). The user-spec AC12 says \"Неизвестная команда\" without qualifying chat type. By symmetry with AC9 + AC10, expected outcome should be event-only (no Subscriber/Funnel call) in non-private. Without a test, the worker may NPE on group `/foo` if the implementer assumed private context.",
+      "recommendation": "Add `ProcessTelegramUpdateJobTest.unknownCommandInGroup_eventOnly_noStubs` and `ProcessTelegramUpdateJobTest.unknownCommandInChannel_eventOnly_noStubs`. Update tech-spec AC matrix to explicitly cover \"`/foo bar` non-private → event `telegram_message_received`, no stubs\". This is a low-frequency real-world case but high-value test because it pins the worker's chat-type branching as the SINGLE switch on `chat.type == \"private\"`, not a duplicated branch per command type."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 22,
+      "passed": 18,
+      "failed": 4
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 5,
+      "integration": 3,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

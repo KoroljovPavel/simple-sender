@@ -1,0 +1,126 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "pass"
+  },
+  "findings": [
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "'Навіщо' section identifies the technical necessity (prerequisite for all other epics, frontend bootstrap) but does not name a concrete user persona or user problem. It explains why auth is needed for the system, not what problem it solves for users (small business owners, marketers) who self-register.",
+      "location": "## Навіщо",
+      "fix": "Add one sentence: e.g. 'Малий бізнес, маркетологи та розробники повинні мати захищений особистий акаунт, щоб керувати ботами та підписниками — без автентифікації цей доступ неможливий.'"
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "Email-delivery failure scenario is described in the interview (error_scenarios score 85) — 'log error, do not expose to user' — but does not appear in the spec body (neither in Як повинно працювати nor in Критерії приймання).",
+      "location": "## Як повинно працювати / ## Критерії приймання",
+      "fix": "Add a note in Як повинно працювати under Email-шаблони: 'Якщо відправка листа не вдалась — помилка логується, користувачеві завжди показується нейтральне повідомлення (не розкриваємо деталь).' Optionally add an acceptance criterion."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "Session-expired → redirect to /login with return URL is covered in the interview (error_scenarios) but absent from the spec. The spec mentions redirect but not the return-URL preservation.",
+      "location": "## Як повинно працювати",
+      "fix": "Add under the Login section or a separate 'Захист маршрутів' paragraph: 'Сесія закінчилась → редірект на /login із збереженням return URL для повернення після логіну.'"
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "Token-invalid (tampered) scenario from interview error_scenarios ('400 Bad Request, user-friendly message') is not reflected in the spec or acceptance criteria.",
+      "location": "## Критерії приймання",
+      "fix": "Add criterion: 'Пошкоджений або невалідний токен підтвердження/скидання → HTTP 400 + зрозуміле повідомлення для користувача.'"
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "'./gradlew test' з очікуванням '80%+ coverage' у таблиці 'Як перевірити' є вимірюваним, але coverage target у Критеріях приймання відсутній як явний чекбокс. The 80% target lives only in Тестування and Як перевірити, not in Критерії приймання, making it easy to skip during acceptance sign-off.",
+      "location": "## Критерії приймання",
+      "fix": "Add criterion: '[ ] Backend integration тести: coverage auth-модуля 80%+.'"
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "Frontend frontend bootstrap (Pinia, Vue Query, shadcn-vue, vee-validate/zod installed and configured) is described in Що робимо and Технічні рішення but has only an indirect acceptance criterion (auth middleware redirect). There is no explicit criterion verifying the dependencies are installed and the layout shell renders.",
+      "location": "## Критерії приймання",
+      "fix": "Add: '[ ] Frontend: @pinia/nuxt, @tanstack/vue-query, vee-validate+zod, shadcn-vue встановлені; authenticated layout shell рендериться без помилок консолі.'"
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "Documentation updates ('Оновлення документації в Epic 02' — architecture.md, deployment.md, ux-guidelines.md) are listed in Технічні рішення but have no acceptance criteria covering their completion.",
+      "location": "## Критерії приймання",
+      "fix": "Add: '[ ] architecture.md, deployment.md, ux-guidelines.md оновлені відповідно до рішень Epic 02 (сесії, нові env vars, account deletion без пароля).'"
+    },
+    {
+      "check": "template_compliance",
+      "severity": "minor",
+      "issue": "Section 'Тестування' does not contain an explicit 'Unit-тести' line, unlike the reference spec and the template which call for 'Unit-тести: робляться завжди, не обговорюються.'",
+      "location": "## Тестування",
+      "fix": "Add 'Unit-тести: робляться завжди, не обговорюються.' as the first line of the Тестування section."
+    },
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "22 acceptance criteria for a declared size L is within reasonable range for L, but sits at the upper boundary. No action required — informational note.",
+      "location": "## Критерії приймання",
+      "fix": "No fix needed. Criteria count (22) is consistent with size L (full-stack auth system)."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "registration flow: email + password + name form, validation rules",
+      "email already exists error message",
+      "email in 30-day soft-delete window — special error message",
+      "success → pending status → verification email → 'Перевірте пошту' page",
+      "email verification: token SHA-256 hash, 24h TTL, status active, redirect /login",
+      "expired verification link + resend button",
+      "resend rate limit 1 per 60 seconds",
+      "login: brute-force 5 attempts → 15 min block (Redis atomic INCR)",
+      "login: blocked user message + SUPPORT_EMAIL",
+      "login: pending user allowed in, dashboard banner",
+      "login: active user → HTTP-only session cookie → /dashboard",
+      "remember me: 30 days vs 24h TTL",
+      "multiple sessions allowed (laptop + phone)",
+      "logout: current session only",
+      "forgot password: always same response (enum protection)",
+      "reset link: 1h TTL, one-time, SHA-256 hash stored",
+      "expired/used reset link error + link to /forgot-password",
+      "after password reset: all sessions invalidated, redirect /login",
+      "profile: view/edit name, email read-only, resend verify button (pending only)",
+      "profile: change password requires current password",
+      "profile: terminate all sessions",
+      "profile: delete account → modal with consequences → soft-delete → redirect /login",
+      "soft-delete: 30-day retention, blocked re-registration during window",
+      "hard delete: JobRunr daily at 03:00",
+      "Super Admin seed: ApplicationRunner, idempotent, env vars",
+      "email templates: 3 templates, Ukrainian language",
+      "secrets never in logs or Sentry",
+      "HTTP-only session cookies rationale (vs JWT)",
+      "spring-session-data-mongodb, sessions collection",
+      "account deletion without re-entering password (deliberate UX override)",
+      "bcrypt cost 12",
+      "frontend bootstrap in Epic 02: Pinia, Vue Query, vee-validate+zod, shadcn-vue, auth middleware, layout shell",
+      "Bug fix Epic 01 carryover: MONGODB_URI / REDIS_URL binding",
+      "new env vars: SUPPORT_EMAIL, SESSION_TTL_HOURS, SESSION_TTL_REMEMBER_ME_DAYS, SUPER_ADMIN_EMAIL, SUPER_ADMIN_PASSWORD",
+      "Mailpit in Docker Compose: port 1025 SMTP, 8025 web UI",
+      "Testcontainers: MongoDB + Redis + Mailpit for integration tests",
+      "80%+ backend auth module coverage target",
+      "Playwright E2E: registration + login golden paths",
+      "docs to update: architecture.md, deployment.md, ux-guidelines.md",
+      "public vs authenticated security config paths"
+    ],
+    "missing": [
+      "Email delivery failure scenario: log error, never expose to user — described in interview error_scenarios but not reflected in spec body or acceptance criteria",
+      "Session expired → redirect /login with return URL preservation — mentioned in interview error_scenarios but absent from spec",
+      "Tampered/invalid token → HTTP 400 + user-friendly message — described in interview error_scenarios but not in spec"
+    ]
+  },
+  "summary": "Специфікація якісна, добре структурована та охоплює переважну більшість тем інтерв'ю. Знайдено 9 незначних (minor) зауважень — критичних або major знахідок немає. Три пропущені теми з інтерв'ю (email-delivery failure, session expired з return URL, invalid token 400) рекомендується додати до специфікації для повноти, але вони не блокують затвердження."
+}

@@ -1,0 +1,87 @@
+{
+  "status": "changes_required",
+  "summary": "Task 8 rewrite is structurally correct: WebClient/Mono/Flux/StepVerifier symbols are gone from all 5 files, public statics (DEFAULT_RESPONSE_TIMEOUT, CONNECT_TIMEOUT, requireValidTokenShape, isTransient, scrubTokens) are preserved, audit ordering and the AtomicInteger semantics (single increment per RestClient request, persisting across both loops) are implemented per spec, and every prior test scenario is preserved 1:1 with sensible name updates (nettyReadTimeout → readTimeout). However, sleepWithDeadline does not clamp Thread.sleep to the remaining budget, which breaks the 429-large-retry-after overall-timeout test invariant and degrades production behavior: a single 429 with retry_after ~30s will block for the full 30s even when the overall 30s budget has only seconds left. This is a critical deviation from spec line 24 (\"overall 30s timeout enforced\") and the test at TelegramSenderTest.java:339-355 (asserts elapsedMs < 8000 under SHORT_OVERALL_TIMEOUT=3s with retry_after=120 clamped to 30).",
+  "criticalIssues": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 309,
+      "severity": "critical",
+      "category": "architecture",
+      "issue": "sleepWithDeadline(durationMs, deadline, attempts) calls Thread.sleep(durationMs) without clamping to the remaining budget. The pre-sleep checkDeadline only fires if the deadline is ALREADY past; it does not prevent a sleep that will overshoot the deadline. The post-sleep check then fires after the overshoot, so the timeout signal is correct but the wall-clock budget is blown.\n\nConcrete failure mode (test TelegramSenderTest.java:339-355, sendText_429LargeRetryAfter_capsAtOverallTimeout):\n  - SHORT_OVERALL_TIMEOUT = 3s, deadline captured at t=0 ⇒ deadline = t+3s.\n  - First HTTP attempt (~50ms) returns 429 with retry_after=120 ⇒ clamp(120, 30) = 30s sleep.\n  - sleepWithDeadline(30000+jitter, deadline=3s, attempts):\n      • checkDeadline at t≈100ms ⇒ not expired, passes.\n      • Thread.sleep(30000+jitter) ⇒ blocks for 30s.\n      • checkDeadline at t≈30100ms ⇒ throws TelegramSendException(\"timeout\").\n  - Total elapsed ≈ 30s. Test asserts elapsedMs < 8000 ⇒ FAILS once Wave 2 closes and tests run.\n\nProduction impact: with the spec'd 30s overallTimeout, a 429 received late in the budget (say, after ~25s consumed by 5xx retries) still blocks the calling VT for up to 30s on Thread.sleep — total 55s wall-clock — even though the deadline says to abandon at 30s. Carrier-thread parking under VT is cheap, but the caller (BotService / webhook job) still waits ~55s before seeing the timeout exception.",
+      "impact": "1) Test sendText_429LargeRetryAfter_capsAtOverallTimeout will fail its < 8000ms timing assertion at the next ./gradlew test run (after Task 9/10 unblock it). 2) Production callers will observe wall-clock latency up to overallTimeout + 30s (instead of ≤ overallTimeout) for any sendText that hits a 429 with non-trivial retry_after late in the budget. 3) Violates tech-spec line 203 (\"check deadline BEFORE the sleep (avoid an unnecessary sleep that would overshoot)\") — current implementation only avoids sleep when deadline is ALREADY past, not when the sleep itself would overshoot.",
+      "recommendation": "Clamp the actual sleep to the time remaining until the deadline. Replace the body of sleepWithDeadline with:\n\n  private void sleepWithDeadline(long durationMs, Instant deadline, AtomicInteger attempts) {\n    checkDeadline(deadline, attempts);\n    if (durationMs <= 0) { checkDeadline(deadline, attempts); return; }\n    long remainingMs = Math.max(0L, java.time.Duration.between(Instant.now(), deadline).toMillis());\n    long actualSleepMs = Math.min(durationMs, remainingMs);\n    if (actualSleepMs > 0) {\n      try { Thread.sleep(actualSleepMs); }\n      catch (InterruptedException ie) {\n        Thread.currentThread().interrupt();\n        throw new TelegramSendException(null, \"interrupted\", attempts.get());\n      }\n    }\n    checkDeadline(deadline, attempts);\n  }\n\nThe post-sleep checkDeadline will then fire deterministically right at the budget boundary, giving wall-clock parity with the prior Reactor .timeout(overallTimeout) behavior. After the fix, the 429LargeRetryAfter test elapsed will land around the SHORT_OVERALL_TIMEOUT (3s) ± jitter."
+    }
+  ],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramRateLimitException.java",
+      "line": 3,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Doc comment still references the deleted reactive architecture: \"internal to TelegramSender's .retryWhen filter (Decision 5 / Architecture step 11)\". Post-Task-8 there is no .retryWhen — the exception is now propagated from the 4xx handler (TelegramSender.map4xx line 266) out of sendWith5xxRetry's re-throw branch (line 169-171) into sendWithRateLimitRetry's catch (line 151). Update to: \"Package-private on purpose: this exception is internal to TelegramSender's nested-loop retry logic — propagated from the 4xx handler (map4xx) through the inner 5xx loop's re-throw branch into the outer 429 retry loop. Never reaches GlobalErrorHandler.\"",
+      "benefit": "Removes stale Reactor references that will confuse future readers; preserves the design-intent comment.",
+      "optional": false
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 35,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Class-level Javadoc still says \"decrypted token is captured in a local variable for the duration of one HTTP attempt and reachable until the synchronous call returns\" — accurate now but the prior sentence \"Plaintext-token lifetime\" was rewritten well. Consider also dropping the \"Never... pushed to background schedulers\" clause: under VT there is no scheduler hop, so the sentence reads oddly. Optional.",
+      "benefit": "Cleaner doc; matches the synchronous reality.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 122,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The Optional<Bot> botOpt local variable can be inlined: Bot bot = botRepository.findById(botId).filter(b -> b.getStatus() == BotStatus.CONNECTED).orElseThrow(() -> AppException.notFound(MESSAGE_BOT_NOT_FOUND)); — collapses two lines into one without losing clarity. The two-line form is fine if you prefer to keep the .filter readable; this is a pure style nit.",
+      "benefit": "Marginal readability; one fewer local.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+      "line": 275,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "mapBodyToSentMessage now handles result == null with a separate warn (\"Telegram ok=false or missing message_id: null body\") and throws TelegramSendException(null, \"null body\", ...). This is a defensive ADD vs the prior Reactor pipeline (which silently dropped null via flatMap). The added branch is correct and strictly stricter, but the warn message string \"null body\" is a literal — consider using a constant or comment so the log line's intent is documented (today a reader sees a literal \"null body\" string and may wonder if it's user-controlled).",
+      "benefit": "Easier to grep for the specific log site; less ambiguity about whether the string is user-supplied.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 681,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "sendText_tokenInTerminalFailureLog_scrubbed_errorLevel only asserts noneMatch(TOKEN) on error logs — the comment explicitly explains why a positive [REDACTED_TOKEN] match is omitted (the terminal ERROR log emits the sentinel \"transient_failure_exhausted\" not the original 5xx body). That's correct reasoning, but it leaves the test vulnerable to a regression where the terminal ERROR site forgets to call scrubTokens entirely — the negative-only assertion would still pass if the formatted message contains *any* non-token-shaped substring. Consider adding a complementary positive assertion: assertThat(errorMessages).anyMatch(m -> m.contains(\"Telegram send terminal failure\")) to at least pin the log-site format string.",
+      "benefit": "Stronger regression net for the terminal-failure log site; complements the per-site TC10 invariant.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 552,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "sendText_botNotFound_throwsNotFound_noHttp does not assert verify(eventService, never()).logEvent(...). The implementation correctly skips audit on AppException(404) via isTerminalAuditable, but the test only checks getRequestCount()==0. Adding verify(eventService, never()).logEvent(any(), any(), any(), any(), any()) would lock the no-audit invariant for the bot-not-found / disconnected paths (the same applies to sendText_botDisconnected at line 568). Same gap existed pre-Task-8 — not a regression, but cheap to close while you're here.",
+      "benefit": "Closes a gap in the no-audit invariant for pre-HTTP 404 paths; cheap to add.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java",
+      "line": 681,
+      "severity": "minor",
+      "category": "testing",
+      "suggestion": "Task spec line 93 (sendText_terminalFailure_emitsErrorLogBeforeAuditEvent) mentions verifying ordering via InOrder on appender + eventService. The current tests (e.g. sendText_5xxRetryExhausted at line 268 and sendText_tokenInTerminalFailureLog at line 681) verify BOTH the error log and the audit event exist, but do not strictly enforce the log-before-event temporal ordering. Code-level ordering is correct (TelegramSender:134-137 explicitly orders log.error → logEvent → throw), but a regression where a future refactor swaps the order would not be caught. Consider adding an InOrder verification in one terminal-failure test to lock the ordering invariant.",
+      "benefit": "Codifies the audit-ordering invariant called out in tech-spec line 50 / task line 93; future refactors cannot silently regress it.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "criticalIssuesCount": 1,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 6,
+    "testCoverageAssessment": "adequate"
+  }
+}

@@ -1,0 +1,39 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 3, 4, 5, 7],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 4,
+      "section": "tech-spec traceability (Files to modify)",
+      "issue": "tech-spec Implementation Tasks › Task 4 still lists `funnel/FunnelRepository.java` under 'Files to modify', but the round-1 fix correctly moved sole ownership of every FunnelRepository change to Task 1 (Task 4 is now a read-only consumer and explicitly says 'DO NOT MODIFY'). The task files are internally consistent and correct; only the tech-spec table lags behind the refined decomposition.",
+      "fix": "Optional: update tech-spec Task 4 'Files to modify' to drop `funnel/FunnelRepository.java` and move it to Task 1's list, so the tech-spec matches the corrected single-owner decomposition. Not a blocker — the task files themselves are the source of truth for execution and are consistent."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 1
+  },
+  "verified_round1_fixes": {
+    "task1_owns_FunnelRepository_with_Optional_retention": "confirmed — What to do §5 + Details + AC declare Task 1 as sole owner; the single-result Optional `findByProjectIdAndTriggerTypeAndTriggerValueAndStatus` is explicitly retained (Optional-retention policy) alongside the new List-returning sibling and keyword-list query",
+    "task4_no_longer_modifies_FunnelRepository": "confirmed — Details marks `funnel/FunnelRepository.java` as 'DO NOT MODIFY (read-only consumer)', Context Files lists it under 'read, do NOT modify', AC explicitly states Task 4 does not modify it",
+    "task4_FunnelExecutionFactory_cycle_break": "confirmed — What to do §1 + CRITICAL Edge case + Implementation hints describe extracting the package-private FunnelExecutionFactory collaborator to break the FunnelEventService→FunnelTriggerServiceImpl→FunnelExecutionEngine→StepExecutor→FunnelEventService cycle; new file listed in Context Files; AC requires no BeanCurrentlyInCreationException with a bean-graph startup check in Verification Steps",
+    "task4_project_scoped_SubscriberService_findById": "confirmed — adds project-scoped `Optional<Subscriber> findById(String projectId, String subscriberId)` with anti-IDOR project filter, coordinated-once with Task 7; TDD anchor present",
+    "task5_depends_on_1_and_4": "confirmed — frontmatter depends_on: [1, 4], wave 3 (both deps in earlier waves: 1=w1, 4=w2)",
+    "task7_project_scoped_subscriber_lookup": "confirmed — What to do §5 forbids raw findById(subscriberId), mandates project-pinned lookup mirroring unsubscribeManual; coordinated with Task 4; cross-project→404 anti-IDOR AC + TDD anchor present",
+    "task7_CORS_X_API_Key_fix": "confirmed — What to do §6 + Details + Implementation hints add X-API-Key to corsConfigurationSource allowedHeaders; AC + IntegrationsCorsIT::preflight_allowsXApiKeyHeader anchor present",
+    "task7_corrected_PK_link_paths": "confirmed — PK reference links use ../../../.claude/skills/project-knowledge/references/{project,architecture,patterns}.md and all resolve; all code-file context links resolve"
+  },
+  "structural_consistency_checks": {
+    "frontmatter": "all 5 tasks: status=planned, depends_on arrays, wave numbers >=1, skills=[code-writing], reviewers=[code-reviewer, security-auditor, test-reviewer], verify array ([] for 1/3/4/5, [smoke] for 7), teammate_name empty; no extra fields",
+    "sections": "all 5 tasks present all 11 template sections in correct order",
+    "dependency_waves": "valid — T1(w1,[]), T3(w1,[]), T4(w2,[1]), T5(w3,[1,4]), T7(w4,[3,4]); every depends_on target is in a strictly earlier wave; no cycles",
+    "frontmatter_body_match": "skills and reviewers in frontmatter match Required Skills and Reviewers sections for all tasks",
+    "shared_resources": "FunnelEventService owner=Spring @Service (created by Task 4); consumers Task 5 (StepExecutor) + Task 7 (EventsController) both depends_on 4; StringRedisTemplate existing singleton, no competing creation; no resource without an owner",
+    "placeholders": "no template placeholders ([Task Name], {PK path}, {reviewer-name}) and no TODO/FIXME/TBD; {round} confined to Reviewers report paths per template",
+    "links": "all PK reference links, SKILL.md links, and code-file context links resolve from the tasks directory; no orphaned references"
+  }
+}

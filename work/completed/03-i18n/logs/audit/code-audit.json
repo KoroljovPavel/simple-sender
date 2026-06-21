@@ -1,0 +1,71 @@
+{
+  "task": 12,
+  "feature": "03-i18n",
+  "auditor": "code-reviewing",
+  "timestamp": "2026-05-08T00:00:00Z",
+  "summary": "3 findings: 0 blocker, 0 high, 1 medium, 2 low. No blockers — Pre-deploy QA (Task 15) is unblocked. Findings are maintainability-only (DRY duplication of error-status extraction across 3 catch blocks; dead errors.verifyEmail.* keys; informational re-confirmation that silentTranslationWarn/silentFallbackWarn are inert under legacy:false — already approved deviation per decisions.md Task 2).",
+  "scope_files_count": 22,
+  "dimensions_checked": [
+    "residual_strings",
+    "nuxtlinklocale_parity",
+    "navigateto_localepath",
+    "useapierror_factory",
+    "routerules_parity",
+    "non_default_locales_constant",
+    "duplicated_patterns",
+    "decisions_conformance",
+    "ac_compliance"
+  ],
+  "dimension_results": {
+    "residual_strings": "OK — no Cyrillic literals or visible English ≥3-char strings outside t()/$t() in pages/, layouts/, components/, app.vue. Verified via grep for Cyrillic ranges and manual scan of every <template> block. Brand 'Bot Funnel' is routed through t('brand.name') (verified default.vue:21).",
+    "nuxtlinklocale_parity": "OK — zero raw <NuxtLink> in feature scope. All link components use <NuxtLinkLocale> (default.vue:21,40,41; auth pages: login:109,110, register:146, forgot-password:48,86, reset-password:79, verify-email:127,137; dashboard:18).",
+    "navigateto_localepath": "OK — every navigateTo() call wraps the path in localePath() (login.vue:46, register.vue:55 object-form, reset-password.vue:58 object-form, profile.vue:179,208, layouts/default.vue:14, middleware/auth.global.ts:32,39). Object-form navigateTo({path: localePath(...), query}) at register/reset-password is correct — only the path field needs locale wrapping.",
+    "useapierror_factory": "OK — useApiError() is invoked at module-level <script setup> (line 10) in login/register/reset-password/profile, never inside catch. forgot-password and verify-email correctly do NOT call useApiError (forgot-password keeps silent catch for anti-enumeration per Task 9 commit; verify-email uses state-machine pattern for token errors, not message rendering).",
+    "routerules_parity": "OK — nuxt.config.ts:66-71 declares '/auth/**' explicitly and spreads nonDefaultAuthRouteRules (built from NON_DEFAULT_LOCALES via Object.fromEntries) — both branches share AUTH_HEADERS const ({X-Robots-Tag: 'noindex, nofollow', Referrer-Policy: 'no-referrer'}). Adding a 3rd locale only requires updating shared/i18n-locales.ts (Decision 14 / AC10 satisfied).",
+    "non_default_locales_constant": "OK — NON_DEFAULT_LOCALES = ['en'] as const lives in shared/i18n-locales.ts (single source of truth). Consumed by nuxt.config.ts:1 (routeRules expansion) AND server/middleware/strip-invalid-locale.ts:1+5 (allow-list). No hardcoded ['en'] in either consumer (Decision 5 / AC10 / parity-drift defense satisfied).",
+    "duplicated_patterns": "1 finding (medium): inline status-extraction duplication in 3 catch blocks (reset-password.vue:60-61, verify-email.vue:39+104-105, profile.vue:98-99) reuses the same `e?.statusCode ?? e?.status ?? e?.response?.status` pattern that useApiError's extractStatus() already encapsulates. Acceptable in current architecture (these branches need numeric status for state-machine transitions, not localized strings — useApiError returns string only) but the helper could be exported.",
+    "decisions_conformance": "Decisions 1-17 verified: D1 @nuxtjs/i18n@^9.5.6 ✓; D2 prefix_except_default ✓; D3 cookieKey: 'i18n_lang' + env-conditional cookieSecure + no cookieMaxAge ✓; D4 redirectOn:'no prefix' + alwaysRedirect:false + fallbackLocale:'uk' ✓; D5 path-normalization order in locale-strip.ts (backslash-reject → strip → collapse → decode → post-decode safety) ✓; D6 useRouteBaseName + PUBLIC_ROUTE_NAMES + fail-closed + localePath ✓; D7 lazy not set (eager default) ✓; D8 nested namespaces (auth/dashboard/profile/layout/validation/errors/common/brand) + camelCase ✓; D9 check-locales.mjs uses Object.create(null) + UNSAFE_KEYS filter ✓; D10 useApiError factory + te() chain ✓; D11 Zod in computed() ✓ (approved deviation: dashboard/profile/auth pages pass ComputedRef directly to useForm without unref — explicitly NO finding per Task 12 spec section 'Authorized Exceptions B'); D12 LangSwitcher uses await setLocale(code) standalone ✓; D13 brand.name='Bot Funnel' in both locales ✓; D14 routeRules parity ✓; D15 LangSwitcher placement ✓; D16 existing tests preserved within authorized scope (auth.global.spec rewritten per explicit exception; 7 page-specs got identity-passthrough useLocalePath mock only — UA literals in toMatch/toContain assertions intact) ✓; D17 Wave 1 solo Playwright bootstrap ✓.",
+    "ac_compliance": "Tech-spec AC1-11 + user-spec AC1-19 verified. AC1 module + URL strategy ✓; AC2 same key-set enforced by prebuild ✓; AC3-6 cookie config ✓; AC7 strip-invalid-locale 302 ✓; AC8 routeRules parity ✓; AC9 LangSwitcher toggle in both layouts ✓; AC10 single source of truth NON_DEFAULT_LOCALES ✓; AC11 silentTranslationWarn/silentFallbackWarn set (literal text — see finding F-002 for legacy-mode-only nuance) ✓; AC12 Zod re-runs on locale switch ✓; AC13 useApiError centralizes API errors ✓; AC15 LangSwitcher.spec asserts cookie value (Vitest line ref via task 6 entry) ✓; AC18 existing UA-tests preserved ✓; AC19 prebuild gate + node:test coverage ✓. Authorized exceptions for AC18 (auth.global.spec full rewrite + 7 page-specs identity-passthrough mock) verified — UA literals in assertions are unmodified."
+  },
+  "authorized_exceptions_verified": {
+    "ac18_auth_global_spec_rewrite": "auth.global.spec.ts is rewritten per Decision 16 explicit exception. 10 cases use mocked useRouteBaseName/useLocalePath/navigateTo — no UA literals (they were never present in the original middleware spec). Within authorized scope.",
+    "ac18_page_specs_uselocalepath_mock": "Verified all 7 spec files (tests/pages/auth/{login,register,forgot-password,reset-password,verify-email}.spec.ts + tests/pages/{dashboard,profile}.spec.ts) added only mockNuxtImport('useLocalePath', () => () => (path: string) => path). UA literals in assertions preserved verbatim: login.spec asserts /коректний email/i, /15 хв/, /невірний/i; register.spec asserts /не співпадають/i, /цифр/i, /вже існує/i; forgot-password.spec asserts /коректний email/i; reset-password.spec asserts /не співпадають/i; profile.spec asserts /не співпадають/i, /введіть поточний пароль/i, /цифр/i, /невірний поточний пароль/i, /проект/i, /бот/i, /підписник/i; dashboard.spec asserts /Підтвердіть email/i, /Перейти до профілю/i. Within authorized scope — no AC18 violation.",
+    "decision_11_computedref_no_unref": "Verified in dashboard.vue, profile.vue, and 5 auth pages: Zod schema is wrapped in computed() and passed AS-IS (`validationSchema: schemaComputed`) to useForm without .value or unref(). Explicit approved deviation per decisions.md Task 10 — NOT a finding.",
+    "i18n_config_location_deviation": "i18n.config.ts is at frontend/i18n/i18n.config.ts (not frontend/i18n.config.ts as worded in spec). Approved deviation per decisions.md Task 2 — necessary because Nuxt 4 + i18n v9 default restructureDir:'i18n' resolves vueI18n path inside that dir. nuxt.config.ts:43 references it as './i18n.config.ts' relative to that dir. NOT a finding."
+  },
+  "findings": [
+    {
+      "id": "F-001",
+      "severity": "medium",
+      "dimension": "duplicated_patterns",
+      "file": "frontend/pages/auth/reset-password.vue",
+      "line": 60,
+      "issue": "Inline status-extraction duplicates the logic encapsulated in useApiError's extractStatus(). The same pattern `(e as {...}).statusCode ?? .status ?? .response?.status` appears verbatim in verify-email.vue:39+104-105 and profile.vue:98-99. Three independent copies of identical code increase maintenance surface — if backend ever returns status under a new field (e.g. error.cause.status), all 3 sites must be updated in lockstep, with the useApiError extractor as a 4th place. Not a runtime bug because the branches consume numeric status to drive UI state-machine (linkInvalid / cooldown), not a localized message — useApiError's contract (returns string) does not cover state transitions.",
+      "quote": "const status = (e as { statusCode?: number; status?: number; response?: { status?: number } })\n    const code = status?.statusCode ?? status?.status ?? status?.response?.status",
+      "recommendation": "Export `extractStatus(error: unknown): number | null` from composables/useApiError.ts as a free function (already lives there as a private helper at line 7-14). Each catch block then becomes a one-liner: `const code = extractStatus(e)`. No semantic change — same null/NaN coercion via Number.isFinite, same field precedence. Reduces 4 copies to 1 source.",
+      "anchored_to": "Audit Dimension 7 (Duplicated patterns / DRY violations); useApiError factory at composables/useApiError.ts:7-14 already implements extractStatus as a module-private function."
+    },
+    {
+      "id": "F-002",
+      "severity": "low",
+      "dimension": "decisions_conformance",
+      "file": "frontend/i18n/i18n.config.ts",
+      "line": 4,
+      "issue": "silentTranslationWarn and silentFallbackWarn are Vue I18n Legacy-mode-only options. Under `legacy: false` (Composition API mode, line 2) they are read but have no runtime effect — the equivalent Composition-mode flags are `missingWarn` and `fallbackWarn` (boolean inverted). Decision 9's stated intent (production console-warning suppression for missing-key info-disclosure defense) is therefore not enforced at runtime. Already documented as approved deviation in decisions.md Task 2 (Round 1 review noted by code-reviewer as informational/non-blocking; AC11 spec text is literally satisfied by the keys' presence).",
+      "quote": "  silentTranslationWarn: process.env.NODE_ENV === 'production',\n  silentFallbackWarn: process.env.NODE_ENV === 'production',",
+      "recommendation": "If production console-warning leakage is observed post-deploy, swap to the Composition-mode equivalents in a follow-up: `missingWarn: process.env.NODE_ENV !== 'production'` and `fallbackWarn: process.env.NODE_ENV !== 'production'` (note inverted polarity — these flags ENABLE warnings, so production should disable them). No action required for this feature — current keys are AC-compliant by literal text and prebuild check-locales gate already prevents missing keys from reaching production. Tracked as approved deviation per decisions.md Task 2.",
+      "anchored_to": "Decision 9 (silent prod warnings); AC11 (Vue I18n production-mode config); decisions.md Task 2 'Deviations' entry (already disclosed)."
+    },
+    {
+      "id": "F-003",
+      "severity": "low",
+      "dimension": "duplicated_patterns",
+      "file": "frontend/i18n/locales/uk.json",
+      "line": 166,
+      "issue": "errors.verifyEmail.{400,410,429,generic} keys exist in both locale dictionaries (uk.json:166-171, en.json:166-171) but are unreachable at runtime. verify-email.vue does not import useApiError — it uses a state-machine pattern (state.value = 'expired' | 'invalid') and renders fixed keys auth.verifyEmail.{invalidMessage,expiredMessage,resendError} from a different namespace. The errors.verifyEmail.* branch of the dictionary is dead weight: maintainers may add 4xx codes assuming they're surfaced, but the page never reads them. Symmetric in both locales (AC2 parity holds).",
+      "quote": "    \"verifyEmail\": {\n      \"400\": \"Посилання недійсне.\",\n      \"410\": \"Посилання прострочено.\",\n      \"429\": \"Забагато спроб. Спробуйте пізніше\",\n      \"generic\": \"Не вдалося надіслати лист. Спробуйте пізніше\"\n    },",
+      "recommendation": "Either (a) wire verify-email.vue's resend catch block to useApiError(err, 'verifyEmail') so the keys become reachable for the resend flow (currently line 110 sets resendStatus='error' which renders auth.verifyEmail.resendError — a hardcoded localized fallback), or (b) delete the errors.verifyEmail.* sub-tree from both locale files to remove dead keys. Option (a) is more consistent with other auth pages; option (b) is faster. Pre-deploy QA blocker priority: low — does not affect user-visible behavior, only architectural consistency.",
+      "anchored_to": "Decision 8 (locale-files namespace structure); Decision 10 (useApiError factory + te() fallback chain — namespace exists but has no consumer)."
+    }
+  ]
+}

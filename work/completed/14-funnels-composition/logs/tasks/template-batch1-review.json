@@ -1,0 +1,35 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "Mandatory PK links project.md / architecture.md / patterns.md point to `.claude/skills/project-knowledge/project.md` (etc.) — missing the `references/` path segment AND missing the `../../../` relative prefix. Actual files live at `.claude/skills/project-knowledge/references/`. From the task file location `work/14-funnels-composition/tasks/3.md` these links resolve to a nonexistent path, so all three mandatory project-context files are effectively unreachable.",
+      "fix": "Change to `[project.md](../../../.claude/skills/project-knowledge/references/project.md)`, `[architecture.md](../../../.claude/skills/project-knowledge/references/architecture.md)`, `[patterns.md](../../../.claude/skills/project-knowledge/references/patterns.md)` — matching the correct paths used in Task 1 and Task 5."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 4,
+      "section": "Context Files",
+      "issue": "Mandatory PK links use `../../../.claude/skills/project-knowledge/project.md` and `.../architecture.md` and `.../patterns.md` and `.../ux-guidelines.md` — all missing the `references/` path segment. The files exist only under `.claude/skills/project-knowledge/references/`, so these four links resolve to nonexistent files.",
+      "fix": "Insert `references/` into each path: `../../../.claude/skills/project-knowledge/references/project.md` (and architecture.md, patterns.md, ux-guidelines.md), matching Task 1/Task 5."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "PK links use absolute machine-specific paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/.claude/skills/project-knowledge/references/...`) and the reviewer report paths in the Reviewers section are also absolute. Target resolves correctly on this machine but is non-portable; every other task in the batch uses repo-relative `../../../` paths.",
+      "fix": "Use repo-relative paths `../../../.claude/skills/project-knowledge/references/...` and `work/14-funnels-composition/logs/working/task-2/...` for consistency with Tasks 1, 3, 4, 5."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3
+  }
+}

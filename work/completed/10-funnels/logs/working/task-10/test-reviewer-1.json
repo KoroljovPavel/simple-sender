@@ -1,0 +1,43 @@
+{
+  "summary": "Test quality for Task 10 is solid overall. Every named TDD-anchor scenario exists and asserts real behavior, not mock wiring: client validation specs drive the real zod schema (empty text, Delay<1, non-http imageUrl, tagSlug regex) and assert both the error node AND the absence of the `add` emit; deep-link rendering asserts the exact composed string (locale-independent); Copy asserts the clipboard arg + a real label toggle (no hardcoded English, safe under the default 'uk' locale); reorder/bounds and prefill-on-edit assert disabled flags and emitted payloads. The E2E mirrors the subscribers.spec.ts real-backend + graceful-skip pattern with no page.route/stubAuth/makeX factories. The main weakness is coverage, not assertion quality: the editor page ([funnelId].vue) holds the task's central AC logic — 422-code→errors.funnels.* inline mapping, graceful 404 redirect, reorder array mutation, debounced trigger persist, persist-before-activate — and NONE of it has executable (non-E2E) coverage. The only test of the inline-422 path is the Playwright page-test, which test.skip()s whenever the backend is absent, so in default CI the headline behavior of the task runs zero assertions.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue (no test)",
+      "finding": "The editor page contains the task's core, novel business logic — resolveFunnelError() mapping a 422 body code to errors.funnels.<code> as an INLINE message (the defining AC: 'inline, not a global toast'), the graceful 404 redirect, onMove() bounds guard + array splice, the persist()-before-activate flush, and the debounced trigger-value persist with TRIGGER_VALUE_RE guard. None of this has a Vitest/component test. Its only coverage is funnels_activation422_showsInlineError in funnels.spec.ts, which test.skip()s without a live backend. Per the litmus test: delete the entire code→errors.funnels.* mapping branch and the whole component-level suite still passes (the E2E is skipped). The headline behavior of Task 10 effectively has no enforced regression coverage in CI.",
+      "recommendation": "Add a mountSuspended component spec for [funnelId].vue (mockNuxtImport for useFunnelsStore/useBotStore/useRoute, same pattern as funnels.spec.ts store test). Assert: (1) store.activate rejecting { statusCode: 422, data: { code: 'funnel_no_steps' } } renders [data-test=funnel-activate-error] with the errors.funnels.funnel_no_steps text and does NOT surface a toast / status does not flip; (2) an unmapped/absent code falls back to useApiError without throwing; (3) onMove from out-of-bounds is a no-op and a valid move reorders steps then triggers store.update with the full array; (4) a 404 from fetchOne calls navigateTo(localePath(.../funnels)). At minimum cover (1) and (4) — they are the inline-422 and graceful-404 ACs."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/FunnelStepsList.spec.ts:27-31",
+      "finding": "The reorder test asserts only the emitted move pair [0,1]; it never verifies a step actually changes position, because the list is presentational and the real splice lives in the page's onMove (untested — see major finding). This is correct for a presentational component, but it means 'reorder' as a user-visible behavior is asserted nowhere executable: the list emits, the page mutates, and the page has no test.",
+      "recommendation": "Acceptable to keep this component test as-is, but pair it with the page-level onMove assertion from the major finding so the from→to pair is actually consumed and the array is verified to reorder. Without that, the (from,to) contract between FunnelStepsList and the page is unverified end-to-end outside the skippable E2E."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/AddStepDialog.spec.ts:50-56 (and EditStepDialog.spec.ts)",
+      "finding": "Specs test FunnelStepForm's validation indirectly through the AddStepDialog/EditStepDialog wrappers. That is fine for the anchor, but FunnelStepForm (311 lines, the actual validation+payload-narrowing engine) has no dedicated spec. The SET_CUSTOM_FIELD branch (customFieldKey required) and the REMOVE_TAG branch are never exercised by any test — only SEND_MESSAGE, SEND_IMAGE, DELAY, ADD_TAG are. The onSubmit switch that narrows the flat model to per-type fields (e.g. blankToNull on parseMode/caption, Number() coercion of delayValue) is only partially asserted (send-message + add-tag emit shape).",
+      "recommendation": "Add two small cases: (a) SET_CUSTOM_FIELD with empty customFieldKey → [data-test=step-cf-key-error] present and no emit; (b) a valid DELAY emit asserting the payload shape { stepType:'DELAY', delayValue: <number>, delayUnit:'MIN' } so the Number() coercion and field narrowing are pinned. These mirror existing patterns and close the two untested step types."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/e2e/funnels.spec.ts:107,110-113",
+      "finding": "After reorder (move-up-2 then move-down-1) the golden path only re-asserts toHaveCount(3) via expect.poll — it never verifies the steps landed in the expected order. A reorder bug that PATCHes a wrong/unchanged array would still pass (count is invariant under reorder). The reorder assertion is effectively a no-op beyond 'nothing was deleted'.",
+      "recommendation": "After the up/down moves, assert the visible summary text order, e.g. read [data-test^=funnel-step-row-] innerText sequence and expect the Delay/message ordering you set up, or assert the PATCH request body steps array order. Otherwise the E2E reorder leg verifies count stability, not reordering."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/tests/components/FunnelTriggerSettings.spec.ts:46-48",
+      "finding": "The Copy 'Copied feedback' assertion uses expect(text).not.toBe(before) — correctly locale-agnostic (good, given default 'uk'), but it would also pass if the button label changed to ANY different string for an unrelated reason (e.g. a spinner). It pins 'the label changed', not 'the label shows the copied state'. Acceptable but slightly weak.",
+      "recommendation": "Optionally also assert the copied state via a state-bearing data attribute or that the label equals t('funnels.trigger.copied') resolved through the same useI18n instance (not a hardcoded English literal), to confirm it is the Copied state specifically and not an incidental change. Low priority — the writeText arg assertion already carries most of the value."
+    }
+  ],
+  "verdict": "changes_requested",
+  "metrics": {
+    "litmusTest": { "checked": 14, "passed": 13, "failed": 1, "note": "Only the inline-422 / 404-redirect page logic fails the litmus test in CI because its sole coverage is the skippable E2E." },
+    "tddAnchorCoverage": "complete — every named scenario exists and asserts the right behavior",
+    "localeCoupling": "none — deep-link asserts are locale-independent; Copy uses label-toggle not hardcoded English; safe under default 'uk'",
+    "e2ePattern": "correct — real backend health-probe + graceful test.skip, no page.route/stubAuth/makeX factories",
+    "coverageAssessment": "adequate for components, gap at the page (orchestration + 422 inline mapping)"
+  }
+}

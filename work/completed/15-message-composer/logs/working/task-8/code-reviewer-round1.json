@@ -1,0 +1,47 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 8,
+  "round": 1,
+  "commit": "fc72d2f",
+  "scope": [
+    "frontend/components/funnels/FunnelMessagePreview.vue",
+    "frontend/stores/funnels.ts",
+    "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts",
+    "frontend/tests/stores/funnels.spec.ts"
+  ],
+  "summary": "Multiblock preview rewrite is clean and well-aligned with the DTO contract from Task 6. Text/caption are interpolated only; media bound via :src; FILE :href scheme-guarded via the same regex idiom as FunnelStepForm. Debounce + immediate-first-run preserved, watch correctly moved to a deep watch on step.blocks. Dead single-field code fully removed (grep-clean outside comments). No blocking issues.",
+  "dimensions_checked": [
+    "1-architecture", "2-separation-of-concerns", "3-readability", "4-error-handling",
+    "5-type-safety", "6-testing", "8-security", "9-performance", "10-cross-file"
+  ],
+  "findings": [
+    {
+      "id": "CR1",
+      "severity": "minor",
+      "dimension": "9-performance/UX",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "finding": "mediaLoadFailed is keyed by block index, so a single failed image inside an ALBUM block flips ALL items in that album to the icon fallback (not just the failing item). For non-album media this is exact; for albums it is coarse.",
+      "action": "accept-as-designed",
+      "reason": "The task explicitly generalizes the old global imageLoadFailed to PER-BLOCK state ('per-block', not per-item). Per-item album fallback is out of scope and a graceful-degradation nicety; current behavior never crashes and shows a neutral icon. Documented in code comments."
+    },
+    {
+      "id": "CR2",
+      "severity": "minor",
+      "dimension": "10-cross-file",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "finding": "Component references i18n keys not yet present in locales: funnels.steps.type.MESSAGE and funnels.editor.previewMediaType.{IMAGE,VIDEO,AUDIO,FILE}. vue-i18n falls back to the key string at runtime (warnings in test stderr).",
+      "action": "coordinate-with-task-7",
+      "reason": "Task 7 owns i18n/locales/*. These keys are a handoff: Task 7 must add MESSAGE to funnels.steps.type and the previewMediaType.* group to both uk.json and en.json. No CI gate (check-locales) breaks; purely a runtime fallback until Task 7 lands."
+    },
+    {
+      "id": "CR3",
+      "severity": "info",
+      "dimension": "1-architecture",
+      "file": "frontend/stores/funnels.ts",
+      "finding": "The preview store action needed NO source change — it already accepts PreviewStepRequest / returns PreviewStepResponse (types updated by Task 6) and passes the body verbatim; store contract (flip error + re-throw, no useApiError) intact.",
+      "action": "no-change",
+      "reason": "Type-driven; only the store preview TEST was migrated to the { stepType, blocks } / { renderedBlocks } shape. Deviation documented in decisions.md."
+    }
+  ],
+  "verdict": "OK"
+}

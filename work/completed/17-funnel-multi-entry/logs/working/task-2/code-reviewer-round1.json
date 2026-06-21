@@ -1,0 +1,34 @@
+{
+  "status": "changes_requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java",
+      "line": 43,
+      "issue": "Cross-element false positive in multikey array query. Spring Data's derived query `findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus` generates flat predicates `{ 'triggers.triggerType': 'event', 'triggers.triggerValue': 'purchase' }` — NOT a MongoDB `$elemMatch`. MongoDB evaluates these as independent array scans: a funnel with triggers `[{type:'keyword', value:'purchase'}, {type:'event', value:'other'}]` would match a query for `(event, purchase)` because `triggerType='event'` matches element 1 and `triggerValue='purchase'` matches element 0 from different elements. In production this means the fan-out dispatcher receives false-positive funnels whose event-type trigger has a different value, causing the Task-5 re-scan to silently discard them (no harm to correctness after re-scan, but unnecessary DB load and incorrect query semantics). The tech-spec's 'matched-element re-scan idiom' comment implies awareness of the post-query re-scan, but does NOT acknowledge that the repository method itself has cross-element false-positive semantics. The consumer re-scan in Task 5 is the safety net, not the fix.",
+      "fix": "Add a Javadoc warning on this method explicitly stating it uses flat array predicates (not $elemMatch) and therefore may return funnels that do NOT have a single trigger element matching BOTH conditions simultaneously. The caller (Task 5) MUST re-scan triggers[] to confirm the matched element. Alternatively, replace the derived query with a @Query annotation using $elemMatch: `@Query(\"{ 'projectId': ?0, 'triggers': { '$elemMatch': { 'triggerType': ?1, 'triggerValue': ?2 } }, 'status': ?3 }\")` — this narrows false positives at the DB level and is the semantically correct query for 'funnels containing a trigger where BOTH type AND value match the same element'. The re-scan in Task 5 should still stay as defense-in-depth."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java",
+      "line": 171,
+      "issue": "Missing cross-element false-positive test. `findByTriggersTriggerTypeAndValueMatchesArrayElement` only tests the true-positive case (matching element present) and a non-matching-value case (`refund` vs `purchase`). It does NOT assert the cross-element behavior: a funnel with `[{type:'keyword', value:'purchase'}, {type:'event', value:'other'}]` — where `triggerType='event'` and `triggerValue='purchase'` come from different elements — would be returned by the derived query (false positive) and must be excluded by the Task-5 re-scan. Without a test for this case, the cross-element semantics are undocumented and could surprise Task-5 authors.",
+      "fix": "Add a test case within `findByTriggersTriggerTypeAndValueMatchesArrayElement` (or a new test `findByTriggersTriggerTypeCrossElementDoesNotElemMatch`) that inserts a funnel with triggers `[{type:'keyword', value:'purchase'}, {type:'event', value:'other'}]` and documents what the derived query returns (the funnel IS returned due to flat predicate semantics). Assert the expected behavior with a comment explaining the caller must re-scan. This makes the semantics explicit and prevents Task-5 surprises."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java",
+      "line": 112,
+      "issue": "Stale test method name `migrationDropsOldBroadFilterIndex`. The method body has been correctly rewritten (it now installs the OLD flat-trio index and asserts the reconciliation drops it), but the name still refers to 'BroadFilter' — the Phase-3 term for the old `{status:'active'}` partial filter shape. The new migration drops the flat-trio index, not a 'broad-filter' index.",
+      "fix": "Rename to `migrationDropsOldFlatTrioTriggerIndex` or `migrationDropsOldTriggerIndex` to match the updated intent and terminology used in the class Javadoc and comments."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java",
+      "line": 276,
+      "issue": "activeFunnel helper leaves triggers unset (null). Tests that use `activeFunnel(projectId)` directly and then call `setTriggers(...)` are fine. However, the `onStartFunnel` helper sets triggers to a single on_start trigger with `onStartTriggerValue` set, but the bare `activeFunnel` factory method creates a funnel with `triggers=null`. If any future test inserts a bare `activeFunnel` without setting triggers and then queries the array-aware methods, the null `triggers` field won't match. This is not a current bug but a fragile factory default.",
+      "fix": "No immediate code change required — all current usages correctly call setTriggers before insert. Add a comment to the `activeFunnel` helper noting that triggers is intentionally left null and callers must set it before insert. Low priority."
+    }
+  ],
+  "summary": "Repository and reconciliation production code is solid: the BeanPostProcessor idempotency logic (presence-by-name detection), log-but-never-throw discipline, greppable APPLIED/NO-OP markers, and `onStartTriggerValue` derived query are all correct. The critical concern is the `findByProjectIdAndTriggersTriggerTypeAndTriggersTriggerValueAndStatus` derived query: Spring Data generates flat array predicates instead of `$elemMatch`, enabling cross-element false positives (a funnel with type and value in different trigger elements would be returned). The tech-spec acknowledges the post-query re-scan idiom in Task 5, but neither the method Javadoc nor the IT explicitly documents or tests this cross-element semantic — leaving Task-5 authors without a clear contract. The fix is either a `@Query` with `$elemMatch` or at minimum an explicit Javadoc warning + a test asserting the cross-element behavior. The three minor findings (stale test name, missing cross-element test case, null triggers factory default) are low-friction fixes. Status: changes_requested for the major finding before Task 5 begins consuming this method."
+}

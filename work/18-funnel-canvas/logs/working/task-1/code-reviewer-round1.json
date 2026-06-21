@@ -1,0 +1,30 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 1,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 802,
+      "issue": "Inline fully-qualified `org.bson.types.ObjectId` class name instead of a top-level import",
+      "fix": "Add `import org.bson.types.ObjectId;` to the import block and change `new org.bson.types.ObjectId().toHexString()` to `new ObjectId().toHexString()`. The existing call in `toSteps` at L991 also uses the inline form — both should be updated for consistency with the rest of the codebase's import discipline."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": 315,
+      "issue": "`duplicate()` silently omits notes from the clone — no documentation of the deliberate choice",
+      "fix": "The omission is correct by scope (Task 1 specifies 'create/duplicate paths do not accept notes from the body, so leave their notes null'), but there is no code comment in the `duplicate` method body explaining why notes are not copied. Mirror the trigger-reset comment style: add a one-liner like `// Canvas notes are editor metadata and not copied to the clone — the author will position nodes on the new canvas.` next to `copy.setUpdatedAt(now)`. This prevents a future maintainer from treating it as an accidental omission."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "line": 349,
+      "issue": "The optional parse-layer NaN/Infinity IT is omitted without a comment explaining the GlobalErrorHandler gap",
+      "fix": "The existing comment at L349-355 accurately explains the omission. No code change required — this finding is informational only, noting that the `GlobalErrorHandler` does not map `HttpMessageNotReadableException` to 400, so asserting 400 on a NaN JSON token would fail. This is an out-of-scope gap but worth a JIRA/follow-up ticket for the error handler."
+    }
+  ],
+  "summary": "All five silent-drop seams are threaded correctly: domain fields + accessors (FunnelStep, Trigger, Funnel), FunnelStep.copyOf, DTO records (CanvasPositionDto, NoteDto, FunnelStepDto, TriggerDto, UpdateFunnelRequest, FunnelResponse), forward mappers (toSteps, applyTriggers, applyNotes), and reverse mappers (toStepDto, toTriggerDtos, toNoteDtos). Security bounds are enforced at both the DTO (@Size, @Valid @AssertTrue) and service-side (MAX_NOTES, NOTE_TEXT_MAX re-checks mirroring MAX_TRIGGERS). Server-minting of note ids is correct (blankToNull + ObjectId). Trigger.equals/hashCode unchanged. Additive-nullable contract holds. Tests cover all mandatory TDD anchors (round-trip IT, copyOf, CanvasPositionDtoTest, FunnelServiceNotesTest). Three minor style findings only — no blockers or majors."
+}

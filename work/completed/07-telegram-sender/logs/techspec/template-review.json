@@ -1,0 +1,36 @@
+{
+  "status": "issues_found",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "task_quality",
+      "description": "Task 4 (Implement TelegramSender) description exceeds 5 sentences and embeds detailed implementation steps (4xx mapping table, retry ladder values, audit event names, test counts). This level of detail belongs in the task file produced during decomposition, not in the tech-spec scope summary.",
+      "recommendation": "Trim Task 4 description to 2-3 sentences: scope (what bean is created, what method it exposes) + reference to Architecture → How it works for the flow and to Testing Strategy for unit/integration scenarios. Detailed steps will be expanded during task-decomposition."
+    },
+    {
+      "severity": "major",
+      "category": "task_quality",
+      "description": "Task 5 (Wire TelegramSender into BotService) description exceeds 5 sentences and enumerates implementation/test steps (constructor wiring, constant addition, branch logic, three new test cases, BotControllerIT positive-path with Awaitility). Same brevity issue as Task 4.",
+      "recommendation": "Reduce to 2-3 sentence scope summary referencing Architecture → How it works (BotService integration) and the Testing Strategy section for the test scenarios. Keep the cross-references; drop the step-by-step."
+    },
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "description": "Task 1 description contains a line-number reference ('mirroring the existing `scrubTokens` promotion comment at line 169-170'). Per template-validator rule 8b, line numbers are implementation details that belong in task files.",
+      "recommendation": "Replace with a non-positional reference, e.g. 'mirroring the existing public-promotion comment on `scrubTokens`'."
+    },
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "description": "Retry ladder values (1s/2s/4s, 30s timeout) and the 4xx → exception mapping appear in both Decisions 8/10/13 and in Task 4 description. Per rule 8c this is duplication — the decision should live in one place.",
+      "recommendation": "In Task 4 description, drop the inline values and replace with 'per Decisions 5, 8, 10, 13'. Keep concrete numbers only in the Decisions section."
+    },
+    {
+      "severity": "minor",
+      "category": "template",
+      "description": "Final Wave omits Deploy and Post-deploy verification tasks. The Agent Verification Plan section explains the rationale (deployment platform TBD, happy path requires Epic 04b, no MCP for live Telegram, opt-in staging-smoke runbook substitutes for post-deploy), which is sound. Flagged informationally so the orchestrator confirms this conditional omission is intentional for L-sized features.",
+      "recommendation": "No change required if the rationale is accepted. Otherwise add a Deploy task once the deployment platform is chosen and a Post-deploy task once Epic 04b lands `ownerChatId` ingestion."
+    }
+  ],
+  "summary": "Tech-spec is structurally complete: all template sections present (incl. Shared resources, User-Spec Deviations), frontmatter valid (created 2026-05-15, status draft, branch dev, size L), Wave 1 parallel tasks have no file overlap, Audit Wave has the 3 required auditors with reviewers:none, and Final Wave QA is present with a documented rationale for omitting Deploy/Post-deploy. Two tasks (4 and 5) violate the brevity rule by embedding detailed implementation steps that belong in task files; minor issues include a line-number reference in Task 1 and value duplication between Decisions and Task 4. No skill mismatches, no wave conflicts, no critical issues — fix the brevity issues during decomposition and the spec is ready."
+}

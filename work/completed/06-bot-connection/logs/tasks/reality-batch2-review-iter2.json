@@ -1,0 +1,52 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 2,
+  "status": "approved",
+  "scope": "Targeted re-validation of three prior findings from reality-batch2-review.json (iter 1).",
+  "findings": [
+    {
+      "severity": "resolved",
+      "category": "missing_function",
+      "task": 4,
+      "prior_issue": "bot.subnav.general, bot.subnav.bot, bot.placeholder were not listed in Task 4 AC or What to do step 1.",
+      "resolution": "All three keys are now explicitly owned by Task 4: Description names them, What to do step 1 has a dedicated bot.subnav bullet and bot.placeholder bullet, and AC has explicit checkboxes for bot.subnav.general, bot.subnav.bot, and bot.placeholder. No residual gap."
+    },
+    {
+      "severity": "resolved",
+      "category": "tdd",
+      "task": 5,
+      "prior_issue": "settings.spec.ts import path fix was framed as optional (if exists).",
+      "resolution": "What to do step 6 now marks the import update as mandatory with bolded emphasis. TDD Anchor explicitly labels it mandatory. AC has a checkbox for the import path change. The step targets the confirmed existing import at line 32 of frontend/tests/pages/projects/settings.spec.ts."
+    },
+    {
+      "severity": "resolved",
+      "category": "hallucination",
+      "task": 5,
+      "prior_issue": "NuxtLinkLocale hint misrepresented the project pattern as bare :to string instead of localePath() wrapper.",
+      "resolution": "Details section now explicitly prescribes :to=\"localePath(`...`)\" and const localePath = useLocalePath() in script setup. The hint explicitly states the project always wraps through localePath() and references ProjectSelector.vue lines 119-128 and 150-159, which use :to=\"localePath(...)\" — confirmed against actual file. Pattern is now accurate."
+    },
+    {
+      "severity": "resolved",
+      "category": "missing_function",
+      "task": 6,
+      "prior_issue": "Task 6 injected MeterRegistry but spring-boot-starter-actuator is not in backend/build.gradle.",
+      "resolution": "MeterRegistry injection is explicitly prohibited in What to do step 1. Description states the project has no metrics infrastructure and names the actuator dep as absent. Dependencies section repeats that spring-boot-starter-actuator is NOT on the classpath. Observability is via dedicated WARN log line, which is reflected in AC11, TDD anchors (ListAppender assertions), and hints. No actuator dep added."
+    },
+    {
+      "severity": "resolved",
+      "category": "hints",
+      "task": 6,
+      "prior_issue": "Implementation hints contained full reactive chain pseudocode and step-by-step algorithm for webhook secret generation and Micrometer counter.",
+      "resolution": "Micrometer counter hint is fully removed (MeterRegistry dropped). Webhook secret hint (line 149) now names the classes (SecureRandom, MessageDigest, HexFormat) without a step-by-step algorithm — acceptable pointer level. Compensating deleteWebhook hint (line 150) describes the operator pattern conceptually without an inline code block. The explicit reactive chain .onErrorResume(persistErr -> ...) in What to do step 3 is an implementation step, not a hint, and is within acceptable scope for step-level instructions. No prescriptive code blocks remain in the hints section."
+    }
+  ],
+  "new_findings": [],
+  "stats": {
+    "tasks_checked": 3,
+    "prior_findings_resolved": 5,
+    "prior_findings_unresolved": 0,
+    "new_issues_found": 0,
+    "claims_verified": 18
+  }
+}

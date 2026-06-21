@@ -1,0 +1,62 @@
+{
+  "verdict": "approved_with_suggestions",
+  "summary": "Both pages cleanly implement Task 11 spec end-to-end: pending banner + Welcome on /dashboard, all five /profile sections (info, resend, change password, terminate-all, delete-account modal), correct vee-validate/zod wiring, established error-shape unwrap pattern, proper interval cleanup on unmount, and 6 well-targeted TDD tests that match the anchors. Conventions from auth/* are followed (mockNuxtImport, settle helper, data-test attributes, zod refine for confirm match). No critical or major findings; remaining items are minor UX/maintainability suggestions and one test-quality nit, all explicitly aligned with the Task 10 precedent that accepts plain Tailwind in lieu of shadcn-vue scaffolding.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "style",
+      "file": "frontend/pages/profile.vue",
+      "line": 53,
+      "issue": "Direct store mutation `authStore.user.name = trimmed` and (line 177, 206) `authStore.user = null` reach into the Pinia setup-store ref from the page. It happens to work because `useAuthStore` exposes `user: userState` (the ref itself unwraps via the store proxy), but it bypasses the store as the single source of truth and silently couples the page to the store's internal shape. Login does the equivalent via `await authStore.fetchUser()`.",
+      "suggestion": "Either (a) call `authStore.fetchUser()` after a successful PATCH /api/profile to refresh the cached user (canonical pattern, matches login.vue), or (b) add a tiny `authStore.setUser(user | null)` / `clearUser()` action in stores/auth.ts and call that from terminate-all-sessions and confirmDelete. Keeps the page free of knowledge about the underlying ref."
+    },
+    {
+      "severity": "minor",
+      "category": "style",
+      "file": "frontend/pages/profile.vue",
+      "line": 249,
+      "issue": "`nameStatus === 'saved'` once set never auto-clears: the green \"Ім'я збережено\" message remains visible until the user clicks Edit again (which resets it inside `startNameEdit`). Users that don't re-edit see a stale success message indefinitely.",
+      "suggestion": "Either start a short timeout (e.g. `setTimeout(() => { if (nameStatus.value === 'saved') nameStatus.value = 'idle' }, 3000)` after success, with cleanup on unmount) or replace with a real toast once shadcn-vue is scaffolded. Same pattern would benefit `changePwdStatus === 'success'` and `resendStatus === 'sent'`."
+    },
+    {
+      "severity": "minor",
+      "category": "style",
+      "file": "frontend/pages/profile.vue",
+      "line": 430,
+      "issue": "Delete-account modal has correct ARIA scaffolding (role=dialog, aria-modal, aria-labelledby) but no ESC-to-close, no focus trap, and no initial focus shift onto the cancel/confirm button. Accessibility precedent set by Task 10 is plain Tailwind divs (no shadcn-vue Dialog), so this is not blocking, but ESC handling is a one-liner that materially improves keyboard-only flow.",
+      "suggestion": "Add `useEventListener('keydown', e => e.key === 'Escape' && closeDeleteModal())` (or `@keydown.esc.window`) and shift focus to the Cancel button when the modal opens via a `nextTick(() => cancelButtonRef.value?.focus())`. Backdrop click-to-close is also a small ergonomic win. Full focus-trap can wait until shadcn-vue Dialog lands."
+    },
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 75,
+      "issue": "`deleteAccount_clickConfirm_callsDeleteProfile` verifies the API call and navigation but not the auth-store side effect (`authStore.user` set to null) that the page explicitly performs and that the do-task checklist depends on. A regression that drops `authStore.user = null` would still pass.",
+      "suggestion": "Add `expect(authStoreMock.user).toBeNull()` after the confirm click. Same applies to a future terminate-all-sessions test (currently absent) — worth adding so the \"clear store before navigating\" comment in the page is enforced by a test."
+    },
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "frontend/tests/pages/profile.spec.ts",
+      "line": 31,
+      "issue": "No test exercises the change-password happy path (200 → success message + form reset) or the 400 \"Невірний поточний пароль\" branch. The single change-password test only covers client-side confirm-mismatch, leaving the server-error mapping (400/429/other) and `resetChangePwdForm()` behavior unverified.",
+      "suggestion": "Add two short tests using the existing apiMock pattern: (1) `apiMock.mockResolvedValueOnce(undefined)` → assert `[data-test=\"change-password-success\"]` visible and inputs cleared; (2) `apiMock.mockRejectedValueOnce({ statusCode: 400 })` → assert `[data-test=\"change-password-error\"]` shows \"Невірний поточний пароль\". Mirrors the login/register error-branch tests added in Task 10 round 1."
+    },
+    {
+      "severity": "nitpick",
+      "category": "style",
+      "file": "frontend/pages/profile.vue",
+      "line": 73,
+      "issue": "On a successful resend (status=sent), `startResendCooldown(60)` runs the timer, but the end-of-timer branch only flips `resendStatus` back to `idle` when it equals `'cooldown'`. After a successful send the \"Якщо акаунт існує…\" message therefore persists for 60s and then for the full lifetime of the page (no reset).",
+      "suggestion": "Make the timer-end branch also clear `'sent'`: `if (resendStatus.value === 'cooldown' || resendStatus.value === 'sent') resendStatus.value = 'idle'`. Or auto-clear the message after a few seconds independent of the cooldown."
+    },
+    {
+      "severity": "nitpick",
+      "category": "style",
+      "file": "frontend/pages/profile.vue",
+      "line": 89,
+      "issue": "Resend body sends `email: authStore.user?.email ?? ''`. The section is only rendered when `authStore.isPending` (so user is guaranteed non-null and email is a real address), making the `?? ''` defensive default unreachable.",
+      "suggestion": "Either drop the `?? ''` (the `v-if` already guards it) or assert the invariant up front (`if (!authStore.user?.email) return`) — either makes the intent clearer and saves a type-narrowing branch."
+    }
+  ]
+}

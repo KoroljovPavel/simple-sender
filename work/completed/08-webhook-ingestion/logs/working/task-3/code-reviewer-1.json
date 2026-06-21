@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": "TelegramCommandParser + ParsedCommand are a clean, AC-compliant pure utility. All edge cases from the task matrix (null, empty, slash-only, leading whitespace, @botname strip on first @, multi-space trim, newline/tab splitters, case preservation, /start@ empty bot, /start@@x multiple @) are handled correctly and pinned by tests. Round-1 javadoc-drift fix on ParsedCommand and the test-consistency fix were both applied correctly in 7dea05d.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramCommandParser.java",
+      "line": 26,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Consider sealing the utility further by adding @SuppressWarnings(\"unused\") on the private constructor or marking the class with a package-private javadoc tag, but this is purely cosmetic — the throwing private ctor + final class already block instantiation and subclassing.",
+      "benefit": "Slightly clearer intent for static analysers; not behavioural.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramCommandParser.java",
+      "line": 60,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The leading-whitespace-skip loop uses Character.isWhitespace(char) on a single char; the splitter loop on line 45 uses the (int) overload via auto-promotion. Both work identically for BMP code points but the difference may confuse future readers. Use the same overload in both places.",
+      "benefit": "Stylistic consistency; no behavioural change (Telegram payloads are UTF-16 strings and surrogate-pair whitespace is not a realistic input).",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/webhook/ParsedCommand.java",
+      "line": 13,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "The NOT_A_COMMAND sentinel is cached as a private static final — nice. Could optionally expose it as a public static final EMPTY constant for callers that want identity comparison instead of .equals(), but the notACommand() factory is sufficient and intent-revealing as-is.",
+      "benefit": "Marginal micro-optimisation if call sites want == rather than .equals(); zero allocation cost either way since the factory already returns the cached instance.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "excellent"
+  }
+}

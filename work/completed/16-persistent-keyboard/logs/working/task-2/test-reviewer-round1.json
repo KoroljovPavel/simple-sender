@@ -1,0 +1,28 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/funnels/FunnelStepForm.keyboard.spec.ts",
+      "line": 202,
+      "description": "The 'renders no resize_keyboard control' test asserts absence of [data-test=\"step-keyboard-resize\"] — a selector that exists nowhere in the codebase. Unlike the CLEAR_KEYBOARD test (which negatively asserts selectors that DO exist on the SET branch, so they are real guards), this assertion is near-tautological: it only catches a regression if a future dev happens to name a resize control with this exact data-test. A dev who added resize_keyboard with any other selector (or a checkbox labelled differently) would not trip it. The acceptance criterion is 'no resize_keyboard control rendered anywhere'.",
+      "recommendation": "Strengthen by asserting on what a resize control would actually look like in this form's idiom: e.g. assert the SET_KEYBOARD block renders exactly two checkboxes (persistent + onetime) and no third — `expect(document.querySelectorAll('[data-test^=\"step-keyboard\"] input[type=checkbox]').length).toBe(2)`. That fails if any third checkbox (a resize toggle) is ever added, regardless of its data-test name. Keep the existing line as a cheap belt-and-suspenders."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/funnels/FunnelStepForm.keyboard.spec.ts",
+      "line": 102,
+      "description": "Text-message hard-block validation (blank text, text >4096) is only exercised on SET_KEYBOARD (the default mount). CLEAR_KEYBOARD shares the same keyboardText/keyboardTextError path and also hard-blocks (keyboardValid checks keyboardTextError for both types), but no test asserts CLEAR_KEYBOARD blocks submit on blank text. Shared code, so low risk, but the CLEAR branch's text-gate is currently unverified — a future refactor that scoped the text error to SET only would pass the suite.",
+      "recommendation": "Add a small case: mount, selectType('CLEAR_KEYBOARD'), set [step-keyboard-text] to '   ', submitForm, expect [step-keyboard-text-error] present and no submit emit. One assertion pair closes the CLEAR-branch text-gate gap."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/funnels/FunnelStepForm.keyboard.spec.ts",
+      "line": 92,
+      "description": "Two tests rely on private knowledge of the seed shape ('one row + one button') by probing step-keyboard-button-0-0, but neither asserts that the seed is EXACTLY one row with EXACTLY one button. The 'caps' test (134) and 'add/remove' test (114) silently assume the starting count is 1; if a future change seeded two rows the cap loops would over-add and the disabled-at-cap assertion could still pass by coincidence (more clicks than needed are no-ops once disabled).",
+      "recommendation": "In the 'renders the SET_KEYBOARD form block' test add a count assertion to pin the seed: `expect(document.querySelectorAll('[data-test^=\"step-keyboard-button-\"]').length).toBe(1)` (matches only the button inputs, not the cell wrappers — adjust the prefix to `step-keyboard-button-0-0`-style if needed) and assert no `step-keyboard-button-1-0`/`step-keyboard-button-0-1` exists. This makes the cap/add-remove tests' implicit '1 → N' arithmetic load-bearing rather than assumed."
+    }
+  ],
+  "summary": "Spec covers the full TDD Anchor list (15 required cases) with strong behavioral assertions, plus three valuable extra edge cases the prompt called for: inactive/non-keyword funnel does not match the hint (line 229), the hint never blocks submit (240), and trimmed emit with fresh defaults (304). Every data-test selector used by the spec maps to a real attribute in FunnelStepForm.vue's SET_KEYBOARD/CLEAR_KEYBOARD template; no hallucinated selectors. Litmus tests pass: the emit cases assert concrete step shape (id/next preserved, keyboardRows deep-equal, CLEAR omits keyboard-only fields, explicit false/true checkbox seed catching the classic `?? true` clobber bug), validation cases assert both the rendered error AND the absence of a submit emit, and the duplicate/over-64/blank cases drive real state through the hand-validation path. Store-seeding timing is handled correctly — the harness seeds funnels AFTER the SET_KEYBOARD type switch fires ensureFunnelsLoaded()'s overwriting fetch, with a clear comment, and beforeEach resets the real-Pinia store for isolation. No blocking or major issues; three minor hardening suggestions (a near-tautological no-resize negative assertion, an untested CLEAR_KEYBOARD blank-text gate, and unpinned seed-count assumptions in the cap/add-remove tests). Status: passed with optional improvements."
+}

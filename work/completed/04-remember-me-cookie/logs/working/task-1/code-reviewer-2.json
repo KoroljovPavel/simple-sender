@@ -1,0 +1,4 @@
+{
+  "summary": "All six round-1 findings are addressed correctly. The REMEMBER_ME_ATTR write is hoisted out of the doOnNext chain and now runs synchronously inside openSession before the reactive pipeline is assembled — functionally equivalent (resolver reads at end-of-request) and slightly more robust (attribute is published even if getSession() errors). Class- and field-level Javadoc accurately documents the cookie-name asymmetry and the REMEMBER_ME_ATTR contract. The PropertyMapper seed comment now correctly states that under this project's application.properties only the path seed survives. The mockExchangeWithCachedSession refactor migrated all 5 call sites; no dead WebSession mocks remain. Scenario H' locks the constructor's setCookieName(...) propagation against regression, plus a bonus inverse test for the secure-flag PropertyMapper override. No new issues introduced.",
+  "findings": []
+}

@@ -1,0 +1,65 @@
+{
+  "validator": "reality-checker",
+  "batch": "5-recheck",
+  "iteration": 2,
+  "tasks_rechecked": [15],
+  "status": "approved",
+  "recheck_summary": {
+    "MAJOR_401_vs_403": "APPROVED",
+    "MINOR_gitleaks_framework": "APPROVED",
+    "MINOR_ac_count_19_vs_20": "APPROVED",
+    "MINOR_depends_on_missing_T8": "APPROVED",
+    "MINOR_verification_steps_section": "APPROVED"
+  },
+  "findings": [],
+  "item_verdicts": [
+    {
+      "original_severity": "major",
+      "category": "feasibility",
+      "task": 15,
+      "original_issue": "Step 6 said 401 for CSRF failure, should be 403",
+      "recheck_verdict": "APPROVED",
+      "evidence": "tasks/15.md line 47: '(authenticated, NO `X-XSRF-TOKEN` header) → expect 403 (CSRF baseline still active for non-webhook paths — Spring Security returns 403 for CSRF failures, NOT 401)'. Status code is now correctly 403."
+    },
+    {
+      "original_severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "original_issue": "Gitleaks referenced via `pre-commit` framework, but project uses direct gitleaks invocation",
+      "recheck_verdict": "APPROVED",
+      "evidence": "tasks/15.md line 43: 'The project installs its hook via `scripts/install-hooks.sh`, which runs `gitleaks detect --staged --verbose` directly (NOT the `pre-commit` framework). Re-run with: `gitleaks detect --staged --verbose --no-banner --redact` from the repo root.' This exactly matches scripts/install-hooks.sh line 16: `gitleaks detect --staged --verbose --no-banner --redact`. Framework mention removed; flags match."
+    },
+    {
+      "original_severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "original_issue": "AC count stated as 19, actual total is 20 (AC11a is a separate labeled criterion)",
+      "recheck_verdict": "APPROVED",
+      "evidence": "tasks/15.md line 28: 'For each user-spec AC (AC1..AC19 plus AC11a — 20 labeled criteria total)'. tasks/15.md line 62: 'All 20 user-spec ACs (AC1–AC19 plus AC11a) mapped'. user-spec.md confirms AC11a is a distinct labeled criterion at line 75. Count and label are now consistent."
+    },
+    {
+      "original_severity": "minor",
+      "category": "cross-task-integration",
+      "task": 15,
+      "original_issue": "depends_on was missing T8 (staging-smoke runbook that T15 references)",
+      "recheck_verdict": "APPROVED",
+      "evidence": "tasks/15.md line 3: 'depends_on: [8, 12, 13, 14]'. T8 is now declared."
+    },
+    {
+      "original_severity": "minor",
+      "category": "feasibility",
+      "task": 15,
+      "original_issue": "No Verification Steps section present",
+      "recheck_verdict": "APPROVED",
+      "evidence": "tasks/15.md lines 85-91: '## Verification Steps' section is present with three concrete smoke checks covering report file existence, report structure, and final verdict line format."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 1,
+    "claims_verified": 5,
+    "issues_found": 0,
+    "previously_flagged": 5,
+    "approved": 5,
+    "regressed": 0
+  }
+}

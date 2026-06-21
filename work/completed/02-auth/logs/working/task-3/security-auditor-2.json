@@ -1,0 +1,61 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A03: Injection",
+      "title": "Token HTML-escaped but not URL-encoded before href substitution — latent URL-breakage risk",
+      "description": "In buildVerificationBody and buildPasswordResetBody, htmlEscape(token) is substituted into a URL query-string position inside an href attribute (e.g. href=\"{APP_URL}/auth/verify-email?token={TOKEN}\"). HTML-escaping is the correct final encoding for text placed into an HTML attribute, but it does not URL-encode the token value first. Characters that are valid in a token but are not URL-safe (e.g. '+', '=', '#', '%', ' ') would be embedded verbatim in the query-string before HTML-escaping, producing a malformed URL that silently breaks the verification link. The current TokenService produces base64url tokens (alphabet [A-Za-z0-9_-], no padding), so the current callers are safe — but there is no assertion in EmailService that enforces this contract. A future change to standard base64 (which uses '+', '/' and '=') or a different token scheme would silently produce broken links without any test catching it.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:57-58, 66-67",
+      "impact": "If the token format ever shifts away from strict base64url, all verification and password-reset links would be silently malformed. Affected users would be unable to verify accounts or reset passwords. This is a silent operational failure with no error log, no metric, and no test catching it.",
+      "recommendation": "Add a token format assertion at the entry point of each public method, or URL-encode the token before HTML-escaping it. Preferred approach — assert the contract:\n\nprivate static final java.util.regex.Pattern BASE64URL = java.util.regex.Pattern.compile(\"^[A-Za-z0-9_-]+$\");\n\npublic void sendVerificationEmail(String to, String name, String token) {\n    if (!BASE64URL.matcher(token).matches()) {\n        throw new IllegalArgumentException(\"Token must be base64url-safe\");\n    }\n    String body = buildVerificationBody(name, token);\n    if (body.isEmpty()) return;\n    sendAsync(to, \"Підтвердіть email\", body);\n}\n\nAlternatively, URL-encode first, then HTML-escape:\n\nprivate static String urlEncodeAndHtmlEscape(String value) {\n    return htmlEscape(java.net.URLEncoder.encode(value, StandardCharsets.UTF_8));\n}\n\nThe assertion is simpler and more explicit about the design contract.",
+      "cwe": "CWE-116"
+    },
+    {
+      "severity": "minor",
+      "category": "A03: Injection",
+      "title": "No XSS regression test for token escaping — only name escaping is covered",
+      "description": "The single XSS test (sendVerificationEmail_htmlEscapesNameWithSpecialChars, line 57-62) passes a malicious name ('<script>alert(\\'xss\\')</script>') but uses a clean token value ('token123'). There is no test that passes a malicious token value (e.g. '\"onload=alert(1) x=\"' or '<img src=x>') and asserts that htmlEscape is applied to it in the resulting body. A refactoring that accidentally removes htmlEscape from the token substitution line would not be caught by the current test suite.",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:57-62",
+      "impact": "XSS regression risk: the htmlEscape fix for token (round 1, finding 1) has no test coverage. A future developer could revert the fix or introduce an analogous bug in a new template without any test failing.",
+      "recommendation": "Add a dedicated test for token escaping in the email body:\n\n@Test\nvoid buildVerificationBody_htmlEscapesTokenInHref() {\n    String body = emailService.buildVerificationBody(\"Alice\", \"\\\"onload=alert(1) x=\\\"\");\n    assertThat(body).contains(\"&quot;onload\");\n    assertThat(body).doesNotContain(\"\\\"onload=alert\");\n}\n\nSimilarly add a test for buildPasswordResetBody with a malicious token.",
+      "cwe": "CWE-79"
+    },
+    {
+      "severity": "minor",
+      "category": "A03: Injection",
+      "title": "htmlEscape does not guard against null input — NullPointerException propagates synchronously",
+      "description": "The htmlEscape static method (line 106-113) calls input.replace(...) directly without a null check. If any caller passes null as name, token, or supportEmail, a NullPointerException is thrown inside buildVerificationBody / buildPasswordResetBody / buildAccountBlockedBody — synchronously, before sendAsync is called. This NPE propagates to the caller (e.g. AuthService) unhandled and uncaught by the Mono.fromCallable / subscribe error handler. In a reactive pipeline, a synchronous exception thrown outside a Mono may crash the subscribing thread rather than being handled as a Mono error signal, depending on the call site.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:106-113 (htmlEscape), 52-76 (buildXxx methods)",
+      "impact": "If a null name or token is ever passed (e.g. from a MongoDB document with a missing field, a test fixture, or a future code path), the service throws an unlogged, unhandled NPE. The email is silently not sent, the caller may receive an unexpected 500, and there is no log entry or metric about the failure.",
+      "recommendation": "Add a null guard in htmlEscape:\n\nstatic String htmlEscape(String input) {\n    if (input == null) return \"\";\n    return input\n            .replace(\"&\", \"&amp;\")\n            .replace(\"<\", \"&lt;\")\n            .replace(\">\", \"&gt;\")\n            .replace(\"\\\"\", \"&quot;\")\n            .replace(\"'\", \"&#39;\");\n}\n\nAlternatively, add Objects.requireNonNull checks at the top of each public method to fail fast with a descriptive message.",
+      "cwe": "CWE-395"
+    },
+    {
+      "severity": "minor",
+      "category": "A03: Injection",
+      "title": "from address passed to MimeMessageHelper.setFrom() without validation — SMTP header injection risk",
+      "description": "The from field (injected from @Value(\"${app.mail.from}\"), default 'noreply@botfunnel.local') is passed directly to MimeMessageHelper.setFrom(from) at line 82 without format validation or sanitization. A misconfigured or environment-variable-injected value containing CRLF characters (\\r\\n) could cause SMTP header injection, allowing an attacker with control over the MAIL_FROM environment variable to inject arbitrary mail headers (Bcc, Cc, Content-Type) into every outgoing email. While this requires compromising the deployment environment, it is a defense-in-depth gap consistent with the treatment applied to other config values.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:26-32 (constructor), 82 (setFrom call)",
+      "impact": "If the MAIL_FROM environment variable is compromised or misconfigured with CRLF characters, an attacker could inject Bcc headers to silently copy all outgoing emails (verification, password reset, account-blocked) to an attacker-controlled address. This could expose tokens and PII to a third party.",
+      "recommendation": "Validate the from address format at construction time using InternetAddress:\n\npublic EmailService(JavaMailSender javaMailSender,\n                    @Value(\"${app.mail.from}\") String from,\n                    @Value(\"${app.url}\") String appUrl) throws AddressException {\n    new InternetAddress(from).validate(); // throws AddressException on malformed/CRLF\n    this.javaMailSender = javaMailSender;\n    this.from = from;\n    this.appUrl = appUrl;\n}\n\nInternetAddress.validate() rejects addresses containing unencoded CRLF, preventing header injection. Wrap the AddressException as IllegalStateException so Spring fails fast at startup.",
+      "cwe": "CWE-93"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Hardcoded super-admin password in test properties committed to source control",
+      "description": "The file backend/src/test/resources/application-test.properties (line 4) contains SUPER_ADMIN_PASSWORD=test-admin-password. This value is committed to source control. While it is labelled a test fixture, it represents a hardcoded credential pattern that violates the project's own security rules (ALWAYS add secrets to .gitignore). If the same value is accidentally reused in a production deployment — or if a developer copies the test properties file as a starting point for a production config — the credential would be weak and already known. Additionally, secret scanning tools (e.g., gitleaks, GitHub secret scanning) may flag this and block CI/CD pipelines.",
+      "location": "backend/src/test/resources/application-test.properties:4",
+      "impact": "A hardcoded password in source control is a credential exposure risk. If the value is ever reused in production, an attacker with access to the repository (or its forks/CI logs) would already know the super-admin password, bypassing authentication entirely.",
+      "recommendation": "Replace the hardcoded value with a randomly generated placeholder that cannot be mistaken for a real credential:\n\nSUPER_ADMIN_PASSWORD=REPLACE_WITH_RANDOM_VALUE_IN_ENV\n\nFor local test runs that actually need a working super-admin, use a .env.test file (gitignored) or a Spring test @TestPropertySource that generates a random password per test run:\n\n@Value(\"${SUPER_ADMIN_PASSWORD:#{T(java.util.UUID).randomUUID().toString()}}\") String superAdminPassword\n\nAlso ensure application-test.properties is listed in .gitignore or that the CI pipeline populates the value from a GitHub Actions secret.",
+      "cwe": "CWE-798"
+    }
+  ]
+}

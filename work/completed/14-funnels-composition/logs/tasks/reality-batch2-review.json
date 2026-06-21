@@ -1,0 +1,76 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 instructs adding 'SUBSCRIBE_TO_FUNNEL' to STEP_TYPES array in FunnelStepForm.vue, but does not acknowledge that the onSubmit switch in the same file has no default/fallback branch. The switch at line 427 covers exactly the 8 current types with no default case. If the implementer adds SUBSCRIBE_TO_FUNNEL to STEP_TYPES but forgets to add a matching case in the switch, the submit handler will silently do nothing (step is unassigned, emit is never called). The task description covers the submit-case (step 2 bullet), but the switch exhaustiveness risk is not flagged anywhere — and there is no TypeScript guard to catch the gap at compile time because the switch is inside a runtime handleSubmit callback on a ref<StepType>.",
+      "fix": "In the What to do step 2, explicitly state that the switch MUST have the new case or TypeScript will not catch the omission. The implementer should add the case and verify that the type-checker narrows correctly. A runtime guard (never assertion or exhaustive check util) would further protect this."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 4,
+      "issue": "Task 4 TDD Anchor states: 'Наявний `required-keys` vitest перевіряє паритет ключів uk/en — тримати локалі симетричними.' This is inaccurate. The file tests/i18n/required-keys.spec.ts only validates a fixed hardcoded REQUIRED_KEYS list (39 explicit keys from earlier tasks). It does NOT perform a full key-parity check between uk.json and en.json. The parity logic exists in frontend/scripts/check-locales.mjs but is NOT invoked in any vitest spec — it is a standalone CLI script. An implementer relying on the spec claim will believe the vitest run catches asymmetric keys, which it does not.",
+      "fix": "Correct the TDD Anchor: 'The required-keys.spec.ts only checks the fixed REQUIRED_KEYS list. Full uk/en parity is not automatically tested in vitest — verify manually by running `node scripts/check-locales.mjs` or add a vitest that calls checkLocales(). New i18n keys must be added to both locales identically and the implementer must add them to REQUIRED_KEYS or run the parity script manually.'"
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 4,
+      "issue": "Task 4 context/reference files in the 'Context Files' section list paths without the /references/ subdirectory: `[project.md](../../../.claude/skills/project-knowledge/project.md)`, `[architecture.md](../../../.claude/skills/project-knowledge/architecture.md)`, `[patterns.md](../../../.claude/skills/project-knowledge/patterns.md)`, `[ux-guidelines.md](../../../.claude/skills/project-knowledge/ux-guidelines.md)`. The actual files live under `.claude/skills/project-knowledge/references/`. The direct paths resolve to nothing (directory has only one child: references/). An agent following these links will get 404/empty reads.",
+      "fix": "Update the four context file links in Task 4 to use the correct paths with /references/ subdir: `.claude/skills/project-knowledge/references/project.md` etc. (Verify: tasks 5 and 6 already use the correct /references/ paths.)"
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 4,
+      "issue": "Task 4 implementation hints state: 'Lazy-loader воронок — мірорити `ensureTagsLoaded` (`...Requested` guard + try/catch → порожній список при помилці, форма не блокується).' and 'Store-методи `fetch(status)` і `fetchOne(id)` уже читають `projectId` з route'. However, `funnelsStore.fetch()` writes to `funnels.value` in the store (a shared reactive ref), while `ensureTagsLoaded` in FunnelStepForm.vue uses a private local ref (`tags`) via direct `useApi()` call — it does NOT call the store. The task says to mirror `ensureTagsLoaded` but then also says to call `useFunnelsStore().fetch(...)`. These two approaches are architecturally different: ensureTagsLoaded bypasses the store entirely. The task mixes both idioms without clarifying which to use for funnel loading. If the implementer calls `funnelsStore.fetch('all')`, that overwrites the store's `funnels.value` which may affect the funnels list page if it is rendered simultaneously — a subtle side-effect not mentioned in the task.",
+      "fix": "Clarify whether the funnel list for the picker should use the store's fetch() (mutates shared state) or a local useApi() call (like ensureTagsLoaded pattern). Given that the store's funnels.value is rendered in the list page, a local fetch via useApi() is safer and consistent with the pattern used for tags and custom-field definitions. Update the hint to recommend the local useApi() pattern explicitly."
+    },
+    {
+      "severity": "minor",
+      "category": "hallucination",
+      "task": 4,
+      "issue": "Task 4 Description step 2 says 'Lazy-fetch воронок проєкту через `useFunnelsStore().fetch(...)` (мірорить `ensureTagsLoaded`/`ensureDefinitionsLoaded` — один раз, коли тип уперше стає `SUBSCRIBE_TO_FUNNEL`, у наявному `watch(selectedType, ...)`).' But the existing watch(selectedType) at line 213 only watches for 'SET_CUSTOM_FIELD', 'ADD_TAG', 'REMOVE_TAG'. Adding SUBSCRIBE_TO_FUNNEL to this same watch is the correct approach, but the task does not explicitly say to extend the existing watch — it says to add it 'у наявному watch', which may be interpreted as adding a branch inside the existing handler, which is the right approach. This is acceptable but slightly ambiguous.",
+      "fix": "Minor clarification only: confirm explicitly that the SUBSCRIBE branch is added inside the existing watch(selectedType, ...) callback at line 213, not as a new separate watcher."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 details say 'fetch(`all`) — список лише `active` приховав би можливість показати підказку'. The store's fetch() signature is `fetch(status: FunnelStatusFilter = 'all'): Promise<void>` and FunnelStatusFilter = 'all' | 'draft' | 'active' | 'paused'. Calling fetch('all') writes the full list (all statuses) to store.funnels. The funnels list page at /funnels by default also calls fetch() with no arg (='all'). This is consistent, but if the list page is currently filtered to 'active' (user applied filter), calling fetch('all') from the form will silently overwrite the store filter state. The task should note this potential side-effect and recommend the local useApi() approach (as flagged above) to avoid it.",
+      "fix": "Same as the major finding above: prefer local useApi() over store.fetch() for the picker's funnel list."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 4,
+      "issue": "The TDD Anchor targets AddStepDialog.spec.ts for all three new tests. The existing spec mounts `AddStepDialog` which internally renders `FunnelStepForm`. The lazy-fetch of funnels in the new SUBSCRIBE block will call the store, which calls useApi() internally — so the existing `apiMock` pattern (mockNuxtImport('useApi', () => () => apiMock)) should work. However, the task does not explicitly describe what apiMock return values are needed for the funnel list fetch and for fetchOne (the step-entry picker). Without mock setup guidance, an implementer may write a test that fetches nothing and the pickers render empty — producing a passing test that does not exercise the real render path of the non-active hint.",
+      "fix": "Add to the TDD Anchor: apiMock.mockResolvedValueOnce([{id:'f1', name:'Funnel A', status:'draft', ...}]) for the funnel list fetch, and apiMock.mockResolvedValueOnce({id:'f1', steps:[{id:'s1',stepType:'SEND_MESSAGE'}]}) for fetchOne, so the inactive-target hint test actually triggers."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_function",
+      "task": 5,
+      "issue": "Task 5 AC lists 'frontend: types/funnel.ts, FunnelStepForm.vue, i18n/locales/{uk,en}.json'. The context files reference path for project.md, architecture.md, patterns.md is correct (/references/ subdir present in task 5). No missing files for the audit scope. One note: the task says decisions.md is a context file and 'на момент виконання звірити з реальними записами Задач 1-4'. The current decisions.md (998B) is a near-empty template — the auditor will find no agent-recorded deviations. This is expected pre-execution but worth noting.",
+      "fix": "No fix needed — task 5 is an audit task and its scope is correctly defined. The decisions.md emptiness is a pre-execution state."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_function",
+      "task": 6,
+      "issue": "Task 6 lists FunnelRepository.java in 'Файли під аудит' (not in 'Files to modify' of other tasks). This file exists at backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java. The context-file link uses a relative path `[FunnelRepository.java](../../../backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java)` — correct. No missing file issue.",
+      "fix": "No fix needed."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 9
+  }
+}

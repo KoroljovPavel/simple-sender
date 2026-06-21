@@ -1,0 +1,43 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "changes_requested",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/jobs/ExportSubscribersJob.java",
+      "line": 128,
+      "finding": "GridFS orphan-blob leak on the FAILED path. handle() assigns `gridFsFileId = streamToGridFs(...)` only on success. When the writer thread fails mid-stream, gridFsOperations.store() has ALREADY persisted a (partial or 0-byte) fs.files blob — store() returns an id to the local variable in streamToGridFs (line 165) — but streamToGridFs then detects writerError and throws (lines 181-186) BEFORE returning that id. So handle()'s gridFsFileId stays null and handleFailure() skips the `if (gridFsFileId != null) gridFsOperations.delete(...)` cleanup (lines 241-243). The author's own comment at lines 137-139 states the FAILED branch deletes this partial file, but the control flow discards the id. ExportCleanupJob only purges DONE exports, so these orphaned blobs are never reclaimed — they accumulate permanently on every failed export. Directly violates the task 'Edge cases' requirement and step 3 ('IF a partial GridFS file was created ... delete it').",
+      "recommendation": "Capture the GridFS file id as soon as store() returns, independent of the later throw. E.g. pass an `AtomicReference<ObjectId> createdFileId` from handle() into streamToGridFs and set it immediately after `gridFsOperations.store(...)` succeeds (before the writerError re-throw), then have handleFailure read that holder. The FAILED-branch IT (SubscriberExportIT.exportJob_internalError_writesFailedAndEmail) should additionally assert that no fs.files document remains for the export after the job fails — the current test stubs mongoTemplate.stream to throw before any byte is written and never asserts blob absence, so it masks this leak."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/export/SubscriberExportController.java",
+      "line": 211,
+      "finding": "The download endpoint (`GET /api/v1/projects/{projectId}/subscribers/exports/{exportId}/download`) requires an authenticated session in production, contradicting the tech-spec contract. tech-spec.md:146 states the download endpoint is 'unauthenticated by session (HMAC only)' and Decision 16/F4 treats it as 'the most-attacked public surface ... it's unauthenticated by session'. SecurityConfig.java:97 maps `/api/**` to `.authenticated()` and was NOT modified by this commit, and there is no permitAll rule for the download path. As a result, a recipient clicking the signed-URL link from the export-ready email (which has no session cookie) gets a 401 from Spring Security before the controller's HMAC verification ever runs — making the core shareable-signed-URL feature (AC19) non-functional outside an active in-app browser session. The controller javadoc even asserts the opposite intent ('reached only by an authenticated session'). The download IT passes only because every download test is annotated `@WithMockAppUser`, so the session-less path is never exercised. Note: the task step-3 hints say `requireOwned(currentUserId(), ...)` for download, which is internally inconsistent with the tech-spec's session-less contract — this needs a product/security decision rather than a silent default.",
+      "recommendation": "Resolve the spec contradiction explicitly: either (a) add a permitAll matcher for `GET .../exports/{exportId}/download` in SecurityConfig and drop the session-coupled `requireOwned(currentUserId())` in the download path (authorize purely via the token's bound projectId + a non-session ownership/soft-delete check), matching tech-spec.md:146; or (b) if session auth is intentionally retained, update tech-spec Decision 16 and AC19 to state the link only works for a logged-in owner, and add an IT that exercises the unauthenticated request to lock the chosen behavior. Add a download test WITHOUT @WithMockAppUser to cover the real email-click scenario."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/jobs/ExportSubscribersJob.java",
+      "line": 33,
+      "finding": "Unused import `java.nio.charset.StandardCharsets` — the deterministic-UUID computation that needed it lives in the controller, not the job.",
+      "recommendation": "Remove the unused import."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/jobs/ExportSubscribersJob.java",
+      "line": 150,
+      "finding": "The PipedInputStream `in` is opened but never explicitly closed. GridFsTemplate.store() does not close the supplied InputStream, so `in` is left open after a successful store(). PipedInputStream holds no OS handle (memory only), so impact is negligible, but the task hint explicitly asked to wrap the PipedOutputStream/PipedInputStream pair so the resource lifecycle is symmetric.",
+      "recommendation": "Close `in` in a finally (or try-with-resources) so the read end is released deterministically, matching the writer-side closeQuietly(pipeOut)."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/export/SubscriberExportController.java",
+      "line": 340,
+      "finding": "The refresh-url switch `default` arm maps to export_failed/410. ExportStatus is a closed 5-value enum all of whose values are already handled (DONE, PENDING, RUNNING, PURGED, FAILED), so the default is unreachable; if a future enum value is added it would be silently treated as 'failed' rather than caught at compile time.",
+      "recommendation": "Optional: drop the default and let the exhaustive switch flag a newly-added enum constant at compile time, or keep default but throw an IllegalStateException so an unhandled status surfaces rather than masquerading as export_failed."
+    }
+  ],
+  "summary": "Strong implementation that closely follows the precedents (ProcessTelegramUpdateJob re-entry guard / atomic FAILED-write / scrubbed-rethrow, deterministic-UUID enqueue, ProjectHardDeleteJob cron + idempotent purge); the PipedOutputStream/virtual-thread streaming is deadlock-safe (interrupt-then-join with InterruptedIOException handling) and all cross-file signatures verify and sources compile. Two material issues block approval: a GridFS orphan-blob leak on the FAILED path (the partial file's id is discarded on the writer-failure throw so handleFailure never deletes it, and FAILED rows are never swept by cleanup), and the download endpoint still sits behind `/api/**` session auth, contradicting the tech-spec's 'unauthenticated by session (HMAC only)' contract so the email signed-link is unusable without a logged-in session."
+}

@@ -1,0 +1,28 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "The 'Технические решения' section descends into HOW-level / tech-spec territory: it names concrete internals (6-arg sendText with Object replyMarkup, FunnelStep.copyOf, Map-builders living in StepExecutor, 'flat nullable fields without _class', resize_keyboard hardcoded true) rather than staying at the WHAT/WHY altitude of a user-spec.",
+      "why_matters": "User-spec should define the contract (what the author/subscriber gets and why), leaving implementation choices to tech-spec. Pre-committing storage shape and call sites in the user-spec narrows the tech-spec's design space and can lock in a decision before it is properly weighed (the spec itself admits the row storage model — list-of-lists vs typed record — is a tech-spec call, yet other equally implementation-level choices are fixed here).",
+      "fix": "Keep the acceptance criteria and constraints (caps, persistence/one-time semantics, fire-and-forget CONTINUE, no migration). Demote the internal mechanics (sendText overload, copyOf, Map-builder placement, resize_keyboard hardcoding) to tech-spec, or reframe them as 'constraints the solution must satisfy' rather than chosen implementations. This is consistent with how the project has written prior phase specs, so treat as a light cleanup, not a blocker."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "Observability for the two new steps is not addressed. The spec mentions PII-safe text trimming indirectly (via reuse of renderTrimmed) but says nothing about whether a SET_KEYBOARD/CLEAR_KEYBOARD send emits a distinguishable audit/log signal, nor how the 'dead button' silent no-op is made debuggable at runtime.",
+      "why_matters": "Both consciously-accepted runtime gaps (dead button no-op, menu-precedence suppression of taps) are invisible by design. With no deploy environment and author-only manual verification, the only way the author can diagnose 'I tapped the button and nothing happened' is a greppable log marker. The engine already follows a codes-only log convention (LOG_KEYWORD_SUPPRESSED_WAITING_FOR_REPLY, LOG_DISPATCH_REENTER_IGNORED); the new steps should slot into that pattern.",
+      "fix": "Add an acceptance criterion or constraint that the keyboard send reuses the existing telegram_message_sent audit path and that the suppressed-tap / no-match cases remain greppable (reuse existing markers, no new logging machinery). One line is enough."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "Edge cases are covered for the happy and most failure paths (empty rendered text, blocked/deleted subscriber via reused error mapping, repeat-tap re-enter guard, dead button), but two boundary cases for SET_KEYBOARD are unstated: (a) a button row with zero buttons after author edits, and (b) total-button or total-keyboard-size limits beyond the per-row cap (Telegram rejects keyboards over its own ceilings).",
+      "why_matters": "The spec caps rows (<=10) and buttons-per-row (<=4) and blocks duplicate labels, but does not state behavior for an empty row or a whitespace-only button label, nor whether validation rejects them. These are exactly the inputs an author can produce in the rows-of-buttons editor, and an empty/blank button serialized into reply_markup is a likely Telegram 400.",
+      "fix": "Add acceptance criteria: empty rows are dropped or rejected by validateSteps (mirror client), and button label is non-blank after trim (mirror the keyword/MESSAGE non-blank conventions). Keep it as validation rules, not new mechanics."
+    }
+  ],
+  "worst_category": "underengineering",
+  "summary": "Idea is reasonable, right-sized (M is accurate), and buildable on the current stack with zero new dependencies, infrastructure, or migrations — every integration point (6-arg sendText Object replyMarkup, keyword dispatch, copyOf snapshot, StepType switch) is verified against actual source. No critical or major findings; only minor altitude and edge-case/observability polish before tech-spec."
+}

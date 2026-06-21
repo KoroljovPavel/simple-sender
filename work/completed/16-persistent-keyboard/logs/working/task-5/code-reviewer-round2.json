@@ -1,0 +1,36 @@
+{
+  "status": "approved",
+  "summary": "Round-2 re-review of the round-1 fix commit (HEAD 67b8d91). All three changes are correct and regression-free: the funnel.ts header doc-comment generalization is accurate, the new empty-renderedBlocks keyboard desync test matches the component's computed/template logic exactly, and the strengthened debounce test's toHaveBeenLastCalledWith payload assertions align with the real funnelsStore.preview('f1', 's1', payload) call signature. No new findings.",
+  "criticalIssues": [],
+  "suggestions": [],
+  "metrics": {
+    "filesReviewed": 2,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 0,
+    "testCoverageAssessment": "excellent"
+  },
+  "round1FindingsVerification": [
+    {
+      "finding": "#3 stale top-of-file header comment in frontend/types/funnel.ts",
+      "status": "resolved",
+      "verification": "Header now reads 'Mirrors the backend DTOs (com.botfunnel.funnel.dto)'. The package com.botfunnel.funnel.dto exists and contains the mirrored DTOs (FunnelResponse, FunnelSummaryResponse, FunnelStepDto, KeyboardRowDto, etc.). Dropping 'Task-5' is correct since these TS types mirror DTOs spanning multiple tasks, not only Task-5. Change is a pure comment edit — no runtime impact."
+    },
+    {
+      "finding": "test-reviewer: missing empty-renderedBlocks keyboard desync test",
+      "status": "resolved",
+      "verification": "New test asserts keyboardText computed returns null when renderedBlocks=[] (renderedBlocks?.[0] is undefined → v-if false → no funnel-preview-keyboard-text node) and keyboardMockRows=[] when keyboardRows=null (v-if length>0 false → no funnel-preview-keyboard node), while funnel-preview-panel still mounts. Assertions match component logic at FunnelMessagePreview.vue lines 77-88, 234-260 exactly. Mirrors the existing MESSAGE renderedBlocks-shorter-than-blocks defensive case."
+    },
+    {
+      "finding": "test-reviewer: strengthen debounce test with payload assertions",
+      "status": "resolved",
+      "verification": "Two toHaveBeenLastCalledWith('f1','s1',expect.objectContaining(...)) assertions added — one verifying keyboardText:'Новий текст' propagates through the keyboardText watch, one verifying keyboardRows mutation propagates through the deep watch. Mock is wired as preview: previewMock and called as funnelsStore.preview(funnelId,'s1',payload) → arg order ('f1','s1',payload) is correct. setKeyboardStep uses id:'s1' and funnelId resolves to 'f1'."
+    },
+    {
+      "finding": "optional: dev-only warn on dropped empty row + empty-text-box cosmetic case",
+      "status": "not-applied-by-design",
+      "verification": "Both were marked optional/no-change in round 1; intentionally skipped. No regression."
+    }
+  ],
+  "regressionCheck": "No regression. Diff is scoped to one comment line in frontend/types/funnel.ts and additive test code in FunnelMessagePreview.spec.ts (no production code, no shared helpers, no test-state leakage — beforeEach resets previewMock, the new test uses mockResolvedValueOnce). Full spec reported green at 29 tests by orchestrator; static analysis confirms all new assertions are consistent with the component."
+}

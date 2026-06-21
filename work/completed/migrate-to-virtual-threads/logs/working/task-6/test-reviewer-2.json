@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "All three round-1 minor findings are addressed correctly with no regression of invariants. (1) AuthControllerIT — both await().atMost(...).until(...) polls in verifyEmail_validToken_userActive_tokenCleared (line 185) and passwordChanged_event_logged (line 532) are replaced with direct eventRepository.findAll().stream().filter(...).findFirst().orElseThrow(); the filter predicates now correctly include both eventType AND userId match, which is actually stronger than the round-1 await predicate (the .filter previously matched eventType only and could have surfaced a wrong-user event in a polluted DB). Awaitility import is still needed (Mongo readiness wait at line 82, two during(...) timing windows at 292/364). (2) AuthServicePasswordResetTest:262-265 — upper bound .isLessThanOrEqualTo(Duration.ofMillis(500)) added alongside the existing 30ms lower bound; the comment block explicitly anchors the 500ms cap below ~250ms BCrypt cost to detect a real auth path leak. (3) AuthServiceRegistrationTest:278 — method renamed to register_emailDispatchFailure_swallowedByService_callerReceivesNormalResponse; the body now matches the name (no spurious HTTP status claim). Litmus test still passes for every touched test. No new findings.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 5,
+      "passed": 5,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 60,
+      "integration": 17,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

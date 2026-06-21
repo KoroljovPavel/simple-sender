@@ -1,0 +1,40 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task step 2 says 'Викотити зміни через GitHub CI/CD' and AC requires 'GitHub Actions pipeline (build + test + deploy + health-check) завершився успішно' — but no GitHub Actions workflow files exist in the repository (.github/ directory is absent). deployment.md explicitly states CI/CD is 'TBD'. The task acknowledges this in its Details section ('GitHub Actions pipeline — платформа/воркфлоу TBD'), yet the AC checkbox treats a green pipeline as a hard pass/fail gate. Executing this task will immediately stall at step 2 with no actionable unblock path other than asking the user.",
+      "fix": "Keep the AC but add a branch condition: if the CI/CD pipeline does not yet exist, gate on user confirmation of the deploy channel before proceeding; or mark the pipeline-existence gate as a pre-condition to confirm before starting Task 13 (not an in-task step)."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task describes the manual MongoDB wipe happening 'Перед тим, як нова версія почне обробляти трафік' (before new version takes traffic). With a TBD deployment platform the ordering between the deploy-step and the wipe-step cannot be guaranteed. There is no staging environment URL defined, so the agent cannot determine which MongoDB URI to target without asking the user.",
+      "fix": "Add an explicit pre-step: ask the user for the target MongoDB URI and confirmation that it is a non-production environment before running the wipe. This is defensive but consistent with the CLAUDE.md rule 'ALWAYS ask before Deploy/push to main/production'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Task step 1 curl commands reference '<live>/api/projects/{projectId}/funnels/{funnelId}' with PUT and POST activate. The actual activate endpoint is POST /api/v1/projects/{projectId}/funnels/{funnelId}/activate (note the /api/v1 prefix, confirmed in FunnelController.java at line 35 + 85). The task uses '<live>/api/...' which omits the /v1 segment — this is a template placeholder, not a hard error, but if a junior agent fills in the base URL literally it will get 404.",
+      "fix": "Update the Verification Steps curl templates to include the full path: <live>/api/v1/projects/{projectId}/funnels/{funnelId} and <live>/api/v1/projects/{projectId}/funnels/{funnelId}/activate."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Task step 1 says to save/activate a funnel 'з валідним мультиблок-композером (text → image+caption → album×3 → text-хвіст із кнопками)'. At the point Task 14 runs the collections have just been wiped by Task 13, so the agent must create a new funnel and funnel steps from scratch via the API. The task does not provide the required request body shape or mention where to obtain a valid projectId — these will need to be resolved from the user at runtime.",
+      "fix": "Add an explicit note that the agent must ask the user for a live projectId and bot before constructing the curl payload, or reference the save-funnel API docs/patterns for the correct request body structure."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 18,
+    "issues_found": 4
+  }
+}

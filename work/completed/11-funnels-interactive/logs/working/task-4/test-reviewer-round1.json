@@ -1,0 +1,20 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "minor",
+      "location": "FunnelControllerIT — label boundary",
+      "finding": "Label length had a reject test at 65 chars but no accept test at exactly 64. The task edge-cases call out the 64-vs-65 boundary explicitly; without a 64-accept test an off-by-one regression (>= vs >) would go uncaught.",
+      "action": "fixed",
+      "fix": "Added activateMenuLabelExactly64IsAccepted (64-char label → activate 200)."
+    },
+    {
+      "severity": "info",
+      "location": "FunnelControllerIT — TDD anchor coverage",
+      "finding": "All task TDD anchors covered: broken edge (callback + next), MENU-without-callback, 3 URL-scheme negatives (javascript:/leading-whitespace/empty-host), too-many-buttons, PATCH→GET round-trip (server id + preserved client id + null End target), reorder-preserves-by-id, fan-in+loop, duplicate-id. Integration test type is correct (MockMvc + Testcontainers, no excessive mocking); assertions check real HTTP status, business $.code, and round-tripped JSON values.",
+      "action": "none"
+    }
+  ]
+}

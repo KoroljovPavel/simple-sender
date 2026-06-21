@@ -1,0 +1,8 @@
+{
+  "reviewer": "security-auditor",
+  "task": 7,
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "Both round-1 findings are fully resolved. (1) onNodeDragStop now applies Number.isInteger(idx) before writing into the trigger and note arrays on both branches (lines 259 and 263 of [funnelId].vue); a malformed nodeId such as 'trigger:x' produces NaN which fails the integer check and exits early — no array[NaN] write is possible. (2) The XSS/note-text unit test (funnel-editor.spec.ts line 851) now asserts noteNode.element.innerHTML does not contain '<img', complementing the existing escaped-text, no-img-element, and no-onerror checks. No v-html directive exists anywhere in [funnelId].vue (grep confirms zero matches). The sanitizeTrigger change (canvasPosition passthrough) introduces no new injection surface — the value is a plain { x: number, y: number } object copied by spread, never rendered as HTML. No new security issues found in the fix commit."
+}

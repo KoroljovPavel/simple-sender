@@ -1,0 +1,34 @@
+{
+  "status": "PASS_WITH_NOTES",
+  "findings": [
+    {
+      "severity": "LOW",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelRepository.java",
+      "line": 35,
+      "issue": "Null-input risk on onStartTriggerValue lookup. findByProjectIdAndOnStartTriggerValueAndStatus accepts String onStartTriggerValue without a null-guard contract. If a caller passes null (e.g. a future Task-4/5 code path that checks for an on_start trigger when none exists), Spring Data generates {onStartTriggerValue: null} which matches all event-only funnels (those with onStartTriggerValue=null). The partial-unique index only prevents duplicates for $exists:true documents; it does not prevent a null-based query from returning cross-type results. In normal operation on_start triggerValue is '' not null, so current callers are safe — but the interface leaves no contract enforcing this.",
+      "fix": "Add a Javadoc @throws or @param note stating 'onStartTriggerValue must not be null; pass empty string for bare /start'. Alternatively, assert non-null inside a default method wrapper or rely on Task 4 to guard at the call site. This is a defensive contract gap, not an exploitable path today."
+    },
+    {
+      "severity": "LOW",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliation.java",
+      "line": 70,
+      "issue": "Non-volatile reconciled flag. The once-per-boot guard 'private boolean reconciled = false' is not volatile. Spring's BeanPostProcessor chain runs single-threaded during context startup, so this is safe in practice. However, without volatile the JMM permits the JIT to cache the flag in a register and miss an update in a multi-threaded BPP scenario (unlikely but possible with parallel bean initialization in newer Spring versions). This is a theoretical risk with negligible real-world impact given Spring's startup model.",
+      "fix": "Change to 'private volatile boolean reconciled = false' for JMM correctness and forward-safety. Zero behavioral change in the current Spring startup model."
+    },
+    {
+      "severity": "INFO",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliation.java",
+      "line": 106,
+      "issue": "Exception message logged verbatim. 'log.error(\"Funnel trigger-index reconciliation failed: {}\", ex.getMessage(), ex)' logs ex.getMessage(). MongoDB driver exception messages for index operations contain structural data (index names, error codes, collection names) — no PII in this context. Confirmed safe for the current use case: the only DB operations in this class are listIndexes() and dropIndex(), whose exceptions cannot surface user-supplied data.",
+      "fix": "No action required. Document in the class Javadoc that ex.getMessage() is safe here (index-operation errors only), so a future maintainer who adds a user-data-touching DB call does not follow the same pattern blindly."
+    },
+    {
+      "severity": "INFO",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java",
+      "line": 156,
+      "issue": "eventOnlyFunnel inserts after the onStartFunnel collision in onStartUniquenessHoldsAndNullDoesNotBind — test isolation is correct (UUID-scoped projectId, finally-cleanup), but the second eventOnlyFunnel insert (line ~157) runs after two collision attempts; the test state within the try block accumulates 2 on_start funnels (promo + empty) before the event-only inserts. This is correct and intended but could confuse future readers: the 'promo' onStartFunnel insert already DuplicateKey-throws on the second attempt (caught by assertThatThrownBy), so only one promo funnel and one empty-string funnel actually persist. The test logic is sound.",
+      "fix": "No functional fix needed. Consider a brief comment after each assertThatThrownBy clarifying how many documents are present at that point, for future readability."
+    }
+  ],
+  "summary": "Task 2 commit 7fe979d is PASS WITH NOTES. No critical or high severity findings. The security-critical properties are correctly preserved: (1) the on_start uniqueness invariant is maintained at the DB level via the partial-unique {projectId, onStartTriggerValue} index with $exists:true guard — the reconciliation correctly drops only the OLD flat-trio index by name presence (never the new index), is idempotent, and log-but-never-throws; (2) all repository queries are projectId-scoped — no cross-project data leakage or IDOR is introduced; (3) log markers are PII-free (index/collection names only); (4) the log-but-never-throw discipline in reconciliation does not silently hide a missing unique index — a drop failure causes auto-index-creation to throw IndexKeySpecsConflict and crash boot loudly (correct behavior per Decision 7). Two LOW findings: a missing null-guard contract on the onStartTriggerValue repository parameter (latent misuse risk, not exploitable today) and a non-volatile once-guard flag (theoretical JMM gap, safe under Spring's single-threaded startup). Two INFO notes: exception message logging (confirmed PII-free for this context) and a test-readability observation."
+}

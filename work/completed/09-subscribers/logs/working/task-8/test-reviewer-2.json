@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review of Task 8 (09-subscribers). All five round-1 findings (2 major, 3 minor) are resolved with real behavioral assertions and no weak/litmus-failing tests remaining. MAJOR-1 (tag endpoints had no HTTP coverage): the new SubscriberTagAssignmentIT drives POST /{id}/tags and DELETE /{id}/tags/{slug} through the real controller — happy path (200 + tags array + counter==1 + subscriber_tag_added event), idempotent re-attach (counter stays 1, single event), detach (204 + counter decremented to 0 + subscriber_tag_removed event), invalid-slug 400, foreign-project 404, unknown-subscriber 404 — and asserts the 10x-concurrent-same-slug invariant (counter==1) against subscriberService.addTag, which is the exact entry-point logic the controller delegates to (controller adds only requireOwned/findOrCreate, both now HTTP-covered by the 404/happy cases). The @WithMockAppUser-on-test-thread limitation is correctly documented and the right layer chosen. MAJOR-2 (mislabeled dollar-key cursor IT): payload changed to {\"v\":{\"$ne\":null},\"id\":<valid 24-hex>} so it passes assertExactlyVAndId and the id-regex and is an injection-shaped nested-operator payload returning 400 invalid_cursor with no row leak — a genuine F6 regression catch at the HTTP boundary, no longer a duplicate of cursor_unknownKeys. MINOR-3 (mass-assignment under-assert): now asserts exactly 1 outbound Telegram send (delta of getRequestCount), exactly 1 personal_message_sent event, and subscriber stays ACTIVE — proving the hostile status:hacked key had no side effect. MINOR-4 (text-search firstName-only): now seeds three subscribers and asserts firstName, lastName, and username token matches independently. MINOR-5 (cursor count-only): now asserts the collected id set equals the full seeded set (catches skips, not just count) AND subscribedAt is non-increasing across all page boundaries (boundary continuity). The four affected classes are green: SubscriberTagAssignmentIT (7), SubscriberControllerIT (19), SubscriberPersonalMessageIT (9), SegmentFilterBuilderTest (22). Pyramid balance remains healthy. One non-blocking note recorded below regarding the dollar-key IT's litmus isolation; the security-relevant behavior is fully verified.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/subscriber/SubscriberControllerIT.java:232 (cursor_dollarPrefixedKeys_returns400)",
+      "issue": "Non-blocking note (not a regression). The payload {\"v\":{\"$ne\":null},\"id\":<hex>} now correctly reaches assertNoDollarKeys (the round-1 duplication of cursor_unknownKeys is fixed), but the recursive $-key guard cannot be isolated in a strict litmus sense: because v is an object, the v.isNumber()/canConvertToLong() type-check at SegmentFilterBuilder.java:138 also rejects this payload. So deleting assertNoDollarKeys alone would still yield 400 here. This is a structural property — with exactly-{v,id} keys plus the v-numeric and id-hex checks running alongside the dollar-walk, no payload can trigger ONLY the dollar-walk; the recursive guard is genuine defense-in-depth that is intentionally redundant with the type/shape checks. The IT does verify the correct end-to-end behavior (injection-shaped nested operator → 400 invalid_cursor, no row leak), which is the guarantee that matters. No change required.",
+      "recommendation": "No action needed. If isolation of the recursive guard is ever desired as a pure unit assertion, it would require calling assertNoDollarKeys directly (it is private), which is not worth widening visibility for. Leave as-is; the behavioral contract is covered at both the unit layer (SegmentFilterBuilderTest.decodeCursor_dollarPrefixedKey) and the HTTP layer."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 14,
+      "passed": 14,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 22,
+      "integration": 35,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,65 @@
+{
+  "status": "pass",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 23,
+  "requirements_covered": 22,
+  "requirements_partial": 1,
+  "requirements_missing": 0,
+  "findings": [
+    {
+      "type": "partial",
+      "source": "tech-spec",
+      "requirement": "AC18: masked token display format",
+      "detail": "AC18 mask deviation is properly documented in User-Spec Deviations with [PENDING USER APPROVAL], full rationale ('tokens NEVER round-trip'), visual difference description, and rollback path. This is partial only because user approval is still pending — which is the correct state for a draft spec. No action required until the user reviews and approves or rejects the deviation.",
+      "severity": "minor"
+    }
+  ],
+  "round2_fixes_verification": {
+    "bot_test_message_sent_in_task6_description": {
+      "status": "resolved",
+      "detail": "Task 6 description now reads: 'audit event emission for bot_connected (on successful Connect) and bot_disconnected (on Disconnect). **No bot_test_message_sent event in 06** — per D7, the test-message endpoint short-circuits to 422 with no state change, so no event is emitted; the event is introduced in 06b on the success branch.' The prohibited event no longer appears as a deliverable. D7 and Task 6 are now consistent."
+    },
+    "errors_bot_connect_401_in_architecture_and_test_spec": {
+      "status": "resolved",
+      "detail": "Architecture section line 51 now reads: 'errors.bot.connect.{400,409,422,429,500,502,generic}' — no 401 key. Frontend component test spec (line 407) now reads: 'Each error status from the backend connect endpoint (400/409/422/429/500/502) resolves the matching errors.bot.connect.{status} key via useApiError. (Backend never returns 401 from connect; that auth-failure status would resolve through the global error handler, not under errors.bot.connect.)' All three locations (Architecture, frontend test spec, Task 4) are now consistent: no 401 under errors.bot.connect."
+    },
+    "task6_verify_smoke_step_order": {
+      "status": "resolved",
+      "detail": "Task 6 Verify-smoke now specifies: 'requireOwned → INCR brute-force counter → per-project pre-check → getMe → platform-wide pre-check → setWebhook → encrypt → persist → bot_connected event → DEL brute-force counter'. This matches the authoritative pipeline in Architecture → How it works exactly (steps 1-12). The round-2 major finding (wrong order: brute-force before ownership) is eliminated."
+    },
+    "missing_negative_event_assertion_for_ac15": {
+      "status": "resolved",
+      "detail": "Task 6 Verify-smoke now explicitly requires: 'test-message endpoint returns 422 with zero Telegram calls and zero events'. The negative assertion that bot_test_message_sent is NOT emitted in 06 is now mandated at the unit-test level. The integration test for AC15 (line 394) already asserted 'MockWebServer receives ZERO requests'; the unit-test-level 'zero events' assertion closes the gap identified in round 2."
+    }
+  },
+  "forward_traceability": {
+    "US-1_AC1": "covered — BotController POST /connect + BotResponse DTO (no token fields per D17)",
+    "US-2_AC2": "covered — D16 bean-validation regex on ConnectBotRequest.token, GlobalErrorHandler → 400",
+    "US-3_AC3": "covered — TelegramApiClient maps Telegram-401 to AppException 422 invalid_bot_token",
+    "US-4_AC4": "covered — D11 retry policy (Retry.backoff 3x200ms maxBackoff 2s, 5xx/IOException/TimeoutException filter)",
+    "US-5_AC5": "covered — D8 maps setWebhook 4xx with config description → 500 webhook_config_error + operator log",
+    "US-6_AC6": "covered — D1 platform-wide service pre-check + partial unique index on telegramBotId filtered status=CONNECTED",
+    "US-7_AC7": "covered — D5 service pre-check + partial unique index on projectId filtered status=CONNECTED (defense-in-depth)",
+    "US-8_AC8": "covered — Connect pipeline steps 4→7→9 enforce ordered side-effects; document only saved if all succeed",
+    "US-9_AC9": "covered — D4 compensating deleteWebhook in onErrorResume + DuplicateKeyException path",
+    "US-10_AC10": "covered — pipeline steps 6-7 generate fresh webhookSecret and build webhookUrl from app.url + projectId",
+    "US-11_AC11": "covered — D14 INCR-every-attempt, pipeline step 2 complete, DEL at step 11, fail-open with WARN + Micrometer counter",
+    "US-12_AC12": "covered — same-token race: platform-wide index + integration test; different-token same-project race: projectId index + integration test (D5, R4b)",
+    "US-13_AC13": "covered — Disconnect pipeline with best-effort deleteWebhook, WARN log, atomic status update (null token+iv+secretHash)",
+    "US-14_AC14": "covered — BotController GET + findByProjectIdAndStatus → 404 if none",
+    "US-15_AC15": "covered — D7 short-circuit to 422 owner_chat_id_unknown, endpoint contract final, integration test asserts 422 + zero MockWebServer requests, unit test asserts zero events",
+    "US-16_AC16": "covered — requireOwned as first step in every pipeline, @JsonIgnoreProperties on request DTOs",
+    "US-17_AC17": "covered — BotResponse has no token fields (D17), BotTokenLeakTest reflective assertion, integration test negative assertion (no field matches token regex)",
+    "US-18_AC18": "partial — synthesized placeholder deviates from AC18 literal (last 3 token chars replaced with literal dots); documented in User-Spec Deviations as [PENDING USER APPROVAL] with full rationale and rollback path",
+    "US-19_AC19": "covered — shadcn Dialog with exact copy in Task 9, i18n keys in Task 4",
+    "US-20_AC20": "covered — D2 SHA-256 hash of 16-byte random secret; integration test asserts 64-hex-char field + SHA-256(plaintext)==storedHash",
+    "US-21_AC21": "covered — D10 folder split, Task 5 creates settings/index.vue + settings/bot.vue + SettingsSubnav.vue",
+    "US-22_AC22": "covered — Task 4, Architecture line 51, and frontend test spec all consistently specify errors.bot.connect.{400,409,422,429,500,502,generic}; no 401 key anywhere in errors.bot subtrees",
+    "US-23_AC23": "covered — bot_connected (pipeline step 10) and bot_disconnected (Disconnect step 6) emitted with PII-safe metadata; bot_test_message_sent explicitly deferred to 06b in D7 and Task 6; negative assertion (zero events) mandated in Task 6 Verify-smoke"
+  },
+  "summary": "22/23 requirements covered; 1 partial (AC18 mask format pending user approval — correctly documented with [PENDING USER APPROVAL] and rollback path). 0 missing. Both round-2 critical findings are confirmed resolved: (1) Task 6 no longer instructs emitting bot_test_message_sent — it now explicitly prohibits it per D7; (2) errors.bot.connect.401 is removed from the Architecture i18n key list and the frontend component test spec, all three locations (Architecture, test spec, Task 4) are consistent. The round-2 major finding (wrong step order in Task 6 Verify-smoke) is also resolved — the correct order requireOwned → INCR → per-project pre-check → getMe → platform-wide pre-check → setWebhook → encrypt → persist → bot_connected → DEL now appears. The round-2 minor finding (no negative event assertion for AC15 at unit-test level) is resolved — Task 6 Verify-smoke now mandates 'zero events'. No new contradictions introduced."
+}

@@ -1,0 +1,68 @@
+{
+  "validator": "reality-checker",
+  "iteration": 2,
+  "batch": [1, 4, 5],
+  "status": "approved",
+  "tasks": [
+    {
+      "task": 1,
+      "verdict": "ok",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "feasibility",
+          "task": 1,
+          "issue": "stopAllScopedByProjectAndFunnel test: the task says 'seed an active execution in another project (different projectId)', but the existing seedExecution(funnelId, status) helper hard-codes class-level projectId and has no overload for a different project. The developer will need to use mongoTemplate.save inline (or duplicate the helper) for the isolation leg. The task does not mention this gap, which may cause confusion mid-TDD.",
+          "fix": "Add a note in the TDD Anchor that seedExecution does not accept a projectId override; the isolation execution must be seeded via mongoTemplate.save directly, following the existing foreign-project pattern used at IT lines 305-306 (saveProject + manual entity construction)."
+        },
+        {
+          "severity": "minor",
+          "category": "tdd",
+          "task": 1,
+          "issue": "The deleteReturns204AndCancelsActiveExecutions existing test (line 159-163) currently asserts execStatus() for running/waiting/waiting_for_reply → cancelled, but does NOT assert stepRunStatus=done. After the refactor (cancelInFlightExecutions shared helper), the delete path will still pass those asserts, but the regression test does not independently verify stepRunStatus=done through delete. The task correctly mandates stepRunStatus assertion for the new stopAll test, but the stated regression guard ('naявні delete tests should stay green') provides a weaker check than needed if someone accidentally drops the stepRunStatus set from the helper.",
+          "fix": "Low-priority: optionally strengthen the existing deleteReturns204AndCancelsActiveExecutions to also assert stepRunStatus=done via mongoTemplate after the refactor. Not a blocker — the existing delete test will still go green as long as the helper preserves status=cancelled."
+        }
+      ]
+    },
+    {
+      "task": 4,
+      "verdict": "ok",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "hints",
+          "task": 4,
+          "issue": "Task says 'funnels.editor currently holds stepsTitle/saving/activate/pause' and the line references (~line 707) are accurate. The line numbers are correct for uk.json (line 707 confirmed) and en.json (line 707 confirmed). Both files mirror line-for-line. No issues with canonical key names — they are exhaustively specified and consistent with Task 5's consumption.",
+          "fix": "No fix needed — included for completeness."
+        }
+      ]
+    },
+    {
+      "task": 5,
+      "verdict": "ok",
+      "findings": [
+        {
+          "severity": "minor",
+          "category": "feasibility",
+          "task": 5,
+          "issue": "Task says '[funnelId].vue does not yet have Dialog* imports — add them from ~/components/ui/dialog'. This is confirmed correct: [funnelId].vue imports only AddStepDialog, EditStepDialog, FunnelStepsList, FunnelTriggerSettings — no Dialog/DialogContent/DialogHeader etc. The task correctly identifies the gap. No issue, just verified.",
+          "fix": "No fix needed — confirmed as stated."
+        },
+        {
+          "severity": "minor",
+          "category": "feasibility",
+          "task": 5,
+          "issue": "storeMock shape in TDD Anchor lists 'duplicate, stopAllExecutions, testRun' as additions. These actions do NOT yet exist in frontend/stores/funnels.ts (Task 3 adds them). Task 5 correctly gates on depends_on: [3, 4], so the ordering is fine. However, the test file funnels-list.spec.ts is expected to be CREATED from scratch (it does not exist today). The task mentions this in a parenthetical but treats it as an afterthought; an agent skimming may miss it.",
+          "fix": "Minor documentation clarity: the TDD Anchor could more prominently flag that funnels-list.spec.ts must be created as a new file (it currently does not exist in frontend/tests/pages/). The hint exists in parentheses but is easy to overlook."
+        }
+      ]
+    }
+  ],
+  "cross_task_notes": "KEY STRUCTURE CONSISTENCY: Canonical key structure is IDENTICAL between Task 4 (producer) and Task 5 (consumer). Both specify nested funnels.editor.stopAll.{button,title,message,confirm,cancel,result} — no flat stopAllConfirm remnant. Flat keys duplicate/duplicateResult/testForMe/testForMeResult/preview/previewPlaceholder/previewSampleData are named identically. Error keys errors.funnels.{funnel_owner_not_linked,funnel_invalid_trigger_type,funnel_invalid_keywords} match exactly. LOCALE FEASIBILITY: uk.json and en.json both have funnels.editor = {stepsTitle,saving,activate,pause} (line 707) and errors.funnels ends at funnel_broken_edge (line 461) in both files — both files DO mirror line-for-line. New keys slot in cleanly. TENANT ISOLATION BUG FIX CONFIRMED: Task 1 explicitly calls out that delete() at line 181 scopes updateMulti only by funnelId (confirmed in FunnelService.java lines 180-181). The task instructs the correct fix: shared cancelInFlightExecutions(projectId, funnelId) helper scoped by BOTH projectId AND funnelId, following FunnelExecutionFactory.cancelExistingForPair (lines 57-65, confirmed). The fix is behavior-preserving for delete because delete already called requireFunnel first (projectId is known). STEPRUNSTATUS ASSERTION CONFIRMED CORRECT: execStatus() at line 852 returns mongoTemplate.findById(id, FunnelExecution.class).getStatus() — returns ExecutionStatus only. Task 1 correctly mandates an ADDITIONAL mongoTemplate.findById(...).getStepRunStatus() assertion. FunnelExecution.getStepRunStatus() confirmed to exist at line 106. No cross-task dependency mismatch: Tasks 4 and 5 both declare depends_on correctly (Task 4 on [2], Task 5 on [3,4]). Task 1 is Wave 1 with no dependencies.",
+  "notes": "All three tasks are feasible and consistent. No critical findings. The two minor notes on Task 1 (seedExecution limitation for isolation test) and Task 5 (funnels-list.spec.ts creation) are documentation gaps, not blockers. The canonical key structure between Tasks 4 and 5 is identical and consistent with the real JSON file structure.",
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 31,
+    "issues_found": 4
+  }
+}

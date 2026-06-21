@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": "Round 2 re-validation: all 6 round-1 findings resolved; verified concrete file paths and new content. Found 1 minor name mismatch in pathMatchers pattern.",
+  "findings": [
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "tech-spec.md:333 — `pathMatchers(\"/api/v1/**\").authenticated()` rule fires before any other gate",
+      "reality": "Actual rule in `backend/src/main/java/com/botfunnel/security/SecurityConfig.java:71` is `pathMatchers(\"/api/**\").authenticated()` (no `/v1` segment). Functionally equivalent — `/api/**` is a superset that already covers `/api/v1/projects/**` — but the path pattern quoted in the test rationale is wrong.",
+      "source": "tech-spec.md, Testing Strategy → Integration tests, line 333",
+      "fix": "Replace `/api/v1/**` with `/api/**` in line 333 to match the actual SecurityConfig rule. (Spec line 50 already correctly states `pathMatchers(\"/api/**\").authenticated()`, so this is a one-place inconsistency.)"
+    }
+  ],
+  "stats": {
+    "total_claims_checked": 64,
+    "confirmed": 63,
+    "mirages_found": 1,
+    "verified_claims": [
+      "round-1 fix: useApi.ts has only `onRequest`, no `onResponseError` (composables/useApi.ts:43)",
+      "round-1 fix: pages/profile.vue:431-477 modal pattern is plain Tailwind divs with role/aria-modal/aria-labelledby",
+      "round-1 fix: shadcn-vue is dev-dep only; frontend/components/ui/ does not exist; frontend/components.json does not exist",
+      "round-1 fix: tech-spec lines 83/85 use string collection-name form (`\"events\"`, `\"projects\"`) consistent with AuthService.java:392 pattern",
+      "round-1 fix: Decision 7 documents intentional 2-arg asymmetry for unprocessableEntity",
+      "round-1 fix: Testing Strategy line 348 documents new pattern + InMemoryStorageProvider fallback",
+      "round-1 fix: Verify-smoke uses `node scripts/check-locales.mjs` (matches package.json prebuild)",
+      "AppException 1-arg factories present (badRequest/unauthorized/forbidden/conflict/tooManyRequests)",
+      "user/UserService.java:29 constructs 404 inline via raw constructor",
+      "frontend/scripts/check-locales.mjs exists",
+      "JobRunrInMemoryConfig.java exposes @Bean StorageProvider via InMemoryStorageProvider",
+      "AbstractIntegrationTest.java exists with Testcontainers Mongo+Redis+Mailpit + JobRunrInMemoryConfig",
+      "HardDeleteJob.java has `@Recurring(id=\"hard-delete-users\", cron=\"0 3 * * *\")` (R5 collision real)",
+      "EventService.logEvent(userId, eventType, ip, ua, metadata) signature matches",
+      "ErrorResponse record shape `{message, code}` matches AC-T1",
+      "ProfileController uses currentUserId() Mono<String> pattern from ReactiveSecurityContextHolder",
+      "ux-guidelines.md:33 has `full-page onboarding` text (PK alignment target valid)",
+      "playwright.config.ts: chromium-only, webServer `pnpm dev`, reuseExistingServer:!CI",
+      "vee-validate, @vee-validate/zod, useForm pattern used in pages/auth/register.vue",
+      "Files-to-create paths in Tasks 1-10 all resolve to valid parent directories"
+    ]
+  }
+}

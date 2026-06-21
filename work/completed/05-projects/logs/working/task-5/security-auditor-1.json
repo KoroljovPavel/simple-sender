@@ -1,0 +1,99 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "audit_notes": {
+    "scope": "Task 5 round 1 — commit 388739b (frontend/ only)",
+    "files_audited": [
+      "frontend/components/ProjectSelector.vue",
+      "frontend/composables/useApi.ts",
+      "frontend/stores/projects.ts",
+      "frontend/tests/components/ProjectSelector.spec.ts",
+      "frontend/tests/composables/useApi-404-interceptor.spec.ts"
+    ],
+    "owasp_top10_coverage": {
+      "A01_broken_access_control": {
+        "status": "n/a-frontend-ux-only",
+        "note": "ACTIVE_LIMIT=5 in ProjectSelector.vue:12 is UX-only; backend (ProjectService, Task 3) is the authoritative access-control boundary per user-spec AC-30 and Decision 11. The disabled <span> branch (lines 120-129) has no href and no tabindex, so keyboard nav cannot 'click' it, but the user can still navigate manually to /projects/new — that is expected; the backend is responsible for rejecting creates over the cap."
+      },
+      "A02_cryptographic_failures": {
+        "status": "n/a",
+        "note": "No crypto code touched in this commit. XSRF-TOKEN cookie read remains as-is from prior task."
+      },
+      "A03_injection": {
+        "status": "clean",
+        "note": "No SQL/NoSQL/command injection surface in frontend. XSS surface checked: no v-html, no innerHTML, no dangerouslySetInnerHTML. {{ p.name }} and {{ t(...) }} interpolations are Vue text nodes — HTML-entity escaped. :data-test and :title attribute bindings escape attribute values. :to=\"localePath(`/projects/${currentProject.id}/settings`)\" interpolates the id behind a hardcoded prefix, so a javascript: scheme prefix is impossible even if an id were attacker-controlled."
+      },
+      "A04_insecure_design": {
+        "status": "clean",
+        "note": "Defense-in-depth on the 404 interceptor: PROJECT_RESOURCE_PATH regex /^\\/api\\/v1\\/projects\\/([^/]+)$/ AND strict equality match[1] === currentProjectId. Even if the regex captures a slightly-different segment (e.g. percent-encoded slash 'abc%2Fbots'), the equality gate against the backend-issued UUID prevents a false-positive trigger. The pendingBannerKey is set to a literal constant 'errors.projects.unavailable' — no attacker-controlled path to key injection."
+      },
+      "A05_security_misconfiguration": {
+        "status": "clean",
+        "note": "credentials: 'include' is necessary for cookie-based auth and is consistent with the rest of the codebase. No CORS/headers configuration was changed."
+      },
+      "A06_vulnerable_components": {
+        "status": "clean",
+        "note": "No new package.json dependencies introduced in this commit."
+      },
+      "A07_auth_failures": {
+        "status": "clean",
+        "note": "No authentication code touched. The 404 interceptor reacts to an authenticated server response and only clears local UI state."
+      },
+      "A08_software_data_integrity": {
+        "status": "clean",
+        "note": "No JSON.parse on untrusted input added; $fetch deserialization on responses is from the trusted backend over an authenticated session. No CI changes."
+      },
+      "A09_logging_monitoring": {
+        "status": "n/a",
+        "note": "Frontend; backend handles security event logging."
+      },
+      "A10_ssrf": {
+        "status": "clean",
+        "note": "extractPath() in useApi.ts only reads .pathname from a URL/string; it never initiates a fetch to a URL derived from ctx.request. There is no SSRF or open-redirect surface — the only side effects are calling projectsStore.handleStaleCurrent() (clears local UI state) and assigning a hardcoded constant string."
+      }
+    },
+    "specific_concerns_addressed": [
+      {
+        "concern": "Regex bypass via percent-encoding (%2F) of an alt separator",
+        "analysis": "PROJECT_RESOURCE_PATH is /^\\/api\\/v1\\/projects\\/([^/]+)$/. The class [^/]+ matches any non-literal-slash character, so 'abc%2Fbots' is treated as one segment and CAPTURED. However, the match[1] === currentProjectId gate (useApi.ts:68) prevents triggering: the captured string 'abc%2Fbots' will not equal the real backend-issued UUID. No exploitable bypass.",
+        "verdict": "safe"
+      },
+      {
+        "concern": "Trailing slash form /api/v1/projects/{id}/",
+        "analysis": "Regex is anchored at $ with [^/]+ before it, so a trailing slash prevents the match entirely. This is the correct conservative behavior — the canonical resource path has no trailing slash, and the store never sends one.",
+        "verdict": "safe"
+      },
+      {
+        "concern": "Mixed-case path /API/v1/projects/{id}",
+        "analysis": "Regex is case-sensitive; mixed-case would not match. The frontend never constructs mixed-case paths (all stores/components use lowercase). At worst this is a missed clear, not a false trigger.",
+        "verdict": "safe"
+      },
+      {
+        "concern": "Absolute URL in request — open-redirect / path-confusion",
+        "analysis": "When request is an absolute URL string, extractPath() goes through new URL(request).pathname — only the pathname is used. For URL instance, .pathname likewise. No URL fields beyond pathname are inspected, and no network request is initiated from this code path. No open-redirect surface; the only effect is local UI state.",
+        "verdict": "safe"
+      },
+      {
+        "concern": "pendingBannerKey attacker-controlled value",
+        "analysis": "Grep across the entire frontend shows pendingBannerKey is only ever assigned the literal 'errors.projects.unavailable' at useApi.ts:70. No other writes. The i18n key resolves to a static translation string in en.json/uk.json; not attacker-influenced.",
+        "verdict": "safe"
+      },
+      {
+        "concern": "XSS via project name / id rendering",
+        "analysis": "No v-html anywhere in ProjectSelector.vue. {{ p.name }} renders as text node — Vue auto-escapes. :data-test=\"`project-selector-item-${p.id}`\" and :to=\"localePath(`/projects/${id}/settings`)\" go through Vue attribute binding which escapes attribute content. id is interpolated AFTER a hardcoded path prefix, so no javascript: scheme injection is possible. Even malicious backend-stored values cannot escape the template.",
+        "verdict": "safe"
+      },
+      {
+        "concern": "5-project cap circumvention via keyboard nav",
+        "analysis": "At the limit, the create UI renders as a non-interactive <span> (no href, no tabindex), so keyboard activation through the dropdown is impossible. The user can still type /projects/new in the address bar — this is acceptable because the cap is a backend invariant (Task 3 ProjectService); the frontend disabled state is documented as UX-only in user-spec AC-30 and Decision 11.",
+        "verdict": "safe"
+      }
+    ]
+  }
+}

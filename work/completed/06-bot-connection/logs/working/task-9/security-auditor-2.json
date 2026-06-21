@@ -1,0 +1,90 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "round1_fixes_verified": {
+    "finding_1_token_input_type_password": {
+      "resolved": true,
+      "evidence": [
+        "bot.vue:129 — `type=\"password\"` replaces the prior `type=\"text\"`.",
+        "Diff HEAD~1..HEAD confirms the single-character semantic change at the original line.",
+        "Spec mounts and exercises the input via `setValue(...)` (bot.spec.ts:138, 162, 189, 359), which is type-agnostic — the existing behavioural assertions still pass.",
+        "Shoulder-surf risk reduced: characters now render as bullets in all evergreen browsers."
+      ]
+    },
+    "finding_2_token_cleared_on_failure": {
+      "resolved": true,
+      "evidence": [
+        "bot.vue:61-67 — `tokenInput.value = ''` now lives in the `finally` block, after both try and catch paths.",
+        "Diff HEAD~1..HEAD shows the assignment was moved from inside the try-block (success-only) into finally; old success-side clear is removed.",
+        "Net effect: the reactive ref and the DOM `.value` are wiped on success AND on any rejection (400/409/422/429/500/502/network).",
+        "AC17 defense-in-depth: rejected token no longer persists across retries."
+      ]
+    },
+    "finding_3_watch_closes_modal_on_null_current": {
+      "resolved": true,
+      "evidence": [
+        "bot.vue:32-37 — `watch(() => botStore.current, (next) => { if (next === null) showDisconnectModal.value = false })`.",
+        "Closes the AC19 modal whenever `botStore.current` transitions to null mid-modal (cross-tab disconnect, project switch via the store watcher in bot.ts:74-86, or a stale-current 404).",
+        "Empty-`@` render path is sealed: the body template still references `botStore.current?.telegramUsername ?? ''`, but the Dialog subtree is unmounted before that re-render can flush.",
+        "Spec regression coverage: bot.spec.ts:385-401 mutates `reactiveStore.current = null` while the modal is open and asserts the confirm button disappears."
+      ]
+    }
+  },
+  "round2_new_risks_examined": {
+    "watcher_vs_disconnect_race": {
+      "risk": "Double-mutation / desync between the new watcher and onConfirmDisconnect.",
+      "verdict": "no_issue",
+      "reasoning": [
+        "botStore.disconnect (bot.ts:65-68) sets current.value = null on success. The watcher then fires and sets showDisconnectModal.value = false. onConfirmDisconnect (bot.vue:86) also sets showDisconnectModal.value = false explicitly. Both writes assign the same value (false) to a boolean ref — Vue's ref setter is idempotent on === equality, so there is no extra reactivity flush, no double unmount, no observable race.",
+        "Error path: disconnect() throws BEFORE current is cleared. The watcher does NOT fire. onConfirmDisconnect's catch block (bot.vue:88-89) closes the modal explicitly. State is consistent.",
+        "closeDisconnectModal() (bot.vue:75-78) guards on disconnecting.value === true to prevent the user from cancelling mid-flight. The watcher intentionally does NOT respect that guard — on success it fires after the await resolves, so closing the modal one tick before the `finally` block clears `disconnecting` is the expected outcome. The DialogContent unmounts; no body-render artifact escapes.",
+        "No path observed where the watcher could reopen the modal or leave it in an inconsistent state. botStore.current can only transition null → Bot via successful fetch/connect; in both cases the modal is not yet open."
+      ]
+    },
+    "password_input_autofill_interaction": {
+      "risk": "Browser password managers store the bot token in their credential vault.",
+      "verdict": "minor_residual_exposure",
+      "reasoning": [
+        "Chrome (since 2014) and Firefox (since v30) deliberately ignore `autocomplete=\"off\"` on `type=\"password\"` fields so password managers continue to function. WHATWG-compliant, intentional vendor behaviour.",
+        "Practical consequence: when the user submits the connect form successfully, Chrome/Edge MAY offer to save the bot token as a password keyed to the settings URL. If accepted, the secret syncs across the user's signed-in devices via Google Password Manager (or Apple Keychain in Safari's case).",
+        "This is a NEW exposure surface that did not exist with `type=\"text\"` + `autocomplete=\"off\"` (text fields with `autocomplete=\"off\"` are honoured by all major browsers).",
+        "Severity: minor. AC17 says the token must never leave the FRONTEND application code; a browser-controlled password vault is not application code. The token does not traverse the network beyond the legitimate /bot/connect POST. However, persisting the credential in the user's browser sync graph is exactly the kind of secondary exposure secrets-handling policies typically want to avoid.",
+        "Mitigation: switch to `autocomplete=\"new-password\"`. Chrome/Edge interpret this as 'do not offer to save'. Firefox treats it as a hint not to autofill. The masking behaviour of `type=\"password\"` is preserved; the shoulder-surf fix from round-1-finding-1 is unaffected.",
+        "Alternative (heavier): keep `type=\"password\"` for masking, add an explicit `name=\"\"` and `data-1p-ignore` / `data-lpignore=\"true\"` to opt out of the major third-party managers (1Password, LastPass). This is overkill for a minor finding."
+      ]
+    }
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A02: Cryptographic Failures",
+      "title": "Browser password manager may persist the bot token after successful connect",
+      "description": "After round-1 fix #1, the token input is `<input type=\"password\" autocomplete=\"off\" ...>` (bot.vue:125-135). On a successful submission, Chrome/Edge/Firefox MAY offer to save the field's last value as a password for the settings page origin. `autocomplete=\"off\"` is deliberately ignored by all major browsers on password fields (Chromium and Mozilla policy, dating to 2014/v30) so that user password managers continue to work. If the user accepts the save prompt, the bot token is written to the browser's credential vault, keyed to the project-settings URL, and synced across devices via Google Password Manager / iCloud Keychain. AC17 requires the token never to leave the frontend; the password vault is a browser feature outside the application's control, so this is arguably out of scope, but it is a new residual exposure that did not exist with `type=\"text\"` (text inputs honour `autocomplete=\"off\"`).",
+      "location": "frontend/pages/projects/[projectId]/settings/bot.vue:125-135",
+      "impact": "Long-lived bearer token may be persisted in the user's browser password manager and synced across their signed-in devices. Risk is amplified if (a) the user shares the device, (b) the device is later compromised, or (c) the user later forgets the field was a token rather than a password and treats the vault entry as low-sensitivity.",
+      "recommendation": "Add `autocomplete=\"new-password\"` to the bot-token input. Chrome and Edge treat this as a directive not to offer the save prompt; Firefox as a hint not to autofill from prior saved entries. Masking semantics of `type=\"password\"` are preserved, so the round-1 shoulder-surf fix is unaffected. Example: `<input id=\"bot-token\" v-model=\"tokenInput\" type=\"password\" autocomplete=\"new-password\" spellcheck=\"false\" ...>`. Optional belt-and-braces: also add `data-1p-ignore` (1Password) and `data-lpignore=\"true\"` (LastPass) for third-party managers. Not blocking; do not regress on this round.",
+      "cwe": "CWE-522",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 130
+    }
+  ],
+  "non_findings_explicitly_checked": [
+    "Watcher vs onConfirmDisconnect race — both writes set the same boolean to false; Vue ref equality short-circuits the second write. No double-mutation.",
+    "Watcher vs onConfirmDisconnect error path — disconnect() throws BEFORE current is cleared, so the watcher does not fire; the catch block closes the modal explicitly. State consistent.",
+    "Watcher vs closeDisconnectModal — closeDisconnectModal early-returns when disconnecting === true; the watcher intentionally does not honour that guard, but the only path that mutates current to null during disconnecting === true is the success path of disconnect itself, where the early close is the desired UX.",
+    "Watcher firing on initial mount — botStore.current starts as null, and Vue's watch() does NOT fire on the initial value unless { immediate: true } is set. The code does not pass that option. No spurious modal close on first render.",
+    "Watcher firing during a stale-current 404 — fetch() (bot.ts:24-29) sets current.value = null on 404; the modal cannot be open at that point because the Connect form is what's rendered when current is null. No regression.",
+    "Watcher leaking memory after page unmount — `watch()` inside `<script setup>` auto-disposes on component unmount via the current Vue instance's scope. No leak.",
+    "type=\"password\" + spellcheck=\"false\" — spellcheck retained, prevents inline browser dictionary from receiving the token. Correct.",
+    "Token in input element's `defaultValue` / DOM serialization — input has no `value=` attribute and v-model binds the IDL property, not the attribute; outerHTML never contains the token. Verified by the existing bot.spec.ts:366 token-regex assertion against the full DOM.",
+    "Vue Devtools exposure of `tokenInput` ref — Pinia/Vue devtools record reactive state; production Vue disables devtools. The new `finally`-block clear shortens the window during which the ref holds the token to a single microtask after the network call resolves.",
+    "AC17/AC18/AC19/AC23 — round-1 audit confirmed all four pass; round-2 changes do not regress any of them. The new watcher tightens AC19 by sealing the empty-`@` render path.",
+    "Hardcoded secrets — no embedded API keys, tokens, passwords, or connection strings in bot.vue, bot.ts, or any audited file. Fixture token in bot.spec.ts is test-only and labelled 'Fake'.",
+    "CSRF / Authz / XSS / SSRF / Insecure deserialization — unchanged from round-1; round-2 surface (template watcher + input type attribute + finally-block reorder) does not introduce new vectors."
+  ]
+}

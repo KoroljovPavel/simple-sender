@@ -1,0 +1,66 @@
+{
+  "verdict": "approved",
+  "status": "approved",
+  "scope": "Task 8 — SubscriberController + SegmentFilter + SegmentFilterBuilder + dto/* + application.properties (commit edacea9)",
+  "methodology": "OWASP Top 10 (2021) code audit, cross-referenced against tech-spec Decisions 5/9/10, security findings F5/F6/F7, user-spec AC21, and patterns.md access-control idiom.",
+  "summary": {
+    "totalFindings": 4,
+    "critical": 0,
+    "major": 0,
+    "minor": 4
+  },
+  "verifiedControls": [
+    "A01 anti-IDOR (AC21): all 7 endpoints have projectService.requireOwned(currentUserId(), projectId, false) as the FIRST statement; requireOwned uniformly 404s on foreign-owned / soft-deleted / malformed ObjectId (ProjectService.java:50-66).",
+    "A01 defense-in-depth: every /{id} endpoint calls requireOwnedSubscriber which filters subscriberRepository.findById(id) by projectId.equals(s.getProjectId()) → foreign/unknown subscriber collapses to uniform 404 (SubscriberController.java:300-306).",
+    "A03 NoSQL operator-injection (F6): SegmentFilterBuilder.decodeCursor enforces all five Decision-5 rules — base64url decode (IllegalArgumentException→400), JSON parse (any exception→400), must be object, keys exactly {v,id}, recursive $-prefix rejection at any depth, v integral number, id ^[a-f0-9]{24}$. Every failure → 400 invalid_cursor, never 500, no rows leaked (SegmentFilterBuilder.java:114-192).",
+    "A03 injection on tag slugs: tagsInclude/tagsExclude and the {slug} path-variable are used only as MATCH VALUES inside $all/$nin/$addToSet/$pull via parameterized Spring Data Criteria/Update — never as field names or operators (SegmentFilterBuilder.java:49-60, SubscriberServiceImpl.java:243-266). Dropping per-element @Pattern on the list query is acceptable.",
+    "A04/A07 rate-limit (F5): bf:rate:personal_message:{projectId}, INCR-every-attempt, EXPIRE only on count==1L, trip on count > 60, counts BEFORE the Telegram call, fail-open with greppable PERSONAL_MESSAGE_RATE_REDIS_FAIL_OPEN WARN — matches BotService.incrementBruteForceCounter shape exactly (SubscriberController.java:284-298).",
+    "A08 mass-assignment: every DTO (SendMessageRequest, TagAssignRequest, SubscriberListQuery, PageResponse, SubscriberResponse, SubscriberEventResponse, SendMessageResponse) carries @JsonIgnoreProperties(ignoreUnknown=true); owner identity is derived only from SecurityContextHolder via currentUserId(), never from the body.",
+    "A09 no sensitive logging: only one log site (Redis fail-open WARN logging the transport exception message); personal-message text is never logged and never persisted — personal_message_sent/failed metadata carries only chatId/messageId/terminalReason/scrubbed-error.",
+    "Token-leak: re-thrown TelegramSendException carries a pre-scrubbed description (TelegramSendException ctor param scrubbedDescription) and is an AppException(BAD_REQUEST, telegram_send_failed) → mapped cleanly by GlobalErrorHandler.handleAppException, no 500 fall-through, no token leak.",
+    "Input bounds: SendMessageRequest @NotBlank @Size(1..4096); SubscriberListQuery search @Size(2..120) (F7) with explicit controller-level <2-char 400; cursor @Size(max=256) bounds decode/recursion; limit @Positive @Max(200) plus server-side clampLimit.",
+    "A02 crypto: no crypto introduced in this task; export HMAC key default is a zero-hex fail-fast sentinel owned by Task 9, not this surface."
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A09:2021 - Security Logging and Monitoring Failures",
+      "title": "Personal-message send has no audit log; only the success/OTHER-failure subscriber_events row records the action",
+      "description": "POST /{id}/messages performs an authenticated outbound action on behalf of a project owner. Success writes a personal_message_sent event and an OTHER-terminal failure writes personal_message_failed, but the BLOCKED_BY_USER / CHAT_NOT_FOUND branches (handleSendFailure, SubscriberController.java:257-263) intentionally write no personal_message_* event (the sender hook owns subscriber_blocked/subscriber_deleted per Decision 10). There is no controller-side audit/INFO log of who initiated the send or the outcome class. This is consistent with Decision 10's writer-ownership design and the sender writes telegram_send_failed to the audit `events` collection, so it is a defense-in-depth observation only, not a gap that breaks the spec.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java:254-280",
+      "impact": "For a compromised-session flood that stays under the 60/min cap, the only forensic trail for blocked/deleted outcomes lives in the sender-owned audit `events` collection (overlap metadata per Decision 10/AC23), not in the CRM stream. Reconstruction is possible but indirect.",
+      "recommendation": "No code change required for this task. If future hardening is desired, add a single structured INFO log (projectId, subscriberId, outcome class — never the message text) on every send outcome, or let the orchestrator confirm the audit `events` overlap is sufficient. Accept as-is per Decision 10.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "events endpoint Mongo query is scoped by subscriberId only, not (subscriberId AND projectId)",
+      "description": "The GET /{id}/events handler builds Query.query(Criteria.where(\"subscriberId\").is(id)) without an additional projectId predicate (SubscriberController.java:180-182). Access is correctly gated by the preceding requireOwnedSubscriber(project.getId(), id) call (line 177), which already proves the subscriber belongs to this project, so there is no current data-leak. However, the query itself is not defense-in-depth self-scoped the way the tag $addToSet/$pull and the list query are — a future refactor that reorders or removes the guard would silently expose any subscriber's event feed by raw id. subscriberId values are also globally unique ObjectIds, so cross-project collision is not currently possible.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java:179-186",
+      "impact": "No exploit today (guard runs first; ids are globally unique). Latent IDOR-regression risk if the requireOwnedSubscriber guard is ever moved/removed during maintenance.",
+      "recommendation": "Add .and(\"projectId\").is(project.getId()) to the events Criteria so the query is self-scoped, matching the defense-in-depth posture of the tag update queries (SubscriberServiceImpl.java:245). Low effort, removes the latent regression class.",
+      "cwe": "CWE-639"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "DELETE /{id}/tags/{slug} path-variable slug has no @Pattern/length bound",
+      "description": "The removeTag handler binds {slug} as a raw @PathVariable String with no validation (SubscriberController.java:214-222), whereas the add path validates via TagAssignRequest @Pattern(^[a-z0-9_-]{1,32}$). The unvalidated slug flows to subscriberService.removeTag → Update().pull(\"tags\", slug), which is a parameterized value match (no injection) and only triggers a counter $inc(-1) when the pull actually modifies a doc (SubscriberServiceImpl.java:256-265). An arbitrary/oversized slug therefore results in a benign no-op (204) — no injection, no double-count. The inconsistency is a robustness nit, not a vulnerability.",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java:217",
+      "impact": "None exploitable. Minor inconsistency: a malformed slug returns 204 (idempotent no-op) rather than a 400, and an unbounded path segment is accepted (already capped by container URL limits).",
+      "recommendation": "Optional: annotate the slug @PathVariable with @Pattern(regexp=\"^[a-z0-9_-]{1,32}$\") and add @Validated to the controller for parity with TagAssignRequest. Not required — the value is parameterized and the no-op semantics are safe.",
+      "cwe": "CWE-20"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Personal-message rate-limit token is consumed before the CONNECTED-bot existence check",
+      "description": "personalMessageRateLimited(project.getId()) runs (SubscriberController.java:233) before the botRepository.findByProjectIdAndStatus(...CONNECTED) lookup (line 240). For a project with no connected bot, each POST still increments the Redis counter before failing with 404 bot_not_found. This cannot be abused to flood Telegram (no send occurs) and the counter self-expires in 60s, so it is at worst a self-inflicted minor inaccuracy in the owner's own bucket. Consistent with Decision 9 (\"every call counts\").",
+      "location": "backend/src/main/java/com/botfunnel/subscriber/SubscriberController.java:233-241",
+      "impact": "Negligible. A no-bot project's owner could exhaust their own personal-message bucket without any message being sent; resets within the minute window.",
+      "recommendation": "Accept as-is — Decision 9 explicitly states the personal-message bucket does not bypass and every call counts. No change needed.",
+      "cwe": "CWE-799"
+    }
+  ]
+}

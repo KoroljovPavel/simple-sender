@@ -1,0 +1,31 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "notes": {
+    "round1_findings_verified": [
+      {
+        "finding": "Finding 1 (minor, A09/CWE-307): HttpRequestUtils.extractIp empty-string getRemoteAddr corner.",
+        "verification": "RESOLVED. backend/src/main/java/com/botfunnel/common/HttpRequestUtils.java:40 now reads `return (remote != null && !remote.isEmpty()) ? remote : \"unknown\";` — exactly the recommended tightening. The empty-string corner now falls through to the canonical `unknown` sentinel, preserving brute-force counter key parity (`brute:fail:ip:`) with AuthService.extractIp / ProjectController.extractIp. No new code path or magic constant introduced; behaviour for the null case and the populated case is unchanged."
+      },
+      {
+        "finding": "Finding 2 (minor, A09/CWE-532): EmailService error log includes recipient email in cleartext.",
+        "verification": "ACCEPTED AS PARITY — NOT REGRESSED. backend/src/main/java/com/botfunnel/email/EmailService.java:94 still logs `Email send failed to {to}: {e.toString()}`; the only change is appending the throwable as a trailing SLF4J arg so the stack trace is attached. The recipient PII surface is unchanged from the pre-migration reactive `.subscribe(null, log::error)` path. The new trailing throwable does not add new PII (stack frames are class/method/line metadata, not message payload). Same `Exception` umbrella catch preserves silent-fail behaviour (US-AC11 / US-AC13 return 200 on SMTP failure). Recommendation from round 1 remains future hardening."
+      }
+    ],
+    "additional_checks_on_fix_commit_HEAD_9bcf3ab": [
+      "Diff scope: 2 production files + 2 test files. Production changes are 1 line in HttpRequestUtils.java and 2 lines in EmailService.java (the comment + the trailing throwable arg). No other production code touched.",
+      "HttpRequestUtilsTest: replaced `canAccess` reflection check with `Modifier.isPrivate(ctor.getModifiers())`. The new assertion is strictly stronger — it inspects the declared access modifier directly rather than the per-caller accessibility flag, so reflection-based instantiation via setAccessible(true) is still detected as a violation of the utility-class contract. No security regression.",
+      "EmailServiceTest: log assertion now filters on the `Email send failed to user@example.com:` prefix before counting. This narrows the assertion to the silent-fail signal, not its inverse — still asserts exactly one matching ERROR. No security regression; only test-robustness.",
+      "Hardcoded secrets scan across the 4 modified files: none found.",
+      "OWASP A03 (Injection): no new sinks introduced. The recipient string `to` flows into `MimeMessageHelper.setTo` which already validates via `InternetAddress.parse` (throws AddressException on CR/LF) — unchanged from round 1.",
+      "OWASP A07 (Auth Failures): the brute-force counter key parity is now exact for the empty-string corner case — closes the residual concern from round 1 Finding 1.",
+      "OWASP A09 (Logging & Monitoring): adding the throwable to the SLF4J call improves operability (full stack trace on SMTP failure) without changing the formatted message contract that EmailServiceTest depends on. Net improvement, no regression."
+    ]
+  }
+}

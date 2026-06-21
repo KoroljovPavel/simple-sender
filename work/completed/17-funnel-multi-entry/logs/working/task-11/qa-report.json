@@ -1,0 +1,230 @@
+{
+  "feature": "17-funnel-multi-entry",
+  "task": "Task 11 — Pre-deploy QA",
+  "branch": "dev",
+  "date": "2026-06-13",
+  "status": "passed",
+  "gateVerdict": "PASS (with 2 AVP smoke scenarios DEFERRED to Task 12; 1 known-flaky non-feature test noted)",
+  "summary": {
+    "totalChecks": 24,
+    "passed": 20,
+    "failed": 0,
+    "notVerifiable": 4,
+    "criticals": 0,
+    "majors": 0,
+    "minors": 1
+  },
+  "lanes": {
+    "backendFullSlow": {
+      "command": "cd backend && ./gradlew test -PrunSlow=true",
+      "infra": "Testcontainers MongoDB + Redis via Docker (Docker UP). JDK 21 toolchain auto-detected.",
+      "result": "BUILD FAILED — 1284 tests, 1 failed, 2 skipped",
+      "compile": "compileJava + compileTestJava SUCCESSFUL (full module compiles — confirms Tasks 1-7 integrated)",
+      "featureClassesAllGreen": true,
+      "onlyFailure": "TelegramWebhookP99IT.p99Latency_under100msAt100ParallelRequests — got 104ms vs <100ms (4ms over). Documented-flaky @Tag(\"slow\") cold-JVM latency SLA probe (build.gradle L48-51). Unrelated to this feature (webhook latency, no funnel/trigger code), pre-existing, not a regression. NON-BLOCKING.",
+      "skipped": "2 — TelegramSenderIT (sendText_* end-to-end via BotService); unrelated to feature, env-gated.",
+      "indexConflict": "No IndexKeySpecsConflict anywhere in the run outside the index-IT assertion strings — clean-startup AC holds.",
+      "logFile": "logs/working/task-11/backend-full-slow.log"
+    },
+    "backendFeatureClasses": {
+      "FunnelExecutionEngineIT": "67 passed, 0 fail",
+      "FunnelEventServiceIT": "13 passed, 0 fail",
+      "FunnelEventServiceTest": "18 passed, 0 fail",
+      "FunnelTriggerIndexReconciliationIT": "5 passed, 0 fail",
+      "FunnelIndexesIT": "8 passed, 0 fail",
+      "FunnelServiceTriggerTypeTest": "13 passed, 0 fail",
+      "FunnelControllerIT": "104 passed, 0 fail",
+      "FunnelTriggerServiceIT": "25 passed, 0 fail",
+      "EventsControllerIT": "15 passed, 0 fail",
+      "ProcessTelegramUpdateJobTest": "48 passed, 0 fail",
+      "TriggerTest": "3 passed",
+      "FunnelTriggersFieldTest": "3 passed",
+      "FunnelIndexAssertionsTest": "2 passed",
+      "TriggerDtoTest": "6 passed",
+      "FunnelServiceKeywordTest": "3 passed",
+      "FunnelServiceEmitEventTest": "7 passed",
+      "FunnelServiceKeyboardStepTest": "23 passed"
+    },
+    "frontendTest": {
+      "command": "cd frontend && pnpm test",
+      "result": "PASS — 55 files, 532 tests passed",
+      "keyFiles": "funnel-editor.spec.ts 49 passed; FunnelTriggersPanel.spec.ts + i18n/required-keys.spec.ts (4, incl. non-empty-value assertion) green; funnels store 18 passed",
+      "logFile": "logs/working/task-11/frontend-test.log"
+    },
+    "i18nParity": {
+      "command": "cd frontend && node scripts/check-locales.mjs",
+      "result": "PASS — exit 0 (uk/en parity, no missing keys). Non-empty-value guard enforced separately by required-keys.spec.ts (audit-fixer).",
+      "logFile": "logs/working/task-11/check-locales.log"
+    }
+  },
+  "acceptanceCriteria": [
+    {
+      "id": "US-1",
+      "criterion": "Funnel stores multiple triggers; each event trigger has its own event name + entry step; single-trigger funnel works as before.",
+      "status": "passed",
+      "evidence": "FunnelControllerIT.patchGet_roundTripsTriggerArray (List<TriggerDto> round-trip); FunnelServiceTriggerTypeTest (per-element validation); TriggerTest/TriggerDtoTest (POJO+DTO shape). 67/104/13 green."
+    },
+    {
+      "id": "US-2",
+      "criterion": "on_start stays the main entry (entry = step 0), drives funnel from the beginning.",
+      "status": "passed",
+      "evidence": "FunnelTriggerServiceImpl.fire enroll stays step-0/depth-0 (Task 5); FunnelTriggerServiceIT 25 green; on_start lookup via $elemMatch over triggers[] (Decision 6 deviation, documented & audited)."
+    },
+    {
+      "id": "US-3",
+      "criterion": "event trigger bindable to ANY existing step; event drops subscriber onto that step (mid-entry).",
+      "status": "passed",
+      "evidence": "FunnelEventServiceIT.event_noInFlight_startsFreshAtEntryStep; FunnelExecutionEngineIT.redirect_movesCursorToEntryStep_andUnparksWaitingForReply. entryStepId resolved against stepsSnapshot."
+    },
+    {
+      "id": "US-4",
+      "criterion": "Two identical event names -> 422 + business code; multiple triggers on one entry step allowed and persisted.",
+      "status": "passed",
+      "evidence": "FunnelControllerIT.patch_duplicateEventNameReturns422, patch_multipleOnStartReturns422, patch_danglingEntryStepIdReturns422; FunnelServiceTriggerTypeTest. Business codes funnel_duplicate_event_name / funnel_invalid_entry_step / funnel_multiple_on_start."
+    },
+    {
+      "id": "US-5",
+      "criterion": "Event for an in-flight subscriber -> existing execution continues from trigger branch (park cleared), NO second execution.",
+      "status": "passed",
+      "evidence": "FunnelExecutionEngineIT.redirect_mutatesExistingRow_noSecondExecutionInserted + redirect_movesCursorToEntryStep_andUnparksWaitingForReply + redirect_ofRunningAndWaiting_movesCursor; FunnelEventServiceIT.event_inFlightExecution_redirectsNotStarts. One-execution invariant asserted by row-count."
+    },
+    {
+      "id": "US-6",
+      "criterion": "Event for a subscriber NOT in funnel (incl. completed/cancelled/failed) -> fresh execution from entry step, only if allowReEnter permits.",
+      "status": "passed",
+      "evidence": "FunnelEventServiceIT.event_noInFlight_allowReEnterFalse_terminalRowDoesNotBlockFreshInsert + event_noInFlight_allowReEnterTrue_cancelThenInsertAtEntry; engine entry-step DuplicateKeyException swallow unit test (Task 5)."
+    },
+    {
+      "id": "US-7",
+      "criterion": "Redirect follows the execution's SNAPSHOT; target absent in snapshot -> only that execution fails, others + sweep keep working.",
+      "status": "passed",
+      "evidence": "FunnelExecutionEngineIT.redirect_brokenCursor_terminalFailsOnlyThatExecution; engine resolves entryStepId against stepsSnapshot; greppable marker FUNNEL_REDIRECT_BROKEN_CURSOR_FAILED (ids-only)."
+    },
+    {
+      "id": "US-8",
+      "criterion": "Race with sweep -> redirect best-effort no-op + greppable WARN, state not corrupted.",
+      "status": "passed",
+      "evidence": "FunnelExecutionEngineIT.redirect_casLost_isNoOp_andEmitsWarn (asserts untouched row AND the WARN fired, not a bare boolean); marker FUNNEL_REDIRECT_CLAIM_LOST logs executionId/funnelId only (PII-free, source-verified)."
+    },
+    {
+      "id": "US-9",
+      "criterion": "Loop button->EMIT_EVENT->trigger->redirect does not infinite-loop on the server (server backstop).",
+      "status": "passed",
+      "evidence": "FunnelExecutionEngineIT.emitEventTriggerSelfLoop_terminatesAtBudgetOrMenuPark + loop_without_wait_trips_step_budget (FUNNEL_STEP_BUDGET_EXCEEDED). Redirect mutates existing row (no new enrollDepth) so depth cap + per-tick budget + human-press menu-park still bound the cycle (tech-spec Risk-4 proof). Live Telegram loop -> DEFERRED Task 12."
+    },
+    {
+      "id": "US-10",
+      "criterion": "App starts without IndexKeySpecsConflict on a clean/wiped DB; one active on_start per (project, trigger) constraint stays in force.",
+      "status": "passed",
+      "evidence": "FunnelTriggerIndexReconciliationIT (5, MARKER_APPLIED/MARKER_NOOP) + FunnelIndexesIT (8, asserts {projectId,onStartTriggerValue} unique partial shape). No IndexKeySpecsConflict in full run. Clean-start on a live wiped DB -> DEFERRED Task 12."
+    },
+    {
+      "id": "US-11",
+      "criterion": "Editor: Triggers panel allows add/delete event triggers and pick entry step; saved with the funnel.",
+      "status": "passed",
+      "evidence": "frontend FunnelTriggersPanel.spec.ts + funnel-editor.spec.ts (49) green; per-element persist/autosave wiring (Task 7)."
+    },
+    {
+      "id": "US-12",
+      "criterion": "Triggers panel labels shown in active locale (uk/en) without empty keys.",
+      "status": "passed",
+      "evidence": "check-locales.mjs exit 0 (uk/en parity) + required-keys.spec.ts asserts funnels.triggersPanel.* present AND non-empty trimmed value in both locales (audit-fixer fix)."
+    },
+    {
+      "id": "TS-1",
+      "criterion": "PATCH/GET round-trips List<TriggerDto>; invalid payloads -> 422 + business code (duplicate event_name, dangling entryStepId).",
+      "status": "passed",
+      "evidence": "FunnelControllerIT.patchGet_roundTripsTriggerArray, patch_duplicateEventNameReturns422, patch_danglingEntryStepIdReturns422 (104 green)."
+    },
+    {
+      "id": "TS-2",
+      "criterion": "onStartTriggerValue unique partial index created on clean/wiped DB; start with no IndexKeySpecsConflict; reconciliation APPLIED/NO-OP.",
+      "status": "passed",
+      "evidence": "FunnelIndexesIT.funnelsCollectionHasExpectedIndexes (partial-unique shape + $exists guard); FunnelTriggerIndexReconciliationIT.migrationDropsOldFlatTrioTriggerIndex (MARKER_APPLIED) + reconciliationIsIdempotentNoOpOnSecondBoot (MARKER_NOOP) + reconciliationNeverThrowsOnMongoFault."
+    },
+    {
+      "id": "TS-3",
+      "criterion": "redirectExecution mutates the existing row (no second execution); CAS-loss path no-op with greppable WARN + intact state.",
+      "status": "passed",
+      "evidence": "FunnelExecutionEngineIT.redirect_mutatesExistingRow_noSecondExecutionInserted + redirect_casLost_isNoOp_andEmitsWarn + redirect_mismatchedSubscriber_isNoOp (anti-IDOR)."
+    },
+    {
+      "id": "TS-4",
+      "criterion": "Broken-cursor redirect terminal-fails only the affected execution; sweep + other executions keep running.",
+      "status": "passed",
+      "evidence": "FunnelExecutionEngineIT.redirect_brokenCursor_terminalFailsOnlyThatExecution (sibling execution survives)."
+    },
+    {
+      "id": "TS-5",
+      "criterion": "All backend slow-lane engine ITs + index ITs green; frontend test + i18n (uk/en) parity green.",
+      "status": "passed",
+      "evidence": "All 17 feature test classes 0-fail (engine 67, event 13, index ITs 5+8, validation 13+104, etc.); frontend 532 passed; check-locales exit 0. The only lane failure is the unrelated flaky P99 latency probe (see findings)."
+    },
+    {
+      "id": "TS-6",
+      "criterion": "No regressions in existing funnel tests.",
+      "status": "passed",
+      "evidence": "Full module compiles + all funnel test classes green (FunnelControllerIT 104, FunnelTriggerServiceIT 25, FunnelServiceKeyword/EmitEvent/KeyboardStep, ProcessTelegramUpdateJobTest 48). Frontend funnels store 18 + editor 49 green. No funnel-domain failures in the 1284-test run."
+    },
+    {
+      "id": "AVP-1",
+      "criterion": "curl POST /api/integrations/v1/events with X-API-Key creates an execution with currentStepId = trigger entry step (202).",
+      "status": "not_verifiable",
+      "evidence": "DEFERRED -> Task 12. Cannot boot the live stack: no standalone MongoDB(27017)/Redis(6379) running, no booted app on 8080, and no seeded project/active-event-funnel/bot/subscriber/X-API-Key in a fresh DB. The contract (202/401/404/400/429 + error-isolation) is proven by EventsControllerIT (15) and the real start-at-entry wiring by FunnelEventServiceIT.event_noInFlight_startsFreshAtEntryStep against Testcontainers Mongo. Live curl confirmation belongs to post-deploy."
+    },
+    {
+      "id": "AVP-2",
+      "criterion": "Bash /start -> waiting_for_reply -> trigger event: SAME funnel_executions row, currentStepId moved to trigger branch, park cleared, no second execution.",
+      "status": "not_verifiable",
+      "evidence": "DEFERRED -> Task 12. Requires a live Telegram bot + webhook to produce /start and park the menu (the spec already routes the live loop to Task 12). The exact behavior (same-row redirect, unpark of waiting_for_reply, no second row) is proven at the IT layer by FunnelExecutionEngineIT.redirect_movesCursorToEntryStep_andUnparksWaitingForReply + redirect_mutatesExistingRow_noSecondExecutionInserted and FunnelEventServiceIT.event_inFlightExecution_redirectsNotStarts."
+    },
+    {
+      "id": "LIVE-1",
+      "criterion": "Live Telegram loop (menu button -> EMIT_EVENT -> trigger node -> redirect) end-to-end.",
+      "status": "not_verifiable",
+      "evidence": "DEFERRED -> Task 12 (user-spec 'Пользователь проверяет' + tech-spec E2E note). Needs live bot/webhook; server backstop proven by emitEventTriggerSelfLoop_terminatesAtBudgetOrMenuPark."
+    },
+    {
+      "id": "LIVE-2",
+      "criterion": "Manual wipe of funnels/funnel_executions + clean engine startup on live env (reconciliation APPLIED, no IndexKeySpecsConflict, sweep up).",
+      "status": "not_verifiable",
+      "evidence": "DEFERRED -> Task 12. Destructive op on the live/non-prod env (guarded). Reconciliation + clean-index behavior proven against Testcontainers wiped DB by FunnelTriggerIndexReconciliationIT + FunnelIndexesIT."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "title": "Flaky non-feature P99 latency probe failed by 4ms in the slow lane",
+      "expected": "TelegramWebhookP99IT.p99Latency_under100msAt100ParallelRequests P99 < 100ms",
+      "actual": "P99 = 104ms (4ms over) under 100 parallel requests on a workstation also running Testcontainers (and earlier the frontend suite)",
+      "reproduction": "cd backend && ./gradlew test -PrunSlow=true — the only failing test of 1284; documented as too-flaky-to-enforce in build.gradle (L48-51); @Tag(\"slow\"); unrelated to funnel/trigger code; pre-existing, not introduced by this feature. Does not gate the feature.",
+      "blocking": false
+    }
+  ],
+  "deferredToPostDeploy": [
+    {
+      "criterion": "AVP-1: curl POST /api/integrations/v1/events drops a new subscriber mid-funnel (202, currentStepId = entry step)",
+      "reason": "No bootable live stack: no standalone Mongo/Redis, no running app, no seeded project/active-event-funnel/bot/subscriber/X-API-Key.",
+      "verificationCondition": "Deployed app + Mongo + Redis + a seeded active funnel carrying an event trigger with an entry step + a valid integration X-API-Key + a known subscriber.",
+      "verificationSteps": "POST {base}/api/integrations/v1/events -H 'X-API-Key: <key>' -d '{\"event_name\":\"SOME_TRIGGER\",\"telegram_user_id\":<id>}' for a subscriber NOT in the funnel; expect 202; read funnel_executions and assert a new row with currentStepId = the trigger's entryStepId."
+    },
+    {
+      "criterion": "AVP-2: trigger event redirects an in-flight execution (same row, cursor moved, park cleared, no second execution)",
+      "reason": "Requires a live Telegram bot + webhook to drive /start and park the menu (waiting_for_reply).",
+      "verificationCondition": "Live bot + webhook; a funnel whose branch parks on a menu, plus an event trigger pointing at another step.",
+      "verificationSteps": "/start -> wait for waiting_for_reply on the menu -> fire the trigger event (API or EMIT_EVENT) -> assert the SAME funnel_executions row: currentStepId moved to the trigger branch, status running / park cleared, and no second execution row was inserted."
+    },
+    {
+      "criterion": "LIVE-1: live Telegram menu-button -> EMIT_EVENT -> trigger-node -> redirect loop end-to-end",
+      "reason": "Live webhook<->engine<->Telegram path cannot be reproduced without a live bot.",
+      "verificationCondition": "Live bot + a funnel 'menu button -> EMIT_EVENT SOME_TRIGGER' + an event trigger node SOME_TRIGGER -> message.",
+      "verificationSteps": "Via Telegram MCP: /start, press the button, confirm the bot drives onto the trigger branch (same in-flight execution redirected, park cleared) and the loop terminates (no runaway)."
+    },
+    {
+      "criterion": "LIVE-2: manual wipe + clean engine startup on the live environment",
+      "reason": "Destructive operation on the target environment; must be done on the first real env (guarded).",
+      "verificationCondition": "Confirmed non-prod target with the 'no production data' precondition.",
+      "verificationSteps": "Manually drop/clear funnels + funnel_executions, restart the app, confirm reconciliation logs APPLIED then NO-OP on re-boot, no IndexKeySpecsConflict in boot logs, sweep starts without snapshot-deserialization errors."
+    }
+  ]
+}

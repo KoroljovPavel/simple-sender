@@ -1,0 +1,39 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelTriggersPanel.vue",
+      "line": 113,
+      "issue": "addEvent() sets selectedIndex.value = props.triggers.length optimistically before the parent confirms the update:triggers emission. Since the panel is prop-driven (parent owns the array), after addEvent() fires, props.triggers still has the OLD length; selectedIndex points one past the last rendered row until the parent re-renders with the new array. In normal autosave flow (Task 7) this is a transient flicker, but if the parent debounces or rejects the emit, the highlight permanently points at a non-existent row.",
+      "fix": "Derive the new index from the emitted array length: `emit('update:triggers', next); selectedIndex.value = next.length - 1` — then selectedIndex is always consistent with the emitted payload regardless of parent latency."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelTriggersPanel.vue",
+      "line": 78,
+      "issue": "modelToEntry(ENTRY_START) returns firstStepId.value, which is null when the funnel has no saved steps yet. addEvent() also defaults entryStepId to firstStepId.value, so a trigger added before any step is persisted will have entryStepId=null and 422 on save (backend Decision 14: event requires non-null entryStepId). The server backstop is the last line of defence, but there is no client-side advisory for this specific scenario (an event row whose entryStepId resolved to null).",
+      "fix": "In the entry-step section of an event row, check `tr.entryStepId === null && firstStepId.value === null` and render a small advisory (e.g. 'Save a step first — event triggers require an entry step') using the existing `entryEmpty` i18n key or a dedicated one. Purely advisory, does not gate save — mirrors the task spec's 'server 422 is the backstop' principle."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelTriggersPanel.vue",
+      "line": 137,
+      "issue": "onKeywordsChange is registered for event-trigger rows (lines 244-247) but FunnelTriggerSettings with triggerType='event' never renders keyword UI, so this handler can never be called in production. It is wired via @update:keywords on every FunnelTriggerSettings instance regardless of type, which is harmless but is dead code for event rows.",
+      "fix": "No action required (safe dead code). Alternatively add a code comment noting that keywords is always null for event triggers and the handler is wired for structural completeness only."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/types/funnel.ts",
+      "line": 44,
+      "issue": "FunnelTrigger.triggerType is typed as `string` rather than `FunnelTriggerType`, requiring an explicit cast `(tr.triggerType as FunnelTriggerType)` in FunnelTriggersPanel wherever the value is passed to FunnelTriggerSettings. This is intentional (DTO pass-through, forward-compat) but is worth documenting so future readers understand the cast is not a workaround.",
+      "fix": "Add a one-line comment on the `triggerType` field: `// Typed as string (not FunnelTriggerType) for forward-compatibility with future server-side trigger kinds; cast with `as FunnelTriggerType` at mount sites.`"
+    }
+  ],
+  "summary": "Task 6 is approved. The frontend migration is clean and complete: FunnelTrigger mirrors TriggerDto one-to-one, the flat trio is removed from all three public types, the store is a proper thin pass-through, and FunnelTriggersPanel clones FunnelStepsList idioms correctly. The lockType prop on FunnelTriggerSettings is correctly implemented and used to pin both the on_start slot and each event row. The entryToModel/modelToEntry sentinel mapping correctly resolves to the first step's id (not null) for event triggers, satisfying the backend's non-null entryStepId requirement. The duplicate-event-name advisory guard, i18n parity, data-test coverage, and test suite (all 6 TDD anchor cases plus whitespace-normalization and sentinel-direction cases) are complete and well-structured. The FunnelStepForm.vue keyword-hint scan correctly iterates the triggers array. Four minor findings: optimistic selectedIndex on add (transient highlight mismatch), missing no-steps advisory for event rows resolving to null entryStepId, dead onKeywordsChange handler on event rows, and an undocumented string-typed triggerType field. None are blocking. No critical or major issues.",
+  "findings_count": {
+    "critical": 0,
+    "major": 0,
+    "minor": 4
+  }
+}

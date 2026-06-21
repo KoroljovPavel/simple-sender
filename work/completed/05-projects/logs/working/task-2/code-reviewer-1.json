@@ -1,0 +1,76 @@
+{
+  "verdict": "approved_with_suggestions",
+  "summary": "Task 2 cleanly delivers the frontend foundation primitives: Project type, SSR-safe Pinia projects store, and a complete uk/en i18n key tree. AC-T7 (zero-touch on auth.global.ts) holds — the file was not modified in b305c9d. AC-T12 (only stores/projects.ts calls localStorage.setItem) is verified across the production tree. Locale parity holds (197/197 keys in both files) and all four AC-25-mandated keys are present in both locales. Decision 9 lazy hydration (isLoaded + inFlight dedup) and Decision 10 (import.meta.client gate around localStorage with QuotaExceededError-safe try/catch) are implemented correctly. Risk R6 SSR-safety is layered (gate + try/catch). Tests faithfully cover the AC list including the dedup race, the empty-list null-out, and the AC-14b restore-rename detection contract. Findings below are minor refinements, not blockers — main item is that the SSR-context test cases name implies they verify the import.meta.client === false branch but the Nuxt vitest environment forces import.meta.client = true, so the suite actually exercises the defensive try/catch fallback rather than the early return. Recommend approving and addressing minor polish in a follow-up.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/tests/stores/projects.spec.ts",
+      "line": 242,
+      "issue": "The two SSR-context tests (lines 242-248, 250-253) stub localStorage to undefined but do not (and cannot easily) flip import.meta.client to false — the Nuxt vitest environment (vitest.config.ts: environment: 'nuxt') sets import.meta.client = true. So the early-return guards `if (!import.meta.client) return` in readPersisted/writePersisted are never executed by these tests; the assertions pass only because the try/catch swallows the resulting TypeError on `localStorage.getItem(...)`. The test names ('SSR context: ...') and the tech-spec Risk R6 line ('with import.meta.client = false (via vi.stubGlobal or equivalent)') imply branch coverage of the gate itself, but in practice the gate's early-return branch is unreached.",
+      "suggestion": "Either rename the tests to reflect what they actually verify ('localStorage unavailable: does not throw, does not write') OR extract the readPersisted/writePersisted helpers from the closure so they can be re-imported into a module-scoped test that mocks `import.meta.client` via vi.stubGlobal('import.meta', { client: false }) (or a small shim helper that takes `isClient` as a parameter and is exported for testing). The current behavior is correct — Risk R6 is covered defensively in two layers — but the test naming overstates which layer is being exercised."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/stores/projects.ts",
+      "line": 20,
+      "issue": "The catch block in writePersisted is silent (comment-only). The tech-spec edge-case note (task 2 line 169) explicitly says: 'on throw, log a console.warn and continue (in-memory state is still correct)'. Current implementation drops the warn. While the comment documents intent, an actual `console.warn('[projects] localStorage write failed', e)` would aid debugging if a user hits QuotaExceededError or storage-disabled mode (rare but real for incognito + restrictive privacy settings).",
+      "suggestion": "Add `console.warn('[projects] localStorage write failed; in-memory state preserved', err)` inside the catch. Keep the existing comment. Minor — the spec author marked this as an edge case, not as a blocker, and there is no AC pinning the log level."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/stores/projects.ts",
+      "line": 47,
+      "issue": "runAutoSelect always calls selectProject(...) even when the persisted ID is kept (keep === true && persisted equals current). This triggers a redundant `localStorage.setItem` write of the same value the store already holds. Functionally harmless but adds an unnecessary storage write on every fetchAll resolve.",
+      "suggestion": "Skip the redundant write: `const next = keep ? persisted : (active[0]?.id ?? null); if (next !== currentProjectId.value) selectProject(next);`. Note this is the only path where the value can be unchanged — create/update/restore all assign new state. Optional polish; leaving as-is is also defensible (idempotent write-through is simpler to reason about)."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/stores/projects.ts",
+      "line": 85,
+      "issue": "softDelete throws away the API response shape information — the call `useApi()(\\`/api/v1/projects/${id}\\`, { method: 'DELETE' })` doesn't type the response. If the backend ever returns a body (e.g. envelope with audit-id), the type will silently default to `unknown`. Other actions (create, update, restore) all use `useApi()<Project>(...)`. Minor cross-file consistency: a uniform `useApi()<void>(...)` annotation would document intent that 200/204 with no body is expected.",
+      "suggestion": "Annotate as `useApi()<void>(\\`/api/v1/projects/${id}\\`, { method: 'DELETE' })` to make the no-body contract explicit and consistent with the typed pattern used by sibling actions. Pure documentation improvement."
+    },
+    {
+      "severity": "suggestion",
+      "file": "frontend/stores/projects.ts",
+      "line": 26,
+      "issue": "sortByCreatedAtDesc relies on lexicographic comparison of ISO-8601 strings (`a.createdAt < b.createdAt`). This works correctly for canonical ISO-8601 instants like '2026-01-02T00:00:00Z' (backend Instant serialization), but fails subtly if the backend ever serializes with timezone offsets or fractional-second variations of differing precision. Defensive note only — the backend tech-spec confirms `Instant` (always UTC, always 'Z'-suffix), so this is safe in practice.",
+      "suggestion": "Optional: switch to numeric `Date.parse(a.createdAt) - Date.parse(b.createdAt)` (with descending order) for absolute robustness against future serialization changes. Keep the current implementation if you want to avoid throwing on malformed dates (Date.parse returns NaN). No change required for the current backend contract."
+    },
+    {
+      "severity": "suggestion",
+      "file": "frontend/stores/projects.ts",
+      "line": 50,
+      "issue": "fetchAll's inFlight dedup ignores the `includeDeleted` parameter — if caller A invokes `fetchAll(false)` (active only) and concurrently caller B invokes `fetchAll(true)` (with soft-deleted), B receives the active-only promise and never sees soft-deleted projects in the store until the next fetch. In the current task scope this never happens (Task 7 is the only `?include_deleted=true` consumer and it triggers from /projects index page mount, not concurrently with dashboard's default fetchAll). But the contract is fragile.",
+      "suggestion": "Either (a) document on the function 'concurrent calls with different includeDeleted semantics: first wins; later callers must wait and re-issue if they need the other view'; or (b) key inFlight by includeDeleted: `const inFlight = new Map<boolean, Promise<void>>()`. Not blocking — current pages are unlikely to race like this, and the spec did not call it out."
+    },
+    {
+      "severity": "suggestion",
+      "file": "frontend/tests/stores/projects.spec.ts",
+      "line": 1,
+      "issue": "The store spec does not have a test for `currentProject` returning null when `currentProjectId` points to a stale id that's no longer in `projects.value` (e.g., between a manual `selectProject('foo')` and a fetchAll that doesn't include 'foo'). The current `currentProject computed returns matching project or null` test covers null via selectProject(null), but not the stale-but-non-null case. The runAutoSelect logic typically prevents this state, but the computed should remain robust.",
+      "suggestion": "Add: `it('currentProject returns null when currentProjectId is stale', () => { const store = useProjectsStore(); store.selectProject('non-existent'); expect(store.currentProject).toBeNull() })`. One-liner for defense. Optional."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 4,
+    "suggestionCount": 3,
+    "testCoverageAssessment": "adequate"
+  },
+  "verifiedAcceptanceCriteria": [
+    "AC-T7 (Decision 9): frontend/middleware/auth.global.ts NOT modified in b305c9d — git log confirms last touch was 79da8f6 (task 7 of feature 02)",
+    "AC-T12: stores/projects.ts is the only production file calling localStorage.setItem (grep confirms; the only other matches are inside tests/stores/projects.spec.ts which is the test file itself)",
+    "AC-T5 (locale parity): both uk.json and en.json contain 197 keys, zero divergence (verified via flatten-and-diff)",
+    "AC-25: all four mandated keys present in both locales — errors.projects.delete.confirmTypeName, errors.projects.unavailable, errors.projects.restore.renamedDueToConflict, projects.create.limitReachedTooltip",
+    "AC-21 + Decision 10 + Risk R6: localStorage gated by `if (!import.meta.client) return` in both readPersisted and writePersisted (lines 7, 16) PLUS a defensive try/catch — two layers of SSR safety",
+    "AC-20 auto-select: runAutoSelect() prefers persisted id when present in active list, else projects[0] sorted createdAt desc — implementation matches spec; tests cover persisted-keep, persisted-missing, persisted-stale, empty-list",
+    "AC-24 (handleStaleCurrent): selectProject(null) (clears in-memory + removes localStorage key) → await fetchAll() → runAutoSelect against fresh list",
+    "Cross-file consistency: useApi() signature matches frontend/composables/useApi.ts (returns $fetch.create(...) instance, accepts <T>(path, opts))",
+    "Pattern parity with stores/auth.ts: setup-style defineStore, named export useStoreNameStore, no explicit Nuxt auto-import imports for ref/computed/useApi",
+    "Type definition: frontend/types/project.ts mirrors tech-spec Data Models § Frontend types exactly (id, name, description: string | null, timezone, createdAt: string, updatedAt: string, deletedAt: string | null)",
+    "AC-T3: no new dependencies (commit modifies no package.json)"
+  ]
+}

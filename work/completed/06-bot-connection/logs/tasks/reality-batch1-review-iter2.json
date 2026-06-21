@@ -1,0 +1,76 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "iteration": 2,
+  "status": "approved",
+  "prior_findings_resolution": {
+    "iter1_critical_task3_missing_test_key": "RESOLVED — Task 1 step 5 now explicitly adds `app.bot.token-encryption-key=0000...` to `backend/src/test/resources/application-test.properties` with full rationale. Task 3 line 136 also acknowledges and defers to Task 1.",
+    "iter1_major_task3_dataMongoTest_confusion": "RESOLVED — Task 3 line 136 now explicitly states 'do not use @DataMongoTest; it is incompatible with the codebase's reactive Mongo + Testcontainers setup and is not used anywhere here'. AbstractIntegrationTest is the mandated base class.",
+    "iter1_major_task2_dynamicPropertySource_confusion": "PARTIALLY RESOLVED — Description and Details now correctly show pure unit test construction via `new TelegramApiClient(WebClient.builder(), mockServer.url('/').toString())` without @SpringBootTest or @DynamicPropertySource. However, Step 5 (What to do) still says 'оверайдять app.telegram.base-url' and Task 1 line 47 still references 'Task 2's WireMock setup' — both are now minor residual imprecisions rather than critical confusion.",
+    "iter1_major_task2_readTimeout_retry": "RESOLVED — Retry filter now explicitly includes `|| ex instanceof io.netty.handler.timeout.ReadTimeoutException` with explanation that ReadTimeoutException is not a subclass of IOException or TimeoutException. A dedicated TDD test case `getMe_nettyReadTimeout_retriesThenReturns502TelegramUnavailable` is added to catch regressions.",
+    "iter1_minor_task2_mockwebserver_version": "RESOLVED — `testImplementation 'com.squareup.okhttp3:mockwebserver:4.12.0'` is now the primary pinned version in both the code block (step 4) and Details, with explicit rationale that Spring Boot 3.5.0 BOM does not manage this artifact."
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "Task 3's `depends_on: []` does not declare a dependency on Task 1, even though `BotRepositoryTest` and `BotIndexTest` extend `AbstractIntegrationTest` (@SpringBootTest), which will attempt to boot `TokenEncryptor` as a Spring bean. `TokenEncryptor` requires `app.bot.token-encryption-key` from `application-test.properties`, a file that Task 1 owns and modifies. The tech-spec labels Wave 1 as 'parallel foundations — independent' (line 488). If the wave executor runs Tasks 1, 2, and 3 concurrently, Task 3's test runner can attempt to boot the Spring context before Task 1 writes the all-zeros key, causing context startup failure with `IllegalStateException: BOT_TOKEN_ENCRYPTION_KEY must be 32 bytes`. The task body at line 136 explicitly acknowledges 'Task 1 owns BOT_TOKEN_ENCRYPTION_KEY in application-test.properties and lands in the same wave — this task should not add or duplicate that property; trust Task 1 to provide it' but offers no mechanical enforcement via `depends_on`.",
+      "fix": "Either (a) add `depends_on: [1]` to Task 3's frontmatter to enforce execution ordering even within the same wave, or (b) add a local `@DynamicPropertySource` in `BotRepositoryTest` and `BotIndexTest` that provides the all-zeros key as a fallback, independent of whether Task 1 has run. Option (a) is simpler and aligns with the principle that same-wave 'independent' means logically independent in domain, not test-execution independent."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 line 47 (`application-test.properties` step) says 'Task 2's WireMock setup' — Task 2 uses `com.squareup.okhttp3:mockwebserver` (OkHttp MockWebServer), not WireMock. These are different libraries. The sentence reads: '...so WebClient-based tests can override per test via @DynamicPropertySource (Task 2's WireMock setup)...' Also, Task 2's unit test does not use @DynamicPropertySource at all — it passes the mock URL directly to the constructor.",
+      "fix": "Replace 'Task 2's WireMock setup' with 'Task 2's MockWebServer setup'. Also drop the parenthetical @DynamicPropertySource reference since Task 2 uses constructor injection, not a Spring property override."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 Step 5 (What to do) says 'що піднімають локальний MockWebServer, оверайдять app.telegram.base-url на mockServer.url(\"/\").toString()' — the phrase 'оверайдять app.telegram.base-url' implies a Spring property override mechanism (@DynamicPropertySource or @TestPropertySource). But the test is explicitly a pure unit test without @SpringBootTest; there is no Spring context to override properties in. The mock URL is passed directly to the `TelegramApiClient` constructor. The TDD Anchor and Details sections both correctly describe the direct-construction pattern, creating an internal inconsistency within the task.",
+      "fix": "Reword Step 5 to: 'Написати юніт-тести ... що піднімають локальний MockWebServer і конструюють клієнт напряму: `new TelegramApiClient(WebClient.builder(), mockServer.url(\"/\").toString())`. Без @SpringBootTest — чистий unit.'  Remove 'оверайдять app.telegram.base-url' from this step."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 Details section states two stale file-state facts: (1) `application-test.properties` described as 'CURRENT STATE (10 lines)' — actual line count is 9; (2) `application.properties` described as 'ends at line 42 with logging.level.org.springframework.security=INFO' — actual file ends at line 41. Neither affects correctness of the implementation steps, but an agent following the 'CURRENT STATE' hint literally might misidentify the file or double-check against wrong line numbers.",
+      "fix": "Update the parenthetical line counts: change '(10 lines)' to '(9 lines)' and 'ends at line 42' to 'ends at line 41'."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 4,
+    "critical": 0,
+    "major": 1,
+    "minor": 3
+  },
+  "verification_notes": {
+    "task_1_iter2": {
+      "application_test_properties_key": "Task 1 step 5 and Details section both now include the 64-hex-char all-zeros key addition to application-test.properties. The actual file currently lacks this key (9 lines, no bot entries) — correct, because Task 1 has not yet been executed. The instruction is present and correct.",
+      "application_properties_state": "application.properties ends at actual line 41 (not 42 as stated in Details). All other CURRENT STATE assertions match.",
+      "env_example_state": ".env.example ends with PROJECTS_MAX_PER_USER=5 — matches Details. BOT_TOKEN_ENCRYPTION_KEY and TELEGRAM_BASE_URL not yet present — correct pre-execution.",
+      "crypto_api": "javax.crypto.Cipher/SecretKeySpec/GCMParameterSpec, java.security.SecureRandom, java.util.HexFormat — all JDK 21 stdlib; no new dependencies needed. Correct.",
+      "tdd_adequacy": "10 test cases verified in TDD Anchor. TokenEncryptorBootValidationTest is a well-formed @SpringBootTest context-failure test using @TestPropertySource. No issues."
+    },
+    "task_2_iter2": {
+      "retry_predicate": "Now includes `io.netty.handler.timeout.ReadTimeoutException` explicitly in the filter predicate with full rationale. Correct.",
+      "mockwebserver_version": "4.12.0 pinned explicitly in both the code block and Details. Spring Boot 3.5.0 BOM confirmed to NOT manage mockwebserver (verified by checking build.gradle — no mockwebserver entry present yet). Correct.",
+      "dynamicPropertySource_clarity": "Description and Details correctly show pure unit test. Step 5 still has residual 'оверайдять' wording but TDD Anchor and Details override this. Minor inconsistency only.",
+      "appException_api": "3-arg constructor `AppException(HttpStatus, String, String)` confirmed. `unprocessableEntity(code, message)` confirmed. `badRequest(message)` confirmed. All factory methods exist. Correct.",
+      "jackson_snake_case_dtors": "No global spring.jackson.property-naming-strategy or custom ObjectMapper found. TelegramResult<T> and TelegramUser records use snake_case field names matching Telegram API field names — Jackson will deserialize them correctly without additional configuration.",
+      "netty_timeout_test": "New TDD test `getMe_nettyReadTimeout_retriesThenReturns502TelegramUnavailable` uses MockWebServer body-delay approach to simulate Netty responseTimeout. This is a valid technique."
+    },
+    "task_3_iter2": {
+      "data_mongo_test_removed": "Task 3 line 136 now explicitly forbids @DataMongoTest and mandates AbstractIntegrationTest. Confirmed no @DataMongoTest usage anywhere in codebase.",
+      "abstractIntegrationTest_path": "Verified at backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java — @SpringBootTest + @ActiveProfiles('test') + Testcontainers (MongoDBContainer, Redis, Mailpit). Pattern confirmed.",
+      "compound_index_partial_filter_api": "Verified @CompoundIndex has `partialFilter()` attribute since Spring Data MongoDB 3.1 (confirmed in spring-data-mongodb-4.5.4-sources.jar source). The attribute name in Task 3 is correct.",
+      "partial_filter_usage": "No existing use of partialFilter in codebase — this is greenfield. The attribute exists in the annotation but is untested in this project. Task correctly notes this is new.",
+      "stepverifier_pattern": "StepVerifier usage for DuplicateKeyException assertion matches project patterns (confirmed in AuthControllerIT and other ITs).",
+      "reactiveMongoTemplate_indexOps": "ReactiveMongoTemplate.indexOps(Bot.class).getIndexInfo() — valid API. Pattern confirmed by AuthControllerIT which injects ReactiveMongoTemplate."
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "Round-2 additions resolve all three round-1 minor coverage gaps and the two code-reviewer-driven AC tests (AC-19 soft-deleted filter, AC-30 active-count). Every new test passes the litmus test against the corresponding implementation line: removing the targeted code line (absolute-URL branch in extractPath, placeholder fallback in template, currentProject guard on settings link, deletedAt filter in activeProjects computed, active-only length in atLimit computed, document mousedown listener, document keydown listener) causes the matching test to fail. Assertions are concrete (DOM tagName, attributes, text(), exists(), real ref values, spy call counts paired with state checks) — no new mock-only or mock-return-and-assert patterns introduced. No flakiness vectors: all event dispatches are synchronous (document.dispatchEvent) and the existing settle() helper (flushPromises + 50ms macrotask + nextTick) is sufficient for the resulting state updates. The interceptor spec now exercises all four request-shape branches of extractPath() (relative string, URL instance, relative + query, absolute URL string). Test pyramid remains healthy (22 unit tests covering pure helper + component behavior). No new gaps worth flagging.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 7,
+      "passed": 7,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 22,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-validation-defer",
+  "round": 1,
+  "verdict": "pass",
+  "summary": "All migrated tests assert the new two-phase contract (draft PUT 200, activate 422) and are value-based — not weakened. The regression test for the canonical bug (delete start node while incomplete ADD_TAG exists) is present and load-bearing. Security regression is preserved: present-but-malformed tagSlug/eventName still 422 on draft save. Notes-cap, finite-coord, entryStepId-scope still 422 on draft save. The DELAY body-assertion gap is a minor style issue only. All four suite gates are green.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:935",
+      "issue": "The DELAY-node draft test asserts `toHaveBeenCalledTimes(1)` but no body assertion. The parallel MESSAGE (line 930-932) and ADD_TAG (line 946-948) tests both assert `body.steps` content. The DELAY test would pass even if the page sent the wrong payload.",
+      "recommendation": "Add body assertion after the call-count check: `const body = storeMock.update.mock.calls[0][1] as Partial<FunnelResponse>; expect(body.steps).toEqual([{ stepType: 'DELAY', id: null }])` — mirrors the ADD_TAG test."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 22,
+      "passed": 21,
+      "failed": 1
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 14,
+      "integration": 8,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "contractVerification": {
+    "incompleteAddTagDraftSave_200_then_activate_422": "PASS — FunnelControllerIT:1543, value-based (stepType round-trip + GET round-trip + 422 code checked)",
+    "emptyMessageDraftSave_200_then_activate_422": "PASS — FunnelControllerIT:1522 via assertStepSavesAsDraftButRejectedOnActivate helper",
+    "malformedTagSlugStillRejectedOnDraftSave": "PASS — FunnelControllerIT:1572, 422 on PUT (format-if-present never deferred)",
+    "notesCapStillRejectedOnDraftSave": "PASS — FunnelControllerIT:320, 400 from bean-validation on PUT",
+    "finiteCoordUnit": "PASS — covered by CanvasPositionDtoTest (integration notes absence intentional and documented)",
+    "entryStepIdScopeStillRejectedOnDraftSave": "PASS — FunnelServiceTriggerTypeTest:186,212, 422 on save",
+    "activateOnIncompleteReturns422_funnel_step_invalid": "PASS — assertStepSavesAsDraftButRejectedOnActivate asserts code value",
+    "activateOnBrokenEdgeReturns422": "PASS — FunnelServiceTriggerTypeTest:212 (dangling entryStepId)",
+    "frontendIncompleteStepStillPatches": "PASS — funnel-editor.spec.ts:924,935,942 assert toHaveBeenCalledTimes(1)",
+    "frontendDeleteStartNodeWhileIncompleteAddTagExists_persists": "PASS — funnel-editor.spec.ts:971, value-based (entryStepId null checked, steps.length 2 checked)",
+    "frontendFeedbackBannerRemoved": "PASS — funnel-editor.spec.ts:381, asserts element does not exist"
+  },
+  "suites": {
+    "backend": "GREEN — 1215 tests, 0 failures, 0 errors (cleanTest run, 3m 25s). FunnelControllerIT: 110 tests, 0 failures. FunnelServiceEmitEventTest: 9 tests, 0 failures. FunnelServiceKeyboardStepTest: 23 tests, 0 failures. FunnelServiceKeywordTest: 3 tests, 0 failures.",
+    "frontend": "GREEN — 638 tests passed, 59 test files, 0 failures (37.4s)",
+    "locales": "GREEN — check-locales.mjs exit 0, no output (no missing/mismatched keys)",
+    "build": "GREEN — pnpm build exit 0, Nuxt SSR output generated (8.51 MB)"
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 14,
+      "issue": "All four commands in 'Verification Steps' and 'Details' are prefixed with 'Run from the repo root', but none work from the repo root. `./gradlew` exists only at `backend/gradlew` (no root-level wrapper). `pnpm test` and `pnpm test:e2e` require `frontend/package.json` (no root-level package.json). `node scripts/check-locales.mjs` resolves to `<repo-root>/scripts/check-locales.mjs` which does not exist (root `scripts/` contains only `install-hooks.sh`); the actual file is `frontend/scripts/check-locales.mjs`.",
+      "fix": "Replace the 'Run from the repo root' instruction block with four separate cd-prefixed commands:\n  cd backend && ./gradlew test -PrunSlow=true\n  cd frontend && pnpm test\n  cd frontend && pnpm test:e2e\n  cd frontend && node scripts/check-locales.mjs\nUpdate both the 'Verification Steps' code block (lines 91-95) and the 'Details' section (lines 112-117) and the 'Acceptance Criteria' bullets (lines 58-61) accordingly."
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 13,
+      "issue": "Task 13 lists `frontend/e2e/funnels.spec.ts` as an existing file to audit (Context Files, line 79), but this file does not exist yet — it is created by task 10 (`10-funnel-editor-e2e.md`), which is still `status: planned`. The audit task correctly declares `depends_on: [1..10]`, so at runtime funnels.spec.ts will exist. However, the wording in the Description and Context Files implies the auditor should find and read this file as though it already exists, with no fallback instruction if it is absent.",
+      "fix": "Add a fallback note in the Description or Details section: 'If `frontend/e2e/funnels.spec.ts` does not exist at audit time, treat its absence as a HIGH finding (E2E spec planned by task 10 was not delivered) and record it in the report.' This makes the task robust if task 10 is partially executed."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "In the 'Reference' verification block (line 93), `node scripts/check-locales.mjs` is listed as a standalone bullet without a `cd frontend &&` prefix, immediately after `cd frontend && pnpm test; pnpm test:e2e`. Running it without `cd frontend` from the repo root will fail because `scripts/` at the repo root contains only `install-hooks.sh`, not `check-locales.mjs`.",
+      "fix": "Change line 93 to: `cd frontend && node scripts/check-locales.mjs` (or equivalently `cd frontend && pnpm run prebuild` since prebuild calls that script)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 14,
+      "issue": "Task 14 references `docs/staging-smoke/10-funnels.md` as an existing runbook (Context Files line 83, Details lines 108 and 128). This file does not currently exist. It is created by task 08 (`08-cascade-config-runbook.md`), which is still planned. The dependency chain is correct (task 14 → task 13 → tasks 1-10 including 08), so the file will exist at runtime. The task does not instruct the executor to verify the file exists before referencing it.",
+      "fix": "Add a note in Context Files or Details: 'Confirm `docs/staging-smoke/10-funnels.md` exists (created by task 08) before writing the QA report. If absent, mark as a blocker.' Low urgency given correct dependency chain."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 21,
+    "issues_found": 4
+  }
+}

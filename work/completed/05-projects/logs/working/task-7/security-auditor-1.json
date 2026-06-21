@@ -1,0 +1,20 @@
+{
+  "verdict": "approved",
+  "summary": "Task 7 introduces a client-only Nuxt page with safe rendering patterns: all user-controlled strings (project.name, description, timezone) flow through Vue mustache auto-escape, no v-html/innerHTML/eval, no localStorage or window access, no external URLs (only localePath for internal routes). Concurrent restore is guarded by a restoringIds Set, banner timer is cleaned up on unmount, and the response is not Object.assign'd into existing objects (no prototype-pollution surface). Two informational notes below; nothing blocks deploy.",
+  "findings": [
+    {
+      "severity": "info",
+      "owasp": "A03:2021 Injection (path)",
+      "where": "frontend/pages/projects/index.vue:160",
+      "issue": "project.id is interpolated directly into the route path passed to localePath(`/projects/${project.id}/settings`). The id originates from the backend (UUID), and NuxtLinkLocale percent-encodes path segments, so this is not exploitable today. However, if the backend ever returns a non-UUID id containing slashes or '..' segments, the resulting <a href> could traverse to a different route. Treat backend id as the trust boundary.",
+      "remediation": "Keep the backend invariant that project.id matches a strict UUID regex (server-side validation). Optionally add a defensive guard on the frontend: const safeId = /^[0-9a-fA-F-]{36}$/.test(project.id) ? project.id : '' and skip rendering the link when it fails. No code change required as long as the backend invariant holds — documenting it in the Project type is enough."
+    },
+    {
+      "severity": "info",
+      "owasp": "A09:2021 Security Logging and Monitoring",
+      "where": "frontend/pages/projects/index.vue:41-46",
+      "issue": "refreshSoftDeleted() swallows all errors silently (empty catch). The inline comment justifies the UX choice, but a silent catch hides 401/403/5xx from telemetry. Not a vulnerability — purely an observability gap that could mask an auth regression on the include_deleted=true path.",
+      "remediation": "Consider routing the caught error through a centralized logger (e.g. console.warn or a Sentry-style hook) without surfacing it to the user, so soft-delete fetch failures remain auditable. Optional, non-blocking."
+    }
+  ]
+}

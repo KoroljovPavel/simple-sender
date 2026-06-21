@@ -1,0 +1,20 @@
+{
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "verdict": "approve",
+  "summary": "All five TDD anchors implemented as integration tests against real Mongo, plus a null-message edge case. Assertions are behavioral and specific: exact-arg verify on advanceOnCallback, event-type + metadata entries, event-before-flip via the established sentinel-on-logEvent approach, re-entry no-op, bot-missing degrade, and a no-PII value check. The jsonNodeSlots() regression (callback_query removed from the telegram_update_other parameterized stream) is handled with an explanatory comment.",
+  "findings": [
+    {
+      "severity": "info",
+      "area": "coverage",
+      "finding": "callbackQuery_callsAdvanceOnCallback_writesEvent, _eventBeforeStatusFlip_orderingInvariant, _reentryGuardDone_noOp, _botMissing_degradesNoAdvance, _eventCarriesNoPii all present; plus _nullMessage_advancesWithNullChatId for the inline-mode edge case.",
+      "action": "none"
+    },
+    {
+      "severity": "info",
+      "area": "regression",
+      "finding": "jsonNodeSlots() no longer emits callback_query; nonMessageJsonNodeSlot_writesUpdateOther_noStubs stays green for the remaining opaque slots.",
+      "action": "none"
+    }
+  ]
+}

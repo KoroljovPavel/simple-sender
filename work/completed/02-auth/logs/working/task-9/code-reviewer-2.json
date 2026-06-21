@@ -1,0 +1,63 @@
+{
+  "status": "approved",
+  "summary": "Round 2 fixes correctly resolve all three actionable round-1 findings. The patterns.md CSRF guidance now matches the WebFlux classes actually imported in SecurityConfig.java (CookieServerCsrfTokenRepository, XorServerCsrfTokenRequestAttributeHandler), the security baseline statement now reflects the explicit /api/** authenticated rule sitting before the catch-all, and deployment.md surfaces SESSION_COOKIE_SECURE and SESSION_COOKIE_SAME_SITE as production-critical hardening flags. No new issues introduced; all four documents are accurate against backend/src/main/java/com/botfunnel/security/SecurityConfig.java, .env.example, application.properties, and tech-spec Decision 12. The two optional architecture.md suggestions from round 1 were not addressed and remain optional — not blocking.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": ".claude/skills/project-knowledge/references/architecture.md",
+      "line": 27,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "(Carried over from round 1, optional.) The phrase 'replaces JWT for auth' on the spring-session-data-mongodb line reads as a delta against an earlier plan rather than an authoritative current-state description. Consider 'used for stateful login sessions' or simply dropping the parenthetical — the rationale is captured in tech-spec / decisions.md.",
+      "benefit": "Documentation reads as authoritative current-state reference rather than a historical delta.",
+      "optional": true
+    },
+    {
+      "file": ".claude/skills/project-knowledge/references/architecture.md",
+      "line": 18,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "(Carried over from round 1, optional.) The 'Currently implemented' suffix lists `security` alongside feature modules; a future agent looking for `security` as a feature package may be briefly confused. Consider clarifying that `security` is the SecurityConfig package, not a feature module.",
+      "benefit": "Reduces ambiguity about the role of the security package.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 2,
+    "testCoverageAssessment": "adequate"
+  },
+  "round1Resolution": {
+    "resolved": [
+      {
+        "file": "patterns.md",
+        "issue": "CookieCsrfTokenRepository → CookieServerCsrfTokenRepository.withHttpOnlyFalse()",
+        "verified": "patterns.md:45 now matches SecurityConfig.java:13,41 (import + bean wiring); also adds XorServerCsrfTokenRequestAttributeHandler matching SecurityConfig.java:14,44, and an explicit note that the Servlet-stack class name is different"
+      },
+      {
+        "file": "patterns.md",
+        "issue": "Security baseline missing /api/** authenticated rule",
+        "verified": "patterns.md:46 now states '/api/** is explicitly authenticated (placed before the catch-all so any future /api/... route fails closed)' — matches SecurityConfig.java:50-52"
+      },
+      {
+        "file": "deployment.md",
+        "issue": "Missing SESSION_COOKIE_SECURE and SESSION_COOKIE_SAME_SITE env vars",
+        "verified": "deployment.md:55-56 add both rows with correct production guidance ('true' for secure, 'strict' for SameSite); variable names match .env.example:11-13 and application.properties:15-16; Decision 12 is referenced in the SameSite note"
+      }
+    ],
+    "notAddressed": [
+      {
+        "file": "architecture.md",
+        "issue": "'replaces JWT for auth' parenthetical (line 27) — round 1 marked optional",
+        "status": "still optional, not blocking"
+      },
+      {
+        "file": "architecture.md",
+        "issue": "security package surfaced as feature module in 'Currently implemented' list (line 18) — round 1 marked optional",
+        "status": "still optional, not blocking"
+      }
+    ]
+  }
+}

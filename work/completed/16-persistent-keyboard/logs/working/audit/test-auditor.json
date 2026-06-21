@@ -1,0 +1,120 @@
+{
+  "task": "10 — Test Audit",
+  "feature": "16-persistent-keyboard",
+  "auditor": "test-auditor",
+  "date": "2026-06-11",
+  "verdict": "passed",
+  "summary": "The test layer for the persistent-keyboard feature is strong, meaningful, and correctly balanced. Every one of the 13 user-spec acceptance criteria maps to at least one concrete test, and all the load-bearing assertions are behavioral rather than mock-only: the engine slow-lane ITs parse the recorded /sendMessage body as a JsonNode and assert the exact reply_markup shape (object-form keyboard rows in order, is_persistent, hardcoded resize_keyboard:true, one_time_keyboard, remove_keyboard:true) with the NON-default booleans seeded so a builder that ignored the step fields fails loudly; the executor unit tests capture the markup Map argument (not just verify(sender)); the controller IT round-trips ALL keyboard fields through PUT->response AND GET; copyOf is pinned for scalars, new-list-instance identity (assertNotSame) and copy-mutation isolation; and the no-v-html source guard in the preview spec still scans the real component source after stripping comments. The four cited 'covered by existing tests, not rewritten' claims (two re-enter-guard cases, keyword dispatch, menu precedence) are all real, assert the cited semantics, and are enabled. Findings are confined to minor/info: one real coverage gap (no test pins the duplicate-button trim semantics that case is NOT folded, Decision 6) and a handful of by-design notes. None blocking.",
+  "severity_counts": { "blocker": 0, "major": 0, "minor": 2, "info": 4 },
+  "inventory": {
+    "backend_unit": [
+      "FunnelStepTest.java — copyOf for keyboard fields: copyOf_preservesKeyboardScalars (text/parseMode/isPersistent/oneTimeKeyboard survive + mutation isolation both directions), copyOf_copiesKeyboardRowsToNewListInstance (isNotSameAs + element isSameAs), copyOf_nullKeyboardRowsStaysNull, copyOf_mutatingCopyKeyboardRowsDoesNotAffectSource (list-level add/clear isolation). User-spec Risk 1 load-bearing — fully covered.",
+      "FunnelStepExecutorTest.java — SET_KEYBOARD/CLEAR_KEYBOARD execution: markup captor asserts keyboard rows/labels in author order, object-form {\"text\":...}, is_persistent/resize_keyboard:true/one_time_keyboard, doesNotContainKey(remove_keyboard) (setKeyboard_sendsTextWithReplyKeyboardMarkup_returnsContinue); null-boolean form defaults true/false never JSON null (setKeyboard_persistentAndOneTimeNullDefaults + doesNotContainNull); variable+parseMode render (setKeyboard_rendersVariablesAndParseMode -> 'hi &lt;b&gt;'); 4096 trim+codes-only WARN no-PII (setKeyboard_trimsTextOver4096AndWarns_pii); remove_keyboard exact map (clearKeyboard_sendsTextWithRemoveKeyboard_returnsContinue); error-mapping trio for SET (BLOCKED/CHAT_NOT_FOUND->CANCEL, OTHER->FAIL, invalid_bot_token->FAIL) + AppException->FAIL for CLEAR; defensive guard null/empty rows + empty-buttons-row -> terminal fail empty_keyboard_rows, never sends (setKeyboard_nullOrEmptyRows_failsTerminally + setKeyboard_rowWithNoButtons_failsTerminally).",
+      "FunnelServiceKeyboardStepTest.java — NOTE: extends AbstractIntegrationTest (real Mongo) so it is technically an IT, but it exercises validation logic via FunnelService.update. Validation matrix all 422 funnel_step_invalid: valid round-trips for SET/CLEAR + null-booleans + text@4096 + buttonText@64 boundaries (acceptance side); rejections — missing/blank text, text>4096, invalid parse mode, 0 rows, >10 rows, 0 buttons/null buttons in a row, >4 buttons, blank/null button text, buttonText>64, duplicate trimmed labels, null row/button element, and CLEAR_KEYBOARD strict-rejects keyboardRows (incl empty list) / isPersistent / oneTimeKeyboard present."
+    ],
+    "backend_integration": [
+      "FunnelExecutionEngineIT.java (@Tag(\"slow\")) — first engine ITs that assert the /sendMessage BODY (Decision 9). setKeyboardStep_sendsExactReplyKeyboardBody_andCompletes: JsonNode walk of reply_markup.keyboard (2 rows x (2,1) distinct labels in order), is_persistent=false + one_time_keyboard=true SEEDED non-default so null-fallback defaults would fail loudly, resize_keyboard:true, text='Choose:', status completed + isNotEqualTo(waiting_for_reply). clearKeyboardStep_sendsRemoveKeyboardBody_andCompletes: remove_keyboard:true + text + completed. buttonLabelText_dispatchesMatchingKeywordFunnel: dispatchForSubscriber(TRIGGER_KEYWORD,'Menu',0) creates exactly one execution for the matched keyword funnel, depth 0, identity asserted (contains+case-insensitive). drainRecordedRequests() helper clears the JVM-singleton MockWebServer backlog so takeRequest() pops the test's own request.",
+      "FunnelControllerIT.java — keyboardStepsRoundTripThroughUpdateAndGet: PUT asserts every keyboard field in the response (stepType, keyboardText, isPersistent, oneTimeKeyboard, keyboardRows length + each button label, CLEAR keyboardRows null) THEN GET re-asserts the same fields (toStepDto wiring both directions). invalidKeyboardStepReturns422 (duplicate labels -> funnel_step_invalid). Preview: previewSetKeyboardReturnsKeyboardKindWithRenderedTextAndRawRows (kind=keyboard, one TEXT block, variable substituted 'Привіт Олена!', raw rows echoed in order), previewSetKeyboardLabelsNotVariableRendered (labels verbatim, NOT rendered), previewSetKeyboardClampsOversizedRows (>10 rows/>4 buttons/label>64 clamped to 10x4x64), previewClearKeyboardReturnsNullRows, previewSetKeyboardEscapesTextPerParseMode (hostile <script> + HTML -> escaped in raw body, A03 guard), previewSetKeyboardBlankTextStillReturnsOneTextBlockNullRows, previewSetKeyboardUnlinkedBotUsesStubSubscriber, previewSetKeyboardLabelAtCapNotTruncated (64 boundary), previewMessageStepHasNullKeyboardRows (regression guard)."
+    ],
+    "frontend": [
+      "tests/components/funnels/FunnelStepForm.keyboard.spec.ts — form blocks for BOTH types; rows sub-editor add/remove rows+buttons; caps (rows@10 disabled, buttons@4 disabled); validation mirror (blank text, text>4096 HARD block, blank button, button>64, duplicate trimmed labels, blank CLEAR text) each asserts an error hook AND emitted('submit') falsy; no resize control (exactly two step-keyboard checkboxes); checkbox defaults persistent ON / one-time OFF; keyword hint show/hide (contains lowercase) + inactive/non-keyword funnel still warns + hint never blocks submit; emit shape SET_KEYBOARD preserves id/next + rows + explicit booleans, CLEAR_KEYBOARD preserves id/next and OMITS keyboardRows/isPersistent/oneTimeKeyboard (toBeUndefined), trimmed labels + fresh-step defaults.",
+      "tests/components/funnels/FunnelMessagePreview.spec.ts — keyboard render branch: SET_KEYBOARD renders backend text + keyboard mock of label rows in order (no inline-button hook, no MESSAGE block stack); CLEAR_KEYBOARD text only no mock; empty keyboardRows array -> no mock; empty renderedBlocks -> no text node, no crash; payload shape carries keyboardText/keyboardParseMode/keyboardRows; debounce re-trigger on keyboardText edit AND deep keyboardRows edit (toHaveBeenLastCalledWith); hostile label + text surface as literal text (no img/b created); no-v-html source guard scans component source (comments stripped) asserting no v-html= / .innerHTML=."
+    ],
+    "cited_existing_not_rewritten": [
+      "FunnelEventServiceTest.reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches (line 201) — VERIFIED real + enabled: allowReEnter=false, DuplicateKeyException on funnel 'dup' insert -> the OTHER match 'ok' still inserts (times(1)) + LOG_DISPATCH_REENTER_IGNORED logged. Asserts the cited silent-no-op semantics.",
+      "FunnelEventServiceTest.reEnter_allowReEnterFunnel_cancelsExistingThenInserts (line 218) — VERIFIED real + enabled: allowReEnter=true -> InOrder cancelExistingForPair THEN insertExecution (restart). Asserts the cited restart semantics.",
+      "ProcessTelegramUpdateJobTest.plainText_dispatchesKeyword (line 362) — VERIFIED real + enabled: plain text, no waiting_for_reply -> dispatchForSubscriber(TRIGGER_KEYWORD, text, 0) invoked exactly once; audit event still written. Webhook leg of button-tap routing.",
+      "ProcessTelegramUpdateJobTest.plainText_keywordSuppressedWhileWaitingForReply (line 380) — VERIFIED real + enabled: parked waiting_for_reply -> dispatchForSubscriber NEVER invoked, parked execution status unchanged, KEYWORD_SUPPRESSED_WAITING_FOR_REPLY marker logged. Menu-precedence semantics."
+    ]
+  },
+  "coverage_table": [
+    { "ac": "1. Author can add SET_KEYBOARD: text <=4096 + variables + parse_mode, <=10 rows x <=4 buttons, button text <=64", "status": "Covered", "test": "FunnelServiceKeyboardStepTest::setKeyboard_valid_acceptedAndRoundTrips + setKeyboard_textAtCap_isValid + setKeyboard_buttonTextAtCap_isValidAndRoundTrips + setKeyboard_tooManyRows_rejected + setKeyboard_rowWithTooManyButtons_rejected + setKeyboard_buttonTextOverCap_rejected + setKeyboard_invalidParseMode_rejected; FunnelStepExecutorTest::setKeyboard_rendersVariablesAndParseMode; FunnelStepForm.keyboard::caps rows at 10 and buttons per row at 4 / blocks submit on text over 4096 / button text over 64" },
+    { "ac": "2. Duplicate button texts blocked (422 funnel_step_invalid + form mirror)", "status": "Covered", "test": "FunnelServiceKeyboardStepTest::setKeyboard_duplicateTrimmedButtonTexts_rejected; FunnelControllerIT::invalidKeyboardStepReturns422; FunnelStepForm.keyboard::blocks submit on duplicate button texts in one keyboard (trimmed)" },
+    { "ac": "3. Two checkboxes Postiyna(is_persistent default on)/Skhovaty(one_time_keyboard default off); resize_keyboard always true, not shown", "status": "Covered", "test": "FunnelStepForm.keyboard::checkbox defaults — persistent ON, one-time OFF + renders no resize_keyboard control (exactly two keyboard checkboxes); executor side: FunnelStepExecutorTest::setKeyboard_persistentAndOneTimeNullDefaults (resize hardcoded true asserted in setKeyboard_sendsTextWithReplyKeyboardMarkup)" },
+    { "ac": "4. SET_KEYBOARD send body has reply_markup.keyboard/is_persistent/resize_keyboard:true/one_time_keyboard (engine IT); CONTINUE then completed, NOT parked", "status": "Covered", "test": "FunnelExecutionEngineIT::setKeyboardStep_sendsExactReplyKeyboardBody_andCompletes (JsonNode body, non-default booleans seeded, completed + isNotEqualTo waiting_for_reply); FunnelStepExecutorTest::setKeyboard_sendsTextWithReplyKeyboardMarkup_returnsContinue (markup captor, Outcome.CONTINUE)" },
+    { "ac": "5. CLEAR_KEYBOARD send body has mandatory text + reply_markup.remove_keyboard:true (engine IT); continues", "status": "Covered", "test": "FunnelExecutionEngineIT::clearKeyboardStep_sendsRemoveKeyboardBody_andCompletes; FunnelStepExecutorTest::clearKeyboard_sendsTextWithRemoveKeyboard_returnsContinue (markup == {remove_keyboard:true}, CONTINUE)" },
+    { "ac": "6. Button tap starts the keyword funnel matching the button text (webhook text -> keyword dispatch -> execution created; existing path unchanged)", "status": "Covered", "test": "FunnelExecutionEngineIT::buttonLabelText_dispatchesMatchingKeywordFunnel (dispatch leg: exactly one execution, depth 0, identity); cited ProcessTelegramUpdateJobTest::plainText_dispatchesKeyword (webhook leg)" },
+    { "ac": "7. Repeat tap while keyword execution alive: allowReEnter=false silent no-op, true restart (existing re-enter guard)", "status": "Covered", "test": "cited FunnelEventServiceTest::reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches (false -> no-op) + reEnter_allowReEnterFunnel_cancelsExistingThenInserts (true -> cancel+insert)" },
+    { "ac": "8. Editor shows non-blocking hint next to a button whose text matches no active keyword funnel", "status": "Covered", "test": "FunnelStepForm.keyboard::shows the keyword hint for a button matching no active keyword funnel + hides when active keyword matches (contains lowercase) + does not show against inactive/non-keyword funnel + keyword hint never blocks submit" },
+    { "ac": "9. Preview (backend endpoint + frontend panel) renders both new steps: text via VariableTemplateRenderer + buttons list", "status": "Covered", "test": "FunnelControllerIT::previewSetKeyboardReturnsKeyboardKindWithRenderedTextAndRawRows (kind=keyboard, 'Привіт Олена!' substituted, raw rows) + previewClearKeyboardReturnsNullRows; FunnelMessagePreview.spec::SET_KEYBOARD renders text+keyboard mock + CLEAR_KEYBOARD text only" },
+    { "ac": "10. Send errors mapped as all send steps: BLOCKED_BY_USER/CHAT_NOT_FOUND->cancelled, other Telegram->failed, invalid_bot_token->failed (unit on StepExecutor)", "status": "Covered", "test": "FunnelStepExecutorTest::setKeyboard_blockedByUser_cancels (BLOCKED + CHAT_NOT_FOUND -> CANCEL) + setKeyboard_otherTelegramError_fails + setKeyboard_invalidBotToken_fails + clearKeyboard_appException_fails" },
+    { "ac": "11. Both steps survive FunnelStep.copyOf: new fields present in execution snapshot and duplicate (unit)", "status": "Covered", "test": "FunnelStepTest::copyOf_preservesKeyboardScalars + copyOf_copiesKeyboardRowsToNewListInstance (new instance) + copyOf_nullKeyboardRowsStaysNull + copyOf_mutatingCopyKeyboardRowsDoesNotAffectSource" },
+    { "ac": "12. Empty/whitespace button text rejected by validation (422 + form mirror)", "status": "Covered", "test": "FunnelServiceKeyboardStepTest::setKeyboard_blankButtonText_rejected (blank + null); FunnelStepForm.keyboard::blocks submit on a blank button text" },
+    { "ac": "13. All new UI strings via i18n (uk + en, parity gate passes)", "status": "Partial (by design)", "test": "No Vitest spec asserts i18n parity directly; covered by the prebuild parity gate (cd frontend && pnpm build / check-locales.mjs) run in Task 11 QA. Decisions.md Task 2/Task 5 report check-locales.mjs green. Partial-by-design per the task brief — NOT flagged as a gap." }
+  ],
+  "findings": [
+    {
+      "id": "F-MINOR-1",
+      "severity": "minor",
+      "title": "Duplicate-button validation does not pin the case-NOT-folded semantics",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelServiceKeyboardStepTest.java::setKeyboard_duplicateTrimmedButtonTexts_rejected",
+      "issue": "Decision 6 states the duplicate-button check trims but does NOT fold case (HashSet on the trimmed raw text, unlike a lowercased keyword match). The test comment explicitly says 'case is NOT folded — Decision 6', but the only duplicate test asserts the TRIM path ('Бонус' vs ' Бонус '). There is no positive case proving that two labels differing only by case (e.g. 'Бонус' and 'бонус') are ACCEPTED. A future regression that lowercased the dedup key would silently start rejecting case-distinct labels and no test would catch it. The form mirror (FunnelStepForm.keyboard) has the same shape — only the trimmed-equal duplicate is tested, not the case-distinct accept.",
+      "recommendation": "Add a positive case to FunnelServiceKeyboardStepTest (and optionally the form spec): setKeyboard_caseDistinctButtonTexts_areAccepted — a SET_KEYBOARD with rows [['Бонус'],['бонос'? no — 'бонус']] updates without 422 and round-trips both labels. Cheap, directly pins the documented Decision-6 contract that distinguishes this dedup from the keyword contains-match.",
+      "litmusTestFailed": false
+    },
+    {
+      "id": "F-MINOR-2",
+      "severity": "minor",
+      "title": "Engine IT does not assert keyboardText variable substitution on the wire (only literal text)",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java::setKeyboardStep_sendsExactReplyKeyboardBody_andCompletes",
+      "issue": "The slow-lane wire-body tests seed a literal keyboardText ('Choose:' / 'Keyboard removed.') and assert it verbatim in body.text. Variable substitution on the keyboard text path IS covered at the unit level (FunnelStepExecutorTest::setKeyboard_rendersVariablesAndParseMode) and at the controller-preview level (previewSetKeyboard...'Привіт Олена!'), so the full sweep->renderer->wire chain with a {user.*} variable substituted into the SENT body is not pinned by any single test. Low risk because each leg is independently covered, but a regression where the engine path skipped the renderer for keyboard steps (while the executor unit + preview kept working) would not be caught by an IT.",
+      "recommendation": "Optional: seed keyboardText with '{user.first_name}' in setKeyboardStep_sends... and assert body.text equals the substituted value for the seeded subscriber. Marginal — the executor unit already proves the executor renders; this would only add the full-engine integration of that path. Defer-acceptable.",
+      "litmusTestFailed": false
+    },
+    {
+      "id": "F-INFO-1",
+      "severity": "info",
+      "title": "FunnelServiceKeyboardStepTest is an IT (extends AbstractIntegrationTest), not a pure unit test",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelServiceKeyboardStepTest.java",
+      "issue": "The tech-spec Testing Strategy lists validateSetKeyboard/validateClearKeyboard under Unit tests, but the implemented test drives validation through FunnelService.update against real Mongo (AbstractIntegrationTest seed of user/project/funnel repos), cloning the FunnelServiceEmitEventTest pattern. It runs in the DEFAULT lane (no @Tag('slow')) so it is exercised on every push, and the round-trip-through-persist actually STRENGTHENS the toSteps/toStepDto coverage. Not a defect — just a pyramid classification note: this is integration-level coverage of unit-level logic, which is acceptable here because the validation is inseparable from the DTO mapping it guards.",
+      "recommendation": "None — accepted as designed. The choice mirrors the established FunnelServiceEmitEventTest precedent and adds persistence round-trip value."
+    },
+    {
+      "id": "F-INFO-2",
+      "severity": "info",
+      "title": "Preview clamp (>10 rows / >4 buttons / label>64) covered; clamp boundary pinned",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java::previewSetKeyboardClampsOversizedRows + previewSetKeyboardLabelAtCapNotTruncated",
+      "issue": "The task Edge-cases section asked to confirm a test covers the Decision-7 clamp (preview echoes CLAMPED rows). It is covered: previewSetKeyboardClampsOversizedRows asserts 12-row/6-button/65-char input clamps to 10 rows x 4 buttons x 64-char label, and previewSetKeyboardLabelAtCapNotTruncated pins the 64-char inclusive boundary as NOT truncated. No gap.",
+      "recommendation": "None — noted for completeness."
+    },
+    {
+      "id": "F-INFO-3",
+      "severity": "info",
+      "title": "No-v-html source guard intact and not weakened by the keyboard branch",
+      "file": "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts (lines 11-14, 166-173)",
+      "issue": "The guard reads the real FunnelMessagePreview.vue source via readFileSync, strips HTML/line/block comments, then asserts the source matches neither /v-html\\s*=/ nor /.innerHTML\\s*=/. It was NOT whitelisted or relaxed when the keyboard render branch was added; the keyboard branch additionally has runtime literal-text assertions (hostile label/text surface as text, no img/b elements created). Source guard confirmed intact.",
+      "recommendation": "None."
+    },
+    {
+      "id": "F-INFO-4",
+      "severity": "info",
+      "title": "Assertion quality is high — no mock-only / tautology / over-mock failures found",
+      "file": "(suite-wide)",
+      "issue": "Spot-checked every anti-pattern the task flagged. Wire-body cases parse the recorded /sendMessage JSON (OBJECT_MAPPER.readTree) and assert reply_markup structure, not request counts/HTTP 200. Executor cases use ArgumentCaptor<Object> on the markup arg and cast to Map (rows order, object-form {text:...}, hardcoded resize true) — never bare verify(sender). Round-trip asserts every keyboard field after BOTH PUT response and GET (toStepDto). copyOf asserts assertNotSame on the rows list AND copy-mutation isolation. Validation is double-covered with negatives (>64, duplicate, CLEAR-rejects-rows). Form specs assert the emitted payload shape incl id/next preservation and CLEAR omitting SET-only fields, not just rendering. No disabled/skipped tests counted as coverage (no @Disabled in any cited file). The engine IT seeds NON-default booleans precisely to defeat a null-fallback-defaults builder. The dispatch IT asserts exactly-one execution + identity + depth (a misconfigured seed would be zero) rather than a bare 'something happened'.",
+      "recommendation": "None."
+    }
+  ],
+  "pyramid_verdict": {
+    "balance": "Correct and as designed. Unit-heavy base: copyOf (FunnelStepTest), executor branch logic + markup builders + error mapping + trim/PII (FunnelStepExecutorTest, all collaborators mocked, no over-mock since the renderer is a real static util), and the frontend form/preview Vitest specs. Validation is double-covered: backend (FunnelServiceKeyboardStepTest, default-lane persist round-trip) + frontend mirror (FunnelStepForm.keyboard) — justified because client and server validators are independent code paths that must agree byte-for-byte (Decision 6). The slow-lane @Tag('slow') ITs (FunnelExecutionEngineIT) are correctly limited to the cross-component invariants that cannot be proven on mocks: the exact /sendMessage wire body, completed-not-parked, and the keyword-dispatch leg. Controller-IT (default lane) carries the HTTP round-trip + preview. E2E correctly None per user-spec (reply keyboards render only in a real Telegram client; manual leg is smoke.md / Task 7). No pyramid inversion; no redundant duplication that reduces zero confidence. The one classification nuance (FunnelServiceKeyboardStepTest is an IT covering unit-level validation logic) is acceptable — see F-INFO-1.",
+    "load_bearing_at_correct_level": true,
+    "no_e2e_by_design": true,
+    "no_v_html_guard_intact": true
+  },
+  "cited_coverage_verification": {
+    "all_citations_accurate": true,
+    "reEnter_false_noop": "FunnelEventServiceTest::reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches — present, enabled, asserts cited semantics",
+    "reEnter_true_restart": "FunnelEventServiceTest::reEnter_allowReEnterFunnel_cancelsExistingThenInserts — present, enabled, InOrder cancel-then-insert",
+    "keyword_dispatch": "ProcessTelegramUpdateJobTest::plainText_dispatchesKeyword — present, enabled, dispatch once at depth 0",
+    "menu_precedence": "ProcessTelegramUpdateJobTest::plainText_keywordSuppressedWhileWaitingForReply — present, enabled, no dispatch + parked execution untouched + greppable marker"
+  },
+  "coverage_gaps": [
+    "Duplicate-button case-NOT-folded accept case is not pinned (F-MINOR-1) — only the trim path is tested; a future lowercase-dedup regression would go uncaught.",
+    "Full-engine wire body does not exercise {user.*} substitution on keyboardText (F-MINOR-2) — covered at unit + preview level, so low risk; optional to add."
+  ],
+  "edge_case_checks": {
+    "positional_FunnelStepDto_ctor_updated": "Yes — FunnelServiceKeyboardStepTest documents the full positional order (22-arg ctor) in a comment and all setKeyboardStep/clearKeyboardStep builders pass the new five trailing args; no silent positional breakage.",
+    "engine_IT_uses_TelegramSenderIT_jsonNode_and_drain_idiom": "Yes — OBJECT_MAPPER.readTree(takeRequest().getBody().readUtf8()) borrowed from TelegramSenderIT; drainRecordedRequests() clears the shared MockWebServer backlog before each body-asserting sweep.",
+    "preview_clamp_covered": "Yes — previewSetKeyboardClampsOversizedRows + previewSetKeyboardLabelAtCapNotTruncated (F-INFO-2).",
+    "no_v_html_guard_scans_real_source": "Yes — readFileSync of FunnelMessagePreview.vue, comments stripped, regex assertions intact (F-INFO-3)."
+  }
+}

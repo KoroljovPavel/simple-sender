@@ -1,0 +1,53 @@
+{
+  "validator": "tech-spec-validator",
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "section": "tasks / wave_conflict",
+      "issue": "NEW wave conflict: Task 5 (tag_added/custom_field_set hooks) and Task 6 (EMIT_EVENT step executor) BOTH list `funnel/StepExecutor.java` in 'Files to modify', and both are in Wave 2 (parallel). Task 5 line 529 ('funnel/StepExecutor.java (pass depth on tag/field step calls)') and Task 6 line 540 ('funnel/StepExecutor.java'). Two parallel tasks editing the same file will produce a merge conflict — and worse, Task 6 adds a new EMIT_EVENT switch case while Task 5 edits the ADD_TAG/SET_CUSTOM_FIELD cases in the same switch block, so the conflict is in adjacent/overlapping code, not trivially auto-mergeable.",
+      "fix": "Serialize the two StepExecutor edits. Recommended: move Task 6 (EMIT_EVENT) to a Wave 2b after Task 5, or merge Task 5's StepExecutor depth-threading change and Task 6's EMIT_EVENT case into a single StepExecutor-owning task. Alternatively, have Task 5 own ALL StepExecutor changes (it already touches the file) and add the EMIT_EVENT case there, dropping StepExecutor from Task 6's modify list. Whichever owner is chosen, ensure exactly one task in any single wave modifies funnel/StepExecutor.java."
+    },
+    {
+      "severity": "minor",
+      "section": "tasks / dependencies",
+      "issue": "Task 6 (EMIT_EVENT) declares only `funnel/StepExecutor.java` as modify target and depends on FunnelEventService (Task 4) — correct ordering. But because Task 5 also rewrites the same switch, Task 6's effective dependency on Task 5's StepExecutor edit is undeclared. If Tasks 5/6 are serialized per the critical finding, make the StepExecutor-internal dependency explicit so the executor agent does not regenerate the file from a stale base.",
+      "fix": "After serializing 5 and 6, note in Task 6 that StepExecutor was already touched by Task 5 (or fold both into one task) so the second editor starts from the post-Task-5 file state."
+    }
+  ],
+  "wave_conflicts": [
+    {
+      "wave": 2,
+      "file": "funnel/StepExecutor.java",
+      "tasks": ["Task 5 (tag_added/custom_field_set hooks)", "Task 6 (EMIT_EVENT step executor)"],
+      "severity": "critical",
+      "note": "Both modify the same StepExecutor switch in parallel — confirmed NEW conflict the prior round did not have."
+    }
+  ],
+  "resolved_from_round_1": [
+    "i18n locale files (uk.json/en.json): Task 10 in Wave 4, Task 11 in Wave 5 — serialized (Wave 5 header explicitly states 'serialized after Wave 4 to avoid locale-file conflict'). No parallel collision.",
+    "frontend/types/funnel.ts: only Task 10 (Wave 4) modifies it. No collision.",
+    "Decisions 4, 10, 11 each now carry an 'Alternatives considered:' line. All 12 decisions have Decision + Rationale + Alternatives considered + Serves."
+  ],
+  "checks_passed": [
+    "Frontmatter valid: created 2026-06-07 (YYYY-MM-DD), status draft, branch dev, size L.",
+    "All template sections present and non-empty: Solution, Architecture (What/How it works/Shared resources), Decisions (12, all complete), Data Models, Dependencies (New packages + Using existing), Testing Strategy (size L), Agent Verification Plan (Verification approach + Tools required), Risks (table, 9 realistic risks each with mitigation), User-Spec Deviations (filled, 4 entries, 2 PENDING USER APPROVAL flagged), Acceptance Criteria (non-empty), Implementation Tasks (waves).",
+    "User-Spec Deviations filled (not 'None'): 4 entries, deviations correctly flagged with approval status.",
+    "Implementation task count = 16 total, of which 11 are real implementation tasks (1-11) + 3 audit (12-14) + 2 final-wave (15-16). Implementation tasks <= 15. No split-recommendation finding.",
+    "All Skill values valid (code-writing for 1-11; code-reviewing/security-auditor/test-master for audit wave; pre-deploy-qa/post-deploy-qa for final wave). No prompt/LLM work mis-skilled.",
+    "All reviewers exist as agents (code-reviewer, security-auditor, test-reviewer) and match code-writing default set. Task 10 omits security-auditor (frontend-only, acceptable but note below).",
+    "Audit Wave correct: 3 tasks (Code Audit/code-reviewing, Security Audit/security-auditor, Test Audit/test-master), reviewers none.",
+    "Final Wave correct: Task 15 Pre-deploy QA (pre-deploy-qa, none) + Task 16 Post-deploy verification (post-deploy-qa, none, per-step tools listed).",
+    "Verify-smoke/Verify-user present on integration/infra/UI tasks: Task 2 (migration), 7 (keyword/Telegram), 8 (events curl), 9 (api-key curl), 10 (UI), 11 (UI). Pure-logic tasks (4,5,6) covered by tests.",
+    "No time-based estimates anywhere; waves use dependency ordering only.",
+    "Wave dependency ordering logical: W1 foundation -> W2 dispatch (depends W1) -> W3 API (depends W1+W2) -> W4 editor FE (depends backend) -> W5 settings FE (depends Task 9, serialized after W4). No circular deps.",
+    "application.properties: Task 4 (W2) modifies, Task 8 (W3) modifies — different waves, no parallel conflict. Task 2 lists it as Files-to-read only.",
+    "Task 4 vs Task 1 on funnel/FunnelRepository.java: different waves (W1 then W2) — serialized, no conflict.",
+    "Confirmed Task 4 does NOT modify funnel/StepExecutor.java (only Tasks 5 and 6 do); Task 4 modify list = FunnelEventService.java, FunnelTriggerServiceImpl.java, FunnelRepository.java, application.properties."
+  ],
+  "notes": [
+    "Task 10 reviewers = code-reviewer, test-reviewer (no security-auditor). Frontend-only trigger/step form — acceptable deviation from code-writing default, consistent with template Task 2 example which also drops security-auditor for a UI form. Not flagged.",
+    "Decision count (12) exceeds the prior round; all complete. No placeholders found anywhere in the document."
+  ],
+  "summary": "changes_required. One NEW critical wave conflict: Tasks 5 and 6 both modify funnel/StepExecutor.java in parallel Wave 2 (the user's flagged risk is real). Prior round-1 issues are resolved: i18n locale files and types/funnel.ts are now serialized across Waves 4/5, and Decisions 4/10/11 now carry Alternatives-considered lines (all 12 decisions complete). Frontmatter, all sections, User-Spec Deviations, task quality, audit/final waves, and the <=15-task limit all pass. application.properties (Tasks 4/8) is split across waves — no conflict there. Fix the StepExecutor collision by serializing or merging Tasks 5 and 6, then this is approvable."
+}

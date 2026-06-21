@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "All 7 round-1 findings are resolved with behavior-pinning assertions, and no regressions were introduced. T1: AC10 webhook URL is asserted exactly (`APP_URL + \"/webhooks/telegram/\" + PROJECT_ID`) via urlCaptor on the happy path, and `connect_secretIsFreshlyDrawnPerInvocation` runs Connect twice and asserts secrets differ and both match `[0-9a-f]{32}` — `never derived from a constant` is now defended. T2: `expire(BRUTE_KEY, 900s)` is verified inside the happy-path InOrder block (count=1 path), `connect_secondAttemptDoesNotResetTtl` (count=2) asserts `never().expire(...)`, and the 11th-attempt test also pins `never().expire(...)` — the conditional-EXPIRE-on-first-hit invariant is now testable from both sides. T3+T6: bot_connected metadata is now pinned with `containsOnlyKeys(\"projectId\",\"telegramBotId\",\"telegramUsername\")` plus three `containsEntry(...)` assertions inside the InOrder block — AC23 positive shape is covered, and the asymmetry vs disconnect metadata is gone. T4: disconnect-Telegram-down WARN is pinned to the dedicated `\"Telegram deleteWebhook failed during Disconnect\"` substring with `isEqualTo(1)`, no longer counting any WARN. T5: the Redis-INCR-fail-open test now verifies `setWebhook`, `save`, and `logEvent` were invoked — fail-open litmus is explicit. T7: all four negative branches (rate-limit/429, disconnect-404, sendTestMessage-404, getByProject-404) now use `InOrder` to pin `requireOwned` before the next collaborator call — AC16 is defended on negative paths. The newly added `disconnect_telegramErrorMessageWithTokenInUri_isScrubbedInWarnLog` test correctly injects a transport error containing the plaintext TOKEN inside a URI, asserts the disconnect WARN substring fires, and iterates every WARN to verify both `doesNotContain(TOKEN)` and that no token-shape substring leaks — this is a real S1 regression guard tied to the production scrubTokens call site at BotService.java:224. Production code matches all new assertions (BotService.java:129 URL, :144 conditional expire, :224 scrub on disconnect WARN, :281-287 connected metadata shape). Only a cosmetic nit remains: imports `anyBoolean`, `isNull`, `atMost` are unused but not flagged — they do not affect test correctness.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 6,
+    "litmusTest": {
+      "checked": 22,
+      "passed": 22,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 22,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

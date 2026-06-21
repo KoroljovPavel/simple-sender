@@ -1,0 +1,68 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Single-test golden-path spec is correct and matches every data-test selector actually shipped by Wave 3 (verified against register.vue, dashboard.vue, projects/new.vue, projects/index.vue, projects/[projectId]/settings.vue, ProjectSelector.vue, layouts/default.vue). All anti-patterns from task hints are respected (no waitForTimeout, no page.route mocking, no beforeAll/afterAll DB cleanup, no helpers, no test.use({locale}), no config edits). Findings are minor readability/robustness nits, no behavioral defects.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 29,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Register form fields are selected by id (#email/#password/#confirmPassword) rather than data-test. Task hints rank data-test as the preferred locator strategy; the inputs in pages/auth/register.vue currently expose only label/id (data-test exists only on error <p> elements). Either accept this as an upstream-debt note in decisions.md (register page is out of Wave 3 ownership scope and out of zero-touch contract AC-T7 for this task), or use getByLabel(...) with locale-stable accessible names. Current id-based selectors do work because Nuxt i18n does not localize HTML ids — but they will silently break if register.vue is rewritten to a component library without preserving id attributes.",
+      "benefit": "Stable selector strategy across the spec and reduces coupling to non-test markup details.",
+      "optional": true
+    },
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 52,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Step 4 asserts only the topbar selector content as proof of 'create succeeded + welcome state rendered'. Task AC line 32 (\"redirect на /dashboard з welcome content\") and the dashboard renders a distinct welcome branch via `showWelcome` computed — but the shipped welcome container has no data-test attribute, and adding one is out of scope here (Wave 3 ownership / AC-T7 zero-touch). Consider adding a redundant assertion against the welcome heading via getByRole('heading', { level: 1 }) so a regression that hides the welcome branch but keeps the selector populated would still fail. Pure defense-in-depth; acceptance criteria does not strictly require it (AC list line 55 only mentions \"Селектор у topbar (AC-19) перевірено\").",
+      "benefit": "Catches a class of regression where the projects store is populated but the dashboard renders neither empty nor welcome branch (e.g., a future refactor that breaks `showWelcome`).",
+      "optional": true
+    },
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 68,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`items` is a long-lived starts-with locator `[data-test^=\"project-selector-item-\"]` that is reused across Step 6, Step 10, and Step 11. Each subsequent use depends on the dropdown being open (`v-if=\"open\"` in ProjectSelector.vue means the items are not in the DOM when closed). The reuse pattern works correctly because Playwright locators are lazy, but a reader has to mentally re-establish \"dropdown is open right now\" at lines 69, 114, 125. A brief inline comment near line 68 explaining that pattern (or a small helper like `async function openSelector() { ... }` — note: task forbids helper FILES, not local-scope arrow functions) would reduce reviewer cognitive load.",
+      "benefit": "Easier debugging when this spec fails in CI six months from now.",
+      "optional": true
+    },
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 109,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "Step 10 uses `page.locator('[data-test^=\"deleted-row-\"]', { hasText: renamedName })` — relies on string match against the renamed project name. This is robust against the deleted-row-{id} suffix being unpredictable (good), but if a future test were to delete multiple projects with overlapping prefixes the hasText filter could become ambiguous. For the golden path with a single deletion it is fine. Optionally, capture the soft-deleted project id from the URL during Step 7 settings navigation and use `locator(`[data-test=\"deleted-row-${id}\"]`)` for an exact lookup.",
+      "benefit": "Pinpoint matching that survives concurrent test fixtures in the future.",
+      "optional": true
+    },
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 113,
+      "severity": "nit",
+      "category": "readability",
+      "suggestion": "`await selectorTrigger.click()` followed by `expect(items).toHaveCount(1)` then `await page.keyboard.press('Escape')` to close — the comment on line 116 (\"Close the dropdown before clicking the restore button below\") is helpful and worth keeping. A reader unfamiliar with absolute-positioned dropdowns might miss why the Escape press is needed; the existing comment already explains it well. No change required.",
+      "benefit": "N/A — already addressed by inline comment.",
+      "optional": true
+    },
+    {
+      "file": "frontend/e2e/projects.spec.ts",
+      "line": 17,
+      "severity": "nit",
+      "category": "readability",
+      "suggestion": "Test title 'golden path: register → create → switch → rename → soft-delete → restore' is descriptive but quite long. Playwright's default `list` reporter prints the full title and may wrap awkwardly in narrow CI logs. Optional: drop a few arrows ('golden path: register → rename → soft-delete → restore') or split the narrative into a leading comment + a shorter title. Cosmetic only.",
+      "benefit": "Cleaner CI log lines.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 1,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 4,
+    "testCoverageAssessment": "adequate"
+  }
+}

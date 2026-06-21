@@ -1,0 +1,32 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "2",
+  "round": 1,
+  "commit": "34f9dc2",
+  "verdict": "approve",
+  "summary": "SUBSCRIBE_TO_FUNNEL save + activation validation is well-structured: a shared fail-closed resolve helper (resolveSubscribeTarget) is reused by both save (validateSubscribeTarget) and activation (requireSubscribeTargetsActive), mirroring the existing requireFunnel pattern. All three validateSteps callsites updated. No regressions, all funnel tests green.",
+  "dimensions_checked": [
+    "architecture", "separation-of-concerns", "readability", "error-handling",
+    "testing", "dependencies", "security", "performance", "cross-file-consistency", "resource-management"
+  ],
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "info",
+      "dimension": "performance",
+      "title": "Redundant target re-resolution between validateSteps and requireSubscribeTargetsActive on activate",
+      "detail": "On activate, validateSteps already resolves each SUBSCRIBE target (existence + project scope), then requireSubscribeTargetsActive resolves the SAME target again to read status. For a funnel with N SUBSCRIBE steps pointing at the same target this is duplicate findById calls. Funnels are capped at 50 steps and activation is a rare author action, so the extra read is negligible. No change required.",
+      "action": "skip",
+      "reason": "Negligible cost (small bounded funnels, rare op); merging the two passes would complicate validateSteps which is shared with update/testRun that must NOT check active-status. Keeping them separate is the correct design per task spec."
+    },
+    {
+      "id": "CR-2",
+      "severity": "info",
+      "dimension": "architecture",
+      "title": "Self-target at activation resolves to inactive (draft) parent",
+      "detail": "A funnel with a SUBSCRIBE step pointing at itself, when activated, would hit requireSubscribeTargetsActive while the parent is still draft (status flips after the check) and fail with funnel_subscribe_target_inactive. Task 2 explicitly defers self-target handling to runtime (Decision 8) and instructs NOT to add special self-target logic here.",
+      "action": "skip",
+      "reason": "Per task spec: no special self-target logic in this task; runtime re-enter guard owns it."
+    }
+  ]
+}

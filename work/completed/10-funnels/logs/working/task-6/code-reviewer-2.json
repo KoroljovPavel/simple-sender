@@ -1,0 +1,47 @@
+{
+  "status": "approved",
+  "summary": "Round-2 confirmation of fix commit 280d452. All round-1 minor items are correctly addressed with no regressions: the dead java.time.Duration import is gone (zero references remain), and the three new tests reference only symbols verified to exist with matching signatures. Both affected test classes are green — FunnelStepExecutorTest 10/10 and FunnelExecutionEngineIT 14/14 (0 failures/errors/skipped), with the new sweepRespectsBatchCapOldestFirstAndWarnsOnSaturation IT present and passing. Test sources compile clean. No new issues found.",
+  "criticalIssues": [],
+  "suggestions": [],
+  "metrics": {
+    "filesReviewed": 3,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 0,
+    "testCoverageAssessment": "excellent"
+  },
+  "verification": {
+    "fixCommit": "280d452",
+    "round1ItemsAddressed": [
+      {
+        "item": "Remove dead Duration import in FunnelExecutionEngine.java",
+        "status": "confirmed",
+        "evidence": "grep for 'Duration' in FunnelExecutionEngine.java returns 0 matches."
+      },
+      {
+        "item": "IT sweepRespectsBatchCapOldestFirstAndWarnsOnSaturation (batch cap + nextRunAt asc + saturation WARN)",
+        "status": "confirmed",
+        "evidence": "Engine sweep() sorts ASC by nextRunAt, .limit(batchSize), and warns when due.size() >= batchSize via LOG_SWEEP_SATURATED. With @DynamicPropertySource sweep-batch-size=2 and 3 staggered-nextRunAt rows, the query returns the 2 oldest (2 >= 2 fires WARN); newest left running/pending. Test present in result XML, passes."
+      },
+      {
+        "item": "no-PII IT also attaches StepExecutor logger and exercises >4096 trim-WARN path",
+        "status": "confirmed",
+        "evidence": "Test attaches LoggerFactory.getLogger(StepExecutor.class), seeds payload with x.repeat(5000), asserts LOG_TEXT_TRIMMED present and PII absent from both loggers. StepExecutor.LOG_TEXT_TRIMMED / MAX_MESSAGE_LENGTH=4096 confirmed; logged fields are lengths only, no payload. Passes."
+      },
+      {
+        "item": "Unit removeTagDelegatesToSubscriberService",
+        "status": "confirmed",
+        "evidence": "Asserts CONTINUE and verify(subscriberService).removeTag(PROJECT_ID, SUBSCRIBER_ID, 'vip'); SubscriberService.removeTag(String,String,String) signature matches."
+      },
+      {
+        "item": "Unit sendMessageInvalidBotTokenFails",
+        "status": "confirmed",
+        "evidence": "BotTokenInvalidException(String botId, String reason) ctor matches; StepExecutor maps BotTokenInvalidException -> StepResult.fail('invalid_bot_token') (Outcome.FAIL); test asserts FAIL + reasonCode invalid_bot_token. Passes."
+      }
+    ],
+    "crossFileChecks": "All symbols used by new tests verified against source: StepExecutor (class), StepRunStatus.pending, getStepRunStatus(), seedExecution/seedActiveSubscriber/enqueueOk/sentCount/reload/sendMessage helpers, tagStep/sendMessageStep/connectedBot/activeSubscriber, StepResult.reasonCode(), LOG_SWEEP_SATURATED, LOG_TEXT_TRIMMED, BotTokenInvalidException ctor, SubscriberService.addTag/removeTag.",
+    "build": "compileTestJava EXIT=0.",
+    "testRun": "FunnelStepExecutorTest tests=10 skipped=0 failures=0 errors=0. FunnelExecutionEngineIT (run with -PrunSlow=true, class is @Tag('slow')) tests=14 skipped=0 failures=0 errors=0; new sweepRespectsBatchCapOldestFirstAndWarnsOnSaturation present and green.",
+    "regressions": "none"
+  }
+}

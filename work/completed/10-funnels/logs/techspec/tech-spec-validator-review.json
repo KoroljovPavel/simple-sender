@@ -1,0 +1,16 @@
+{
+  "verdict": "issues_found",
+  "findings": [
+    {
+      "check": "wave_conflict_detection",
+      "detail": "Wave 4 runs Task 9 and Task 10 in parallel, and BOTH list `frontend/i18n/locales/uk.json` and `frontend/i18n/locales/en.json` in their 'Files to modify'. Two parallel tasks editing the same locale files will produce merge conflicts (and risk i18n parity-gate breakage). Fix: either (a) move Task 10 to a Wave 5 after Task 9, (b) merge Tasks 9 and 10 into one frontend task, or (c) carve i18n key additions into a single dedicated task/owner so only one task in the wave writes uk.json/en.json.",
+      "severity": "high"
+    },
+    {
+      "check": "task_description_brevity",
+      "detail": "Several implementation-task descriptions are dense and run beyond the recommended 2-3 sentence scope statement, embedding behavioral detail that belongs in task files at decomposition time. Most notable: Task 6 (FunnelExecutionEngine) packs the full step-runner algorithm (atomic-claim, dispatch table, pre-send gate, bot-pin, per-step state machine, send-fail semantics) into one description; Task 5 and Task 7 are similarly detailed. These read more like mini-designs than scope lines. They contain no AC/TDD-anchors/line-numbers (good), and the detail is accurate, so this is advisory, not blocking. Consider trimming each to WHAT/WHY + a Decision reference and letting task-decomposition expand the HOW.",
+      "severity": "low"
+    }
+  ],
+  "summary": "Tech-spec is structurally complete and high-quality. Frontmatter correct (created 2026-05-31, status draft, branch dev, size L matching user-spec). All template sections present and filled, including Shared resources table and User-Spec Deviations (None, justified). 15 Decisions each carry Rationale + Alternatives + a 'Supports' user-spec reference or [TECHNICAL] tag (Decisions 12-14 are [TECHNICAL]). 14 tasks total (<=15): 10 implementation across 4 waves + Audit Wave (code-reviewing/security-auditor/test-master, reviewers none) + Final Wave (pre-deploy-qa); Deploy/post-deploy correctly omitted with justification (no CI/CD, no live env). Task descriptions are brief WHAT/WHY scope statements with no AC/TDD-anchors/line numbers; each has Skill/Reviewers/Files-to-modify/Files-to-read; smoke/user verifications present where appropriate. Skills and reviewers all valid per catalog. All reviewer agents confirmed on disk (.claude/agents/: code-reviewer, security-auditor, test-reviewer, skill-checker, prompt-reviewer present). architecture.md and patterns.md present in project-knowledge; proposed file paths and flat-POJO/sole-writer conventions align with them. Dependency-vs-wave ordering is consistent, no circular deps. ONE high-severity wave-conflict: Tasks 9 and 10 both modify uk.json/en.json in the same parallel Wave 4 -- must be resolved before execution. One low-severity advisory: a few task descriptions (notably Task 6) are denser than the 2-3 sentence scope ideal."
+}

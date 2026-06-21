@@ -1,0 +1,79 @@
+{
+  "reviewer": "security-auditor",
+  "task": 6,
+  "feature": "17-funnel-multi-entry",
+  "commit": "a192a3b",
+  "branch": "dev",
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "findings": [],
+  "owasp_checklist": {
+    "A01_broken_access_control": {
+      "result": "PASS",
+      "notes": "No access-control logic lives in the frontend. The store sends the trigger array as-is to the backend; the backend enforces projectId-scoped authorization. No client-side gating of save/delete that could be bypassed."
+    },
+    "A02_cryptographic_failures": {
+      "result": "PASS",
+      "notes": "No secrets, tokens, API keys, or credentials appear in any changed file. The frontend bundle carries only UI strings."
+    },
+    "A03_injection_xss": {
+      "result": "PASS",
+      "notes": "No v-html or innerHTML usage in any changed file. All user-supplied data (triggerValue, eventName, keywords, entryStepId) is rendered via Vue {{ }} text interpolation or bound to native inputs with v-model — both paths auto-escape. The deep-link URL (t.me/...) is displayed in a <code>{{ link }}</code> text node (not an <a :href>), so no javascript: URI injection path exists. i18n step-type keys are rendered via t() which returns plain text. SearchableSelect option labels are text-interpolated (confirmed no v-html in its template)."
+    },
+    "A03_injection_client_side_logic": {
+      "result": "PASS",
+      "notes": "The client-side duplicate-event-name guard is explicitly advisory (does not block save). The server 422 is the enforced backstop. No security logic has been moved client-only."
+    },
+    "A04_insecure_design": {
+      "result": "PASS",
+      "notes": "The trigger array is a full-replace payload sent to PATCH. Per-trigger and cross-trigger validation (duplicate event_name, dangling entryStepId, at-most-one on_start, event-only mid-entry) is handled server-side per tech-spec Decision 13/14. Client-side guards are advisory UX only."
+    },
+    "A05_security_misconfiguration": {
+      "result": "N/A",
+      "notes": "No new Nuxt config, CORS, or security-header changes in this diff. Unchanged from baseline."
+    },
+    "A06_vulnerable_components": {
+      "result": "N/A",
+      "notes": "No new npm dependencies introduced (user-spec constraint respected). Only Vue/Nuxt primitives reused."
+    },
+    "A07_authentication_failures": {
+      "result": "PASS",
+      "notes": "Frontend makes no authentication decisions. useApi() handles auth headers transparently. No new unauthenticated endpoints introduced."
+    },
+    "A08_software_integrity": {
+      "result": "PASS",
+      "notes": "No eval(), dynamic import with user data, or deserialisation of untrusted data. The trigger array flows through typed interfaces to the backend."
+    },
+    "A09_logging_monitoring": {
+      "result": "N/A",
+      "notes": "Frontend scope — no server-side logging surface. No console.log of sensitive data observed."
+    },
+    "A10_ssrf": {
+      "result": "PASS",
+      "notes": "No server-side requests constructed from user input. The deep-link URL is assembled client-side for clipboard copy only (t.me/<botUsername>?start=<triggerValue>); triggerValue is validated against /^[A-Za-z0-9_-]{0,64}$/ before the link is shown; botUsername originates from the server (not user-typed). Link is displayed as text — never used as a fetch/redirect target."
+    },
+    "url_deep_link_safety": {
+      "result": "PASS",
+      "notes": "The link computed in FunnelTriggerSettings is suppressed when valueError is non-null (pattern guard). The link is rendered as text in a <code> element, not as a clickable <a :href>. No open-redirect or javascript: URI injection vector."
+    },
+    "secrets_in_bundle": {
+      "result": "PASS",
+      "notes": "Reviewed types/funnel.ts, stores/funnels.ts, FunnelTriggersPanel.vue, FunnelTriggerSettings.vue. No hardcoded secrets, API keys, tokens, or credentials."
+    },
+    "input_rendering": {
+      "result": "PASS",
+      "notes": "trigger.triggerValue is rendered as {{ tr.triggerValue || t(...) }} in the row header — text-only. Entry step labels use t(`funnels.steps.type.${s.stepType}`) where stepType is a controlled server enum with plain-text locale values. No HTML injection path."
+    },
+    "mass_assignment": {
+      "result": "PASS",
+      "notes": "FunnelTrigger interface carries only (triggerType, triggerValue, keywords, entryStepId) — exactly the backend TriggerDto contract. The store's update() sends payload verbatim; no extra fields are injected client-side."
+    }
+  },
+  "notes": "Audit scope: types/funnel.ts, stores/funnels.ts, FunnelTriggersPanel.vue (new), FunnelTriggerSettings.vue, FunnelStepForm.vue (keyboard scan patch), en.json, uk.json. Backend-side security (anti-IDOR CAS, projectId discipline, 422 validation, PII-free WARN logs) is out of scope for this frontend-only task. All frontend-relevant OWASP A01–A10 checks pass. Vue auto-escaping and the absence of v-html/innerHTML are the primary XSS safeguards; both are confirmed."
+}

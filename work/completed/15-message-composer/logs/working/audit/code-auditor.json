@@ -1,0 +1,136 @@
+{
+  "task": "9 - Code Audit (holistic, independent)",
+  "feature": "15-message-composer",
+  "auditor": "code-auditor",
+  "date": "2026-06-10",
+  "methodology": "code-reviewing (11 dimensions); INDEPENDENT review — per-task self-reviews were not independent (nested agent spawning restricted)",
+  "scope": "Final state of all backend + frontend source files changed in the feature (model -> persistence -> send/engine -> validation/DTO -> callback -> frontend types -> UI -> preview).",
+  "verdict": "issues found (no critical; 2 major, 4 minor, 5 info) — feature is coherent end-to-end; majors are robustness/spec-fidelity gaps, not functional defects on the happy path",
+  "counts": { "critical": 0, "major": 2, "minor": 4, "info": 5 },
+
+  "old_type_removal": {
+    "result": "COMPLETE in all production code and templates",
+    "grep_backend_src": "No StepType.SEND_MESSAGE / SEND_IMAGE / StepType.MENU symbol or string-literal usages. All MENU / SEND_* hits are historical-context comments/Javadoc only (e.g. 'Menu precedence', 'replaces the former flat SEND_MESSAGE/SEND_IMAGE/MENU').",
+    "grep_frontend": "No 'MENU'/'SEND_MESSAGE'/'SEND_IMAGE' string literals or removed StepType values in types/components/stores/pages/i18n. All hits are comments. All .parseMode references are ContentBlock-level (b.parseMode/block.parseMode/row.parseMode), NOT removed flat FunnelStep fields.",
+    "flat_fields": "No residual flat msg fields (text/parseMode/imageUrl/caption) or their getters/setters on FunnelStep / FunnelStepDto / FunnelResponse / FunnelSummaryResponse / frontend FunnelStep. Confirmed by grep for getText()/getImageUrl()/getParseMode()/setImageUrl across funnel+bot packages — zero hits.",
+    "enum": "StepType = {MESSAGE, DELAY, ADD_TAG, REMOVE_TAG, SET_CUSTOM_FIELD, EMIT_EVENT, SUBSCRIBE_TO_FUNNEL} — old kinds gone, MESSAGE added.",
+    "exhaustive_switches": "StepExecutor.execute(StepType) and FunnelService.validateSteps switch are both exhaustive with NO default (compiler-enforced completeness). StepExecutor.sendBlock(BlockType) and albumElementType(BlockType) are exhaustive over BlockType."
+  },
+
+  "shared_resources_compliance": {
+    "TelegramSender": "PASS — remains a single Spring @Component with one RestClient. New methods (sendVideo/sendAudio/sendDocument) are thin wrappers over the shared sendSingleMedia -> send -> sendMapped seam; sendMediaGroup uses the SAME sendMapped orchestration with only a distinct response mapper (mapBodyToSentAlbum) and metadata builder. No second HTTP client introduced. STATIC_OBJECT_MAPPER is a lightweight static utility (not a heavy/duplicated resource). Token scrub parity: album mapper runs raw description through TelegramApiClient.scrubTokens on every error path — matches single-message mapper.",
+    "VariableTemplateRenderer": "PASS — final class, private constructor, all-static methods, no fields. Stateless static. Called from StepExecutor.renderTrimmed and FunnelService.renderBlocks/renderMediaItems with no duplication.",
+    "album_path": "PASS — separate array-mapper as designed (Decision 5), but inherits CONNECTED filter, 5xx/429 retry, 30s deadline, audit, Decision-4 subscriber hook, and token scrub via sendMapped."
+  },
+
+  "album_correction_thread": {
+    "result": "COHERENT end-to-end",
+    "model": "MediaItem(BlockType type, String mediaUrl, String caption) — per-item kind present.",
+    "send": "StepExecutor.buildAlbum derives Telegram element type per item via albumElementType (IMAGE->photo, VIDEO->video, AUDIO->audio, FILE->document); TEXT/ALBUM throw IllegalStateException (unreachable post-validation).",
+    "validate": "FunnelService.validateAlbum enforces full Decision-5 predicate inline: each item kind in {IMAGE,VIDEO,AUDIO,FILE}; visual(photo+video) may mix; audio/file never mix with another kind (kinds>1 -> 422); caption only on first item.",
+    "dto": "MediaItemDto.type (BlockType) round-trips via toMediaItems/toMediaItemDtos.",
+    "frontend_type": "types/funnel.ts MediaItem.type: BlockType.",
+    "ui": "FunnelStepForm.blockError ALBUM branch mirrors backend predicate byte-for-byte (hasVisual/hasAudio/hasFile counts, kinds>1, caption-on-first); buildBlock drops non-first captions.",
+    "preview": "RenderedMediaItem intentionally omits type (preview renders captions/urls only) — documented and acceptable."
+  },
+
+  "findings": [
+    {
+      "id": "MAJ-1",
+      "severity": "major",
+      "dimension": "Error Handling (4) / Architecture (1)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java:103 (mongoTemplate.find) + tech-spec Risks row 'tolerant-read' + Decision 4",
+      "issue": "The tech-spec asserts a fail-safe invariant: 'legacy old-type document that survived the manual wipe does not crash the engine on startup (tolerant-read)'. This invariant is NOT implemented. There is no custom MongoCustomConversions / @ReadingConverter for unknown StepType (or BlockType) enum values, and application.properties has no read-unknown-enum setting. A surviving funnel_executions/funnels document with stepType='MENU' (or any removed value) will fail Spring Data enum deserialization during sweep()'s mongoTemplate.find(...) — which is OUTSIDE the per-execution try/catch (that guard only wraps runExecution per row). The ConversionFailedException would abort the ENTIRE sweep tick, stalling the whole engine, not just one execution. Note: the per-execution try/catch DOES protect against a deserialized-but-malformed step (e.g. a MESSAGE step with null blocks NPEs inside one runExecution and is caught), so the gap is specifically the load-time enum conversion of an UNKNOWN value.",
+      "recommendation": "Either (a) implement the claimed tolerant-read (a read converter that maps unknown StepType/BlockType to a benign skip/terminal-fail sentinel), or (b) explicitly downgrade the spec/risk entry to 'accepted residual risk, mitigated operationally by the Decision-4 manual wipe (zero production data)'. Task 12 (pre-deploy QA) / Task 13 (deploy + wipe) should verify the wipe is total before relying on this. Do not leave the spec asserting an invariant the code does not provide."
+    },
+    {
+      "id": "MAJ-2",
+      "severity": "major",
+      "dimension": "Error Handling (4)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java:171-185 (message(): blocks.size()/blocks.get(i))",
+      "issue": "StepExecutor.message() dereferences step.getBlocks() (blocks.size(), blocks.get(i)) with no null guard. A MESSAGE step whose snapshot has null blocks throws NPE on every sweep tick. validateMessage rejects null/empty blocks at save time, so this is unreachable on the normal path — but a directly-seeded/legacy snapshot (the same population that MAJ-1 covers) would NPE forever: the execution never terminates (the engine's per-execution try/catch catches the NPE but the row stays running/in_progress and is re-claimed next tick -> infinite log spam, stuck execution). Validation is at the API boundary; the executor (engine-internal, consumes persisted snapshots) does not defend its own precondition.",
+      "recommendation": "Add a defensive guard at the top of message(): if (blocks == null || blocks.isEmpty()) return StepResult.fail(\"empty_message_blocks\") (terminal, so the stuck execution self-resolves instead of looping). Cheap, removes the infinite-retry footgun, and makes the executor robust to a malformed snapshot independent of save-time validation."
+    },
+    {
+      "id": "MIN-1",
+      "severity": "minor",
+      "dimension": "Code Readability & Maintainability (3)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java:411,424 (previewStep/renderBlocks comments) ; backend dto PreviewStepRequest.java:7 / PreviewStepResponse.java:5 reference 'Decision 8' correctly ; frontend stores/funnels.ts:215 + frontend types/funnel.ts (preview comments) reference 'Decision 9'",
+      "issue": "Inconsistent Decision numbering for the preview feature. The tech-spec has exactly 8 Decisions; preview = Decision 8. Backend DTOs correctly say 'Decision 8', but FunnelService.previewStep/renderBlocks comments say 'Decision 9 / Decision 8' and frontend stores/funnels.ts:215 and several types/funnel.ts comments say 'Decision 9'. There is no Decision 9. (The album-typer correction's handoff note already flagged 'Decision 9 -> Decision 8' for types but it was not fully applied; store + FunnelService still drift.)",
+      "recommendation": "Normalize all preview references to 'Decision 8' across FunnelService.java, stores/funnels.ts, and remaining types/funnel.ts comments. Pure comment fix; no behavior change."
+    },
+    {
+      "id": "MIN-2",
+      "severity": "minor",
+      "dimension": "Code Readability & Maintainability (3) / Cross-File Consistency (10)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/Button.java:4",
+      "issue": "Dangling Javadoc reference: '{@link StepType#MENU}'. StepType.MENU was removed (Decision 4), so this @link no longer resolves. Compilation is unaffected (build.gradle has no -Xdoclint/-Werror for javadoc), but the symbol reference is broken and the comment text ('button on a MENU step') is stale — the button now lives on the MESSAGE composer's last non-album block (Decision 2).",
+      "recommendation": "Replace '{@link StepType#MENU}' with '{@link StepType#MESSAGE}' and update the prose to 'last non-album block of a MESSAGE composer step (Decision 2)'."
+    },
+    {
+      "id": "MIN-3",
+      "severity": "minor",
+      "dimension": "Separation of Concerns (2) / Resource Mgmt (11)",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue:69-72,275,280 (mediaLoadFailed keyed by block index for ALBUM)",
+      "issue": "For an ALBUM block, every item's <img @error> calls onMediaError(index) with the BLOCK index, so a single broken album image flips the whole album block to the placeholder (all items hidden), not just the failing item. Per-item granularity is lost. Functional-not-broken, pure UX; already noted by the Task-8 self-review as accept-as-designed but re-confirmed here independently.",
+      "recommendation": "Optional: key album failures by composite (blockIndex, itemIndex) so one bad item degrades only that cell. Low priority — preview-only, no correctness/security impact."
+    },
+    {
+      "id": "MIN-4",
+      "severity": "minor",
+      "dimension": "Architecture (1)",
+      "file": "frontend/e2e/funnels.spec.ts (carried over from Wave 4 gate report)",
+      "issue": "e2e/funnels.spec.ts still references the removed model (helper addSendMessage on default SEND_MESSAGE, step-text-input, selectOption('MENU'), step-menu-* selectors). It is excluded from the vitest gate (include: tests/**) and runs only under pnpm test:e2e (live stack), so it compiles (selectors are string literals, no removed TS types) and did not break CI — but it is dead/stale relative to the composer UI and would fail if ever run. Out of the strict source scope of this task but it is part of the feature's removal surface.",
+      "recommendation": "Migrate e2e/funnels.spec.ts to the composer UI (owner per Wave-4 note: e2e/Task 11) before it is re-enabled, or quarantine it explicitly so it is not silently misleading. Tracked as unresolved in the Wave 4 gate; surface to Task 11/12."
+    },
+    {
+      "id": "INFO-1",
+      "severity": "info",
+      "dimension": "Cross-File Consistency (10)",
+      "file": "backend PreviewStepRequest.stepType (String) / PreviewStepResponse.RenderedBlock.type (String) vs frontend PreviewStepRequest.stepType (StepType) / RenderedBlock.type (BlockType)",
+      "issue": "Frontend mirrors are STRICTER (typed enum) than the backend (raw String). This is intentional and safe (backend tolerates unknown preview block types by design — preview is non-validating; frontend only ever sends valid enum values). No action needed; noting the asymmetry for completeness.",
+      "recommendation": "None."
+    },
+    {
+      "id": "INFO-2",
+      "severity": "info",
+      "dimension": "Architecture (1)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/MediaItem.java:24 (BlockType reused as per-item kind)",
+      "issue": "MediaItem.type reuses the BlockType enum but only IMAGE|VIDEO|AUDIO|FILE are valid (TEXT/ALBUM are nonsense for an item). The constraint is enforced only at validation (validateAlbum) and defensively at send (albumElementType throws on TEXT/ALBUM). A dedicated MediaKind enum would make illegal states unrepresentable, but reusing BlockType avoids a parallel enum + DTO and is consistent with the codebase's flat-model philosophy. Acceptable trade-off; documented in both records' Javadoc.",
+      "recommendation": "None (acceptable as-is). If a future phase adds more block types, revisit."
+    },
+    {
+      "id": "INFO-3",
+      "severity": "info",
+      "dimension": "Error Handling (4)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java:189-196 (message() single outer try/catch)",
+      "issue": "Per-node at-most-once (Decision 3) is correctly preserved: all N block sends run under ONE engine claim inside one try/catch; a mid-block TelegramSendException maps via fromTerminalReason (BLOCKED/CHAT_NOT_FOUND -> cancel, else fail), blocks 1..K-1 are lost-forward with no re-send. Catch arms (TelegramSendException / BotTokenInvalidException / AppException) match the former flat branches exactly. Verified consistent with Decision 3.",
+      "recommendation": "None."
+    },
+    {
+      "id": "INFO-4",
+      "severity": "info",
+      "dimension": "Security (8) — cross-check only; deep audit is Task 10",
+      "file": "FunnelService.requireMediaSource/requireUrl/looksLikeUrl ; StepExecutor.sendBlock ; FunnelMessagePreview.vue (no v-html, http(s) scheme guard) ; renderBlocks (parseMode escaping, no dereference)",
+      "issue": "No gross security violations observed in scope: media URLs are never dereferenced server-side (anti-SSRF, Decision 6); strict http(s) scheme validation with leading-whitespace + empty-host rejection; backend-side parseMode escaping in preview; frontend renders text via {{ }} only (no v-html / innerHTML anywhere) and gates clickable media on http(s). Callback wire contract {executionId}:{buttonIndex} unchanged with strict parse + IDOR/owner/project checks + CAS-gated event recording. Depth of OWASP review deferred to Task 10 per task scope.",
+      "recommendation": "Defer detailed security findings to Task 10."
+    },
+    {
+      "id": "INFO-5",
+      "severity": "info",
+      "dimension": "Architecture (1) — snapshot isolation (Decision 1/3)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelStep.java:99-129 (copyOf) + FunnelExecutionFactory.deepCopySteps",
+      "issue": "Snapshot isolation is correctly threaded: copyOf takes a defensive shallow copy of blocks (new ArrayList<>) — valid because ContentBlock and MediaItem are immutable records (so element sharing is safe), null stays null. deepCopySteps maps element-wise via copyOf. Verified coherent with Decision 1/3.",
+      "recommendation": "None."
+    }
+  ],
+
+  "files_reviewed": {
+    "backend_model": ["FunnelStep.java", "StepType.java", "ContentBlock.java", "MediaItem.java", "BlockType.java", "FunnelExecutionFactory.java"],
+    "backend_send_engine": ["bot/TelegramSender.java", "bot/dto/AlbumItem.java", "funnel/StepExecutor.java", "funnel/FunnelExecutionEngine.java (cross-ref)", "funnel/FunnelService.java", "funnel/FunnelTriggerServiceImpl.java", "funnel/FunnelController.java (cross-ref)", "funnel/VariableTemplateRenderer.java (cross-ref)"],
+    "backend_dto": ["FunnelStepDto.java", "ContentBlockDto.java", "MediaItemDto.java", "FunnelResponse.java", "FunnelSummaryResponse.java", "PreviewStepRequest.java", "PreviewStepResponse.java"],
+    "frontend": ["types/funnel.ts", "components/funnels/FunnelStepForm.vue", "components/funnels/FunnelMessagePreview.vue", "stores/funnels.ts", "i18n/locales/uk.json (cross-ref)", "i18n/locales/en.json (cross-ref)"]
+  },
+
+  "escalation": "MAJ-1 and MAJ-2 are robustness/spec-fidelity gaps, not happy-path defects. Recommend addressing before Pre-deploy QA (Task 12): MAJ-2 is a small defensive guard; MAJ-1 needs a decision (implement tolerant-read vs. downgrade the spec invariant to accepted-residual-risk gated on a verified total wipe in Task 13). MIN-1/MIN-2 are comment-only fixes. MIN-3/MIN-4 are optional/owned-elsewhere."
+}

@@ -1,0 +1,90 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11, 12],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 10,
+      "issue": "Task 10 references 'common/SessionAttributes.java' as the outcome of Task 1 (depends_on: [1, 2]), but Task 1 has not yet been executed. The file 'backend/src/main/java/com/botfunnel/common/SessionAttributes.java' does NOT exist in the codebase. REMEMBER_ME_ATTR is currently defined as a public static final in 'RememberMeWebSessionIdResolver' (line 41) and imported from there in 'AuthService' (line 605). This is a pre-condition failure: the codebase still has the 'auth → security' cycle that Task 1 is supposed to resolve. Task 10 depends_on [1, 2] correctly, but the executor must confirm Tasks 1 and 2 are truly complete before starting Task 10, or the atomic flip commit will reference a non-existent class.",
+      "fix": "Verify Task 1 and Task 2 are fully merged into dev before starting Task 10. Do not start Task 10 until 'common/SessionAttributes.java' exists and 'AuthService' imports from it."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 12,
+      "issue": "Task 12 requires 'backend/src/main/java/com/botfunnel/security/RememberMeCookieSerializer.java' (created by Task 3) as a read-only reference for AC18 assertions. This file does NOT exist yet — the current codebase still uses the reactive 'RememberMeWebSessionIdResolver'. Task 12 depends_on includes tasks 3–10, but the executor must confirm Wave 2 is fully landed. Without RememberMeCookieSerializer, the TC5 bean assertion and all AC18 cookie-attribute assertions cannot be designed correctly against the actual implementation.",
+      "fix": "Ensure Task 3 is fully complete before starting Task 12. The TC5 @Bean registration and cookie attribute wiring in RememberMeCookieSerializer determine exactly what AC18 must assert."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 11,
+      "issue": "Task 11 Step 3 instructs booting via './gradlew :backend:bootRun -PappArgs=\"-Djdk.tracePinnedThreads=full\"' and the Acceptance Criteria + Verification Steps repeat this exact command. However, 'build.gradle' does NOT define a 'bootRun' task block that reads '-PappArgs' and passes values as JVM args. The Spring Boot Gradle plugin's 'bootRun' task does not honor '-PappArgs' out of the box — this flag has no effect. The correct Gradle flag to pass JVM arguments to bootRun is '-Pjvm.args' (if configured) or via the 'jvmArgs' property on the bootRun task, or by using '-Djdk.tracePinnedThreads=full' directly as a JVM flag with JAVA_OPTS or 'bootRun { jvmArgs = [...] }'. As-is, the command is a mirage: the JVM flag will be silently ignored and no pinning output will be captured.",
+      "fix": "Either: (a) add 'tasks.named(\"bootRun\") { jvmArgs = project.findProperty(\"appArgs\")?.split(\" \") ?: [] }' to build.gradle, or (b) change the Verification Steps to use JAVA_OPTS: 'JAVA_OPTS=\"-Djdk.tracePinnedThreads=full\" ./gradlew :backend:bootRun', or (c) use the Gradle toolchainJvmArgs mechanism. The task body and all AC/verification references must use the corrected command form."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 12,
+      "issue": "Task 12 step 5 (AC18) says: 'Read MockHttpServletResponse.getCookies() (NOT the higher-level cookie().maxAge(...) matcher — that matcher only covers Max-Age and we need all attributes). Locate the SESSION cookie and assert: ... sameSite == \"Strict\" (read via Tomcat's Cookie API; if SameSite is not exposed there in the active Tomcat version, fall back to parsing the raw Set-Cookie header)'. The application.properties currently uses 'server.reactive.session.cookie.same-site=${SESSION_COOKIE_SAME_SITE:lax}' with a default value of 'lax' (not 'Strict'). The test-profile (application-test.properties) does NOT override SESSION_COOKIE_SAME_SITE. Therefore the test assertion 'SameSite=Strict' will fail in the test environment unless the environment variable SESSION_COOKIE_SAME_SITE is set to 'Strict'. The task assumes 'Strict' without verifying the test-profile value.",
+      "fix": "After Task 3 lands (which renames server.reactive to server.servlet), check application-test.properties for the actual cookie.same-site value. Either (a) set SESSION_COOKIE_SAME_SITE=Strict in application-test.properties and assert 'Strict', or (b) read the actual configured value dynamically in the test via @Value and assert whatever is configured. Do not hardcode 'Strict' unless the test profile actually sets it."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 12,
+      "issue": "Task 12 step 2 references 'WithMockAppUser' for the AC16 session-continuity test in ProfileControllerIT, with the assertion shape using 'SESSION_CONTINUATION' (session A survives). However, the existing 'changePassword_correctCurrent_passwordRotated_otherSessionsKilled_eventLogged' test (line 225 in current ProfileControllerIT) already covers the identical assertion shape — seeds sess-laptop, sess-phone for USER_ID + sess-other-user for another-user-id, calls change-password, asserts both seeded sibling sessions are gone and the other-user session survives. The new AC16 test 'changePassword_sessionContinuity_principalLookupTerminatesOtherSessions' described in Task 12 is essentially a duplicate of the existing test (already in the pre-flip codebase at line 225). The task does not acknowledge this overlap. The executor may try to add a redundant test, or the existing test may be the AC16 test that just needs to be preserved during migration.",
+      "fix": "Verify whether the existing 'changePassword_correctCurrent_passwordRotated_...' test in ProfileControllerIT satisfies AC16's session-continuity assertion. If it does, Task 12 only needs to add the pre-flip BSON fixture sibling test (the second AC16 assertion) and the other four tests. Avoid duplicating an assertion that already exists."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 10,
+      "issue": "Task 10 Details section (item: ConcurrencyTestUtils.java) contains a full prescriptive implementation: 'try { ready.countDown(); start.await(); return task.call(); } finally { /* the countDown must reach zero unconditionally */ }'. The comment-block in the Details section then notes this exact code shape with precise method names, variable names, and the try/finally ordering. While framed as 'hints', this is a full algorithm with code logic — specifically the pattern 'ready.countDown() called inside try BEFORE task.call() AND the finally block is described as already fulfilling the contract'. Per checklist G, hints containing step-by-step algorithms or code blocks with full logic are severity major.",
+      "fix": "Reduce the Details/Implementation hints to conceptual pointers: 'Use CountDownLatch barrier with two latches (ready, start); ensure countDown is unconditional even on exception'. Remove the prescriptive try-block code shape from the Details section; the TDD Anchor tests provide the behavioral contract. The What-to-do section already describes the shape adequately."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 10,
+      "issue": "Task 10 TDD Anchor's second test 'parallelInvoke_taskThrowingBeforeBarrier_doesNotHang' has a logical gap with the D10 contract. D10 mandates 'try { … } finally { ready.countDown(); }' — meaning ready.countDown() must happen BEFORE start.await() and task.call(). The Details section describes a different shape: 'ready.countDown(); start.await(); return task.call()' inside try — where ready.countDown() is the FIRST statement. In this shape, a task that throws AFTER ready.countDown() (i.e., in task.call()) would not hang ready.await() because countDown already happened. But a task that throws BEFORE ready.countDown() (e.g., in initialization code before countDown) WOULD hang. The test name says 'taskThrowingBeforeBarrier' — but the implementation hint places countDown as the first line, meaning nothing can throw before it. The test description is internally inconsistent with the hint about where countDown sits in the try block. One of them is misleading.",
+      "fix": "Align the test description with the actual barrier contract. If ready.countDown() is always the first statement, the test should be named 'parallelInvoke_taskThrowingDuringExecution_doesNotHang'. If the intent is to test a throw before ready.countDown(), the implementation must use try/finally wrapping countDown (not placing countDown first). Clarify which contract is correct."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 12,
+      "issue": "Task 12 step 5 AC18 instructs: 'Read MockHttpServletResponse.getCookies() ... assert XSRF-TOKEN cookie is also present'. The current 'doLogin(...)' helper in AuthControllerIT (line 330) uses 'webTestClient.mutateWith(csrf())' which is the WebFlux test mutator from 'org.springframework.security.test.web.reactive.server.SecurityMockServerConfigurers'. After Task 6 + Task 10 migrate AuthControllerIT to MockMvc, the login helper becomes MockMvc-based. However, the current 'doLogin' helper only asserts 'expectStatus().isOk()' and discards the response — it does NOT return the response or make cookies accessible. Task 12 must modify or create a new login variant that captures and returns the MockMvcResult or the MvcResult object for cookie inspection. The task instructs 'Reuse the existing seedUser(...) and doLogin(...) helpers' without acknowledging that doLogin cannot surface cookies in its current form.",
+      "fix": "Add a note that a new 'MvcResult doLoginAndCapture(...)' helper (or similar) is needed for AC18's cookie assertions. The existing void 'doLogin(...)' cannot return cookie state for assertion. This is a feasibility gap in the step instructions, not just a style issue."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "Task 11 Step 4 instructs driving a 'synthetic register-storm' with curl: 'curl -s -X POST -H \"Content-Type: application/json\" -d \"{\\\"email\\\":\\\"vt-probe-$i@example.com\\\",\\\"password\\\":\\\"Password123!\\\"}' but omits the CSRF token. After the Wave 2 migration, the app runs on the MVC servlet stack with CsrfFilter active on POST /api/auth/register. A bare curl POST will be rejected with 403 CSRF before reaching BCrypt. The pinning catalogue would then be empty for the register path — matching the Edge Cases note ('diagnose by checking response codes from the storm driver; if all 4xx, fix the request payload'). However the curl command in the Verification Steps does not mention obtaining a CSRF token first.",
+      "fix": "Add a pre-storm step to obtain an XSRF-TOKEN cookie (via GET /health or similar safe verb), then include it in the register-storm curl as '-H \"X-XSRF-TOKEN: <value>\" -b \"XSRF-TOKEN=<value>\"'. Alternatively note that for the VT-pinning probe, CSRF can be temporarily disabled in test configuration or a separate @SpringBootTest context can be used."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_function",
+      "task": 12,
+      "issue": "Task 12 Details section says the pre-flip BSON fixture for AC16 should be built 'exactly as ProfileControllerIT.seedSession(...) does today (line 57 pre-flip) — same fields, same types'. The actual seedSession at line 57 uses 'reactiveMongoTemplate.getCollection(\"sessions\").flatMap(c -> reactor.core.publisher.Mono.from(c.insertOne(doc))).block()'. After Task 7 + Task 10 migrate ProfileControllerIT to MockMvc + MongoTemplate, 'reactiveMongoTemplate' no longer exists in this class. The post-flip seedSession should use 'mongoTemplate.getCollection(\"sessions\").insertOne(doc)' directly (synchronous). Task 12 references 'line 57 pre-flip' as the canonical shape but doesn't flag that this line uses the reactive template that will be gone.",
+      "fix": "Note in the task that the post-flip 'seedSession' helper uses 'MongoTemplate.getCollection(\"sessions\").insertOne(doc)' (synchronous, no .flatMap or .block). The pre-flip line 57 pattern is the logical template but the reactive API calls must be replaced."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 10,
+      "issue": "Task 10 Acceptance Criteria item 8 says: './gradlew compileTestJava (run inside the Phase B atomic commit context) — no compile errors in the 8 files owned by this task plus HealthController.java'. The parenthetical 'run inside the Phase B atomic commit context' acknowledges the test cannot compile in isolation, but this creates a validation gap: the pre-deploy QA tool (Task 17) runs './gradlew test' on the full commit. If an executor tries to verify Task 10 alone before Wave 2 is atomically staged, the compile will fail due to missing servlet imports. The AC should clarify that this check is only valid in the context of the full Wave 2 commit and cannot be used as an incremental gate.",
+      "fix": "Clarify in the Acceptance Criteria that './gradlew compileTestJava' for Task 10 is only a valid check AFTER all Wave 2 task files (3-9) are staged in the same git add sequence. Add a note: 'This AC is not independently verifiable; it is a Wave 2 atomic commit gate.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 11
+  }
+}

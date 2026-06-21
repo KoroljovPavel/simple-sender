@@ -1,0 +1,33 @@
+{
+  "task": "2",
+  "round": 1,
+  "reviewer": "test-reviewer",
+  "verdict": "approved",
+  "summary": "Bootstrap task with verify=[smoke] is the right test posture — no business logic to unit-test (routeRules + i18n config are framework-internal, explicitly deferred per Decisions 5/9 and Task 2 inline note). Sanity-check anchor (47 existing Vitest specs green) holds, AC18/Decision 16 preserved. One non-blocking caveat: Task 2 smoke scenarios 2 and 3 over-state what's verifiable in isolation — they assume auth.global already on locale-aware redirects (Task 7, Wave 3). Recommend annotating smokes 2/3 as 'partial pass — full assertion deferred to Task 7' so the next reviewer doesn't read them as regressions.",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "work/03-i18n/tasks/2.md:100-110",
+      "issue": "Smoke 2 expectation '302 /en/... + Set-Cookie i18n_lang=en' assumes auth.global has been refactored to locale-aware redirects (Decision 6 / Task 7). At Task 2's wave-graph position auth.global still hardcodes navigateTo('/auth/login') for unauth requests, which preempts the i18n-module redirect. Observed: 302 /auth/login + cookie=uk. The i18n module IS wired correctly (Set-Cookie header is being emitted by the i18n SSR plugin), but that signal is not what smoke 2 asserts. As written, smoke 2 cannot pass until Task 7 lands — it is an integration test of the full i18n + auth pipeline, not a Task 2 boundary check.",
+      "fix": "Scope Task 2 smoke 2 to what's testable in isolation: (a) request a PUBLIC route (e.g. /auth/login) with Accept-Language: en-US — assert Set-Cookie: i18n_lang=en is present and 302 Location starts with /en/, OR (b) explicitly mark this scenario as 'baseline captured, full redirect target verified after Task 7 (Decision 6)' in Verification Steps. Do not require the /dashboard variant to fully pass at Task 2 — flag it as deferred. This is a task-spec annotation issue, not a code defect, hence info severity."
+    },
+    {
+      "severity": "info",
+      "file": "work/03-i18n/tasks/2.md:106-110",
+      "issue": "Smoke 3 expectation 'invalid cookie i18n_lang=xx → НЕ редиректить, fallback на default uk' conflates two redirect sources: (1) i18n module deciding not to redirect because cookie is invalid, (2) auth.global deciding not to redirect because user is unauth on a protected route. Observed: 302 /auth/login from auth.global (i18n module IS correctly ignoring xx — Set-Cookie rewrites to uk fallback). The smoke as worded reads as 'i18n bootstrap broken' when in fact the i18n contract is met; what redirects is unrelated middleware.",
+      "fix": "Reword smoke 3 to assert ONLY i18n-layer behavior at Task 2 boundary: 'Set-Cookie response on /dashboard with Cookie: i18n_lang=xx should rewrite cookie to i18n_lang=uk (fallback applied) and Location header MUST NOT contain /en/ prefix (i18n did not honor the invalid cookie)'. The assertion 'не редиректить взагалі' is false at this wave-graph point — defer it to post-Task-7 integration smoke. Curl evidence shows the i18n module behavior IS correct; only the smoke's expected outcome is over-stated."
+    },
+    {
+      "severity": "info",
+      "file": "work/03-i18n/tech-spec.md:197",
+      "issue": "Forward-looking note for Task 6 (LangSwitcher Vitest): the planned assertion useCookie('i18n_lang').value === 'en' after click is at risk of becoming a mock-wiring litmus-failure if useCookie is mocked to be write-through trivially (test would pass with empty click handler). This is not a Task 2 defect — flagging now so Task 6's test-reviewer can ensure the assertion catches real failure (e.g., separately verify setLocale was awaited AND that the cookie ref was updated by the real setLocale codepath, not by the test's own mock writing).",
+      "fix": "When Task 6 lands, ensure LangSwitcher.spec asserts at least one observable that fails if click handler is empty: e.g., spy on setLocale and assert it was called with 'en' (mock-call check) AND assert the rendered active-state class moves to EN button (DOM assertion that depends on real reactive update). Two independent assertions defeat the single-mock-wire litmus failure mode."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/i18n/i18n.config.ts:1",
+      "issue": "Commit message notes 'i18n.config.ts at frontend/i18n/i18n.config.ts (Nuxt 4 + i18n v9 resolves vueI18n config inside restructureDir)' — file landed at frontend/i18n/i18n.config.ts but task spec / tech-spec call out frontend/i18n.config.ts (root-level). This is a Nuxt-4 path resolution adjustment and is correct for v9 + restructureDir, but the smoke-check that this resolution actually wires legacy:false and the warn-suppression flags is implicit (relies on dev-server starting without warnings + AC 'pnpm dev стартує без помилок'). No specific assertion verifies that legacy:false took effect — though this is acceptable since Task 6 (LangSwitcher) and Task 9 (auth pages) will fail loudly if Composition API mode isn't active.",
+      "fix": "No fix required for Task 2 — accept the implicit verification through downstream tasks. If desired, add a one-line manual sanity check in Verification Steps: 'curl -s localhost:3000/ | grep -q __NUXT_I18N__ to confirm vueI18n config loaded' (very lightweight, optional). Alternatively defer to Task 6 LangSwitcher Vitest, which exercises useI18n() and would surface a misconfigured legacy mode."
+    }
+  ]
+}

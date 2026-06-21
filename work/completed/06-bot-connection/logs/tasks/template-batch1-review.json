@@ -1,0 +1,51 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "Context Files",
+      "issue": "Link `[project.md](../../../.claude/skills/project-knowledge/project.md)` points to a path that does not exist. Project-knowledge documents live under `.claude/skills/project-knowledge/references/`, not directly in `project-knowledge/`. Other tasks in the batch correctly use `references/project.md`.",
+      "fix": "Change the path to `../../../.claude/skills/project-knowledge/references/project.md` to match the other tasks in this batch and the actual file location."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 1,
+      "section": "Required Skills",
+      "issue": "Skill link target is `../../../.claude/skills/code-writing/SKILL.md` which (because of the three `../`) resolves outside `work/06-bot-connection/tasks/` to `<repo-root>/.claude/skills/code-writing/SKILL.md`. That is the correct file. However the link text prefix `[.claude/skills/code-writing/SKILL.md]` (in Task 1 only) is inconsistent with sibling tasks 2/3/4/5 which use `[skills/code-writing/SKILL.md]`. Not load-bearing but worth normalising.",
+      "fix": "Rename the link label to `skills/code-writing/SKILL.md` for consistency with tasks 2-5 (path stays the same)."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 1,
+      "section": "Verification Steps",
+      "issue": "Task 1 frontmatter declares `verify: []` (no smoke / no user). The template instructs to omit Smoke and User subsections when no checks exist — Task 1 does this correctly. The third Automated bullet (\"Boot-time validation smoke (manual or via a tiny Spring test)\") is in spirit a smoke check rather than an automated unit-test command. Either reclassify it under a `### Smoke` subsection (and flip frontmatter `verify` to `[smoke]`) or rewrite it as a concrete Spring `@SpringBootTest` invocation under Automated.",
+      "fix": "If the boot-time check is intended to run as part of unit tests, express it as a concrete gradle test command; otherwise move it under a new `### Smoke` subsection and update `verify: [smoke]` in frontmatter."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Context Files",
+      "issue": "The line `frontend/pages/projects/[projectId]/settings.vue — текущий файл (источник кода для index.vue, перед удалением)` is plain text rather than a markdown link. All other context entries use `[name](path)` form.",
+      "fix": "Wrap the entry as a markdown link, e.g. `[settings.vue](../../../frontend/pages/projects/[projectId]/settings.vue) — current file (source code for index.vue, before deletion)`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 2,
+      "section": "Verification Steps",
+      "issue": "The Smoke subsection mostly restates the Automated unit-test scenarios rather than providing a separate executable smoke check distinct from `pytest`/`gradle test`. It is internally consistent (a unit test against MockWebServer IS the smoke for Task 2) but the surrounding prose duplicates what is already covered by the Automated subsection.",
+      "fix": "Either trim the Smoke subsection to a single bullet that points to the same gradle command, or remove the Smoke subsection and switch frontmatter `verify` to `[]` — the duplication is currently harmless but adds noise."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 5
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "status": "approved",
+  "summary": "Round-1 findings are well-addressed. The ArrowDown+Enter assertion now pins the exact next-zone payload with a negative guard against the current selection, killing the prior litmus failure. The invalid-tz split cleanly separates UI-flow (picker refuses to commit) from defense-in-depth (schema rejects synthetic emits) — both tests now earn their place. The !pendingBannerKey overwrite-guard, staleness-banner persistence with fake timers, browser-tz UTC-fallback mirror, aria-activedescendant assertion, full-list-when-empty assertion, and the load-bearing 500+missing-project redirect test all land correctly. The cross-tab settings test now has toHaveBeenCalledTimes(1) as the navigate-double-call guard. Two minor residual gaps remain — both inherited from the new code, not the test fixes: the new empty-string-emit contract has only the positive-direction test (does NOT verify the inputValue setter's `props.modelValue !== ''` guard), and the new useApi `.catch()` log-and-swallow path on handleStaleCurrent rejection is shimmed-out rather than tested. Neither blocks approval; both are flagged for follow-up.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/TimezonePicker.spec.ts:139-154 (emits empty string when the user clears the input)",
+      "issue": "The new empty-emit test covers ONLY the positive direction (modelValue='Europe/Berlin' → setValue('') → emit ['']). TimezonePicker.vue:65 wraps the emit in a `if (v === '' && props.modelValue !== '')` guard. If a future regression deletes the `&& props.modelValue !== ''` clause, the picker would emit '' every time the user touches an already-empty field — wasted reactivity churn and a spurious dirty-state in vee-validate. The current test cannot catch this: starting from a non-empty modelValue, the guard removal is silent. Litmus: delete `&& props.modelValue !== ''` from line 65 → test still passes.",
+      "recommendation": "Add a complementary negative-direction test:\n```\nit('does not emit when the input is cleared but modelValue is already empty', async () => {\n  // Guards against a regression that drops the `props.modelValue !== ''` clause\n  // in the inputValue setter — would cause redundant '' emits on every keystroke\n  // in an already-empty field.\n  const wrapper = await mountSuspended(TimezonePicker, {\n    props: { modelValue: '' },\n  })\n  const input = wrapper.find('[data-test=\"timezone-picker-input\"]')\n  await input.trigger('focus')\n  await input.setValue('')\n  await settle()\n  // Either no emit at all, or no '' emit beyond what was already there.\n  const emitted = wrapper.emitted('update:modelValue') as string[][] | undefined\n  expect(emitted).toBeUndefined()\n})\n```\nThis exactly addresses the question raised in the review brief: 'if props.modelValue is already \"\", no emit should fire — is this tested?' — currently no."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/composables/useApi-404-interceptor.spec.ts:44-48 (handleStaleCurrentSpy.mockResolvedValue(undefined))",
+      "issue": "The mock fix accommodates the new `.catch()` in useApi.ts:72-74, but it only makes the existing tests run — it does not verify the new behavior. If handleStaleCurrent REJECTS (a real possibility: the store action calls useApi internally), the useApi interceptor's `.catch()` should swallow and log. No test asserts that the interceptor does not crash, that pendingBannerKey is still set, and that no unhandled rejection escapes. The mock simply moves from `undefined` to a resolved Promise — neither value exercises the new error path.",
+      "recommendation": "Add a test that asserts the log-and-swallow contract:\n```\nit('404 interceptor swallows handleStaleCurrent failures without crashing', async () => {\n  handleStaleCurrentSpy.mockRejectedValueOnce(new Error('store action failed'))\n  const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})\n  const unhandled = vi.fn()\n  process.on('unhandledRejection', unhandled)\n  // Trigger the interceptor on a /api/v1/projects/:id 404.\n  await runInterceptor({ statusCode: 404, url: '/api/v1/projects/current' })\n  await new Promise((r) => setImmediate(r))\n  expect(unhandled).not.toHaveBeenCalled()\n  expect(projectsStore.pendingBannerKey).toBe('errors.projects.unavailable')\n  warnSpy.mockRestore()\n  process.off('unhandledRejection', unhandled)\n})\n```\nThis is the ONLY test that would catch a regression dropping the `.catch()`."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/projects/settings.spec.ts (no test for the !pendingBannerKey guard on the `!project.value` branch)",
+      "issue": "settings.vue has TWO `!pendingBannerKey` guards (lines 57 and 67). The new `mount_apiReturns404_doesNotOverwriteExistingBannerKey` test only exercises the line-57 guard (404 catch). The line-67 guard (`!project.value` post-fetch redirect) is NOT covered for overwrite-protection. The mount_apiReturns500_andProjectMissing_stillRedirects test asserts pendingBannerKey='errors.projects.unavailable' but does NOT pre-seed a non-null key, so it doesn't exercise the guard branch on line 67.",
+      "recommendation": "Add (or extend the existing missing-project test):\n```\nit('mount_projectMissingAfterFetch_doesNotOverwriteExistingBannerKey', async () => {\n  routeMock.params = { projectId: 'p-vanished' }\n  projectsStoreMock.projects = []\n  projectsStoreMock.currentProject = null\n  projectsStoreMock.currentProjectId = null\n  projectsStoreMock.pendingBannerKey = 'errors.projects.staleSpecific'\n  apiMock.mockReset()\n  apiMock.mockResolvedValueOnce(null) // resolves but project not in store\n  await mountSuspended(SettingsPage)\n  await settle()\n  expect(projectsStoreMock.pendingBannerKey).toBe('errors.projects.staleSpecific')\n  expect(navigateToMock).toHaveBeenCalledWith('/projects')\n})\n```\nLow-priority because the two guards are structurally identical — a regression in the 404-branch guard would near-certainly come with the same regression in the missing-project branch. But the symmetry is worth a single guard test."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 38,
+      "passed": 36,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 13,
+      "integration": 24,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "11",
+  "round": 1,
+  "summary": "Task 11 is a well-executed closing-wave frontend: the six dialogs, two pages, RecentExportsDialog, Playwright golden-path, two Vitest specs and the staging-smoke runbook all follow the established precedent (reactive computed() zod schemas, useApiError fallback to errors.generic, data-test selectors, project-scoped 404 redirect, mass-assignment-safe request bodies, canonical slug regex, TASK-11 markers). The canonical slug-regex guard returns nothing and all referenced i18n keys exist with uk parity. No critical issues. The main findings are a backend/frontend contract divergence on the GET /exports list (backend returns DONE-only and ignores the limit=20 the dialog sends, so the dialog's PENDING/RUNNING/FAILED/PURGED branches are currently unreachable) and a few minor copy/cleanup nits. Verdict: approve with minor follow-ups; the contract divergence is on the Task 9 backend side and the dialog is forward-compatible.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "frontend/components/subscribers/RecentExportsDialog.vue",
+      "line": "48-62, 144-189",
+      "finding": "Backend/frontend contract divergence. The dialog GETs `/subscribers/exports?limit=20` and renders status branches for DONE, PENDING/RUNNING (spinner), and FAILED/PURGED. But SubscriberExportController.listExports (backend Task 9, line 198-207) calls `findByProjectIdAndStatusOrderByCreatedAtDesc(projectId, ExportStatus.DONE)` — it returns ONLY DONE rows, ignores the `limit` query param entirely (no @RequestParam, no .limit()), and never emits PENDING/RUNNING/FAILED/PURGED. So the in-flight spinner branch (data-test recent-export-progress-*) and the FAILED/PURGED `—` branch are dead code against the current backend, and the task requirement 'PENDING/RUNNING rows show a progress indicator' (task line 53/57) cannot be satisfied. This is not in the listed intentional deviations.",
+      "suggestion": "Decide the contract: either (a) widen the backend list query to return recent rows of all statuses with an honored limit (preferred — matches task spec and makes the dialog branches live), or (b) if DONE-only is intentional, record it as a deviation in decisions.md, drop/comment the unreachable non-DONE template branches, and remove the misleading `query: { limit: 20 }` the backend silently ignores. At minimum document the divergence so a future reader does not assume the spinner path is exercised."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/tags/RenameTagDialog.vue",
+      "line": "85",
+      "finding": "The slug-immutability tooltip renders `t('tags.deleteDialog.confirmBody')` — 'The tag will be removed from all subscribers. This action cannot be undone.' That is delete-cascade copy shown on a Rename dialog's read-only slug field; it is semantically wrong and could confuse an operator into thinking renaming deletes the tag. The correct copy ('slug is permanent / cannot be changed') was an unseeded i18n key (intentional deviation #4), but borrowing the delete-cascade string is worse than borrowing a neutral one.",
+      "suggestion": "Use a neutral existing key (e.g. tags.columns.slug as a plain label with no tooltip, or drop the tooltip until Task 2 seeds a slug-immutability key) rather than the delete-cascade body. Record the missing key (validation/tooltip for slug immutability) in decisions.md for the Task 2 reopen."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/customFields/AddCustomFieldDialog.vue",
+      "line": "193-204",
+      "finding": "The BOOLEAN tri-state <select> omits `v-bind=\"defaultValueAttrs\"` (the STRING/NUMBER/DATE inputs all bind it). Functionally harmless because the non-NUMBER schema is z.any(), but it is an inconsistency with the sibling inputs and the EditCustomFieldDialog repeats the same omission (EditCustomFieldDialog.vue:178-188). If a future schema adds boolean validation the field would silently skip vee-validate's blur/touch tracking.",
+      "suggestion": "Either bind `v-bind=\"defaultValueAttrs\"` on the boolean <select> for consistency, or add a one-line comment explaining why it is intentionally omitted (v-model is the only attr vee-validate needs for a select, mirroring the new.vue TimezonePicker comment)."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/tags/index.vue",
+      "line": "63-65, 92-99",
+      "finding": "`formatDate(iso: string | null)` helper is defined but never used in the template — the table only renders label/slug/subscriberCount/actions, dropping the 'created' column that the task (line 37) and tech-spec (line 35) list for the /tags table. Same for the custom-fields page which DOES render defaultValue but neither page shows 'created'. Dead helper + missing-column vs spec.",
+      "suggestion": "Either add the Created column (formatDate is already written and a createdAt field exists on Tag/CustomFieldDefinition) to match the spec, or remove the unused formatDate helper to avoid dead code. If the column was intentionally cut for layout, note it as a deviation in decisions.md."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/components/subscribers/RecentExportsDialog.vue",
+      "line": "97-116",
+      "finding": "refreshUrl() catch sets `row.disabled = true` for EVERY error including transient ones (429 refresh_rate_limited, 503 service_unavailable fail-CLOSED). A rate-limit or temporary Redis outage permanently disables the Refresh button for that row until the dialog is closed and reopened (which re-fetches). For 410 purged/failed permanent-disable is correct, but for 429/503 the operator cannot retry without a reopen.",
+      "suggestion": "Consider only disabling the row on terminal codes (export_purged/export_failed) and leaving it enabled for retryable codes (refresh_rate_limited/service_unavailable). Low priority since close+reopen recovers and Task 2 seeded no per-code copy; document the trade-off if leaving as-is."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/components/tags/DeleteTagDialog.vue",
+      "line": "29, 69-71",
+      "finding": "Affected-count copy renders `t('tags.columns.subscriberCount') + ': ' + affectedCount` ('Subscribers: N') rather than the task's intended cascade sentence 'N subscribers will lose this tag'. The number is always shown including 0 (good, satisfies the edge case), but the phrasing relies on the column-header key as a makeshift label. This is consistent with intentional deviation #1 (no GET /tags/{slug}) and #4 (i18n gaps), so it is acceptable, but flagging for completeness since the exact AC wording differs.",
+      "suggestion": "Acceptable as-is given the documented i18n gap. If Task 2 is reopened, add a tags.deleteDialog.affectedCount key with a proper '{count} subscribers will lose this tag' message and switch to it."
+    }
+  ],
+  "verdict": "approve"
+}

@@ -1,0 +1,53 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "What to do",
+      "issue": "Step 3 `/start` private branch checks `bot.getStatus() == CONNECTED` after the bot has already been resolved via `botRepository.findByProjectIdAndStatus(projectId, CONNECTED)` (line 49). The status predicate is therefore tautologically true at that point and the redundant check on line 50 is dead.",
+      "fix": "Drop the redundant `bot.getStatus() == CONNECTED` from the populate predicate at line 50 — the finder already guarantees CONNECTED. The atomic `findAndModify` Query on line 50 already independently includes `status=CONNECTED`, which is the only place the check actually matters."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 10,
+      "section": "Acceptance Criteria",
+      "issue": "AC line 108 reads `All four controller-owned counters register exactly: received (success), duration (Timer), rejected{invalid_secret}, rejected{project_not_found}, rejected{duplicate}.` That sentence promises four counters but enumerates five items; the Timer is not a counter (the title and Description both correctly say `4 counters + 1 Timer`).",
+      "fix": "Reword the AC to `All four controller-owned counters + one Timer register exactly: received (success counter), duration (Timer), rejected{invalid_secret} (counter), rejected{project_not_found} (counter), rejected{duplicate} (counter).` so the noun count matches the enumeration."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 10,
+      "section": "Context Files",
+      "issue": "Context Files line 116 lists `AC17` (ownerChatId set) as relevant user-spec for this controller task, but the actual ownerChatId write is performed by the worker (T9). The controller only enqueues; AC17 verification belongs to ProcessTelegramUpdateJobTest. Including AC17 here can mislead the implementer into adding a controller-side test that the AC9 test cases cannot satisfy.",
+      "fix": "Remove `AC17` from the user-spec context-file reference line for T10 (and from any AC carry-forward implied here). AC17 is correctly owned by T9 (already listed there)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 3
+  },
+  "notes": {
+    "fixes_verified": [
+      "T6: project.md + architecture.md present in Context Files.",
+      "T7: project.md + architecture.md present; test-style description reads `Plain JUnit 5 + Reactor StepVerifier, no Spring context` (line 35).",
+      "T8: project.md + architecture.md present; JobRunr collection guidance now points operator to `db.getCollectionNames()` on staging Mongo with default `jobrunr_jobs` (Edge cases line 90 + What to do step 3 Failed-queue section line 41).",
+      "T9: depends_on changed to [1, 3, 4, 5, 6, 7]; counter standardised to `telegram_worker_outcome_total` (lines 25, 83, 112); logEventBlocking 5-param shape `(userId, eventType, ipAddress, userAgent, metadata)` documented (line 53); AC14 retry-exhaustion scope clarified — synchronous FAILED + counter + rethrow only, retry verified via T8 runbook (line 83); sticker/media-only `text==null AND message!=null` decided as `telegram_update_other updateKind=message` (line 160); speculative T2-dependency note removed (line 154); private-method-name hint relaxed to `exact helper names left to implementer judgement` (line 166); project.md + architecture.md present.",
+      "T10: title reads `4 counters + 1 Timer` (line 11); `OffsetBasedPageRequest('updatedAt:ASC', 0, 10)` replaces `PageRequest.ascOnUpdatedAt(10)` (line 63); AC5 test gains `runOn(Schedulers.boundedElastic())` (line 71); redundant WebTestClient re-binding hint removed and replaced with explicit `do NOT re-bind` (line 63); project.md + architecture.md present."
+    ],
+    "no_critical_or_major_remaining": true,
+    "dependency_graph_clean": "T9 wave 2 depends on T1/T3/T4/T5/T6/T7 (all wave 1). T10 wave 3 depends on T1/T2/T4/T5/T9 (all earlier waves). No cycles, all dep targets exist.",
+    "shared_resource_check": "MeterRegistry owner=T1; T9 declares T1 in depends_on; T10 declares T1 in depends_on. No competing instances in any wave. Compliant with tech-spec Shared Resources table.",
+    "carry_forward_check": "All tech-spec AC for T6 (smoke build), T7 (smoke build), T8 (operator reads runbook end-to-end), T9 (AC6-AC12, AC14, re-entry), T10 (AC1-AC3, AC5, AC15, AC16, AC18 + Decision 4/11 self-heal) covered in respective task AC sections.",
+    "remaining_findings_are_all_minor": "Three minor findings only — one redundant status check, one phrasing mismatch in counter-count AC, one stale user-spec AC reference in T10 Context Files. None block approval; all may be addressed at implementer's discretion."
+  }
+}

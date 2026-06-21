@@ -1,0 +1,39 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 7,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts — canvas wiring describe block",
+      "issue": "Drag-stop coverage is tested only for step nodes (id 's1'). The task description and implementation also handle trigger nodes (nodeId prefix 'trigger:') writing into Trigger.canvasPosition. No test exercises a trigger drag-stop to verify that path. If the trigger branch in the page's onNodeDragStop handler were missing or silently no-op'd, the tests would not catch it.",
+      "recommendation": "Add one test: seed a funnel with a trigger, emit node-drag-stop with nodeId 'trigger:0' and a position, assert storeMock.update is called and body.triggers[0].canvasPosition equals the emitted position. Pattern is identical to the existing step drag-stop test at line 697."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/pages/funnel-editor.spec.ts:770 — read-only list test",
+      "issue": "The test asserts structural mutators are absent from row 0 but does not assert that clicking a structural mutator's data-test selector (if accidentally re-introduced) would not trigger storeMock.update. The assertion is DOM-presence-only (no element rendered) rather than also a behavioral guard (no mutation fired if element somehow appeared). This is low risk given the explicit element absence checks, but the test would not catch a mis-wired emit that fires update without a visible control.",
+      "recommendation": "After asserting the controls are absent, add: storeMock.update.mockClear(); await settle(); expect(storeMock.update).not.toHaveBeenCalled(); to confirm the mounted list did not fire a structural PATCH during idle settle. This makes the test both a DOM guard and a behavioral guard."
+    }
+  ],
+  "summary": "All five TDD-anchor tests are implemented and use value-based assertions. The drag-stop test correctly checks canvasPosition value AND sibling field integrity. The XSS test correctly asserts the note text is visible as escaped text content AND that no real img/onerror element exists in the DOM — not merely a string-presence check. The read-only list test (both in the preview describe and in the Task 7 describe) asserts concrete element absence. The i18n required-keys gate is properly extended: 23 funnels.canvas.* keys added to REQUIRED_KEYS, NON_EMPTY_REQUIRED_KEYS filter correctly ORed to cover the new namespace, and the non-empty assertion checks both string type and trimmed length > 0. The two pre-existing tests that were replaced (list action buttons, edit-dialog pin regression) were legitimately superseded by the read-only invariant — the old behaviors are intentionally gone (Decision 2), not accidentally dropped, and the new tests carry equivalent or stronger behavioral assertions. Two minor gaps: trigger drag-stop path has no dedicated test, and the read-only list test lacks a behavioral (no-PATCH-fired) guard to complement its DOM-absence check. Neither is a blocker.",
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 0,
+      "component": 8,
+      "assessment": "healthy — component tests are the specified test type for this task; E2E drag is intentionally manual per Testing Strategy"
+    }
+  }
+}

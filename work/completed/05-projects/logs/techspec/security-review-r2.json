@@ -1,0 +1,75 @@
+{
+  "status": "approved",
+  "round": 2,
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "round1_resolution_verification": [
+    {
+      "round1_finding": "MEDIUM A01 — CI-enforced requireOwned check",
+      "round1_severity": "medium",
+      "resolution_status": "resolved-as-deferred-with-trigger",
+      "evidence": "Risk R1 (tech-spec.md line 389) now reads: 'Follow-up trigger: when the first child epic mounts a controller under /api/v1/projects/{projectId}/... (04-bots), introduce a structural enforcement (ArchUnit rule or grep-based CI gate) so missing requireOwned becomes a CI failure, not a checklist miss. Out-of-scope here (no descendants exist yet).' This is the appropriate scope decision: this feature has zero project-scoped child controllers; the gate would have nothing to assert against. The trigger is concrete (named: 04-bots) and the enforcement options are pre-decided (ArchUnit OR grep CI gate). Adequate.",
+      "verdict": "accepted"
+    },
+    {
+      "round1_finding": "MEDIUM A04 — Decision 8 unbounded vectors",
+      "round1_severity": "medium",
+      "resolution_status": "resolved",
+      "evidence": "Decision 8 (lines 139-147) now enumerates all three vectors: (1) POST capped by quota — 'quota IS the rate-limit'; (2) PATCH unbounded — 'Worst case: audit-log spam (project_renamed/project_updated events). Operational mitigation: existing Mongo write-rate alarms (planned, deployment.md monitoring). UX-only damage; no data leak'; (3) DELETE+RESTORE oscillation — 'unbounded. Same audit-log spam concern. Same operational mitigation'; (4) 404 ID-probe enumeration — 'Rate-unlimited, but the response is uniform (anti-enumeration per Decision 2). Mongo-hit vs Mongo-miss timing diff is theoretical; in practice both paths run a single findById and return identical bodies'. Closes with 'Audit log volume monitoring is the operational backstop.' Trigger for revisit also stated: 'Revisit if production audit-log volume becomes a real cost-line.' Adequate.",
+      "verdict": "accepted"
+    },
+    {
+      "round1_finding": "LOW A01 — Decision 14 deletedAt-FIRST guard ordering",
+      "round1_severity": "low",
+      "resolution_status": "resolved",
+      "evidence": "Three reinforcing locations: (a) How-it-works Soft-delete+restore (line 74): 'Decision 14 guard FIRST: if project.deletedAt == null → throw AppException.notFound(...) (uniform anti-enumeration; an active project is not restore-eligible). This guard runs BEFORE quota / rename / save logic so an active project cannot be silently mutated.' (b) Decision 14 (line 178): 'Implementation order is critical: requireOwned(includeSoftDeleted=true) returns the project; service then checks deletedAt != null as the FIRST action after the guard, BEFORE quota check, name-conflict check, or rename logic. This ordering ensures an active project cannot accidentally enter the rename path during a refactor (defense-in-depth against future regression that might silently append \" (restored)\" to a live project name).' (c) IT bullet (line 342): 'POST /{id}/restore on active project → 404 (Decision 14); assert NEITHER project_renamed NOR project_restored event was written (deletedAt-FIRST guard verified).' Resolved.",
+      "verdict": "accepted"
+    },
+    {
+      "round1_finding": "LOW A03 — Mongo injection guidance freeze",
+      "round1_severity": "low",
+      "resolution_status": "resolved",
+      "evidence": "AC-T11 added (line 417): 'All Mongo queries in com.botfunnel.project.* use ReactiveMongoRepository derived finders or Query.query(Criteria.where(field).is/in(typedValue)) with typed values. No string concatenation into Criteria; no use of Criteria.where(...).is(rawJson). Code-reviewer enforces during Audit Wave (NoSQL injection guidance freeze for downstream epics).' This freezes the constraint as a code-reviewer-enforced AC for this epic and as a written rule downstream epics will inherit. Resolved.",
+      "verdict": "accepted"
+    },
+    {
+      "round1_finding": "LOW A05 — 401 test isolation from CSRF/session pollution",
+      "round1_severity": "low",
+      "resolution_status": "resolved",
+      "evidence": "IT bullet (line 331): 'Unauthenticated requests → 401 (using a bare WebTestClient.get()/post()/patch()/delete() — no @WithMockAppUser-mutated client, no csrf() mutator. A fresh test client confirms that pathMatchers(\"/api/v1/**\").authenticated() rule fires before any other gate).' Explicitly addresses the false-pass risk from shared-mutator pollution. Covers all four mutating verbs. Resolved.",
+      "verdict": "accepted"
+    },
+    {
+      "round1_finding": "LOW A08 — Response-shape ownerId leak lock",
+      "round1_severity": "low",
+      "resolution_status": "resolved",
+      "evidence": "IT bullet (line 320): 'POST / with hostile body {name, ownerId: \"<other-user>\"} → DB record's ownerId equals authenticated user (mass-assignment defense). Response-shape lock: assert response body does NOT contain ownerId field (jsonPath(\"$.ownerId\").doesNotExist()) — same assertion repeated for GET, PATCH, RESTORE responses.' Locks the response contract across all four read/write surfaces. Resolved.",
+      "verdict": "accepted"
+    },
+    {
+      "round1_finding": "LOW A09 — Audit event for requireOwned denials (intentionally NOT added)",
+      "round1_severity": "low",
+      "resolution_status": "accepted-as-documented-decision",
+      "evidence": "Decision 8 (line 143) cites 'audit-log spam' as the concrete operational concern that justifies the rate-limit decision. Adding a project_access_denied event on every requireOwned rejection would AMPLIFY the same audit-log volume vector the decision rejects rate-limiting because of. The two decisions are internally consistent: if audit-log volume is the cost-line operations watches, deliberately writing more audit rows on the rejection path (which an attacker controls the rate of via 404-probe per Decision 8 vector 4) is anti-aligned. The trade-off is forensic-blindness on enumeration scanning vs operational cost; the spec accepts forensic-blindness because 404-probe yields no data and the timing-diff is theoretical (per Decision 8). Acceptable as an internally-consistent documented decision. Future revisit-trigger: if a real enumeration incident occurs, audit-log volume cost is reassessed alongside the deny-event signal.",
+      "verdict": "accepted"
+    },
+    {
+      "round1_finding": "LOW A05 — Decision 10 localStorage scope-lock for future epics",
+      "round1_severity": "low",
+      "resolution_status": "resolved",
+      "evidence": "Decision 10 (line 157) adds explicit scope-lock paragraph: 'Scope-lock for future epics: Only opaque resource identifiers (ObjectId hex) may be persisted in localStorage. No tokens, no PII, no list data, no cached server responses. Any future epic adding a localStorage.setItem(...) write must amend this decision and pass a fresh security review. Enforced by AC-T11.' Note: the in-text reference says 'Enforced by AC-T11' but the actual grep enforcement is in AC-T12 (line 418): 'frontend/stores/projects.ts is the only file in this PR that calls localStorage.setItem (Decision 10 scope-lock for opaque-IDs-only). Verified via grep -rn \"localStorage.setItem\" frontend/ → exactly one source-file match, in stores/projects.ts.' This is a minor cross-reference label glitch — substantive enforcement (single-file grep gate at AC-T12) is correct and verifiable. Resolved.",
+      "verdict": "accepted"
+    }
+  ],
+  "findings": [],
+  "notes": [
+    "All eight round-1 findings are resolved or accepted as internally-consistent documented decisions.",
+    "Cross-reference glitch only: Decision 10 paragraph says 'Enforced by AC-T11' but the grep gate is actually AC-T12. AC-T11 is the Mongo-query injection freeze; AC-T12 is the localStorage.setItem grep. Substantive enforcement is correct (AC-T12 grep matches the scope-lock); only the label reference inside Decision 10 is wrong. Not a security finding — recommend a one-character documentation fix when the spec is touched next, but does not block approval.",
+    "No new findings introduced by the round-2 changes. The added IT assertions (deletedAt-FIRST event-emission check, ownerId.doesNotExist() across four responses, bare-WebTestClient 401 across four verbs) all tighten security guarantees without new attack surface.",
+    "Decision 8 + Decision 14 + AC-T11 + AC-T12 collectively form a coherent layered defense: structural (T11, T12 grep gates), behavioral (Decision 14 ordering, requireOwned uniformity), and operational (Decision 8 audit-log volume monitoring as backstop). The trade-offs (no rate-limit, no deny-event audit row) are documented with explicit revisit-triggers."
+  ]
+}

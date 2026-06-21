@@ -1,0 +1,45 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 3,
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:903",
+      "issue": "sendPhoto_400OtherDescription_terminalOther does not assert that EVENT_TELEGRAM_SEND_FAILED audit event is emitted. AC §7 requires 'terminal fail → telegram_send_failed'. The unit tests for 403 and 400-chat-not-found also omit this audit assertion; only the IT tests enforce it via InOrder. Since the unit tests are the primary coverage for individual failure paths, each terminal-failure scenario should independently verify the audit event.",
+      "recommendation": "Add to each terminal-failure unit test (403, 400-chat-not-found, 400-other, 5xx-exhausted): verify(eventService).logEvent(eq(OWNER_ID), eq(TelegramSender.EVENT_TELEGRAM_SEND_FAILED), isNull(), isNull(), any()). The success test already does this for EVENT_TELEGRAM_MESSAGE_SENT."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:847",
+      "issue": "sendPhoto_rateLimited_retriesThenSucceeds verifies request count=2 and return value, but does not assert that both requests target /bot.../sendPhoto. If the retry mechanism were to change the endpoint on retry (a potential refactor regression), this test would not catch it.",
+      "recommendation": "After the call, drain both recorded requests via mockServer.takeRequest() and assert req.getPath() ends with '/sendPhoto' for each. Alternatively assert mockServer.takeRequest().getPath().equals('/bot' + TOKEN + '/sendPhoto') for the retry request."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderSubscriberHookIT.java:226",
+      "issue": "sendPhoto_chatNotFound_marksDeletedByChat does not include verify(subscriberService, times(1)).markDeletedByChatId(...) that its 403 sibling has. The asymmetry is harmless (ordered.verify already limits to one call), but a double-invocation bug would go undetected without the explicit times(1) guard.",
+      "recommendation": "Add after the inOrder block: verify(subscriberService, times(1)).markDeletedByChatId(PROJECT_ID, TELEGRAM_BOT_ID, CHAT_ID); — matching the pattern in sendPhoto_403_marksBlockedByChat."
+    }
+  ],
+  "summary": "All 7 TDD-anchor scenarios are present and substantive. The success test verifies endpoint path, method, all body fields (photo, caption, parse_mode, chat_id), return value, and audit event. The token-no-leak test captures log output and makes a non-tautological assertion — logSites non-empty, TOKEN absent, [REDACTED_TOKEN] present. Failure scenarios assert the correct TerminalReason enum value and the correct mark*/never() combination. The null-omission edge case (caption+parseMode) is covered with explicit doesNotContainKey assertions. Both IT flip scenarios (403→blocked, 400-chat-not-found→deleted) are present with InOrder audit-before-flip verification. Three minor gaps found: (1) terminal-failure unit tests omit EVENT_TELEGRAM_SEND_FAILED audit assertion, covered only at IT level; (2) the 429-retry test does not re-check the endpoint on the retry request; (3) minor asymmetry in the IT times(1) guard for markDeletedByChatId. No critical or major findings.",
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 10,
+      "passed": 10,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 8,
+      "integration": 2,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

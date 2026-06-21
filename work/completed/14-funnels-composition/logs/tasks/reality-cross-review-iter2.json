@@ -1,0 +1,73 @@
+{
+  "validator": "reality-checker",
+  "batch": [3, 4],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "The FunnelStepDto constructor-arity warning in the TDD Anchor correctly names FunnelExecutionEngineIT and FunnelStepExecutorTest. However it omits a third critical callsite: FunnelServiceEmitEventTest.java:71 uses a fully positional 17-arg new FunnelStepDto(...) in its emitStep() helper. Task 2 depends_on Task 1 and is responsible for updating these callsites, but Task 3's note points implementors only at FunnelExecutionEngineIT/FunnelStepExecutorTest. If an implementor reads Task 3 in isolation before Task 2 is done they may not realise FunnelServiceEmitEventTest also needs the update. The gap is low-risk because Task 2 explicitly covers it (see task-2.md line 51 and 143), but Task 3's own note is incomplete.",
+      "fix": "In the TDD Anchor constructor-arity note, extend the list of callsites to watch: 'FunnelServiceEmitEventTest.java:71 (emitStep helper) also uses the positional constructor — Task 2 handles it, but be aware when running the full funnel test suite in parallel.' No code change required; note update only."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 4,
+      "issue": "Task 4 TDD Anchor correctly instructs adding fetch: vi.fn() and a reactive funnels: ref([...]) to storeMock in vi.hoisted, seeding >=1 active + >=1 non-active funnel in beforeEach, and making the inactive-target-hint assertion non-vacuous. Verified against the actual storeMock in funnel-editor.spec.ts (lines 13-28): the current storeMock has fetchOne/update/activate/pause/duplicate/stopAllExecutions/testRun/preview but NO fetch method and NO funnels ref — confirming the extension is necessary and the task's diagnosis is accurate. One small gap: the task says 'add fetch: vi.fn() and funnels: ref([...])' in vi.hoisted, but the real funnels store exposes funnels as a plain ref (stores/funnels.ts:23 const funnels = ref<FunnelSummaryResponse[]>([])) rather than storeToRefs output. The task's hint 'if the form reads the list through storeToRefs(funnelsStore).funnels, the mock must expose a reactive ref' is correct but leaves the implementor to verify after implementation. This is a hint adequacy gap rather than a blocking issue.",
+      "fix": "Optionally strengthen the hint: since useFunnelsStore already returns funnels as a plain ref property (not computed/storeToRefs), the mock should expose funnels directly as ref([]) in the storeMock object. Implementor should verify the form's actual read path (direct .funnels vs storeToRefs) and match accordingly. No blocking issue."
+    }
+  ],
+  "confirmed_checks": {
+    "task4_storeMock_fetch_and_funnels_ref": {
+      "status": "confirmed",
+      "detail": "Task 4 TDD Anchor explicitly requires adding fetch: vi.fn() and funnels: ref([...]) to storeMock in vi.hoisted. The actual storeMock (funnel-editor.spec.ts:13-28) lacks both. The instruction is correct and necessary."
+    },
+    "task4_seed_active_and_inactive": {
+      "status": "confirmed",
+      "detail": "Task 4 TDD Anchor requires seeding storeMock.funnels.value with >=1 active AND >=1 non-active funnel in beforeEach of the SUBSCRIBE describe block. Correctly specified."
+    },
+    "task4_inactive_hint_non_vacuous": {
+      "status": "confirmed",
+      "detail": "Task 4 TDD Anchor explicitly states 'Non-vacuous: test MUST first verify picker carries both options (otherwise hint turns green for the wrong reason), then select non-active and assert hint renders.' Correctly specified."
+    },
+    "task4_four_error_codes_must_match_task2": {
+      "status": "confirmed",
+      "detail": "Task 4 lists four codes under errors.funnels.* that MUST match Task 2 byte-for-byte: funnel_subscribe_target_required, funnel_subscribe_target_not_found, funnel_subscribe_target_step_not_found, funnel_subscribe_target_inactive. Task 2 (lines 35-38, 54-56, 59) defines exactly these four codes with identical spellings. Match confirmed."
+    },
+    "task4_depends_on_empty": {
+      "status": "confirmed",
+      "detail": "Task 4 depends_on: []. Verified Task 1 files_to_modify (grep over task-1.md): StepType.java, FunnelStep.java, FunnelStepDto.java, FunnelService.java, StepTypeTest.java — no frontend/types/funnel.ts. Task 1 is backend-only (Java); frontend/types/funnel.ts is not referenced in Task 1 at all. depends_on: [] is correct."
+    },
+    "task3_constructor_arity_note": {
+      "status": "confirmed_with_minor_gap",
+      "detail": "Task 3 TDD Anchor contains the required warning: 'FunnelStepDto constructor grows 17->20 args (Task 1); update positional ctor callsites/helpers in FunnelExecutionEngineIT/FunnelStepExecutorTest'. Verified: FunnelExecutionEngineIT uses new FunnelStep() + setters (not positional), FunnelStepExecutorTest uses new FunnelStep() + setters (not positional) — so the direct risk for these two files is low. The actual positional callsite is in FunnelServiceEmitEventTest.java:71, which is Task 2's responsibility. Task 3's note is directionally correct but could name this third file for completeness."
+    },
+    "task3_depends_on_is_1": {
+      "status": "confirmed",
+      "detail": "Task 3 depends_on: [1]. Correct — Task 3 requires SUBSCRIBE_TO_FUNNEL enum constant and FunnelStep fields from Task 1."
+    },
+    "task3_enrollSpecificFunnel_no_funnel_param": {
+      "status": "confirmed",
+      "detail": "Task 3 enrollSpecificFunnel signature: enrollSpecificFunnel(String projectId, String subscriberId, String targetFunnelId, String targetEntryStepId, int originDepth, Long telegramBotId). No Funnel param — the method resolves the target funnel internally via funnelRepository.findById(targetFunnelId). Confirmed correct per What-to-do step 2c and Details/FunnelEventService.java note."
+    },
+    "task3_outcome_complete_does_not_yet_exist": {
+      "status": "confirmed",
+      "detail": "Verified StepExecutor.java line 329: enum Outcome { CONTINUE, DELAY, CANCEL, FAIL, WAIT_FOR_REPLY }. No COMPLETE yet. FunnelExecutionEngine.java drive switch (line 257-288) has no COMPLETE case. Task 3 correctly adds both."
+    },
+    "task3_insertExecutionAt_does_not_exist": {
+      "status": "confirmed",
+      "detail": "FunnelExecutionFactory.java has only insertExecution (line 75), not insertExecutionAt. Task 3 correctly adds the overload."
+    },
+    "task3_five_callsites_of_insertExecution": {
+      "status": "confirmed",
+      "detail": "Task 3 states 5 callsites: FunnelEventService.java (2 at lines 196/200), FunnelTriggerServiceImpl.java (2 at lines 157/163), FunnelService.java testRun (line 354). Verified: grep confirms exactly these 5. All stay unchanged; only enrollSpecificFunnel calls insertExecutionAt."
+    }
+  },
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 18,
+    "issues_found": 2
+  }
+}

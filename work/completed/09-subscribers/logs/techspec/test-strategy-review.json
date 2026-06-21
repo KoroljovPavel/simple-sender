@@ -1,0 +1,67 @@
+{
+  "round": 2,
+  "status": "passed",
+  "summary": "Round 2 re-check of the 09-subscribers tech-spec Testing Strategy. All 14 Round 1 findings (4 AC gaps, 7 missing scenarios, 3 high-impact shallow assertions plus several supporting tightenings) are now reflected in the spec text with named test methods that read as litmus-pass: each new assertion targets observable state (Mongo rows, GridFS metadata, event-collection isolation, ListAppender log order, atomic counter values, bean count) rather than mock invocations or string-only substring checks. Pyramid balance unchanged and healthy: 9 unit + 16 integration + 3 @Tag('slow') latency/heap probes + 1 Playwright golden path. Two pre-existing minor items remain but are explicitly accepted by the spec authors as L-MVP trade-offs: (1) SubscriberExportHeapIT kept on heap-delta measurement (vs MemoryPoolMXBean.getPeakUsage() — acknowledged in user-prompt as minor finding acceptable for L MVP) and (2) the AC #6 hostile-body mass-assignment assertion is described in Acceptance Criteria narrative but not bound to a named test method. Three smaller scoping concerns flagged below as minor — none block delivery and each can be addressed inline during Wave 3 implementation.",
+  "previous_findings_resolved": [
+    "AC11 mass-assignment: CustomFieldValueValidationIT.patch_unknownKeys_silentlyDropped_noError_noPersist names the exact behavior — PATCH with extra keys returns 200 and asserts customFields contains exactly the schema-known keys.",
+    "AC21 requireOwned parity: TagControllerIT now explicitly enumerates access guards (foreign owner / soft-deleted / malformed projectId → 404); CustomFieldDefinitionIT and SubscriberExportSignedUrlIT cover their endpoints; tech-spec line 392 calls out TagController parity explicitly.",
+    "AC22 mid-cascade retry: ProjectSoftDeleteCascadeIT.hardDelete_midCascadeCrash_nextRunResumes injects a MongoTemplate decorator throwing on step 3, asserts exception propagation + state after partial + idempotent next-run completion.",
+    "AC23 dual-write invariant: SubscriberEventsIsolationIT asserts events collection has zero rows of CRM eventTypes and exactly one telegram_command_start. Decision 10 also explicitly assigns personal_message_failed writer ownership to the controller in the OTHER branch.",
+    "AC24 stub replacement: SubscriberStubReplacementIT performs ApplicationContext.getBeansOfType(SubscriberService.class).size() == 1 + SimpleName equals SubscriberServiceImpl — Spring-context invariant that catches a future @MockitoBean slip.",
+    "Race on 20-cap CustomFieldDefinition: CustomFieldDefinitionIT.parallel21Posts_acceptsOnly20 uses parallelInvoke(21) and asserts persisted size == 20 exactly + exactly one 422.",
+    "Concurrent tag counter race: TagControllerIT.addSameTag_concurrentlyFrom10Subscribers_counterEqualsExactly10 uses parallelInvoke(10) and asserts Tag.subscriberCount == 10 exactly (catches lost updates from non-atomic write).",
+    "Redis-down fail-open path: SubscriberRateLimitIT.redisFailsOpen_proceeds_andLogsWarn stops Redis container mid-test, asserts subscriber is created + WARN log contains SUBSCRIBER_START_RATE_REDIS_FAIL_OPEN greppable constant. Personal-message rate-limit path also added (rate_limited_returns429_andNoSenderCalled).",
+    "FAILED export path: SubscriberExportIT.exportJob_internalError_writesFailedAndEmail asserts status=FAILED + scrubbed errorMessage + sendExportFailedEmail + event subscribers_export_failed. emptyFilter_zeroSubscribers_producesValidHeaderOnly covers zero-row export edge.",
+    "Cursor tie-break: SubscriberControllerIT.cursor_paginates_across_identical_sortValue seeds 60 subscribers with identical lastSeenAt and asserts page 1 + page 2 cover all 60 with no skips/dupes. cursor_invalidShape_returns400 also added for NoSQL-injection-attempt cursor payload.",
+    "IndexCreationIT: explicit exact-property assertions named — unique=true on (projectId, telegramUserId), language=none on text index, expireAfter == Duration.ofDays(365) on subscriber_events TTL, partialFilterExpression byte-matching on subscriber_exports.",
+    "Heap probe: SubscriberExportHeapIT kept on heap-delta measurement (not switched to MemoryPoolMXBean.getPeakUsage). Acknowledged in prompt as accepted L-MVP trade-off; remaining minor finding below.",
+    "Shallow assertion on TelegramSenderSubscriberHookIT: now requires BOTH @MockitoSpyBean call assertion AND direct Mongo state assertion (status, blockedAt, event row in subscriber_events, event row in events).",
+    "Shallow assertion on SubscriberExportConcurrencyIT: strict invariants added — exactly 1 PENDING row + exactly 1 ENQUEUED JobRunr job (via storageProvider.countJobs(StateName.ENQUEUED) == 1).",
+    "Shallow assertion on ProjectSoftDeleteCascadeIT: ListAppender<ILoggingEvent> assertion on per-step log ordering (gridFsFilesRemoved before exportsRemoved before subscriberEventsRemoved before subscribersRemoved before tagsRemoved before project_hard_deleted)."
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy / Acceptance Criteria #6 (line 490)",
+      "issue": "Acceptance Criteria #6 demands an integration test that seeds a hostile body {ownerId: '<other>'} on a write endpoint, asserts the persisted owner comes from SecurityContextHolder, and asserts the response body does not echo ownerId. The narrative is in the AC list, but no named test method in the Testing Strategy section carries this assertion. A future contributor reading only the Testing Strategy block would miss it; whoever owns the audit gate has to cross-reference back to AC line 490.",
+      "recommendation": "Add to SubscriberPersonalMessageIT (or TagControllerIT) an explicitly named method `hostileBody_unknownOwnerFieldIgnored_persistedOwnerFromSecurityContext_responseDoesNotEcho` — POST {text: 'hi', ownerId: 'attacker-id'} on /subscribers/{id}/messages (or POST {slug:'x', ownerId:'attacker-id'} on /tags) → assert (a) 200/201, (b) persisted document's ownerId equals SecurityContextHolder principal id, NOT the body value, (c) response JSON does not contain key `ownerId` at all. This locks the @JsonIgnoreProperties(ignoreUnknown=true) + SecurityContext sourcing invariant under regression."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy → SubscriberRateLimitIT (line 387)",
+      "issue": "Cross-project rate-limit isolation is not asserted. The Redis bucket key is `bf:rate:start:{projectId}` (per Decision 9), so the per-project key suffix is load-bearing — a regression that drops the projectId suffix or uses a global bucket would silently rate-limit project B because project A is hot. The current SubscriberRateLimitIT only exercises same-project storm; the cross-project independence claim has no test.",
+      "recommendation": "Add to SubscriberRateLimitIT a named method `crossProjectStorm_eachProjectBucketIndependent_noFalseRateLimitTrip` — parallelInvoke(100) /start on project A in parallel with parallelInvoke(100) /start on project B (different telegramUserIds in each); assert both projects fully persist 100 subscribers each (200 total) and zero rate_limit_exceeded events in either project's subscriber_events. This catches a 1-character drop of the projectId suffix in the Redis key."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy → SubscriberExportSignedUrlIT (line 397)",
+      "issue": "Download rate-limit case is described as `31st download per minute → 429`, which is the sequential framing. Decision 9's bucket is INCR → EXPIRE-only-on-first → check > threshold, mirrored from BotService — the threshold-crossing edge under concurrency is the real correctness surface (a regression to non-atomic check-then-incr would still pass the sequential test). The companion file SubscriberExportConcurrencyIT was upgraded to strict-invariant assertions; the download-rate-limit case should get the same treatment.",
+      "recommendation": "Reframe (or add) a `parallelDownloads31_atLeastOneReturns429_eventReasonRateLimited` method using ConcurrencyTestUtils.parallelInvoke(31, () -> GET /download) per patterns.md:181; assert (a) at least one 429 response, (b) at most 30 successful 200s, (c) the 429s each emit a `subscribers_export_download_denied{reason: 'rate_limited'}` audit event. Keep the sequential 31st-call case for happy-path documentation but add the race case for the load-bearing assertion."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy → SubscriberExportHeapIT (line 409)",
+      "issue": "Heap probe kept on ManagementFactory.getMemoryMXBean() before/after delta. Per the prompt, the spec authors explicitly chose not to migrate to MemoryPoolMXBean.getPeakUsage() and accept this for L MVP. The remaining concern is flake-risk: heap delta is GC-sensitive — without an explicit System.gc() + short sleep before each sample, a CI flake here under @Tag('slow') will get silenced rather than investigated. This is a known issue and may be acceptable, but the test's flake-mitigation strategy should be documented in the test description so future maintainers don't quietly disable it.",
+      "recommendation": "If staying on heap-delta (per L-MVP decision), tighten the description to: seed 50k subscribers, force System.gc() and Thread.sleep(50) before sampling baseline, run ExportSubscribersJob.handle, force System.gc() + sleep again, sample delta; assert delta < 64 MB on 3-iteration median (not single sample) to reduce GC-jitter false-fail. Median-of-3 is the cheapest robustness gain for a heap-delta probe and keeps the test on @Tag('slow') where flakes are tolerable. Alternatively, switch to MemoryPoolMXBean.getPeakUsage() + resetPeakUsage() for a tighter, less GC-sensitive bound — minimal API change, eliminates flakiness."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 1,
+    "litmusTest": {
+      "checked": 29,
+      "passed": 29,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 9,
+      "integration": 16,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

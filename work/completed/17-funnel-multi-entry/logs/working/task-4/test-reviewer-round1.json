@@ -1,0 +1,105 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "4",
+  "feature": "17-funnel-multi-entry",
+  "round": 1,
+  "commit": "9a1441c",
+  "status": "CHANGES_REQUESTED",
+  "summary": "TDD anchor coverage is solid across FunnelServiceTriggerTypeTest — all 10 mandated anchor tests are present, assertions are meaningful (business codes, not just status), and the pyramid balance (service-level integration tests for logic, FunnelControllerIT for HTTP contract) is correct. The migrated test files (FunnelServiceEmitEventTest, FunnelServiceKeyboardStepTest, FunnelServiceKeywordTest) are correctly updated to the List<TriggerDto> model and are not weakened. One HIGH finding: FunnelControllerIT retains a legacy test (`invalidTriggerValueWithSpaceReturns422`) that sends a flat `\"triggerValue\"` field now silently ignored by `@JsonIgnoreProperties(ignoreUnknown=true)` — the test will fail when run (expects 422, gets 200). One MEDIUM finding: the tech-spec explicitly requires the IT-level separation of 'intra-funnel at most one on_start' vs 'cross-funnel duplicate on_start value' as distinct cases in FunnelControllerIT; the intra-funnel case (CODE_MULTIPLE_ON_START) lives only in the service test, not in FunnelControllerIT as an HTTP-level test.",
+  "findings": [
+    {
+      "id": "F-1",
+      "severity": "HIGH",
+      "category": "broken-test",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "test": "invalidTriggerValueWithSpaceReturns422",
+      "description": "This test sends `Map.of(\"name\", \"Draft\", \"triggerValue\", \"has space\", \"steps\", ...)` with no `triggers` array. Since `UpdateFunnelRequest` has `@JsonIgnoreProperties(ignoreUnknown=true)`, the flat `triggerValue` field is silently dropped; the absent `triggers` normalizes to a single bare `on_start(\"\")` inside `applyTriggers`. The request succeeds (200 OK), but the test asserts `status().isUnprocessableEntity()` + code `funnel_invalid_trigger_value`. The test will FAIL when Task 11 runs the full suite.",
+      "impact": "A pre-Phase-8 regression guarantee (reject invalid trigger value via HTTP) is now exercised only by FunnelServiceTriggerTypeTest at the service layer; the HTTP-level check is uncovered and the old test gives a false signal.",
+      "fix": "Replace the flat `\"triggerValue\"` body with a proper triggers array: `\"triggers\", List.of(Map.of(\"triggerType\", \"on_start\", \"triggerValue\", \"has space\"))`. The on_start value `\"has space\"` should be rejected by `normalizeOnStartValue` → 422 `funnel_invalid_trigger_value`."
+    },
+    {
+      "id": "F-2",
+      "severity": "MEDIUM",
+      "category": "missing-it-case",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "test": "(missing)",
+      "description": "Tech-spec Testing Strategy (Validation + DTO) explicitly requires: 'intra-funnel \"at most one on_start\"' vs 'cross-funnel duplicate on_start value → 422 split out as distinct cases' in FunnelControllerIT. The cross-funnel case is covered by `activateTriggerConflictReturns422` and `updateActiveFunnelToCollidingTriggerReturns422` (both check `funnel_trigger_conflict`). However, the intra-funnel 'two on_start elements in one PATCH body' case (CODE_MULTIPLE_ON_START) is tested only at the service level in FunnelServiceTriggerTypeTest, not at the HTTP level in FunnelControllerIT. The spec puts both in FunnelControllerIT to verify the HTTP stack (controller → service) transmits the correct code for each semantically distinct 422.",
+      "impact": "An HTTP-level regression in the intra-funnel on_start-count guard (e.g., a DTO layer silently dropping the second on_start) would go undetected by FunnelControllerIT.",
+      "fix": "Add a test in FunnelControllerIT (Phase 8 section): PATCH with `triggers = [onStartTriggerMap(\"\"), onStartTriggerMap(\"x\")]` → expect 422 + `$.code == \"funnel_multiple_on_start\"` (FunnelService.CODE_MULTIPLE_ON_START). Mirrors `patch_duplicateEventNameReturns422` in structure."
+    },
+    {
+      "id": "F-3",
+      "severity": "LOW",
+      "category": "stale-test-field",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java",
+      "test": "exceedingMaxStepsReturns422",
+      "description": "The request body still carries `\"triggerValue\", \"\"` as a flat field that is now silently ignored. The test itself remains valid (it verifies step-count enforcement, which is unaffected), but the stale field is misleading documentation and should be cleaned up.",
+      "impact": "None on correctness; test will pass. Only a maintenance/clarity issue.",
+      "fix": "Remove `\"triggerValue\", \"\"` from the Map.of body (or replace with the triggers array if desired for explicitness)."
+    }
+  ],
+  "tdd_anchor_coverage": {
+    "assessed_against": "tech-spec Testing Strategy → Validation + DTO, task-4.md TDD Anchor",
+    "items": [
+      {
+        "anchor": "triggers_duplicateEventNameRejected",
+        "covered_in": ["FunnelServiceTriggerTypeTest", "FunnelControllerIT.patch_duplicateEventNameReturns422"],
+        "assertion_quality": "GOOD — asserts business code CODE_DUPLICATE_EVENT_NAME via both service-throw and $.code HTTP path"
+      },
+      {
+        "anchor": "triggers_atMostOneOnStart",
+        "covered_in": ["FunnelServiceTriggerTypeTest"],
+        "assertion_quality": "GOOD at service level — asserts CODE_MULTIPLE_ON_START. Missing HTTP-level case in FunnelControllerIT (see F-2)."
+      },
+      {
+        "anchor": "triggers_danglingEntryStepIdRejected",
+        "covered_in": ["FunnelServiceTriggerTypeTest", "FunnelControllerIT.patch_danglingEntryStepIdReturns422"],
+        "assertion_quality": "GOOD — distinct from eventRequiresEntryStepId, uses code CODE_INVALID_ENTRY_STEP"
+      },
+      {
+        "anchor": "triggers_eventRequiresEntryStepId",
+        "covered_in": ["FunnelServiceTriggerTypeTest"],
+        "assertion_quality": "GOOD — asserts CODE_INVALID_ENTRY_STEP with null entryStepId. Note: not in FunnelControllerIT as HTTP test, but spec only requires dangling in IT; event-requires-null is a service-layer concern."
+      },
+      {
+        "anchor": "triggers_multipleEventsSameEntryStepAllowed",
+        "covered_in": ["FunnelServiceTriggerTypeTest"],
+        "assertion_quality": "GOOD — asserts 200 + persisted triggers count=3; negative of the duplicate check"
+      },
+      {
+        "anchor": "triggers_arraySizeCapRejected",
+        "covered_in": ["FunnelServiceTriggerTypeTest"],
+        "assertion_quality": "GOOD — 51 triggers (1+50 events), asserts CODE_TRIGGER_LIMIT"
+      },
+      {
+        "anchor": "triggers_perTriggerKeywordCapsEnforced",
+        "covered_in": ["FunnelServiceTriggerTypeTest"],
+        "assertion_quality": "GOOD — both MAX_KEYWORDS=51 and MAX_KEYWORD_LENGTH=65 are exercised with correct CODE_INVALID_KEYWORDS"
+      },
+      {
+        "anchor": "onStartTriggerValue_syncedFromOnStartElement",
+        "covered_in": ["FunnelServiceTriggerTypeTest", "FunnelControllerIT.patchGet_roundTripsTriggerArray"],
+        "assertion_quality": "GOOD — FunnelServiceTriggerTypeTest asserts three states (non-empty, bare, no on_start); FunnelControllerIT also asserts scalar = \"promo\" post-PATCH"
+      },
+      {
+        "anchor": "duplicate_resetsTriggersToSingleOnStartAndClearsScalar",
+        "covered_in": ["FunnelServiceTriggerTypeTest", "FunnelControllerIT.duplicatePreservesStepsAndAllowReEnter"],
+        "assertion_quality": "GOOD — FunnelServiceTriggerTypeTest asserts triggers.size=1, triggerType, triggerValue, onStartTriggerValue=null; FunnelControllerIT asserts triggers.size=1 + onStartTriggerValue=null via DB read"
+      },
+      {
+        "anchor": "patchGet_roundTripsTriggerArray (FunnelControllerIT)",
+        "covered_in": ["FunnelControllerIT.patchGet_roundTripsTriggerArray"],
+        "assertion_quality": "GOOD — verifies PUT response, GET response, and DB scalar in one test; covers the multi-trigger (on_start + event) shape"
+      }
+    ]
+  },
+  "pyramid_balance": {
+    "verdict": "CORRECT",
+    "notes": "Business logic (cross-trigger rules, caps, sync) lives in FunnelServiceTriggerTypeTest (integration at service seam, no HTTP overhead, fast feedback). HTTP contract (round-trip, duplicate event, dangling step) is verified at the controller IT level. No redundant duplication — each test level catches different failure modes. FunnelServiceEmitEventTest, FunnelServiceKeyboardStepTest, FunnelServiceKeywordTest correctly updated to List<TriggerDto> model without logic weakening."
+  },
+  "migrated_test_quality": {
+    "FunnelServiceEmitEventTest": "PASS — reqWithStep now uses List.of(onStart(\"\")) correctly; SUBSCRIBE_TO_FUNNEL tests use onStart(\"parent\") / onStart(\"parent2\") to avoid on_start conflicts on activate; all assertions unchanged",
+    "FunnelServiceKeyboardStepTest": "PASS — reqWithStep updated to List<TriggerDto> with single bare on_start; no logic changes; assertions unchanged",
+    "FunnelServiceKeywordTest": "PASS — keywordReq now wraps keywords inside TriggerDto element; assertions correctly pivot to resp.triggers().get(0).keywords() and DB triggers[0].getKeywords(); keywords_rejectedForNonKeywordTrigger now correctly exercises the new requireNoKeywords path on on_start"
+  }
+}

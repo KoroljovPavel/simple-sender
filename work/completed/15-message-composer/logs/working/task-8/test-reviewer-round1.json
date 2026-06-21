@@ -1,0 +1,46 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 8,
+  "round": 1,
+  "commit": "fc72d2f",
+  "scope": [
+    "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts",
+    "frontend/tests/stores/funnels.spec.ts"
+  ],
+  "summary": "Component spec (22 tests) and store preview cases were rewritten to the multiblock DTO contract. All TDD-anchor scenarios from the task are present; every test asserts real DOM/state behavior (element existence, DOM order via indexOf, attribute values, literal text), not just mock-was-called. Mocking is minimal (component: store.preview + useRoute = 2; store: useApi = 1) — correct test type. No redundant or empty-assertion tests.",
+  "pyramid": "Unit/component (vitest + @nuxt/test-utils mountSuspended) — correct for a Vue UI panel; preview-step page wiring is covered separately by Task 10.",
+  "tdd_anchors_covered": [
+    "ordered stack of mixed block types (DOM order via indexOf + data-block-type)",
+    "calls store preview with { stepType: MESSAGE, blocks } exactly once on immediate run",
+    "reactive block change re-triggers debounced preview (fake timers; 2nd call carries mutated blocks)",
+    "text/caption rendered as TEXT never v-html (literal payload + 0 injected elements + static source guard)",
+    "binds media via :src for IMAGE (+ referrerpolicy, caption order)",
+    "FILE href only for http(s); file_id/non-http -> icon, no href",
+    "ALBUM grid of items; caption only on first",
+    "buttons under the last block (DOM order)",
+    "placeholder for non-message step, no backend call",
+    "neutral message on preview error (404)",
+    "store: preview sends blocks request + returns renderedBlocks; re-throw on failure"
+  ],
+  "findings": [
+    {
+      "id": "TR1",
+      "severity": "info",
+      "finding": "Static no-v-html source guard reads the SFC via readFileSync (cwd=frontend/) and strips comments before matching v-html=/.innerHTML= — robust against comment false-positives (the file mentions v-html in comments deliberately).",
+      "action": "no-change"
+    },
+    {
+      "id": "TR2",
+      "severity": "info",
+      "finding": "Added tests beyond the anchors (VIDEO/AUDIO icon, per-block @error fallback, renderedBlocks-shorter-than-blocks desync safety, IMAGE file_id/non-http src guard, loading state). Each catches a distinct failure mode (no redundancy).",
+      "action": "no-change"
+    },
+    {
+      "id": "TR3",
+      "severity": "info",
+      "finding": "Reactive-change test uses vi.useFakeTimers to deterministically separate the immediate run from the 600ms debounced re-run and asserts the exact mutated blocks payload on the 2nd call — verifies the watch was moved from flat fields to a deep watch on step.blocks.",
+      "action": "no-change"
+    }
+  ],
+  "verdict": "OK"
+}

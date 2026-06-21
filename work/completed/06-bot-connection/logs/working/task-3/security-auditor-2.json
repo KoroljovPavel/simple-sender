@@ -1,0 +1,73 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "round2_verification": {
+    "round1_report": "work/06-bot-connection/logs/working/task-3/security-auditor-1.json",
+    "round1_fix_commit": "506c479",
+    "verdicts": [
+      {
+        "round1_finding": "Major — Missing @JsonIgnore on sensitive Bot fields",
+        "disposition": "APPLIED",
+        "verified": true,
+        "notes": [
+          "Bot.java fields encryptedTokenCiphertext, encryptedTokenIv, tokenSuffix, webhookSecretHash all annotated @JsonIgnore at field level (lines 53/55/57/59).",
+          "Jackson default visibility config (no override found in backend/src/main) aggregates annotations across field/getter/setter for a property; field-level @JsonIgnore correctly suppresses both serialization and deserialization even with public getter present.",
+          "Spring Data MongoDB persistence is unaffected: MappingMongoConverter uses its own meta-model (org.springframework.data.mapping) and ignores Jackson annotations — confirmed by passing BotRepositoryTest and BotIndexTest, which round-trip all four fields through Mongo and read back non-null tokenSuffix / encryptedTokenCiphertext / etc.",
+          "No DTO or controller currently consumes Bot directly (grep across backend/src found only Bot.java, BotRepository.java, BotRepositoryTest.java, BotIndexTest.java, plus common/package-info.java string match); the @JsonIgnore is correctly forward-defensive for the upcoming HTTP layer."
+        ]
+      },
+      {
+        "round1_finding": "Minor — BotStatus.fromString(null) NPE",
+        "disposition": "APPLIED",
+        "verified": true,
+        "notes": [
+          "BotStatus.java line 20 returns null on null input before delegating to valueOf.",
+          "Jackson contract for @JsonCreator returning null: target enum field is set to null, which is the documented and expected behavior for optional/PATCH-style fields (no NullPointerException, no MismatchedInputException).",
+          "Alternative of throwing a typed validation exception is a product-policy choice, not a security gap — null-tolerant deserialization is the safer default and matches Spring's PATCH-merge semantics.",
+          "No new vulnerability introduced: case-coercion (toUpperCase) still occurs for non-null inputs, and unknown values still throw IllegalArgumentException via valueOf, preserving the original input-validation behavior."
+        ]
+      },
+      {
+        "round1_finding": "Minor — No Bot toString override",
+        "disposition": "SKIPPED",
+        "verified": true,
+        "notes": [
+          "Confirmed acceptable for this commit: default Object.toString (Bot@hashCode) discloses nothing sensitive.",
+          "Commit 506c479 does not add or modify any toString surface — no regression introduced.",
+          "Risk remains theoretical only if a downstream task adds a Lombok @Data / IDE-generated toString without re-running this audit; recommend the auditor revisit when bot-module DTOs or service-layer logging is added."
+        ]
+      },
+      {
+        "round1_finding": "Minor — Partial-filter literal hardcoded",
+        "disposition": "APPLIED",
+        "verified": true,
+        "notes": [
+          "Bot.java static block (lines 34-40) asserts \"CONNECTED\".equals(BotStatus.CONNECTED.name()) at class load.",
+          "JVM guarantee: <clinit> runs at first active use of the Bot class. Spring Data MongoDB's MappingMongoConverter and IndexResolver scan @Document classes during ApplicationContext startup (via reflection on Class objects); this constitutes active use and fires the static initializer before any persistence or index creation.",
+          "Failure mode on divergence is loud and operator-visible: an IllegalStateException wrapped in ExceptionInInitializerError aborts Spring context startup with the explicit message 'Partial-filter literal CONNECTED diverged from BotStatus.CONNECTED.name() = <new name>'.",
+          "No security regression — the check is fail-closed: a misalignment between the index filter and the enum name would silently break D1/D5 race protections (partial-unique indexes would match zero rows, allowing duplicate CONNECTED bots), so failing fast at startup is strictly safer."
+        ]
+      }
+    ]
+  },
+  "additional_checks_round2": {
+    "owasp_a01_access_control": "N/A — domain entity, no authz surface in this commit.",
+    "owasp_a02_cryptographic_failures": "Field names (encryptedTokenCiphertext, encryptedTokenIv) indicate the token will be stored encrypted; actual KDF/AEAD implementation lives in Task 1 (TokenEncryptor, already reviewed). No new crypto in this commit.",
+    "owasp_a03_injection": "All queries are derived-name Spring Data repository methods (findByProjectIdAndStatus, findFirstByTelegramBotIdAndStatus, findByProjectId). No raw query strings, no @Query annotations, no user-controlled string concatenation. NoSQL injection vector closed.",
+    "owasp_a04_insecure_design": "Defensive static-block invariant for index-vs-enum coupling is a positive design improvement. Partial-unique indexes enforce D1/D5 race-condition protection at the database layer.",
+    "owasp_a05_security_misconfiguration": "spring.data.mongodb.auto-index-creation=true is dev-only per Bot.java header comment (line 12) — confirm in production profile that indexes are pre-created via migration to avoid startup races, but out of scope for this commit.",
+    "owasp_a06_vulnerable_components": "No dependency changes in commit 506c479. Jackson @JsonIgnore is a stable, well-audited API in jackson-annotations.",
+    "owasp_a07_auth_failures": "N/A — no auth code in this commit.",
+    "owasp_a08_software_data_integrity": "No deserialization of untrusted input into Bot in this commit. BotStatus.fromString uses valueOf which rejects unknown values — safe.",
+    "owasp_a09_logging_monitoring": "No logging changes. The new static-block failure would surface in Spring boot startup logs as ExceptionInInitializerError, which is appropriate for an invariant violation.",
+    "owasp_a10_ssrf": "N/A — no outbound HTTP in this commit.",
+    "hardcoded_secrets_scan": "Test fixtures use placeholder strings 'ct', 'iv', 'abc', 'hash' — not real credentials. No secrets in commit 506c479."
+  },
+  "final_assessment": "All round 1 findings either correctly fixed and verified (3) or appropriately deferred with justification (1). No new vulnerabilities introduced in commit 506c479. Test improvements (BotRepositoryTest now asserts status filter actually applies, prevents silent test regressions if Spring Data ignores the status argument) materially strengthen the security posture of D5 race-condition protections. Approved."
+}

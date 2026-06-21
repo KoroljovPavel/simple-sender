@@ -1,0 +1,45 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [6, 7, 8, 9, 10, 11, 12],
+  "status": "approved",
+  "focus_checks": {
+    "audit_report_path_consistency": {
+      "result": "pass",
+      "detail": "Tasks 8/9/10 reference ONLY work/17-funnel-multi-entry/logs/working/audit/{code,security,test}-auditor.json (JSON) everywhere (AC, What-to-do, Verification deliverable, Details, Post-completion). No .md audit-report variants and no alternate audit paths remain."
+    },
+    "no_nonexistent_npm_scripts": {
+      "result": "pass",
+      "detail": "Tasks 6 and 11 contain no lint/typecheck references at all. Task 7's only `pnpm lint`/`pnpm typecheck` mention is inside an explanatory note (line 122) stating those scripts do NOT exist in package.json and must not be run — acceptable. Runnable commands in 6/7/11 are limited to `pnpm test` and `node scripts/check-locales.mjs`."
+    },
+    "frontmatter_and_section_integrity": {
+      "result": "pass",
+      "detail": "All frontmatter intact (status: planned, valid arrays for depends_on/skills/reviewers/verify). Audit tasks 8/9/10 correctly have no TDD Anchor and reviewers: [] with no Reviewers section. QA tasks 11/12 correctly have no TDD Anchor and reviewers: []. All mandatory sections present in every task. Code tasks 6/7 correctly have TDD Anchor + full reviewer trio."
+    }
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 12,
+      "section": "Reviewers",
+      "issue": "Task 12 keeps a '## Reviewers' section with body text 'None — ...', whereas the other no-reviewer tasks (8/9/10/11) omit the section entirely. Both forms correctly communicate reviewers: []; the divergence is purely stylistic.",
+      "fix": "Optional: drop the '## Reviewers' section in Task 12 to match 8/9/10/11, or leave as-is (the explicit 'None' is self-documenting). No functional impact."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 11,
+      "section": "Acceptance Criteria",
+      "issue": "Task 11 has a second heading '## Acceptance Criteria to verify (sources of truth)' (line 70) in addition to the canonical '## Acceptance Criteria'. It is a distinct, additive section (mirrors user-spec/tech-spec AC for QA cross-checking), not a duplicate of the template section.",
+      "fix": "Acceptable as an extra section. Optional: rename to make the additive nature obvious (e.g. '## AC sources of truth') if a future linter flags the 'Acceptance Criteria' prefix as a duplicate. No action required."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 7,
+    "issues_found": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  }
+}

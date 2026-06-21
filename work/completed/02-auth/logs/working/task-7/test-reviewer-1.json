@@ -1,0 +1,71 @@
+{
+  "summary": "Strong test suite for Task 7. All 8 TDD anchors are present with meaningful assertions on real state (MongoDB documents, query JSON, captured User objects). Litmus test passes for every reviewed test — none rely on mock-return/mock-only patterns. Pyramid is healthy (6 unit + ~13 integration). Three gaps lower confidence on session-invalidation effects: deleteAccount IT does not verify 'same cookie -> 401' (the second half of the anchor name), change-password IT does not verify 'other sessions invalidated, current session valid' end-to-end, and the 30d boundary case is not pinned (Spring Data 'Before' keyword is strict < while AC says <=). The custom @WithMockAppUser pattern is sound and well-justified, and the JobRunrInMemoryConfig swap for slice tests is a clean upgrade over @MockitoBean StorageProvider with no isolation regression.",
+  "verdict": "needs_improvement",
+  "status": "needs_improvement",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java:147 (deleteAccount_setsStatusDeleted_invalidatesSession)",
+      "issue": "Test name and TDD anchor (task line 68) promise 'same cookie -> 401' but the IT only asserts status=deleted, deletedAt set, and the account_deleted event. Session invalidation is verified only at the unit level (verify(session).invalidate() against a Mockito WebSession). The end-to-end fact 'after DELETE /api/profile, the original session cookie no longer authorizes /api/profile' is never asserted. A regression where session.invalidate() is silently dropped, or where ProfileService.deleteAccount returns before invalidation completes, would be invisible.",
+      "recommendation": "After the DELETE returns 200, capture the SESSION cookie that the @WithMockAppUser context implicitly establishes (or perform a real /api/auth/login first to obtain a real session and then call DELETE with that cookie via webTestClient.mutateWith(...).cookie(...)), then assert: GET /api/profile with the same cookie -> 401. Also assert reactiveMongoTemplate.count(Query.query(Criteria.where(\"principal\").is(USER_ID)), \"sessions\").block() == 0 to pin the MongoDB state directly. The latter (Mongo state assertion) is the simpler change and matches the tech-spec line 303 rule 'Assertions check both HTTP response AND MongoDB/Redis state'."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java:203 (changePassword_correctCurrent_passwordRotated_eventLogged)",
+      "issue": "AC line 75 and Decision 14 require: 'other sessions invalidated, current session still valid'. The IT only verifies the password hash rotated and password_changed event logged. No assertion that other sessions for this user are removed from the sessions collection while the current one remains. ProfileServiceTest.changePassword_correctPassword_excludesCurrentSession verifies the *intent* of the query (principal=userId AND _id != current), but the integration end-to-end behavior is unproven. A regression in terminateAllSessionsExcept (e.g., wrong field path, off-by-one on the !=) would not be caught at the IT layer.",
+      "recommendation": "Before invoking change-password, seed three sessions via seedSession(...): one matching the current SecurityContext session id (use a fixed value so you can reference it after) and two other sessions for the same USER_ID, plus one for an unrelated user. After the 200 response, assert reactiveMongoTemplate.count(Criteria.where(\"principal\").is(USER_ID), \"sessions\").block() == 1 AND that the surviving session's _id equals the seeded current id; assert the unrelated user's session is still present. Note: this requires the test to seed the current session with a known id and align WithMockAppUser/test client to send that SESSION cookie — alternatively, just assert sessions-for-USER-count goes from 3 to 1 (or 2 -> 0 if you cannot pin the current session id), which still proves 'other sessions invalidated'."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/jobs/HardDeleteJobTest.java:51 (hardDelete_onlyDeletesUsersOlderThan30Days)",
+      "issue": "Tech-spec line 94 and AC line 81 specify 'deletedAt <= now - 30d' (inclusive boundary). UserRepository.findByStatusAndDeletedAtBefore uses Spring Data's 'Before' keyword which is strict less-than (<). The test uses 31d (clearly older) and 29d (clearly newer), which would pass with either inclusive or exclusive boundary semantics. The boundary case 'deletedAt == now - 30d exactly' is untested, so the discrepancy between AC ('<=') and implementation ('<') is invisible. A user soft-deleted exactly 30d ago would not be hard-deleted today — minor data-retention drift but a real spec violation.",
+      "recommendation": "Add a test seedDeleted(\"boundary@test.com\", Instant.now().minus(Duration.ofDays(30))) and assert it is deleted by the job (matching AC '<=') OR explicitly document the deviation in tech-spec (change AC to '<') and assert it is NOT deleted. Either choice resolves the ambiguity. The simplest fix is to change the repository finder to findByStatusAndDeletedAtLessThanEqual (LessThanEqual keyword) and assert the boundary user is removed; this aligns implementation with the spec text as written."
+    },
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "backend/src/test/java/com/botfunnel/profile/ProfileServiceTest.java:169 (getProfile_returnsCurrentFields)",
+      "issue": "Unit test for getProfile happy path duplicates ProfileControllerIT.getProfile_returns200WithIdNameEmailStatus with no added value. Both check id/email/name/status are returned; the unit version mocks userRepository.findById to return the same User the IT seeds. Litmus test: if ProfileService.getProfile delegated incorrectly the IT would catch it equally well. The unit test does not exercise any logic branch the IT misses.",
+      "recommendation": "Either remove the unit test, or convert it into a branch-specific check the IT cannot easily express: e.g., getProfile_userNotFound_propagatesUnauthorized — call profileService.getProfile(\"nonexistent\") and StepVerifier.expectErrorMatches(e -> e instanceof AppException && ((AppException) e).getStatus().value() == 401). That covers the loadUser switchIfEmpty branch, which currently has no test."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/profile/ProfileServiceTest.java (entire file)",
+      "issue": "ProfileService.loadUser uses switchIfEmpty(Mono.error(AppException.unauthorized(...))) but no test covers the user-not-found branch for any of changePassword/deleteAccount/updateProfile/getProfile. If the switchIfEmpty is removed or replaced with Mono.empty(), all current tests still pass (they all mock findById to return Mono.just(user)).",
+      "recommendation": "Add one parametric or single-shot test: when(userRepository.findById(\"missing\")).thenReturn(Mono.empty()); StepVerifier.create(profileService.changePassword(\"missing\", \"x\", \"NewStr0ngPass\", session, IP, UA)).expectErrorSatisfies(e -> assertThat(((AppException) e).getStatus().value()).isEqualTo(401)).verify();"
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/jobs/HardDeleteJobTest.java (entire file)",
+      "issue": "AC line 82 requires 'HardDeleteJob logs deleted user IDs and count before deletion' (GDPR audit trail per tech-spec line 95). No test captures or asserts on log output. If the log statement is silently removed, no test fails. This is a minor-severity finding because log assertions are often considered overkill, but the GDPR audit-trail framing in the tech-spec elevates it from cosmetic to spec-relevant.",
+      "recommendation": "Add a test using a Logback ListAppender attached to HardDeleteJob's logger: seed 2 deleted users 31d old, run the job, assert the captured log events include one INFO message whose formatted text contains both user ids and the substring 'removing 2 users'. Alternative: extract the log call into an injectable AuditSink interface and verify on a TestAuditSink — but that is a refactor; the ListAppender approach is two helper methods and no production change."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/profile/ProfileServiceTest.java:113 (terminateAllSessions_deletesAllSessionsForUser)",
+      "issue": "Unit test asserts the deleted count is propagated (3L) but does not verify the Query targets the correct field path ('principal' = userId). In contrast, changePassword_correctPassword_excludesCurrentSession captures the Query and asserts on its JSON. Without a similar capture here, a regression where the query filters on the wrong field name (e.g., 'principalName' vs 'principal') is undetectable at the unit layer — only the IT terminateAllSessions_removesAllSessionDocuments would catch it.",
+      "recommendation": "Mirror the existing ArgumentCaptor<Query> pattern: ArgumentCaptor<Query> qc = ArgumentCaptor.forClass(Query.class); verify(reactiveMongoTemplate).remove(qc.capture(), eq(\"sessions\")); String json = qc.getValue().getQueryObject().toJson(); assertThat(json).contains(\"\\\"principal\\\"\").contains(USER_ID); assertThat(json).doesNotContain(\"$ne\"); — the last clause guards against accidentally calling terminateAllSessionsExcept here."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 9,
+    "litmusTest": {
+      "checked": 19,
+      "passed": 19,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 6,
+      "integration": 13,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

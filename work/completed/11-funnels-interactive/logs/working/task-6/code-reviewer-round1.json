@@ -1,0 +1,35 @@
+{
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "approve",
+  "summary": "Frontend MENU editor (FunnelStepForm sub-editor, sibling-step target picker via SearchableSelect, MENU summary, inline funnel_broken_edge) follows the existing per-type form idiom and graph-model decisions. Client validation mirrors backend validateSteps. One minor label-numbering issue fixed in review.",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "dimension": "Code Readability & Cross-File Consistency",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "finding": "menuTargetOptions used the FILTERED array index for the displayed step-position number, so the '{n}.' prefix could diverge from the funnel-steps-list numbering when un-targetable steps (no id / the edited MENU itself) precede a target.",
+      "action": "fixed",
+      "resolution": "Capture the real position from the full siblingSteps array before filtering, so the label number matches FunnelStepsList."
+    },
+    {
+      "id": "F2",
+      "severity": "info",
+      "dimension": "Separation of Concerns",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "finding": "MENU button rows are a local reactive array validated by hand on submit (not vee-validate fields). This is consistent with the task's explicit guidance and the form's existing per-widget pattern; manual gate in onSubmit blocks emit when invalid.",
+      "action": "accepted",
+      "resolution": "No change — intentional design, covered by tests."
+    },
+    {
+      "id": "F3",
+      "severity": "info",
+      "dimension": "Cross-File Consistency",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "finding": "Emitted Button shape {type,label,targetStepId,url} matches frontend Button interface and backend ButtonDto byte-for-byte; End encoded as targetStepId:null (verified against FunnelService.validateMenu / requireExistingTarget).",
+      "action": "accepted",
+      "resolution": "No change."
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-card-preview",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "Both round-1 minors are fully resolved. F-02 (timeout orphan edge): useFunnelCanvas.ts line 251 now guards stepType === 'MESSAGE' before emitting a timeout edge, exactly mirroring hasTimeoutHandle in FunnelCanvasNode.vue (line 83 requires isMessageStep). Two new unit tests cover the negative case (non-MESSAGE step with timeoutTargetStepId → no edge emitted) and the positive case (MESSAGE step → edge emitted), plus the existing full-round-trip test already exercised the MESSAGE path. detectBrokenEdges still flags timeoutTargetStepId for all step types regardless of stepType, which is intentionally conservative — it surfaces data-integrity violations that buildEdges silently drops, and server validation prevents such states in practice. F-01 (dead i18n key): preview.imageUnavailable removed from en.json, uk.json, and required-keys.spec.ts; a full-codebase grep confirms zero remaining references. No regressions found."
+}

@@ -1,0 +1,34 @@
+{
+  "summary": "Task 1 delivers a clean, spec-aligned AES-256-GCM utility. The crypto primitives are correct (AES/GCM/NoPadding, fresh 12-byte IV per call from SecureRandom, 128-bit auth tag, UTF-8 plaintext), fail-fast key validation covers blank/non-hex/wrong-length cases with operator-readable messages, and the component honours D15 (lives in common/crypto, no bot-specific imports) and D3 (no keyVersion in EncryptedValue or anywhere else). Unit test coverage hits every TDD anchor plus a sensible extra (decryptRejectsNonTwelveByteIv), and the ApplicationContextRunner-based boot validation is the right shape — lightweight, no Testcontainers, no risk of pulling MongoDB/Redis into the test context. No critical or major findings.",
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "title": "Duplicated comment block across three boot-validation test methods",
+      "location": "backend/src/test/java/com/botfunnel/common/crypto/TokenEncryptorBootValidationTest.java:30-33, 45-48, 60-63",
+      "description": "The same three-line comment explaining why `.hasStackTraceContaining(\"IllegalStateException\")` is used instead of `.rootCause()` is duplicated verbatim in `contextFailsWhenKeyIsBlank`, `contextFailsWhenKeyIsNonHex`, and `contextFailsWhenKeyIsWrongLength`. The reasoning is good (and worth documenting once) but copy-pasting it three times is noise that will drift if anyone ever edits one copy and forgets the others.",
+      "suggestion": "Lift the explanation into a single class-level Javadoc comment (or a `private static void assertStartupFailedWithKeyError(AssertableApplicationContext context)` helper that owns both `hasStackTraceContaining` calls). Either form removes the duplication and makes the intent visible once."
+    },
+    {
+      "severity": "minor",
+      "title": "Boot-validation assertions match on `IllegalStateException` substring only — would also pass for an unrelated ISE in the chain",
+      "location": "backend/src/test/java/com/botfunnel/common/crypto/TokenEncryptorBootValidationTest.java:33-34, 48-49, 63-64",
+      "description": "`hasStackTraceContaining(\"IllegalStateException\")` matches any frame in the throwable chain whose class name (or message) contains that string. The accompanying `hasStackTraceContaining(\"BOT_TOKEN_ENCRYPTION_KEY\")` makes a false positive very unlikely in practice, but the test would also pass if Spring later threw its own `IllegalStateException` while bubbling up our exception. Not a real defect — the property-name assertion still anchors it to our code path.",
+      "suggestion": "Optional tightening: walk the cause chain explicitly via `assertThat(context.getStartupFailure()).getCause().getCause().isInstanceOf(IllegalStateException.class).hasMessageContaining(\"BOT_TOKEN_ENCRYPTION_KEY\")` (after confirming the exact wrapping depth Spring uses for `@Value`-failure → bean-instantiation failure). Keep the current message check as belt-and-braces. Skip if you'd rather not couple the test to Spring's wrapping shape."
+    },
+    {
+      "severity": "low",
+      "title": "Error message wording uses the env-var name, not the Spring property name",
+      "location": "backend/src/main/java/com/botfunnel/common/crypto/TokenEncryptor.java:19, 80-83",
+      "description": "The boot-time failure message says `BOT_TOKEN_ENCRYPTION_KEY must be 32 bytes / 64 hex characters; …`. That's the env-var name, while the actual Spring property is `app.bot.token-encryption-key`. For the common case (operator launching the JAR with the env var set in their shell or via Docker) this is the right thing to surface. But if someone configures the property directly (`-Dapp.bot.token-encryption-key=...`, application.properties override, Spring Cloud Config) the message points at a name they didn't set. The task spec explicitly mandates this exact wording, so this is just an observation — not a request to change anything.",
+      "suggestion": "No change required; the task spec dictates this wording and operator UX is better with the env-var name. If a future revision wants both, the format `BOT_TOKEN_ENCRYPTION_KEY (app.bot.token-encryption-key)` covers both audiences."
+    },
+    {
+      "severity": "low",
+      "title": "EncryptedValue record inherits identity-based equals/hashCode/toString for byte[] fields",
+      "location": "backend/src/main/java/com/botfunnel/common/crypto/EncryptedValue.java:3",
+      "description": "Java records derive `equals`/`hashCode`/`toString` from each component's own implementation. For `byte[]` that means reference equality and an unhelpful `[B@...` in `toString`. In the current pipeline this is invisible — `BotService` (Task 6) will Base64-encode immediately and never compare or log the record. But if a future caller ever does `if (a.equals(b)) …` on two `EncryptedValue`s built from the same bytes, it will silently fail. The task explicitly chose to keep the bytes raw inside the record (Base64 lives at the caller boundary, per D15), so this is per-spec — flagging it only so the constraint is visible.",
+      "suggestion": "No change required for this task. If a future task ever needs structural equality (e.g. dedup in a Set), override `equals`/`hashCode`/`toString` on the record manually using `Arrays.equals` / `Arrays.hashCode` / `HexFormat.of().formatHex(...)`. Avoid `toString`ing the ciphertext into logs either way — it's not a secret on its own but it's noisy."
+    }
+  ]
+}

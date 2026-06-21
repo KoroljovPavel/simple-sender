@@ -1,0 +1,105 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 9,
+      "issue": "Task 9 line 53 calls `eventService.logEventBlocking(\"telegram_command_start\", projectId, Map.of(...))` with 3 arguments. The actual signature in EventService.java is `logEventBlocking(String userId, String eventType, String ipAddress, String userAgent, Map<String, Object> metadata)` — 5 parameters. The invocation shown in the task is not valid Java and will not compile. The correct call pattern (as used in ProjectHardDeleteJob) is logEventBlocking(userId, eventType, ipAddress, userAgent, metadata).",
+      "fix": "Replace the 3-arg invocation in Task 9's What-to-do step 3 with a correctly shaped 5-arg call, e.g. `eventService.logEventBlocking(projectId, \"telegram_command_start\", null, null, Map.of(\"startPayload\", parsed.payload(), \"chatId\", chat.id)).block()`. The first arg (`userId`) should be `projectId` (consistent with how ProjectHardDeleteJob passes ownerId). Update all event-write examples in step 3 consistently."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 9,
+      "issue": "Counter name is inconsistent within Task 9 itself. Lines 25, 68, 69, and 83 call the counter `worker_outcome_total` while the Acceptance Criteria (line 112) and the tech-spec Decision 10 both use the canonical name `telegram_worker_outcome_total`. The implementer will see two names and may implement one or the other, breaking the AC assertion.",
+      "fix": "Replace all occurrences of bare `worker_outcome_total` in Task 9 with `telegram_worker_outcome_total` to match the tech-spec and the AC."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 says the test for AC14 should 'spy JobRunr StorageProvider to confirm retry actually fires (verify getJobs(FAILED) after exhaustion)'. JobRunr's in-memory StorageProvider used in tests (JobRunrInMemoryConfig) exhausts retries asynchronously; the test would need timing coordination or a synchronous drain of the retry loop to reliably assert FAILED state. The existing HardDeleteJobTest / ProjectHardDeleteJobIT do not exercise this pattern at all. The task gives no guidance on how to synchronously trigger retry exhaustion, making this assertion infeasible as stated. The rest of the failure-handler coverage (processingStatus=FAILED, processingError scrubbed, counter tick, exception rethrown via assertThrows) is well-defined and feasible.",
+      "fix": "Either drop the 'spy StorageProvider to confirm retry fires' assertion from AC14 and note it is covered by the JobRunr framework itself, or add concrete guidance (e.g. configure JobRunrInMemoryConfig with maxRetries=0 for that specific test so the job transitions to FAILED synchronously after a single rethrow)."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 states the ProcessTelegramUpdateJobTest should 'Extend AbstractIntegrationTest so Testcontainers Mongo is live and stubs are real beans' AND 'Use @MockitoSpyBean SubscriberService, @MockitoSpyBean FunnelTriggerService for call-count assertions'. At the time T9 executes, SubscriberService and FunnelTriggerService are NEW interfaces that do not exist in the codebase yet (they are created by T6 and T7 respectively, which are Wave 1 tasks). However, T9's depends_on includes [2,3,4,5,6,7] so the dependency on T7 (FunnelTriggerService) IS declared. This is correct. The finding is that the task body never explicitly states the NoOpFunnelTriggerService and NoOpSubscriberService stubs MUST be in the Spring context for the spy to wrap — the implementer needs to confirm AbstractIntegrationTest picks up those beans automatically via @SpringBootTest, which is implied but not verified in the task text.",
+      "fix": "Add a note in Task 9 Context Files or Details clarifying that @SpringBootTest (via AbstractIntegrationTest) will auto-register NoOpSubscriberService and NoOpFunnelTriggerService as @Service beans, making them spyable via @MockitoSpyBean. No code change needed; documentation only."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 8,
+      "issue": "Task 8 instructs the writer to 'verify the actual collection name from JobRunrMongoConfig source code' for the JobRunr failed-job collection. JobRunrMongoConfig.java only configures the MongoClient bean and mentions `jobrunr_*` collections in a comment — it does NOT expose or document the specific collection names JobRunr uses internally (e.g. `jobrunr_jobs`, `jobrunr_recurring_jobs`). The actual collection names come from JobRunr's MongoDBStorageProvider internals, not from this project file. If the runbook author reads only JobRunrMongoConfig they will not find the collection names and may leave a placeholder.",
+      "fix": "Update Task 8 edge-case note to clarify that JobRunrMongoConfig does not list the collection names; instead, the author should check the JobRunr 7.3.x source or documentation for the storage collection prefix (`jobrunr_jobs` is the primary jobs collection). The task should point to the JobRunr docs or add the known collection name explicitly so the runbook does not ship with a placeholder."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 9,
+      "issue": "Implementation hint at Task 9 line 164 says 'extract per-branch private methods (handleStartPrivate(...), handleStopPrivate(...), handleStartGroup(...)...) each helper returns void and may throw'. This is close to prescribing the full decomposition structure, including specific method names and signatures. While not a full algorithm, naming concrete private methods crosses from hint into light implementation prescription.",
+      "fix": "Soften to: 'Consider extracting per-branch helpers to keep handle() readable; exact decomposition is left to the implementer.' Remove the specific method name list."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 9,
+      "issue": "Task 9 What-to-do step 3 (Step 1) says: 'If processingStatus == FAILED and the call is a retry, treat as new attempt: continue'. This implies the re-entry guard only short-circuits on DONE, not on FAILED. The tech-spec Decision 9 and Architecture Worker path step 1 are consistent with this. However the task text also says 'the worker's FIRST action is if processingStatus == DONE return' which correctly excludes FAILED — the two statements are consistent but the phrase 'treat as new attempt: continue' is redundant and could mislead an implementer into adding explicit FAILED handling where none is needed (FAILED simply falls through to normal execution). Minor clarity issue.",
+      "fix": "Remove the sentence 'If processingStatus == FAILED and the call is a retry, treat as new attempt: continue' — the fall-through is already implied by only returning on DONE."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 7,
+      "issue": "Task 7 TDD Anchor and Acceptance Criteria specify JUnit 5 + Reactor StepVerifier for NoOpFunnelTriggerServiceTest. The Details section confirms this. StepVerifier is available via `io.projectreactor:reactor-test` which IS present in build.gradle (confirmed). This is fine. However, the task says 'Plain JUnit 5, no Spring context' in step 3 while the Details section says 'JUnit 5 + Reactor StepVerifier'. StepVerifier does not require Spring context, so these are compatible — but the phrasing is inconsistent and could confuse the implementer into thinking they should avoid StepVerifier.",
+      "fix": "Align the description in step 3 to say 'Plain JUnit 5 with Reactor StepVerifier (no Spring context required)' to remove ambiguity."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 8
+  },
+  "verification_notes": {
+    "files_confirmed_exist": [
+      "backend/src/main/java/com/botfunnel/jobs/HardDeleteJob.java",
+      "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "backend/src/main/java/com/botfunnel/jobs/JobRunrMongoConfig.java",
+      "backend/src/test/java/com/botfunnel/jobs/HardDeleteJobTest.java",
+      "backend/src/main/java/com/botfunnel/events/EventService.java",
+      "backend/src/main/java/com/botfunnel/bot/Bot.java",
+      "backend/src/main/java/com/botfunnel/bot/BotRepository.java",
+      "backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java",
+      "backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java",
+      "backend/src/test/java/com/botfunnel/JobRunrInMemoryConfig.java",
+      "docs/staging-smoke/06-bot-connection.md",
+      "docs/staging-smoke/07-telegram-sender.md"
+    ],
+    "functions_confirmed_exist": [
+      "BotRepository.findByProjectIdAndStatus(String, BotStatus): Mono<Bot>",
+      "TelegramApiClient.scrubTokens(String): String — public static",
+      "Bot.ownerChatId field (Long) with getter/setter",
+      "EventService.logEventBlocking(String userId, String eventType, String ipAddress, String userAgent, Map<String, Object> metadata): Mono<Event>",
+      "HardDeleteJob.hardDeleteSoftDeletedUsers() — @Recurring @Job worker style confirmed",
+      "ProjectHardDeleteJob uses cascade ordering (logEventBlocking before status flip) — confirmed precedent",
+      "@MockitoSpyBean pattern confirmed in BotControllerIT — Spring Boot 3.x import"
+    ],
+    "files_confirmed_absent": [
+      "backend/src/main/java/com/botfunnel/subscriber/SubscriberService.java — not yet created (T6 creates it)",
+      "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerService.java — not yet created (T7 creates it)",
+      "backend/src/main/java/com/botfunnel/webhook/ — package does not exist yet",
+      "micrometer-core not yet in build.gradle — must be added by T1 per tech-spec"
+    ],
+    "cross_task_dependency_check": {
+      "T7_depends_on": "none — Wave 1 leaf. Correct: FunnelTriggerService is new, no prior task creates it.",
+      "T8_depends_on": "none — Wave 1. 06-bot-connection.md and 07-telegram-sender.md confirmed to exist as style precedents.",
+      "T9_depends_on": "[2,3,4,5,6,7] — Wave 2. T7 (FunnelTriggerService) and T6 (SubscriberService) correctly declared. Dependency chain is complete."
+    }
+  }
+}

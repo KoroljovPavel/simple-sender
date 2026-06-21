@@ -1,0 +1,78 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5],
+  "iteration": 2,
+  "status": "approved",
+  "resolution_confirmed": [
+    {
+      "task": 2,
+      "finding": "actuator/health reference (was critical)",
+      "resolved": "Task 2 now correctly references /health in both step 8 (line 64) and SecurityConfig current state description (line 119). No /actuator/health reference anywhere in the task."
+    },
+    {
+      "task": 5,
+      "finding": "verifyEmail expiry filter in DB query (was critical)",
+      "resolved": "Step 2 of verifyEmail now explicitly says 'no expiry filter in the DB query' (line 51). Expiry is checked in service layer after retrieving user (line 53). The two-stage check that makes TOKEN_EXPIRED distinguishable from invalid token is correctly described."
+    },
+    {
+      "task": 5,
+      "finding": "setIfAbsent returning null instead of Mono<Boolean> (was major)",
+      "resolved": "Step 2.2 of resendVerification correctly documents: 'setIfAbsent() returns Mono<Boolean> — Boolean.FALSE means the key already existed (rate limited); check with .map(success -> !success)' (line 59). The null-check anti-pattern is gone. Edge cases note (line 134) is also consistent."
+    },
+    {
+      "task": 3,
+      "finding": "Thread.sleep for async test verification (was major)",
+      "resolved": "Implementation hint now correctly recommends Awaitility: 'use Awaitility.await().atMost(2, SECONDS).until(...) to verify async email was sent — Thread.sleep() is fragile in test contexts' (line 98). Thread.sleep is no longer suggested."
+    },
+    {
+      "task": 1,
+      "finding": "JaCoCo plugin missing (flagged in batch 5 review)",
+      "resolved": "Task 1 step 5 includes adding JaCoCo plugin, jacocoTestReport configuration block, and dependsOn test wiring (lines 51-57)."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 3,
+      "issue": "The full Mono.fromCallable fire-and-forget code block is still present in 'What to do' step 1 (line 32), not removed to just a pattern pointer: `Mono.fromCallable(() -> { sendMsg(); return null; }).subscribeOn(Schedulers.boundedElastic()).subscribe(null, err -> log.error(...))`. This prescribes the exact implementation in the implementation steps themselves, not just in the hints section. The previous iter 1 finding flagged this as a hints violation — the full code block was moved to be recognizable as a step in the implementation, which makes it more prescriptive, not less.",
+      "fix": "Replace the full code block in step 1 with: 'Fire-and-forget pattern: wrap the blocking SMTP call in Mono.fromCallable, subscribe on Schedulers.boundedElastic(), and use subscribe() with a null success consumer and error-logging consumer so failures do not propagate to the caller.' Remove the inline code block."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 2,
+      "issue": "Step 8 instructs to configure CORS with `allowedOrigins(\"${app.url:http://localhost:3000}\")` (line 63). This is a Spring property placeholder syntax — it is NOT resolved when passed as a Java string literal to the allowedOrigins() method. The CORS origin will literally be the string '${app.url:http://localhost:3000}', which will never match any real browser origin, silently breaking CORS for all requests. SecurityConfig must @Value-inject the app.url property and pass the injected field value to allowedOrigins().",
+      "fix": "Change the CORS instruction to: 'Inject app URL via constructor/field: @Value(\"${app.url:http://localhost:3000}\") String appUrl. Then call allowedOrigins(appUrl) in the CORS config.' The placeholder must be in the @Value annotation on a field, not as a string literal argument."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 5,
+      "issue": "Implementation hint (line 138) says: 'MessageDigest.getInstance(\"SHA-256\") is not thread-safe; create a new instance per call or use DigestUtils from Spring.' Spring's org.springframework.util.DigestUtils only provides MD5 digest utilities — it has no SHA-256 method. Suggesting it as an alternative to MessageDigest.getInstance(\"SHA-256\") is a hallucinated API reference. An implementer who tries to use Spring's DigestUtils for SHA-256 will find no such method and may import Apache Commons Codec's DigestUtils (different library, not in dependencies) by mistake.",
+      "fix": "Remove 'or use DigestUtils from Spring' from the hint. Correct hint: 'MessageDigest.getInstance(\"SHA-256\") is not thread-safe; create a new instance per call. Spring Security's org.springframework.security.crypto.codec.Hex can encode the resulting byte[] to a hex string.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 2,
+      "issue": "TDD anchor test SecurityConfigTest.java::unauthenticated_protectedEndpoint_returns401 (line 73) still does not mention that the test class requires @MockitoBean for MongoClient, RedisConnectionFactory, and ReactiveRedisConnectionFactory. All three existing security tests (HealthEndpointTest, HealthSecurityTest, SecurityBlockTest) use these exact mocks to prevent Spring context startup failure. Without them, SecurityConfigTest will fail to start. This was flagged as minor in iter 1 and remains unaddressed.",
+      "fix": "Add to the TDD anchor note: 'SecurityConfigTest must @MockitoBean the same three infrastructure beans as existing tests: MongoClient, RedisConnectionFactory, and ReactiveRedisConnectionFactory — otherwise the Spring context fails to start.'"
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 creates AbstractIntegrationTest (line 124) but does not include an explicit step to ensure Task 4's stub IT tests (AuthControllerIT tests for login session fixation, rememberMe TTL, login_success event) are migrated to extend AbstractIntegrationTest. Task 4 explicitly says to 'create a minimal base class stub or write tests without it; refactor when AbstractIntegrationTest is available', but no refactoring instruction exists in Task 5. This risks leaving Task 4's IT tests as stubs indefinitely.",
+      "fix": "Add an explicit step in Task 5 'What to do': 'Ensure AuthControllerIT extends AbstractIntegrationTest (created in this task). If Task 4 created a stub base class, update AuthControllerIT to inherit from AbstractIntegrationTest so all Task 4 IT tests run against real Testcontainers.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "claims_verified": 47,
+    "issues_found": 5,
+    "critical": 0,
+    "major": 2,
+    "minor": 3
+  }
+}

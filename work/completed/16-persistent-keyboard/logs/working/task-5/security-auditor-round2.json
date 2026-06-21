@@ -1,0 +1,11 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "notes": "Round-2 re-review of Task 5 (16-persistent-keyboard frontend preview panel). HEAD commit 'fix: address review round 1 for task 5' touches only two files: frontend/tests/components/funnels/FunnelMessagePreview.spec.ts (new desync test + strengthened toHaveBeenLastCalledWith debounce-payload assertions) and a one-word doc-comment edit in frontend/types/funnel.ts ('Task-5 backend DTOs' -> 'backend DTOs'). No component/template/render logic changed. Both security invariants re-verified against unchanged FunnelMessagePreview.vue: (1) Stored-XSS A03 invariant HOLDS — all rendered text/caption and keyboard labels (keyboardText, keyboardMockRows, block.text/caption, button labels) are output exclusively via {{ }} text interpolation; no v-html / innerHTML sink anywhere; Telegram MarkdownV2/HTML escaping stays inert as plain text. (2) No-URL-dereference invariant HOLDS — isHttpUrl()/HTTP_URL_RE scheme guard still gates every :src (IMAGE, ALBUM items) and :href (FILE) binding to http(s) only, rejecting file:// / data: / javascript: / opaque file_id tokens; FILE link retains rel='noopener noreferrer nofollow' + referrerpolicy='no-referrer'. The new desync test asserts the empty-renderedBlocks keyboard path renders no text node and does not crash, with no change to the rendering code it exercises. No hardcoded secrets, no new dependencies, no network/URL dereference introduced."
+}

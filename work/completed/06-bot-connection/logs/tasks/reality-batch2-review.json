@@ -1,0 +1,76 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 6,
+      "issue": "Task 6 injects MeterRegistry and calls meterRegistry.counter('botfunnel.bot_connect.brute_force.redis_failures').increment(), but spring-boot-starter-actuator (which provides MeterRegistry autoconfig) is NOT in backend/build.gradle. The dependency list contains only webflux, data-mongodb-reactive, data-redis-reactive, security, mail, validation, jobrunr, and test dependencies. MeterRegistry will not be available as a Spring bean, so the BotService constructor will fail to wire.",
+      "fix": "Add 'implementation \"org.springframework.boot:spring-boot-starter-actuator\"' to backend/build.gradle dependencies block, or remove the MeterRegistry injection and replace the Micrometer counter increment with a log.warn() only (dropping the observability requirement from D14)."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 6,
+      "issue": "Task 6 lists files_to_read: backend/src/main/java/com/botfunnel/bot/TelegramApiClient.java (from T2), TokenEncryptor.java (from T1), Bot.java (from T3). None of these files exist in the codebase yet — they are created by Wave 1 tasks 1, 2, 3. Task 6 correctly declares depends_on: [1, 2, 3], which is fine. However, the tech-spec Architecture section referenced in task 6 also refers to 'bot/BotService' being in the same package as these files, and the bot package directory does not exist at all (verified: find returned 0 results for com/botfunnel/bot/). This is expected for a greenfield task, but the task must not be executed until tasks 1-3 complete. The dependency declaration is present — this is a WARNING to the executor rather than a task defect.",
+      "fix": "No task text change needed; executor must enforce wave ordering. Confirm tasks 1-3 are complete before starting task 6."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 6,
+      "issue": "The implementation hints section is borderline over-prescriptive in several places. Specifically: (a) 'Compensating deleteWebhook: chain via .onErrorResume(persistErr -> telegram.deleteWebhook(token).onErrorContinue((err, o) -> log.warn(...)).then(Mono.error(persistErr)))' provides a full reactive chain implementation. (b) 'Webhook secret: SecureRandom.getInstanceStrong() → 16 bytes → encode (Base64 or hex) for the plaintext header sent to Telegram. Hash via MessageDigest.getInstance(\"SHA-256\") and hex-encode (HexFormat.of().formatHex(...))' is a step-by-step algorithm. (c) 'Micrometer counter creation: inject MeterRegistry and call meterRegistry.counter(\"botfunnel.bot_connect.brute_force.redis_failures\").increment() inside the fail-open path' is an exact code snippet. Per the validation checklist, hints should point to patterns and approaches, not prescribe the solution.",
+      "fix": "Trim the hints to directional pointers: e.g. 'see AuthService.incrementWithTtl for the INCR+EXPIRE shape', 'use MessageDigest SHA-256 + HexFormat for the webhook secret hash', 'see Spring Micrometer docs for counter registration'. Remove exact reactive chain code from hints."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 5,
+      "issue": "Task 5 hints say: 'NuxtLinkLocale under the cap resolves target through i18n routing — :to=\"`/projects/${projectId}/settings`\". This short-variant is used in ProjectSelector.vue (lines 119-128 and 150-159).' However, actual inspection of ProjectSelector.vue shows it uses :to=\"localePath(`/projects/${...}/settings`)\" (wrapping in localePath()), NOT bare string :to without localePath. The hint misrepresents the actual pattern in the codebase. Using bare :to strings with NuxtLinkLocale may or may not work the same way depending on the i18n routing mode; the existing project pattern always wraps in localePath().",
+      "fix": "Correct the hint to reflect the actual pattern: use :to=\"localePath(`/projects/${projectId}/settings`)\" consistent with ProjectSelector.vue lines 150-159 and settings.vue which also calls const localePath = useLocalePath(). Add useLocalePath() to SettingsSubnav.vue script setup."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 instructs adding 'bot.subnav.general' and 'bot.subnav.bot' keys in step 4 / edge-cases section based on Task 5 needing them. But Task 4's own key inventory (AC, What to do steps 1-3) does NOT list 'bot.subnav.*' or 'bot.placeholder' keys. The Description says 'Task 5... t(\"bot.*\")' but the structured inventory in step 1 only lists bot.page, bot.connectForm, bot.connected, bot.disconnectModal, bot.toasts. If Task 5 runs with temporary literals (allowed by the task), the prebuild gate passes vacuously. But if Task 5 uses t('bot.subnav.general') with keys expected from Task 4, and Task 4 does not include them in its AC, the keys may be silently omitted. The parity gate only checks key symmetry between locales, not completeness against component usage.",
+      "fix": "Add 'bot.subnav.general' and 'bot.subnav.bot' (and 'bot.placeholder' if needed) explicitly to Task 4's What to do step 1 inventory and Acceptance Criteria, OR explicitly state in Task 5 that those keys are added by Task 5 itself (not Task 4) alongside the component creation."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 5,
+      "issue": "The existing test file frontend/tests/pages/projects/settings.spec.ts imports the settings page as: 'import SettingsPage from \"../../../pages/projects/[projectId]/settings.vue\"'. After the folder split, this import path breaks because settings.vue is deleted. Task 5 mentions this in Edge Cases and says 'rename the test file and fix the import path', but this is framed as optional ('if exists'). The file does exist (confirmed). The task must fix the import from settings.vue to settings/index.vue or the existing test suite breaks, which contradicts the AC requirement 'Existing tests by settings.vue (if any) passed after migration without changing asserts'.",
+      "fix": "Make the settings.spec.ts import path update a mandatory step in What to do (not optional). The import must change to '../../../pages/projects/[projectId]/settings/index.vue' and the test file should be moved to tests/pages/projects/[projectId]/settings/index.spec.ts."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 says 'current state: 290 lines' for both en.json and uk.json in the Details section. Actual file inspection confirms both files end at line 290/291. This is accurate at time of writing but may become stale if other Wave 1 tasks also modify these files concurrently. Since Tasks 4, 5 are in Wave 1 with no declared dependency between them, and Task 5 does NOT modify locale files, there is no race condition on en.json/uk.json specifically. No action needed — minor informational note.",
+      "fix": "No change required. Noting for awareness."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "Task 6 instructs discriminating DuplicateKeyException via the index name in the exception message: '.getMessage().contains(\"projectId_unique_connected\") vs .contains(\"telegramBotId_unique_connected\")'. The Spring Data MongoDB driver (reactive) wraps the Mongo driver's MongoBulkWriteException or MongoWriteException. The index name appears in the error message as part of the 'details' or 'errmsg' field but the exact format varies by driver version. The fallback logic (re-run findFirstByTelegramBotIdAndStatus) is documented, which is good. However, DuplicateKeyException is org.springframework.dao.DuplicateKeyException — it is NOT currently used or imported anywhere in the backend, making this unverified.",
+      "fix": "Add a note to the task that the developer should verify the exception message format with a quick integration test or by inspecting the reactive Mongo driver's exception wrapping before relying on .getMessage().contains(). The fallback path is adequate if the message doesn't contain the index name."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5 verification step says 'cd frontend && pnpm test -- tests/pages/projects' but the vitest config uses 'include: [\"tests/**/*.{spec,test}.ts\"]' and the test script is just 'vitest'. The '--' separator with a path filter should work with vitest CLI (vitest accepts a glob/path argument), but the exact invocation syntax for Nuxt test-utils (@nuxt/test-utils/runtime) in this project is not verified to support path-based filtering. This is a minor risk.",
+      "fix": "Verify filter syntax: 'pnpm test -- --reporter=verbose tests/pages/projects' or use 'pnpm vitest run tests/pages/projects'. Update the verification step with the confirmed working syntax."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 9
+  }
+}

@@ -1,0 +1,58 @@
+{
+  "status": "approved",
+  "round": 2,
+  "verdict": "approved",
+  "scope": "round-2 design re-review of tech-spec architecture (no code exists yet); grounded against FunnelService.java (MAX_KEYWORDS=50/MAX_KEYWORD_LENGTH=64), FunnelExecutionEngine.java (claimForCallback CAS), FunnelEventService.java + FunnelTriggerServiceImpl.java (try/catch(Throwable), ids-only WARN), application.properties (max-fanout=50, max-steps=50, max-steps-per-tick=100, max-enroll-depth=10)",
+  "summary": {
+    "totalFindings": 2,
+    "critical": 0,
+    "high": 0,
+    "major": 0,
+    "minor": 2,
+    "medium": 0,
+    "low": 2,
+    "note": "All three round-1 medium findings are resolved by Decision 14, the strengthened Decision 3, and the Risks table updates. Zero critical/high/medium design flaws remain. Two low best-practice notes carry over (entryStepId DTO-layer validation; manual-wipe runbook guard) — neither blocks approval."
+  },
+  "round1Resolution": [
+    {
+      "finding": "A04 — unbounded List<Trigger> size + aggregate keyword growth (DoS / insecure design)",
+      "previousSeverity": "medium",
+      "status": "resolved",
+      "evidence": "New Decision 14 mandates an @Size ceiling on List<TriggerDto> in the DTO PLUS a service-level check (funnel_step_invalid/422), AND preserves the existing per-trigger keyword caps (verified in code: MAX_KEYWORDS=50, MAX_KEYWORD_LENGTH=64 in FunnelService.requireKeywords/normalizeKeywords). Risks table adds the 'Unbounded List<Trigger> / keyword growth (DoS, A04)' row tying the cap to the existing rate-limit + fan-out ceiling. Task 4 acceptance ('trigger-array size cap + per-trigger keyword caps per Decision 14') and Testing Strategy unit case ('trigger-array @Size cap + per-trigger keyword caps enforced') + IT ('over-cap trigger array rejected') close the loop. The aggregate concern is bounded by trigger-array cap x per-element keyword cap, both now enforced. Minor: Decision 14 does not name the concrete N — recommended to pin it (e.g. 50, aligning with max-fanout/max-steps) at implementation, but the discipline is now specified."
+    },
+    {
+      "finding": "A01 — redirectExecution entry-point scoping contract under-specified (anti-IDOR)",
+      "previousSeverity": "medium",
+      "status": "resolved",
+      "evidence": "Decision 3 now states the CAS predicate is bound by BOTH subscriberId AND funnelId (a deliberate strengthening over today's claimForCallback, which code confirms binds subscriberId + status=waiting_for_reply + stepRunStatus=pending but NOT funnelId). It explicitly states executionId 'originates ONLY from the trusted in-flight exists/lookup probe inside the dispatcher (never from request input)' and that 'a mismatched-subscriber redirect is a guaranteed no-op'. Task 5 mirrors the contract. Testing Strategy adds the engine IT 'mismatched-subscriber redirect is a no-op (anti-IDOR, Decision 3)' plus 'cross-funnel isolation' IT, converting the assumed control into a tested invariant. The under-specified scoping is now an explicit, verified contract."
+    },
+    {
+      "finding": "A09 — new redirect/start WARN markers must inherit PII-free greppable-id discipline",
+      "previousSeverity": "low",
+      "status": "resolved",
+      "evidence": "Risks 'fire()/dispatch error-isolation regression' row now states: 'New WARN markers log ids/codes only — never event_name/triggerValue/PII (anti log-injection, Phase-5 precedent)'. Decisions 4 and 5 specify greppable PII-free markers. This matches verified code: FunnelTriggerServiceImpl.fire and FunnelEventService.dispatchForSubscriber both catch(Throwable) and log only projectId + exception class name, never payload/event_name. The discipline is now explicit for the new markers; Task 9 (Security Audit) lists 'no PII in WARN logs' as an audit dimension."
+    }
+  ],
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A03",
+      "title": "entryStepId / triggerValue still rely on service-side resolution; no DTO bean-validation guard",
+      "description": "TriggerDto.entryStepId and triggerValue remain free Strings with no DTO-level @Size/@Pattern. Decision 14 states 'each trigger's entryStepId and triggerValue use the existing slug regexes' at the service layer, and Task 4 validates entryStepId resolves to an existing step id in THIS funnel (the load-bearing anti-IDOR/integrity control for mid-entry, correctly constraining entry to the funnel's own step set). This matches the existing convention (DTO carries minimal constraints; service does per-type validation), so it is consistent and not a vulnerability. Flagged only as defense-in-depth: an early DTO guard would reject obviously malformed oversized values before they reach service resolution and array iteration.",
+      "location": "Data Models: TriggerDto; Decision 14; Task 4 (FunnelService validation)",
+      "impact": "Low. Malformed/oversized entryStepId or triggerValue strings are rejected at the service layer (422) rather than the DTO layer; combined with the new @Size array cap, the worst case is bounded service-side work on a capped array before rejection.",
+      "recommendation": "Optionally add a cheap DTO @Size on entryStepId/triggerValue to fail fast. Ensure Task 4 validation rejects an entryStepId that resolves against the LIVE funnel but not the SUBMITTED step set (validate against the same step-id set built in validateSteps), and keep the 'dangling entryStepId -> 422' IT (already listed in Testing Strategy).",
+      "cwe": "CWE-20"
+    },
+    {
+      "severity": "minor",
+      "category": "A08",
+      "title": "Manual collection wipe on first deploy lacks a documented guard/runbook gate",
+      "description": "Decision 8 / Task 12 specify a one-time manual wipe of funnels/funnel_executions. Reasonable given no production data, but a manual destructive DB operation tied to a deploy is an integrity concern: no documented environment-confirmation, backup, or idempotency guard prevents running it against the wrong database, and the index reconciliation BeanPostProcessor assumes a clean/wiped state. Task 12 now narrates the operational sequence (wipe then confirm clean startup, reconciliation APPLIED, no IndexKeySpecsConflict), which partially addresses it, but the destructive-step guard itself is still implicit.",
+      "location": "Decision 8; Task 12 (Post-deploy verification)",
+      "impact": "Low. Mis-targeted wipe could clear the wrong environment's data; mitigated by the absence of production data today but not by a documented control.",
+      "recommendation": "Document the wipe as a guarded runbook step in Task 12: explicitly name the target environment, add a 'no production data' precondition check, and confirm reconciliation logs APPLIED only after the wipe. Keep it out of any automated CI path (the spec already states deploy is CI/CD-only and this is a manual emergency-style op).",
+      "cwe": "CWE-665"
+    }
+  ]
+}

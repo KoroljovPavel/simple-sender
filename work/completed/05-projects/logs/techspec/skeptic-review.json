@@ -1,0 +1,42 @@
+{
+  "verdict": "pass",
+  "iterations": 1,
+  "findings": [
+    {
+      "severity": "medium",
+      "claim": "composables/useApi.ts — extend onResponseError with path-scoped 404 interceptor",
+      "issue": "Current useApi.ts only configures onRequest in $fetch.create(...); there is no existing onResponseError hook to 'extend'. The hook does not exist today — it must be added. ofetch (the engine behind $fetch) does support onResponseError, so the work is feasible, but the wording 'extend' implies an existing hook that does not exist.",
+      "fix": "Reword the tech-spec line 43 from 'extend onResponseError' to 'add onResponseError' (or 'introduce onResponseError'). Implementation feasibility unchanged."
+    },
+    {
+      "severity": "medium",
+      "claim": "Frontend: ... shadcn-vue components (modal, input, dropdown).",
+      "issue": "shadcn-vue is listed in package.json as a devDependency (CLI generator), but no shadcn-vue components have been generated in this project: frontend/components/ui/ does not exist, frontend/components.json does not exist, and the only existing modal (profile.vue:431-477) is plain Tailwind divs with manual ARIA — not a shadcn-vue Dialog primitive. Tech-spec implicitly assumes ready-to-use Modal/Input/Dropdown primitives that are not present.",
+      "fix": "Either (a) add a Wave 1 sub-step to run the shadcn-vue CLI to scaffold the needed components (modal/dialog, input, select/dropdown) and commit the generated components/ui/* files, or (b) drop the shadcn-vue mention and explicitly model UI on the existing plain-Tailwind modal pattern in pages/profile.vue (matches Decision 'Functionality over aesthetics on MVP'). Either way, AC-T3 'No new dependencies' still holds (shadcn-vue is dev-only; it generates code, not runtime packages)."
+    },
+    {
+      "severity": "low",
+      "claim": "ReactiveMongoTemplate.remove(Query, Class) for cascade ... template.remove(Query.query(where(\"_id\").in(deletedIds)), Project.class)",
+      "issue": "Tech-spec mixes two ReactiveMongoTemplate.remove(...) overload shapes. Line 82-83 alternates between collection-name string ('events') and Class<?> (Project.class). Both overloads exist in Spring Data MongoDB, but the codebase exclusively uses the collection-name string form (auth/AuthService.java:392, profile/ProfileService.java:115,124). This is a minor convention inconsistency rather than a correctness issue.",
+      "fix": "Pick one form for consistency with existing code — recommend the collection-name string form everywhere ('projects' for the project-document remove). Functionally equivalent."
+    },
+    {
+      "severity": "low",
+      "claim": "AC-T2: AppException.unprocessableEntity(String, String) factory present in common/AppException.java",
+      "issue": "All existing factories (badRequest, unauthorized, forbidden, conflict, tooManyRequests) take a single String message and pass null for code. The new unprocessableEntity factory taking (code, message) deviates from the established 1-arg shape. Not wrong, but inconsistent with the 'aligns with the established factory style' claim in Decision 7.",
+      "fix": "Either (a) accept the 2-arg deviation and document it explicitly in Decision 7 as 'first factory carrying a non-null code at construction', or (b) keep the 1-arg shape and require callers to use the raw constructor for the code+message form. Recommend (a) — the asymmetry is intentional because 422 always wants a code and other factories never do."
+    },
+    {
+      "severity": "low",
+      "claim": "ProjectHardDeleteJobIT ... assert JobScheduler.getRecurringJobs() includes id=\"hard-delete-projects\", cron=\"0 3 * * *\"",
+      "issue": "JobScheduler is a JobRunr API (org.jobrunr.scheduling.JobScheduler) and getRecurringJobs() exists, but no current test in the codebase ever injects or queries JobScheduler — HardDeleteJobTest only invokes the @Recurring method directly and never checks registration. The claim is forward-looking and feasible (the bean is auto-configured by jobrunr-spring-boot-3-starter), but is a new pattern with no precedent here.",
+      "fix": "Acceptable as-is. Note in the test plan that this introduces a new test pattern. If the autowire fails, fall back to inspecting the InMemoryStorageProvider directly via the @Bean StorageProvider in JobRunrInMemoryConfig."
+    },
+    {
+      "severity": "low",
+      "claim": "Task 2 Verify-smoke: cd frontend && pnpm exec node scripts/check-locales.mjs",
+      "issue": "package.json defines the prebuild step as 'node scripts/check-locales.mjs' (no pnpm exec). Both forms work, but the tech-spec form needlessly invokes pnpm's binary resolver where a direct node call suffices. Cosmetic.",
+      "fix": "Replace with 'cd frontend && node scripts/check-locales.mjs' to match the package.json prebuild script."
+    }
+  ]
+}

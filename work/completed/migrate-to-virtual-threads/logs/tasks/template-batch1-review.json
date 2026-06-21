@@ -1,0 +1,79 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 1,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use absolute filesystem paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/...`) instead of the template-recommended feature-relative path (`work/{feature}/logs/working/task-{N}/{name}-{round}.json`). Absolute paths leak the author's machine layout into a portable artifact.",
+      "fix": "Replace the leading `/Users/pavlokorolov/IdeaProjects/simple-sender/` with `work/migrate-to-virtual-threads/...` so the paths match task-creator rule #10 (feature-anchored, machine-portable). Tasks 2, 4, 5 already follow this convention."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 3,
+      "section": "Reviewers",
+      "issue": "Same absolute-path issue as Task 1: reviewer report paths anchor on `/Users/pavlokorolov/IdeaProjects/simple-sender/work/...` rather than the template-prescribed feature-relative form.",
+      "fix": "Replace the absolute prefix with `work/migrate-to-virtual-threads/...` to match Tasks 2/4/5 and task-creator rule #10."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "TDD Anchor",
+      "issue": "TDD Anchor section is present but explicitly disavows owning any new tests (`Pre-existing unit tests against these repositories are owned by the Spring Data test slice... not by these interface files themselves`) and substitutes grep-gate TC7 as the acceptance gate. For a pure interface-signature refactor with no method bodies, this is a defensible position, but the template's expectation is either concrete `tests/path::name` anchors OR section deletion for non-code tasks. The current shape (section present with no `tests/path::name` entries) sits between the two options.",
+      "fix": "Either (a) delete the TDD Anchor section entirely since no new tests are being authored (the task is a pure type-signature refactor with no behavioural surface), keeping the verification-gate language inside Verification Steps; or (b) keep the section and add the explicit grep-gate `backend-grep::TC7-no-ReactiveMongoRepository` style placeholder anchor so the section follows the template's `tests/path::name — description` shape."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 1,
+      "section": "Acceptance Criteria",
+      "issue": "Tech-spec Task 1 does not enumerate a numbered AC list of its own (description-only). User-spec AC3 (`reactor.* grep returns 0 matches`) and AC6 (no reactive starters) are not directly applicable to this Phase A pre-flip task. The task's AC list is internally consistent and well-scoped, but the relationship to user-spec/tech-spec ACs is implicit rather than annotated.",
+      "fix": "Add a one-line note in Description or AC header that this task does not directly satisfy any AC* / TC* identifier — it is a pre-flip cleanup enabling later Wave 2 tasks to satisfy AC3/AC6. Optional but helps cross-reference traceability."
+    },
+    {
+      "severity": "minor",
+      "category": "atomicity",
+      "task": 5,
+      "section": "Files",
+      "issue": "Task 5 modifies 4 production files (UserService, EventService, EmailService, new HttpRequestUtils) plus 4 test files (3 rewrites + 1 new). The 8-file scope exceeds the template's 1-3 file heuristic, though task-creator rule #163 allows larger atomic units when logically cohesive. The cohesion rationale (`three leaf services that do NOT depend on ServerWebExchange` plus `consolidate 4 duplicate extractIp helpers per D13`) is sound, but the HttpRequestUtils extraction is logically separable from the three service flips.",
+      "fix": "Optional refactor: split into Task 5a (HttpRequestUtils + tests — pure new utility) and Task 5b (UserService + EventService + EmailService flips + tests). Currently scoped as one task per tech-spec Implementation Tasks line 397; keeping the original decomposition is also defensible since both halves land in the same Wave 2 atomic commit per D5/D9."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 2,
+      "section": "What to do",
+      "issue": "Task 2 What-to-do step 5 enumerates 5 `.block()` call sites (L189–195, L235–241, L242, L253, L254) but tech-spec Task 2 description and the task's own narrative both note `4 .block() call sites`. The task acknowledges the discrepancy (`tech-spec mentions 4... actual file currently has 5`). This is an honest finding but creates uncertainty for the implementing agent — the grep gate in AC will not catch the discrepancy because it only verifies absence post-flip.",
+      "fix": "Either (a) re-count call sites against the current file and pick a single canonical number (4 or 5) in both Description, What-to-do, and Details — then update tech-spec Task 2 with the corrected count; or (b) explicitly state in AC that the verification grep `subscriberService\\.|funnelTriggerService\\.` returns N occurrences with zero `.block()` suffixes, independent of the pre-flip count."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 6,
+    "critical": 0,
+    "major": 0,
+    "minor": 6
+  },
+  "per_task_status": {
+    "1": "approved",
+    "2": "approved",
+    "3": "approved",
+    "4": "approved",
+    "5": "approved"
+  },
+  "notes": {
+    "frontmatter": "All 5 tasks have valid frontmatter: status=planned, depends_on as array (Wave 1: [], Wave 2: [1,2]), wave numbers correct, skills=[code-writing] consistent with body, verify field is YAML array (verify=[] for tasks 1/2/4/5, verify=[smoke] for task 3 matching tech-spec Verify-smoke).",
+    "section_order": "All 5 tasks follow the template section order: Title → Required Skills → Description → What to do → TDD Anchor → Acceptance Criteria → Context Files → Verification Steps → Details → Reviewers → Post-completion.",
+    "skills_reviewers_consistency": "Frontmatter skills and Required Skills section match in all 5 tasks. Frontmatter reviewers and Reviewers section match in all 5 tasks. Task 4 correctly omits security-auditor per tech-spec line 393 (pure type-signature refactor — Audit Wave Task 15 covers cross-cutting).",
+    "ac_carryforward": "Task 3 covers AC4/AC5/AC6/AC17/AC18 + TC4/TC5/TC6 from tech-spec; Task 5 covers D12/D13/D15 + AC11/AC13 preservation; Task 4 covers TC7. Tasks 1 and 2 are Phase A pre-flip cleanup with no direct AC mapping in tech-spec (they enable Wave 2 tasks to satisfy AC3/AC6).",
+    "tdd_anchor": "Tasks 1, 2, 3, 5 have concrete `tests/path::test_name — description` anchors. Task 4 has a section but explicitly defers tests to consumer tasks (5-9); this is the only borderline case among the batch and is flagged minor.",
+    "reviewer_paths": "Tasks 2, 4, 5 use feature-anchored `work/migrate-to-virtual-threads/logs/working/task-N/...` paths. Tasks 1 and 3 use absolute filesystem paths — flagged minor (template prefers feature-anchored).",
+    "context_files": "All 5 tasks include user-spec.md, tech-spec.md, decisions.md, project.md, architecture.md, patterns.md as markdown links — mandatory PK files all present.",
+    "template_placeholders": "None detected. No `{round}` references appear outside the legitimate {round}-suffix placeholder in reviewer report paths (which is intentional and resolved by the executing agent)."
+  }
+}

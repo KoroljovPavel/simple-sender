@@ -1,0 +1,7 @@
+{
+  "auditor": "code-auditor",
+  "round": 1,
+  "verdict": "OK",
+  "summary": "Re-reviewed the audit-fix diff (commit c0fdd15) for F1/F2/F3 against the original code-auditor findings. All three are correctly resolved with no new issues and invariants intact. F1: requireTimeout is invoked inside validateMenu, which runs on BOTH update and activate via the shared validateSteps, so the engine can never receive an unvalidated/legacy timeoutUnit — closing the durationOf-throws-stranded-execution liveness bug; both-or-neither + value>=1 + unit-in-{MIN,HOUR,DAY} logic mirrors requireDelay exactly and maps to 422 funnel_step_invalid (never 500). timeoutTargetStepId broken-edge coverage was already present (validateSteps calls requireExistingTarget on it for every step type) — confirmed, no change required. F2: FunnelStep.timeoutUnit comment corrected to MIN|HOUR|DAY; tech-spec line 239 also fixed on disk. F3: timeout UI emits the three fields only when engaged, End encoded as timeoutTargetStepId=null, value/unit client validation mirrors backend requireTimeout (both-or-neither + value>=1), reuses DELAY_UNITS + SearchableSelect + menuTargetOptions idiom; no v-html (interpolation + v-model only), target id is server-validated by requireExistingTarget. Security lens on the new UI: clean — no injection sink, target picker safe.",
+  "findings": []
+}

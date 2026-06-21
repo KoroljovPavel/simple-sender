@@ -1,0 +1,54 @@
+{
+  "validator": "reality-checker",
+  "batch": [10, 11],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 10,
+      "issue": "Task 10 Verification Steps runs `./gradlew test --tests '*FunnelExecutionEngineIT*' ...` without `-PrunSlow=true`. FunnelExecutionEngineIT is annotated @Tag(\"slow\") at the class level (line 62 of FunnelExecutionEngineIT.java). build.gradle excludes the 'slow' tag by default (`excludeTags 'slow'` unless `project.hasProperty('runSlow')`). The --tests filter selects the class but the tag exclusion overrides it, so all FunnelExecutionEngineIT tests will be silently skipped. The audit will falsely report 'engine ITs green' when they were never executed.",
+      "fix": "Add `-PrunSlow=true` to the Gradle command: `./gradlew test -PrunSlow=true --tests '*FunnelExecutionEngineIT*' --tests '*FunnelControllerIT*' --tests '*FunnelService*'`"
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 11,
+      "issue": "`pnpm lint` and `pnpm typecheck` are listed as acceptance criteria (task 11 AC line 58) and as Verification Steps commands (`cd frontend && pnpm lint && pnpm typecheck`). Neither script exists in frontend/package.json. The only defined scripts are: dev, prebuild, build, generate, preview, test, test:e2e. A completed prior feature (work/completed/17-funnel-multi-entry/tasks/7.md) explicitly documents: 'у frontend/package.json НЕМАЄ скриптів lint/typecheck'. Running `pnpm lint` or `pnpm typecheck` will exit with 'ERR_PNPM_NO_SCRIPT: Script \"lint\" not found'.",
+      "fix": "Remove `pnpm lint && pnpm typecheck` from the Verification Steps and AC. For type-checking, use `pnpm build` (which runs nuxt build and fails on TS errors) — this is already a separate AC/step. For linting, there is no lint script: omit entirely or note it is not configured."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Task 10 Description and Details categorise FunnelExecutionEngineIT as 'slow-lane' but the Verification Steps command does not include `-PrunSlow=true`, causing the same silent-skip problem as finding #1. The task body even says '(slow-lane включён)' in the verification, which is factually false without the flag.",
+      "fix": "Same as finding #1 — add `-PrunSlow=true` to the Gradle command in Verification Steps."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 11,
+      "issue": "Task 11 Verification Steps says the slow-lane flag might be `-Pslow` as an example: '(наприклад `./gradlew test -Pslow` або відповідний профіль з репозиторію)'. The actual flag per build.gradle is `-PrunSlow=true`, not `-Pslow`. Using `-Pslow` will silently do nothing (`project.hasProperty('runSlow')` is false), so FunnelExecutionEngineIT will still be excluded. The task does instruct the agent to verify the flag from the repo, but the example misleads.",
+      "fix": "Replace the example `-Pslow` with the correct flag `-PrunSlow=true` in the Verification Steps hint. The canonical command for the slow-lane is `./gradlew test -PrunSlow=true`."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 10,
+      "issue": "Task 10 Acceptance Criteria #1 says 'Всі тестові файли фічі ідентифіковані (через decisions.md + tech-spec)'. The canvas-specific test files useFunnelCanvas.spec.ts (task 4) and FunnelCanvas.spec.ts (task 5) do not yet exist on disk — they are created by tasks 4 and 5 respectively. The task body acknowledges this (Details section, 'якщо canvas-специфічних файлів немає на диску — це критична знахідка'), but the Dependencies line says 'задачі 1–7 завершені' and the overall framing treats all files as present. The actual Acceptance Criteria checklist does not include the conditional: if a file is absent the AC cannot be evaluated, which could mislead the executing agent into treating an absent spec file as a passing audit rather than as a critical gap.",
+      "fix": "This is an awareness note: the executing agent must first check disk presence of useFunnelCanvas.spec.ts and FunnelCanvas.spec.ts before proceeding. The Details section already says this; the AC phrasing could be tightened to: 'All test files identified; absent canvas-specific files (useFunnelCanvas.spec.ts, FunnelCanvas.spec.ts) are flagged as critical coverage gaps, not audit failures.' No functional change needed beyond clarifying the AC wording."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 11,
+      "issue": "`node scripts/check-locales.mjs` is listed as a standalone Verification Step (`cd frontend && node scripts/check-locales.mjs`). The script is also invoked automatically as a `prebuild` hook in package.json (`\"prebuild\": \"node scripts/check-locales.mjs\"`). Running it standalone and via `pnpm build` provides redundant but harmless coverage. The task text correctly references both. However, the standalone invocation from within `frontend/` resolves to `frontend/scripts/check-locales.mjs` which exists — so this is valid.",
+      "fix": "No change needed. The script exists at frontend/scripts/check-locales.mjs. The dual invocation (standalone + prebuild) is redundant but correct."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 18,
+    "issues_found": 6
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": "Round-1 critical and major findings on SecurityBlockTest and ConcurrencyTestUtilsTest were addressed correctly. The 403 assertion is now deterministic and the rationale comment is technically accurate (no custom AuthenticationEntryPoint exists, so the default Http403ForbiddenEntryPoint surfaces anonymous denial as 403). The renamed/reshaped test bodies in ConcurrencyTestUtilsTest match impl behaviour, and the new zero-N guard test adds genuine coverage of the n<=0 fail-fast path. No regressions or new critical issues introduced.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/test/java/com/botfunnel/common/test/ConcurrencyTestUtilsTest.java",
+      "line": 76,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "The task file's TDD anchor (work/migrate-to-virtual-threads/tasks/10.md lines 78-81) literally names 4 tests with specific identifiers. This commit renamed 2 of them (returnsResultsInSubmissionOrder -> returnsAllResults_noLossNoDuplicates; propagatesCallableException -> propagatesCallableException_evenWhenOtherTasksSucceed) and added a 5th (parallelInvoke_zeroN_throwsIllegalArgumentException). The skip rationale for round-1 finding #3 cited 'TDD anchor mandates this exact name verbatim' — which sets a precedent that contradicts renaming the other two. Either both should have been renamed or none. Recommend acknowledging the rename + the added 5th test in the task report / decisions.md so the deviation is documented.",
+      "benefit": "Keeps task report honest about test-name deviations from the TDD anchor; avoids confusion for Task 13's patterns.md rewrite which may reference TDD anchor names.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/common/test/ConcurrencyTestUtilsTest.java",
+      "line": 52,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The test name parallelInvoke_taskThrowingBeforeBarrier_doesNotHang remains technically misleading — the body throws AFTER start.await() (post-barrier), not before. The added class-level comment (lines 23-25) explains the pre-barrier hedge is left to inspection, but the test name still promises a behaviour the body does not exercise. If keeping verbatim per TDD-anchor precedent, consider an inline @DisplayName on this test that reads 'task throwing inside body does not hang caller' so test runners surface the accurate description without breaking the contract name.",
+      "benefit": "Reconciles the verbatim-name contract with the accurate behaviour description in IDE / CI test output.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/common/test/ConcurrencyTestUtilsTest.java",
+      "line": 47,
+      "severity": "low",
+      "category": "performance",
+      "suggestion": "Widening the barrier-spread bound 50ms -> 200ms accommodates CI cold-start jitter but the comment claim 'still failing a serial-release impl (which would spread 10+ ms per task)' assumes ~10ms/task serial cost. On a hot JVM serial release of trivial Instant::now tasks would spread well under 1ms each (~10ms total for N=10), so the 200ms bound would PASS a serial-release bug. Consider either tightening to ~50ms with a @RetryingTest annotation, or adding a separate assertion that proves true concurrency (e.g. mid-execution observation of >1 task in the body simultaneously via AtomicInteger high-water mark).",
+      "benefit": "Closes a gap where the barrier-spread gate could silently approve a regression to serial execution.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 3,
+    "testCoverageAssessment": "adequate"
+  }
+}

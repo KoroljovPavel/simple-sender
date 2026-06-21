@@ -1,0 +1,21 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "AC1 parallel load uses N=100 at parallelism=10. P99 from 100 samples is the single worst-of-100 request — a single GC pause, Testcontainer cold-cache hit, or JIT warm-up artifact dominates the figure. Variance is high enough that the assertion can both false-pass and false-fail on the same code. The round-1 fix is directionally correct (parallel beats sequential), but the sample size is the next weak link.",
+      "why_matters": "If R1 materializes in production (the greenfield JobRunr-enqueue-from-WebFlux pattern is slow on real traffic), a 100-sample assertion has a non-trivial chance of having passed in CI on a fast run. Conversely, a coincidental slow run on a noisy CI agent can flake the build. The AC reads as a hard P99 gate, so the methodology should match.",
+      "fix": "Either (a) raise the sample size to N=1000+ at parallelism=10 (still completes in seconds against Testcontainer Mongo) so P99 has >=10 samples; or (b) reword AC1 to 'median latency under parallel load <50ms AND max latency <200ms across N=100 parallel requests' — both invariants are stable at N=100 and together approximate the production-readiness signal. Tech-spec can choose."
+    },
+    {
+      "category": "feasibility",
+      "severity": "minor",
+      "issue": "AC16 asserts counters via `MeterRegistry.find(...).counter().count()` in integration tests, but the spec only adds `io.micrometer:micrometer-core` (no `spring-boot-starter-actuator`). Without actuator, Spring Boot does NOT auto-configure a `MeterRegistry` bean — integration tests will fail at injection time unless tech-spec explicitly registers a `SimpleMeterRegistry` (or similar) bean.",
+      "why_matters": "TD12's defense of the Micrometer half-step rests on counters having an immediate consumer (the AC16 integration-test assertion). If the bean isn't wired, the consumer doesn't exist and the half-step regresses into the round-1 finding it was meant to address. This is a tech-spec landmine the user-spec sets up but doesn't pre-empt.",
+      "fix": "Add a one-liner to TD12 or Dependencies: 'tech-spec must register a `SimpleMeterRegistry` (or equivalent) `@Bean` since actuator is not on the classpath — the bean is the consumer that makes AC16 counter-asserts compile and run.' This pre-empts the failure mode and locks in TD12's justification."
+    }
+  ],
+  "worst_category": "underengineering",
+  "summary": "All four round-1 major findings are addressed substantively: AC1 now uses parallel load, AC4 is scoped to webhook path, AC11a separates my_chat_member, AC13 partial-filter TTL preserves failed rows, AC16 adds worker_outcome counter with explicit consumer, and TD12 justifies the Micrometer half-step with a concrete in-epic consumer + Epic-09 alignment. The rejections of findings #1, #7, #8 are defensible — TD12 is no longer half-baked, the stub-package decision matches the 04c precedent the spec explicitly cites, and the residual implementation specifics are minor stylistic concerns rather than blockers. Two new minor issues remain (AC1 sample size at N=100, and the MeterRegistry-bean-without-actuator gap) — both belong in tech-spec, neither blocks user-spec approval."
+}

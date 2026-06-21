@@ -1,0 +1,110 @@
+{
+  "summary": "Task 7 implements ProfileController/Service, SuperAdminSeeder, and HardDeleteJob cleanly with reactive patterns and BCrypt pinned to boundedElastic. Cross-file consistency with AuthService and AppUserDetails is correct, all critical TDD anchors have at least a unit-level test, the JobRunr in-memory test config is a clean refactor of the prior @MockitoBean mess. The notable gaps are: (1) duplicated terminateAllSessions logic between AuthService and ProfileService, (2) a misleading comment in terminateAllSessionsExcept that misstates spring-session-data-mongodb's _id behaviour, (3) no IT verifying the current-session-survives invariant from Decision 14, and (4) several modest duplications (USER_AGENT_MAX, extractIp helper) that should be promoted to a shared utility.",
+  "verdict": "approved_with_suggestions",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 91,
+      "description": "ProfileService.terminateAllSessions(userId) is byte-for-byte identical to AuthService.terminateAllSessions(userId) (AuthService.java:379-383). Same Criteria.where(\"principal\").is(userId), same template.remove(q, \"sessions\"), same .map(getDeletedCount). Two callers (ProfileService.terminateAllSessions and AuthService.resetPassword) now hold independent copies of the spring-session-data-mongodb field path knowledge — if Spring Session ever bumps that field name, both must be updated and tests in two packages must be re-run.",
+      "fix": "Extract a SessionTerminationService (or static helper in com.botfunnel.session) that owns the sessions-collection field path. Both AuthService and ProfileService delegate to it. The single shared place will then be the only thing the Task 6 IT (sessionsCollection_principalFieldPath_isAtTopLevel) protects. Keeps Decision 14 / reset-password parity."
+    },
+    {
+      "severity": "major",
+      "category": "testing",
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+      "line": 203,
+      "description": "Decision 14 says change-password must invalidate every session except the current one. The unit test (ProfileServiceTest::changePassword_correctPassword_excludesCurrentSession) checks the Query JSON contains $ne <SESSION_ID>, but no IT verifies the invariant against real spring-session-managed sessions. seedSession() is implemented in this very file and used by terminate-all, but is not used for change-password. A subtle bug — wrong field name, wrong serialization of the WebSession id — would not be caught.",
+      "fix": "Add an IT changePassword_correctCurrent_otherSessionsRemoved_currentSessionRemains: seed two extra session docs with principal=USER_ID and arbitrary _ids, drive change-password through WebTestClient (the test SecurityContext + a manual session document with the same _id as the test request), then assert sessions.count(principal=USER_ID) == 1 and the surviving _id matches the current session id. Asserts both halves of Decision 14 against the real schema."
+    },
+    {
+      "severity": "minor",
+      "category": "readability",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 99,
+      "description": "Comment claims `spring-session-data-mongodb hashes the session ID before storing it, so equality on the hash representation must match exactly what WebSession.getId() returns at runtime — Spring Session does this hashing on read/write transparently`. The reactive MongoOperationsSessionRepository / ReactiveMongoSessionRepository writes the session id directly to the _id field — no hashing in either direction. The code is correct because both sides use the literal id; the comment is not. Misleading comments are worse than missing ones because they encode false invariants future maintainers will trust.",
+      "fix": "Replace with: `// Spring Session stores its session document with the session ID literally in _id. Excluding _id == WebSession.getId() preserves the device that initiated change-password (Decision 14). Field path verified by AuthControllerIT.sessionsCollection_principalFieldPath_isAtTopLevel.`"
+    },
+    {
+      "severity": "minor",
+      "category": "maintainability",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileController.java",
+      "line": 88,
+      "description": "extractIp(ServerWebExchange) (X-Forwarded-For first segment, fallback to remoteAddress) and the USER_AGENT_MAX = 500 cap are duplicated between ProfileController and AuthService/AuthController (AuthService.USER_AGENT_MAX is also 500). Three copies of the same IP-extraction logic now exist in the codebase; if a fourth controller starts logging audit events the same logic will be cloned again.",
+      "fix": "Extract com.botfunnel.common.RequestMeta with two static methods extractIp(ServerWebExchange) and capUserAgent(String). Move USER_AGENT_MAX into it as a public constant. Delete the three local copies."
+    },
+    {
+      "severity": "minor",
+      "category": "error-handling",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 84,
+      "description": "Audit event logging is wired via .doOnSuccess on terminateAllSessionsExcept and on session.invalidate(). If either signal errors (Mongo blip on the sessions collection, WebSession.invalidate Mono fails), the password rotation / soft-delete has already been persisted but no audit event is recorded. Given EventService is itself fire-and-forget, this is a defensible design — but it does mean a partial-failure window exists where state changed without an audit trail. The change-password TDD anchor is implicitly affected too (assertion only checks 200, not event presence on the failure branch).",
+      "fix": "Either move the eventService.logEvent call to immediately after userRepository.save(...) succeeds (audit captures the state change irrespective of downstream session-cleanup outcome) or wrap the doOnSuccess in a doFinally that always logs once the save returns. Same pattern in deleteAccount (line 119-121)."
+    },
+    {
+      "severity": "minor",
+      "category": "error-handling",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 70,
+      "description": "A failed BCrypt verification in changePassword (wrong current password) is not audit-logged. Repeated failed change-password attempts on a session-jacked account would be a meaningful intrusion signal, but no `password_change_failed` (or similar) event is written. Out of strict scope — the events enum doesn't include such a type and the task does not require it — but flagging since AuthService logs login_failed on the same brute-force-relevant axis.",
+      "fix": "Optional. If kept as-is, document the asymmetry in decisions.md. Otherwise add a `password_change_failed` event type (Epic-level decision) and log on the BCrypt-mismatch branch with metadata={reason: \"wrong_current_password\"}."
+    },
+    {
+      "severity": "minor",
+      "category": "readability",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileController.java",
+      "line": 78,
+      "description": "currentUserId() filter `a != null && a.isAuthenticated() && a.getPrincipal() instanceof AppUserDetails`: the `a != null` guard is dead code — ReactiveSecurityContextHolder.getContext() emits empty Mono when no SecurityContext is present, and SecurityContext.getAuthentication() can be null but Mono.map's lambda would be invoked only with a non-null context. The filter still works because of the instanceof check, but the redundant null guard suggests confusion about the reactive flow.",
+      "fix": "Drop `a != null` — the `a.isAuthenticated()` would NPE if it were ever null, which would be the real bug to surface. Or use ReactiveSecurityContextHolder.getContext().mapNotNull(SecurityContext::getAuthentication) so the null is handled at the chain level."
+    },
+    {
+      "severity": "minor",
+      "category": "readability",
+      "file": "backend/src/main/java/com/botfunnel/jobs/HardDeleteJob.java",
+      "line": 49,
+      "description": "Log line emits all deleted user IDs in a single record (`ids={...}`). For the regular daily cadence × 30-day retention, the batch size is naturally bounded — but on first deployment after a long stale-account backlog, this could produce a multi-kilobyte log line. Splunk/Loki indexers truncate above various thresholds (commonly 8KB) and the GDPR-audit intent would silently fail.",
+      "fix": "Either log one record per id (cheap, more grep-able, scales) or chunk the ids list into N=100 sublists before logging. Acceptable as-is given the bounded volume; flagging for visibility."
+    },
+    {
+      "severity": "minor",
+      "category": "maintainability",
+      "file": "backend/src/main/java/com/botfunnel/admin/SuperAdminSeeder.java",
+      "line": 56,
+      "description": "Three sequential .block() calls (findByEmail, save on create, save on promote). Each is a new event-loop hop. ApplicationRunner.run() is intentionally allowed to block (decisions / task spec confirm), but a pure reactive chain (.flatMap..flatMap..switchIfEmpty..block at the end) would be 1 round-trip of orchestration vs 3 here. Minor — acceptable for startup-only code.",
+      "fix": "Optional refactor: rewrite seed() as a single reactive chain, .block() once at the bottom of the chain. No functional change; cleaner."
+    },
+    {
+      "severity": "minor",
+      "category": "best-practices",
+      "file": "backend/src/main/java/com/botfunnel/profile/dto/ChangePasswordRequest.java",
+      "line": 9,
+      "description": "currentPassword has no @Size cap (unlike newPassword which inherits @ValidPassword + @NotBlank). A malicious client could POST a 10MB string for currentPassword and force a CPU-bound bcrypt-verify call before BCrypt itself bails. BCryptPasswordEncoder caps inputs at 72 bytes internally so the actual hash work is bounded, but the JSON parser and reactive netty buffer absorb the full payload first. Already mitigated by spring.codec.max-in-memory-size, but a DTO-level @Size(max=200) would surface intent.",
+      "fix": "Add @Size(max = 200) on both currentPassword (and consider newPassword too — @ValidPassword does not enforce max). Aligns with Task 6 round-2 minor on @Size for other auth DTOs."
+    },
+    {
+      "severity": "minor",
+      "category": "testing",
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileServiceTest.java",
+      "line": 64,
+      "description": "ProfileServiceTest sets up a User with passwordHash = `$2a$12$existing-hash` (a literal that is not a valid bcrypt hash). Because PasswordEncoder is mocked, the test still passes — but the literal will mislead someone reading the test as an example of how a real hash looks. Tiny readability nit.",
+      "fix": "Either write `passwordEncoder.encode(\"Strong1Pass\")` once in setUp and use the real bcrypt output, or rename the constant to OLD_HASH and add a comment that it's a synthetic placeholder routed past the mocked encoder."
+    },
+    {
+      "severity": "nitpick",
+      "category": "best-practices",
+      "file": "backend/src/test/java/com/botfunnel/JobRunrInMemoryConfig.java",
+      "line": 14,
+      "description": "Class is package-private (no modifier on the class declaration is fine for a TestConfiguration). However the @Bean method is also package-private — Spring would typically prefer public for clarity even though it works either way.",
+      "fix": "Optional: mark `public class JobRunrInMemoryConfig` and `public StorageProvider storageProvider()`. Both are imported by other-package tests (com.botfunnel.security.SecurityConfigTest), which works with package-private only because the @Import contract accepts the class reference, not because of visibility. Cosmetic."
+    },
+    {
+      "severity": "nitpick",
+      "category": "readability",
+      "file": "backend/src/main/java/com/botfunnel/profile/ProfileService.java",
+      "line": 70,
+      "description": "Boolean.FALSE.equals(matches) — the previous Mono returned a boolean from a Callable, which auto-boxes; null is impossible. The defensive null-safe equality is not wrong, just slightly cute. `if (!matches)` would compile-fail because matches is Boolean here, but `!Boolean.TRUE.equals(matches)` reads more directly to most maintainers.",
+      "fix": "Optional: switch to `if (!matches)` after binding the unboxed value: `.flatMap(matches -> { if (!matches) { ... } ... })`. Or accept current form."
+    }
+  ]
+}

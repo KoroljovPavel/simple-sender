@@ -1,0 +1,29 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review of Task 7 (ProjectHardDeleteJob cascade extension). All four round-1 findings are resolved and no behavioral regressions were introduced. Suite is green on --rerun-tasks: ProjectHardDeleteJobIT 12 tests (up from 11 — orphan-blob test added), ProjectSoftDeleteCascadeIT 3 tests, 0 failures / 0 errors. (1) The round-1 major: the weak idempotency test is now cron_cascadeRecoversPartialDrainThenSecondRunIsNoOp — it seeds a SURVIVING project doc (step 8 'drop projects' modeled as not-reached) plus survivor rows in tags/subscriber_events/subscriber_exports/GridFS while deliberately NOT seeding subscribers (a collection already drained by the simulated crash). The single first run now genuinely hits every cascade remove(): the litmus test passes because deleting any production cascade remove line (e.g. the tags or subscriber_events sweep) leaves that collection's row alive and fails the corresponding countByProjectId(...).isZero() assertion, and the exact log line deletedCount=1 ... subscribersRemoved=0 tagsRemoved=1 pins the per-collection drains including the genuine no-op on the empty subscribers collection. The second fire then asserts the all-zero no-eligible line appears exactly once. It is no longer a duplicate of cron_zeroDeletionDay. (2) round-1 minor missing-coverage: cron_gridFsFileWithoutExportPointer_isStillSwept seeds a GridFS blob with no subscriber_exports pointer and asserts it is still swept — locking in the metadata.projectId-keyed sweep / GridFS-before-exports contract; an implementation that joined GridFS through subscriber_exports would leak this blob and fail. (3) round-1 minor anti-pattern: nanoTime seeds for subscribers/tags replaced with a static AtomicLong SEQ, and the DONE-status load-bearing comment added on seedSubscriberExport. (4) round-1 low: TODO marker aligned to 'Task 8/4/5'. The only residual is a cosmetic inconsistency (two nanoTime usages remain — seedSubscriberEvent's subscriberId and ProjectSoftDeleteCascadeIT's project name — neither is under a unique index nor asserted, so harmless). Tests assert real post-run DB/GridFS state and exact structured log shapes, not mock calls. Litmus pass rate 16/16.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "file": "backend/src/test/java/com/botfunnel/jobs/ProjectHardDeleteJobIT.java",
+      "line": 120,
+      "description": "Cosmetic follow-up to round-1 finding 3 (already resolved for the load-bearing seeds). The commit replaced System.nanoTime() with the deterministic AtomicLong SEQ for the unique-compound seeds that actually back a unique index (subscribers (projectId,telegramUserId), tags (projectId,slug)), and documented the rationale in the SEQ comment at line 50. Two nanoTime usages were left behind: seedSubscriberEvent's subscriberId here at line 120, and ProjectSoftDeleteCascadeIT.saveSoftDeleted's project name at line 83 (plus that file's inline subscriber seed at lines 121-122). None of these fields participate in a unique index, none are asserted, and SubscriberEvent/Subscriber here are wiped per-test by cleanState, so there is zero flakiness or collision risk — this is purely a consistency nit against the stated 'replace nanoTime seeds' intent, not a correctness issue. No functional change required.",
+      "suggested_fix": "Optional only. For full consistency with the SEQ-determinism rationale, route the remaining unique-ish seed fields through SEQ as well: seedSubscriberEvent -> e.setSubscriberId(\"sub-\" + SEQ.incrementAndGet()), and in ProjectSoftDeleteCascadeIT switch the project name and the inline Subscriber telegramUserId/telegramChatId to an equivalent AtomicLong counter. Leave as-is if you prefer to scope the change to indexed fields only — behavior is identical either way."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 16,
+      "passed": 16,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 15,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

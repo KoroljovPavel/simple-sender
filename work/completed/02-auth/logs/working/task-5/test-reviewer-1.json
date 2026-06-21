@@ -1,0 +1,77 @@
+{
+  "status": "needs_improvement",
+  "summary": "Test suite is broad and well-structured: every TDD anchor from task 5 is satisfied (under different names but with equivalent semantics), the unit/integration split is healthy, and IT assertions cover both HTTP response and MongoDB/Mailpit state. However, two gaps are notable: (1) the acceptance criterion 'email_verified event logged in events collection' is not asserted at the integration level — only at the unit level via mock verification, so the EventService->EventRepository->MongoDB chain is never exercised end-to-end; (2) the soft-delete >30-day path is covered only in unit tests, not in IT, so the repurpose-document branch is not asserted at the persistence layer. A handful of smaller issues exist around minor missing assertions and the MockServerWebExchange setup. No critical issues, no litmus-test failures.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:142-161 (verifyEmail_validToken_userActive_tokenCleared)",
+      "issue": "Task acceptance criterion 'email_verified event logged in events collection after successful verification' is not verified at the integration level. The IT for verify-email asserts user status, token clearing, and HTTP 200, but never queries the MongoDB `events` collection to assert that an `email_verified` document was written. Unit-level coverage exists (AuthServiceRegistrationTest line 262-265), but it only checks `eventService.logEvent(...)` was called on a mock — it does not exercise EventService -> EventRepository -> MongoDB. If EventService/EventRepository wiring breaks, no test catches it.",
+      "recommendation": "Add an assertion to verifyEmail_validToken_userActive_tokenCleared: autowire EventRepository, after the verify call do `List<Event> events = eventRepository.findByUserIdOrderByCreatedAtDesc(saved.getId()).collectList().block();` and assert `events.stream().anyMatch(e -> 'email_verified'.equals(e.getEventType()))`. Also extend cleanState() to delete the events collection between tests (`eventRepository.deleteAll().block()`) so this and future event-related ITs are isolated."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java (no IT for soft-delete >30d)",
+      "issue": "The task edge-case bullet explicitly calls out two soft-delete paths: within 30 days (409) and older than 30 days (succeed). The unit test AuthServiceRegistrationTest::register_softDeletedEmail_olderThan30Days_succeedsAndRepurposesDocument covers the >30d path, but no integration test exercises the document-repurpose flow against real MongoDB. The unique-index-on-email behavior, the cleared-deletedAt persistence, and the carry-over-field reset (passwordResetTokenHash etc.) are not asserted with a real repository. A subtle bug in the repurpose flow (e.g., not clearing all carry-over fields, or relying on a save() pattern that fails the unique index) would slip past the unit suite.",
+      "recommendation": "Add an IT register_softDeletedEmail_olderThan30Days_201_repurposesDocument: seedUser('old@test.com', deleted, now.minus(31d)); call POST /api/auth/register with same email; expectStatus 201; query repo and assert: same _id as seeded, status=pending, deletedAt=null, passwordResetTokenHash=null, emailVerificationTokenHash matches [0-9a-f]{64}. Use the existing seedUser helper."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:139 (verifyEmail null/blank guard) — no test covers this branch",
+      "issue": "AuthService.verifyEmail starts with `if (rawToken == null || rawToken.isBlank()) return Mono.error(badRequest(...))`. No test exercises the null or blank input. A regression that removes this guard would have hashToken(null) throw NPE -> 500 instead of the clean 400. Litmus test: remove the guard, and no existing test fails (the IT sends 'garbage-not-issued', the unit test sends 'garbage-token' — both go through hashToken successfully).",
+      "recommendation": "Add unit test verifyEmail_blankToken_returns400 in AuthServiceRegistrationTest: StepVerifier.create(authService.verifyEmail(\"\", exchange())).expectErrorMatches(e -> e instanceof AppException && ((AppException)e).getStatus()==BAD_REQUEST).verify(); verifyNoInteractions(userRepository). Same for null. Even better: add an IT GET /api/auth/verify-email with no token query param — the @RequestParam validation should also produce a clean 400."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:184-189 (verifyEmail_invalidToken_400NotServerError)",
+      "issue": "Test only asserts HTTP 400 — does not assert the response body. The contract is `{message: \"Посилання недійсне\"}` for invalid (and `{code: \"TOKEN_EXPIRED\"}` for expired). A regression that swaps these two messages would leak the existence of a token to an attacker (invalid vs expired = enumeration oracle).",
+      "recommendation": "Append .expectBody().jsonPath(\"$.message\").isEqualTo(\"Посилання недійсне\").jsonPath(\"$.code\").doesNotExist(); — locks in both the exact message AND the absence of the TOKEN_EXPIRED code so the two error paths cannot drift."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:194-210 (resendVerification_within60s_429)",
+      "issue": "Test verifies the rate-limit window (first 200, second 429) but does not assert that the rate limit is per-email (different emails should not collide). Also no IT asserts the anti-enumeration property: resend with an unknown email also returns 200 with no email in Mailpit and the Redis key still gets set. Both are explicit Decision 7 properties.",
+      "recommendation": "Add resendVerification_unknownEmail_200_noEmailInMailpit_redisKeySet: POST /api/auth/resend-verification with `{email: 'never-existed@test.com'}` -> expectStatus 200; assert mailpit().getMessageCount() == 0; assert redisTemplate.hasKey(\"resend:rate:never-existed@test.com\").block() == true. Optionally add resendVerification_differentEmails_doNotCollide: two POSTs with two emails within 60s -> both return 200."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:48-57 (cleanState)",
+      "issue": "cleanState() catches Exception from `mailpit().deleteAllMessages()` and silently ignores it ('Mailpit boot lag — retried by next test seeding'). This swallows real failures (e.g., Mailpit API contract change, container OOM). Worse, the assertion `assertThat(all).hasSize(1)` in register_validData_201_userPendingInDB_emailInMailpit will fail if a previous test's email survived — but the test author won't see the underlying reason because the swallowed exception masks the cause.",
+      "recommendation": "Either (a) loop with Awaitility until deleteAllMessages succeeds, e.g. `await().atMost(Duration.ofSeconds(10)).pollInterval(Duration.ofMillis(200)).untilAsserted(() -> mailpit().deleteAllMessages())`, or (b) await for `mailpit().getMessageCount() == 0` after deletion. Do not silently swallow — log the exception at minimum: `} catch (Exception ex) { log.warn(\"mailpit clean failed\", ex); }`."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/TokenServiceTest.java:14-18 (generateRawToken_decodesTo32Bytes)",
+      "issue": "Task TDD anchor specifies `generateRawToken_length43CharsUrlSafe` — assert string is 43 chars. The actual test asserts the decoded byte length is 32. These are mathematically equivalent (32 bytes base64url unpadded = 43 chars), but the named anchor and the spec ('returns 43-char URL-safe base64 string') focus on the string-length contract that consumers (URL builders, DB column sizes) actually depend on. A regression that adds padding would make the string 44 chars but decoded bytes still 32 — the current test would not catch it. The padding-absence test (generateRawToken_isBase64UrlWithoutPadding) checks for `=`, but does not check overall length.",
+      "recommendation": "Add or rename to assert string length directly: `assertThat(tokenService.generateRawToken()).hasSize(43).matches(\"[A-Za-z0-9_-]+\");`. This matches the TDD anchor name and the user-facing contract verbatim."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthServiceRegistrationTest.java:48-49 (Answers.RETURNS_DEEP_STUBS on ReactiveRedisTemplate)",
+      "issue": "`@Mock(answer = Answers.RETURNS_DEEP_STUBS)` on the redis template is convenient but it conflates 'opsForValue not stubbed' with 'opsForValue returns null mono'. Tests that forget to stub setIfAbsent will silently get a Mono.empty() instead of a NPE, masking missing setup. This pattern also makes it easier to assert mock interaction without forcing the test to model real Redis behavior. So far it works but it's a maintenance risk for the next person extending the suite.",
+      "recommendation": "Acceptable as-is for now, but consider extracting a small helper `stubResendNotRateLimited()` / `stubResendRateLimited()` that explicitly stubs `opsForValue().setIfAbsent(...)` and document why deep stubs are used. If new resend variants are added, this prevents 'phantom' empty-Mono returns from hiding bugs."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 8,
+    "litmusTest": {
+      "checked": 27,
+      "passed": 27,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 21,
+      "integration": 8,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 7,
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "All round-1 findings addressed cleanly. The sanitizeTrigger bug is correctly fixed: canvasPosition is now explicitly carried as `tr.canvasPosition ?? null` (line 194) so trigger coordinates survive the PATCH body without dropping any other field. The fix is consistent with how steps (passed verbatim) and notes (passed verbatim) carry canvasPosition. onNodeDragStop trigger and note branches both have Number.isInteger(idx) guards that make malformed nodeIds (e.g. `trigger:x` -> NaN) a safe no-op. Comments accurately describe direct vs debounced persist paths. Stale `funnel-add-step` e2e selectors are removed, tests remain skipped. A new regression test (line 719-753 of funnel-editor.spec.ts) exercises the full trigger canvasPosition round-trip including sanitizeTrigger. No new issues or regressions found."
+}

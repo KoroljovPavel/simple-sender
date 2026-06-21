@@ -1,0 +1,73 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 3, 4, 9, 11],
+  "iteration": 2,
+  "status": "changes_required",
+  "purpose": "Verify five targeted fixes from cross-task-reality-review iter1. Check no new critical issues introduced.",
+  "fix_verification": {
+    "task_1_redis_testcontainer_note": {
+      "status": "partial",
+      "present": true,
+      "issue": "Note references GenericContainer<>(\"redis:7-alpine\").withExposedPorts(6379) with @DynamicPropertySource — correct. But the note says to override spring.data.redis.host and spring.data.redis.port, while Task 1 step 1 binds REDIS_URL to spring.data.redis.url. These are two different Spring Boot Redis config approaches and they conflict. The app property is .url but the test override hint uses .host/.port."
+    },
+    "task_3_awaitility_attribution": {
+      "status": "fixed",
+      "present": true,
+      "note": "Line 98 now correctly states: 'Awaitility is available via spring-boot-starter-test transitive dependency.' Testcontainers attribution removed."
+    },
+    "task_4_dependency_and_principal_contract": {
+      "status": "fixed",
+      "present": true,
+      "note": "Dependencies section line 128 explicitly states EmailService is NOT a dependency for event logging; EventService is created within Task 4 itself. Principal name contract note at line 145 says getUsername() must return user id (MongoDB ObjectId string), not email."
+    },
+    "task_9_spring_session_not_in_redis_row": {
+      "status": "fixed",
+      "present": true,
+      "note": "Line 34 explicitly says spring-session-data-mongodb stores sessions in MongoDB, not Redis — do not add it to the Redis row. patterns.md CSRF update is now in scope (lines 25-26 and step 3 in What to do)."
+    },
+    "task_11_ux_guidelines_parallel_note": {
+      "status": "partial",
+      "present": true,
+      "note": "Note at line 94 warns that ux-guidelines.md is updated by Task 9 in parallel and instructs relying on tech-spec Decision 5 as fallback. However, depends_on: [8] is unchanged — Task 9 is NOT declared as a dependency. The structural parallel-execution risk remains; the note is a documentation-level mitigation, not a dependency fix. Acceptable given Decision 5 is authoritative and the note is explicit."
+    }
+  },
+  "findings": [
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Redis Testcontainer DynamicPropertySource hint (line 134) says to map spring.data.redis.host and spring.data.redis.port. But Task 1 step 1 binds REDIS_URL to spring.data.redis.url (url-based config, not host/port). These are mutually exclusive Spring Boot Redis config approaches. If the app is configured with spring.data.redis.url, then @DynamicPropertySource in AbstractIntegrationTest must override spring.data.redis.url=redis://localhost:{container.getMappedPort(6379)}, NOT spring.data.redis.host + spring.data.redis.port. Using host/port overrides will not work when the app property binding is url-based.",
+      "fix": "Update the DynamicPropertySource hint to: 'Override spring.data.redis.url=redis://localhost:{container.getMappedPort(6379)} (matching the application.properties binding). Do NOT override spring.data.redis.host/port — those are inactive when url-based config is used.'"
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 11,
+      "issue": "Task 11 depends_on: [8] but not [9]. Task 9 (updating ux-guidelines.md) runs in parallel in Wave 6. The note at line 94 documents this and provides the Decision 5 fallback — which is correct and sufficient. However, the dependency omission is still technically present. The mitigation note is adequate for implementation safety, but wave-enforcement tooling will not block Task 11 from starting before Task 9 completes.",
+      "fix": "Accepted mitigation via note + Decision 5 reference. Optionally add 9 to depends_on: [8, 9] to make the ordering machine-enforceable, but the note is sufficient for human-driven execution."
+    }
+  ],
+  "no_new_critical_issues": true,
+  "new_issues_check": {
+    "task_1": "One new major issue: DynamicPropertySource hint uses spring.data.redis.host/port but app property is spring.data.redis.url — these conflict.",
+    "task_3": "No new issues.",
+    "task_4": "No new issues.",
+    "task_9": "No new issues. patterns.md is now in scope. spring-session-data-mongodb correctly placed outside Redis row.",
+    "task_11": "No new critical issues. Minor: dependency not declared (accepted mitigation)."
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "claims_verified": 18,
+    "issues_found": 2,
+    "by_severity": {
+      "critical": 0,
+      "major": 1,
+      "minor": 1
+    },
+    "fixes_verified": {
+      "fully_applied": 3,
+      "partially_applied": 2,
+      "missing": 0
+    }
+  }
+}

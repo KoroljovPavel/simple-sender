@@ -1,0 +1,62 @@
+{
+  "summary": "Task 10 (funnel editor) is a well-structured, idiomatic implementation that hits nearly all acceptance criteria: store actions re-throw (component maps errors via useApiError), client validation mirrors backend FunnelService byte-for-byte (text/imageUrl/delay/tagSlug/triggerValue), PATCH sends the full ordered steps array, reorder bounds are enforced, i18n parity is clean (all 6 backend 422 codes mapped, check-locales passes), and Vitest+E2E coverage is thorough. Two real correctness/UX bugs warrant fixing before approval: (1) a non-404 load failure leaves a blank page with no error/retry UI because the whole template is gated behind v-if=\"funnel\"; (2) an activate-time persist failure renders the same error message twice (activateError + saveError banners). Several minor divergences (active deep-link preview drops ?start=, concurrent-PATCH race on debounced trigger save) are noted.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": "62-76, 178-222",
+      "finding": "On a NON-404 load failure (500, network error, malformed response) load() sets saveError but the entire template — including both the <p v-if=\"activateError\"> and <p v-if=\"saveError\"> error banners — is gated behind <div v-if=\"funnel\">. Since funnel.value is still null after a failed load, NOTHING renders: the user sees a permanently blank page with no error message and no retry. The 404 path redirects gracefully, but every other failure mode (backend down, transient 5xx) is a dead-end. This also contradicts the Task 9 convention that introduced common.loading/common.retry page states for exactly this situation.",
+      "recommendation": "Render a loading/error/retry shell OUTSIDE the v-if=\"funnel\" block (mirror funnels/index.vue and custom-fields page loading/error states). Track a loadError ref separate from saveError, show it with a retry button when funnel is null and load failed; show a loading indicator until `loaded` flips."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": "149-166, 217-222",
+      "finding": "When activate() flushes pending edits via persist() and that persist FAILS, it sets activateError.value = saveError.value. Because persist() itself already set saveError, BOTH the funnel-activate-error and funnel-save-error <p> banners render the identical message simultaneously — duplicate error UI.",
+      "recommendation": "On the persist-failure branch inside activate(), clear saveError after copying it into activateError (saveError.value = null), or render only one banner (drop the standalone saveError <p> and surface persist failures through activateError, or vice-versa). Pick a single error surface for the activate flow."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelTriggerSettings.vue",
+      "line": "21-27",
+      "finding": "For an ACTIVE funnel the client preview still wins over the server deepLink whenever botUsername is present (the `if (props.botUsername)` branch is checked first). With an empty trigger_value the client renders bare `t.me/<bot>` while the backend's canonical deepLink (resolveDeepLink) is `t.me/<bot>?start=` (trailing ?start=). The displayed/copied link for an active empty-trigger funnel therefore diverges from the server's canonical link. Functionally both deep-link to bare /start, so impact is cosmetic, but the 'persists across reload, copy the canonical link' intent is not fully honored for active funnels.",
+      "recommendation": "For an active funnel prefer props.deepLink when present (e.g. show server deepLink unless the user is actively editing trigger_value on a draft), or make the empty-value preview match the backend (`?start=` suffix) so copy == server canonical. At minimum document the intentional divergence."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": "111-144",
+      "finding": "Every step add/edit/delete/move and every debounced trigger_value change fires an independent full-array PATCH via persist(). These can overlap: e.g. a debounced trigger PATCH (600ms) resolving after a later step-add PATCH would applyResponse() with a stale server snapshot, or two in-flight PATCHes resolve out of order (last-resolved wins, not last-issued). No request sequencing/cancellation guard. Low probability for a single user clicking, but reorder + fast typing can trigger it.",
+      "recommendation": "Serialize persists (await an in-flight token / abort the previous request) or drop applyResponse() for the debounced-trigger persist and only re-apply on explicit actions. Given Phase-1 single-editor scope this is acceptable as-is if acknowledged; flagging for awareness."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/components/funnels/FunnelStepsList.vue",
+      "line": "72-75",
+      "finding": "The <li> v-for uses :key=\"index\". Since reorder/delete mutate the array by index, index-as-key is acceptable here (rows carry no internal stateful inputs — the edit form lives in a separate dialog), but it defeats Vue's keyed-diff and re-renders confirm state oddly if a delete-confirm is open during a reorder. confirmIndex is reset on delete but not on reorder, so an open confirm could briefly point at the wrong row after a move.",
+      "recommendation": "Acceptable for Phase 1. If hardened: reset confirmIndex = null on the steps prop changing (watch), or key by a stable per-step id once the backend exposes one."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "line": "50-56, 87",
+      "finding": "DELAY client validation uses z.coerce.number().int().min(1) and the initialValue is 1. The .int() rule is STRICTER than the backend (requireDelay only rejects null or < 1, not non-integers). This cannot cause a false 422 (stricter client never lets through what the server rejects), so it is safe, but it is a deliberate deviation from the 'byte-for-byte mirror' claim in the file's own header comment.",
+      "recommendation": "Either drop .int() to match the backend exactly, or adjust the header comment to note delay is intentionally validated as a positive integer client-side (UX choice). No functional risk."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": "51-55",
+      "finding": "resolveFunnelError maps err.data.code first then falls back to resolveError(err, contextKey). For a 422 whose code is unmapped/absent it falls to errors.funnels.{activate|update|pause}.422 (absent) then .generic (present). Verified all keys resolve. Note: it relies solely on err.data.code; verify-email.vue in this repo also falls back to err.response._data.code for the ofetch shape where the parsed body is under response._data. If useApi ever surfaces the body only under response._data, the code mapping would silently miss and show the generic message.",
+      "recommendation": "Mirror verify-email.vue: read code from (err.data?.code ?? err.response?._data?.code) for robustness across ofetch error shapes. Current behavior degrades gracefully to the localized generic message, so this is hardening, not a defect."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": "78-84",
+      "finding": "load() and botStore.fetch() run unawaited in onMounted with no loading indicator; the page is blank until the funnel resolves. For a slow backend this is a perceptible empty flash. Tied to the major finding above (no loading shell).",
+      "recommendation": "Add a loading skeleton/spinner gated on !loaded && !loadError, resolved together with the error-shell fix."
+    }
+  ],
+  "verdict": "changes_requested"
+}

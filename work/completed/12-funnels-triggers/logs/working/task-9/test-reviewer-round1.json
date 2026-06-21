@@ -1,0 +1,32 @@
+{
+  "task": 9,
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "skill": "test-master",
+  "scope": "frontend/tests/components/FunnelTriggerSettings.spec.ts (+5), frontend/tests/components/AddStepDialog.spec.ts (+2)",
+  "summary": "Component (Vitest nuxt) tests for the Phase-3 trigger selector + EMIT_EVENT step. All 7 TDD-anchor behaviors covered with real DOM/model/emit assertions. Mocking limited to useApi + useRoute (the established SearchableSelect pattern, under the 3+ wrong-test-type threshold). Test pyramid correct: tech-spec assigns no E2E here, covers via Vitest component tests. 402/402 frontend tests green.",
+  "findings": [
+    {
+      "severity": "info",
+      "category": "TDD anchor coverage",
+      "finding": "All seven task TDD anchors covered: keyword editor render + on_start-block hidden, tag/field SearchableSelect render, api-event slug invalid->error + valid->clears, keyword add(2)/remove(1) model equality, on_start deep-link no-regression, EMIT_EVENT in picker + event-name field, EMIT_EVENT emit {stepType,eventName} + block-on-empty.",
+      "action": "noted-positive"
+    },
+    {
+      "severity": "info",
+      "category": "Assertion quality",
+      "finding": "keyword add/remove asserts the actual `keywords` model array (['bonus','sale'] then ['sale']) via the manual v-model handler pattern — verifies real state mutation through the emitted update contract, not a mock call.",
+      "action": "noted-positive"
+    },
+    {
+      "severity": "minor",
+      "category": "Coverage gap (out of Vitest scope)",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "finding": "The page-level persist() branching (keyword owns `keywords` + clears triggerValue; other types own triggerValue + clear keywords — the stale-value Edge case) is not asserted in funnel-editor.spec.ts.",
+      "action": "accept-as-is",
+      "reason": "tech-spec scopes Vitest to the three component behaviors (selector, keyword list, EMIT_EVENT) — all covered. The PATCH round-trip is explicitly a verify-user (human / Task 15) check per the task's Verify-user. Adding a page-PATCH assertion would exceed the stated automated-test scope; flagged for transparency."
+    }
+  ],
+  "verdict": "approve",
+  "unresolved": []
+}

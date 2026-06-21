@@ -1,0 +1,59 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5],
+  "mode": "cross-task-integration",
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 5,
+      "issue": "Task 5 'Implementation hints' section (line 166) references `/api/me` as the endpoint to test AC-4 backward compat: 'curl ... http://localhost:8080/api/me'. The actual controller maps `@RequestMapping(\"/api/auth\")` + `@GetMapping(\"/me\")` → full path is `/api/auth/me`. The Smoke section of the same task (line 97) correctly uses `/api/auth/me` and even has an inline note confirming it. The conflict between the two sections in the same task creates ambiguity: an executor following the 'Implementation hints' block will get a 404 or 403 instead of 200, making AC-4 smoke appear to fail.",
+      "fix": "In Task 5 'Implementation hints', replace the `/api/me` reference with `/api/auth/me` to match the Smoke section and the actual `AuthController` mapping."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 (Test Audit) must verify that `mockExchangeWithSessions` in `AuthServiceTest` is extended to stub `exchange.getAttributes()` after Task 1. The current implementation at AuthServiceTest.java:119-128 stubs only `getRequest()` and `getSession()`. Task 1 adds `exchange.getAttributes().put(REMEMBER_ME_ATTR, ...)` inside `openSession`. If Task 1 fails to extend the helper, `verify(attrs).put(REMEMBER_ME_ATTR, ...)` will silently no-op on the Mockito default (returns null), making the test appear green with no real assertion — a false-confidence failure. Task 4 correctly calls this out (point 8 in Description), but the finding is elevated to major because it is the sole cross-task wiring check that guards against Task 1 producing a broken test. Task 4 depends_on [1] which is correct, so the chain is sound; this is a tracking note to ensure Task 4's executor does not skip point 8.",
+      "fix": "Task 4 executor must verify mockExchangeWithSessions (AuthServiceTest.java:119) is extended: `when(exchange.getAttributes()).thenReturn(new ConcurrentHashMap<>())` (or a mock Map) is present after Task 1. If missing, file a blocker finding in the test audit report."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 1,
+      "issue": "Two existing tests in AuthServiceTest — `login_success_invalidatesPreAuthSession_andSetsRememberMeTtl` (lines 306-341) and `login_success_noRememberMe_setsTtl24Hours` (lines 343-365) — currently contain pre-existing broken assertions that contradict the real `openSession` implementation at AuthService.java:590-606: (a) `verify(preAuth).invalidate()` — `openSession` never calls `invalidate()` per the Mono.cache comment at lines 598-602; (b) `verify(fresh).setMaxIdleTime(...)` — `openSession` calls `getSession()` once and gets `preAuth` (cached Mono), never `fresh`. If Task 1 does not fix these broken assertions before adding the new `REMEMBER_ME_ATTR` assertions, the tests will fail at the broken verify points and never reach the new assertions, producing misleading CI failures that obscure the actual missing coverage. Task 1 explicitly documents this (TDD Anchor Note and What-to-do step 2), so the intent is correct; this finding flags it as a cross-task risk because the broken assertions are pre-existing state that Tasks 2/3/4 inherit when reading the test file.",
+      "fix": "In Task 1 step 2: remove `verify(preAuth).invalidate()` from both tests; change `verify(fresh).setMaxIdleTime(...)` to `verify(preAuth).setMaxIdleTime(...)` in both tests; remove or make lenient the `when(preAuth.invalidate()).thenReturn(Mono.empty())` stubs. These are pre-existing fixes required before the new assertions are added."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 instructs the auditor to look for the register-auto-login regression case in both `AuthServiceTest` AND `AuthServiceRegistrationTest`. However the task also says 'if not found in either — blocker'. The register regression case is not yet present in `AuthServiceRegistrationTest` (confirmed by grep: 0 matches for getAttributes/REMEMBER_ME/register_auto/publishesRememberMe). It will be created by Task 1. This creates a sequencing assumption: Task 4 will only find the case after Task 1 completes (depends_on: [1] is declared, so this is correct). The minor flag is for documentation: Task 4 should confirm the case exists in one of the two files; if it exists only in `AuthServiceTest` (not `AuthServiceRegistrationTest`), it must not be marked missing.",
+      "fix": "No change needed — depends_on: [1] correctly gates Task 4. Task 4 executor must search both files as instructed before declaring the register case missing."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 2,
+      "issue": "Task 2 (Code Audit) reads `AuthService.java` and checks that `openSession` writes the attribute 'after setMaxIdleTime and before securityContextRepository.save(...)'. Task 1's implementation hint says the attribute write should be a `.doOnNext` or `.doOnSuccess` after the existing `setMaxIdleTime` call. The current `openSession` pipeline is: `getSession()` → `.doOnNext(session -> session.setMaxIdleTime(ttl))` → `.then(securityContextRepository.save(...))`. The attribute write via `exchange.getAttributes().put(...)` is not reactive (it is a synchronous map put), so it can be placed in either `.doOnNext` on the session or a separate `.doOnNext` on the Mono chain. If the executor places the attribute write AFTER `securityContextRepository.save(...)` fires (e.g. as a downstream side-effect), the resolver will run with the attribute absent when the framework flushes the session — this is the ordering risk called out in tech-spec and in Task 3 Description line 192-194. Task 2 must explicitly verify ordering.",
+      "fix": "Task 2 auditor must verify that the `exchange.getAttributes().put(REMEMBER_ME_ATTR, ...)` write happens in the reactive pipeline BEFORE `securityContextRepository.save(exchange, context)` is subscribed (i.e., inside the `.doOnNext` on the session Mono, not as a downstream `.then`). If the ordering is wrong, file a blocker finding."
+    }
+  ],
+  "cross_task_summary": {
+    "dependency_chain": "VALID — Task 2/3/4 all declare depends_on:[1]; Task 5 declares depends_on:[2,3,4]. No hidden dependencies found.",
+    "shared_resources": "VALID — RememberMeWebSessionIdResolver is owned by SecurityConfig (singleton @Bean), no task creates a duplicate instance.",
+    "inconsistent_approaches": "NONE — all three audit tasks (2/3/4) read the same source files; no inconsistent API usage across tasks.",
+    "endpoint_references": "MINOR INCONSISTENCY in Task 5 (see finding 1): Implementation hints use /api/me but Smoke section correctly uses /api/auth/me.",
+    "pre_existing_test_breakage": "KNOWN — AuthServiceTest lines 316/327/329 have broken assertions (verify(preAuth).invalidate, verify(fresh).setMaxIdleTime) that must be fixed in Task 1 before new assertions are added. Tasks 1 and 4 document this; Tasks 2/3 may also encounter it when reading the test file."
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "claims_verified": 31,
+    "issues_found": 5,
+    "critical": 0,
+    "major": 3,
+    "minor": 2
+  }
+}

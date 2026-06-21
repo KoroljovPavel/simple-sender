@@ -1,0 +1,22 @@
+{
+  "summary": "Full-feature OWASP Top 10 audit of 12-funnels-triggers (Phase 3): the first public key-authed API surface (POST /api/integrations/v1/events) plus the new entry-trigger expansion (keyword/tag_added/custom_field_set/event + EMIT_EVENT). All seven priority surfaces audited and found sound: API-key storage is hash-only (256-bit SecureRandom, SHA-256 hex, no plaintext at rest, no plaintext compare, prefix mask leaks no entropy); the 401 is byte-identical (bodyless sendError) across missing/blank/malformed/unknown causes with no exploitable timing oracle; the two security chains are mutually exclusive in both directions (Order(1) STATELESS key chain on /api/integrations/**, Order(2) session chain; chain isolation IT proves both directions); the Redis fail-open rate-limits are backstopped by Redis-independent depth cap (10) and per-dispatch fan-out ceiling (50) that bound recursion/width even when Redis is down; subscriber resolution is always project-scoped to the key-pinned projectId (anti-IDOR, both subscriber_id and telegram_user_id); input validation enforces the event_name slug + cross-field one-identifier rule; no PII/secret reaches any log site. Verdict: clean. No Critical/High/Medium. Two Low/defense-in-depth notes only.",
+  "findings": [
+    {
+      "severity": "low",
+      "owasp": "A03:2021 Injection (mass-assignment) / convention deviation",
+      "file": "backend/src/main/java/com/botfunnel/api/EventIngressRequest.java",
+      "line": 19,
+      "description": "EventIngressRequest lacks the @JsonIgnoreProperties(ignoreUnknown=true) annotation that the project convention (patterns.md L218, task 12.md L51) applies as the explicit mass-assignment defense on inbound DTOs. Behaviorally this is NOT exploitable: the DTO exposes only eventName/telegramUserId/subscriberId setters, the controller pins projectId from the ApiKeyAuthentication (never reads owner/project from the body), and Spring Boot disables FAIL_ON_UNKNOWN_PROPERTIES by default, so unknown fields like {\"projectId\":\"x\",\"ownerId\":\"y\"} are silently dropped with no binding target. The gap is a convention deviation (the annotation makes the intent explicit and is robust to a future global Jackson FAIL_ON_UNKNOWN_PROPERTIES flip), not a live vulnerability.",
+      "recommendation": "Add @JsonIgnoreProperties(ignoreUnknown=true) to EventIngressRequest to match the ratified mass-assignment convention and harden against a future Jackson config change. Non-blocking."
+    },
+    {
+      "severity": "low",
+      "owasp": "A07:2021 Identification and Authentication Failures (timing side-channel, defense-in-depth)",
+      "file": "backend/src/main/java/com/botfunnel/api/ApiKeyService.java",
+      "line": 90,
+      "description": "lookup() short-circuits null/blank presented keys before any DB call, while a well-formed-but-unknown key incurs an indexed findByKeyHash query. This is a theoretical timing difference between 'no/blank header' and 'present key', but it distinguishes only states the attacker already controls and knows (whether they sent a header). The security-relevant distinction — valid key vs invalid-but-present key — both traverse the identical findByKeyHash indexed point-query, so there is no oracle to separate a valid key from an invalid one. Compare is by SHA-256 hash equality at the DB index, not a byte-by-byte plaintext compare, so no per-character early-exit timing leak exists. No exploitable enumeration tell.",
+      "recommendation": "No change required; documented as defense-in-depth. If ever hardening further, route null/blank through the same hash+lookup path, but this is unnecessary given the equal-cost path for the only meaningful distinction."
+    }
+  ],
+  "verdict": "clean"
+}

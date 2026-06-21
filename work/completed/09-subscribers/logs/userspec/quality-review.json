@@ -1,0 +1,84 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "warning"
+  },
+  "findings": [
+    {
+      "check": "size_check",
+      "severity": "minor",
+      "issue": "Size declared L, but 24 acceptance criteria and 13 user scenarios exceed the L-feature typical depth thresholds (>10 AC, >3 flows). This is a legitimate L-feature so no sizing error, but the warning is flagged per rules.",
+      "location": "Frontmatter + Критерии приёмки",
+      "fix": "No action required — 24 ACs and 13 scenarios are proportional to the actual scope (new CRM module replacing a stub, 4 UI pages, async export, state machine). Document is self-consistent."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "AC1 includes 'latency observed-in-UI <2s' as part of a functional AC. This is measurable but conflates functional assertion (subscriber appears) with a performance SLA. As stated in Ограничения, P95 <300ms for the list endpoint — the <2s UI figure includes background worker latency and is stated as a constraint, not testable in an automated integration test. The criterion should clarify the verification method.",
+      "location": "Критерии приёмки — AC1",
+      "fix": "Split the latency assertion into a separate perf AC or note how it is tested (e.g., integration-тест with timer assert). Alternatively reference the existing Ограничения clause and remove the latency clause from AC1 to avoid ambiguity about test method."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "AC5 returns HTTP 200 OK with body {status:\"blocked\"} after a 403 from Telegram. The user-facing message behavior (toast text in UI) is described in the scenarios but the criterion only covers backend. The Playwright E2E plan covers this. Minor gap in AC completeness for UI contract.",
+      "location": "Критерии приёмки — AC5",
+      "fix": "Add a note that the frontend toast behavior (\"Subscriber blocked the bot\") is covered by Playwright E2E (subscribers.spec.ts). No blocking issue."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "AC8 mentions PATCH renames 'label only (slug immutable)' but does not specify expected HTTP response code on success (200 vs 204) or the updated document shape returned. Minor — testability is not blocked but the criterion is incomplete for contract specification.",
+      "location": "Критерии приёмки — AC8",
+      "fix": "Add expected HTTP response code and response body shape (e.g., 200 with updated tag document, or 204 no body)."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "The 'Зачем' section references project.md and Epic dependencies well, but does not explicitly quantify the user problem ('pусто в /subscribers, нет кому слать broadcast'). The value statement is concrete enough to pass but could name the user persona more explicitly (e.g., 'проектний власник бачить порожній /subscribers' instead of the implied reference).",
+      "location": "Зачем",
+      "fix": "No blocking action needed — the section is substantive and passes the Completeness check. Minor wording improvement only."
+    },
+    {
+      "check": "template_compliance",
+      "severity": "minor",
+      "issue": "The template specifies 'Тестирование' should include a decision on integration/E2E tests WITH rationale. The spec states 'Интеграционные тесты: делаем. Причина: ...' and 'E2E тесты: делаем (Playwright golden path). Причина: ...' — both present with rationale. However, the Staging-smoke runbook description (docs/staging-smoke/09-subscribers.md) is referenced but noted as 'created in рамках этой фичи' — it does not yet exist. This is a forward reference, not a missing section, but worth flagging.",
+      "location": "Тестирование — Staging-smoke runbook reference",
+      "fix": "No action needed in user-spec. The runbook is explicitly scoped as a deliverable of the feature tasks. Confirm its creation is tracked in the task decomposition."
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "Q1: Mongo embedded document for JSONB fields → Сценарий 7, Технические решения (CustomFieldDefinition embedded in Project)",
+      "Q2: CustomFieldDefinition embed in Project (max 20) → AC10, Технические решения TD1",
+      "Q3: subscriber_events as separate collection, TTL 1y → AC23, Технические решения TD2",
+      "Q4: text-index search + cursor pagination + indexes → AC13, Ограничения, Технические решения TD3/TD4",
+      "Q5: tags separate collection, on-demand counters, find-or-create → AC8, AC9, Технические решения TD5",
+      "Q6: status state-machine (active↔unsubscribed, *→blocked, *→deleted, reactivation) → AC2, AC3, AC4, AC5, Сценарий 1-4",
+      "Q7 pivot: CSV stored in MongoDB GridFS → AC16, Технические решения TD8",
+      "Q8: rate-limit option C (Redis bucket 100/min) → AC6, Ограничения, Технические решения TD11",
+      "Q9: testing matrix (unit + integration + E2E + staging-smoke) → Тестирование section",
+      "Q10 A: ProjectHardDeleteJob extends cascade; soft-delete keeps children intact → AC22, Сценарий 12",
+      "Q11 A: subscriber status=deleted forever, no purge job → Технические решения TD13, Ограничения",
+      "Q12 A: one in-flight export per project, partial-unique index, 409 on concurrent → AC17, Технические решения TD14",
+      "Q13 B: CustomFieldDefinition name+type immutable, label/defaultValue editable, delete cascades → AC10, AC12, Технические решения TD15",
+      "Q14 A: TelegramSender direct inject SubscriberService, events split → AC5, Технические решения TD16, R6",
+      "Q15: cursor-only Load more pagination (no numbered pages, no Prev) → AC13, Сценарий 3",
+      "Q16: tag slug regex ^[a-z0-9_-]{1,32}$ → AC8, AC22",
+      "Q17 A: HMAC payload includes projectId for cross-project substitution defense → AC19, Технические решения",
+      "Q18: Failed export 'New export' button (not Retry) → Технические решения (Failed export 'New export' button)",
+      "Q19 C: markBlocked/markDeleted signature (projectId, telegramBotId, chatId) → AC5, Технические решения TD16, Ограничения",
+      "Q20: sidebar sub-items under Subscribers + auto-index-creation=true accepted → Технические решения (Sidebar), Ограничения (Production index management), R14",
+      "Send personal message included in scope (Q1/P5) → AC15, Сценарий 8",
+      "Export email + in-app link (Q1/P6) → AC16, Сценарий 9",
+      "Cross-project isolation → AC7, Сценарий 13, R5"
+    ],
+    "missing": []
+  },
+  "summary": "Специфікація якісна, повна і узгоджена — усі 20+ тем інтерв'ю покриті, 24 AC testable, ризики з митигаціями, протиріч не виявлено. Чотири minor-зауваження (latency assertion в AC1, розмір понад пороги для L, відсутній HTTP-контракт у AC8, forward reference на staging runbook) не блокують затвердження."
+}

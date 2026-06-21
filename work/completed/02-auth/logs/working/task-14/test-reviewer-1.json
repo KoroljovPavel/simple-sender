@@ -1,0 +1,79 @@
+[
+  {
+    "severity": "low",
+    "area": "Testcontainers setup",
+    "file": "backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java",
+    "issue": "Base class is correct: @SpringBootTest(RANDOM_PORT) + @Testcontainers, MongoDB 8.0 (org.testcontainers:mongodb), Redis 7.4-alpine (GenericContainer), Mailpit v1.29.7 (ch.martinelli.oss:testcontainers-mailpit). Containers are static + started in static {} block (true singleton, not @Container per-class). Note that spring.mail.host/port is overridden by an @Primary JavaMailSender bean rather than @DynamicPropertySource (legitimate workaround for MailSenderAutoConfiguration binding ordering, documented in code).",
+    "recommendation": "No change needed. Document the base-class deviation from the literal tech-spec wording in decisions.md for future maintainers (singleton vs @Container static-field both produce identical singleton semantics)."
+  },
+  {
+    "severity": "critical",
+    "area": "Login brute-force IT coverage",
+    "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+    "issue": "Tech-spec line 308 and acceptance criteria explicitly require an integration test that performs 5 wrong-password logins → 6th attempt returns 429, with Redis brute:fail:{email} = 5. This flow is only covered by AuthServiceTest unit tests using mocked ReactiveRedisTemplate. There is no IT that drives the real INCR pipeline against the Redis Testcontainer end-to-end. Same gap for the per-IP threshold (brute:fail:ip:{ip} = 20).",
+    "recommendation": "Add IT in AuthControllerIT: seed an active user, POST /api/auth/login with wrong password 5 times, query redisTemplate.opsForValue().get(\"brute:fail:user@test.com\") → assert \"5\". Issue 6th login → assert 429. Optionally a parallel test that POSTs with X-Forwarded-For repeated 20 times to drive the IP counter."
+  },
+  {
+    "severity": "critical",
+    "area": "Brute-force counter reset IT coverage",
+    "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+    "issue": "Tech-spec line 308 requires: wrong password then correct → Redis counter reset to 0 (verified via DB). User-spec acceptance criterion line 397: 'Successful login after failed attempts → Redis brute-force counter deleted'. No IT performs N-1 failed logins → 1 successful login → asserts brute:fail:{email} key DELETED (not just count = 0). The current AuthServiceTest.login_success_resetsBruteForceCountersAndLogsEvent verifies redisTemplate.delete() via Mockito, not real Redis state.",
+    "recommendation": "Add IT: 4 wrong logins, then 1 correct login (200), then redisTemplate.hasKey(\"brute:fail:user@test.com\").block() must be false AND hasKey(\"brute:fail:ip:...\") must be false. The DEL must be observable in the actual Redis instance, not mocked."
+  },
+  {
+    "severity": "high",
+    "area": "Session TTL DB assertion",
+    "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+    "issue": "Tech-spec line 308 and AC lines 394-395 require querying the MongoDB sessions collection and asserting maxInactiveInterval >= 2592000 (rememberMe=true) / <= 86400 (rememberMe=false). No IT does this. AuthServiceTest verifies session.setMaxIdleTime(Duration) via mocked WebSession, but this never crosses the spring-session-data-mongodb serializer that writes maxInactiveInterval to the document. A regression in the WebSession-to-MongoDB persistence path (e.g., a future spring-session config change) would not be caught.",
+    "recommendation": "Add IT: doLogin with rememberMe=true → reactiveMongoTemplate.findAll(Document.class, \"sessions\").blockFirst() → assert doc.getInteger(\"maxInactiveInterval\") >= 2592000. Pair test with rememberMe=false → assert <= 86400. AuthControllerIT already has the helper sessionsCollection_principalFieldPath_isAtTopLevel that proves the schema is queryable."
+  },
+  {
+    "severity": "high",
+    "area": "login_success / login_failed event IT coverage",
+    "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+    "issue": "Tech-spec line 308 and AC line 413 require login_success event in events collection after a successful login, and login_failed events for wrong password / non-existent email / blocked / brute-force. Only email_verified, password_changed, and account_deleted have IT-level event assertions. login_success and login_failed events are only verified at the AuthService unit level via Mockito.verify(eventService).logEvent(...). A misconfigured EventRepository or fire-and-forget subscription leak would not be caught at integration level.",
+    "recommendation": "After doLogin success in an IT: poll eventRepository.findAll().filter(e -> 'login_success'.equals(e.getEventType()) && userId.equals(e.getUserId())).hasElements() — same Awaitility pattern already used in passwordChanged_event_logged. Add a parallel IT for wrong-password → assert login_failed event with non-null userId. The existing fire-and-forget log path can lag; reuse Awaitility."
+  },
+  {
+    "severity": "high",
+    "area": "Non-existent email login IT coverage",
+    "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+    "issue": "Tech-spec AC line 398 and verification plan line 345 require IT: POST /api/auth/login with non-existent email → 401 (not 500). Only AuthServiceTest covers this with mocks (login_nonExistentEmail_runsDummyBcrypt_andIncrementsCounters_returns401). A regression where AuthService.DUMMY_HASH becomes invalid, or the dummy-BCrypt branch errors, would not be caught at IT level.",
+    "recommendation": "Add IT: POST /api/auth/login with email='ghost@test.com' (no seeded user) → expectStatus().isUnauthorized() (NOT 5xx). Optionally also assert that redisTemplate has the brute:fail:ghost@test.com counter incremented to 1 (closes the security-auditor finding #1 oracle at IT level)."
+  },
+  {
+    "severity": "medium",
+    "area": "Change-password current-session-survives IT gap",
+    "file": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+    "issue": "ProfileControllerIT.changePassword_correctCurrent_passwordRotated_otherSessionsKilled_eventLogged covers other-session invalidation + event, but the test author explicitly acknowledges in comments that 'we cannot assert current session survives at the document level here' because @WithMockAppUser does not produce a real SESSION cookie. Tech-spec line 313 and AC line 408 require both halves: 'current session still valid + other session invalidated'. Currently the unit test ProfileServiceTest.changePassword_correctPassword_excludesCurrentSession pins the `_id != currentSessionId` clause via Query JSON inspection, but no IT confirms that the actual ReactiveMongoTemplate.remove() with that Query leaves a matching session document untouched.",
+    "recommendation": "Two options: (a) Augment the existing IT — seed a session document with _id matching the WebSession's id (pull session.getId() before the request via @WithMockAppUser hooks) and assert it survives the delete; or (b) Add a thin ReactiveMongoTemplate-level integration test that seeds 3 docs (current, sibling, other-user) and runs the actual production query, asserting only the sibling is removed. Option (b) is lighter-weight and isolates the assertion."
+  },
+  {
+    "severity": "medium",
+    "area": "Logout IT shallow",
+    "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+    "issue": "logout_endpoint_returns200 is a 200-only smoke test; logout_secondLoginCreatesIndependentSessionsDocument verifies session-multiplicity invariant but not the actual logout flow. AC line 400 ('SESSION cookie invalidated; other sessions unaffected') is therefore not verified end-to-end. The author documents this as a WebTestClient.bindToApplicationContext limitation, but the unit test (AuthServicePasswordResetTest.logout_invalidatesCurrentWebSession_returnsCompletes) only verifies session.invalidate() was called via Mockito and that reactiveMongoTemplate is untouched.",
+    "recommendation": "If the cookie limitation is fundamental, document explicitly in tech-spec Testing Strategy that logout's 'other devices untouched' invariant is verified at the unit level only, and add a second-best IT that issues two logins (creating 2 session docs) → calls /api/auth/logout → asserts that the sessions collection still has at least 1 doc (the other login's session document is not affected by the no-cookie logout). This catches accidental wiring of logout to a sessions-collection delete."
+  },
+  {
+    "severity": "low",
+    "area": "Dummy BCrypt timing test",
+    "file": "backend/src/test/java/com/botfunnel/auth/",
+    "issue": "Task instructions item 8 asks for a timing test comparing non-existent-email login to wrong-password login. No such test exists. As the task description acknowledges, timing assertions are inherently flaky.",
+    "recommendation": "Skip — flaky tests with hardcoded time bounds harm the suite. The dummy-BCrypt invocation on missing user is verified at unit level (AuthServiceTest.login_nonExistentEmail_runsDummyBcrypt_andIncrementsCounters_returns401 calls verify(passwordEncoder).matches(\"anyPassword\", AuthService.DUMMY_HASH)) which is sufficient for the timing-side-channel mitigation guarantee. Document this decision in tech-spec Testing Strategy."
+  },
+  {
+    "severity": "low",
+    "area": "Registration login_success-NOT-present assertion",
+    "file": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java",
+    "issue": "Tech-spec line 306 explicitly says 'event login_success NOT present yet' after registration. register_validData_201_userPendingInDB_emailInMailpit does not assert event absence. Registration must not somehow trigger a login_success event by mistake.",
+    "recommendation": "Optional hardening: after the registration assertions, assert eventRepository.findAll().filter(e -> 'login_success'.equals(e.getEventType())).count().block() == 0. Cheap and pins the negative."
+  },
+  {
+    "severity": "low",
+    "area": "Application-test.properties test-keys",
+    "file": "backend/src/test/resources/application-test.properties",
+    "issue": "Properties file contains MONGODB_URI/REDIS_URL placeholders that are unused (real container URIs come from @DynamicPropertySource). It does not override spring.data.mongodb.uri or spring.data.redis.url directly as listed in the task description — those are set via @DynamicPropertySource, which is functionally equivalent. The MONGODB_URI/REDIS_URL keys here are not consumed by Spring directly.",
+    "recommendation": "Either remove the unused MONGODB_URI/REDIS_URL keys from application-test.properties to avoid confusion, or comment them as 'kept to satisfy ${MONGODB_URI:...} placeholder fallbacks if the test profile is loaded outside @DynamicPropertySource'."
+  }
+]

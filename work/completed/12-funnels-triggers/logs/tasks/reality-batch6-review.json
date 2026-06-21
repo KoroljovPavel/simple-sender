@@ -1,0 +1,49 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 4, 7],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 Details section says FunnelExecutionEngine injects StepExecutor to describe the cycle, but the actual injection is indirect — FunnelExecutionEngine drives StepExecutor via a method call (StepExecutor is a @Component injected into FunnelExecutionEngine, confirmed by StepExecutor.java line 43 and FunnelExecutionEngine.java). The cycle description is functionally correct but the phrasing 'FunnelExecutionEngine → StepExecutor' implies a constructor-injection edge; the actual edge is FunnelExecutionEngine injects StepExecutor (confirmed). No impact on implementation — the cycle and the factory fix are correctly identified.",
+      "fix": "Informational only — no change needed. The bean cycle is real and the factory fix is correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 TDD Anchor references 'FunnelEventServiceIT::fanout_oneFiringStartsNExecutions — proves the Task-1 index relax'. This IT will require the Task-2 startup migration to have run (to actually drop the old index); without it, two active non-on_start funnels with the same triggerValue will be blocked by the existing unique index. The task does not call out this coupling explicitly in the TDD Anchor (only in the Edge case section). If Task 4's IT runs before Task 2 merges, the fan-out IT will fail for the wrong reason.",
+      "fix": "Add a note to the TDD Anchor that the fan-out IT depends on Task 2's migration having run (same note already exists in Task 1's IT section — mirror it in Task 4's TDD Anchor)."
+    }
+  ],
+  "prior_criticals_resolution": {
+    "critical_1_cors_x_api_key": {
+      "was": "Task 7 did not instruct adding X-API-Key to CORS allowedHeaders",
+      "now": "Task 7 Step 6 explicitly adds X-API-Key to allowedHeaders; SecurityConfig.corsConfigurationSource() verified at line 142 to currently allow only [Content-Type, X-Requested-With, X-XSRF-TOKEN] — the gap is real and the fix is present. RESOLVED.",
+      "status": "resolved"
+    },
+    "critical_2_subscriber_by_id_project_scoped": {
+      "was": "Task 7 did not address that SubscriberRepository.findById is not project-scoped and SubscriberService has no findById",
+      "now": "Task 7 Step 5 explicitly requires project-scoped lookup, references the unsubscribeManual pattern (SubscriberServiceImpl lines 214-215: findById(id).filter(sub -> projectId.equals(sub.getProjectId()))), forbids raw findById, and coordinates with Task 4 to add the method exactly once. SubscriberService confirmed to have only findByChat (no findById). RESOLVED.",
+      "status": "resolved"
+    }
+  },
+  "verification_notes": {
+    "task1_optional_method": "FunnelRepository.java line 20-21: Optional<Funnel> findByProjectIdAndTriggerTypeAndTriggerValueAndStatus exists and is retained. Task 1 correctly designates itself as sole owner and instructs keeping this method alongside the new List-returning sibling. VERIFIED.",
+    "task4_bean_chain": "FunnelTriggerServiceImpl injects FunnelExecutionEngine (line 99/116); StepExecutor is a @Component used by FunnelExecutionEngine. insertExecution is private at line 426, cancelExistingForPair is private at line 408 — Task 4 correctly identifies both as needing to become package-private. Bean cycle is real. VERIFIED.",
+    "task4_subscriberservice_no_findbyid": "SubscriberService interface has only findByChat (line 88); no findById. SubscriberRepository has only findById from MongoRepository (not project-scoped). Task 4 correctly requires adding project-scoped findById to the service boundary. VERIFIED.",
+    "task7_cors_current_state": "SecurityConfig.corsConfigurationSource() line 142: allowedHeaders = [Content-Type, X-Requested-With, X-XSRF-TOKEN]. X-API-Key is absent. Task 7 correctly adds it. VERIFIED.",
+    "task7_unsubscribemanual_pattern": "SubscriberServiceImpl lines 214-215 uses findById(subscriberId).filter(sub -> projectId.equals(sub.getProjectId())) — the exact pattern Task 7 references. VERIFIED."
+  },
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 18,
+    "issues_found": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  }
+}

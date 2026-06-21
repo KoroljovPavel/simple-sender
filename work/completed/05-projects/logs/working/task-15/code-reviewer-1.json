@@ -1,0 +1,94 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 15 cleanly closes the four smoke-test UX findings plus folds in TimezonePicker. AC-T7 zero-touch contract is honored (auth.global.ts / SecurityConfig.java / JobRunrMongoConfig.java untouched), Decision 10 scope-lock is honored (no new localStorage writes), i18n parity is intact (4 new keys in both locales), and cross-file consistency for the new pendingBannerKey writer in settings.vue lines up with the store contract and the useApi 404-interceptor. Findings below are minor/UX polish — none block merge.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "frontend/pages/projects/new.vue",
+      "line": 31,
+      "severity": "minor",
+      "category": "best-practices",
+      "issue": "Inconsistent runtime guard around Intl.supportedValuesOf — defaultTz at line 14-17 was hardened against missing supportedValuesOf in this commit (`typeof Intl.supportedValuesOf === 'function' && ...`), but the refine() at line 31 still calls `Intl.supportedValuesOf('timeZone').includes(v)` unguarded. On the same legacy-Safari path that motivated the defaultTz fix, submit will throw a TypeError before validation can report a friendly error. settings.vue already uses the safe pattern (lines 23-26 build a `timezones` const with the same fallback and then refines against that array).",
+      "suggestion": "Hoist the same `typeof Intl.supportedValuesOf === 'function' ? Intl.supportedValuesOf('timeZone') : [Intl.DateTimeFormat().resolvedOptions().timeZone]` into a module-scope `timezones` const (mirroring settings.vue lines 23-26) and refine against `timezones.includes(v)`.",
+      "benefit": "Eliminates the partial-protection asymmetry inside new.vue and matches the helper pattern already shipped in settings.vue and TimezonePicker.vue.",
+      "optional": false
+    },
+    {
+      "file": "frontend/components/TimezonePicker.vue",
+      "line": 52,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "Task 15 explicitly requires \"Якщо юзер очистив поле — emit empty string\" (task file line 144). The current `inputValue` setter only writes to `query.value`; modelValue is never re-emitted when the user clears the input. After Escape/outside-click `closeDropdown()` resets `query = ''` and the input reverts to the original `props.modelValue`. As a result an explicit user-clear does not propagate to v-model. settings.vue's zod refine tolerates empty string (line 80: `v === '' || timezones.includes(v)`), but new.vue's refine (line 31) does not — and either way the documented contract is not met.",
+      "suggestion": "When `inputValue.set('')` is invoked (or on a dedicated 'clear' button), emit `update:modelValue` with `''` so v-model reflects the cleared state. Alternatively, document the deviation in decisions and adjust the task AC.",
+      "benefit": "Aligns the shipped component with the documented task contract; avoids future ambiguity about how a cleared field should behave.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/TimezonePicker.vue",
+      "line": 67,
+      "severity": "minor",
+      "category": "readability",
+      "issue": "`openDropdown()` presets `activeIndex` to the current modelValue's index inside `allTimezones` (line 73-74), but the listbox is `max-h-64 overflow-y-auto`. When the selected zone is far down the list (e.g. Europe/Kyiv ≈ index 250), the highlighted active option is rendered well below the visible portion of the dropdown and the user has to scroll to find it. No `scrollIntoView({block: 'nearest'})` call brings it into view on open.",
+      "suggestion": "After `open.value = true` in openDropdown, in a microtask (`nextTick`) call `document.getElementById(\\`${listboxId}-opt-${activeIndex.value}\\`)?.scrollIntoView({block: 'nearest'})`. Same hook can be reused on ArrowDown/ArrowUp to keep the active row visible during keyboard navigation.",
+      "benefit": "Brings keyboard and pointer UX to parity with native <select> behavior — the user always sees what's highlighted.",
+      "optional": true
+    },
+    {
+      "file": "frontend/pages/projects/new.vue",
+      "line": 104,
+      "severity": "minor",
+      "category": "best-practices",
+      "issue": "`v-bind=\"timezoneAttrs\"` on `<TimezonePicker>` spreads vee-validate's field attrs (e.g. `name`, `onBlur`) onto the component's root `<div>` (containerRef) instead of the inner `<input>`. `name=\"timezone\"` on a div is invalid HTML and `onBlur` won't fire on the input the user actually interacts with — only the div-level blur, which doesn't bubble the same way. Submit-time validation still runs through handleSubmit so functional correctness is preserved, but on-blur-validation UX is lost compared to the pre-commit native <select>.",
+      "suggestion": "Either (a) declare the TimezonePicker root as `<input>`-like by using `<input>` as the focusable surface and forwarding `$attrs` only to it via `inheritAttrs: false` + explicit `v-bind=\"$attrs\"` on the inner input, or (b) drop `v-bind=\"timezoneAttrs\"` from both new.vue (line 107) and settings.vue (line 254) since the component already emits `update:modelValue` which is the only attr vee-validate strictly needs.",
+      "benefit": "Removes the invalid-HTML `name` on a div and restores blur-time validation parity with the rest of the form fields (name/description still validate on blur).",
+      "optional": true
+    },
+    {
+      "file": "frontend/pages/projects/[projectId]/settings.vue",
+      "line": 44,
+      "severity": "minor",
+      "category": "performance",
+      "issue": "The explicit GET `/api/v1/projects/{id}` on every mount adds a synchronous roundtrip even for the happy path where the user navigates to settings for an active, fresh project that is already in the store. For a typical mount this is wasted bandwidth and adds ~150ms of perceived latency before the form is wired (handleSubmit/resetForm fire after onMounted resolves).",
+      "suggestion": "Short-circuit the GET when `projectsStore.isLoaded && project.value !== null` — in that branch the store is the source of truth and the GET buys nothing. Only do the explicit GET when the store says the project is missing (covers same-tab back-after-delete + cross-tab stale + foreign-id cases). The current behavior is documented in the comment at line 28-32 but the optimization is straightforward and matches the smoke-test rationale.",
+      "benefit": "Removes a redundant API call on the most common path (user opens settings on the current project) while preserving the new staleness contract for the edge cases the smoke-test surfaced.",
+      "optional": true
+    },
+    {
+      "file": "frontend/composables/useApi.ts",
+      "line": 69,
+      "severity": "minor",
+      "category": "error-handling",
+      "issue": "`handleApiResponseError` invokes `projectsStore.handleStaleCurrent()` (which awaits an internal `fetchAll`) without awaiting and without a `.catch()`. If the follow-up fetchAll rejects (network blip, 401 after session expiry, 5xx) the rejection is unhandled and becomes an unhandledrejection event in the browser. Pre-existing to this task (the interceptor predates task 15) but task 15 doubled the surface area by adding an explicit settings.vue redirect that depends on the interceptor side-effects.",
+      "suggestion": "Wrap as `projectsStore.handleStaleCurrent().catch((err) => console.warn('[useApi] handleStaleCurrent post-404 fetch failed', err))`. Keep fire-and-forget semantics, but make the failure mode auditable instead of silent.",
+      "benefit": "Prevents an invisible unhandledrejection in the stale-current-project path; logs become useful when the user reports 'banner appears then nothing happens'.",
+      "optional": true
+    },
+    {
+      "file": "frontend/tests/pages/projects/new.spec.ts",
+      "line": 111,
+      "severity": "minor",
+      "category": "testing",
+      "issue": "`new_invalidTimezone_showsValidationError` synthesizes the error path by directly emitting `update:modelValue` from the TimezonePicker component (line 112), which bypasses the actual UI gate the component enforces (only option-click or Enter commits a value). The test is honest about the workaround (lines 96-103 comment) but the assertion ends up validating zod refine() behavior rather than the integration with TimezonePicker. If someone removes the refine() in the future, this test would catch nothing.",
+      "suggestion": "Either keep this as a zod-refine-only test and rename it to `new_invalidTimezone_zodRefineRejects`, or replace it with a TimezonePicker-level spec that asserts the component refuses to emit a value not in `allTimezones`. The latter is the right place for that contract.",
+      "benefit": "Reduces test ambiguity about which layer is being validated; the spec name aligns with the actual coverage.",
+      "optional": true
+    },
+    {
+      "file": "frontend/components/TimezonePicker.vue",
+      "line": 47,
+      "severity": "minor",
+      "category": "best-practices",
+      "issue": "`Math.random().toString(36).slice(2, 8)` for the listbox id has a small collision probability when multiple TimezonePicker instances mount on the same page (e.g. a future multi-form scenario, or even reuse in modals). With 6 base36 chars there's ~1 in 2 billion collision risk — practically fine, but the project already uses `useId()` pattern (Vue 3.5+) in other places.",
+      "suggestion": "Replace `tz-picker-list-${Math.random().toString(36).slice(2, 8)}` with `tz-picker-list-${useId()}`. Drops the (vanishingly small) collision risk and is SSR-deterministic so hydration never sees a mismatch — currently the random suffix is generated independently on server and client.",
+      "benefit": "Eliminates SSR/CSR id-mismatch potential and aligns with the project's existing id-generation pattern.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 14,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 8,
+    "testCoverageAssessment": "adequate"
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "verdict": "pass",
+  "iterations": 1,
+  "findings": [
+    {
+      "severity": "medium",
+      "type": "weak_assertion",
+      "location": "tech-spec.md Section: Testing Strategy > Integration tests > ProjectControllerIT (audit event assertions)",
+      "issue": "Most IT cases say 'audit event presence (poll via await().atMost(...))' but do not specify which metadata fields are asserted. The data-models table declares specific metadata keys per event (e.g., `project_renamed` carries `projectId`, `previousName`, `name`; `project_soft_deleted` carries `projectId`, `name`; `project_hard_deleted` carries `projectId`, `name`), but only the `project_restored` IT explicitly mentions asserting `renamedDueToConflict=true`. Without per-event metadata assertions, a regression that drops `previousName` or `name` from event metadata would not be caught. patterns.md and project conventions emphasize meaningful assertions on document state, not just status codes.",
+      "fix": "In Testing Strategy > Integration tests, add explicit metadata assertions for every audit event IT case: (a) `project_created` IT asserts event has `metadata.projectId == response.id` AND `metadata.name == request.name`; (b) `project_renamed` IT asserts `metadata.previousName == oldName` AND `metadata.name == newName` AND `metadata.projectId == id`; (c) `project_updated` IT asserts metadata has `projectId` only (no name fields); (d) `project_soft_deleted` and `project_restored` ITs assert `metadata.projectId` and `metadata.name`; (e) `project_hard_deleted` IT (already present in ProjectHardDeleteJobIT) extends current 'survives cascade' assertion to also verify `metadata.projectId` and `metadata.name`."
+    },
+    {
+      "severity": "medium",
+      "type": "missing_coverage",
+      "location": "tech-spec.md Section: Testing Strategy > Unit tests > Frontend (AC-14b — renamedDueToConflict informational toast)",
+      "issue": "AC-14b requires that when restore returns a renamed project (server appended ' (restored)'), frontend shows an informational toast keyed by `errors.projects.restore.renamedDueToConflict`. The unit-test list for `pages/projects/index.spec.ts` only mentions 'Restore button → POST /restore' without asserting the rename-detection branch (compare response.name vs pre-request name) or the toast emission. The litmus test fails: removing the rename-detection logic from the restore handler would not break any planned test.",
+      "fix": "Add to Testing Strategy > Unit tests > Frontend, under `pages/projects/index.spec.ts`: 'Restore where mocked store returns project with `name = original + \" (restored)\"` → component invokes `useApiError`/toast helper with key `errors.projects.restore.renamedDueToConflict`; restore where response.name unchanged → only success toast, no rename toast.' Mock `projectsStore.restore` to return both branches and assert toast invocation arguments."
+    },
+    {
+      "severity": "medium",
+      "type": "missing_edge_case",
+      "location": "tech-spec.md Section: Testing Strategy > Unit tests > Frontend > stores/projects.spec.ts (Risk R6 — SSR localStorage safety)",
+      "issue": "Risk R6 states 'explicit SSR-context test ensures no throw' for `import.meta.client` gating. The unit-test list says `selectProject writes localStorage; on init reads localStorage and falls back to projects[0] when key missing/invalid`, but no test exercises the SSR branch where `import.meta.client === false` (server render). Without an explicit SSR-context test, a regression where someone removes the `if (import.meta.client)` guard would only surface during a real Nuxt SSR run, not during Vitest.",
+      "fix": "Add to `stores/projects.spec.ts` test list: 'selectProject under SSR context (mock `import.meta.client = false`) does NOT call `localStorage.setItem` and does NOT throw; store init under SSR context skips localStorage read.' Use Vitest's `vi.stubGlobal` or `vi.mock('#imports', ...)` to flip `import.meta.client`. This closes the AC-21 SSR-safety branch and matches the Risk R6 mitigation claim."
+    },
+    {
+      "severity": "low",
+      "type": "missing_coverage",
+      "location": "tech-spec.md Section: Acceptance Criteria > AC-T5 (locale parity gate)",
+      "issue": "AC-T5 verifies `check-locales.mjs` exit code is 0 — that enforces key-set parity but does NOT assert presence of the specific required keys called out in user-spec AC-25 (`errors.projects.delete.confirmTypeName`, `errors.projects.unavailable`, `errors.projects.restore.renamedDueToConflict`, `projects.create.limitReachedTooltip`). A developer could omit all four keys from BOTH locales and parity would still pass.",
+      "fix": "Either (a) add a tiny Vitest `tests/i18n/required-keys.spec.ts` that imports `uk.json` and `en.json` and asserts each AC-25-mandated key is present in both, OR (b) extend `frontend/scripts/check-locales.mjs` with a hardcoded `REQUIRED_KEYS = ['errors.projects.delete.confirmTypeName', ...]` allow-list and fail when any is missing. Option (a) keeps the script generic and surfaces in `pnpm test`."
+    },
+    {
+      "severity": "low",
+      "type": "missing_edge_case",
+      "location": "tech-spec.md Section: Risks > R3 (service-level uniqueness race window)",
+      "issue": "Risk R3 acknowledges a 10–60ms race window for service-level name uniqueness pre-check. The Testing Strategy does not include a concurrency test (two simultaneous POST `/projects` with the same name). This is acceptable per Decision 4 (5-active quota caps abuse), but the conscious decision NOT to test the race should be documented somewhere in the Testing Strategy so it isn't mistaken for an oversight during Test Audit.",
+      "fix": "Add a 'Tests intentionally NOT written' subsection to Testing Strategy noting: 'Concurrent-POST race for name uniqueness (Risk R3) is not tested — the 10–60ms window is mitigated by the 5-active quota per Decision 4; a fallback `IndexOps.ensureIndex(partialFilterExpression)` is the deferred mitigation if collisions appear in production via automated clients.' Same paragraph can cover R4 (cron-vs-restore race — same justification: handled by the standard 404-flow on frontend)."
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review. Both round-1 majors are adequately addressed. MAJOR #2 (cursor-move not proven in redirect_ofRunningAndWaiting_movesCursor) is fully fixed: the seed now shapes s1 --next--> tail (2 sends if cursor stays) vs entry --> End (1 send), and the test asserts currentStepId==null AND sentCount delta==1 — breaking the claimForRedirect '.set(currentStepId, entryStepId)' CAS line (FunnelExecutionEngine.java:415) would drive s1+tail = 2 sends and fail. Verified against the implementation; litmus passes. MAJOR #1 (allowReEnter paths) is substantially addressed: the allowReEnter=true cancel-then-insert branch (insertAtEntryStep:339-343) is now covered by both an IT and a unit test, and the allowReEnter=false fresh-start-at-entry path is covered by the terminal-row IT. One narrow residual remains and is downgraded to minor: the LITERAL entry-step swallow (insertAtEntryStep catch DuplicateKeyException -> LOG_DISPATCH_REENTER_IGNORED -> return false, FunnelEventService.java:349-352) is still not directly exercised — the unit test reEnter_duplicateOnOneFunnel stubs insertExecution (the step-0 insertOneFunnel swallow at 491-494), not insertExecutionAt. As the orchestrator honestly anticipated, that exact branch is only reachable via a concurrent race in production, so it is hard to drive deterministically in an IT. Coverage of the redirect-vs-start decision, anti-IDOR CAS, CAS-loss no-op, broken-cursor terminal-fail, and Decision-10 event-only gating is strong and assertion-driven.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "FunnelEventService.java:349-352 (insertAtEntryStep DuplicateKeyException swallow)",
+      "issue": "The entry-step swallow branch (allowReEnter=false: insertExecutionAt throws DuplicateKeyException -> LOG_DISPATCH_REENTER_IGNORED -> return false) is still not directly tested. The new IT event_noInFlight_allowReEnterFalse_terminalRowDoesNotBlockFreshInsert exercises only the success path (terminal row does NOT hold the unique index, so the insert SUCCEEDS, return true at line 348) — it never reaches the catch at 349. The unit test reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches does drive a DuplicateKeyException swallow, but on insertExecution (the step-0 insertOneFunnel path, lines 491-494), not insertExecutionAt — the funnel(id) helper has triggers==null, so matchedEntryStepId returns null and routing takes insertOneFunnel, not insertAtEntryStep. The two paths share the LOG_DISPATCH_REENTER_IGNORED marker but are distinct code. Real-world reachability of the entry-step swallow is concurrent-race-only (the in-flight probe returned null, so a colliding running|waiting row only appears via a concurrent insert), which is why an IT cannot drive it deterministically. Acceptable to leave, but the contract is one stub away from being locked.",
+      "recommendation": "Add a focused unit test in FunnelEventServiceTest: stub an event funnel whose triggers[] carries an event Trigger with a non-null entryStepId (so matchedEntryStepId returns it and routing reaches insertAtEntryStep), keep allowReEnter=false, and doThrow(new DuplicateKeyException(\"race\")).when(executionFactory).insertExecutionAt(...). Dispatch an event with no in-flight row (inFlightExecutionId stubbed/returns null). Assert: (a) LOG_DISPATCH_REENTER_IGNORED logged, (b) no exception escapes dispatchForSubscriber, (c) redirectOrStart counted the funnel as NOT acted-on (e.g. for a two-funnel fan-out the other funnel still inserts). This locks the entry-step swallow contract symmetrically with the existing step-0 swallow coverage."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 13,
+      "passed": 13,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 4,
+      "integration": 14,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

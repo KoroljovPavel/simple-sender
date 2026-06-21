@@ -1,0 +1,50 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 5 is correct, well-tested, and idiomatic to the project's established patterns (requireOwned-first, anti-enumeration 404, MongoTemplate atomic writes, mass-assignment whitelist, @JsonIgnoreProperties). All 56 tests pass (15 + 7 + 34), including the Decision-3 concurrency cap proof. The documented index-19 cap deviation is correct: customFieldDefinitions.19 exists-false truly enforces the 20-element cap (verified by parallel21Posts_acceptsOnly20 asserting exactly 20 persisted + one 422). No critical or major issues; a handful of minor maintainability/observability suggestions only.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java",
+      "line": 97,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "When request.values() contains a known key whose validated value equals the already-stored value (a true no-op set), the controller still issues the MongoTemplate.update write and then calls subscriberService.recordCustomFieldsSet(...). recordCustomFieldsSet correctly no-ops on an empty old->new diff (so no spurious event), but the Mongo write itself still fires. This is harmless (idempotent $set) and the event correctness is fully preserved by the changedKeys guard in SubscriberServiceImpl. Optional: skip the persist when newValues carry no actual change to avoid the redundant write.",
+      "benefit": "Eliminates a redundant Mongo round-trip on no-op PATCHes; keeps write semantics aligned with the audit-event no-op semantics.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/project/CustomFieldsController.java",
+      "line": 125,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "The PATCH update response body is reconstructed in-memory (finalLabel/finalDefault) rather than re-read from the persisted document. This is deterministic and correct here because the update is a single positional $set with arrayFilters that cannot partially fail silently. For symmetry with SubscriberCustomFieldsController (which re-reads post-write) and robustness against future schema changes, consider re-reading the definition after the write. Not required — current behavior is correct.",
+      "benefit": "Response always reflects the actual persisted state; consistent read-after-write idiom across the two controllers in this task.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/project/CustomFieldsController.java",
+      "line": 136,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "PATCH cannot clear defaultValue to null: request.defaultValue() == null is treated as 'no change' (PATCH semantics), so there is no way to reset a definition's defaultValue back to null once set. This matches the documented PATCH-null-means-no-change contract in UpdateCustomFieldRequest and is consistent with the task spec, but unlike the subscriber-value PATCH (where null clears the field) the asymmetry is intentional and currently undocumented as a known limitation. Consider a short note if a future 'clear default' need arises.",
+      "benefit": "Records the intentional asymmetry (definition-default vs subscriber-value null handling) so a future maintainer does not mistake it for a bug.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/project/CustomFieldsController.java",
+      "line": 120,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "EventService.logEvent throws on persistence failure (per its documented contract). In CustomFieldsController.create/update/delete the event write happens AFTER the Mongo state mutation, so an EventService failure would surface as a 500 to the caller even though the schema change already committed. This mirrors the existing ProjectService pattern (event-after-persist, no swallow), so it is consistent with project convention and not a regression — flagged only for awareness that audit-event failure is not isolated from the user-facing response on these write paths.",
+      "benefit": "Awareness of the audit-write-failure blast radius; matches the existing ProjectService precedent so no change is strictly needed.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 10,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 4,
+    "testCoverageAssessment": "excellent"
+  }
+}

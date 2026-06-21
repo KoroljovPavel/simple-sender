@@ -1,0 +1,39 @@
+{
+  "validator": "reality-checker",
+  "batch": [6, 7, 8],
+  "iteration": 2,
+  "status": "approved",
+  "iteration1_fixes_verified": [
+    {
+      "fix": "Task 6 — SendResult/enum Outcome removed; SentMessage + throw TelegramSendException(TerminalReason) contract",
+      "result": "CONFIRMED. Zero occurrences of SendResult or Outcome enum in task-6 doc. Section 4 correctly states: success = normal return (SentMessage), failure = throws TelegramSendException with getTerminalReason() -> TerminalReason {BLOCKED_BY_USER, CHAT_NOT_FOUND, OTHER} or BotTokenInvalidException. TelegramSendException.java verified: enum TerminalReason { BLOCKED_BY_USER, CHAT_NOT_FOUND, OTHER } exists exactly as stated. SentMessage.java verified as record(Long chatId, Long messageId, Instant sentAt). Engine catch-branches on TerminalReason; no duplicate subscriber-flip (correctly notes 'рушій НЕ дублює flip'). Mutable Clock declared as static inner @TestConfiguration of FunnelExecutionEngineIT — exactly as specified."
+    },
+    {
+      "fix": "Task 7 — No startCommandFiresFunnelTrigger; real method startPrivateWithPayload_callsSubscriberAndFunnel_writesEvent; spy instruction simplified",
+      "result": "CONFIRMED. Zero occurrences of startCommandFiresFunnelTrigger in task-7 doc. The method startPrivateWithPayload_callsSubscriberAndFunnel_writesEvent appears 5 times (lines 78, 112, 133, 169, 186). Verified against ProcessTelegramUpdateJobTest.java line 234: method exists with that exact name and verifies fire() call. @MockitoSpyBean FunnelTriggerService (interface type) confirmed at line 62 of test. Spy instruction correctly simplified to 'підтвердити, що наявний spy резолвить рівно один бін; без перейменування'."
+    },
+    {
+      "fix": "Task 8 — All 5 containsPattern assertions explicitly required to be updated; removeByProjectId uses .in(deletedIds) batch form",
+      "result": "CONFIRMED. Task 8 explicitly mentions '5 тестів із containsPattern-ассертами' in both What-to-do (lines 60-64) and TDD Anchor (lines 87-90), and requires updating ALL 5. Actual ProjectHardDeleteJobIT.java has exactly 5 containsPattern calls (lines 228, 311, 336, 394, 451) — count matches. None currently contains funnelsRemoved/funnelExecutionsRemoved fields — confirmed by grep (0 matches). removeByProjectId helper verified in ProjectHardDeleteJob.java line 146-149: uses Criteria.where('projectId').in(deletedIds) batch form. Task 8 hint correctly states '.in(deletedIds), НЕ .is()' in two places (lines 161, 196)."
+    }
+  ],
+  "findings": [],
+  "new_mirages_introduced": "None detected. All three iteration-1 fixes are accurately applied and consistent with the actual codebase state. No new hallucinations or inconsistencies introduced.",
+  "codebase_spot_checks": [
+    "TelegramSendException.java: enum TerminalReason { BLOCKED_BY_USER, CHAT_NOT_FOUND, OTHER } — matches task-6 contract exactly",
+    "SentMessage.java: record(Long chatId, Long messageId, Instant sentAt) — matches 'returns SentMessage' claim",
+    "TelegramSender.java: sendText() returns SentMessage, throws RuntimeException — no sendPhoto yet (correctly planned for Task 3, correctly listed in depends_on: [1,2,3,4])",
+    "ProjectHardDeleteJob.java: removeByProjectId() uses Criteria.where('projectId').in(deletedIds) — matches hint",
+    "ProjectHardDeleteJobIT.java: 5 containsPattern calls, none containing funnelsRemoved — task-8 regression warning is accurate",
+    "ProcessTelegramUpdateJobTest.java: @MockitoSpyBean FunnelTriggerService at line 62 (interface type); startPrivateWithPayload_callsSubscriberAndFunnel_writesEvent at line 234",
+    "NoOpFunnelTriggerService.java: @Service, implements FunnelTriggerService — exists, targeted for deletion by Task 7",
+    "FunnelTriggerService.java: interface with fire() + cancelActiveFor() — exists as described",
+    "ClockConfig.java: @Bean systemClock() -> Clock.systemUTC() — exists at common/, matches task-6 hint",
+    "AbstractIntegrationTest.java: uses @Import + inner static @TestConfiguration (MailpitTestConfig) — pattern matches task-6 Clock instruction"
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 0
+  }
+}

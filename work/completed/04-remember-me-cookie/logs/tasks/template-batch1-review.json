@@ -1,0 +1,92 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 2,
+      "section": "Required Skills",
+      "issue": "Skill link `[skills/code-reviewing/SKILL.md](.claude/skills/code-reviewing/SKILL.md)` uses a bare path that does not resolve from `work/04-remember-me-cookie/tasks/2.md`. From this location, `.claude/...` resolves to `work/04-remember-me-cookie/tasks/.claude/...` (does not exist). Tasks 1 and 4 correctly use `../../../.claude/skills/...`.",
+      "fix": "Replace with `[skills/code-reviewing/SKILL.md](../../../.claude/skills/code-reviewing/SKILL.md)` to match the prefix used in Task 1 and Task 4."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 3,
+      "section": "Required Skills",
+      "issue": "Skill link `[skills/security-auditor/SKILL.md](.claude/skills/security-auditor/SKILL.md)` uses a bare path that does not resolve from `tasks/3.md`. Resolves to `work/04-remember-me-cookie/tasks/.claude/...` (does not exist).",
+      "fix": "Replace with `[skills/security-auditor/SKILL.md](../../../.claude/skills/security-auditor/SKILL.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "frontmatter",
+      "task": 3,
+      "section": "frontmatter",
+      "issue": "Frontmatter omits the optional `teammate_name:` field that is present in Tasks 1, 2, 4, 5 and in the template. Cosmetic inconsistency across the batch.",
+      "fix": "Add `teammate_name:` (empty) to Task 3 frontmatter for consistency with the rest of the batch and the template."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 5,
+      "section": "Required Skills",
+      "issue": "Skill link `[skills/pre-deploy-qa/SKILL.md](.claude/skills/pre-deploy-qa/SKILL.md)` uses a bare path that does not resolve from `tasks/5.md`.",
+      "fix": "Replace with `[skills/pre-deploy-qa/SKILL.md](../../../.claude/skills/pre-deploy-qa/SKILL.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 4,
+      "section": "Verification Steps → Automated",
+      "issue": "Task 4 (Test Audit) declares `verify: []` in frontmatter but the Verification Steps → Automated subsection prescribes running `./gradlew :backend:test --tests ...` as a sanity check. Task 2 (Code Audit) explicitly states the auditor does NOT run tests. Inconsistent posture across audit tasks for the same wave; if Task 4 truly runs a gradle command it should declare `verify: [smoke]` or remove the command and rely on Task 5 for execution.",
+      "fix": "Either add `verify: [smoke]` to frontmatter and clearly justify the test-execution as part of the audit, or remove the gradle invocations from Verification Steps to align with the audit-only posture documented in Task 2."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Verification Steps → Automated",
+      "issue": "Verification Steps → Automated subsection in Task 3 only restates that the audit report file must exist — there is no actual command, MCP tool call, or executable check. For a task with `verify: []` and reviewers `[]`, this is acceptable, but the section content is essentially a duplicate of an Acceptance Criterion.",
+      "fix": "Either omit the Automated subsection (allowed for non-code tasks) or replace its content with a real self-check command (e.g., `test -f work/04-remember-me-cookie/logs/working/task-3/security-audit-report.md`)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 6,
+    "by_severity": {
+      "critical": 0,
+      "major": 0,
+      "minor": 6
+    }
+  },
+  "summary": {
+    "task_1": {
+      "verdict": "pass",
+      "notes": "Code task with full template structure. TDD Anchor present and complete: 8 resolver tests (Scenarios A-H from tech-spec Testing Strategy, mapped to AC-1..AC-8) + 3 AuthServiceTest cases (extended login_success_invalidatesPreAuthSession_andSetsRememberMeTtl, login_success_noRememberMe_setsTtl24Hours, new register_autoLogin_publishesRememberMeFalseAttribute). All test names include description tied to AC. Tech-spec ACs (build, ApplicationContext check, no regressions in ProfileControllerIT, no new deps, no new ERROR logs, smoke curl) all carried forward into task ACs. Frontmatter valid: skills=[code-writing], reviewers=[code-reviewer, security-auditor, test-reviewer], wave=1, depends_on=[], verify=[smoke]. Skill ↔ reviewers mapping matches catalog default. Required Skills link uses correct `../../../` relative prefix. Context Files include user-spec, tech-spec, decisions, code-research, project, architecture, patterns, plus all files-to-modify/read/create as markdown links."
+    },
+    "task_2": {
+      "verdict": "pass with minor",
+      "notes": "Code Audit task. TDD Anchor correctly DELETED (non-code audit task). Frontmatter valid: skills=[code-reviewing], reviewers=[] (matches catalog: auditor IS the review), wave=2, depends_on=[1], verify=[]. Reviewers section text matches frontmatter ([]). One minor finding: Required Skills link uses bare path `.claude/skills/code-reviewing/SKILL.md` instead of `../../../.claude/skills/...`."
+    },
+    "task_3": {
+      "verdict": "pass with minor",
+      "notes": "Security Audit task. TDD Anchor correctly DELETED. Frontmatter valid: skills=[security-auditor], reviewers=[]. Two minor findings: (1) broken bare path in Required Skills link; (2) missing optional `teammate_name:` field (inconsistent with other tasks in the batch); (3) Verification Steps Automated subsection essentially duplicates an Acceptance Criterion. OWASP A02 and A07 explicitly addressed in checklist as required by security-auditor methodology."
+    },
+    "task_4": {
+      "verdict": "pass with minor",
+      "notes": "Test Audit task. TDD Anchor correctly DELETED. Frontmatter valid: skills=[test-master], reviewers=[], wave=2, depends_on=[1], verify=[]. Required Skills link uses correct relative prefix. One minor finding: Verification Steps Automated runs `./gradlew :backend:test` while frontmatter declares `verify: []` — inconsistent with Task 2 which explicitly states auditor does NOT run tests. Either tighten the audit-only stance or declare verify=[smoke]."
+    },
+    "task_5": {
+      "verdict": "pass with minor",
+      "notes": "Pre-deploy QA task. TDD Anchor correctly DELETED (non-code QA task). Frontmatter valid: skills=[pre-deploy-qa], reviewers=[], wave=3, depends_on=[2, 3, 4], verify=[smoke, user]. Wave/dependency chain consistent: tasks 2/3/4 are wave 2, task 5 is wave 3. AC-1..AC-8 from user-spec all enumerated and each tied to a concrete smoke command or existing-test assertion. Manual browser smoke (User subsection) explicitly required before task closes. One minor finding: broken bare path in Required Skills link."
+    },
+    "decomposition": {
+      "verdict": "pass",
+      "notes": "Five-task split matches tech-spec Implementation Tasks: Wave 1 (Task 1 implementation) → Audit Wave (Tasks 2/3/4 in parallel) → Final Wave (Task 5 QA). Dependency chain valid, no cycles. Shared resource RememberMeWebSessionIdResolver has single owner (Task 1); audit/QA consumers all declare depends_on:[1] (or chain via 2/3/4). No competing instances. Task count proportional to S-sized bug fix. AC and TDD anchors carried forward from tech-spec without loss."
+    }
+  },
+  "report_path": "work/04-remember-me-cookie/logs/tasks/template-batch1-review.json"
+}

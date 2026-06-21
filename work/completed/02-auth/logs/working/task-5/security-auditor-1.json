@@ -1,0 +1,91 @@
+{
+  "status": "changes_required",
+  "summary": {
+    "totalFindings": 8,
+    "critical": 1,
+    "major": 2,
+    "minor": 5
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "A01: Broken Access Control",
+      "title": "Soft-delete repurposing inherits isSuperAdmin flag (privilege escalation)",
+      "description": "AuthService.applyRegistration() reuses the existing User document when registering against a soft-deleted email older than 30 days (slot.repurposed() == true). The method explicitly resets deletedAt, passwordResetTokenHash, passwordResetExpiresAt, and passwordResetUsedAt, but it does NOT reset User.superAdmin. If a previously-soft-deleted account was a superadmin, the new registrant silently inherits isSuperAdmin=true after they verify their email, even though no one ever granted them admin rights. The User entity exposes a boolean superAdmin field (com.botfunnel.user.User#setSuperAdmin) with @Field(\"isSuperAdmin\") on disk, so this state survives the round-trip.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:228-249 (applyRegistration); backend/src/main/java/com/botfunnel/user/User.java:27-28,57-58",
+      "impact": "Any attacker who learns the email of a former superadmin (e.g., from a public commit history, leaked backup, or insider knowledge) can wait 31 days after the original account was soft-deleted and then register the same email. After clicking the verification link they obtain a fully-active superadmin account. This is a deterministic, repeatable privilege escalation path with no detective control (no event is logged for the inherited flag).",
+      "recommendation": "In AuthService.applyRegistration(), explicitly reset every authority/role-bearing field on the repurposed slot. Minimum patch:\n\n```java\nuser.setDeletedAt(null);\nuser.setSuperAdmin(false);              // ADD\nuser.setPasswordResetTokenHash(null);\nuser.setPasswordResetExpiresAt(null);\nuser.setPasswordResetUsedAt(null);\n```\n\nLonger-term, treat repurposing as a hard reset: instantiate a new User and copy only id+createdAt from the existing document, so any future authority field added to the schema is excluded by default. Add a unit test that registers against a soft-deleted superadmin and asserts isSuperAdmin == false on the resulting document.",
+      "cwe": "CWE-269"
+    },
+    {
+      "severity": "major",
+      "category": "A04: Insecure Design",
+      "title": "POST /api/auth/register has no rate limit — enables BCrypt CPU DoS and outbound email flood",
+      "description": "Unlike POST /api/auth/login (per-email + per-IP brute-force counters via Redis), POST /api/auth/register has no rate limiter. Each request triggers passwordEncoder.encode() at BCrypt cost 12 (~250ms of single-thread CPU per request, Decision 3). For every valid (non-existing) email it also triggers an outbound email send via JavaMailSender. There is no per-IP cap on the number of registrations.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthController.java:43-48 (register endpoint); backend/src/main/java/com/botfunnel/auth/AuthService.java:121-136 (register service)",
+      "impact": "Two concrete attack vectors: (1) CPU exhaustion DoS — an attacker scripts ~50 req/s of POST /api/auth/register, saturating boundedElastic with BCrypt work and starving legitimate login/registration. (2) Outbound email abuse — an attacker registers fakeN@disposable.com 1000s of times, causing the SMTP relay to send 1000s of verification emails. This can blow through a transactional email quota, get the sending domain reputation-flagged by SpamHaus/SpamCop, or be used to spam victims if attacker substitutes plausible victim addresses (verification email content includes a clickable link, which is a low-grade phishing carrier).",
+      "recommendation": "Add a per-IP throttle on POST /api/auth/register before BCrypt. Reuse the existing Redis brute-force pattern: e.g., key 'register:rate:ip:{ip}' with INCR + EXPIRE 3600s, threshold 10 per hour, fail with 429. Optionally add an additional per-email key to prevent registration spam against a single victim address. Consider also adding a CAPTCHA or proof-of-work for the registration endpoint in production.",
+      "cwe": "CWE-770"
+    },
+    {
+      "severity": "major",
+      "category": "A07: Identification and Authentication Failures",
+      "title": "Password policy is too weak: 8 chars + 1 ASCII letter + 1 ASCII digit allows trivially weak passwords",
+      "description": "ValidPasswordValidator accepts the literal string 'password1' as valid (>=8 chars, has letter, has digit). It also accepts 'aaaaaaa1', '12345678a', and any password from the top-1000 leaked-password lists that happen to satisfy the format. There is no check for: (a) minimum entropy, (b) presence in the well-known breached-password corpora (NIST SP 800-63B 5.1.1.2 explicitly requires this), (c) symbol/uppercase requirement, (d) maximum length cap (DoS via 10MB password BCrypt).",
+      "location": "backend/src/main/java/com/botfunnel/auth/validation/ValidPasswordValidator.java:11-34; backend/src/main/java/com/botfunnel/auth/dto/RegisterRequest.java:16-18",
+      "impact": "Online password-guessing against the top-100 leaked passwords succeeds against any user who picked 'password1', 'qwerty123', etc. The brute-force counter (5 fails per email per 15 min) limits but does not eliminate this — an attacker who tries 4 of the most common passwords per email per 15 min still has a meaningful success rate at scale. Also, with no max-length check, BCrypt silently truncates passwords longer than 72 bytes, so a user's 100-char passphrase is reduced to 72 bytes with no warning (correctness gap, not a vuln per se).",
+      "recommendation": "Two fixes: (1) Add a length cap (e.g., max 128) to RegisterRequest.password via @Size(min=8, max=128). (2) Either integrate a breached-password check (e.g., HIBP k-anonymity API, or a local wordlist of the top-10k leaked passwords from rockyou) or strengthen the rule to require at least one symbol AND mixed case AND minimum length 12, per current NIST/OWASP guidance. The current rule satisfies the project spec verbatim, so this finding may be a spec-level concern that should be raised to user-spec for revision; flag explicitly to the spec owner before changing the validator.",
+      "cwe": "CWE-521"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Resend verification rate limit is keyed on email only, not IP — easy to bypass for DoS/abuse",
+      "description": "AuthService.resendVerification() rate-limits via Redis SET NX EX 60 on key 'resend:rate:{email}'. An attacker can iterate through arbitrary email values (existing or non-existing) and hit the endpoint at high QPS, bypassing the 60s lock since each email gets its own key. While each individual email cannot be re-sent more than once per 60s, the global request rate per IP is unbounded.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:170-206 (resendVerification); :255-257 (resendKey)",
+      "impact": "(1) An attacker enumerates a list of 10,000 user emails (from a leaked breach corpus) and sends a resend for each → 10,000 verification emails dispatched in seconds, blowing through SMTP quota and harming sender reputation. (2) Pure DoS: 100k req/s of resend with random email values floods the Redis keyspace and the MongoDB findByEmail index. (3) The Redis call has no error handler — if Redis is unavailable, resendVerification returns 500 (vs login which fails open), creating a Redis-availability oracle.",
+      "recommendation": "Add a per-IP layer to the rate limit, e.g., 'resend:rate:ip:{ip}' with threshold 5 per hour via INCR + EXPIRE 3600. Also consider mirroring login's onErrorResume(...) behavior on the Redis call so a Redis outage does not fail-closed (or, conversely, is consistent with the project-wide policy).",
+      "cwe": "CWE-770"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Register endpoint distinguishes 'email exists' from 'email recently soft-deleted' via response body",
+      "description": "POST /api/auth/register returns two distinguishable 409 responses depending on the existing user's status: 'Користувач з таким email вже існує' for a non-deleted user, and 'Акаунт з таким email вже існує або був нещодавно видалений. Зверніться до підтримки: <support>' for a soft-deleted user within 30 days. An attacker probing registration can therefore distinguish (a) email never used, (b) email used and active/pending, (c) email used and soft-deleted within 30 days.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:208-226 (resolveRegistrationSlot)",
+      "impact": "Mild information disclosure useful for OSINT/reconnaissance. The 'recently deleted' message is a strong signal that an account existed and was deleted, which can be combined with social-engineering pretexting against the victim or against support staff. This contradicts the project's anti-enumeration stance documented in Decision 7 / Decision 13.",
+      "recommendation": "Return an identical 409 message for both branches, e.g., 'Користувач з таким email вже існує. Якщо ви вважаєте це помилкою, зверніться до підтримки: <support>'. The forensic detail (was-deleted vs active) belongs in server logs, not the API response. If the spec requires the deletion-window message to be visible to legitimate users, route it through a separate authenticated support flow.",
+      "cwe": "CWE-204"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "No audit event is logged on registration or on resend-verification",
+      "description": "AuthService.register() persists a new pending user but does not call eventService.logEvent(...). resendVerification() neither logs successful re-sends nor rate-limit trips. Only verifyEmail() logs an event ('email_verified'). The events collection is the project's single source of truth for security-relevant audit trails (per tech-spec Decision: events collection schema), and the absence of register/resend events removes the ability to investigate registration-fraud or mail-bomb incidents post-hoc.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:121-136 (register — no logEvent); :170-206 (resendVerification — no logEvent)",
+      "impact": "When a registration-abuse or mail-bomb incident is detected (per the major DoS finding above), incident responders have no per-event timeline of who registered when, from which IP. Forensics requires reconstructing from raw access logs which may not be retained or correlatable. Compliance-wise, GDPR Art. 30 / SOC2 CC7.2 expect security-relevant events to be auditable.",
+      "recommendation": "In register() (after userRepository.save succeeds), call eventService.logEvent(saved.getId(), 'user_registered', ip, userAgent, Map.of('email', saved.getEmail())). In resendVerification(), log 'verification_resend_requested' (with reason='rate_limited' on the 429 path, reason='sent' on the success path with userId, reason='unknown_email' when findByEmail is empty — the latter is fine to log internally without leaking it externally). Update the event-type enum in tech-spec to include the new event names.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "minor",
+      "category": "A05: Security Misconfiguration",
+      "title": "{APP_URL} placeholder in email templates is not HTML-escaped",
+      "description": "EmailService.buildVerificationBody/buildPasswordResetBody pass appUrl through .replace('{APP_URL}', appUrl) without calling htmlEscape. The {APP_URL} is interpolated inside an href attribute (e.g., href=\"{APP_URL}/auth/verify-email?token={TOKEN}\"). For the {NAME} placeholder htmlEscape is applied; the inconsistency is the issue.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:55-58, 64-67, 73-75",
+      "impact": "Today this is benign because appUrl is sourced from the @Value('${app.url}') configuration, not user input. However, defense-in-depth: if a future change ever derives appUrl from a per-tenant or per-request value (multi-tenant), or if the env var is mis-set with stray quote/angle-bracket characters, the email HTML breaks (broken layout) or, in the worst case, the href is broken in a way that smuggles attacker-controlled content into the template. Also, appUrl is interpolated inside an HTML attribute without quoting validation, so a value containing a literal '\"' would close the attribute.",
+      "recommendation": "Apply htmlEscape consistently to every placeholder substitution, including {APP_URL}: `.replace(\"{APP_URL}\", htmlEscape(appUrl))`. As an extra defense, validate appUrl at startup (e.g., new URI(appUrl); reject schemes other than http/https) so a misconfigured value fails fast.",
+      "cwe": "CWE-1336"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "Verification token transported in URL query string can be captured by access logs and HTTP referrer leakage",
+      "description": "GET /api/auth/verify-email?token=<43-char base64url> places the secret token in the URL. Even though the application code never logs the token, infrastructure components routinely log full request URIs: web access logs (nginx, CloudFront, ALB), reverse-proxy logs, browser history, and the HTTP Referer header sent by any external resource the verification page subsequently loads. The token is a one-time secret with 24h validity, so a single leaked log line within that window is exploitable.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthController.java:50-54 (GET verify-email); backend/src/main/resources/templates/email/verify-email.html:12 (link template)",
+      "impact": "Operationally, organizations frequently retain access logs for >24h and forward them to centralized log aggregators (Datadog, CloudWatch). A SOC analyst with read-only log access could harvest unverified tokens during the 24h window and verify accounts on behalf of victims. The token-in-URL pattern also fails PCI-DSS / OWASP ASVS V8.3.1 ('Sensitive data is not stored in URL parameters').",
+      "recommendation": "Two viable mitigations: (1) Switch verify-email to POST and have the frontend page (loaded via GET on a token-less path) read the token from the URL fragment (after #), then POST it to the backend — fragments are never sent to the server or logged. (2) Configure the access-log format to omit query strings for /api/auth/verify-email* (nginx: `log_format` with regex strip; Spring access log: customize `server.tomcat.accesslog.pattern`). Document the chosen mitigation in tech-spec. At minimum, add a defensive `Referrer-Policy: no-referrer` header on the verify-email response so the token does not leak via Referer.",
+      "cwe": "CWE-598"
+    }
+  ]
+}

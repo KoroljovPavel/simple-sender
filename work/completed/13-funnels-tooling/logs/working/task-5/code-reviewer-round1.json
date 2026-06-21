@@ -1,0 +1,27 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 5,
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practices",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 45,
+      "issue": "The `testing` ref is declared and toggled in testRun() (true in try, false in finally) but never consumed in the template — the Test-for-me button is not :disabled by it, so the double-click guard described in the task's Edge cases is not actually wired.",
+      "impact": "No functional bug — double-click is explicitly optional for AC ('за бажанням', not required). Dead-ish state only.",
+      "recommendation": "Either bind `:disabled=\"testing\"` on the funnel-test-run button to realize the in-flight guard, or drop the ref. Optional."
+    },
+    {
+      "severity": "minor",
+      "category": "maintainability",
+      "file": "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+      "line": 247,
+      "issue": "testRun() reimplements the inline-vs-toast branch (errorCode + te + t) inline instead of reusing the existing resolveFunnelError() helper. resolveFunnelError already maps a mapped business code to its localized string and falls back to the generic message, but it cannot tell the caller WHICH surface to use (inline vs toast), so a small duplication is justified here.",
+      "impact": "Minor duplication of the code→i18n lookup logic; both paths stay in sync only by convention.",
+      "recommendation": "Acceptable as-is. Optionally expose a helper that returns {code, message} so testRun can pick the surface without re-deriving the code. Not required."
+    }
+  ],
+  "notes": "Cross-file verified: funnelsStore.duplicate(id):Promise<FunnelResponse>, stopAllExecutions(id):Promise<StopAllResponse {cancelled:number}>, testRun(id):Promise<void> all exist in stores/funnels.ts with matching signatures; destructuring `{ cancelled }` is correct. All canonical i18n keys present in en.json/uk.json (funnels.editor.duplicate/duplicateResult/testForMe/testForMeResult, stopAll.{button,title,message,confirm,cancel,result}, errors.funnels.funnel_owner_not_linked); no flat stopAllConfirm; no locale files modified by this commit. Stop-all confirm uses the existing Dialog pattern (NOT alert-dialog), with separate refs in both files (editor: stopOpen/stopping; list: stopTarget/stopping/stopError) cleanly isolated from delete refs — no leaked dialog state. Error mapping correct: 422 mapped business code → inline (testError ref + funnel-test-run-error <p> near the button, NOT toast); network/5xx/unmapped → toast; duplicate/stop-all use toast (list stop-all also surfaces inline in dialog body like deleteError). Test for me button is not status-gated, available+enabled on draft (verified by test). No preview toggle/panel present (Task 6 correctly absent). All async paths have try/catch; no swallowed errors. data-test attributes consistent with existing conventions. All 54 vitest pass (funnel-editor 33, funnels-list 3-block, funnels store) with node v22.19.0; no regressions."
+}

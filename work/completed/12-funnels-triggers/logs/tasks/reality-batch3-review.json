@@ -1,0 +1,61 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 7,
+      "issue": "Task 7 step 5 asks to add a 'project-scoped findById equivalent' to SubscriberService/SubscriberServiceImpl and implies SubscriberRepository has such a query. SubscriberRepository only exposes findByProjectIdAndTelegramUserId, findByProjectIdAndTelegramChatId, and the bot-scoped variant — there is no findByProjectIdAndId (project-scoped lookup by subscriberId). The task text says 'the repository already exposes findByProjectIdAndTelegramUserId; add a project-scoped findById equivalent' — but never explicitly states that SubscriberRepository needs a new method too. Without that repository method the implementation would have to use findById + filter (like unsubscribeManual does inline), yet the task describes this as a service-level addition. The instruction is ambiguous and the required repository method does not exist.",
+      "fix": "Make step 5 explicit: add Optional<Subscriber> findByProjectIdAndId(String projectId, String id) to SubscriberRepository (or document that the implementation should mirror unsubscribeManual's inline findById + filter pattern). Either way, add it to 'Files to modify' so the implementer is not surprised."
+    },
+    {
+      "severity": "critical",
+      "category": "security",
+      "task": 7,
+      "issue": "The existing CORS configuration in SecurityConfig.corsConfigurationSource() sets allowedHeaders to exactly [\"Content-Type\", \"X-Requested-With\", \"X-XSRF-TOKEN\"]. The X-API-Key header used by the key-authenticated chain is NOT listed. A cross-origin client (e.g. a browser-based integration) sending POST /api/integrations/v1/events with X-API-Key will be rejected by the browser's CORS preflight before the request reaches the filter. Task 7 modifies SecurityConfig.java but its steps and hints say nothing about updating corsConfigurationSource().",
+      "fix": "In the SecurityConfig update for Task 7, add \"X-API-Key\" to the allowedHeaders list in corsConfigurationSource(). Document this in the task's 'Files to modify' or 'Edge cases' section."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 9,
+      "issue": "Task 9 TDD Anchor places two AddStepDialog tests at path 'frontend/tests/components/funnels/AddStepDialog.spec.ts', but the actual file is at 'frontend/tests/components/AddStepDialog.spec.ts' (root of components/, not in the funnels/ subdirectory). The funnels/ subdirectory currently contains only CreateFunnelDialog.spec.ts. The new EMIT_EVENT specs will not be picked up by the test runner if created at the wrong path, and the TDD Anchor's statement 'follow the existing frontend/tests/components/funnels/ style' is misleading for this file.",
+      "fix": "Correct the TDD Anchor paths from 'frontend/tests/components/funnels/AddStepDialog.spec.ts' to 'frontend/tests/components/AddStepDialog.spec.ts', matching the existing file location. The statement about following the funnels/ style can stay but the file path must be the root location."
+    },
+    {
+      "severity": "major",
+      "category": "missing_function",
+      "task": 9,
+      "issue": "Task 9 tells the implementer to add 'keywords?: string[] | null' to UpdateFunnelRequest but the current UpdateFunnelRequest in types/funnel.ts has no keywords field. The existing FunnelSummaryResponse and FunnelResponse also lack keywords. This is expected work, but the task's Details section says 'currently the funnel shapes carry triggerType: string | null + triggerValue: string | null but no keywords' — that is accurate. However, the task does NOT mention that the funnelId.vue wiring must also type-check against the updated shapes. If the implementer only adds keywords to types/funnel.ts without updating the page's ref and the UpdateFunnelRequest call in persist(), the TypeScript compiler will flag the new v-model binding. The 'What to do' section covers this under the wiring bullet, but the file is missing from 'Files to modify' (only listed as a parenthetical Modify wiring note in Context Files), which may cause the implementer to skip it.",
+      "fix": "Add 'frontend/pages/projects/[projectId]/funnels/[funnelId].vue' explicitly to the 'Files to modify' list in Task 9, not just as a parenthetical note in Context Files. The file currently hard-codes triggerType: 'on_start' at line 104 and has no keywords ref — this wiring is mandatory for the feature to work."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 7,
+      "issue": "Implementation hints for the rate-limit say 'copy the startRateLimitExceeded shape verbatim'. The actual method in SubscriberServiceImpl uses RATE_KEY_PREFIX = 'bf:rate:start:' (keyed by projectId). Task 7's /events global rate-limit should use key 'bf:rate:events' (a single global key, not per-subscriber or per-project). The pattern is the same (INCR + EXPIRE on count==1 + fail-open) but the key shape is fundamentally different — a global scalar key vs the project-scoped key in the reference. Copying the shape 'verbatim' could mislead the implementer into adding a per-project or per-subscriber key for the /events limit.",
+      "fix": "Clarify the hint: 'Mirror the INCR/EXPIRE/fail-open shape from startRateLimitExceeded, but use a single global key bf:rate:events (not per-project or per-subscriber) because the /events limit is a global throughput cap, not a per-caller cap.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 says 'Стиль ответа (status 200 vs 201 на POST, имена полей DTO) согласовать с существующими контроллерами кабинета (ProjectController, BotController)'. ProjectController.create returns 201. The TDD Anchor test says '200/201' (ambiguous). For a generate/regenerate action that is idempotent (POST always either creates or overwrites), using 200 vs 201 is a meaningful semantic difference. The task leaves this unresolved for the implementer, and the test anchor does not pin the status code.",
+      "fix": "Pin the expected HTTP status in the task. Given that POST is idempotent (regenerate = overwrite), 200 is the more consistent choice and avoids a 201 on regenerate when the resource already existed. Update the TDD Anchor to assert a single status."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 9,
+      "issue": "Task 9 Details states 'FunnelTriggerSettings.vue — today props are { botUsername, deepLink } with a single triggerValue defineModel. The trigger type is hard-coded to on_start (a static <span> rendering t(funnels.trigger.onStart), lines ~57-62)'. The actual span is at line 59 in the current file, but the comment says 'lines ~57-62'. This is a line-number approximation hint, which is acceptable, but the description is accurate. No blocking issue.",
+      "fix": "No action required — approximate line numbers in hints are expected to drift."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 7
+  }
+}

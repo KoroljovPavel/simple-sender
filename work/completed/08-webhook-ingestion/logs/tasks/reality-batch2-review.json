@@ -1,0 +1,91 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task mentions 'Jackson 2.12+ supports records natively' in the description and 'Jackson 2.13+' in the edge-cases section — two different minimum version claims for the same feature. The project uses Spring Boot 3.5.0 which bundles Jackson 2.17+, so the inconsistency has no practical impact, but creates minor confusion for the implementer about which bound to trust.",
+      "fix": "Standardise on a single version floor — 'Jackson 2.12+ supports records natively' is the correct claim (Jackson 2.12 added record support). Remove or align the '2.13+' mention in the Edge Cases section."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 4,
+      "issue": "TDD Anchor lists 9 method names but the 'What to do' step 5 also lists 9 cases and both include 'deserialize_unknownNestedField_isIgnored', however the TDD Anchor only lists 'deserialize_unknownTopLevelField_isIgnored' as the second entry — the nested-field variant appears only in step 5 but not explicitly as a separate TDD Anchor entry. The Anchor has 9 entries which matches, but careful counting shows: step 5 lists 'unknown top-level field' AND 'extra junk inside message' as TWO sub-cases of one test case, while the TDD Anchor splits them into two separate test names. This is slightly inconsistent but not blocking.",
+      "fix": "Verify that the two separate TDD Anchor entries 'deserialize_unknownTopLevelField_isIgnored' and 'deserialize_unknownNestedField_isIgnored' are implemented as two distinct @Test methods, each exercising their respective fixture."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "T5 instructs the test to assert 'expireAfter resolves to Duration.ofDays(90) (or expireAfterSeconds=7776000 in the raw Mongo response)' from getIndexInfo(). Spring Data MongoDB 5.x returns IndexInfo objects; the expireAfter field on IndexInfo is typed as Duration, not as raw expireAfterSeconds. The test should use Duration.ofDays(90) comparison via IndexInfo.getExpireAfter(), not parse the raw integer. The hint is partially misleading in suggesting both forms are equivalent at the assertion level.",
+      "fix": "In the test, assert via indexInfo.getExpireAfter().equals(Duration.ofDays(90)) — the IndexInfo API in Spring Data MongoDB 5.x returns Duration directly. Drop the raw expireAfterSeconds=7776000 comparison path from test code (keep only as a comment explaining what the raw Mongo value would be)."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 5,
+      "issue": "The 'failedStatus_excludedFromTtlPartialFilter' test is marked @Disabled('manual procedure') by design. The task correctly acknowledges this is timing-sensitive and non-automatable in CI. However the test javadoc procedure is not specified in the task — only 'document the procedure in a test javadoc' is mentioned. Without a concrete procedure, the operator may not know how to run the manual verification.",
+      "fix": "Add a concrete manual procedure note to the task or to the test javadoc template: e.g. 'After running the integration test once, connect to mongosh, insert a FAILED document with createdAt = Date(Date.now() - 1000*60*60*24*91), wait >60s for the TTL monitor, verify document still exists via db.raw_updates.findOne({processingStatus: \"FAILED\"})'."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "The implementation hint says '@MockitoSpyBean SubscriberService in ProcessTelegramUpdateJobTest (T9) will replace the no-op for invocation assertions'. @MockitoSpyBean was introduced in Spring Boot 3.4.0 (Spring Framework 6.2). The project uses Spring Boot 3.5.0 so this is supported. No actual issue — recording for awareness that if the project were downgraded below 3.4.0 this hint would be wrong.",
+      "fix": "No action needed — Spring Boot 3.5.0 fully supports @MockitoSpyBean. Consider adding a comment in the hint that @MockitoSpyBean requires Spring Boot >= 3.4.0 for future maintainers."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 42,
+    "issues_found": 5
+  },
+  "verification_summary": {
+    "task_4": {
+      "files_referenced": {
+        "backend/src/main/java/com/botfunnel/bot/dto/TelegramResult.java": "EXISTS — record TelegramResult<T>(boolean ok, T result, Integer error_code, String description)",
+        "backend/src/main/java/com/botfunnel/bot/dto/TelegramUser.java": "EXISTS — record TelegramUser(Long id, boolean is_bot, String first_name, String username)",
+        "backend/src/main/java/com/botfunnel/bot/dto/TelegramSendResult.java": "EXISTS — record TelegramSendResult<T>(boolean ok, T result, Integer error_code, String description, TelegramSendParameters parameters)"
+      },
+      "package_collision": "com.botfunnel.user.User EXISTS as a @Document class — the new com.botfunnel.webhook.dto.User record is in a different package, no collision. Task correctly identifies this risk and resolves it by package boundary.",
+      "jackson_record_support": "Jackson 2.17+ is bundled (Spring Boot 3.5.0) — records supported natively, no @JsonProperty needed for snake_case components. Verified via existing TelegramResult and TelegramUser records which use the same pattern.",
+      "new_files_are_net_new": "com.botfunnel.webhook.dto package does not exist — all 4 files are new, no conflicts.",
+      "dependencies": "No new dependencies required — Jackson is on classpath via spring-boot-starter-webflux. Correct.",
+      "tdd_anchor": "9 test method names listed, all in a new test class path that does not exist yet. Feasible.",
+      "decision_6_compliance": "Record shape matches tech-spec Data Models exactly: 12 components on TelegramUpdate, 5 on Message, 4 on Chat, 6 on User. JsonNode slots correct."
+    },
+    "task_5": {
+      "files_referenced": {
+        "backend/src/main/java/com/botfunnel/bot/Bot.java": "EXISTS — confirmed ownerChatId field at line 51, getter/setter style (no Lombok), @CompoundIndex with partialFilter UPPERCASE 'CONNECTED' pattern",
+        "backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java": "EXISTS — @SpringBootTest + @Testcontainers + MongoDBContainer. Correct base class for repository integration tests.",
+        "BotRepository.findByProjectIdAndStatus": "EXISTS in BotRepository.java — method signature matches what the tech-spec describes"
+      },
+      "indexed_annotation_support": "@Indexed supports partialFilter (since Spring Data MongoDB 3.1) and expireAfter (since 2.2) — verified by reading Indexed.java source from spring-data-mongodb-5.0.4-sources.jar",
+      "auto_index_creation": "spring.data.mongodb.auto-index-creation=true in main application.properties; test profile does NOT override it — indexes auto-created in Testcontainers Mongo. RawUpdateRepositoryTest will find indexes present after first save.",
+      "duplicate_key_pattern": "DuplicateKeyException pattern matches existing BotIndexTest.java lines 57/75 — StepVerifier.expectError(DuplicateKeyException.class) is the established project convention.",
+      "no_new_packages": "Correct — spring-data-mongodb-reactive and bson are already on classpath.",
+      "new_files_are_net_new": "com.botfunnel.webhook package does not exist — all 3 files are new, no conflicts.",
+      "partial_filter_syntax": "Matches Bot.java precedent: single-quoted keys in JSON string literal. Correct.",
+      "ttl_partial_filter_uppercase": "UPPERCASE enum literals 'PENDING' and 'DONE' match Spring Data MongoDB's default enum.name() persistence. Bot.java uses 'CONNECTED' with same pattern. Correct."
+    },
+    "task_6": {
+      "files_referenced": {
+        "backend/src/main/java/com/botfunnel/bot/BotService.java": "EXISTS — @Service style with constructor injection, no Lombok. Correct precedent for NoOpSubscriberService."
+      },
+      "interface_signatures": "SubscriberService method signatures match tech-spec Data Models exactly — upsertFromTelegramUpdate(9 params) and markUnsubscribed(3 params) with Mono<Void> return.",
+      "no_primary_annotation": "Correctly NOT annotated @Primary per Decision 14.",
+      "package_is_correct": "com.botfunnel.subscriber package does not exist — net new, correct placement per Decision 14.",
+      "no_new_dependencies": "reactor-core already on classpath via spring-boot-starter-webflux. Correct.",
+      "test_approach": "Plain JUnit 5, no Spring context — correct since NoOpSubscriberService has no injected collaborators. StepVerifier for reactive assertions is the established pattern."
+    },
+    "cross_task": {
+      "wave_consistency": "T4/T5/T6 all Wave 1, depends_on=[] — all are net-new files with no inter-dependencies within this batch. Correct.",
+      "shared_resources": "No shared heavy resources in T4/T5/T6 — T4 creates DTOs, T5 creates persistence layer, T6 creates a stub service. No overlap.",
+      "missing_cross_task_deps": "None — T4 creates DTOs consumed by T9 (future task), T5 creates repo consumed by T9/T10 (future tasks), T6 creates service consumed by T9 (future task). All consumption is in later waves/tasks not in this batch."
+    }
+  }
+}

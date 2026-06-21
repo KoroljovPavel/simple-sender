@@ -1,0 +1,54 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "verifyEmail implementation steps 2–4 are self-contradicting and will not produce TOKEN_EXPIRED responses. Step 2 queries with 'expiresAt > now' (filtering out expired tokens). If a token is expired the query returns no user, so step 3 fires ('Посилання недійсне' — generic 400), never step 4 ('TOKEN_EXPIRED'). The Acceptance Criteria and TDD test 'verifyEmail_expiredToken_400WithTokenExpiredCode' require a distinct TOKEN_EXPIRED response, which the described algorithm cannot produce.",
+      "fix": "Change the query in step 2 to find user by hash and status only (without the expiresAt filter). After finding the user, check expiry in the service layer: if found but expiresAt <= now → throw AppException with code TOKEN_EXPIRED. If not found at all → throw generic bad request. This two-stage check is the only way to distinguish 'expired' from 'invalid' tokens."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 5,
+      "issue": "Edge cases section states: 'setIfAbsent(...) returns Mono<Boolean> — false if key existed (rate limited)' — but then immediately contradicts itself with 'If key existed (result null): throw 429'. ReactiveRedisTemplate.opsForValue().setIfAbsent() returns Mono<Boolean.FALSE> when the key already exists, never null. The null-check pattern is from the legacy (non-reactive) StringRedisTemplate and does not apply here. An implementor following the 'result null' description would write incorrect reactive-chain logic (e.g., checking == null on a Boolean, or misapplying .switchIfEmpty).",
+      "fix": "Replace 'result null' with 'result == Boolean.FALSE'. Correct example: .setIfAbsent(key, \"1\", Duration.ofSeconds(60)).flatMap(set -> set ? proceed : Mono.error(AppException.tooManyRequests(...)))"
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 6,
+      "issue": "Implementation hint states 'the terminate-all method returns Mono<Long> (deleted count)'. ReactiveMongoTemplate.remove(Query, String) returns Mono<DeleteResult>, not Mono<Long>. An implementor who declares the method return type as Mono<Long> and tries to chain will get a compile error or ClassCastException. The deleted count is obtained via DeleteResult.getDeletedCount().",
+      "fix": "Change method return type to Mono<DeleteResult> (or Mono<Void> if count is not needed). Update the flatMap chain accordingly: .flatMap(result -> { log.info(\"Deleted {} sessions\", result.getDeletedCount()); return Mono.empty(); })"
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 4,
+      "issue": "Task 4 (wave 2) includes AuthControllerIT integration tests that require Testcontainers (real MongoDB + Redis + Spring Session) for session fixation, rememberMe TTL, and login_success event assertions. AbstractIntegrationTest — the base class providing Testcontainers singleton containers — is only created in Task 5 (wave 3). Task 4 explicitly acknowledges this with 'create a minimal base class stub or write tests without it; refactor when AbstractIntegrationTest is available', but Task 5 does not include a step to refactor or complete Task 4's stub IT tests. Without explicit refactoring instructions in Task 5, the stub IT tests may be left incomplete after Task 5 finishes. (Note: both tasks write to AuthControllerIT.java, so Task 5 will organically fix the class if the implementor inherits from AbstractIntegrationTest correctly — low risk but unguaranteed.)",
+      "fix": "Add an explicit step in Task 5: 'Ensure AuthControllerIT extends AbstractIntegrationTest (replacing any stub base class from Task 4) and that all Task 4 IT tests now run against real Testcontainers.' This closes the gap without ambiguity."
+    },
+    {
+      "severity": "minor",
+      "category": "security",
+      "task": 4,
+      "issue": "Step 8 instructs to trust the X-Forwarded-For header without qualification: 'check X-Forwarded-For header first (for reverse-proxy setups), fallback to remoteAddress'. Without reverse-proxy IP validation or a trusted-proxy list, any client can forge X-Forwarded-For to an arbitrary IP, bypassing the per-IP brute-force limiter. The tech-spec does not describe a trusted-proxy configuration or header validation mechanism.",
+      "fix": "Add a note that X-Forwarded-For should only be trusted when the request originates from a known reverse-proxy (e.g., check that remoteAddress matches the proxy IP, or configure spring.webflux.trusted-proxies). For local dev without a proxy, fall back to remoteAddress only. Alternatively, use Spring WebFlux's ServerRequest.remoteAddress() with proxy configuration applied at the framework level."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 6,
+      "issue": "The ForgotPasswordRequest DTO (just {email}) is listed in the Details 'Files' section but is not present in the 'What to do' steps. Only ResetPasswordRequest is explicitly called out in step 2. An implementor following the What to do steps mechanically may omit creating ForgotPasswordRequest.java, instead inlining email as a @RequestParam or a Map, which would be inconsistent with the DTO-based pattern used throughout the feature.",
+      "fix": "Add a sub-step under step 2: 'Create ForgotPasswordRequest DTO at backend/src/main/java/com/botfunnel/auth/dto/ForgotPasswordRequest.java with a single @NotBlank @Email String email field.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 6
+  }
+}

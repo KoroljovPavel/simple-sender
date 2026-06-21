@@ -1,0 +1,86 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 6 cleanly flips the 600-LOC AuthService + 8-endpoint AuthController + 4 test files from WebFlux to the servlet stack. All 9 public service methods return synchronous types, all 4 BCrypt sites call passwordEncoder directly, IP/UA extraction routes through HttpRequestUtils, session-fixation defense (changeSessionId before saveContext) is wired and asserted via InOrder spy, brute-force INCR+conditional-EXPIRE and fail-open Redis semantics are preserved. Cross-file references (HttpRequestUtils, SessionAttributes, SecurityContextRepository bean, EventService.logEvent signature) all resolve correctly to the post-Task-1/3/5 sources. Minor findings around import hygiene, ordering of private helpers, and a few documentation/defensive-coding niceties.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 591,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Use a top-level import for java.util.List instead of the fully-qualified `java.util.List.of(emailKey, ipKey)` in resetBruteCounters. Every other collection type in this file is imported (Optional, Map); the fully-qualified reference is an outlier and reduces scanability.",
+      "benefit": "Consistent import style across the file; easier visual parsing of the brute-counter reset path.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 320,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "`forgotKey(String ip)` private static helper is defined mid-file (right after `doForgotPassword`) while every other Redis-key helper (`registerIpKey`, `resendKey`, `bruteEmailKey`, `bruteIpKey`) is grouped at the bottom of the class. Move `forgotKey` to the same trailing group so all key-construction helpers live together — easier to audit prefix conventions in one place.",
+      "benefit": "Single place to audit Redis key prefix conventions; reduces chance of accidental key-namespace collisions in future edits.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 295,
+      "severity": "minor",
+      "category": "error-handling",
+      "suggestion": "In `doForgotPassword` the InterruptedException branch sets `Thread.currentThread().interrupt()` and then falls through to `eventService.logEvent(...)`. If the event-write itself blocks on Mongo and the interrupt is observed there, the audit-trail write may fail mid-flight. Consider returning early after the interrupt (the dummy-delay invariant is already satisfied — the wall-clock leak is closed) or wrapping the event write in its own try/catch for the unknown-email branch.",
+      "benefit": "Marginal robustness improvement on a rare interrupt path; documents intent that interrupt handling is bounded to the dummy-delay path.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 131,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "`me()` builds a 4-clause OR check across `auth == null`, `!isAuthenticated()`, `instanceof AnonymousAuthenticationToken`, and `!(principal instanceof AppUserDetails)`. Add a one-line Javadoc explaining why each clause exists (mirrors `ReactiveSecurityContextHolder.switchIfEmpty(...)` semantics, defensive against principal-type drift). Future maintainers may otherwise drop the third or fourth clause as redundant.",
+      "benefit": "Locks in the four orthogonal unauthenticated cases; prevents accidental simplification that re-opens an enumeration path.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 142,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Task spec line 42 documents `register(RegisterRequest, HttpServletRequest)` (no response param — 'register does not open session'), but the implementation takes both `HttpServletRequest` and `HttpServletResponse` because auto-login was already part of the reactive behavior. The implementation is correct; the spec drift should be reported back in decisions.md so reviewers do not waste cycles on the apparent signature mismatch. Code is fine; flag for spec correction.",
+      "benefit": "Spec/code alignment in decisions.md prevents repeat reviewer confusion in future audit rounds.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/auth/AuthService.java",
+      "line": 353,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "`rotatePasswordAndTerminateSessions` orders: save user (password rotated) → terminateAllSessions → logEvent. With EventService now throwing on failure (per its Task-5 contract), an event-write failure after the password rotation leaves a window where the user has a new password and stale sessions are deleted but no audit event was recorded — return is HTTP 500. This mirrors the reactive `.then` chain shape so it is regression-preserving for this task, but a brief code comment naming the ordering invariant (password-write must precede session-termination, and an event-write failure does NOT roll back the rotation) would help future readers understand that the order is load-bearing.",
+      "benefit": "Documents an existing invariant so future refactors do not accidentally swap the order and break the no-audit-without-password-change contract.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthServiceTest.java",
+      "line": 400,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`login_success_callsChangeSessionId_beforeSaveContext_forSessionFixationDefense` constructs `MockHttpServletRequest baseRequest`, spies it with `Mockito.spy(baseRequest)`, then invokes login. `Mockito.spy` on a non-final Mockito-friendly class works, but `MockHttpServletRequest` has non-trivial setter semantics — relying on partial mocking for a single InOrder assertion is brittle. Consider an alternative: capture `request.getSession().getId()` before and after to compare values (MockHttpServletRequest.changeSessionId regenerates the id), as the implementation hint in tasks/6.md suggests. The current spy approach works but is heavier than needed.",
+      "benefit": "Less coupling to Mockito-spy internals; the comparison-of-session-ids approach is self-documenting and harder to silently break.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/auth/AuthServicePasswordResetTest.java",
+      "line": 246,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "`forgotPassword_unknownEmail_incursDummyDelay_forEnumerationOracleSuppression` measures wall-clock with `Duration.between(start, Instant.now())` and asserts `>= 30ms`. Under a heavily loaded CI runner or a VT carrier pinned by another test, a 40ms sleep may legitimately measure as 35ms after JIT warm-up jitter. Recommend tightening the assertion to `>= FORGOT_DUMMY_DELAY.minus(Duration.ofMillis(15))` or making the bound configurable; current `30ms` floor is reasonable but document the rationale in a comment so the threshold survives future tuning.",
+      "benefit": "Reduces likelihood of intermittent CI flake on the timing-oracle regression test.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 7,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 8,
+    "testCoverageAssessment": "adequate"
+  }
+}

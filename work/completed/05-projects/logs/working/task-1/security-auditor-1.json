@@ -1,0 +1,31 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Project entity is not annotated with @JsonIgnoreProperties — not a current bug, but no defense-in-depth if it ever leaks into a binding path",
+      "description": "The Mongo entity backend/src/main/java/com/botfunnel/project/Project.java has no class-level @JsonIgnoreProperties(ignoreUnknown = true) and exposes a public no-arg constructor + setters for ownerId/createdAt/updatedAt/deletedAt. Wave 2 (Task 3) is supposed to bind only DTOs (CreateProjectRequest / UpdateProjectRequest) on the controller layer, and both DTOs already carry @JsonIgnoreProperties — that is the actual mass-assignment defense (Risk R2) and it is in place. The residual risk is purely defense-in-depth: if a future controller author ever accidentally annotates a handler parameter with `@RequestBody Project project`, Jackson would happily populate ownerId/deletedAt from the wire because the entity itself has no opt-out. The class also has no JavaDoc/comment explicitly forbidding direct controller binding. Note: this task is foundation-only and explicitly scopes service/controller wiring out, so this is not a bug today; the DTO layer is the correct seam.",
+      "location": "backend/src/main/java/com/botfunnel/project/Project.java:20",
+      "impact": "If a Wave-2+ change ever wires the Project entity directly as a `@RequestBody` (a common copy-paste mistake from tutorials), an authenticated client could set `ownerId` to any user id, hijacking or planting projects on foreign accounts. Mitigated today by the DTO contract; the entity has no second line of defense.",
+      "recommendation": "Optional hardening for Task 3 / future PRs (NOT required for this task to merge): add `@JsonIgnoreProperties(ignoreUnknown = true)` at the class level of `Project` and / or a one-line comment near the class declaration: `// Never bind directly from HTTP — use Create/UpdateProjectRequest.` Even better, mark internal-only fields (`ownerId`, `deletedAt`) with `@JsonIgnore` on their getters. This is purely defense-in-depth; Risk R2 is already mitigated at the DTO layer.",
+      "cwe": "CWE-915"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "`description` field (up to 200 chars) carries no server-side sanitization — XSS responsibility is implicitly delegated to the frontend",
+      "description": "CreateProjectRequest.description and UpdateProjectRequest.description are constrained only by `@Size(max = 200)`. Whatever the user posts is persisted verbatim and echoed back via ProjectResponse.description. There is no HTML/script stripping, no character whitelist, and no comment in the DTO declaring that output encoding is the consumer's responsibility. Per tech-spec the only consumer is a Nuxt frontend that renders text as text (Vue auto-escapes in `{{ }}`), so this is acceptable in the current threat model — but the contract is implicit. Any future consumer (email digest, SMS preview, PDF export, an AI-generated `innerHTML` rendering) that reuses the description without escaping would inherit a stored-XSS sink.",
+      "location": "backend/src/main/java/com/botfunnel/project/dto/CreateProjectRequest.java:14, backend/src/main/java/com/botfunnel/project/dto/UpdateProjectRequest.java:15",
+      "impact": "Today: none — Vue's `{{ }}` interpolation auto-escapes. Future: a stored XSS sink the moment any consumer renders `description` as HTML (e.g. `v-html`, an HTML email template, a markdown-rendered admin view).",
+      "recommendation": "No change required for this task. For Task 3 (service layer) consider one of: (a) document the contract explicitly with a one-line comment in both DTOs and ProjectResponse — `// description is plain text; consumers MUST escape on render`, (b) trim leading/trailing whitespace and reject control characters (e.g. `@Pattern(regexp = \"^[^\\\\u0000-\\\\u001F\\\\u007F]*$\")` or equivalent service-layer normalization), or (c) sanitize on write with a library like OWASP Java HTML Sanitizer if HTML rendering is ever planned. Option (a) is cheapest and sufficient under the current threat model.",
+      "cwe": "CWE-79"
+    }
+  ]
+}

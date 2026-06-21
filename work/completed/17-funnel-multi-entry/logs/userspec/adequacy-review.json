@@ -1,0 +1,35 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "overengineering",
+      "severity": "major",
+      "issue": "The user-spec is saturated with HOW-level implementation detail that belongs in the tech-spec. Acceptance criteria, Risks, and Constraints name concrete internal mechanisms: `claimForCallback`/`resumeOnCallback`, `insertExecutionAt`, `FunnelTriggerIndexReconciliation` BeanPostProcessor (vs ApplicationRunner), `stepsSnapshot`, `stillClaimed`-CAS discipline, `stepRunStatus pending->in_progress`, the partial-index filter literals, and the `enrollDepth`-backstop. Example AC: 'Index reshape (on_start-унікальність) застосовується через FunnelTriggerIndexReconciliation BeanPostProcessor-патерн (НЕ ApplicationRunner)'.",
+      "why_matters": "User-spec defines WHAT and WHY; pinning the implementation (specific class names, CAS field transitions, BeanPostProcessor-vs-ApplicationRunner) in acceptance criteria prematurely locks the solution, couples the spec to current internals, and makes the document brittle if the engine is refactored. It also blurs the review boundary — a reviewer cannot tell which constraints are product requirements vs. implementation preferences.",
+      "fix": "Demote internal-mechanism naming to the tech-spec. Restate the affected acceptance criteria in observable terms: e.g. 'a fired trigger on an in-flight subscriber moves that subscriber to the trigger branch WITHOUT creating a second execution and WITHOUT losing snapshot isolation' instead of naming claimForCallback/stillClaimed. Keep the index-reshape requirement as 'on_start global uniqueness is preserved and startup does not fail on index conflict' and leave the BeanPostProcessor mechanism to tech-spec. The code-research.md already carries all the HOW — the user-spec should reference it, not duplicate it."
+    },
+    {
+      "category": "underengineering",
+      "severity": "major",
+      "issue": "The redirect-vs-sweep concurrency race is listed in Risk 2 but has NO acceptance criterion defining the actual outcome. The spec says redirect 'reuses CAS discipline extended to running/waiting', but the genuinely hard case — a redirect arriving while the sweep already owns the row (`stepRunStatus=in_progress`) — is left with no defined behaviour. Code-research §4/§5 explicitly flags this: 'A redirect arriving while the sweep owns the row (in_progress) loses the CAS — define the outcome (retry / drop / re-schedule).' The user-spec defers this entirely to tech-spec without stating the product-level expectation.",
+      "why_matters": "Whether a trigger event is silently dropped, retried, or queued when it collides with an in-flight sweep tick is a USER-OBSERVABLE behaviour (the subscriber either gets redirected or doesn't), not a pure implementation detail. Leaving it undefined risks a tech-spec that picks 'drop on CAS-miss' — meaning trigger events can be silently lost under normal sweep concurrency, with no acceptance test catching it.",
+      "fix": "Add an acceptance criterion stating the expected outcome when a redirect lands on an execution the sweep is mid-processing — e.g. 'the trigger event is not silently lost: the redirect either wins or is re-attempted so the subscriber reliably lands on the trigger branch' (or, if drop is acceptable, state that explicitly as a known limitation). This is a product decision, not just engineering."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "Edge-case coverage is uneven across the model change. Specific gaps: (1) execution in `failed` status is never addressed in the redirect-vs-start branch (the spec enumerates completed/cancelled/absent, but FunnelExecution also has `failed`); (2) the value of `triggerValue` for the `on_start` element inside the new `List<Trigger>` is unspecified (today on_start carries triggerValue=\"\"); (3) behaviour when a trigger's `entryStepId` points at a step that exists in the live funnel but is later removed from the funnel while a NEW (post-edit) execution starts — snapshot isolation covers in-flight runs, but the fresh-start branch reads the live funnel.",
+      "why_matters": "Unhandled state-machine gaps surface as production surprises. `failed` falling through to the wrong branch could either resurrect a dead run or wrongly block a re-entry. An unspecified on_start triggerValue can collide with the multikey unique partial index (empty-value self-collision is called out as a landmine in code-research §5).",
+      "fix": "Add explicit handling: treat `failed` like completed/cancelled (eligible for fresh start, subject to allowReEnter) or state otherwise; specify the on_start element's triggerValue convention; and add an edge case for a fresh-start trigger whose entryStepId no longer resolves in the live funnel (reject at validation vs. fail at runtime)."
+    },
+    {
+      "category": "feasibility",
+      "severity": "minor",
+      "issue": "The multikey unique partial index on `triggers.triggerType`/`triggers.triggerValue` is the one part of the design with real stack-compatibility uncertainty. The spec acknowledges this (Risk 1 + a service-only-uniqueness fallback) and code-research §5 independently flags MongoDB multikey-unique semantics (per-array-element cross-document uniqueness, empty-value self-collision). The fallback is sound, but the feature's core invariant 'exactly one active on_start funnel per trigger value' depends on a Mongo index behaviour that the spec itself is not certain will 'lay down correctly'.",
+      "why_matters": "If the multikey index cannot enforce the invariant, on_start global uniqueness drops to a service-level check only — which loses the DuplicateKeyException defense-in-depth that the current single-trigger design relies on (race between two concurrent activations). The fallback is acceptable but is a genuine reduction in guarantee, and the spec presents it as equivalent.",
+      "fix": "Note in the spec (or flag for tech-spec) that the service-only fallback is NOT equivalent to index-enforced uniqueness under concurrent activation, and require the tech-spec to either prove the multikey index works (FunnelIndexesIT) or add an explicit concurrency guard if it falls back to service-only."
+    }
+  ],
+  "worst_category": "overengineering",
+  "summary": "The proposed solution is feasible, well-sized for an L, and chooses the cheaper 'one-execution redirect-or-start' model over parallel entries — adequate and buildable on the existing stack with no new dependencies. No critical blockers, so approved; but the user-spec leaks substantial tech-spec-level HOW into its acceptance criteria, and the redirect-vs-sweep concurrency outcome (a user-observable behaviour) is left undefined."
+}

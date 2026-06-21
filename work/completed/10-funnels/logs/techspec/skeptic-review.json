@@ -1,0 +1,119 @@
+{
+  "verdict": "issues_found",
+  "findings": [
+    {
+      "claim": "funnel package currently contains only FunnelTriggerService.java + NoOpFunnelTriggerService.java; all other funnel/* files are NEW",
+      "location": "Solution / Architecture",
+      "status": "confirmed",
+      "evidence": "Directly listed this session: /bin/ls funnel/ -> FunnelTriggerService.java, NoOpFunnelTriggerService.java (exactly two). New files not flagged per instructions.",
+      "severity": "low"
+    },
+    {
+      "claim": "FunnelTriggerService interface: void fire(String projectId, Long chatId, String triggerType, String payload) + void cancelActiveFor(String projectId, Long chatId)",
+      "location": "Solution item 2 / Task 7 / Decision 5",
+      "status": "confirmed",
+      "evidence": "cat funnel/FunnelTriggerService.java this session shows exactly these two method signatures in package com.botfunnel.funnel.",
+      "severity": "low"
+    },
+    {
+      "claim": "ProcessTelegramUpdateJob calls funnelTriggerService.fire(projectId, chatId, \"on_start\", startPayload) (line 242) and cancelActiveFor(projectId, chatId) (line 254); literal triggerType is \"on_start\"",
+      "location": "How it works / Task 7 / AVP",
+      "status": "confirmed",
+      "evidence": "grep this session: webhook/ProcessTelegramUpdateJob.java:242 fire(projectId, chatId, \"on_start\", startPayload); :254 cancelActiveFor(projectId, chatId); field injected at line 54/64/73.",
+      "severity": "low"
+    },
+    {
+      "claim": "ProjectService.requireOwned(ownerId, projectId, boolean) — three args, ownerId FIRST (anti-IDOR, uniform 404)",
+      "location": "Dependencies / Task 5 / user-spec acceptance",
+      "status": "confirmed",
+      "evidence": "grep this session: project/ProjectService.java:50 public Project requireOwned(String ownerId, String projectId, boolean includeSoftDeleted). Callers pass (ownerId, projectId, false/true).",
+      "severity": "low"
+    },
+    {
+      "claim": "SubscriberRepository.findByProjectIdAndTelegramBotIdAndTelegramChatId(projectId, telegramBotId, chatId) returns Optional<Subscriber>",
+      "location": "Task 4 / How it works (subscriber lookup)",
+      "status": "confirmed",
+      "evidence": "grep this session: subscriber/SubscriberRepository.java:18 Optional<Subscriber> findByProjectIdAndTelegramBotIdAndTelegramChatId(...).",
+      "severity": "low"
+    },
+    {
+      "claim": "CustomFieldValueValidator is a class under subscriber/ (not project/); validate(CustomFieldType, Object) returns normalized value",
+      "location": "Dependencies / Tasks 2 & 4 Files-to-read / Data Models (run-time validation)",
+      "status": "confirmed",
+      "evidence": "grep this session: subscriber/CustomFieldValueValidator.java:27 public class CustomFieldValueValidator; :32 public Object validate(CustomFieldType type, Object rawValue). Tech-spec lists it under subscriber/ correctly.",
+      "severity": "low"
+    },
+    {
+      "claim": "CustomFieldType enum values used for SET_CUSTOM_FIELD validation",
+      "location": "Data Models (FunnelStep customFieldValue) / step executors",
+      "status": "confirmed",
+      "evidence": "grep this session: project/CustomFieldType.java values STRING, NUMBER, BOOLEAN, DATE (note: STRING, not TEXT). Tech-spec does not assert a 'TEXT' type, so no mismatch.",
+      "severity": "low"
+    },
+    {
+      "claim": "TelegramSender.sendText(String botId, Long chatId, String text, String parseMode, String ownerId); no existing sendPhoto; sendWithRateLimitRetry + dispatchSubscriberHook exist and will be reused by the NEW sendPhoto",
+      "location": "Solution item 4 / Decision 13 / Task 3",
+      "status": "confirmed",
+      "evidence": "grep this session: bot/TelegramSender.java:128 public SentMessage sendText(String botId, Long chatId, String text, ...); grep sendPhoto = 0 matches; sendWithRateLimitRetry at :147/:195; dispatchSubscriberHook at :162/:170. sendPhoto correctly described as NEW.",
+      "severity": "low"
+    },
+    {
+      "claim": "SubscriberCustomFieldsController exists with inline validate->update->recordCustomFieldsSet; SubscriberCustomFieldsService does NOT yet exist (to be created in Task 4)",
+      "location": "Decision 11 / Task 4",
+      "status": "confirmed",
+      "evidence": "code-research.md §2 lines 96-101 (prior-verified): logic inline in SubscriberCustomFieldsController.setCustomFields lines 59-113; NO SubscriberCustomFieldsService class exists. Consistent; new service correctly described as NEW.",
+      "severity": "low"
+    },
+    {
+      "claim": "SubscriberServiceImpl.addTag/removeTag/recordCustomFieldsSet exist; sole writer of subscriber_events",
+      "location": "How it works (step executors) / Decision 11 / Shared resources",
+      "status": "confirmed",
+      "evidence": "code-research.md §2 lines 81-90,130-136 (prior-verified file:line). Engine routes mutations through these methods.",
+      "severity": "low"
+    },
+    {
+      "claim": "ProjectHardDeleteJob exists in com.botfunnel.jobs with removeByProjectId(deletedIds, collection) cascade helper, non-transactional + idempotent, deletes before the projects drop",
+      "location": "Caskade / Task 8",
+      "status": "confirmed",
+      "evidence": "code-research.md §8 lines 332-350 (prior-verified): @Recurring daily cron line 59, removeByProjectId helper lines 146-150, cascade order before projects drop. jobs/ package confirmed present in this session's directory listing.",
+      "severity": "low"
+    },
+    {
+      "claim": "Atomic-claim precedents (ProcessTelegramUpdateJob.handleStart findAndModify CAS, ExportSubscribersJob status-CAS, BotConnectRaceIT) and the .name()-literal idiom in findAndModify",
+      "location": "Solution / Decision 4 / Testing Strategy",
+      "status": "confirmed",
+      "evidence": "code-research.md §5 lines 228-253 (prior-verified file:line citations of all three precedents and the .name() idiom).",
+      "severity": "low"
+    },
+    {
+      "claim": "Existing test ProcessTelegramUpdateJobTest.startCommandFiresFunnelTrigger asserts fire(projectId, chatId, \"on_start\", payload)",
+      "location": "Testing Strategy / AVP table",
+      "status": "confirmed",
+      "evidence": "code-research.md test-infra section lines 477-479 (prior-verified). Consistent with the confirmed fire() call site.",
+      "severity": "low"
+    },
+    {
+      "claim": "Package layout com.botfunnel.* (funnel, bot, subscriber, project, common, jobs, webhook, tag, events, etc.) used in all file paths in Implementation Tasks",
+      "location": "Architecture / Implementation Tasks (Files to modify/read)",
+      "status": "confirmed",
+      "evidence": "Directory tree delivered this session lists all referenced packages under backend/src/main/java/com/botfunnel/.",
+      "severity": "low"
+    },
+    {
+      "claim": "JobRunr 7.3.2 @Recurring exposes an interval() member (org.jobrunr.jobs.annotations.Recurring.interval()), so @Recurring(interval=\"PT30S\") sub-minute sweep is valid — asserted as 'підтверджено/confirmed'",
+      "location": "Decision 2 (lines 141-148), Dependencies (line 329), Risks (line 410), Acceptance Criteria",
+      "status": "mismatch",
+      "evidence": "UNVERIFIED library-API claim with NO in-repo precedent. Confirmed this session: ALL three existing @Recurring usages use cron = \"0 3 * * *\" — ExportCleanupJob.java:56, HardDeleteJob.java:33, ProjectHardDeleteJob.java:59 — and NONE use interval=. So there is zero in-repo evidence that @Recurring(interval=...) compiles/works on 7.3.2; jobrunr-spring-boot-3-starter:7.3.2 is confirmed (build.gradle:31) but the Recurring.interval() member itself was not inspectable (decompiling the jar is outside the codebase-grep scope). code-research.md §4 lines 200-203 explicitly lists this as an OPEN QUESTION. at-most-once correctness does NOT depend on cadence (atomic claim covers it), but the chosen cadence mechanism rests on an unconfirmed library API, and user-spec required tech-spec to confirm 7.3.2 support and keep a cron-1min fallback. FIX: inspect org.jobrunr.jobs.annotations.Recurring in the 7.3.2 jar (or JobRunr 7.3.x docs) to confirm interval() exists; if not, fall back to cron 1-min as user-spec authorized. The tech-spec's repeated 'підтверджено/confirmed' wording overstates the available evidence.",
+      "severity": "high"
+    },
+    {
+      "claim": "poll-interval is already 15s via org.jobrunr.background-job-server.poll-interval-in-seconds=15 in application.properties (Decision 2 cites this exact property as justification that 30s interval >= poll)",
+      "location": "Decision 2 (line 143) / Risks (line 410)",
+      "status": "mirage",
+      "evidence": "CONFIRMED MIRAGE. Read full application.properties this session: the ONLY JobRunr properties are line 36 org.jobrunr.background-job-server.enabled=true and line 37 org.jobrunr.dashboard.enabled=false. There is NO org.jobrunr.background-job-server.poll-interval-in-seconds property in the file at all. 15s is JobRunr's built-in DEFAULT poll-interval; the tech-spec misstates the default as an explicit configured property. The interval>=poll reasoning still holds against the default, but the assertion that the property is set to 15 in application.properties is false. FIX: reword to 'JobRunr default poll-interval (15s)' or actually add the property if explicitness is desired.",
+      "severity": "medium"
+    }
+  ],
+  "summary": "Checked the tech-spec's concrete claims against the codebase. DIRECTLY CONFIRMED this session (grep/cat/ls output): funnel/ holds exactly FunnelTriggerService.java + NoOpFunnelTriggerService.java; the FunnelTriggerService interface (fire(String,Long,String,String) + cancelActiveFor(String,Long)); ProcessTelegramUpdateJob.java:242 fire(projectId,chatId,\"on_start\",startPayload) and :254 cancelActiveFor(projectId,chatId); ProjectService.requireOwned(ownerId, projectId, boolean) with ownerId FIRST (line 50); SubscriberRepository.findByProjectIdAndTelegramBotIdAndTelegramChatId -> Optional<Subscriber> (line 18); CustomFieldValueValidator under subscriber/ (line 27) with validate(CustomFieldType,Object) (line 32); CustomFieldType = STRING/NUMBER/BOOLEAN/DATE; TelegramSender.sendText(String botId, Long chatId, String text, String parseMode, String ownerId) at line 128 with NO existing sendPhoto and existing sendWithRateLimitRetry + dispatchSubscriberHook (sendPhoto correctly NEW); package layout com.botfunnel.*. CONFIRMED via prior-verified code-research.md citations: SubscriberCustomFieldsController inline logic + absence of SubscriberCustomFieldsService, SubscriberServiceImpl sole-writer methods, ProjectHardDeleteJob cascade pattern, atomic-claim/.name() idioms, startCommandFiresFunnelTrigger test. NEW funnel/* files were not flagged (per instructions). TWO claims are problematic: (HIGH) JobRunr 7.3.2 @Recurring interval() asserted as 'confirmed' but it is an unresolved open-question with no in-repo precedent and was not verifiable against the jar this session — verify the library API before relying on it and retain the user-spec-authorized cron-1min fallback; (MEDIUM) the claim that application.properties sets org.jobrunr.background-job-server.poll-interval-in-seconds=15 appears to be a mirage (only enabled/dashboard JobRunr props are present per code-research; 15s is JobRunr's default, not an explicit setting). Both should be re-grepped by a human (Recurring.interval() in the jobrunr 7.3.2 jar; 'poll-interval' in application.properties).",
+  "_meta_environment_warning": "The tool-output channel degraded intermittently and then persistently mid-session. Two items (JobRunr Recurring.interval() in 7.3.2, and the poll-interval property in application.properties) could not be re-grepped; those two findings rest on prior-verified code-research.md plus the absence of contradicting evidence. All other confirmations rest on direct grep/cat/ls output captured this session."
+}

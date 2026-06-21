@@ -1,0 +1,510 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-05-09 00:00:00"
+  last_updated: "2026-05-09 02:00:00"
+  status: "completed"
+  can_resume: false
+  current_question_num: 3
+  feature_size: "S"  # bug fix in auth, ~1-2 backend files + integration test
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-05-09 00:10:00"
+    topic: "feature_scope_and_deferred_items"
+    agent_question: |
+      Вибір наступного епіку. Знайдено залишене: improvements.md (rememberMe
+      cookie не persistent) і future-features.md (pending-user restrictions,
+      OAuth/2FA/magic-links). Пропоную:
+      1. Підтвердити 03-projects як наступний critical-епік.
+      2. У 03-projects увімкнути pending-restrictions (тільки project-scope).
+      3. До 03-projects зробити окремий S-spec на rememberMe фікс.
+      4. Ліміт 5 проектів через app.projects.max-per-user.
+    user_answer: |
+      1. Так. 2. Ок. 3. Давай зробимо. 4. Окей.
+    summary: |
+      Беремо 04-remember-me-cookie як bug-fix, потім 05-projects як feature.
+      Pending-restrictions для проектів — у 05-projects.
+
+  - question_num: 3
+    timestamp: "2026-05-09 01:10:00"
+    topic: "cycle2_edge_cases_verification"
+    agent_question: |
+      Q1 Re-login зі зміною rememberMe (true → false при наступному логіні):
+        новий cookie session-only, старий перезаписується. Без додаткового AC.
+      Q2 terminate-all-sessions: cookie на пристрої залишається, при першому
+        запиті юзер як анонім → редірект на login. Не ускладнюємо.
+      Q3 Incognito mode: браузер видаляє cookie при закритті незалежно від
+        Max-Age. Документуємо як known limitation.
+      Q4 Manual verification: docker-compose + bootRun + pnpm dev →
+        Cookies має Expires +30d з галочкою; cookie без Expires без галочки;
+        Max-Age=0 при logout.
+    user_answer: |
+      Q1: ідея — зберігати останній вибір rememberMe в localStorage і
+      preselect-ити чекбокс при наступному логіні / auto-login після register.
+      Куди — в цей spec чи improvements.md?
+      Q2: Згоден.
+      Q3: Ок.
+      Q4: підходить, не треба нічого зайвого.
+    summary: |
+      Edge cases закриті: Q1 поведінка resolver покриває (cookie
+      перезаписується). Pre-select rememberMe з localStorage — окрема
+      UX-фіча, перенесена в improvements.md. Q2/Q3/Q4 ок.
+
+  - question_num: 2
+    timestamp: "2026-05-09 00:30:00"
+    topic: "cycle1_acceptance_constraints_testing"
+    agent_question: |
+      Q1 Success criteria: Set-Cookie SESSION має Max-Age=2592000 при
+        rememberMe=true; без Max-Age при rememberMe=false; Path=/, HttpOnly,
+        SameSite=Lax, Secure (по env) збережені. Підходить?
+      Q2 Sliding expiration: A=cookie Max-Age на 30 днів від login без
+        переписування на кожному запиті; B=re-issue cookie на кожен запит;
+        C=re-issue коли залишилось <N% TTL. Голос за A.
+      Q3 Constraints: pre-fix-cookie не інвалідуються при деплої — фікс
+        тільки для нових логінів. Ок?
+      Q4 Testing: integration тест в AuthControllerIT, без E2E, без unit на
+        резолвер. Підходить?
+    user_answer: |
+      Q1 - все підходе. Q2 - окей беремо A. Q3 - Ок. Q4 - Ок.
+    summary: |
+      AC: 4 пункти (cookie Max-Age, no Max-Age коли false, серверний TTL
+      синхронний, pre-fix backward-compat). Sliding=A. Test=integration
+      в AuthControllerIT (з можливим fallback на unit якщо bindToContext
+      не пропускає Set-Cookie).
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "04-remember-me-cookie"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 95
+    status: "complete"
+    value: |
+      Fix Spring Session SESSION cookie не persistent: при rememberMe=true
+      backend ставить TTL сесії в Mongo на 30 днів, але cookie приходить без
+      Max-Age/Expires → браузер видаляє його при закритті, юзер логаутиться,
+      попри 30-денний серверний TTL. Рішення з improvements.md: кастомний
+      WebSessionIdResolver, який читає прапор rememberMe з exchange-атрибута
+      (виставлений у AuthService.login) і додає ResponseCookie.maxAge(ttl).
+      Headers Path=/, HttpOnly, SameSite=Lax, Secure (по SESSION_COOKIE_SECURE
+      env) — зберігаються незмінно.
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "bug"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: |
+      Юзер ставить чекбокс "Запам'ятати мене" → очікує що залишиться залогіненим
+      після перезапуску браузера. Зараз — ні: cookie session-only, юзер
+      логаутиться попри 30-денний серверний TTL. Чекбокс UX-broken.
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 85
+    status: "complete"
+    value: "Усі юзери, які користуються чекбоксом Remember Me на /auth/login."
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 95
+    status: "complete"
+    value: |
+      1. POST /api/auth/login з rememberMe=true → Set-Cookie має
+         Max-Age=2592000 (= app.session.ttl-remember-me-days * 86400) та
+         Expires=<+30d>. Path=/, HttpOnly, SameSite=Lax, Secure (по env).
+      2. POST /api/auth/login з rememberMe=false → Set-Cookie БЕЗ Max-Age/
+         Expires, решта флагів незмінні (як зараз).
+      3. Серверний TTL у sessions.expireAt збережений: rememberMe=true → 30d,
+         false → 24h. Поведінка openSession не регресує.
+      4. Pre-fix-cookie (видане до деплою) не ламається: при першому запиті
+         продовжує авторизувати юзера, доки не протухне на сервері або юзер
+         не релогіниться. Backward-compatible.
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: |
+      - Sliding expiration: підхід A (Max-Age ставиться один раз на login,
+        не подовжується на наступних запитах). Активний юзер релогіниться
+        раз на 30 днів.
+      - Backward compat: pre-fix-cookies при деплої не інвалідуються.
+      - Cookie security flags (Path/HttpOnly/SameSite/Secure) зачитуються з
+        application.properties:14-16 — не дублюємо в коді.
+      - Frontend: жодних змін, чекбокс і `rememberMe` flag вже шлеться
+        правильно.
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      Integration test (AuthControllerIT.java): два нових тести
+      — login_rememberMe_setsCookieMaxAge, login_noRememberMe_cookieIsSessionOnly.
+      Якщо bindToApplicationContext не пропускає Set-Cookie (коментар на
+      AuthControllerIT.java:326), переключити ці тести на bindToServer +
+      RANDOM_PORT АБО винести в unit-test на RememberMeWebSessionIdResolver
+      (рішення в техспеку).
+      Без окремого E2E на Playwright — поведінка cookie тестується точніше
+      на рівні integration/unit.
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 90
+    status: "complete"
+    value: |
+      US-1: Як юзер, я тикаю "Запам'ятати мене" перед логіном → закриваю
+      браузер → відкриваю його через день → залишаюсь залогіненим (до 30
+      днів від моменту логіну).
+      US-2: Як юзер, я НЕ тикаю "Запам'ятати мене" → закриваю браузер →
+      відкриваю → редіректить на /auth/login (поведінка не змінилась).
+      US-3: Як юзер, я залогінився з галочкою → виходжу через "Logout" →
+      cookie очищається (Max-Age=0). Наступний логін без галочки створює
+      session-only cookie без слідів попередньої persistence.
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 95
+    status: "complete"
+    value: |
+      AC-1: POST /api/auth/login з rememberMe=true → Set-Cookie SESSION має
+        Max-Age=2592000 (= app.session.ttl-remember-me-days * 86400) і
+        Expires=<+30d>. Прапори Path=/, HttpOnly, SameSite (по env), Secure
+        (по env) збережені.
+      AC-2: POST /api/auth/login з rememberMe=false → Set-Cookie SESSION
+        БЕЗ Max-Age і Expires (як зараз). Решта прапорів незмінні.
+      AC-3: Серверний sessions.expireAt у MongoDB синхронний з cookie:
+        rememberMe=true → 30d, false → 24h. Поведінка openSession не
+        регресує (існуючі AuthServiceTest тести проходять).
+      AC-4: Pre-fix-cookie (видане до деплою фіксу) при першому запиті
+        після деплою продовжує авторизувати юзера, доки не протухне
+        серверно або юзер не релогіниться. Backward-compatible.
+      AC-5: Logout (POST /api/auth/logout) очищає cookie через Max-Age=0
+        незалежно від rememberMe (поведінка Spring expireSession збережена).
+      AC-6: Auto-login після register (`AuthService.java:167`) продовжує
+        використовувати rememberMe=false (session-only cookie) — без змін.
+    gaps: ""
+    required: true
+
+  edge_cases:
+    score: 90
+    status: "complete"
+    value: |
+      EC-1: Юзер релогінився зі зміною прапорця (true → false): новий cookie
+        перезаписує старий, стає session-only. Resolver обробляє
+        автоматично — без додаткового AC.
+      EC-2: terminate-all-sessions / change-password / deleteAccount
+        (`ProfileService.java:108, 72, 127`) видаляють session-документи
+        в Mongo, cookie на поточному пристрої залишається з попереднім
+        Max-Age. Перший наступний запит → анонім → редірект на login.
+        Поточна поведінка не змінюється фіксом. Окрему cookie-clear на
+        terminate-all НЕ робимо.
+      EC-3: Incognito mode: браузер ігнорує Max-Age, видаляє cookie при
+        закритті вікна. Це обмеження браузера (не наше) — задокументовано
+        як known limitation.
+      EC-4: Cookie name настроюваний через server.reactive.session.cookie.name
+        (default SESSION). Resolver має читати ім'я з ServerProperties, не
+        хардкодити.
+      EC-5: SecurityContext save після setSessionId: order операцій важливий
+        — атрибут rememberMe має бути в exchange ДО того, як Spring Session
+        викликає setSessionId.
+    gaps: ""
+    required: true
+
+  error_scenarios:
+    score: 85
+    status: "complete"
+    value: |
+      ES-1: Resolver читає null/відсутній exchange-атрибут → fallback на
+        super.setSessionId (як без галочки). Не падаємо.
+      ES-2: Якщо ServerProperties не bound (теоретично): значення httpOnly,
+        secure, sameSite, name мають дефолти ("SESSION", true, false, "lax")
+        — резолвер не падає при перевизначенні.
+      ES-3: Race condition при паралельних логінах з одного exchange —
+        неможлива (один exchange = один HTTP запит).
+      ES-4: Помилка в openSession ДО setRememberMe (раніше throw) → cookie
+        не пишеться взагалі (response без Set-Cookie). Юзер бачить 5xx.
+        Це поточна поведінка, не регресуємо.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      Agent (pre-deploy):
+        - mvn test (backend) — інтеграційні + unit тести проходять.
+        - pnpm test (frontend) — без змін, перевіряємо що не зламали.
+      Manual (developer перед merge, локально):
+        - docker compose up + bootRun + pnpm dev.
+        - Логін з галочкою → DevTools → Cookies → SESSION має Expires +30d.
+          Закрити браузер, відкрити — залишається залогіненим.
+        - Логін без галочки → SESSION без Expires → закрити браузер,
+          відкрити — редірект на /auth/login.
+        - Logout → SESSION має Max-Age=0 (видалена з Cookies в DevTools).
+      Post-deploy: на live HTTPS-середовищі повторити manual flow в Chrome
+        (Playwright не обов'язково, smoke-перевірка).
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 100
+    status: "complete"
+    value: |
+      Жодних UI-змін: чекбокс "Запам'ятати мене" на /auth/login уже існує і
+      шле прапорець `rememberMe` у POST /api/auth/login. Локалізація і
+      layout не чіпаються.
+    gaps: ""
+    required: false
+
+  risks:
+    score: 90
+    status: "complete"
+    value: |
+      R-1: Override CookieWebSessionIdResolver втратить auto-binding з
+        ServerProperties.Reactive.Session.Cookie. Mitigation: інжектнути
+        ServerProperties і скопіювати поля (name, path, httpOnly, secure,
+        sameSite, domain) у власний бін (рішення в техспеку).
+      R-2: Існуючий AbstractIntegrationTest з bindToApplicationContext не
+        пропускає Set-Cookie (`AuthControllerIT.java:326`). Mitigation: для
+        двох нових тестів використати bindToServer + RANDOM_PORT АБО
+        винести unit-тест на резолвер з мокнутим ServerWebExchange.
+      R-3: Установлення exchange-атрибута до openSession — нова конвенція в
+        цьому проекті. Mitigation: scoped тільки до login-flow, ключ у
+        приватній константі резолвера.
+    gaps: ""
+    required: true
+
+  technical_decisions:
+    score: 80
+    status: "complete"
+    value: |
+      TD-1: Sliding expiration НЕ робимо — Max-Age пишеться один раз при
+        логіні. Активний юзер релогіниться раз на 30 днів. Простіше і
+        прозоріше для MVP.
+      TD-2: Pre-fix cookies НЕ інвалідуємо при деплої. Backward compat
+        важливіший за immediate consistency.
+      TD-3: Cookie security flags (httpOnly, secure, sameSite, name)
+        НЕ дублюємо в коді — читаємо з application.properties через
+        ServerProperties.
+      TD-4: UX-фіча "запам'ятовувати останній вибір rememberMe" винесена
+        в improvements.md, не входить у цей фікс.
+    gaps: ""
+    required: false
+
+  deploy_approach:
+    score: 85
+    status: "complete"
+    value: |
+      Через стандартний CI/CD (GitHub Actions, як для інших змін). Без
+      міграцій бази. Без змін env vars (SESSION_TTL_*, SESSION_COOKIE_*
+      вже є в deployment.md). Жодних ручних кроків при деплої.
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 100
+    status: "complete"
+    value: "Жодних. Юзер просто продовжує користуватись логіном."
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 90
+    status: "complete"
+    value: |
+      - AuthService.login (`AuthService.java:582`) → openSession →
+        додати запис прапорця rememberMe в exchange-attribute перед
+        save SecurityContext.
+      - Spring Session (`spring-session-data-mongodb`) → custom
+        WebSessionIdResolver bean overrides Boot's default
+        `WebSessionIdResolverAutoConfiguration` (back-off через
+        @ConditionalOnMissingBean).
+      - Logout flow (AuthService.java:250-255) → expireSession
+        наслідується з super, не чіпаємо.
+      - terminate-all-sessions / change-password / deleteAccount
+        (ProfileService) → не залежать, не модифікуємо.
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 90
+    status: "complete"
+    value: |
+      - Spring Framework 6.x WebFlux (`spring-web-6.1.3` per Boot 3.5.x):
+        CookieWebSessionIdResolver, ResponseCookie, WebSession.
+      - spring-session-data-mongodb (вже на classpath).
+      - Spring Boot 3.5 ServerProperties для конфігурації cookie.
+      - Жодних нових зовнішніх залежностей.
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 85
+    status: "complete"
+    value: |
+      - Java 21, WebFlux reactive (Mono/Flux).
+      - Override Spring `setSessionId` (метод public у CookieWebSessionIdResolver).
+      - `addCookieInitializer` API не пропускає ServerWebExchange — через
+        нього не зробити per-request Max-Age. Тому override методу.
+      - Тестовий стенд `bindToApplicationContext` не пропускає Set-Cookie —
+        обмеження тестів.
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 95
+    status: "complete"
+    value: |
+      Жодних змін у MongoDB. spring-session-data-mongodb сам керує
+      колекцією sessions. Cookie на сервер передається/повертається через
+      HTTP-заголовки без додаткового сторіджу.
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 100
+    status: "complete"
+    value: |
+      Жодних міграцій. Pre-fix cookies продовжать працювати (AC-4),
+      нові логіни писатимуть cookie з Max-Age. Натуральна міграція
+      через релогін.
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/04-remember-me-cookie/user-spec.md"
+  status: "approved"
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase4_completion"
+  questions_asked: 3
+  last_question: "Cycle 2 batch — re-login, terminate-all, incognito, manual verify"
+  total_required_score: 91
+  total_optional_score: 92
+  completion_estimate: "95%"
+  user_detail_level: "moderate"
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Free-form notes:
+  - Important insights
+  - Areas of uncertainty
+  - Pivot points
+  - Scope changes
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

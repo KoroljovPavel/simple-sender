@@ -1,0 +1,77 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 audits AuthServiceTest for `verify(exchange.getAttributes()).put(REMEMBER_ME_ATTR, Boolean.TRUE/FALSE)` assertions in `login_success_invalidatesPreAuthSession_andSetsRememberMeTtl` (≈line 306) and `login_success_noRememberMe_setsTtl24Hours` (≈line 343), plus a new register auto-login case. None of these assertions or the register case exist yet — the pre-existing `AuthService.openSession` does NOT write to `exchange.getAttributes()` and `RememberMeWebSessionIdResolver` has not been created (Task 1 artifact is absent). Task 4 explicitly depends_on [1] and must not run before Task 1 is complete. If Task 1 was done before this validation, the audit targets are missing from the actual test file.",
+      "fix": "Confirm Task 1 (wave 1) is fully executed before running Task 4. The REMEMBER_ME_ATTR write in `openSession` and the corresponding test assertions are Task 1 deliverables. Task 4 cannot pass — and should not be started — while the audit targets are absent."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 5,
+      "issue": "AC-4 smoke command uses endpoint `/api/me` (line 95 of task 5: `curl -i -s http://localhost:8080/api/me`), but the actual endpoint is `/api/auth/me`. `AuthController` is annotated `@RequestMapping(\"/api/auth\")` with `@GetMapping(\"/me\")`, making the full path `/api/auth/me`. The `ProfileController` base is `/api/profile`. There is no controller mapped to `/api/me` anywhere in the codebase. This smoke command will return 404, not 200 OK, causing AC-4 to appear failed even when the implementation is correct.",
+      "fix": "Replace `http://localhost:8080/api/me` with `http://localhost:8080/api/auth/me` in the AC-4 smoke block of task 5 (line 95). Also update the comment on line 94 from `/api/me` to `/api/auth/me`."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 4,
+      "issue": "Task 4's primary audit target `backend/src/test/java/com/botfunnel/security/RememberMeWebSessionIdResolverTest.java` does not exist in the codebase — it is a Task 1 deliverable. Task 4 references this file as the main object of the test audit. Without it the audit cannot run. Likewise, `backend/src/main/java/com/botfunnel/security/RememberMeWebSessionIdResolver.java` (the production class being tested) does not exist.",
+      "fix": "Task 4 has a correct `depends_on: [1]` declaration. Validate that Task 1 has been executed and both files exist before running Task 4. No change needed to the task file itself — the dependency is correct. This finding documents the pre-execution reality state."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_file",
+      "task": 5,
+      "issue": "Task 5 reads and verifies `backend/src/main/java/com/botfunnel/security/RememberMeWebSessionIdResolver.java`, `backend/src/test/java/com/botfunnel/security/RememberMeWebSessionIdResolverTest.java`, and the extended `AuthServiceTest`. None of these Task 1 artifacts exist yet, so QA cannot proceed. Task 5 `depends_on: [2, 3, 4]` correctly models the chain, but the root dependency on Task 1 (which creates these files) is implicit. If Task 1 was not done, no smoke command or test run will work.",
+      "fix": "Operational: ensure Task 1 is complete before attempting Task 5. The dependency chain (Task 5 → Tasks 2/3/4 → Task 1) is implicitly correct, but if the feature is being validated mid-flight, Tasks 4 and 5 must be blocked until Task 1's artifacts exist."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 Description item 6 instructs auditor to verify `AuthServiceTest` at `≈line 306` and `≈line 343` for REMEMBER_ME_ATTR assertions. The current pre-Task-1 state of `AuthServiceTest` shows those tests at lines 306 and 344 respectively, but they contain NO `exchange.getAttributes()` mock setup — `mockExchangeWithSessions` only mocks `getRequest()` and `getSession()`, not `getAttributes()`. After Task 1 adds the attribute write, the existing mock exchange will be missing `getAttributes()` stub, which will cause a NullPointerException or unsatisfied mock at runtime. The task does not warn the auditor to check for this mock gap.",
+      "fix": "Add a hint in task 4 Details section: auditor should verify that `mockExchangeWithSessions` (or the exchange mock used in the two extended login tests) stubs `exchange.getAttributes()` to return a mutable map, so the `verify(...).put(REMEMBER_ME_ATTR, ...)` assertions can succeed. If the stub is absent, flag as blocker in the audit report."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 4,
+      "issue": "Task 4 requires verifying the new `register_autoLogin_writesRememberMeFalseAttribute` test in `AuthServiceTest`. However, `AuthServiceTest` covers only login flows — the register tests live in `AuthServiceRegistrationTest` (a separate class found at `backend/src/test/java/com/botfunnel/auth/AuthServiceRegistrationTest.java`). The task description says the new register auto-login case should be in `AuthServiceTest`, which may be inaccurate. If Task 1 places it in `AuthServiceRegistrationTest` instead, the auditor looking only at `AuthServiceTest` will report a missing test as a blocker — a false positive.",
+      "fix": "Clarify in task 4 Details (and the corresponding tech-spec Testing Strategy) that the register auto-login regression case may live in either `AuthServiceTest` or `AuthServiceRegistrationTest` — both are valid locations. Auditor should check both files. Or, if the intent is specifically `AuthServiceTest`, note that `AuthServiceRegistrationTest` is the existing dedicated file for register flows and Task 1 must place it there."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "AC-5 smoke (task 5 line 104) uses `POST /api/auth/logout` with a `Cookie` header but no CSRF token. The actual security config uses CSRF protection on state-changing endpoints. The smoke may return 403 FORBIDDEN rather than the expected `Max-Age=0` cookie if the CSRF filter is active on the local stack.",
+      "fix": "Add a note in the AC-5 smoke that the CSRF token must be included (or that CSRF is disabled for the local bootRun profile). Check `application.properties` or `SecurityConfig` for `CSRF_DISABLED` env var behavior in dev. Alternatively, show how to fetch the XSRF-TOKEN cookie first and pass it as a header."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "The skill path reference in task 5 line 16 uses a relative path `[skills/pre-deploy-qa/SKILL.md](.claude/skills/pre-deploy-qa/SKILL.md)` while the equivalent reference in task 4 uses `../../../.claude/skills/...`. Both resolve to the same file at runtime since the skill loader uses the project root, but the inconsistent path style could confuse automated path resolvers or documentation tools.",
+      "fix": "Minor inconsistency — no functional impact. Normalize to use the same relative path format as task 4 if path consistency is desired across task files."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 31,
+    "issues_found": 8
+  },
+  "notes": {
+    "decision_7_deferral": "Correctly handled. Task 4 explicitly states (lines 22-23, 49, 59, 123) that the absence of a new @SpringBootTest IT on Set-Cookie is NOT a finding — it is an intentional deferral documented in Decision 7. The task mandates a dedicated 'Intentional deferral' section in the audit report referencing Decision 7 and AuthControllerIT.java:326-329. This is correct and complete.",
+    "scenarios_a_h_match": "Tech-spec Testing Strategy defines Scenarios A through H. Task 4 references all eight by letter (A/B/C in item 1, F in item 2, D in item 3, E in item 4, G/H in item 5). Coverage matrix requirement (AC item 3, post-completion item) maps all 8 to @Test methods. Labels and descriptions are consistent with tech-spec.",
+    "ac_1_to_8_coverage_in_task5": "Task 5 Acceptance Criteria list explicitly covers AC-1 through AC-8 from user-spec, one checkbox per criterion. The AC descriptions match user-spec wording. The Verification Steps Smoke section provides concrete curl commands for AC-1,2,4,5,6,7,8 and explains AC-3 is covered by existing tests. Coverage is complete with one caveat: the /api/me URL error (critical finding above).",
+    "curl_syntax": "All curl commands in task 5 are syntactically valid (-i -s -X POST, -H, -d flags used correctly). The only issue is the wrong URL path for AC-4 (critical finding).",
+    "ac8_env_var": "AC-8 env-var override uses `SERVER_REACTIVE_SESSION_COOKIE_NAME=ALT` (Spring Boot env-var convention for `server.reactive.session.cookie.name`). This is correct — verified against application.properties which shows `server.reactive.session.cookie.http-only=true`, `server.reactive.session.cookie.secure=${SESSION_COOKIE_SECURE:false}`, `server.reactive.session.cookie.same-site=${SESSION_COOKIE_SAME_SITE:lax}`, confirming the Spring Boot property prefix and env-var mapping are consistent.",
+    "depends_on_declared": "Task 4 depends_on: [1] is correctly declared. Task 5 depends_on: [2, 3, 4] is correctly declared. Both Task 1 and the transitive wave ordering are correct."
+  }
+}

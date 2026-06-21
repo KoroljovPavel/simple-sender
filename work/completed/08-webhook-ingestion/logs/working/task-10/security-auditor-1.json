@@ -1,0 +1,82 @@
+{
+  "severity_counts": {
+    "critical": 0,
+    "major": 2,
+    "minor": 3,
+    "info": 2
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "162-171",
+      "issue": "DuplicateKey self-heal path uses rawUpdateRepository.findAll() with in-memory filter to locate the colliding row. The comment acknowledges 'no findByProjectIdAndUpdateId' helper but accepts the full-collection scan. The raw_updates collection has 90-day TTL on PENDING/DONE plus unbounded retention on FAILED (audit trail per Decision 8) — it will grow into hundreds of thousands of rows over the project lifetime. Every Telegram retry of an already-seen update_id triggers a full-collection reactive scan on the request thread, blocking the event loop.",
+      "attack_vector": "DoS amplification via duplicate-key path. (1) Legitimate Telegram retry storms (network glitch causing N retries of the same update) become quadratic in collection size. (2) Authenticated misuse: any holder of a valid webhook secret can replay an update_id at high rate, each replay forcing a full scan. (3) Indirect: an attacker with valid secret who knows update_ids can intentionally re-POST to amplify load. Directly violates user-spec AC1 (P99 < 100ms) — measured P99 will explode once raw_updates exceeds a few thousand rows. The 'slow' AC1 test seeds a fresh collection per test, so the violation is not caught by IT.",
+      "recommendation": "Add a typed repository query `Mono<RawUpdate> findFirstByProjectIdAndUpdateId(String projectId, Long updateId)` to RawUpdateRepository. It will use the existing unique compound index `projectId_updateId_unique` — O(log n) lookup, not O(n) full scan. Replace `findExistingRawUpdate()` body with this typed query. Add a follow-up unit test that seeds 10k rows and asserts the lookup completes in < 50 ms.",
+      "recommendation_code": "// in RawUpdateRepository.java\nMono<RawUpdate> findFirstByProjectIdAndUpdateId(String projectId, Long updateId);\n\n// in TelegramWebhookController.findExistingRawUpdate(...)\nreturn rawUpdateRepository.findFirstByProjectIdAndUpdateId(projectId, updateId);"
+    },
+    {
+      "id": "F2",
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "173-186",
+      "issue": "Enqueue failure path returns the raw exception via `Mono.error(ex)`. The exception propagates out of the controller and is caught by `GlobalErrorHandler` (backend/src/main/java/com/botfunnel/common/GlobalErrorHandler.java:43, `@ExceptionHandler(Throwable.class)`), which returns `ResponseEntity<ErrorResponse>` with JSON body `{\"message\":\"Internal server error\",\"code\":null}`. This contradicts Decision 3 ('every response is Mono<ResponseEntity<Void>>... no body, no AppException, no GlobalErrorHandler path') and breaks the AC18 invariant that webhook responses are body-less. Although the hardcoded body string carries no token, the channel between controller and GlobalErrorHandler is also where `ex.getMessage()` is exposed to `log.error(\"Unhandled exception\", ex)` at GlobalErrorHandler:45 — that log site does NOT pass the message through `scrubTokens`. If `ex.getMessage()` contains a Telegram-token-shaped substring (e.g. from a downstream JobRunr error that includes the payload's URL or token), it lands in the application log unredacted.",
+      "attack_vector": "Token leak via uncontrolled error path. The controller scrubs its own ERROR line (line 180-182) but the same exception is re-thrown to `Mono.error(ex)` and then rendered by GlobalErrorHandler's catch-all, which logs the full stack trace including `ex.getMessage()` via SLF4J's `{}, ex` form. Any token-shaped substring in the exception chain (JobRunr serialisation of the lambda capturing rawUpdateId, downstream error messages that quote bot token) reaches a second, UNSCRUBBED log site. The IT's `errorLogOnEnqueueFail_noTokenInOutput` only filters by logger name `com.botfunnel.webhook.TelegramWebhookController`, so the unscrubbed line from `com.botfunnel.common.GlobalErrorHandler` is invisible to the test.",
+      "recommendation": "Two-part fix. (1) Convert the controller-level enqueue failure to an explicit 5xx response that does NOT propagate through GlobalErrorHandler: replace `return Mono.error(ex)` with `return Mono.just(ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).<Void>build())` so the response body stays empty and the exception never reaches the @ControllerAdvice. (2) Independently, harden GlobalErrorHandler.handleThrowable to call `TelegramApiClient.scrubTokens(ex.getMessage())` before passing to log.error — defense-in-depth for every controller, not just webhook.",
+      "recommendation_code": "// TelegramWebhookController.enqueueIdempotent\n.onErrorResume(ex -> {\n    log.error(\"TelegramWebhookController - enqueue failed (rawUpdateId={}): {}\",\n            TelegramApiClient.scrubTokens(rawUpdateId),\n            TelegramApiClient.scrubTokens(ex.getMessage()));\n    return Mono.error(new EnqueueFailedSignal()); // sentinel\n})\n// Then in receive(), .onErrorResume(EnqueueFailedSignal.class, e -> Mono.just(ResponseEntity.status(500).<Void>build()))"
+    },
+    {
+      "id": "F3",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "188-195",
+      "issue": "`extractUpdateId(body)` parses `update_id` via `Long.valueOf(raw.toString())`. If an authenticated client (anyone with the valid webhook secret) sends a payload with a non-numeric `update_id` (e.g. `\"update_id\": \"abc\"` or `\"update_id\": [1,2]`), `Long.valueOf` throws `NumberFormatException` (subclass of `IllegalArgumentException`). That exception propagates inside `handleVerified` — past the upstream `onErrorResume(IllegalArgumentException.class, ex -> Mono.empty())` which is scoped to the `botRepository` lookup only — and lands in GlobalErrorHandler producing a 500.",
+      "attack_vector": "Authenticated payload-based DoS. With a leaked or compromised webhook secret, an attacker can send malformed update_id values to repeatedly trigger 500s, generate noise in error logs, and pollute downstream observability. Telegram never sends non-numeric update_ids, so this surface only exists for adversarial clients. Severity is minor because (a) it requires a valid secret and (b) the GlobalErrorHandler body is the hardcoded 'Internal server error'.",
+      "recommendation": "Guard the parse and bail to 400 / 422 explicitly, or coerce a missing/malformed update_id into a deterministic 'reject' branch with its own counter. Minimum acceptable: wrap in `try { return Long.valueOf(raw.toString()); } catch (NumberFormatException nfe) { return null; }` so it joins the existing null-update_id path. Better: add a 'malformed_payload' rejection counter and return 422 empty body.",
+      "recommendation_code": "private static Long extractUpdateId(Document body) {\n    Object raw = body.get(\"update_id\");\n    if (raw == null) return null;\n    try {\n        return Long.valueOf(raw.toString());\n    } catch (NumberFormatException nfe) {\n        return null; // collapses into the null branch; or branch to explicit 422 reject\n    }\n}"
+    },
+    {
+      "id": "F4",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "133-141",
+      "issue": "When `extractUpdateId` returns `null` (payload missing the field) the controller still persists `RawUpdate` with `updateId = null`. The unique compound index `(projectId, updateId)` treats explicit nulls as a single value in MongoDB's default behavior — a second null-updateId POST for the same projectId triggers DuplicateKeyException and follows the self-heal path. Combined with F1, an authenticated client (or even Telegram in pathological mode) sending payloads without `update_id` will spam the full-scan duplicate path on every retry.",
+      "attack_vector": "Authenticated DoS amplifier that compounds F1. By omitting `update_id`, an attacker forces every second-or-later POST into the duplicate code path, which executes `findAll()`. Severity bumps from minor to major if F1 is not fixed; minor on its own.",
+      "recommendation": "Reject payloads missing `update_id` at the controller boundary before save: increment a 'malformed_payload' counter and return 422 (empty body, no GlobalErrorHandler). Telegram contract guarantees update_id is present; absence is adversarial or corrupt.",
+      "recommendation_code": "Long updateId = extractUpdateId(body);\nif (updateId == null) {\n    rejectedMalformed.increment(); // new counter\n    return Mono.just(ResponseEntity.unprocessableEntity().<Void>build());\n}"
+    },
+    {
+      "id": "F5",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "144-145",
+      "issue": "`meterRegistry.counter(RECEIVED_TOTAL, \"projectId\", projectId).increment()` is called per success request without caching. Two issues: (1) per-request `Tag.of` allocation contradicts the file's own claim 'Counters cached in @PostConstruct so Tag.of allocations stay off the hot path' (line 56). (2) `received_total{projectId=...}` is a high-cardinality tagged metric on SimpleMeterRegistry — every distinct projectId creates a permanent Counter instance with no eviction. With N projects, N Counter objects live forever in memory. This is documented in the task file as an accepted risk but worth flagging.",
+      "attack_vector": "Slow-burn memory growth proportional to project count. Not externally triggerable (requires a valid bot CONNECTED for each distinct projectId), so attack surface is internal. Operational risk, not direct security.",
+      "recommendation": "Either (a) cache per-projectId counters in a `ConcurrentHashMap<String, Counter>` with `computeIfAbsent`, or (b) drop the projectId tag entirely (the task file explicitly authorises this — AC16 asserts counter presence, not per-projectId breakdown). Option (b) is simpler and eliminates cardinality risk entirely; per-project visibility can be reconstructed from `raw_updates` collection.",
+      "recommendation_code": "// Option A: cached map\nprivate final ConcurrentHashMap<String, Counter> receivedByProject = new ConcurrentHashMap<>();\n// in success path:\nreceivedByProject.computeIfAbsent(projectId, pid ->\n        Counter.builder(RECEIVED_TOTAL).tag(\"projectId\", pid).register(meterRegistry)).increment();"
+    },
+    {
+      "id": "F6",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java",
+      "line": "115-118, 119-123",
+      "issue": "`switchIfEmpty` + `doOnEach` composition: the Timer.Sample stop in `doOnEach` triggers on `isOnNext() || isOnError()`. On the 404 path (`switchIfEmpty` emits a ResponseEntity) the timer stops correctly. However on cancellation (client disconnects mid-flight) the timer is NEVER stopped because `doOnEach` doesn't fire for OnCancel. Sample objects are lightweight but not zero-cost; over millions of cancelled requests they accumulate in the JVM. Telegram should not cancel, but proxies/LBs can.",
+      "attack_vector": "Slow memory leak on adversarial cancellations. Not an exploit path; informational.",
+      "recommendation": "Use `.doFinally(signal -> sample.stop(durationTimer))` instead of `.doOnEach(...)`. doFinally fires on completion, error, AND cancellation — the canonical timer-completion pattern for reactive pipelines.",
+      "recommendation_code": ".doFinally(signal -> sample.stop(durationTimer));"
+    },
+    {
+      "id": "F7",
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/webhook/TelegramWebhookControllerIT.java",
+      "line": "127-137, 444",
+      "issue": "Test `errorLogOnEnqueueFail_noTokenInOutput` filters captured log lines by logger name exactly equal to `com.botfunnel.webhook.TelegramWebhookController`. The companion GlobalErrorHandler logging site (`com.botfunnel.common.GlobalErrorHandler` line 45) is invisible to this filter. The test confirms scrubbing at the controller's own log site but does NOT confirm token containment at the @ControllerAdvice path that the same exception also flows through (see F2). The test passes for the wrong reason — it would still pass if scrubTokens disappeared from GlobalErrorHandler, because the test doesn't observe that logger.",
+      "attack_vector": "Test gap, not a runtime vulnerability. Hides F2 from CI.",
+      "recommendation": "Either (a) extend the IT's appender to attach to the root logger (or to `com.botfunnel.common.GlobalErrorHandler`) and assert no-token across all log sites in the request lifecycle, or (b) fix F2 such that the exception never reaches GlobalErrorHandler — then the current narrow filter is correct because no other logger participates.",
+      "recommendation_code": "// Attach appender to root logger to capture all SLF4J output during the test:\nLogger rootLogger = (Logger) LoggerFactory.getLogger(org.slf4j.Logger.ROOT_LOGGER_NAME);\nrootLogger.addAppender(appender);"
+    }
+  ],
+  "summary": "Constant-time secret verification, anti-enumeration 404 behaviour, deterministic JobRunr UUID idempotency, and per-site token scrubbing inside the controller are correctly implemented. Two major concerns warrant change before merge: (F1) the DuplicateKey self-heal path uses an unindexed `findAll()` collection scan that will violate AC1 once `raw_updates` grows and amplifies DoS on retries; (F2) enqueue failures escape through `GlobalErrorHandler` which produces a JSON body (violating Decision 3) and logs the raw exception message at a second, unscrubbed log site invisible to the IT.",
+  "verdict": "conditional"
+}

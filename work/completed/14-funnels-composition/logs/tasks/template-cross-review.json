@@ -1,0 +1,77 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task-integration",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "resource-sharing",
+      "task": 4,
+      "section": "What to do / Details",
+      "issue": "Task 4 owns frontend/types/funnel.ts (StepType union + targetFunnelId/targetEntryStepId/endParentAfter fields) and i18n locale files, but its prose repeatedly hedges with 'якщо Task 1 уже їх додав — не дублювати'. Task 1 is backend-only (its Files-to-modify lists no frontend file and the task text never references funnel.ts), so Task 1 will never add these. The hedge is harmless (Task 4 falls through to 'add them') but the cross-reference to a non-existent Task 1 frontend change is misleading and could cause an executor to waste time looking for it. Ownership is in fact unambiguous: Task 4 is the sole owner of funnel.ts and both locale files.",
+      "fix": "Optional: drop the 'if Task 1 already added them' conditional in Task 4 and state plainly that Task 4 owns the frontend funnel.ts union+fields and the uk/en locale keys. tech-spec Architecture (line 42) lists types/funnel.ts under 'Frontend' which is Task 4's scope; tech-spec Task 1 Files-to-modify is backend-only — consistent with Task 4 ownership."
+    }
+  ],
+  "cross_task_checks": {
+    "shared_resources": [
+      {
+        "resource": "FunnelExecutionFactory (singleton bean)",
+        "owner": "Spring DI (pre-existing); insertExecutionAt overload added by Task 3",
+        "consumers": ["Task 3 FunnelEventService.enrollSpecificFunnel via new insertExecutionAt"],
+        "verdict": "ok — overload owned by Task 3; existing 5 callsites of insertExecution delegated unchanged; no competing instance"
+      },
+      {
+        "resource": "Redis auto-enroll rate-limit key bf:rate:auto-enroll:{subscriberId}",
+        "owner": "infra (pre-existing); reused via FunnelEventService.autoEnrollRateLimitExceeded",
+        "consumers": ["Task 3 enrollSpecificFunnel reuses existing private method/field — no duplicate backstop"],
+        "verdict": "ok — Task 3 explicitly forbids duplicating depth-cap/rate-limit; single dispatcher owns backstops"
+      },
+      {
+        "resource": "telegramBotId inheritance",
+        "owner": "resolved at enroll (Decision 9)",
+        "consumers": ["Task 3 passes execution.getTelegramBotId() into child — no new lookup"],
+        "verdict": "ok — single resolution path in Task 3 StepExecutor->enrollSpecificFunnel"
+      },
+      {
+        "resource": "frontend/types/funnel.ts (StepType union + 3 new FunnelStep fields)",
+        "owner": "Task 4",
+        "consumers": ["Task 4 only (frontend)"],
+        "verdict": "ok — Task 1 is backend-only and does NOT touch funnel.ts (verified: 0 references); single owner, no same-wave conflict (Task 4 alone in Wave 2 touches frontend). Minor finding raised re: misleading hedge."
+      },
+      {
+        "resource": "i18n keys (uk.json + en.json: funnels.steps.* + errors.funnels.funnel_subscribe_*)",
+        "owner": "Task 4",
+        "consumers": ["Task 4 only; error codes themselves originate in Task 2 backend validation"],
+        "verdict": "ok — only Task 4 edits locale files (verified: Tasks 1/2/3 = 0 refs). Task 4 correctly notes it must mirror the exact code strings produced by Task 2."
+      }
+    ],
+    "dependency_graph": {
+      "edges": "1->{2,3,4}; {2,3,4}->{5,6,7}; {5,6,7}->8",
+      "acyclic": true,
+      "wave_ordering": "correct — every depends_on target sits in a strictly earlier wave (1<2, 2<3, 3<4)",
+      "verdict": "ok"
+    },
+    "same_wave_file_conflicts": {
+      "wave_2": {
+        "task_2": ["FunnelService.java (validateSteps branch + activation block + error codes)", "FunnelServiceEmitEventTest.java"],
+        "task_3": ["FunnelExecutionFactory.java", "FunnelEventService.java", "StepExecutor.java", "FunnelExecutionEngine.java", "FunnelExecutionEngineIT.java", "FunnelStepExecutorTest.java"],
+        "task_4": ["frontend/types/funnel.ts", "FunnelStepForm.vue", "i18n/uk.json", "i18n/en.json"],
+        "verdict": "ok — disjoint file sets. Task 2 explicitly states 'НЕ чіпай StepExecutor/FunnelEventService/FunnelExecutionFactory'. Task 3 only modifies StepExecutor (not FunnelService.validateSteps) and references FunnelService only for callsite-counting context. No two Wave-2 tasks write the same file."
+      },
+      "sequential_handoffs_across_waves": {
+        "StepExecutor.java": "Task 1 (Wave 1) inserts placeholder 'case SUBSCRIBE_TO_FUNNEL -> StepResult.cont();' with TODO; Task 3 (Wave 2, depends_on [1]) replaces it with real enroll + COMPLETE/CONTINUE. Correct dependency-ordered handoff, not a conflict.",
+        "FunnelService.java": "Task 1 (Wave 1) inserts empty 'case SUBSCRIBE_TO_FUNNEL -> {}' in validateSteps switch; Task 2 (Wave 2, depends_on [1]) fills it with DB-lookup validation. Correct dependency-ordered handoff.",
+        "FunnelStepDto.java constructor arity": "Task 1 grows record 17->20 args; Task 2 (depends_on [1]) explicitly updates existing test callsites (emitStep) to the new arity. Correctly sequenced; no break."
+      }
+    },
+    "competing_instances": "none — no two tasks in the same wave create their own instance of any heavy/shared resource"
+  },
+  "stats": {
+    "tasks_checked": 8,
+    "issues_found": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  }
+}

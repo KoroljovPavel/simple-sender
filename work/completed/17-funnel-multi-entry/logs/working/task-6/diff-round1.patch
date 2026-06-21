@@ -1,0 +1,484 @@
+a192a3b feat: task 6 — frontend types, store, Triggers panel (72 seconds ago) <johnypashka>
+frontend/components/funnels/FunnelStepForm.vue     |   9 +-
+ .../components/funnels/FunnelTriggerSettings.vue   |  11 +-
+ .../components/funnels/FunnelTriggersPanel.vue     | 278 +++++++++++++++++++++
+ frontend/i18n/locales/en.json                      |  21 ++
+ frontend/i18n/locales/uk.json                      |  21 ++
+ frontend/stores/funnels.ts                         |  10 +-
+ .../funnels/FunnelStepForm.keyboard.spec.ts        |  17 +-
+ .../components/funnels/FunnelTriggersPanel.spec.ts | 172 +++++++++++++
+ frontend/tests/i18n/required-keys.spec.ts          |  18 ++
+ frontend/tests/stores/funnels.spec.ts              |   6 +-
+ frontend/types/funnel.ts                           |  44 ++--
+ 11 files changed, 576 insertions(+), 31 deletions(-)
+
+frontend/components/funnels/FunnelStepForm.vue
+  @@ -683,11 +683,16 @@ const keyboardValid = computed<boolean>(() => {
+  +  // Phase 8 (17-funnel-multi-entry): a funnel now carries a LIST of triggers; scan each keyword trigger's
+  +  // keywords (the flat f.triggerType/f.keywords trio is gone).
+     const matched = storeFunnels.value.some(
+       (f) =>
+         f.status === 'active' &&
+  -      f.triggerType === 'keyword' &&
+  -      (f.keywords ?? []).some((kw) => kw && text.includes(kw)),
+  +      (f.triggers ?? []).some(
+  +        (tr) =>
+  +          tr.triggerType === 'keyword' &&
+  +          (tr.keywords ?? []).some((kw) => kw && text.includes(kw)),
+  +      ),
+     )
+     return !matched
+   }
+  +7 -2
+
+frontend/components/funnels/FunnelTriggerSettings.vue
+  @@ -13,7 +13,13 @@ import type { FunnelTriggerType } from '~/types/funnel'
+  -const props = defineProps<{ botUsername?: string | null; deepLink?: string | null }>()
+  +// lockType pins the trigger-TYPE selector (disabled, no change emitted). Used by FunnelTriggersPanel for
+  +// the on_start "main entry" slot and each event row, where the panel — not this form — owns the type.
+  +const props = defineProps<{
+  +  botUsername?: string | null
+  +  deepLink?: string | null
+  +  lockType?: boolean
+  +}>()
+   const triggerType = defineModel<FunnelTriggerType>('triggerType', { default: 'on_start' })
+   const triggerValue = defineModel<string>('triggerValue', { default: '' })
+   const keywords = defineModel<string[]>('keywords', { default: () => [] })
+  @@ -150,7 +156,8 @@ onBeforeUnmount(() => {
+  -        class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+  +        :disabled="props.lockType"
+  +        class="w-full rounded-md border px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:cursor-not-allowed disabled:bg-gray-100"
+         >
+           <option v-for="ty in TRIGGER_TYPES" :key="ty" :value="ty">{{ t(`funnels.trigger.type.${ty}`) }}</option>
+         </select>
+  +9 -2
+
+frontend/components/funnels/FunnelTriggersPanel.vue
+  @@ -0,0 +1,278 @@
+  +<script setup lang="ts">
+  +// Vertical list of the funnel's entry triggers (Phase 8 — 17-funnel-multi-entry). Clones the add/delete/
+  +// select structure of FunnelStepsList.vue. on_start is the funnel's MAIN entry (always step 1) — it is
+  +// shown read-only at the top and edited through the existing FunnelTriggerSettings form, not the event
+  +// list. Below it the author manages N `event` triggers: each row mounts FunnelTriggerSettings (the portable
+  +// trigger form, Decision 11) plus a per-trigger entry-step SearchableSelect built over the funnel's OWN
+  +// steps (passed via the `steps` prop — NOT an async fetch like FunnelStepForm.subscribeEntryOptions).
+  +//
+  +// Mid-entry is event-only (Decision 10): the backend REQUIRES a non-null entryStepId resolving to a step
+  +// for `event` and rejects it for every other type. So the "from start" sentinel for an event trigger maps
+  +// to the FIRST step's id (not null) — see entryToModel/modelToEntry. A duplicate event_name inside the
+  +// funnel is flagged with an advisory error (the server 422 is the real backstop — Decision 13/14).
+  +//
+  +// The whole array is emitted via `update:triggers` on every mutation (full-replace, mirroring the PATCH
+  +// contract). Task 7 mounts this with `v-model:triggers` and drives the autosave.
+  +import type { FunnelStep, FunnelTrigger, FunnelTriggerType } from '~/types/funnel'
+  +import FunnelTriggerSettings from '~/components/funnels/FunnelTriggerSettings.vue'
+  +import SearchableSelect from '~/components/funnels/SearchableSelect.vue'
+  +
+  +const props = defineProps<{
+  +  triggers: FunnelTrigger[]
+  +  steps: FunnelStep[]
+  +  botUsername?: string | null
+  +  deepLink?: string | null
+  +}>()
+  +
+  +const emit = defineEmits<{
+  +  'update:triggers': [triggers: FunnelTrigger[]]
+  +  add: []
+  +  delete: [index: number]
+  +  select: [index: number]
+  +}>()
+  +
+  +const { t } = useI18n()
+  +
+  +// Sentinel = "entry at the first step". Same constant-semantics as FunnelStepForm.SUBSCRIBE_ENTRY_START.
+  +const ENTRY_START = '__START__'
+  +
+  +// Index of the lone on_start trigger (the main entry) and the event triggers shown in the list. on_start
+  +// always enters at step 1 and is never deletable from this panel — it is the funnel's main entry.
+  +const onStartIndex = computed(() => props.triggers.findIndex((tr) => tr.triggerType === 'on_start'))
+  +const eventEntries = computed(() =>
+  +  props.triggers
+  +    .map((tr, index) => ({ tr, index }))
+  +    .filter(({ tr }) => tr.triggerType === 'event'),
+  +)
+  +
+  +const selectedIndex = ref<number | null>(null)
+  +const confirmIndex = ref<number | null>(null)
+  +
+  +// Entry-step options built from the funnel's OWN steps (prop, not async). Steps without an id (not yet
+  +// persisted) are skipped — no stable target. The "from start" sentinel is always first. Copied byte-for-
+  +// byte from FunnelStepForm.subscribeEntryOptions except for the prop source.
+  +const entryOptions = computed(() => {
+  +  const stepOptions = props.steps
+  +    .map((s, position) => ({ s, position }))
+  +    .filter(({ s }) => !!s.id)
+  +    .map(({ s, position }) => ({
+  +      value: s.id as string,
+  +      label: `${position + 1}. ${t(`funnels.steps.type.${s.stepType}`)}`,
+  +    }))
+  +  return [{ value: ENTRY_START, label: t('funnels.triggersPanel.entryStart') }, ...stepOptions]
+  +})
+  +
+  +// The id of the first step (the resolution target for the "from start" sentinel on an event trigger).
+  +const firstStepId = computed<string | null>(() => props.steps.find((s) => !!s.id)?.id ?? null)
+  +
+  +// Map a stored entryStepId to the SearchableSelect model: null OR the first step's id → the sentinel
+  +// (both mean "from start" for the author); any other id is shown verbatim.
+  +function entryToModel(entryStepId: string | null | undefined): string {
+  +  if (!entryStepId) return ENTRY_START
+  +  if (entryStepId === firstStepId.value) return ENTRY_START
+  +  return entryStepId
+  +}
+  +// Map the SearchableSelect model back to the stored entryStepId. The sentinel → the first step's id
+  +// (mid-entry is event-only and the backend requires a non-null entry step). If the funnel has no saved
+  +// step yet, fall back to null — the server 422 is the backstop and the author sees the advisory.
+  +function modelToEntry(model: string): string | null {
+  +  return model === ENTRY_START ? firstStepId.value : model
+  +}
+  +
+  +// Advisory duplicate-event-name guard: an event row is flagged when an EARLIER event row carries the same
+  +// (case-preserving, trimmed) triggerValue — mirrors the backend's case-preserving duplicate rule, but is
+  +// advisory only (does not gate save). The first occurrence is never flagged.
+  +const duplicateIndices = computed(() => {
+  +  const seen = new Set<string>()
+  +  const dups = new Set<number>()
+  +  for (const { tr, index } of eventEntries.value) {
+  +    const key = (tr.triggerValue ?? '').trim()
+  +    if (!key) continue
+  +    if (seen.has(key)) dups.add(index)
+  +    else seen.add(key)
+  +  }
+  +  return dups
+  +})
+  +
+  +// All mutations rebuild the whole array and emit it (full-replace). Pinia/parent owns the source of truth.
+  +function replaceAt(index: number, next: FunnelTrigger): void {
+  +  const copy = props.triggers.map((tr, i) => (i === index ? next : tr))
+  +  emit('update:triggers', copy)
+  ... (178 lines truncated)
+  +278 -0
+
+frontend/i18n/locales/en.json
+  @@ -947,6 +947,27 @@
+  +    },
+  +    "triggersPanel": {
+  +      "mainEntry": "Main entry",
+  +      "mainEntryHint": "Starts at the first step",
+  +      "eventTriggers": "Event triggers",
+  +      "add": "Add trigger",
+  +      "delete": "Delete",
+  +      "confirmDelete": "Delete this trigger?",
+  +      "unnamedEvent": "Unnamed event",
+  +      "entryLabel": "Entry step",
+  +      "entryStart": "From the start",
+  +      "entryPlaceholder": "Choose an entry step…",
+  +      "entryLoading": "Loading…",
+  +      "entryEmpty": "Add a step first",
+  +      "entryNoMatches": "No matching steps",
+  +      "entryHint": "The subscriber enters the funnel at this step when the event fires.",
+  +      "duplicateEventName": "This event name is already used by another trigger in this funnel.",
+  +      "empty": {
+  +        "title": "No event triggers yet",
+  +        "body": "Add an event trigger so the funnel can also start from an API event or an Emit event step."
+  +      }
+       }
+     }
+   }
+  +21 -0
+
+frontend/i18n/locales/uk.json
+  @@ -947,6 +947,27 @@
+  +    },
+  +    "triggersPanel": {
+  +      "mainEntry": "Головний вхід",
+  +      "mainEntryHint": "Починає з першого кроку",
+  +      "eventTriggers": "Тригери подій",
+  +      "add": "Додати тригер",
+  +      "delete": "Видалити",
+  +      "confirmDelete": "Видалити цей тригер?",
+  +      "unnamedEvent": "Подія без назви",
+  +      "entryLabel": "Крок входу",
+  +      "entryStart": "З початку",
+  +      "entryPlaceholder": "Оберіть крок входу…",
+  +      "entryLoading": "Завантаження…",
+  +      "entryEmpty": "Спершу додайте крок",
+  +      "entryNoMatches": "Немає відповідних кроків",
+  +      "entryHint": "Підписник входить у воронку на цьому кроці, коли спрацьовує подія.",
+  +      "duplicateEventName": "Цю назву події вже використовує інший тригер у цій воронці.",
+  +      "empty": {
+  +        "title": "Поки немає тригерів подій",
+  +        "body": "Додайте тригер події, щоб воронка могла також запускатися від API-події або кроку «Згенерувати подію»."
+  +      }
+       }
+     }
+   }
+  +21 -0
+
+frontend/stores/funnels.ts
+  @@ -76,8 +76,10 @@ export const useFunnelsStore = defineStore('funnels', () => {
+  -              triggerType: updated.triggerType,
+  -              triggerValue: updated.triggerValue,
+  +              // Phase 8 (17-funnel-multi-entry): the summary row carries the whole trigger array (the flat
+  +              // triggerType/triggerValue trio is gone). The store stays a thin pass-through — it projects
+  +              // the array verbatim, never reasons about its shape.
+  +              triggers: updated.triggers,
+                 allowReEnter: updated.allowReEnter,
+                 stepCount: updated.steps.length,
+                 updatedAt: updated.updatedAt,
+  @@ -113,8 +115,8 @@ export const useFunnelsStore = defineStore('funnels', () => {
+  -            triggerType: updated.triggerType,
+  -            triggerValue: updated.triggerValue,
+  +            // Phase 8 (17-funnel-multi-entry): project the whole trigger array (flat trio removed).
+  +            triggers: updated.triggers,
+               allowReEnter: updated.allowReEnter,
+               stepCount: updated.steps.length,
+               updatedAt: updated.updatedAt,
+  +6 -4
+
+frontend/tests/components/funnels/FunnelStepForm.keyboard.spec.ts
+  @@ -35,21 +35,28 @@ function checked(sel: string): boolean {
+  -function funnelSummary(over: Partial<FunnelSummaryResponse>): FunnelSummaryResponse {
+  +// Phase 8 (17-funnel-multi-entry): the summary carries a `triggers` array, not the flat trio. The factory
+  +// keeps the convenience `triggerType`/`keywords` overrides and maps them into a single trigger element so
+  +// the existing call sites read unchanged.
+  +function funnelSummary(
+  +  over: Partial<Omit<FunnelSummaryResponse, 'triggers'>> & {
+  +    triggerType?: string
+  +    keywords?: string[] | null
+  +  } = {},
+  +): FunnelSummaryResponse {
+  +  const { triggerType = 'keyword', keywords = ['бонус'], ...rest } = over
+     return {
+       id: 'f1',
+       projectId: 'p1',
+       name: 'Game',
+       description: null,
+       status: 'active',
+  -    triggerType: 'keyword',
+  -    triggerValue: null,
+  -    keywords: ['бонус'],
+  +    triggers: [{ triggerType, triggerValue: null, keywords, entryStepId: null }],
+       allowReEnter: false,
+       stepCount: 1,
+       createdAt: '',
+       updatedAt: '',
+  -    ...over,
+  +    ...rest,
+     }
+   }
+   
+  +12 -5
+
+frontend/tests/components/funnels/FunnelTriggersPanel.spec.ts
+  @@ -0,0 +1,172 @@
+  +// @vitest-environment nuxt
+  +import { describe, it, expect, afterEach, vi } from 'vitest'
+  +import { mountSuspended, mockNuxtImport } from '@nuxt/test-utils/runtime'
+  +import { DOMWrapper } from '@vue/test-utils'
+  +import { settle } from '../../helpers/settle'
+  +import FunnelTriggersPanel from '../../../components/funnels/FunnelTriggersPanel.vue'
+  +import type { FunnelStep, FunnelTrigger } from '../../../types/funnel'
+  +
+  +// FunnelTriggersPanel manages the funnel's LIST of triggers (Phase 8 — 17-funnel-multi-entry). on_start is
+  +// the read-only main entry (always step 1); the panel adds/removes `event` triggers and lets the author
+  +// pick each one's entry step over the funnel's OWN steps (passed via the `steps` prop). The whole array is
+  +// emitted back via `update:triggers` (full-replace, mirrors the backend PATCH contract).
+  +//
+  +// The panel mounts FunnelTriggerSettings per row, which lazily fetches tags/fields for tag_added/
+  +// custom_field_set — kept off the wire here by mocking useApi and exercising `event`/on_start only.
+  +mockNuxtImport('useApi', () => () => () => Promise.resolve([]))
+  +mockNuxtImport('useRoute', () => () => ({ params: { projectId: 'p1' } }))
+  +
+  +function $(sel: string): DOMWrapper<Element> {
+  +  const el = document.querySelector(sel)
+  +  if (!el) throw new Error(`not found: ${sel}`)
+  +  return new DOMWrapper(el)
+  +}
+  +function maybe(sel: string): Element | null {
+  +  return document.querySelector(sel)
+  +}
+  +
+  +const STEPS: FunnelStep[] = [
+  +  { stepType: 'MESSAGE', id: 's1', blocks: [{ type: 'TEXT', text: 'Hi' }] },
+  +  { stepType: 'DELAY', id: 's2', delayValue: 5, delayUnit: 'MIN' },
+  +  { stepType: 'MESSAGE' }, // no id (unsaved) — must be skipped in the entry picker
+  +]
+  +
+  +function onStart(): FunnelTrigger {
+  +  return { triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }
+  +}
+  +function event(value: string, entryStepId: string | null = 's1'): FunnelTrigger {
+  +  return { triggerType: 'event', triggerValue: value, keywords: null, entryStepId }
+  +}
+  +
+  +async function mountPanel(triggers: FunnelTrigger[], steps: FunnelStep[] = STEPS) {
+  +  const wrapper = await mountSuspended(FunnelTriggersPanel, {
+  +    props: { triggers, steps },
+  +    attachTo: document.body,
+  +  })
+  +  await settle()
+  +  return wrapper
+  +}
+  +
+  +// The latest emitted array (the panel emits the WHOLE replacement array on every mutation).
+  +function lastTriggers(wrapper: Awaited<ReturnType<typeof mountPanel>>): FunnelTrigger[] {
+  +  const ev = wrapper.emitted('update:triggers')
+  +  if (!ev || ev.length === 0) throw new Error('no update:triggers emitted')
+  +  return ev.at(-1)![0] as FunnelTrigger[]
+  +}
+  +
+  +describe('FunnelTriggersPanel', () => {
+  +  afterEach(() => {
+  +    document.body.innerHTML = ''
+  +    vi.clearAllMocks()
+  +  })
+  +
+  +  it('adds an event trigger', async () => {
+  +    const wrapper = await mountPanel([onStart()])
+  +    await $('[data-test="funnel-trigger-add"]').trigger('click')
+  +    await settle()
+  +
+  +    const next = lastTriggers(wrapper)
+  +    // on_start is preserved; a fresh empty `event` trigger is appended.
+  +    expect(next).toHaveLength(2)
+  +    expect(next[0].triggerType).toBe('on_start')
+  +    expect(next[1].triggerType).toBe('event')
+  +    expect(next[1].triggerValue ?? '').toBe('')
+  +    // The add path defaults entryStepId to the FIRST step's id (event requires a non-null entry —
+  +    // Decision 14). If this regressed to null, the funnel would 422 on save.
+  +    expect(next[1].entryStepId).toBe('s1')
+  +  })
+  +
+  +  it('removes a trigger', async () => {
+  +    const wrapper = await mountPanel([onStart(), event('purchase')])
+  +    // Two-click confirm delete (no silent drop).
+  +    await $('[data-test="funnel-trigger-delete-1"]').trigger('click')
+  +    await settle()
+  +    await $('[data-test="funnel-trigger-delete-confirm-1"]').trigger('click')
+  +    await settle()
+  +
+  +    const next = lastTriggers(wrapper)
+  +    expect(next).toHaveLength(1)
+  +    expect(next[0].triggerType).toBe('on_start')
+  +  })
+  +
+  +  it('entry-step picker lists the funnel steps', async () => {
+  +    await mountPanel([onStart(), event('purchase')])
+  +    // Open the event row's entry-step combobox.
+  +    await $('[data-test="funnel-trigger-entry-1-input"]').trigger('focus')
+  +    await settle()
+  +
+  +    // Sentinel "from start" + one option per step WITH an id (s1, s2); the id-less step is skipped.
+  +    expect(maybe('[data-test="funnel-trigger-entry-1-option-__START__"]')).not.toBeNull()
+  +    expect(maybe('[data-test="funnel-trigger-entry-1-option-s1"]')).not.toBeNull()
+  ... (72 lines truncated)
+  +172 -0
+
+frontend/tests/i18n/required-keys.spec.ts
+  @@ -47,6 +47,24 @@ const REQUIRED_KEYS = [
+  +  // Task 6 (17-funnel-multi-entry) — FunnelTriggersPanel.vue labels. uk/en parity, no empty values.
+  +  'funnels.triggersPanel.mainEntry',
+  +  'funnels.triggersPanel.mainEntryHint',
+  +  'funnels.triggersPanel.eventTriggers',
+  +  'funnels.triggersPanel.add',
+  +  'funnels.triggersPanel.delete',
+  +  'funnels.triggersPanel.confirmDelete',
+  +  'funnels.triggersPanel.unnamedEvent',
+  +  'funnels.triggersPanel.entryLabel',
+  +  'funnels.triggersPanel.entryStart',
+  +  'funnels.triggersPanel.entryPlaceholder',
+  +  'funnels.triggersPanel.entryLoading',
+  +  'funnels.triggersPanel.entryEmpty',
+  +  'funnels.triggersPanel.entryNoMatches',
+  +  'funnels.triggersPanel.entryHint',
+  +  'funnels.triggersPanel.duplicateEventName',
+  +  'funnels.triggersPanel.empty.title',
+  +  'funnels.triggersPanel.empty.body',
+   ] as const
+   
+   describe('i18n AC-25 required keys', () => {
+  +18 -0
+
+frontend/tests/stores/funnels.spec.ts
+  @@ -23,8 +23,7 @@ function summary(id: string, status: FunnelSummaryResponse['status'] = 'draft'):
+  -    triggerType: 'on_start',
+  -    triggerValue: '',
+  +    triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+       allowReEnter: false,
+       stepCount: 0,
+       createdAt: '2026-01-01T00:00:00Z',
+  @@ -39,8 +38,7 @@ function full(id: string): FunnelResponse {
+  -    triggerType: 'on_start',
+  -    triggerValue: '',
+  +    triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+       allowReEnter: false,
+       steps: [],
+       deepLink: null,
+  +2 -4
+
+frontend/types/funnel.ts
+  @@ -30,6 +30,24 @@ export type StepType =
+  +// One funnel entry trigger — mirrors backend TriggerDto (com.botfunnel.funnel.dto.TriggerDto, Task 3)
+  +// one-to-one. Phase 8 (17-funnel-multi-entry): a funnel carries a LIST of triggers, each with its own
+  +// entry step, replacing the former flat triggerType/triggerValue/keywords trio. Field semantics:
+  +//   - triggerType  → the discriminator (FunnelTriggerType byte-for-byte).
+  +//   - triggerValue → match key for tag_added (tag slug) / custom_field_set (field key) / event (event
+  +//                    name); the deep-link parameter for on_start; null/unused for keyword.
+  +//   - keywords     → only populated for triggerType=keyword (the scanned word list); null otherwise.
+  +//   - entryStepId  → the step this trigger enters at. Mid-entry is EVENT-ONLY (Decision 10): the backend
+  +//                    REQUIRES a non-null entryStepId resolving to a step for `event`, and REJECTS a
+  +//                    non-null entryStepId for every other type (on_start/keyword/tag_added/custom_field_set
+  +//                    always enter at step 1, so their entryStepId is null).
+  +export interface FunnelTrigger {
+  +  triggerType: string
+  +  triggerValue?: string | null
+  +  keywords?: string[] | null
+  +  entryStepId?: string | null
+  +}
+  +
+   // Inline-keyboard button on a MESSAGE composer step — mirrors backend Button record
+   // (com.botfunnel.funnel.Button). type is 'callback' (advances the funnel to targetStepId, or End when
+   // null) or 'url' (opens an http(s) link, does not advance). targetStepId and url are mutually exclusive
+  @@ -154,10 +172,9 @@ export interface FunnelSummaryResponse {
+  -  triggerType: string | null
+  -  triggerValue: string | null
+  -  // Only populated for triggerType=keyword; null/empty for every other trigger type (Decision 3).
+  -  keywords?: string[] | null
+  +  // The funnel's entry triggers (Phase 8 — 17-funnel-multi-entry). Replaces the former flat trigger trio;
+  +  // a funnel always carries at least the on_start element, plus zero or more event/keyword/tag/field ones.
+  +  triggers: FunnelTrigger[]
+     allowReEnter: boolean
+     stepCount: number
+     createdAt: string
+  @@ -172,10 +189,10 @@ export interface FunnelResponse {
+  -  triggerType: string | null
+  -  triggerValue: string | null
+  -  // Only populated for triggerType=keyword; null/empty for every other trigger type (Decision 3).
+  -  keywords?: string[] | null
+  +  // The funnel's entry triggers (Phase 8 — 17-funnel-multi-entry). Replaces the former flat trigger trio;
+  +  // each carries its own entry step (mid-entry is event-only — see FunnelTrigger). deepLink is built from
+  +  // the on_start element server-side.
+  +  triggers: FunnelTrigger[]
+     allowReEnter: boolean
+     steps: FunnelStep[]
+     deepLink: string | null
+  @@ -189,15 +206,14 @@ export interface CreateFunnelRequest {
+  -// PATCH/PUT .../funnels/{id} body — full-replace metadata + trigger + steps (all nullable server-side).
+  -// Task 9 includes update() in the store per contract but has no UI for it (Task 10 reuses it).
+  +// PATCH/PUT .../funnels/{id} body — full-replace metadata + triggers + steps (all nullable server-side).
+  +// Phase 8 (17-funnel-multi-entry): the trigger array is sent whole (full-replace, NOT a delta); per-trigger
+  +// and cross-trigger validation (≤1 on_start, duplicate event_name, event-only mid-entry) lives server-side
+  +// → 422. Task 10 reuses update() to persist editor changes.
+   export interface UpdateFunnelRequest {
+     name?: string
+     description?: string | null
+  -  triggerType?: string | null
+  -  triggerValue?: string | null
+  -  // Only sent for triggerType=keyword (the active type owns its value — Edge cases); omit otherwise.
+  -  keywords?: string[] | null
+  +  triggers?: FunnelTrigger[]
+     allowReEnter?: boolean
+     steps?: FunnelStep[]
+   }
+  +30 -14
+[full diff: rtk git diff --no-compact]

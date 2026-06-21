@@ -1,0 +1,30 @@
+{
+  "task": 7,
+  "reviewer": "test-master",
+  "round": 1,
+  "verdict": "approved",
+  "pyramid": "Component-level (vitest + @nuxt/test-utils mountSuspended) — correct level for a Vue form: DOM-driven behavior, no >3-mock integration smell. E2E for the funnel editor is out of tech-spec scope (Task 11 confirms).",
+  "coverage": [
+    {"anchor": "adds a block of the picked type", "covered": true, "test": "FunnelStepForm.composer.spec.ts::adds a block of the picked type / renders the per-type widget for each block type"},
+    {"anchor": "moves a block up and down", "covered": true, "test": "::moves a block up and down"},
+    {"anchor": "removes a block", "covered": true, "test": "::removes a block"},
+    {"anchor": "per-type widget for each block type", "covered": true, "test": "::renders the per-type widget for each block type (TEXT textarea+parseMode; media url+caption+parseMode; ALBUM 2 items, caption only on first)"},
+    {"anchor": "emits MESSAGE with ordered blocks", "covered": true, "test": "::emits a MESSAGE step with ordered blocks on submit"},
+    {"anchor": "blocks submit on empty composer", "covered": true, "test": "::blocks submit on an empty composer"},
+    {"anchor": "blocks >10 blocks", "covered": true, "test": "::caps the composer at 10 blocks (the add-block button disables) — UX mirror of MAX_BLOCKS; the picker prevents reaching 11"},
+    {"anchor": "album <2 / >10 items", "covered": true, "test": "::blocks an album with fewer than 2 or more than 10 items"},
+    {"anchor": "invalid album type-mixing", "covered": true, "test": "::blocks an album with an invalid type mix (audio mixed with photo) + ::accepts a valid photo+video album mix"},
+    {"anchor": "buttons only on last non-album block", "covered": true, "test": "::shows/hides the buttons section by last-block type + ::does not block submit on stale hidden button rows when the last block is an album + ::emits buttons attached when last block is non-album"},
+    {"anchor": "over-length warns but does not block", "covered": true, "test": "::warns but does not block on over-length text or caption"},
+    {"anchor": "rejects non-http(s) media url; accepts http(s)/file_id", "covered": true, "test": "::rejects a non-http(s) media url and accepts http(s) / a bare file_id + ::accepts an opaque file_id as the media source"},
+    {"anchor": "edit seeding + id/next preserved", "covered": true, "test": "::seeds the composer from an edited MESSAGE step and preserves id/next"}
+  ],
+  "migrated_specs": [
+    "AddStepDialog.spec.ts — default MESSAGE composer, IMAGE-block url rejection, MESSAGE emit",
+    "EditStepDialog.spec.ts — prefills a MESSAGE text block",
+    "FunnelStepsList.spec.ts — MESSAGE fixture",
+    "funnel-editor.spec.ts — FunnelStepForm — MESSAGE keyboard describe (former MENU), message fixtures; preview-selection cases nudged to Task 8's landed contract"
+  ],
+  "quality_notes": "Tests assert behavior (emitted step shape, inline error/warn presence, section visibility) not implementation. Album type-mixing covers both the rejected mix and the valid photo+video mix (positive+negative). The file_id vs URL disambiguation has both branches. settle() helper used consistently for the vee-validate microtask. No findings.",
+  "findings": []
+}

@@ -1,0 +1,39 @@
+{
+  "task": "3",
+  "round": 1,
+  "reviewer": "code-reviewer",
+  "verdict": "approved",
+  "summary": "Implementation cleanly satisfies Decision 5 normalization order, the discriminated union is exhaustive and type-narrowed correctly in the middleware, and pure-function/handler separation makes the 15 unit tests free of any Nitro mocking. A few minor/nit observations below; nothing blocking.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/server/utils/locale-strip.ts:30",
+      "issue": "Magic number `slice(3)` for stripping `/xx` is correct but couples to the regex (1 slash + 2-char code). If allow-list ever expands to 3-letter codes (e.g., regional variants `/zh-tw/`), this hard-coded offset silently breaks. Currently fine because regex hard-codes `[a-z]{2}`, but the coupling is implicit.",
+      "fix": "Either derive the offset from the match (`pathname.slice(match[0].length) || '/'`) or extract a named constant `const LOCALE_PREFIX_LEN = 3` next to the regex with a one-line comment. Optional — current behavior is correct."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/server/utils/locale-strip.ts:16",
+      "issue": "Backslash rejection runs on every request before the locale-prefix regex even runs, meaning paths like `/dashboard\\evil` (no locale prefix at all) are also 400'd by this middleware. That is a defensible defense-in-depth choice and is consistent with Decision 5 phrasing (`reject backslash перш за все`), but it changes Nitro's default passthrough behavior for non-locale paths and is not covered by an explicit test.",
+      "fix": "Add one fixture asserting the chosen behavior (e.g., `/dashboard\\evil` → reject 400, OR scope the backslash check inside the prefix-matched branch). Documenting via test prevents accidental regression and clarifies intent for future readers. Optional."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/server/utils/locale-strip.ts:46",
+      "issue": "The auth-zone match expression `target === '/auth' || target.startsWith('/auth/') || target.startsWith('/auth?')` is correct (no false positive on `/authentic`, catches `/auth`, `/auth/...`, `/auth?...`), but the rule is reused conceptually in tech-spec Decision 6 and `nuxt.config.ts` route-rules; inlining it here risks divergence. Consider extracting `isAuthZonePath(p)` helper alongside the regex constant.",
+      "fix": "Optional refactor — extract `function isAuthZonePath(p: string): boolean` at module scope. Improves readability and centralizes the rule for future Decision-6/Decision-14 audits."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/server/middleware/strip-invalid-locale.ts:1-23",
+      "issue": "Auto-imported h3 helpers (`defineEventHandler`, `setResponseStatus`, `setResponseHeaders`, `sendRedirect`) are used without explicit imports. This is the Nitro convention and works, but explicit imports from `h3` make the file self-documenting and friendlier to non-Nuxt-aware reviewers / IDE go-to-definition.",
+      "fix": "Optional: add `import { defineEventHandler, sendRedirect, setResponseStatus, setResponseHeaders } from 'h3'`. Matches the import strategy already chosen for `NON_DEFAULT_LOCALES` (relative, explicit). Pure style preference."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/server/middleware/strip-invalid-locale.ts:13",
+      "issue": "Reject branch returns the bare string `'Bad Request'`. Nitro will infer text/html and serialize it; for a security-focused 400 it is conventional to either return an empty body or send a plain-text content-type. Not a defect, just inconsistent with how other production Nitro middlewares typically respond to malformed input.",
+      "fix": "Optional: `return ''` or set `Content-Type: text/plain` explicitly via `setResponseHeaders`. No functional impact on AC."
+    }
+  ]
+}

@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 3
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A02: Cryptographic Failures",
+      "title": "SESSION_COOKIE_SECURE defaults to false amplifies plain-HTTP exposure under 30-day Max-Age (deferred, pre-existing)",
+      "description": "Round 1 finding re-evaluated. application.properties keeps server.reactive.session.cookie.secure=${SESSION_COOKIE_SECURE:false}. With this fix, a SESSION cookie that previously survived only until browser close will now sit on disk for up to 30 days when rememberMe=true, materially widening the window of plain-HTTP capture if the env var is unset in any reachable environment. The tech-spec correctly reads the flag from ServerProperties (Decision 3) so the resolver does not regress security; however, the deploy-time validation (fail-fast when prod profile resolves Secure=false) is intentionally deferred and not added to the AVP. Acknowledged as out-of-scope per orchestrator's note: pre-existing default, not changed by this fix.",
+      "location": "Section: Decision 3, AC-1; backend/src/main/resources/application.properties (server.reactive.session.cookie.secure=${SESSION_COOKIE_SECURE:false})",
+      "impact": "Long-lived 30-day authentication cookie can be captured over plain HTTP and replayed for the full Max-Age window. Severity downgraded to minor because: (a) pre-existing default, not introduced by this change; (b) explicitly deferred by orchestrator as out-of-scope; (c) production deploy is expected to set SESSION_COOKIE_SECURE=true via env var. Tracking only so the deferral remains visible. CWE-614, CWE-319.",
+      "recommendation": "Track as a follow-up hardening item: add a startup assertion that fails fast when active profile is 'prod' (or app.url scheme is https) and resolved cookie.secure=false. Confirm in deployment runbook that SESSION_COOKIE_SECURE=true is mandatory in prod CI/CD secrets. Optionally pair with HSTS at the reverse proxy. Not required for this feature; recorded for visibility.",
+      "cwe": "CWE-614"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Stale cookie persists on device for 30 days after terminate-all-sessions / change-password (unchanged behavior, amplified by feature)",
+      "description": "Decision 5 / user-spec 'Ограничения' confirm that terminate-all-sessions, change-password, and deleteAccount continue to invalidate sessions in MongoDB only — they do not emit Max-Age=0 cookies for non-initiating devices. With the new 30-day persistent cookie, a device whose session was terminated by another device now keeps a stale SESSION cookie value on disk for up to 30 days. The next request from that device misses Mongo and the user is treated as anonymous (correct), but the cookie value itself remains on the device until natural expiry. No direct exploit while the server-side store is honest, but the attack surface for any future server-side session-store bug grows. The tech-spec acknowledges this in Decision 5 and Ограничения §6.",
+      "location": "Section: Decision 5; user-spec 'Ограничения' bullet on terminate-all/change-password/deleteAccount",
+      "impact": "Information-disclosure floor: stale cookie value sits on disk for 30 days post-terminate-all. No direct exploit because authoritative session store is server-side. Becomes relevant only if a future bug allows server-side session resurrection or if the cookie value carries any signing material (it does not — SESSION cookie is an opaque ID). CWE-613.",
+      "recommendation": "Confirmed acceptable for this scope. Document in user-spec / runbook that 'change-password' and 'terminate-all-sessions' do not clear cookies on non-initiating devices, and that the cookie value alone is not authoritative. Optional follow-up: emit Max-Age=0 on the response of change-password/terminate-all for the initiating device (already implicit via session invalidation). Not required for this fix.",
+      "cwe": "CWE-613"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "login_success event does not record rememberMe flag - forensic gap for 30-day persistent sessions",
+      "description": "Round 1 finding re-evaluated, unchanged. AuthService.java:585 still calls eventService.logEvent(... EVENT_LOGIN_SUCCESS ..., null) with null metadata. After this fix, a login_success event corresponds either to a 24h session-only cookie or to a 30-day persistent cookie, and an incident responder cannot distinguish the two from the events collection alone. User-spec 'Технические решения' explicitly accepts 'Без додаткових логів від компонента запису cookie' — that constraint applies to the resolver, not to the auth event payload, so adding rememberMe to login_success metadata would not violate scope. Tech-spec is silent on this.",
+      "location": "AuthService.java:585; user-spec 'Технические решения' bullet on logs",
+      "impact": "Forensic gap: incident response cannot determine post-hoc which sessions are 30-day persistent. Limits ability to identify and proactively revoke long-lived authenticated sessions during a compromise investigation. CWE-778.",
+      "recommendation": "One-line follow-up: pass Map.of(\"rememberMe\", request.isRememberMe()) to eventService.logEvent in checkStatusAndAuthorize at AuthService.java:585. No PII added, materially improves audit value. Could be deferred to a follow-up ticket but should be explicitly tracked.",
+      "cwe": "CWE-778"
+    }
+  ]
+}

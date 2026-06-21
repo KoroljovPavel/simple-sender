@@ -1,0 +1,20 @@
+{
+  "reviewer": "security-auditor",
+  "task": 3,
+  "round": 2,
+  "verdict": "OK",
+  "summary": "Both round-1 items resolved or accepted. The MAJOR A01/IDOR in unsubscribeManual is fixed: signature is now unsubscribeManual(String projectId, String subscriberId) in both SubscriberService.java and SubscriberServiceImpl.java, the lookup filters by projectId, and a foreign-project subscriberId collapses to a uniform 404 (anti-enumeration) with no mutation. The MINOR A09/PII-in-subscriber_events is accepted as by-design per Decision 10 + Decision 8 cascade, in-scope correctly assigned to the ProjectHardDeleteJob task, not this one. No new findings. Pure-unit SubscriberStatusMachineTest green; test sources compile.",
+  "previousFindings": [
+    {
+      "ref": "round-1 major (A01/IDOR)",
+      "status": "RESOLVED",
+      "evidence": "SubscriberService.java:53 — interface now `void unsubscribeManual(String projectId, String subscriberId)`. SubscriberServiceImpl.java:211-216 — `subscriberRepository.findById(subscriberId).filter(sub -> projectId.equals(sub.getProjectId())).orElseThrow(() -> AppException.notFound(MESSAGE_SUBSCRIBER_NOT_FOUND))`. A subscriber owned by a different project fails the projectId filter and throws the SAME 404 as a missing id — anti-enumeration preserved, cross-tenant write blocked. The subsequent flip(s.getId(), ...) operates on the already-verified row's own immutable _id, so no mutation can reach a foreign-project document. This closes the IDOR consistently with addTag/removeTag, which scope via Criteria.where(\"_id\").is(subscriberId).and(\"projectId\").is(projectId) (SubscriberServiceImpl.java:245, 258). Unit test SubscriberStatusMachineTest.unsubscribeManual_foreignProject_throws404 asserts 404 + verify(subscriberEventRepository, never()).save(any()) (no mutation/event). All 6 call sites (test + impl + interface) use the two-arg signature; grep confirms no stale one-arg caller and no Task 8 controller exists yet to leak the unscoped path."
+    },
+    {
+      "ref": "round-1 minor (A09/GDPR — PII snapshots in subscriber_events with 365d TTL)",
+      "status": "ACCEPTED_BY_DESIGN",
+      "evidence": "Disposition accepted for THIS task's scope. (1) The data is tenant-scoped (every SubscriberEvent carries projectId) and TTL-bounded (Decision 10: @Indexed(expireAfter=\"365d\") on createdAt). (2) Purge on project hard-delete is owned by Decision 8 / ProjectHardDeleteJob, whose cascade order explicitly drains subscriber_events before subscribers (tech-spec §Project soft-delete cascade, Decision 8 step 4) — a separate task (Wave 3 / the cascade task referenced as Task 12), NOT Task 3. (3) Task 3's own scope (per 3.md) is the SOLE writer of subscriber_events; recording before/after custom-field values is the documented Decision 10 contract, and recordCustomFieldsSet correctly writes only to subscriber_events (never platform events) — SubscriberServiceImpl.java:228-240. (4) The team has demonstrably internalized the round-1 GDPR concern elsewhere: Decision 16 deliberately routes IP/UA download-denied audit to the no-identity-join platform `events` collection specifically to avoid the disproportionate-retention pattern this finding warned about. Right-to-erasure for individual subscribers (vs whole-project hard-delete) remains a future-feature compliance note, correctly out of this task's scope."
+    }
+  ],
+  "findings": []
+}

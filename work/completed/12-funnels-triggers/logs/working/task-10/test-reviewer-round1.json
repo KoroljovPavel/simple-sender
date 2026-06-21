@@ -1,0 +1,33 @@
+{
+  "task": "10",
+  "reviewer": "test-reviewer",
+  "round": 1,
+  "scope": ["frontend/tests/pages/projects/settings-apikey.spec.ts"],
+  "test_layer": "component (Nuxt mountSuspended) — correct layer for a UI feature; full live E2E deferred to user/Task 15 per tech-spec (no new E2E).",
+  "findings": [
+    {
+      "id": "TR-1",
+      "severity": "minor",
+      "finding": "AC 'Action button is disabled in flight' was not covered by a test in round 1.",
+      "action": "fixed",
+      "reason": "Added 'disables the action button while the request is in flight' using a deferred POST promise to hold the busy state observable; asserts disabled toggles true during flight and the modal opens after settle."
+    },
+    {
+      "id": "TR-2",
+      "severity": "info",
+      "finding": "Each test maps to a distinct TDD anchor / AC and asserts real rendered state (DOM presence, text, HTML negation) rather than bare mock-call checks. The show-once contract is verified by asserting the plaintext is absent from wrapper.html() after modal close.",
+      "action": "none",
+      "reason": "Meaningful assertions, no redundancy; consistent with sibling settings.spec.ts harness (mockNuxtImport)."
+    }
+  ],
+  "coverage": {
+    "none-state": "renders Generate when no key",
+    "masked-state": "renders mask + Regenerate when key present",
+    "show-once-modal": "Generate shows plaintext once in modal (asserts POST issued to correct URL+method)",
+    "dismiss/no-linger": "dismissing modal returns to masked state (plaintext absent from HTML)",
+    "error-path": "request failure surfaces inline error (no modal)",
+    "in-flight-disabled": "disables the action button while the request is in flight"
+  },
+  "summary": "Six component tests cover all card states and the show-once security contract; assertions verify real rendered behavior. Added an in-flight-disabled test to close the one AC gap. All green (6/6).",
+  "verdict": "approve"
+}

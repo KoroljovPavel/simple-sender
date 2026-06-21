@@ -1,0 +1,67 @@
+{
+  "status": "needs_improvement",
+  "summary": "All 5 required TDD anchor tests are present, plus 3 useful supplementary tests. Vitest is correctly configured via @nuxt/test-utils with the Nuxt environment, and mocking uses mockNuxtImport at the import boundary (correct). Mocks are appropriately scoped (1-2 per test). Main concern: fetchUser_401Response_setsUserNull fails the litmus test because user is already null in beforeEach — removing the line that sets userState.value = null in the catch block would leave the test passing. Minor gaps: no test for non-401 error propagation, redundant_testing in two pass-through middleware cases that only assert navigateTo was not called.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "empty_test",
+      "location": "frontend/tests/stores/auth.spec.ts:29",
+      "issue": "fetchUser_401Response_setsUserNull fails the litmus test. beforeEach sets useState('auth-user').value = null and the test asserts store.user is null after fetchUser rejects with 401. If you delete the implementation line `userState.value = null` in stores/auth.ts (the catch branch for 401), the test still passes because the user was already null. The test verifies the precondition, not the behavior.",
+      "recommendation": "Set the user to a non-null value before calling fetchUser, so the assertion proves the catch branch actively cleared it. Replace with: in beforeEach pre-arm with `apiMock.mockResolvedValueOnce(activeUser); const store = useAuthStore(); await store.fetchUser();` then `apiMock.mockRejectedValueOnce({ statusCode: 401 }); await store.fetchUser(); expect(store.user).toBeNull(); expect(store.isAuthenticated).toBe(false);`. Alternatively, set `store.user = { id: '1', ... }` directly, then assert it is cleared after the 401."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/stores/auth.spec.ts (no test)",
+      "issue": "stores/auth.ts:18 re-throws non-401 errors (`throw e`). This branch is not exercised. A 500 or network error should propagate to the caller (so callers can show error toast / retry); silently swallowing would be a behavior regression with no test to catch it.",
+      "recommendation": "Add `fetchUser_500Response_throwsError`: `apiMock.mockRejectedValueOnce({ statusCode: 500 }); await expect(store.fetchUser()).rejects.toMatchObject({ statusCode: 500 }); expect(store.user).toBeNull();`."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/stores/auth.spec.ts (no test)",
+      "issue": "logout error path is not tested. stores/auth.ts:22-28 wraps the API call in try/finally so user is cleared even when logout endpoint fails — this is a deliberate UX choice (always log out on the client even if the server call errors). Without a test, a future refactor that moves `userState.value = null` outside the finally could regress this behavior unnoticed.",
+      "recommendation": "Add `logout_apiError_clearsUserAnyway`: pre-set user, `apiMock.mockRejectedValueOnce(new Error('network')); await expect(store.logout()).rejects.toThrow(); expect(store.user).toBeNull();` (or `await store.logout().catch(() => {})` if logout is expected to swallow). Verify whichever contract the implementation chose."
+    },
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "frontend/tests/middleware/auth.global.spec.ts:50-67",
+      "issue": "authenticated_protectedRoute_passesThrough and unauthenticated_publicAuthRoute_passesThrough only assert that navigateTo was NOT called. They do not assert anything about state or further behavior. The unauthenticated_publicAuthRoute case never configures apiMock, so if the implementation accidentally called fetchUser on a public auth route it would throw and the test would fail for the wrong reason. These tests provide weak signal.",
+      "recommendation": "Strengthen each pass-through test with a positive assertion. For authenticated_protectedRoute_passesThrough, add `expect(apiMock).not.toHaveBeenCalled()` (we already have user, no fetch needed) and assert `store.user` is unchanged. For unauthenticated_publicAuthRoute_passesThrough, add `expect(apiMock).not.toHaveBeenCalled()` to lock in the optimization that we skip the /api/auth/me call on /auth/** when no user is set."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/middleware/auth.global.spec.ts (no test)",
+      "issue": "Route meta `requiresAuth: false` branch in middleware/auth.global.ts:8 is not tested. Future pages (e.g., a public landing page outside /auth/**) will rely on `definePageMeta({ requiresAuth: false })` to opt out of redirect to /auth/login — this contract is currently undocumented by tests.",
+      "recommendation": "Add `unauthenticated_routeWithRequiresAuthFalse_passesThrough`: `apiMock.mockRejectedValueOnce({ statusCode: 401 }); const to = makeRoute('/public-landing', { requiresAuth: false }); await middleware(to, makeRoute('/')); expect(navigateToMock).not.toHaveBeenCalled();`."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/stores/auth.spec.ts:14, frontend/tests/middleware/auth.global.spec.ts:25",
+      "issue": "`useState<unknown>('auth-user').value = null` in beforeEach reaches into Nuxt's module-level state by key. This works because the auth store uses the same key, but it couples the test to a non-public implementation detail (the literal string 'auth-user'). If the store ever renames the useState key, these resets silently stop cleaning state and tests start leaking between cases.",
+      "recommendation": "Either expose a `$reset` action on the store and call `useAuthStore().$reset()`, or import the key as an exported constant from stores/auth.ts (`export const AUTH_USER_KEY = 'auth-user'`). Pinia's setup-store $reset is not auto-generated; a manual `function $reset() { userState.value = null }` returned from defineStore covers it cleanly."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 6,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 8,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "taskRequired": {
+    "needed": false,
+    "rationale": "All 5 required TDD anchor tests are present and the bootstrap is structurally correct. The one major issue (litmus failure on fetchUser_401Response_setsUserNull) is a small fix — pre-arm a non-null user state — and can be folded into the next round in this context. The remaining minor items are coverage extensions, not blockers."
+  }
+}

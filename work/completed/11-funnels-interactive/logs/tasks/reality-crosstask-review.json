@@ -1,0 +1,63 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  "mode": "cross-task-integration",
+  "iteration": "cross-task",
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "Task 3 StepExecutor.menu() must encode callback_data = \"{executionId}:{buttonIndex}\" (Decision 6) when building reply_markup buttons, but the 'What to do' and 'Details' sections for StepExecutor never state this encoding. Task 3 only says 'рендер reply_markup з кнопок кроку'. If the implementor builds callback_data differently (e.g. just button index, or a label-based string), Task 5's strict parser (\"{executionId}:{buttonIndex}\", ObjectId-hex shape, rівно один ':') will reject every real callback, breaking the entire interactive path silently.",
+      "fix": "Add an explicit instruction in Task 3 'What to do' step 3 (MENU-park section): 'each callback button must have callback_data = execution.getId() + \":\" + buttonIndex (0-based index in step.getButtons()); URL buttons carry url field instead — Decision 6.' Also update the FunnelStepExecutorTest TDD Anchor to assert the exact callback_data value produced."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 3,
+      "issue": "The tech-spec Testing Strategy (unit tests) lists 'callback_data — build \"{executionId}:{buttonIndex}\"' as a required unit test, but Task 3's TDD Anchor for FunnelStepExecutorTest only covers: (a) reply_markup is non-null, (b) timeout deadline calculation. The build-encoding test is unassigned — no task's TDD Anchor explicitly owns it. Task 5 tests only parsing (malformed/oversized), not a round-trip build+parse test. If the encoding in Task 3 is wrong, no test will catch it before Task 5 integration.",
+      "fix": "Add to Task 3 TDD Anchor: 'FunnelStepExecutorTest::menu_callback_buttons_encode_correct_data — for a MENU step with 3 callback buttons, assert that the reply_markup passed to sender.sendText contains callback_data values equal to \"{execution.getId()}:0\", \"{execution.getId()}:1\", \"{execution.getId()}:2\" respectively; URL buttons have url field, not callback_data.'"
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "timeoutUnit format conflict is left unresolved across task boundaries. Task 3 explicitly flags the conflict (tech-spec Data Models says 'minutes|hours|days'; existing delayUnit convention uses 'MIN|HOUR|DAY') and asks the implementor to record the decision. However: (1) Task 4's FunnelStepDto just declares 'String timeoutUnit' with no constraint, so whatever Task 3 decides will be silently accepted by the DTO regardless; (2) Task 6's FunnelStep frontend type also leaves timeoutUnit?: string unconstrained; (3) the frontend DelayUnit type is 'MIN'|'HOUR'|'DAY' — if the backend adopts the same convention for timeout, a future implementor building the timeout UI in Task 6 may follow tech-spec Data Models and send 'minutes' instead of 'MIN'. The conflict is documented in Task 3 but not propagated to consuming tasks.",
+      "fix": "After Task 3 records the decision in decisions.md, both Task 4's FunnelStepDto comment and Task 6's frontend types/funnel.ts should be updated to reflect the chosen format. Add a note to Task 4 and Task 6: 'timeoutUnit format is resolved in decisions.md Task 3 — align with that decision, do NOT use tech-spec Data Models string as-is without confirming.'"
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 1,
+      "issue": "Task 1 and Task 3 both modify FunnelExecutionEngine.java to add waiting_for_reply to the sweep and claim $in arrays (sites 2 and 3). Task 1 is wave 1, Task 3 is wave 2 (depends_on [1,2]), so they run sequentially — no race. However, both task descriptions describe adding the same values to the same sites, without a clear 'Task 1 owns these sites, Task 3 defers'. Task 3 says 'узгодити з Task 1, який міг це вже зробити — не дублювати', which relies on the implementor checking at runtime. If both tasks are executed by the same or different agents in sequence, there is no mechanical guard against duplicate insertion.",
+      "fix": "Clarify ownership: Task 1 owns ALL 6 $in sites (including FunnelExecutionEngine sweep and claim). Task 3 should read: 'waiting_for_reply was already added to FunnelExecutionEngine sweep/claim $in by Task 1 — do NOT re-add; verify at task start with grep.' This eliminates ambiguity."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 6,
+      "issue": "Task 6 hint section says the 'End' sentinel for a callback button target should mirror Task 4's ButtonDto encoding (null vs empty string), explicitly deferring to implementation. The actual ButtonDto from Task 4 uses null = End (matching tech-spec and domain model). Task 6 SearchableSelect options hint uses empty string '' as value ('options: [{value:\"\", label: t(...End)}, ...]'). If the SearchableSelect emits '' and the API sends '' but the backend validates null = End and treats '' as a non-null targetStepId that won't be in the step-id set, the button round-trip would produce a funnel_broken_edge 422. The hint may guide the implementor toward the wrong encoding.",
+      "fix": "Clarify in Task 6 Details: 'End sentinel in ButtonDto = null (not empty string). The SearchableSelect option value for End should be null or a sentinel object that maps to null in the emitted buttons array. Do NOT send empty string as targetStepId — validateSteps will treat it as a broken edge reference.' Align the SearchableSelect options hint accordingly."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 11,
+    "cross_task_chains_verified": 7,
+    "claims_verified": 38,
+    "issues_found": 5
+  },
+  "verified_ok": [
+    "depends_on chains are correct for all tasks (transitively complete): T1→[], T2→[], T3→[1,2], T4→[1], T5→[2,3], T6→[1,4], T7→[5], T8/9/10→[1..7], T11→[8,9,10]",
+    "No duplicate heavy resource initialization: TelegramSender, Clock, EventService, JobRunr sweep are all reused singletons — confirmed in tech-spec Shared Resources table and no task creates a new bean",
+    "Event names are consistent across tasks: funnel_button_clicked (Task 5 trigger), telegram_callback_query (Task 7 webhook) — both match tech-spec Decision 9 and Architecture",
+    "callback_data FORMAT is consistently '{executionId}:{buttonIndex}' in tech-spec Decision 6, Task 5 parser, and Task 7 webhook description",
+    "End sentinel encoding is null throughout backend domain: Button.targetStepId=null means End in tech-spec Data Models, Task 4 ButtonDto, and Task 3 resumeOnCallback",
+    "FunnelExecutionEngineIT test names do not overlap between Task 3 (resumeOnCallback_* tests) and Task 5 (advanceOnCallback_* tests) — different methods, complementary coverage",
+    "wave ordering is correct: W1 (T1,T2) → W2 (T3,T4) → W3 (T5,T6) → W4 (T7) → W5 audit (T8,T9,T10) → W6 final (T11)",
+    "No parallel-wave file conflicts: Task 4 (FunnelService/DTO) and Task 5 (FunnelTriggerServiceImpl/engine) are wave 3 parallel but modify different files",
+    "FunnelTriggerServiceImpl modifications are sequential: T1 ($in additive) → T3 (insertExecution seed) → T5 (advanceOnCallback) — no merge conflict",
+    "paused-drain Decision 11 is consistently excluded from resumeOnCallback and advanceOnCallback in both Task 3 and Task 5 (no paused-gate in either task)",
+    "answerCallbackQuery best-effort pattern is consistently specified in Task 5 (all no-op paths) and referenced in Task 7 (best-effort, error-isolated)"
+  ]
+}

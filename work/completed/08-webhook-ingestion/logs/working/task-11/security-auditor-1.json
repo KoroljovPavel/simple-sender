@@ -1,0 +1,66 @@
+{
+  "severity_counts": {
+    "critical": 0,
+    "major": 0,
+    "minor": 2,
+    "info": 4
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "61",
+      "issue": "transferEncoding.toLowerCase() uses the JVM default locale. The Turkish locale famously breaks ASCII case folding (I -> dotless i), which in pathological deployments could mask token matches. In this specific case the literal 'chunked' contains no characters affected by Turkish locale folding, so the check is functionally safe today, but the default-locale call is a known anti-pattern that future header tokens added to this predicate (e.g. checking for 'identity', 'gzip', etc.) would inherit.",
+      "attack_vector": "Not directly exploitable for 'chunked' (no I/i ambiguity). Acts as a latent footgun for any future addition to this case-insensitive check on the security-critical Transfer-Encoding header.",
+      "recommendation": "Use Locale.ROOT explicitly: `transferEncoding.toLowerCase(java.util.Locale.ROOT).contains(\"chunked\")` — guarantees ASCII semantics regardless of JVM locale. Add Locale import."
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "60-61",
+      "issue": "Transfer-Encoding inspection reads only headers.getFirst(HttpHeaders.TRANSFER_ENCODING). HTTP/1.1 permits multi-valued Transfer-Encoding either as one comma-joined header value or as multiple separate header lines. Spring's HttpHeaders.getFirst returns only the first value; if Reactor Netty surfaces 'Transfer-Encoding: identity\\r\\nTransfer-Encoding: chunked' as two distinct entries, getFirst returns 'identity' and the chunked detection fails open. In practice Reactor Netty joins repeated headers into a single comma-separated value (so getFirst would return 'identity, chunked' and contains('chunked') still trips), but this depends on the connector behaviour and is not guaranteed across HTTP/2 vs HTTP/1.1 paths or future Reactor Netty versions.",
+      "attack_vector": "Smuggled chunked body via multi-line Transfer-Encoding header could theoretically slip past getFirst if Netty changes its multi-value handling. Combined with a downstream proxy that interprets chunked, this is a classic HTTP request-smuggling primitive — though Decision 13's whole purpose is to slam the door on that class of bypass.",
+      "recommendation": "Iterate over all Transfer-Encoding header values, not just the first: `headers.get(HttpHeaders.TRANSFER_ENCODING)` (List<String>), then `.stream().anyMatch(v -> v != null && v.toLowerCase(Locale.ROOT).contains(\"chunked\"))`. Equivalent runtime cost, removes the multi-header ambiguity entirely."
+    },
+    {
+      "id": "F3",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "78-82",
+      "issue": "Every rejection emits a WARN log line. An unauthenticated attacker who can reach the public webhook endpoint can spam rejections (chunked or missing-CL POSTs) to flood logs and rotate them, potentially evicting earlier security-relevant lines. No rate limiting / log-sampling around the 413 path.",
+      "attack_vector": "Log-flooding DoS — exhaust disk, evict earlier audit lines, or saturate a downstream log aggregator. Severity bounded by typical SLF4J + logback async appender behaviour and any infra-level rate limiting in front of the service.",
+      "recommendation": "Either downgrade to DEBUG for the success-counter-only signal and let the metric (telegram_webhook_rejected_total{reason=payload_too_large}) carry the alerting, OR wrap in a per-IP rate limiter at infra ingress. Not a blocker — flagging for operational hardening."
+    },
+    {
+      "id": "F4",
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/webhook/WebhookSecurityBlockTest.java",
+      "line": "60-65, 104-109",
+      "issue": "Both 'reaches controller' assertions test only `status != 403`. If an unexpected layer (e.g. a misconfigured upstream auth filter) returns 401 or 500, the test still passes even though the intended chain shape changed. The current implementation does behave correctly, but the assertion does not pin down WHICH non-403 status was expected, weakening the regression net.",
+      "attack_vector": "None — this is a test-quality observation, not a runtime vulnerability.",
+      "recommendation": "Tighten the expectation: with mocked Mongo the controller path typically returns 404 (bot/project not found) per the controller's switchIfEmpty branch. Assert `expectStatus().value(s -> assertThat(s).isIn(404, 500))` or equivalent, so a future regression that flips this to 401 fails fast."
+    },
+    {
+      "id": "F5",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": "77-81",
+      "issue": "CSRF protection is scoped via AndServerWebExchangeMatcher(DEFAULT_CSRF_MATCHER, Negated(PathPattern)). DEFAULT_CSRF_MATCHER restricts CSRF to mutating verbs (POST/PUT/DELETE/PATCH). The Negated path matcher uses '/webhooks/telegram/{projectId}' (single-segment) — this is correct and prevents sub-path leak (e.g. /webhooks/telegram/abc/admin would still require CSRF). Verified by reading the test 'multiSegmentWebhookPath_doesNotMatch' and the auth-chain shape. Flagging for visibility: the safety of this design depends on Spring's PathPattern parsing `{projectId}` as exactly one segment by default, which is current Spring Security 6.x behaviour but should be re-verified on Spring Security upgrades.",
+      "attack_vector": "None today. Future Spring Security upgrade that changes PathPattern segment semantics could broaden the CSRF exemption — e.g. if `{projectId}` ever became greedy, an attacker could exempt arbitrary /webhooks/telegram/** paths from CSRF.",
+      "recommendation": "Add a unit/slice test that explicitly asserts CSRF is REQUIRED for POST /webhooks/telegram/abc/def (multi-segment) — the current test suite only verifies the positive case (single-segment exempt) and the multi-segment case for the FILTER, not for CSRF. Suggested test: `webTestClient.post().uri(\"/webhooks/telegram/abc/def\").contentType(JSON).bodyValue(...).exchange().expectStatus().isForbidden()`."
+    },
+    {
+      "id": "F6",
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java",
+      "line": "84-85",
+      "issue": "Rejection response sets status and calls setComplete() but does not explicitly set Content-Length: 0 or any security headers (no Cache-Control, no Content-Type). Reactor Netty will emit a default-shaped 413 with whatever framework defaults apply. In practice the response body is genuinely empty and the framework handles framing correctly, but downstream proxies/CDNs may cache an unbounded 413 response and the lack of Cache-Control could let an attacker poison shared caches with 413 entries keyed on the webhook URL.",
+      "attack_vector": "Cache-poisoning a 413 response so legitimate Telegram webhook POSTs see a stale 413 — low likelihood because the URL is unique per project and Telegram is unlikely to share a cache with attackers; mitigated by Telegram's own HTTPS path. Mostly hygiene.",
+      "recommendation": "Optionally add `exchange.getResponse().getHeaders().setCacheControl(\"no-store\")` before setComplete(). Not required by AC — flagging for hardening only."
+    }
+  ],
+  "summary": "All seven required checks pass: chunked / missing-CL / >1MB rejection (lines 60-69), single-segment path scope on both filter regex (line 33) and SecurityConfig matchers (lines 81, 91), CSRF AND with DEFAULT_CSRF_MATCHER preserving verb semantics (lines 77-81), correct ordering of permitAll before authenticated (lines 91-92), CookieServerCsrfTokenRepository.withHttpOnlyFalse + non-Xor ServerCsrfTokenRequestAttributeHandler preserved (lines 60, 68), and WARN log scrubbing projectId and transferEncoding through TelegramApiClient.scrubTokens (lines 78-82). Two minor defense-in-depth issues (default-locale toLowerCase, getFirst-only Transfer-Encoding read) are exploitability-bounded today but worth fixing to harden against future framework or locale changes; four info-level observations cover log-flood DoS, test-assertion tightness, and response-header hygiene. No critical or major findings — implementation faithfully realises Decisions 3, 10, 13 and closes AC4 + AC15.",
+  "verdict": "go"
+}

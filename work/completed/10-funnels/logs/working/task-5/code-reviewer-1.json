@@ -1,0 +1,40 @@
+{
+  "summary": "Task 5 (Funnel CRUD service + controller) is solid and closely matches the task/tech-spec. requireOwned-first anti-IDOR with uniform 404, cross-project funnel guard, trigger-conflict defense-in-depth (service pre-check + DuplicateKeyException->422 on activate), step-order rewrite from array index, cancel-on-delete bulk update with lowercase enum .name() literals (Decision 14), and DTO mass-assignment defense (@JsonIgnoreProperties) are all implemented correctly and well-tested. One major defense-in-depth gap: the update() path can mutate an ACTIVE funnel's triggerValue (editing active funnels is allowed by Decision 3) but does not run the trigger-conflict pre-check nor catch DuplicateKeyException, so a colliding trigger edit surfaces as 500 instead of 422. A few minor items around caption length, missing config key, and over-broad DuplicateKeyException catch.",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "110-131",
+      "finding": "update() can change triggerValue/triggerType on an ACTIVE funnel (Decision 3 deliberately does NOT lock editing of active funnels), but unlike activate() it neither runs the trigger-conflict service pre-check nor wraps funnelRepository.save() in a try/catch for DuplicateKeyException. If an owner edits an active funnel's trigger to one already held by another active funnel in the same project, the partial-unique index (projectId, triggerType, triggerValue) filtered status=active throws DuplicateKeyException, which propagates uncaught and surfaces as HTTP 500. This is the exact 'not 500' failure mode the activate path was hardened against (Decision 8 defense-in-depth), left open on the symmetric edit path.",
+      "recommendation": "On update(): when the (possibly changed) trigger would apply to a funnel whose status is active, run the same service pre-check (excluding self) and wrap the save in try { ... } catch (DuplicateKeyException) { throw AppException.unprocessableEntity(CODE_TRIGGER_CONFLICT, ...); } as activate() does. Add an IT that PUTs a colliding triggerValue onto an active funnel and asserts 422 funnel_trigger_conflict (not 500)."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "278-286",
+      "finding": "SEND_IMAGE caption is accepted but never length-validated. Telegram rejects photo captions longer than 1024 characters, so an over-long caption passes CRUD/activate validation and only fails later at send time (Task 6/3 sendPhoto). text is bounded at 4096 (requireText) but caption has no equivalent guard.",
+      "recommendation": "Add a caption max-length check (1024) in the SEND_IMAGE branch (and SEND_MESSAGE if caption is ever used there), throwing invalidStep(...) with CODE_INVALID_STEP, mirroring requireText's length bound."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "173-178",
+      "finding": "The DuplicateKeyException catch on activate() is correct but broad: any DuplicateKeyException raised during save (e.g. a future second unique index on the funnels collection) would be mis-mapped to funnel_trigger_conflict. Today the only unique index is the trigger one, so this is benign, but it is a latent mis-classification.",
+      "recommendation": "Optional: narrow by inspecting ex.getMessage()/index name for the trigger index, or document the single-unique-index assumption with a comment so a future index addition revisits this catch."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "72",
+      "finding": "max-steps is injected via @Value(\"${app.funnel.max-steps:50}\") but app.funnel.max-steps is not present in backend/src/main/resources/application.properties; the task/tech-spec refer to it as FUNNEL_MAX_STEPS (env-overridable). The :50 default keeps it working, but there is no env-var binding (e.g. ${FUNNEL_MAX_STEPS:50}) so operators cannot tune it without a code/property change, diverging from the other env-driven configs in the project.",
+      "recommendation": "Either add app.funnel.max-steps=${FUNNEL_MAX_STEPS:50} to application.properties or bind the env var directly in the @Value default, matching the project's env-config convention."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelController.java",
+      "line": "53-66",
+      "finding": "PUT and PATCH share one handler with identical full-replace semantics (documented in the class comment). This is intentional, but PATCH advertising partial-update semantics while actually full-replacing (a null steps array clears all steps via toSteps(null) -> empty list) can surprise API clients who send a partial PATCH body.",
+      "recommendation": "No code change required if the frontend always sends the full array (it does, per Decision/contract). Consider documenting in the API/OpenAPI that PATCH here is a full-replace alias, not RFC-5789 partial semantics, to avoid client confusion."
+    }
+  ]
+}

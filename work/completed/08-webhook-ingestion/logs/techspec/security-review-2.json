@@ -1,0 +1,91 @@
+{
+  "status": "changes_required",
+  "summary": {
+    "totalFindings": 8,
+    "critical": 1,
+    "major": 2,
+    "minor": 5
+  },
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "A04 Insecure Design",
+      "title": "DuplicateKey self-heal path references `rawUpdate.getId()` that was never assigned — re-enqueue will use `null` job target",
+      "description": "The C1 fix has a correctness gap in the self-heal branch. Decision 4 + step 3 of the inbound HTTP path state: `rawUpdateRepository.save(new RawUpdate(...))` → DuplicateKey → `enqueueIdempotent(rawUpdate.getId())` STILL called. The problem: when `save(...)` throws `DuplicateKeyException`, the Mongo driver never assigns an `_id` to the in-memory `RawUpdate` instance (`@Id` is populated only after a successful insert). The handler is calling `enqueueIdempotent(rawUpdate.getId())` on an object whose `id` is still `null` (or the client-side ephemeral UUID Spring Data sometimes pre-generates — implementation-dependent and unstable across Spring Data versions). Two failure modes follow: (a) `rawUpdateId` is `null` → `UUID.nameUUIDFromBytes(null.getBytes(UTF_8))` NPE → 5xx response → Telegram retries → same NPE → infinite loop on each redelivery, AND `handle(null)` would NPE inside the worker. (b) `rawUpdateId` is a client-side pre-allocated id that DOES NOT match the existing row's `_id` in Mongo → deterministic UUID is derived from the WRONG id → worker is enqueued with a `rawUpdateId` that doesn't exist in Mongo → worker `RawUpdate` load returns empty → either NPE or silent skip → the ACTUAL existing PENDING row is still orphaned, exactly as before the C1 fix. The self-heal MUST first fetch the existing row by `(projectId, updateId)` to obtain the persisted `_id`, then derive the deterministic UUID from THAT id. This lookup is missing from the spec.",
+      "location": "Section: Architecture › How it works › Inbound HTTP path step 3 (DuplicateKey branch) + Decision 4 + Decision 11",
+      "impact": "C1 (silent message loss) is NOT actually closed. Either (a) every Telegram retry after the original enqueue failure produces a 5xx via NPE — Telegram eventually gives up after its retry budget, orphan PENDING row stays forever, message lost; or (b) re-enqueue happens with a deterministic UUID derived from the wrong id, the worker fails to find that row, the actual orphan persists, message lost. The spec's intended self-heal cannot work as written.",
+      "recommendation": "Update the DuplicateKey branch to explicitly lookup the existing row first. Pseudocode: `.onErrorResume(DuplicateKeyException.class, dup -> rawUpdateRepository.findOneByProjectIdAndUpdateId(projectId, body.update_id()).flatMap(existing -> { meter.tick('duplicate'); return enqueueIdempotent(existing.getId()).thenReturn(ok); }))`. Add a repository method `Mono<RawUpdate> findOneByProjectIdAndUpdateId(String, Long)` backed by the same compound index. Update Decision 4 to state: 'DuplicateKey branch: lookup existing row by (projectId, updateId), then re-enqueue using its persisted `_id`. The compound unique index serves the lookup at zero added cost.' Add an integration test for the EXACT failure mode: (1) seed a row with manual `_id="abc"`, `processingStatus=PENDING` directly in Mongo (no JobRunr enqueue happened); (2) POST a duplicate update; (3) assert exactly one row exists with id `abc`, AND a JobRunr job is now enqueued with `UUID.nameUUIDFromBytes('abc'.getBytes(UTF_8))`; (4) run worker, assert event written + `processingStatus=DONE`. Until this is documented, the C1 fix is implementation-fragile.",
+      "cwe": "CWE-754 (Improper Check for Unusual or Exceptional Conditions)"
+    },
+    {
+      "severity": "major",
+      "category": "A09 Logging & Monitoring",
+      "title": "`received_total{projectId}` cardinality budget undefined + no test guards `rejected_total` against accidental projectId tag",
+      "description": "Decision 10 implicitly addresses M5 by listing `telegram_webhook_received_total{projectId}` (only success path has the label) and `telegram_webhook_rejected_total{reason=...}` (no projectId tag). However the previous review's recommendation #2 (explicit cardinality budget for `received_total` — e.g., aggregate into `projectIdBucket` after N distinct values) and #3 (test that asserts NO projectId tag on rejected_total) are not implemented. The spec lacks: (a) an explicit cardinality cap or sampling strategy on the success-path label (it grows linearly with active projects forever — fine today, problematic at platform scale unless Epic 09's exporter strips it); (b) an AC16 test that probes 10 different unknown projectIds and asserts `meterRegistry.find('telegram_webhook_rejected_total').tag('reason','project_not_found').counter().count()==10` AND that no `projectId` tag exists on that meter — the test as written ('exactly matches expected for each of the 5 counter combinations') doesn't explicitly guard the no-projectId-on-rejection invariant; an implementer could accidentally add the tag and the test would still pass on count alone.",
+      "location": "Section: Decisions › Decision 10 + Acceptance Criteria AC16",
+      "impact": "Implementation drift risk: future maintainer adds `projectId` tag to a rejection counter for 'better observability', metrics-backend DoS surface re-opens. Probing-based attack (10K unknown projectId guesses) creates 10K time-series. Cardinality budget for the success path remains unbounded against future platform growth — acceptable today, but not documented as a known scale ceiling.",
+      "recommendation": "Two concrete changes: (1) Add to Decision 10: 'Cardinality budget for `received_total{projectId}` is N=1000 distinct projects. Beyond N, Epic 09's exporter applies a `projectIdBucket=<sha256(projectId)%100>` rewrite. Documented as a known scale ceiling.' (2) Add to AC16 test: assertion `meterRegistry.find('telegram_webhook_rejected_total').meters().forEach(m -> assertThat(m.getId().getTag('projectId')).isNull())` — explicit no-tag invariant. Same assertion for `payload_too_large` reason. Update tech-spec Acceptance Criteria grep invariant to include: `grep -rn 'projectId' backend/src/main/java/com/botfunnel/webhook/ | grep -E 'Tag|tag\\(' | grep -v 'received_total'` MUST return empty.",
+      "cwe": "CWE-770 (Allocation of Resources Without Limits or Throttling)"
+    },
+    {
+      "severity": "major",
+      "category": "A04 Insecure Design",
+      "title": "Worker `processingStatus=FAILED` is a re-execution branch with no max-retry budget tracked in the row itself",
+      "description": "Decision 9 + worker step 1: 'If `processingStatus == FAILED` and the call is a retry, treat as new attempt: continue.' This means a FAILED row will execute stub calls + write events + flip status on every retry attempt. JobRunr's default retry policy (10 attempts) bounds the explosion, but: (a) Events are not idempotent by `eventType + resourceId` — each retry writes a duplicate `telegram_command_start` event, polluting the audit trail and any future analytics. (b) Stub `SubscriberService.upsertFromTelegramUpdate` is idempotent by design (upsert); but `FunnelTriggerService.fire('on_start', payload)` is NOT documented as idempotent — Epic 06 may treat repeated `fire` as 'start the funnel again', double-charging the user. (c) The `processingError` field is overwritten on each retry — last-error-wins, prior errors are lost (forensic gap). (d) No max-attempts column on the row itself, so even after JobRunr gives up, a future operator manually re-enqueuing the job (e.g., via `mongosh` + cron sweep) would retry without bound. The interplay between 'DONE re-entry guard' (early return, idempotent) and 'FAILED treated as new attempt' (full execution, NOT idempotent) is asymmetric and surprising.",
+      "location": "Section: Decisions › Decision 9 + Architecture › How it works › Worker path step 1",
+      "impact": "Audit-trail pollution: a worker that fails mid-cascade (event written, exception during status save) will re-execute on retry, writing a SECOND duplicate event. Downstream Epic 06 funnels triggered repeatedly = real user impact (duplicate messages sent to subscriber). Forensic gap: prior errors overwritten. With the cron sweep mitigation suggested in security-review-1 (recommendation C1c), unbounded retry becomes possible.",
+      "recommendation": "Three changes: (1) Make the re-entry guard symmetric — treat FAILED the same as DONE (early return) when ANY prior event was written for this `rawUpdateId`. Implementation: before the per-branch cascade, query `eventRepository.existsByResourceIdAndEventTypeIn(rawUpdateId, listOfWebhookEventTypes)` and short-circuit if true. Document in Decision 9: 'FAILED + events-exist → no-op return (avoid duplicate cascade); FAILED + no-events → full retry.' (2) Add `processingAttempts: Integer` column to `RawUpdate`, increment on every worker entry, hard-cap at N (e.g., 20). Beyond N, worker writes `processingStatus=ABANDONED` + alerts. (3) Append-only `processingErrors: List<String>` (last 5) instead of overwriting `processingError`. Update AC14 test to verify duplicate cascade does NOT occur after partial-failure-then-retry.",
+      "cwe": "CWE-639 (Authorization Bypass Through User-Controlled Key) — partial: idempotency-key not enforced through the worker cascade"
+    },
+    {
+      "severity": "minor",
+      "category": "A02 Cryptographic Failures",
+      "title": "M9 (unsalted SHA-256 secret entropy floor) — recommendation NOT applied to tech-spec",
+      "description": "Previous review's M9 recommended (option 1, cheapest) documenting an explicit minimum-entropy invariant for the webhook secret + adding a test that the Connect flow rejects operator-supplied secrets shorter than N bytes. Updated tech-spec Decision 2 still does not document the entropy floor or specify whether secrets are server-generated vs operator-supplied. Patterns.md states secrets are server-generated, but the tech-spec should ratify this invariant explicitly for 04b given it's the first webhook-consuming feature.",
+      "location": "Section: Decisions › Decision 2",
+      "impact": "Unchanged from M9 in security-review-1: if any operator-supplied low-entropy secret enters the system through any path (now or later), unsalted SHA-256 falls to dictionary attack on a leaked hash. Defense-in-depth gap.",
+      "recommendation": "Add one paragraph to Decision 2: 'Webhook secret invariant: server-generated via `SecureRandom`, base64-encoded, 32 bytes (~256 bits). Documented in `BotService.connect` source. No operator-supplied secret path exists. AC2 includes a test that asserts secret entropy: `SecretGenerator.generate().length() >= 32 && Pattern.matches(\"[A-Za-z0-9_-]+\", secret)`.' Cost: ~10 lines of spec + one assertion.",
+      "cwe": "CWE-916 (Use of Password Hash With Insufficient Computational Effort)"
+    },
+    {
+      "severity": "minor",
+      "category": "A04 Insecure Design",
+      "title": "M10 (ownerChatId race detection + rollback) — recommendation NOT applied to tech-spec",
+      "description": "Previous review's M10 recommended three additions: (1) audit-trail event when `ownerChatId` is populated, (2) manual recovery procedure in staging-smoke runbook, (3) explicit threat-model documentation of downstream consequences. Updated tech-spec Decision 5 + Risk R2 still only say 'Accepted threat. Staging-smoke runbook re-instructs owner to /start immediately.' No audit event documented, no recovery procedure documented, no downstream-consequence threat-model addition. Risk R2 wording unchanged from prior iteration.",
+      "location": "Section: Decisions › Decision 5 + Risks R2",
+      "impact": "Unchanged from M10 in security-review-1: silent owner-impersonation possible, recovery requires undocumented manual mongosh intervention.",
+      "recommendation": "Three minimal additions: (1) Decision 5 addendum: 'On atomic populate success, worker emits event `bot_owner_chat_populated` with `metadata.chatIdHash=sha256(chatId)` + timestamp. Visible in audit trail per AC17.' (2) Staging-smoke runbook (T8) section: 'Recovery from misclaimed ownerChatId — `db.bots.updateOne({_id: ObjectId(\"...\")}, {$set: {ownerChatId: null}})` then re-issue /start from owner.' (3) Risk R2 wording: 'Accepted threat. Downstream consequence: attacker silently receives BotService.sendTestMessage calls + future Epic 06 broadcasts targeted at owner. Recovery is operator-manual via mongosh per runbook.'",
+      "cwe": "CWE-362 (Concurrent Execution using Shared Resource with Improper Synchronization)"
+    },
+    {
+      "severity": "minor",
+      "category": "A07 Identification & Authentication Failures",
+      "title": "M12 (webhook secret rotation semantics) — recommendation NOT applied to tech-spec",
+      "description": "Previous review's M12 recommended documenting the rotation semantics (what happens when a bot is re-Connected with a new secret; the brief window of 401s from in-flight Telegram requests with the old secret). Updated tech-spec adds no Decision and no Risk entry covering rotation. AC2 invalid_secret counter spike during reconnect is undocumented, will look like an attack to ops.",
+      "location": "Section: Decisions (no decision documents rotation) + Risks (no risk covers rotation window)",
+      "impact": "Unchanged from M12 in security-review-1: ops confusion during reconnect, false-positive alarms on 401 rate.",
+      "recommendation": "Add a single Decision (e.g., Decision 20): 'Reconnect overwrites `bot.webhookSecretHash` atomically. In-flight Telegram updates sent with previous secret fail with 401 — window bounded by Telegram setWebhook ack latency (typically <1s). Operator runbook (T8) correlates 401 spikes with reconnect timestamps before alarming. No grace-period dual-hash mechanism in 04b — deferred to Epic 09/10 if ops report friction.' Cost: ~8 lines of spec.",
+      "cwe": "CWE-294 (Authentication Bypass by Capture-replay) — informational"
+    },
+    {
+      "severity": "minor",
+      "category": "A04 Insecure Design",
+      "title": "M13 (DLQ alerting gap) — recommendation NOT applied to tech-spec",
+      "description": "Previous review's M13 recommended adding a simple hourly `@Scheduled` job that counts `processingStatus=FAILED` rows in the last hour and emits a structured log line, OR at least documenting the MTBF gap explicitly. Updated tech-spec Risk R5 still only says 'Document `mongosh db.raw_updates.find({processingStatus:'FAILED'})` procedure in staging-smoke runbook.' No scheduled-job alert, no explicit MTBF gap acknowledgment in the risk table.",
+      "location": "Section: Risks R5 + Decision 9",
+      "impact": "Unchanged from M13 in security-review-1: post-deploy worker failures invisible until next manual smoke or user complaint. MTBF entirely operator-driven.",
+      "recommendation": "Either (a) add Task 9 sub-step: create `WorkerFailureAlertJob @Recurring(cron='0 0 * * * *')` that queries failed count in last hour, logs WARN if >0; OR (b) update R5 wording: 'Worker failure detection: mongosh-driven until Epic 09 ships Prometheus exporter. MTBF for worker bugs is operator-poll-interval. Accepted for 04b; tracked as a deferred-mitigation in feature decisions.md.' Either is acceptable. Spec currently has neither.",
+      "cwe": "CWE-778 (Insufficient Logging)"
+    },
+    {
+      "severity": "minor",
+      "category": "A08 Software and Data Integrity",
+      "title": "M11 (micrometer-core version pin) — partially addressed; BOM-managed but explicit pin still preferred",
+      "description": "Previous review's M11 recommended pinning `micrometer-core` version explicitly in `backend/build.gradle` for visibility. Updated tech-spec Dependencies section notes 'Version inherited from Spring Boot BOM (pinned by parent)' — this is BETTER than nothing (BOM management does pin the version transitively), but the explicit pin in `build.gradle` was the recommendation specifically to make the version visible in code review and lock behavior across patch-level Spring Boot upgrades. Acceptable as a deliberate trade-off, but the rationale ('we rely on BOM') should be in the Dependencies section, not just implicit.",
+      "location": "Section: Dependencies › New packages",
+      "impact": "Low: Spring Boot BOM does pin Micrometer for the current line. Risk is only that a future Spring Boot upgrade silently changes the resolved version without it appearing in review diffs.",
+      "recommendation": "Optional: add a sentence to Dependencies › New packages: 'We intentionally do not pin `micrometer-core` to a fixed version — the Spring Boot BOM resolves it, and pinning it ourselves would create a maintenance burden across Spring Boot upgrades. Trade-off: version changes are invisible in code review.' This makes the decision explicit. Or: pin the version + accept the upgrade-friction. Either resolves the finding.",
+      "cwe": "CWE-1357 (Reliance on Insufficiently Trustworthy Component)"
+    }
+  ]
+}

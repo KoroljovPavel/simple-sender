@@ -1,0 +1,119 @@
+{
+  "verdict": "issues_found",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 35,
+  "requirements_covered": 29,
+  "requirements_partial": 4,
+  "requirements_missing": 2,
+  "findings": [
+    {
+      "id": "F-01",
+      "type": "gap",
+      "requirement": "US-26: Observability — every execution state transition logged with log-constant style (matching ProcessTelegramUpdateJob pattern)",
+      "detail": "User-spec Acceptance Criteria states explicitly: 'Кожен перехід стану виконання логується (claim win/loss, step in_progress/done, send-fail із terminal reason, completed/cancelled/failed) — JobRunr dashboard вимкнено, тож логи — єдина видимість (взірець: лог-константи ProcessTelegramUpdateJob).' Tech-spec Solution and Architecture describe the execution flow in detail but never mention a logging strategy. 'How it works' and step-executor descriptions omit any reference to log-constant style, WARN/INFO levels, or which transitions must emit named constants. The Risks section does not list 'silent failures / no observability' as mitigated. Implementation Tasks 6 and 7 don't name observability as a deliverable or review target. This is a complete gap — tech-spec provides zero guidance on what to log, at what level, or using what constant naming pattern.",
+      "severity": "high",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-02",
+      "type": "gap",
+      "requirement": "US-24: Reactivation — upsertFromTelegramUpdate sets subscriber status=active BEFORE fire() call (order in ProcessTelegramUpdateJob is load-bearing for first-send not self-cancelling)",
+      "detail": "User-spec Acceptance Criteria explicitly calls this out: 'Реактивація. /start від unsubscribed-підписника: upsert ставить status=active ДО fire() (порядок у ProcessTelegramUpdateJob), тож перший send не само-скасовується.' The code-research confirms the call order exists in the webhook worker. However, tech-spec never mentions this ordering constraint anywhere — not in How it Works (trigger section only describes fire() internals), not in Decisions, not in Implementation Tasks. Task 7 (FunnelTriggerService) and the Trigger flow description in Architecture focus entirely on fire() internals and never reference the pre-condition that subscriber.status must already be active by the time fire() is called. An implementer building the engine from the tech-spec alone would not know this ordering is a correctness requirement and might break it when restructuring webhook handling.",
+      "severity": "high",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-03",
+      "type": "partial",
+      "requirement": "US-3: Send Message — empty text → 422 validation at which point (save vs activate vs send-time)?",
+      "detail": "User-spec says 'порожній текст → 422'. Tech-spec Data Models section shows DTO uses '@Valid (per-type обов'язкові поля)' and Acceptance Criteria mentions 422 for 'невалідні кроки', but the tech-spec never explicitly states that empty text on a SendMessage step is caught at save/PATCH time via bean-validation rather than at engine execution time. This matters because the engine would need different handling (fail the execution vs reject the API request). The activate validation in FunnelService is mentioned ('обов'язкові поля'), which partially covers this, but the exact validation point (bean-validation on DTO vs service-layer activate vs engine pre-check) is underspecified. Risk: implementer puts validation only at activate, misses it on step save, or vice versa.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-04",
+      "type": "partial",
+      "requirement": "US-4: Send Image — 'Недоступний/невалідний URL (Telegram відповів помилкою) → термінальна → failed з логуванням'",
+      "detail": "Tech-spec covers the happy-path sendPhoto and the 429/403/400/5xx terminal semantics accurately. However the specific case 'Telegram responded with an error about the URL itself (e.g. 400 with a message other than chat-not-found, or a 200 that indicates the photo could not be fetched)' is not distinguished from the general 'інші термінальні → failed' bucket. For correctness an implementer needs to know: does Telegram return 400 with a non-chat-not-found description when the image URL is bad? If so, does that path go through the OTHER terminal branch (not the chat-not-found flip)? The tech-spec Architecture section says 'інші термінальні (5xx-exhausted, інші 4xx) → виконання failed' which partially covers it, but does not clarify that invalid-URL errors arriving as 400 (not chat-not-found) must NOT flip subscriber status. This is a nuanced distinction the spec should call out explicitly.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-05",
+      "type": "partial",
+      "requirement": "US-C4: Telegram deep-link payload ≤64 chars [A-Za-z0-9_-] — validation of trigger_value",
+      "detail": "User-spec Constraints state 'deep-link payload ≤64 chars [A-Za-z0-9_-]'. Code-research confirms the backend does NOT currently validate this in the parser. Tech-spec mentions trigger_value as a String field and deep-link generation, but never specifies whether trigger_value must be validated against the Telegram charset/length constraint at funnel-save or activation time. The code-research open question #1 explicitly flags this ('Should funnel matching normalize/validate the 64-char/charset Telegram constraint?') but tech-spec does not answer it — the answer is implicitly 'no validation' since the Decisions section and DTO descriptions don't mention it. A user trying to activate a funnel with trigger_value='hello world' (space) would get a broken deep-link that Telegram would reject, but the system would happily show t.me/bot?start=hello world.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-06",
+      "type": "partial",
+      "requirement": "US-15: Pause — 'paused воронки → нові /start не створюють виконань; ті, що в дорозі, дограють'",
+      "detail": "Tech-spec mentions 'paused' as a FunnelStatus enum value and 'paused → no new + активні дограють' in the Integration Tests section. However, the Architecture 'How it works' section describing fire() does not explicitly state that fire() must check funnel.status == active before creating a new execution. The trigger flow (step 3 in fire() description) says 'знаходить active-воронку проєкту' — so it only queries for active funnels. This implicitly covers the pause behavior, but the PATCH/status-change API flow for pausing a funnel is never described. There is no endpoint or service method described for transitioning draft→active→paused→active. The activate endpoint is described, but the pause and unpause transitions (and what HTTP method/path they use) are absent from the tech-spec.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-07",
+      "type": "scope_creep",
+      "requirement": "N/A — unique partial index on (projectId, triggerType, triggerValue) filtered status=active in funnels collection",
+      "detail": "Tech-spec Data Models adds a 'partial-unique (projectId, triggerType, triggerValue) filtered status=active' index on the funnels collection as 'defense-in-depth поверх сервісної перевірки'. User-spec only requires a 422 at activation time when a conflict is detected — it requires a service-layer check, not a database-level unique constraint. The index is described as defense-in-depth and is a reasonable engineering addition, but it is not derived from any user-spec requirement and is not marked [TECHNICAL] in Decisions. It adds an implicit behavior: a direct MongoDB write bypassing the service would also be blocked. This is minor infrastructure hardening, but represents undocumented scope from the user-spec perspective. It should either be documented as [TECHNICAL] in a Decision or removed.",
+      "severity": "low",
+      "recommendation": "keep"
+    },
+    {
+      "id": "F-08",
+      "type": "underengineering",
+      "requirement": "US-11 + US-12: At-most-once per step — the per-step pending→in_progress→done state machine and the sweep claim are two separate atomic operations; failure window between them is not addressed",
+      "detail": "Tech-spec Decision 4 and the Architecture describe: (1) atomic claim of the execution via findAndModify, then (2) per-step stepRunStatus pending→in_progress→done. However, the spec describes these as two conceptually separate CAS operations — the execution-level claim sets the execution to in_progress, and then step-level tracking uses stepRunStatus. There is a subtle underspecification: if the sweep claims the execution (execution-level in_progress) and then crashes BEFORE the step-level claim (stepRunStatus→in_progress), on the next sweep tick the execution is still in_progress at execution level but the step is still pending at step level. The spec does not describe what happens: does the next sweep tick re-claim it? The Architecture says the atomic claim matches on 'stepRunStatus=pending' — meaning the execution-level claim and the step-level claim are the SAME findAndModify. But this is implied, not stated. If they are separate, the failure window exists; if they are the same (one atomic write), the spec should say so explicitly. For an L-size feature with explicit multi-replica safety requirements, this needs to be unambiguous.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-09",
+      "type": "underengineering",
+      "requirement": "US-S2: Step reordering (↑/↓) — API contract for step reordering is not specified",
+      "detail": "User-spec Scenario 2 says 'Переміщує кроки ↑/↓, редагує, видаляє.' Tech-spec describes PATCH updating 'метаданих + повного steps' — i.e., the client sends the entire steps array. This is the right approach for a simple vertical list, but the tech-spec never states this explicitly. It also does not specify the FunnelStep.order field semantics: is `order` maintained by the client (client sets 0,1,2,...), maintained by the server on receipt of the full array (server assigns order based on array position), or is it a freely settable int used for sorting? The Data Models show `order: int` as a field in FunnelStep, but no rule is given for who sets it and how. An implementer might implement step-by-step PATCH endpoints for individual step operations (add/move/delete/edit) rather than a full-array replacement, leading to a different and more complex API.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-10",
+      "type": "underengineering",
+      "requirement": "US-S3: Deep-link generation — which endpoint returns the deep-link?",
+      "detail": "User-spec says the system shows the deep-link t.me/<bot>?start=<trigger_value> with a Copy button. Tech-spec mentions 'ActivateFunnelResponse (deep-link)' DTO and the Acceptance Criteria AC mentions 'генерація deep-link'. But it is unclear: is the deep-link returned only in the activate response (POST /funnels/{id}/activate), or is it also included in the GET funnel response so the editor can show it at any time for an already-active funnel? If the GET endpoint does not return the deep-link, the editor cannot show it after page reload. The user-spec scenario implies the trigger settings screen shows the deep-link while configuring the funnel (before activation), which means the GET endpoint (or the PATCH response) must also compute and return it. The tech-spec only mentions it in ActivateFunnelResponse, which is incomplete.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-11",
+      "type": "underengineering",
+      "requirement": "US-1: CRUD — list with ?status= filter; response shape for FunnelResponse not specified",
+      "detail": "Tech-spec mentions 'список із фільтром ?status=' in Task 5 and the Architecture, but the FunnelResponse DTO contents are not specified anywhere in the tech-spec. The Data Models section describes the Funnel document fields but does not state what subset is projected into FunnelResponse, whether steps are included in the list response (or only in the individual GET), whether pagination is required, or what the list response envelope looks like (array vs {items, total, ...}). For a frontend that needs to render a list of funnels, this ambiguity will cause implementer choices that may not match the frontend's needs.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-12",
+      "type": "underengineering",
+      "requirement": "US-C2 + US-12: sub-minute @Recurring interval — Decision 2 confirms PT30S is valid in JobRunr 7.3.2, but FUNNEL_SCHEDULER_INTERVAL_SECONDS env var injection into the @Recurring annotation is not addressed",
+      "detail": "Decision 2 confirms @Recurring(interval='PT30S'). User-spec Constraints and Task 8 reference env var FUNNEL_SCHEDULER_INTERVAL_SECONDS. However, JobRunr @Recurring interval is set at annotation compile-time. To make it configurable via env var, Spring Expression Language or a programmatic JobRunr API would be needed — this is non-trivial and has no precedent in the codebase (all @Recurring annotations use hardcoded cron strings). Tech-spec does not address how the env var feeds into the annotation. The Architecture simply says '@Recurring(interval=\"PT30S\")' as if it's a hardcoded value, while Task 8 says to 'add env var FUNNEL_SCHEDULER_INTERVAL_SECONDS'. These two statements are inconsistent — is the interval hardcoded or configurable? If configurable, the mechanism is unspecified.",
+      "severity": "medium",
+      "recommendation": "fix"
+    },
+    {
+      "id": "F-13",
+      "type": "overengineering",
+      "requirement": "N/A — Task 11 (Code Audit), Task 12 (Security Audit), Task 13 (Test Audit) as separate audit-wave tasks",
+      "detail": "The Implementation Tasks include three dedicated audit tasks (11, 12, 13) each calling a separate skill (code-reviewing, security-auditor, test-master). While quality reviews are valuable, three separate audit waves for a single feature adds process overhead disproportionate to the feature scope. The existing task structure already includes 'Reviewers: code-reviewer, security-auditor, test-reviewer' on every implementation task, meaning three passes of review per task PLUS three dedicated audit tasks at the end. This doubles the review work. For an L-size feature a single combined audit or an inline review process is standard; separate audit tasks are typically reserved for cross-cutting architectural changes or compliance-sensitive features. This is a process-level YAGNI, not a code-level one.",
+      "severity": "low",
+      "recommendation": "adjust"
+    }
+  ],
+  "summary": "29/35 requirements covered; 4 partial; 2 fully missing. Critical gaps: (F-01) observability/logging strategy is absent from tech-spec despite being an explicit acceptance criterion; (F-02) the reactivation-order constraint (upsert before fire()) is never mentioned. Significant partials: (F-05) trigger_value charset/length validation left open by code-research is still unresolved in tech-spec; (F-06) pause/unpause API transition is missing from Architecture; (F-09) step reordering API contract and 'order' field semantics are underspecified; (F-10) deep-link availability in GET response vs only activate response is unresolved; (F-11) FunnelResponse shape and list pagination are unspecified; (F-12) FUNNEL_SCHEDULER_INTERVAL_SECONDS env var vs hardcoded PT30S annotation is inconsistent. One atomicity subtlety (F-08): the execution-level claim and per-step stepRunStatus claim need to be explicitly stated as a single findAndModify for the at-most-once guarantee to hold. One minor undocumented scope addition (F-07): defense-in-depth unique index on funnels collection is not marked [TECHNICAL]. No YAGNI abstractions or unnecessary layers found; architecture is proportionate to an L-size engine. Solution section contains genuine technical depth beyond user-spec paraphrase."
+}

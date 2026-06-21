@@ -1,0 +1,59 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "All seven acceptance criteria from Task 9 are satisfied. The four documentation files are accurate against the actual codebase (build.gradle, application.properties, .env.example, SecurityConfig.java, infra/docker-compose.yml), terminology is consistent across files (session, Mailpit, spring-session-data-mongodb), and the documentation principles (high-level overview, no large code blocks, preserved operational details) are followed. One minor accuracy issue: patterns.md references `CookieCsrfTokenRepository` while the WebFlux code actually uses `CookieServerCsrfTokenRepository`. Two optional gaps worth noting: deployment.md does not surface the `SESSION_COOKIE_SECURE` / `SESSION_COOKIE_SAME_SITE` env vars that are present in .env.example, and the patterns.md \"current security baseline\" line still says only `/health` and `/api/auth/**` are permitAll while SecurityConfig also requires `/api/**` to be authenticated explicitly (informational only, not contradictory).",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": ".claude/skills/project-knowledge/references/patterns.md",
+      "line": 45,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "The class name `CookieCsrfTokenRepository` is the Spring Servlet-stack class. The reactive (WebFlux) stack uses `CookieServerCsrfTokenRepository` — that is the actual import in `backend/src/main/java/com/botfunnel/security/SecurityConfig.java` (line 13). Tech-spec Decision 12 also has the wrong name; this documentation refresh is a good moment to align with the code. Suggested edit: replace `CookieCsrfTokenRepository.withHttpOnlyFalse()` with `CookieServerCsrfTokenRepository.withHttpOnlyFalse()` in the patterns.md CSRF bullet.",
+      "benefit": "Future readers grepping for the class name in source code will find a hit; avoids a small but real mismatch between the documented API and the WebFlux API actually used.",
+      "optional": false
+    },
+    {
+      "file": ".claude/skills/project-knowledge/references/deployment.md",
+      "line": 62,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "`.env.example` lists `SESSION_COOKIE_SECURE` and `SESSION_COOKIE_SAME_SITE` (mapped to `server.reactive.session.cookie.secure` / `same-site` in application.properties), and Decision 12 / Task 4 deviation note explicitly say \"production must override via SESSION_COOKIE_SECURE=true / SESSION_COOKIE_SAME_SITE=strict — to be enforced via deployment.md.\" These two production-critical security flags are not currently in the deployment.md env-var table.",
+      "benefit": "Operators have a single source of truth for production cookie hardening. Without these two rows, an operator following deployment.md would deploy with `Secure=false; SameSite=Lax`, which is the dev default but unsafe in production.",
+      "optional": false
+    },
+    {
+      "file": ".claude/skills/project-knowledge/references/patterns.md",
+      "line": 46,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The updated \"current security baseline\" line says `/health` and `/api/auth/**` are permitAll. This is accurate, but SecurityConfig.java (line 51) explicitly authorises `/api/**` as authenticated() before the catch-all `anyExchange().authenticated()`. Worth either dropping the redundant `/api/**` rule from SecurityConfig or noting the layered rule in patterns.md so readers understand the chain (rule ordering is already discussed two bullets above).",
+      "benefit": "Avoids slight ambiguity for a reader who later opens SecurityConfig.java and sees an extra rule that isn't reflected in the baseline statement.",
+      "optional": true
+    },
+    {
+      "file": ".claude/skills/project-knowledge/references/architecture.md",
+      "line": 27,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The phrase \"replaces JWT for auth\" is fine for now but slightly historical; future readers without Epic 02 context will not know what it replaced. Consider either dropping the \"replaces JWT\" parenthetical (the why is in tech-spec / decisions) or rewording to \"used for stateful login sessions\".",
+      "benefit": "Documentation reads as authoritative current-state reference rather than a delta against an earlier plan.",
+      "optional": true
+    },
+    {
+      "file": ".claude/skills/project-knowledge/references/architecture.md",
+      "line": 18,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "The package-module list mixes two concerns: (a) the planned full module layout for the project and (b) the currently-implemented subset. The \"Currently implemented\" suffix is good, but `security` is listed as a current module while `common` is also listed — both are present in code; the split is fine. Consider also surfacing that `security` is not a long-lived feature module but the SecurityConfig package, to avoid future confusion.",
+      "benefit": "Reduces ambiguity when a future agent looks for the `security` package expecting feature code.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 5,
+    "testCoverageAssessment": "adequate"
+  }
+}

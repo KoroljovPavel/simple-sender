@@ -1,0 +1,134 @@
+{
+  "status": "passed",
+  "reviewer": "test-reviewer",
+  "round": 2,
+  "commit": "1ecf587",
+  "summary": "All three round-1 findings are resolved. TR-1 (false-green cursor-move test) is fixed with the exact litmus approach prescribed: s1→tail (2 sends) vs entry→End (1 send), asserting sentCount()-before==1 AND currentStepId==null. The test now fails if claimForRedirect stops setting currentStepId=entryStepId. TR-2 (allowReEnter=false active in-flight swallow path) is covered by the new eventEntryStep_insertAtEntryDuplicate_isSwallowedPerFunnel unit test, which stubs mongoTemplate.findOne to return null (no in-flight) and doThrow(DuplicateKeyException) on insertExecutionAt, then asserts LOG_DISPATCH_REENTER_IGNORED at WARN/INFO and no exception escapes — locking the insertAtEntryStep swallow branch that was never reachable before. TR-3 (drift WARN) is covered by eventMatchedFunnel_inMemoryTriggerDrift_warnsAndFallsBackToStepZero, which seeds a funnel with a tag_added trigger element returned by the event repo query, asserts LOG_DISPATCH_NO_MATCHED_ELEMENT fires at WARN, and verifies fallback to insertExecution (step-0 path, not insertExecutionAt). The cancel-then-insert branch is now exercised with a real pre-existing terminal row via seedTerminalExecution(cancelled). No assertion weakening observed; no vacuous stubs introduced. 98 tests (67+13+18) credibly green.",
+  "findings": [],
+  "findingsBySeverity": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "minor": 0
+  },
+  "roundOneFindings": {
+    "TR-1": {
+      "status": "resolved",
+      "location": "FunnelExecutionEngineIT.java::redirect_ofRunningAndWaiting_movesCursor",
+      "fix": "Graph reshaped exactly as prescribed: s1=sendMessageStep('s1','orig','tail'), tail=sendMessageStep('tail','orig-tail',null), entry=sendMessageStep('entry','redirected',null). Cursor seeded on s1. After redirectExecution: (1) assertThat(reload(execId).getStatus()).isEqualTo(completed), (2) assertThat(reload(execId).getCurrentStepId()).isNull() — entry had no next → End, (3) assertThat(sentCount()-before).isEqualTo(1) — entry only, NOT s1+tail. enqueueOk(2) as buffer. If claimForRedirect drops the .set(currentStepId) update, drive runs s1+tail=2 sends and assertion (3) fails. Litmus test passes.",
+      "litmusTestNowPasses": true
+    },
+    "TR-2": {
+      "status": "resolved",
+      "location": "FunnelEventServiceTest.java::eventEntryStep_insertAtEntryDuplicate_isSwallowedPerFunnel",
+      "fix": "Unit test added. stubBotAndSubscriber(); eventFunnel('ev','purchase','entry') seeded; stubEventFunnels(ev); mongoTemplate.findOne returns null by default (no in-flight probe hit → start-at-entry path taken, not redirect); doThrow(new DuplicateKeyException('re-enter')).when(executionFactory).insertExecutionAt(eq(PROJECT_ID), eq(ev), any(), any(), anyInt(), eq('entry')); assertThatCode dispatch doesNotThrowAnyException(); assertThat(warnOrInfo(LOG_DISPATCH_REENTER_IGNORED)).isTrue(). This locks the insertAtEntryStep DuplicateKeyException swallow — the only path previously unreachable. Structurally distinct from the existing reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches (which routes through insertExecution/step-0, not insertExecutionAt/entry-step).",
+      "swallowBranchNowExercised": true
+    },
+    "TR-3": {
+      "status": "resolved",
+      "location": "FunnelEventServiceTest.java::eventMatchedFunnel_inMemoryTriggerDrift_warnsAndFallsBackToStepZero",
+      "fix": "Unit test added. Funnel seeded with a single tag_added trigger (triggerType mismatch for event dispatch). stubEventFunnels(drifted). After dispatch: assertThat(warn(LOG_DISPATCH_NO_MATCHED_ELEMENT)).isTrue() — uses the strict WARN-level helper (not warnOrInfo), verify(executionFactory, times(1)).insertExecution(PROJECT_ID, drifted, SUBSCRIBER_ID, TELEGRAM_BOT_ID, 0) and verify(executionFactory, never()).insertExecutionAt(any()...). Locks the .equals re-scan branch against a type-check regression."
+    }
+  },
+  "cancelThenInsertBranchWithPreExistingTerminalRow": {
+    "status": "resolved",
+    "location": "FunnelEventServiceIT.java::event_noInFlight_allowReEnterTrue_cancelThenInsertAtEntry",
+    "fix": "seedTerminalExecution(f.getId(), ExecutionStatus.cancelled, 's1') now seeds a real cancelled row before dispatch. Assertions: (a) fresh running rows == 1 and fresh.get(0).getId() != oldId and fresh.get(0).getCurrentStepId() == 'entry'; (b) mongoTemplate.findById(oldId) still cancelled. Proves the cancel-then-insert branch runs against a real prior row and that cancel is a no-op on a terminal status (row untouched). Previously the test had no prior row, so the branch was exercised in a vacuous scenario."
+  },
+  "techSpecCoverageAssessment": {
+    "redirect_in_flight_incl_unpark_waiting_for_reply": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_movesCursorToEntryStep_andUnparksWaitingForReply",
+      "quality": "strong — status==completed + sentCount==1 proves park cleared and branch ran"
+    },
+    "redirect_running_waiting_cursor_proved": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_ofRunningAndWaiting_movesCursor",
+      "quality": "strong — send-delta (1 not 2) + currentStepId==null are the definitive cursor-move proof; litmus test PASSES"
+    },
+    "redirect_mutates_existing_row_no_second_doc": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_mutatesExistingRow_noSecondExecutionInserted",
+      "quality": "strong — unchanged"
+    },
+    "fresh_start_at_entryStepId": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::event_noInFlight_startsFreshAtEntryStep",
+      "quality": "strong — unchanged"
+    },
+    "allowReEnter_false_active_inflight_noop_swallow": {
+      "covered": true,
+      "test": "FunnelEventServiceTest::eventEntryStep_insertAtEntryDuplicate_isSwallowedPerFunnel",
+      "quality": "strong — DuplicateKeyException thrown on insertExecutionAt, LOG_DISPATCH_REENTER_IGNORED asserted, no exception escapes; locks previously uncovered emission site"
+    },
+    "allowReEnter_respected_terminal_does_not_block": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::event_noInFlight_allowReEnterFalse_terminalRowDoesNotBlockFreshInsert",
+      "quality": "strong — unchanged"
+    },
+    "allowReEnter_true_cancel_then_insert_with_real_prior_row": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::event_noInFlight_allowReEnterTrue_cancelThenInsertAtEntry",
+      "quality": "strong — real pre-existing terminal row; fresh row id asserted distinct from old; old row status asserted unchanged"
+    },
+    "broken_cursor_terminal_fail_isolated": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_brokenCursor_terminalFailsOnlyThatExecution",
+      "quality": "strong — unchanged"
+    },
+    "cas_loss_noop_warn_emitted": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_casLost_isNoOp_andEmitsWarn",
+      "quality": "strong — unchanged"
+    },
+    "mismatched_subscriber_anti_idor": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::redirect_mismatchedSubscriber_isNoOp",
+      "quality": "strong — unchanged"
+    },
+    "drift_warn_covered": {
+      "covered": true,
+      "test": "FunnelEventServiceTest::eventMatchedFunnel_inMemoryTriggerDrift_warnsAndFallsBackToStepZero",
+      "quality": "strong — strict WARN-level check on LOG_DISPATCH_NO_MATCHED_ELEMENT; both insertion paths asserted"
+    },
+    "cross_funnel_isolation": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::event_crossFunnelIsolation_startsTriggerFunnel_leavesOtherUntouched",
+      "quality": "strong — unchanged"
+    },
+    "one_event_two_funnels_decided_independently": {
+      "covered": true,
+      "test": "FunnelEventServiceIT::oneEvent_twoFunnels_decidedIndependently",
+      "quality": "strong — unchanged"
+    },
+    "emit_event_self_loop_terminates_at_budget": {
+      "covered": true,
+      "test": "FunnelExecutionEngineIT::emitEventTriggerSelfLoop_terminatesAtBudgetOrMenuPark",
+      "quality": "adequate — unchanged; the redundant OR clause (both arms scan the same list for the same constant) is harmless"
+    }
+  },
+  "assertionQualityCheck": {
+    "noAssertionWeakening": true,
+    "noVacuousStubs": true,
+    "listAppenderUsedForWarn": true,
+    "tagSlowOnEngineIT": true,
+    "strictWarnLevelOnNewTests": {
+      "TR2_test": "uses warnOrInfo — acceptable since LOG_DISPATCH_REENTER_IGNORED may be INFO at one emission site (matches existing reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches pattern)",
+      "TR3_test": "uses warn() — strict WARN-level check; correct since the drift branch emits at WARN"
+    },
+    "notes": "The TR-1 test's enqueueOk(2) buffer pattern is correct (one send fires, one stays queued, drained in AfterEach). The before=sentCount() snapshot taken outside the redirect call correctly isolates the delta. The emitEventTriggerSelfLoop test's OR in the budget assertion remains a minor stylistic redundancy but is functionally harmless — both arms check the same constant on the same list."
+  },
+  "metrics": {
+    "totalTestsReported": 98,
+    "roundOneHighFindingsResolved": 2,
+    "roundOneMinorFindingsResolved": 1,
+    "newTestsAdded": 3,
+    "modifiedTests": 1,
+    "findingsBySeverity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "minor": 0
+    }
+  }
+}

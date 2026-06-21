@@ -1,0 +1,44 @@
+{
+  "validator": "task-validator",
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 6,
+      "section": "Context Files / Required Skills",
+      "issue": "Project-knowledge and skill links use root-relative form (`.claude/skills/project-knowledge/references/...`, `.claude/skills/code-writing/SKILL.md`) without the `../../../` prefix, while tasks 7, 8, 10 in the same batch use the task-dir-relative form (`../../../.claude/...`). The target files exist on disk and the root-relative form matches the template, so links resolve from project root (CWD). The inconsistency is purely cosmetic but mixed within one batch.",
+      "fix": "Pick one convention batch-wide. Recommended: keep the root-relative `.claude/...` form (matches task.md.template and task-creator note that bare paths resolve from CWD), and align tasks 7/8/10 to drop the `../../../` prefix — or vice versa. No functional impact either way."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 7,
+      "section": "Context Files / Required Skills",
+      "issue": "Uses the `../../../.claude/...` task-dir-relative prefix for PK and (implicitly) skill links, diverging from the root-relative form used in tasks 6 and 9 and in the template. Paths resolve correctly on disk; flagged only for batch consistency.",
+      "fix": "Align to the chosen batch-wide convention (see task 6 finding)."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 9,
+      "section": "Context Files",
+      "issue": "Mixes path forms within the same file: most PK links use root-relative `.claude/skills/project-knowledge/references/...` but the patterns.md link inside Implementation hints (`[patterns.md](.claude/skills/project-knowledge/references/patterns.md)`) and the architecture/project links are root-relative while other tasks in the batch use `../../../`. All resolve. Cosmetic batch-consistency issue only.",
+      "fix": "Align to the chosen batch-wide convention (see task 6 finding)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3
+  },
+  "notes": {
+    "project_knowledge_path_check": "VERIFIED. On-disk project-knowledge files exist ONLY at `.claude/skills/project-knowledge/references/` (project.md, architecture.md, patterns.md, ux-guidelines.md, deployment.md). The bare `.claude/skills/project-knowledge/` directory contains only `references/`. ALL five batch-2 tasks (6,7,8,9,10) reference PK files via the `.../references/...` segment, which resolves correctly. No task in this batch uses the non-resolving `project-knowledge/<file>` (missing `references/`) path. The known inconsistency mentioned in the request does NOT affect this batch — only the relative-prefix style differs (cosmetic, captured as minor findings above).",
+    "audit_wave_tasks": "Tasks 8, 9, 10 are Audit Wave tasks and are correctly structured: no TDD Anchor section, `reviewers: []`, no Reviewers body section, `verify: []`, deliverable is a JSON audit report (8 -> code-audit-1.json, 9 -> security-auditor-1.json, 10 -> returned as text per task-10 spec). Skills match content: 8=code-reviewing, 9=security-auditor, 10=test-master. All correct.",
+    "frontmatter": "All 5 tasks: status=planned (iteration 1 OK), depends_on arrays of numbers, wave numbers >=1, skills arrays, reviewers arrays, verify YAML arrays, teammate_name present-but-empty. No extra fields. Task 6 verify=[user] matches tech-spec Verify-user; Task 7 verify=[smoke] matches tech-spec Verify-smoke. Code tasks 6/7 reviewers=[code-reviewer,security-auditor,test-reviewer] include required code-reviewer+test-reviewer for code-writing skill.",
+    "dependency_graph": "No cycles. Task 6 depends_on [4] wave 3 (Task 4 wave 2 -> OK, wave strictly greater). Task 7 depends_on [5] wave 4 (Task 5 wave 3 -> OK). Tasks 8/9/10 depends_on [1..7] wave 5 (all predecessors waves 1-4 -> OK). All referenced task numbers exist.",
+    "carry_forward": "Tasks 6 and 7 carry forward tech-spec AC and Testing Strategy items without loss. Task 6 mirrors tech-spec Task 6 AC (MENU in STEP_TYPES, button sub-editor, client validation mirror of validateSteps/Decision 10, summary, funnel_broken_edge inline, i18n uk+en, no v-html, vitest+1 playwright) and Testing Strategy E2E/unit items. Task 7 carries event-before-flip, re-entry guard, no-PII (Decision 9), error-isolation, advanceOnCallback call. Audit tasks 8/9/10 correctly reference the full Decisions/Testing-Strategy/Shared-resources scope as audit targets rather than re-implementing.",
+    "shared_resources": "tech-spec Shared resources table lists only existing singletons (TelegramSender, Clock bean, EventService, JobRunr @Recurring sweep) with no new heavy resources. Tasks 6/7 consume via existing owners (Task 7 calls existing FunnelTriggerService; no new bean creation). Task 8 explicitly audits shared-resource compliance. No competing instances, no missing owner.",
+    "code_files": "All code files referenced in tasks 6 and 7 (Files to modify + Files to read) verified to exist on disk. Skill/agent link targets (code-writing, code-reviewing, test-master SKILL.md; security-auditor.md) all exist."
+  }
+}

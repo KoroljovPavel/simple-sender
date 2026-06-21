@@ -1,0 +1,62 @@
+{
+  "status": "OK",
+  "summary": "Wave 2 task-7 test rewrite is clean. Coverage parity is preserved 1-to-1 vs the pre-flip variant (verified by diffing method-name lists across all 9 rewritten files: ProjectServiceTest +2 list tests, all others identical sets). All StepVerifier/Mono/Flux/reactor surface is gone (zero grep matches). MockMvc + CSRF + servlet @WithMockAppUser pattern applied consistently; spy beans reset between tests; race tests correctly extracted to a RANDOM_PORT TestRestTemplate harness with a real /api/auth/login bind and XSRF cookie echo. Token-scrub regression has the strong negative assertion. Log-appender attach/detach lifecycle is correct. Findings below are all informational/minor and reflect inherited brittleness in the pre-flip code that the rewrite preserved verbatim — out of scope for the atomic flip per the brief.",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/project/ProjectServiceTest.java",
+      "line": 207,
+      "category": "coverage",
+      "title": "Two list tests added that were not in the pre-flip variant",
+      "description": "`list_excludeDeleted_returnsActiveOnly` and `list_includeDeleted_returnsAll` are present post-flip but did not exist in the pre-flip ProjectServiceTest (verified via diff against d842813~1). This is a strict ADDITION of coverage rather than parity loss. The reviewer brief instructed not to flag missing pre-flip coverage; this is a positive deviation, not a defect. Noting it so the team knows the rewrite intentionally widened the unit-level coverage of `list()` (which is otherwise only IT-tested via `getProjects_returnsOnlyOwnActiveSortedDesc`). No action required."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java",
+      "line": 138,
+      "category": "maintainability",
+      "title": "Strong InOrder pinning of every Connect side-effect step",
+      "description": "`connect_happyPath_runsSideEffectsInDocumentedOrder` pins the InOrder across 8 collaborators (projectService → valueOperations → redisTemplate.expire → botRepository.findByProjectIdAndStatus → telegramApiClient.getMe → botRepository.findFirstByTelegramBotIdAndStatus → telegramApiClient.setWebhook → tokenEncryptor.encrypt → botRepository.save → eventService.logEvent → redisTemplate.delete). Pure refactors that reorder a single step (e.g. moving the brute-force `expire` to fire before the `findByProjectIdAndStatus` pre-check) would break this test even though the externally observable behaviour is unchanged. This brittleness is INHERITED from the pre-flip variant — the documented order is an explicit AC11/AC23 spec requirement (INCR-every-attempt before Telegram calls, event emission after save success), so the pinning protects the spec. Noting for awareness; no change required for the flip."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotServiceTest.java",
+      "line": 281,
+      "category": "maintainability",
+      "title": "Exact-count log assertion (`warns == 1`) is strict",
+      "description": "`connect_redisDownOnIncrement_failsOpenAndLogsWarn` and `connect_redisDownOnDelete_failsOpenAndLogsWarn` assert `warns == 1`. If a future change adds a second WARN site for the same fail-open category (e.g. a counter-increment exception and a separate counter-expire exception both wrapped by their own catch), the test breaks even though the security posture is unchanged. Pre-flip used the same assertion shape — preserved verbatim. A more forgiving `isGreaterThanOrEqualTo(1)` would still pin the fail-open requirement without coupling to the exact site count; `BotControllerIT.postConnect_redisDown_failsOpen_connectSucceeds_warnLogged` already uses that softer shape (line 540). Noting; out of scope for the flip."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileServiceTest.java",
+      "line": 47,
+      "category": "maintainability",
+      "title": "Deep-stub StringRedisTemplate complicates verify() targets",
+      "description": "`@Mock(answer = Answers.RETURNS_DEEP_STUBS) StringRedisTemplate redisTemplate` makes `redisTemplate.opsForValue()` return a cached deep-stub. The test then `verify`s on `redisTemplate.opsForValue().increment(...)` (line 91, 117) — this works because Mockito caches the deep-stub instance, but the pattern hides the `ValueOperations` mock identity. A simpler shape would be to declare `@Mock ValueOperations<String, String> valueOperations` and `lenient().when(redisTemplate.opsForValue()).thenReturn(valueOperations)` in `setUp()` — same as BotServiceTest already does (line 96-97 + 113). The deep-stub pattern works correctly here, but the inconsistency between BotServiceTest's explicit ValueOperations mock and ProfileServiceTest's deep-stub is a small maintainability paper cut. Noting; the deep-stub pattern is valid Mockito idiom."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotConnectRaceIT.java",
+      "line": 187,
+      "category": "flakiness",
+      "title": "AtomicInteger dispatch counter preserves race semantics correctly",
+      "description": "The dispatch-counter pattern (`AtomicInteger dispatch = new AtomicInteger(0)` inside the single Callable, with `targetProjects.get(dispatch.getAndIncrement())`) is safe under `ConcurrencyTestUtils.parallelInvoke(2, ...)` because (per the D10 contract) the helper parks both VTs at a CountDownLatch before simultaneous release. The `getAndIncrement()` itself is atomic, so the two threads observe distinct counter values (0 and 1, in non-deterministic order). The actual race we want to test — the Connect critical section — fires AFTER the dispatch, on the underlying repository/Redis interaction. This is correct. Flagged as info only so future maintainers don't mistake this for a non-deterministic test (the race outcome IS non-deterministic by design: `{200, 409}` containsExactlyInAnyOrder, not a fixed pair). No action required."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/profile/ProfileControllerIT.java",
+      "line": 224,
+      "category": "coverage",
+      "title": "IT cannot assert 'current session survives' under @WithMockAppUser",
+      "description": "`changePassword_correctCurrent_passwordRotated_otherSessionsKilled_eventLogged` openly acknowledges (comment lines 224-227) that `@WithMockAppUser` produces no real server-side SESSION cookie, so the IT can only verify the sibling-session-deletion side; the `_id != currentSessionId` clause is locked by `ProfileServiceTest.changePassword_correctPassword_excludesCurrentSession_andResetsCounter` (line 95-122) which asserts directly on the captured `Query.toJson()`. This split is correct and is also documented in the task spec (Task 12 will strengthen with a BSON-fixture assertion). Noting because cross-layer coverage of the same invariant via unit-asserts-query-shape + IT-asserts-side-effect is a defensible pattern but slightly indirect; no change required for the flip."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/bot/BotControllerIT.java",
+      "line": 540,
+      "category": "maintainability",
+      "title": "MockitoSpyBean wiring for the broken-Redis test depends on BotService picking up the spy",
+      "description": "`postConnect_redisDown_failsOpen_connectSucceeds_warnLogged` overrides `redisTemplateSpy.opsForValue()` via `doReturn(brokenOps).when(redisTemplateSpy).opsForValue()`. This works only if BotService is autowired with the SAME bean instance that @MockitoSpyBean wraps. Since the BotService constructor injects a `StringRedisTemplate` from the application context, and @MockitoSpyBean replaces the bean definition in the context, this is correct. Verified by the test's success criteria (200 OK + WARN logged). Flagged as info so future maintainers know the spy substitution depends on Spring bean identity — not a defect, but worth knowing if the BotService constructor is ever changed to take a `StringRedisTemplate` by qualifier or factory."
+    }
+  ]
+}

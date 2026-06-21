@@ -1,0 +1,49 @@
+{
+  "agent": "wave4-gate",
+  "feature": "15-message-composer",
+  "date": "2026-06-09",
+  "suite": {
+    "vitest": { "command": "pnpm test run", "testFiles": "53 passed (53)", "tests": "487 passed (487)", "exit": 0 },
+    "localeCheck": { "command": "node scripts/check-locales.mjs", "result": "PASS", "exit": 0 },
+    "lint": { "result": "N/A", "note": "No lint/typecheck tooling configured in frontend (no eslint/biome/prettier config, no lint or typecheck script in package.json). The defined checks are `test` (vitest) and `prebuild` (check-locales.mjs); both green." }
+  },
+  "i18nGapsFixed": [
+    {
+      "keys": [
+        "funnels.editor.previewMediaType.IMAGE",
+        "funnels.editor.previewMediaType.VIDEO",
+        "funnels.editor.previewMediaType.AUDIO",
+        "funnels.editor.previewMediaType.FILE"
+      ],
+      "referencedBy": "components/funnels/FunnelMessagePreview.vue:255 (Task 8) — t(`funnels.editor.previewMediaType.${block.type}`)",
+      "problem": "Missing in BOTH uk.json and en.json. Parity check (symmetric diff only) passed despite the keys not existing, so VIDEO/AUDIO/FILE preview blocks would have rendered the raw key string at runtime.",
+      "fix": "Added previewMediaType.{IMAGE,VIDEO,AUDIO,FILE} to funnels.editor in both locales; added the 4 keys to tests/i18n/required-keys.spec.ts to regression-guard the handoff."
+    }
+  ],
+  "staticKeyAudit": "All static funnels.* keys referenced in components/pages exist in both locales (verified by extraction script).",
+  "dynamicKeyAudit": "All resolved dynamic keys verified present in both locales: steps.type.* (7 StepTypes), steps.blockType.* (6 BlockTypes), steps.unit.* (3), trigger.type.* (5), editor.previewMediaType.* (4, fixed).",
+  "e2e": {
+    "run": false,
+    "reason": "e2e/*.spec.ts run only via `pnpm test:e2e` (Playwright), which requires a live Nuxt dev server on :3000 plus a real backend on :8080. Not part of the vitest gate (vitest include = tests/**) and not runnable in this sandbox.",
+    "findings": "e2e/funnels.spec.ts still drives the removed model: addSendMessage() assumes default SEND_MESSAGE flat step + step-text-input, and funnels_menuGoldenPath uses selectOption('MENU') with step-menu-* selectors that no longer exist in the composer UI.",
+    "handling": "Left compiling/consistent (selectors are string literals; no removed TS types referenced, so files type-check). Migrating these to the composer requires the live composer selector contract + running stack to validate and belongs to the e2e owner task (Task 11), out of scope for this vitest gate. Noted as unresolved."
+  },
+  "filesChanged": [
+    "frontend/i18n/locales/en.json",
+    "frontend/i18n/locales/uk.json",
+    "frontend/tests/i18n/required-keys.spec.ts"
+  ],
+  "preserved": [
+    "XSS guards intact (no v-html added)",
+    "Decision 5 client validation untouched",
+    "Decision 2 (buttons on last non-album block) untouched",
+    "No assertions weakened; no component behavior changed"
+  ],
+  "selfReview": {
+    "testMaster": "Diff strengthens coverage (required-keys guards the fixed handoff); no assertions weakened or skipped.",
+    "codeReviewing": "Minimal additive diff (19 insertions). Locale parity preserved; JSON valid; wording consistent with existing blockType labels."
+  },
+  "unresolved": [
+    "e2e/funnels.spec.ts (funnels_menuGoldenPath + addSendMessage helper) still references the removed MENU/SEND_MESSAGE model and needs migration to the composer UI by the e2e owner task; not part of the vitest gate, test.skip()s without a backend so it cannot fail the suite."
+  ]
+}

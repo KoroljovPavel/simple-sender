@@ -1,0 +1,75 @@
+{
+  "status": "approved",
+  "round": 1,
+  "scope": "frontend only — [funnelId].vue + tests/pages/funnel-editor.spec.ts (commit c14edfd)",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 0
+  },
+  "findings": [],
+  "analysis": [
+    {
+      "area": "Mass-assignment / PATCH payload field leakage (A04)",
+      "verdict": "PASS",
+      "detail": "sanitizeTrigger() builds an explicit object literal with exactly four fields: {triggerType, triggerValue, keywords, entryStepId}. It never spreads the source FunnelTrigger — no extra fields from the in-memory object can bleed into the PATCH body. The function also enforces per-type ownership: keyword owns `keywords` and nulls `triggerValue`; all other types own `triggerValue` and zero out `keywords`. This is correct client-side mass-assignment hygiene. The server remains the authoritative validator (422 + business code)."
+    },
+    {
+      "area": "XSS via rendered trigger data (A03)",
+      "verdict": "PASS",
+      "detail": "All trigger values are rendered exclusively through Vue's {{ }} interpolation in FunnelTriggersPanel.vue (e.g. `{{ tr.triggerValue || t('...') }}`), which auto-escapes HTML. No v-html, innerHTML, or dangerouslySetInnerHTML is used anywhere in the changed or consumed files. The sanitizeTrigger output flows into the JSON body of a PATCH call, not into the DOM as markup. This is consistent with the project-wide 'never v-html' invariant documented in existing code comments."
+    },
+    {
+      "area": "Cross-project autosave scoping / anti-IDOR (A01)",
+      "verdict": "PASS",
+      "detail": "The PATCH is routed via funnelsStore.update(funnelId.value, ...) where funnelId comes from route.params.funnelId (computed) and the store's listUrl() scopes to route.params.projectId. The anti-IDOR uniform-404 redirect (statusOf(err) === 404 → navigateTo(list)) in load() is preserved verbatim. No new ownership or authorization logic was added or weakened. The server enforces tenant scoping and returns a uniform 404 for missing/cross-owner funnels."
+    },
+    {
+      "area": "Re-entrancy guard (applyingResponse flag) — bypass of autosave gate (A04)",
+      "verdict": "PASS",
+      "detail": "The module-level `applyingResponse` boolean suppresses exactly one scheduleTriggerPersist() cycle after a server response is applied, preventing an infinite persist→applyResponse→watch loop. It is consumed (set false) on the very first watch invocation after a server assignment, before any timer is armed. It cannot be exploited to bypass validation: it only prevents scheduling a debounce timer, not calling persist() directly. activate() always calls persist() unconditionally, and the server 422 remains the authoritative backstop."
+    },
+    {
+      "area": "Timer re-entrancy — debounce bypass to trigger premature PATCH (A04)",
+      "verdict": "PASS",
+      "detail": "scheduleTriggerPersist() always cancels any pending timer (clearTimeout) before re-evaluating triggers.every(triggerReady). An edit that makes the array incomplete after it was ready will cancel the previously armed timer and not re-arm it. A subsequent edit that completes the array re-arms a fresh 600ms timer. There is no window where a partially-filled trigger array can slip through the gate via a race."
+    },
+    {
+      "area": "entryStepId injection / dangling reference (A04)",
+      "verdict": "PASS",
+      "detail": "entryStepId is carried verbatim by sanitizeTrigger (entryStepId: tr.entryStepId ?? null). The client does not validate that the id resolves to a real step — this is intentional and correct: FunnelTriggersPanel's entryOptions computed limits the UX picker to steps present in the funnel's own `steps` prop (server-minted ids only), and the server rejects a dangling entryStepId with 422. No injection vector: entryStepId is a plain string sent in a JSON body to a scoped API endpoint, not rendered in the DOM."
+    },
+    {
+      "area": "Duplicate-event-name advisory guard — bypass (A04)",
+      "verdict": "PASS",
+      "detail": "The duplicateIndices advisory in FunnelTriggersPanel.vue shows a warning for duplicate event slugs within the funnel. It is explicitly advisory (does not gate save, correctly documented as such). The server 422 with a business code is the real backstop, mapped inline via resolveFunnelError. No bypass is possible because the client-side guard only adds a UI warning; it does not suppress or gate the PATCH."
+    },
+    {
+      "area": "triggerType loose typing — unknown type sent in PATCH (A03/A04)",
+      "verdict": "PASS",
+      "detail": "FunnelTrigger.triggerType is typed as `string` (not the FunnelTriggerType literal union). triggerReady() defaults to `return false` for unknown types, so an unknown triggerType never triggers an autosave. sanitizeTrigger treats an unknown type as a non-keyword (sends triggerValue, zeroes keywords) — the server validates triggerType server-side and returns 422 for unknown values. No injection or authorization bypass is possible."
+    },
+    {
+      "area": "defaultTriggers() fallback — payload sent on server-returned empty triggers (A04)",
+      "verdict": "PASS",
+      "detail": "When the server returns an empty/absent triggers array, the client falls back to [{triggerType:'on_start', triggerValue:'', keywords:null, entryStepId:null}]. sanitizeTrigger produces {triggerType:'on_start', triggerValue:'', keywords:[], entryStepId:null} for this element. This is a valid minimal payload that the server accepts. The fallback is a UX convenience (panel always shows the main entry row); the server independently validates and will reject malformed payloads."
+    },
+    {
+      "area": "Hardcoded secrets in code or tests",
+      "verdict": "PASS",
+      "detail": "No API keys, tokens, passwords, or connection strings appear in the diff or the full files. Test fixtures (draft(), summary()) contain only inert sample data (step ids, event slugs such as 'order_paid', timestamps)."
+    },
+    {
+      "area": "ReDoS (A03-adjacent)",
+      "verdict": "PASS",
+      "detail": "The two client-side regexes used as the autosave gate — TRIGGER_VALUE_RE = /^[A-Za-z0-9_-]{0,64}$/ and EVENT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/ — are fully anchored, use a single bounded character class with an explicit upper bound of 64 characters, and have no nesting, backreferences, or overlapping alternation. They run in linear time with no catastrophic backtracking. Inputs are user-typed trigger slugs, which are short by design."
+    },
+    {
+      "area": "Dependencies",
+      "verdict": "PASS",
+      "detail": "No new npm dependencies were added in this task (consistent with the user-spec constraint). No package.json or lockfile changes are in scope."
+    }
+  ]
+}

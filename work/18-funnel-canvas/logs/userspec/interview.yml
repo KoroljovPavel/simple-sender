@@ -1,0 +1,274 @@
+# Interview Plan — 18-funnel-canvas
+# Adaptive discovery interview. Updated after EACH user response.
+
+interview_metadata:
+  started: "2026-06-13"
+  last_updated: "2026-06-13"
+  status: "completed"
+  can_resume: false
+  current_question_num: 0
+  feature_size: "L"
+
+conversation_history:
+  - question_num: 1
+    topic: "Cycle 1 — scope, positions, edit surface, note node, testing"
+    summary: >
+      (1) List editor downgraded to READ-ONLY, canvas is sole edit surface, list may be removed later.
+      (2) Positions stored per-step as nullable {x,y} (option a), dagre auto-layout for legacy/empty.
+      (3) Reuse existing step forms in a side-panel (no editor rewrite); ADD an editor-only note node.
+      (4) Testing: Vitest component tests + backend position serialization test; no new E2E; manual drag/zoom.
+  - question_num: 2
+    topic: "Cycle 2 — Q5-Q9 edges/notes/delete/palette/next + Start-node screenshot"
+    summary: >
+      Q5=a draw-to-connect typed handles. Q6=notes as funnel-level notes[] (outside steps). Q7=auto-clean
+      dangling edges on delete + warning. Q8=palette = existing step types + trigger + note (nothing new).
+      Q9=a explicit next (array order stops driving step-to-step flow). User shared competitor screenshot:
+      a dedicated "Початковий Крок" Start node (on_start entry) with explanatory copy + single output
+      handle "Перший крок" -> first step; copy notes the flow can also be entered via triggers/events.
+      Defaults accepted: new node persists to mint id before wiring; SUBSCRIBE cross-funnel = exit badge;
+      broken edges highlighted.
+  - question_num: 3
+    topic: "Cycle 2 close — Start node + cycles"
+    summary: >
+      A confirmed: Start node optional ("Початковий Крок"), its single output edge = on_start entry step;
+      trigger-only funnels have no Start node. on_start entry mechanism (array[0] vs explicit entryStepId)
+      is a tech-spec detail. B confirmed: cycles allowed (engine backstops unchanged); exactly one default
+      `next` per node, one edge per source handle, each button its own target.
+  - question_num: 4
+    topic: "Validation round 1 — critical null-next gap"
+    summary: >
+      Adequacy validator (changes_required) found CRITICAL: next==null is array-order fallthrough in
+      FunnelExecutionEngine.advanceToNext (confirmed L488-501), not terminal — an unwired node would
+      lie. Quality validator APPROVED (fixed: removed untestable 'reused without rewrite' AC; added
+      Start-node lifecycle). User chose Variant 1: TWO bounded engine changes — advanceToNext treats
+      null next as end-of-branch; resolveStartCursor enters on_start at the start-node edge target (not
+      array[0]). Array order no longer affects execution. Added ACs + engine ITs + updated risks/decisions.
+
+phase1_feature_overview:
+
+  feature_name:
+    score: 95
+    status: "complete"
+    value: "18-funnel-canvas (Phase 9 — editable Vue Flow canvas over the Phase-8 multi-entry model)"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 92
+    status: "complete"
+    value: >
+      Editable drag-and-drop canvas editor for funnels (Vue Flow + @dagrejs/dagre auto-layout)
+      rendering the existing graph data model: node CRUD, drawn arrows (next/button/timeout targets),
+      zoom/pan, persisted per-step node positions, disconnected-subflow visualization. Canvas becomes
+      the SOLE editing surface; the vertical-list editor is downgraded to READ-ONLY (and may be
+      removed after the feature lands). Node click opens the existing step form in a side panel
+      (reuse FunnelStepForm — no editor rewrite). Adds an editor-only "note" annotation node.
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 95
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 85
+    status: "complete"
+    value: >
+      Funnel author edits a graph (multi-entry, branches, fan-in, disconnected subflows/drafts)
+      through a flat vertical list — hard to see structure, edges, and orphan trigger subflows.
+      Phase 8 introduced disconnected components the list cannot represent well.
+    gaps: ""
+    required: true
+    score_note: "raised to 85 after Cycle 1 confirmation"
+
+  target_users:
+    score: 70
+    status: "partial"
+    value: "Funnel author (small-business owner / marketer building Telegram funnels)"
+    gaps: "Any power-user vs novice distinctions"
+    required: false
+
+  success_criteria:
+    score: 20
+    status: "pending"
+    value: ""
+    gaps: "Concrete testable success measures"
+    required: true
+
+  constraints:
+    score: 50
+    status: "partial"
+    value: >
+      Stack unchanged (Nuxt 4 + Vue 3 + shadcn-vue + Tailwind). New frontend deps: Vue Flow
+      (@vue-flow/core) + @dagrejs/dagre. Desktop-first (>=1024px) per ux-guidelines. No backend
+      model change expected (graph data model already exists since Phase 2).
+    gaps: ""
+    required: true
+    decided: "per-step nullable position {x,y} (carried through copyOf); dagre auto-layout for legacy/empty; new deps Vue Flow + dagre approved; mobile = read-only list fallback"
+
+  testing_strategy:
+    score: 85
+    status: "complete"
+    value: >
+      Vitest component tests (render graph from model data; add node/edge -> correct PATCH payload;
+      dagre auto-layout when positions absent; note node create/edit; read-only list still renders).
+      Backend: a small serialization/tolerant-read test for the new position field. NO new E2E
+      (Vue Flow drag/zoom is hard to E2E; existing Playwright stays on golden-path locale). Manual
+      check for live drag/zoom/pan.
+    gaps: ""
+    required: true
+
+phase2_user_experience:
+  user_stories:
+    score: 85
+    status: "complete"
+    value: >
+      Author opens funnel -> canvas renders all step nodes + a Start node (on_start) + event-trigger
+      nodes + notes, auto-laid-out (dagre) if no saved positions. Author drags nodes (saved as
+      canvasPosition), draws edges from typed source handles (default next / per-button / timeout) to
+      target nodes, clicks a node to edit its content in a side panel (reuse FunnelStepForm), adds nodes
+      from a palette (existing step types + trigger + note), deletes nodes (dangling edges auto-cleaned),
+      zoom/pan. Save = existing full-replace PATCH. Vertical list becomes read-only.
+    gaps: ""
+    required: true
+  acceptance_criteria: { score: 70, status: "partial", value: "Derived from Q5-Q9 + research; to finalize in draft", gaps: "Write testable list in spec", required: true }
+  edge_cases:
+    score: 90
+    status: "complete"
+    value: >
+      Disconnected subflows/orphans preserved (no single-root assumption); cycles allowed (return-to-menu,
+      engine loop backstops unchanged); one default `next` per node (single source handle), buttons each
+      one target; edge only to SAVED node (new node persists to mint id first); cross-funnel SUBSCRIBE
+      shown as exit badge not edge; legacy funnels w/o positions -> dagre auto-layout; empty/new funnel
+      shows just the Start node.
+    gaps: ""
+    required: true
+  error_scenarios:
+    score: 80
+    status: "partial"
+    value: >
+      Dangling edge after delete -> auto-clean + warning; broken edge serialized null (not "") else 422
+      funnel_broken_edge on activate -> canvas highlights it; SSR window-undefined -> ClientOnly/.client;
+      save failure -> existing saveError toast path.
+    gaps: ""
+    required: true
+  verification_strategy: { score: 85, status: "complete", value: "Vitest component tests + backend round-trip IT for canvasPosition; manual drag/zoom/pan; no new E2E", gaps: "", required: true }
+  ui_ux_requirements:
+    score: 80
+    status: "partial"
+    value: >
+      Desktop-first >=1024px (ux-guidelines); shadcn-vue + Tailwind chrome around Vue Flow canvas; node
+      card reuses a lightweight body (not full FunnelMessagePreview for perf); dedicated Start node
+      ("Початковий Крок") with explanatory copy + single output handle -> entry step; palette; i18n
+      funnels.canvas.* in both locales (parity gate).
+    gaps: ""
+    required: false
+  risks:
+    score: 80
+    status: "partial"
+    value: >
+      Vue Flow SSR integration (mitigate ClientOnly/.client + CSS import); perf on large graphs
+      (only-render-visible-elements + light node body); reverse-mapper silent-drop of canvasPosition
+      (round-trip IT); index-vs-id addressing reconciliation (canvas id-addressed, array order still
+      rewritten server-side); on_start entry mechanism under explicit-next (array[0] sync vs explicit
+      on_start entry pointer).
+    gaps: ""
+    required: true
+  technical_decisions:
+    score: 80
+    status: "partial"
+    value: >
+      Vue Flow + dagre (roadmap-chosen); canvas = SOLE editor (list read-only); explicit next (Q9a);
+      draw-to-connect typed handles (Q5a); notes as funnel-level notes[] outside steps (Q6); auto-clean
+      dangling on delete (Q7); palette = existing types only (Q8); field name canvasPosition (avoid
+      order collision); positions also on triggers (start + event nodes).
+    gaps: ""
+    required: false
+  deploy_approach: { score: 75, status: "partial", value: "Frontend deploy + backend additive fields; no migration (Decision 4, nullable). No live env yet -> live checks deferred like prior phases.", gaps: "", required: false }
+  manual_user_actions: { score: 80, status: "complete", value: "None — no new external setup; new frontend deps installed via pnpm in build.", gaps: "", required: false }
+
+phase3_integration:
+  integration_points:
+    score: 85
+    status: "complete"
+    value: >
+      Funnel editor page frontend/pages/projects/[projectId]/funnels/[funnelId].vue (owns steps/triggers
+      arrays + persist() full-replace PATCH); funnels Pinia store update()/fetchOne(); reuse FunnelStepForm
+      in side panel, FunnelTriggerSettings in trigger-node form; SearchableSelect retired for edges
+      (replaced by drawn edges). Backend: FunnelStep/Trigger + FunnelStepDto/TriggerDto + toSteps/toStepDto
+      mappers + copyOf; new Funnel.notes[].
+    gaps: ""
+    required: true
+  dependencies: { score: 85, status: "complete", value: "Phase-8 multi-entry model (triggers + entryStepId), Phase-2 graph (ids/next/targets), FunnelStepForm, store PATCH contract", gaps: "", required: false }
+  technical_constraints: { score: 80, status: "partial", value: "Vue Flow client-only under Nuxt SSR; @JsonIgnoreProperties drops un-added fields; null!=\"\" edges; full-replace PATCH", gaps: "", required: false }
+  data_requirements:
+    score: 85
+    status: "complete"
+    value: >
+      New persisted: FunnelStep.canvasPosition {x,y} (nullable), Trigger.canvasPosition {x,y} (start +
+      event nodes), Funnel.notes: List<{id, text, canvasPosition}> (editor-only, never executed). All
+      additive/nullable -> no migration. canvasPosition carried through FunnelStep.copyOf + both mappers.
+    gaps: ""
+    required: false
+  migration_needs: { score: 90, status: "complete", value: "None — nullable additive fields; legacy/empty positions -> dagre auto-layout on open, persisted on first drag/save. Decision 4 wipe stands.", gaps: "", required: false }
+
+phase4_completion:
+  userspec_file: "work/18-funnel-canvas/user-spec.md"
+  status: "approved"
+  validation: >
+    Quality: APPROVED (round 3, minors fixed). Adequacy: 3 rounds — drove out the critical null-next
+    fallthrough + the on_start seam. Final on_start mechanism is code-verified: relax
+    FunnelService.validateTriggers requireNoEntryStep for on_start; FunnelTriggerServiceImpl.fire()
+    reads the matched on_start trigger's entryStepId and uses insertExecutionAt (not hardcoded step 0);
+    advanceToNext: null next = end-of-branch; resolveStartCursor untouched (Phase-5 seam preserved);
+    reuse existing Trigger.entryStepId (no new field). Backend delta = canvasPosition on step+trigger +
+    Funnel.notes[] + the 3 engine/trigger/validation edits. Hit the 3-iteration cap; remaining adequacy
+    notes were seam-precision/sizing, now corrected against live code.
+
+decision_rules:
+  required_threshold: 85
+  optional_threshold: 50
+
+progress:
+  current_phase: "phase1_feature_overview"
+  questions_asked: 0
+  last_question: ""
+  completion_estimate: "15%"
+  user_detail_level: "unknown"
+
+notes: |
+  - Canvas was explicitly Out-of-Scope on MVP (project.md), now activated as Phase 9.
+  - Phase 2 already minted the graph data model (stable step ids + next/button target edges +
+    fan-in/loops) precisely to enable a future canvas — no tree->graph migration needed.
+  - ux-guidelines "Funnel Editor" says vertical list / no canvas — will need updating post-feature.
+  - Open: node POSITIONS need persistence (new field on funnel/step?) — likely the ONLY backend change.
+  - DECIDED: list editor -> read-only; canvas sole edit surface (may delete list later).
+  - DECIDED: positions per-step nullable {x,y}; dagre auto-layout fallback.
+  - DECIDED: reuse step forms in side-panel; add editor-only note node.
+  - OPEN (Cycle 2): note node must NOT be an executable StepType — store as funnel-level notes[]
+    (editor-only, never in execution graph) OR a StepType the engine ignores. Decide in Cycle 2.
+  - OPEN (Cycle 2): edge creation UX maps to which field — next vs button.targetStepId vs timeout;
+    deleting a node must clean up dangling targets pointing at it.
+
+  CODE-RESEARCH FINDINGS (code-research.md, agent done):
+  - Backend is NOT a one-line change: per-step position touches 5 spots (FunnelStep field+accessors,
+    copyOf, FunnelStepDto record, toSteps forward map, toStepDto reverse map) + a round-trip IT.
+    Still nullable -> no migration (Decision 4). FunnelStepDto has @JsonIgnoreProperties(ignoreUnknown)
+    so an un-added position is SILENTLY DROPPED — must add to record + BOTH mappers.
+  - NAME COLLISION: "position" already = step ORDER (array index). Use `canvasPosition`.
+  - CRITICAL: `next` has NO UI today — flow is implicit ARRAY ORDER (next=null => fall through to next
+    step in list). Backend rewrites `order` from array index. Canvas is id-addressed, list is
+    index-addressed. => Decide: make `next` explicit on canvas, or keep implicit array-order fallthrough
+    (canvas derives array order by insertion or y). THIS IS Q9.
+  - Edges only to SAVED nodes (id minted on first PATCH). New dropped node must persist to mint id
+    before it can be wired. null (not "") = no edge, else 422 funnel_broken_edge.
+  - SUBSCRIBE cross-funnel edge (targetEntryStepId) points into ANOTHER funnel -> render as terminal
+    "exit" badge, not a drawn edge.
+  - Vue Flow SSR: wrap in <ClientOnly> or *.client.vue (none exist yet); import @vue-flow/core CSS.
+  - dagre must lay out the whole forest (orphans/disconnected subflows are valid Phase-8 drafts).
+  - Vitest: mountSuspended + mockNuxtImport('useFunnelsStore'); funnel-editor.spec.ts (1162 lines) is
+    the page-mount pattern; i18n parity gate (check-locales.mjs + required-keys.spec.ts).
+  - Correction to Cycle-1 testing answer: a backend round-trip IT for canvasPosition IS in scope.

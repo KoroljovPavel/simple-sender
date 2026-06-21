@@ -1,0 +1,61 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A05: Security Misconfiguration",
+      "title": "WebhookPayloadSizeFilter ordering relies on implicit @Order discovery for Filter bean (not explicit FilterRegistrationBean)",
+      "description": "WebhookPayloadSizeFilter is auto-registered by Spring Boot via @Component + extends OncePerRequestFilter. Its precedence vs SecurityFilterChain depends on Boot's ServletContextInitializerBeans honouring the @Order(HIGHEST_PRECEDENCE + 10) annotation on the bean. Current Spring Boot 3.x does this correctly (via OrderUtils.getOrder against the bean), but the path is bespoke and a future upgrade or accidental switch to a non-Ordered Filter base class would silently demote the filter to LOWEST_PRECEDENCE — placing it AFTER SecurityFilterChain (DelegatingFilterProxyRegistrationBean ships at HIGHEST_PRECEDENCE + 50). At that point Tomcat would buffer up to the container default (≈2MB form size, but raw body has no implicit cap) BEFORE the 413 gate, defeating the DoS mitigation that the filter exists to provide. The tech-spec hint already calls this out and proposes the explicit form. Since this is a defense-in-depth invariant whose breakage is silent (no test failure, no log), the explicit form is preferable.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java:32-34",
+      "impact": "Silent DoS-protection bypass on a Spring Boot upgrade or refactor — oversize/chunked payloads reach Spring DispatcherServlet body buffering before the 413 gate.",
+      "recommendation": "Register the filter explicitly via a @Bean FilterRegistrationBean<WebhookPayloadSizeFilter> with .setOrder(Ordered.HIGHEST_PRECEDENCE + 10) and .addUrlPatterns(\"/webhooks/telegram/*\"). Drop the @Order on the bean to avoid double-registration ambiguity. Example:\n\n@Bean\npublic FilterRegistrationBean<WebhookPayloadSizeFilter> webhookPayloadSizeFilterRegistration(WebhookPayloadSizeFilter filter) {\n    FilterRegistrationBean<WebhookPayloadSizeFilter> reg = new FilterRegistrationBean<>(filter);\n    reg.setOrder(Ordered.HIGHEST_PRECEDENCE + 10);\n    reg.addUrlPatterns(\"/webhooks/telegram/*\");\n    return reg;\n}",
+      "cwe": "CWE-693 (Protection Mechanism Failure)"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design",
+      "title": "Outer catch (Throwable) in receive() swallows JVM Errors and may mask non-numeric update_id as 500",
+      "description": "TelegramWebhookController.receive() wraps its body in `catch (Throwable t) { return 500; }`. This catches Errors (OutOfMemoryError, StackOverflowError) and converts them to a generic 500 — generally an anti-pattern because Errors signal JVM-level problems and should propagate so the container/JobRunr can surface them. It also catches NumberFormatException from extractUpdateId when `update_id` is present but not numeric, converting that to a 500 instead of a 400 (the present-but-malformed case is semantically the same as 'missing update_id' which the code already routes to 400). The behaviour is not a confidentiality leak (empty body, no message echoed), but a malformed-payload attack would tick a 5xx counter rather than a 4xx counter, which can confuse SLO/alerting.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/TelegramWebhookController.java:183",
+      "impact": "Errors are suppressed; non-numeric update_id reports as 500 (server fault) instead of 400 (client fault), skewing error-rate metrics and potentially masking genuine server faults.",
+      "recommendation": "Narrow the outer catch to `Exception` (let Errors propagate to JobRunr/Tomcat); add an explicit `catch (NumberFormatException ex)` adjacent to extractUpdateId to map malformed numerics to 400 the same way the missing-update_id branch does. Keep the scrubbed WARN log on this 400 branch.",
+      "cwe": "CWE-396 (Declaration of Catch for Generic Exception)"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring Failures",
+      "title": "ProcessTelegramUpdateJob INFO/WARN/ERROR sites log rawUpdateId/projectId/chatId/botId without scrubbing",
+      "description": "Worker log sites at lines 96-97 (start INFO), 107-108 (success INFO), 129-130 (failure ERROR), 211-212 (bot-lookup-miss WARN), 229-230 (ownerChatId populated INFO — botId raw, chatId scrubbed) emit `rawUpdateId`, `projectId`, `chatId`, `bot.getId()` directly without TelegramApiClient.scrubTokens(...). These IDs are ObjectIds / numeric Telegram chat identifiers — they are NOT token-shaped, so the regex (`\\d{1,20}:[A-Za-z0-9_-]{30,50}`) would not match them anyway, and the security-invariant enumeration is technically satisfied (the value cannot carry a token in the modeled threat model). However the patterns.md mandate is 'scrubber on every log site' as defense-in-depth, and the inconsistency with the controller paths (which DO scrub projectId/updateId) creates a reviewer hazard: a future developer adding a new log site by copying the worker pattern would omit scrubbing for a future field that DOES carry sensitive content. The ownerChatId-populated log mixes both styles (botId raw, chatId scrubbed) — bug-prone.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:96-97,107-108,129-130,211-212,229-230",
+      "impact": "No direct token leak today, but the defense-in-depth invariant is partially upheld; future fields added to these log lines may carry tokens unscrubbed by precedent.",
+      "recommendation": "Wrap every interpolated value at every worker log site with TelegramApiClient.scrubTokens(...), matching the controller convention. Keeps the pattern uniform and prevents future-field leaks. Alternative: introduce a SafeLog helper that scrubs all arguments and use it uniformly across the webhook surface.",
+      "cwe": "CWE-532 (Insertion of Sensitive Information into Log File)"
+    },
+    {
+      "severity": "minor",
+      "category": "A03: Injection / A04: Insecure Design",
+      "title": "Telegram update payload fields (first_name, last_name, username, startPayload) flow into event metadata and subscriber records unscrubbed",
+      "description": "ProcessTelegramUpdateJob.dispatch passes message.from().first_name/last_name/username and the /start payload (parsed.payload()) into eventService.logEvent(...) metadata and subscriberService.upsertFromTelegramUpdate(...). These values originate from Telegram's user-controlled payload (post-secret-auth, but still attacker-controllable by any user chatting with the bot). They are persisted to Mongo (events + subscribers collections) and surfaced via admin UI later. If an attacker sends `/start <bot-token-shape>`, the token shape lands in the events collection as `metadata.startPayload`. Persisted-store XSS via first_name (e.g. `<script>alert(1)</script>`) is the more concrete vector when the frontend renders these fields. Scope-wise this is pre-existing behaviour (Task 9 only flipped logEventBlocking → logEvent — no semantic change to the data flow). Flagging as defense-in-depth for the surface this task touches.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java:189-195, 235-241, 242, 259-282",
+      "impact": "(1) Operator-side token-shape strings can persist into the events collection. (2) Stored-XSS if frontend renders user-controlled Telegram fields without output encoding. (3) NoSQL operator injection if a downstream consumer treats startPayload as a Mongo query fragment (none present today, but a precedent).",
+      "recommendation": "Apply TelegramApiClient.scrubTokens(...) to first_name/last_name/username/startPayload at the storage boundary in EventService and SubscriberService. Cap startPayload length (Telegram contract: 64 chars). Verify the frontend escapes these fields when rendering admin views (out of scope for this audit but worth a follow-up ticket).",
+      "cwe": "CWE-79 (XSS) / CWE-117 (Improper Output Neutralization for Logs and Persisted Data)"
+    },
+    {
+      "severity": "minor",
+      "category": "A05: Security Misconfiguration",
+      "title": "WebhookPayloadSizeFilter PathPattern matches request URI without context-path awareness",
+      "description": "The filter parses `request.getRequestURI()` directly into a PathContainer, then matches against the literal pattern `/webhooks/telegram/{projectId}`. `getRequestURI()` includes the servlet context path. If the application is ever deployed under a non-root context (server.servlet.context-path=/api or similar), the URI becomes `/api/webhooks/telegram/...`, the PathPattern does NOT match, and the filter falls through to chain.doFilter — the size gate becomes inert on the webhook path while the controller still receives the request (because the SecurityFilterChain and the @RequestMapping resolution both adapt to the context path). Today the project deploys at root (no context-path in application.properties), so this is theoretical. But the implicit coupling is fragile: a deployment change (Helm chart, k8s ingress rewrite, embedded Tomcat context reconfig) could silently disable the 413 gate.",
+      "location": "backend/src/main/java/com/botfunnel/webhook/WebhookPayloadSizeFilter.java:63",
+      "impact": "Silent loss of payload-size protection on the webhook endpoint when the application is deployed under a non-root servlet context.",
+      "recommendation": "Use `request.getServletPath()` (returns the path AFTER the context path, matching how @RequestMapping resolves) instead of `request.getRequestURI()`. Or strip the context path manually via `request.getRequestURI().substring(request.getContextPath().length())`. Either makes the filter context-path-agnostic. Add a regression test asserting the filter still matches when ServletContext is configured with a non-empty context path (MockHttpServletRequest.setContextPath + setServletPath).",
+      "cwe": "CWE-1188 (Insecure Default Initialization of Resource)"
+    }
+  ]
+}

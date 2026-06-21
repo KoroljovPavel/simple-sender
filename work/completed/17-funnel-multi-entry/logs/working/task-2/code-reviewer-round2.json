@@ -1,0 +1,60 @@
+{
+  "round": 2,
+  "status": "approved",
+  "findings": [],
+  "round1_major_resolved": {
+    "issue": "Cross-element false positive in multikey array query",
+    "resolution": "RESOLVED. FunnelRepository.java line 63 now has an explicit @Query annotation with $elemMatch: `{ 'projectId': ?0, 'triggers': { '$elemMatch': { 'triggerType': ?1, 'triggerValue': ?2 } }, 'status': ?3 }`. Both predicates (triggerType + triggerValue) are now pinned to the SAME array element at the DB level, eliminating the cross-element false positive. The method signature is unchanged. The Javadoc above the method explains the $elemMatch semantics, the rejected derived-query form, and the caller re-scan idiom — clear contract for Task-5 authors.",
+    "verified": true
+  },
+  "round1_minors_resolved": [
+    {
+      "issue": "Stale test method name `migrationDropsOldBroadFilterIndex`",
+      "resolution": "RESOLVED. Method renamed to `migrationDropsOldFlatTrioTriggerIndex` (FunnelTriggerIndexReconciliationIT.java line 150). The new name matches the updated intent (dropping the flat-trio index, not the Phase-3 broad filter).",
+      "verified": true
+    },
+    {
+      "issue": "Missing cross-element false-positive test",
+      "resolution": "RESOLVED. FunnelIndexesIT.java lines 207-229: new test `findByTriggersTriggerTypeAndValueExcludesCrossElementMatch` inserts a funnel with [{keyword,purchase},{event,other}] and asserts the $elemMatch query returns empty — correctly proving the cross-element funnel is excluded. The Javadoc explains the flat-predicate false-positive that $elemMatch prevents.",
+      "verified": true
+    },
+    {
+      "issue": "activeFunnel helper leaves triggers unset (null) — fragile factory default",
+      "resolution": "RESOLVED (informally). The round-1 finding noted this was low priority and no code change was required. The final file's activeFunnel helper in FunnelIndexesIT.java still intentionally leaves triggers null (callers set them before insert), and the usage pattern is consistent throughout. No regression introduced.",
+      "verified": true
+    }
+  ],
+  "additional_checks": [
+    {
+      "area": "FunnelTriggerIndexReconciliation.java — volatile guard",
+      "note": "The `reconciled` flag was upgraded from `boolean` to `volatile boolean` (diff line 64). This is a correct improvement: although a single MongoDatabaseFactory bean makes the race window vanishingly small, the volatile write/read barrier is the right defensive idiom for a shared-state guard in a BeanPostProcessor, which can in principle be called from multiple threads during context refresh in some Spring configurations.",
+      "status": "positive"
+    },
+    {
+      "area": "FunnelTriggerIndexReconciliationIT — log marker assertions",
+      "note": "New @BeforeEach/@AfterEach log appender setup (lines 74-97) captures MARKER_APPLIED and MARKER_NOOP at INFO level using exact-match on getFormattedMessage(). Both migrationDropsOldFlatTrioTriggerIndex and reconciliationIsIdempotentNoOpOnSecondBoot now assert exactly-1 vs exactly-0 for both markers. This directly pins the greppable strings Task 12 post-deploy verification depends on — any reword will break the test, which is the stated intent.",
+      "status": "positive"
+    },
+    {
+      "area": "FunnelTriggerIndexReconciliationIT — bean return invariant assertion",
+      "note": "reconciliationNeverThrowsOnMongoFault now also asserts that the method returns the same bean instance (`isSameAs(broken)`). This validates the BeanPostProcessor contract: returning null would silently drop the MongoDatabaseFactory from the Spring context. The original test only checked that no exception was thrown.",
+      "status": "positive"
+    },
+    {
+      "area": "FunnelRepository.java — keyword fan-out method",
+      "note": "findByProjectIdAndTriggersTriggerTypeAndStatus (single-condition, no triggerValue) remains as a Spring Data derived method without @Query. This is correct: a single array field predicate (just triggerType) does NOT have a cross-element ambiguity problem — there is no second independent clause to mismatch across elements. No false-positive risk here.",
+      "status": "correct, no issue"
+    },
+    {
+      "area": "FunnelRepository.java — null guard Javadoc on onStartTriggerValue lookup",
+      "note": "The Javadoc explicitly warns callers not to pass null for onStartTriggerValue, explaining that null would match all event-only funnels (whose scalar is null). The bare /start payload maps to empty string, not null. This is a correct, proactive contract clarification that prevents a latent bug in Task-4/5 callers.",
+      "status": "positive"
+    },
+    {
+      "area": "No regressions in unchanged CRUD methods",
+      "note": "findByProjectId and findByProjectIdAndStatus are unchanged. The flat trigger trio methods (findByProjectIdAndTriggerTypeAndTriggerValueAndStatus / findAllByProjectId... / findByProjectIdAndTriggerTypeAndStatus) are fully removed. The interface compiles cleanly against the Task-1 model (no references to removed top-level triggerType/triggerValue/keywords fields).",
+      "status": "correct"
+    }
+  ],
+  "summary": "APPROVED. All four round-1 findings are resolved. The critical major finding is definitively fixed: the fan-out query now uses an explicit @Query with $elemMatch that pins both triggerType and triggerValue to the same array element, eliminating the cross-element false-positive at the database level. The method signature is unchanged (consumer binding in Task 4/5 unaffected). The stale test name is updated (migrationDropsOldFlatTrioTriggerIndex), the cross-element exclusion test is added and asserts the correct empty-result behavior, and the activeFunnel null-triggers note was acknowledged as low-priority (no change required). Beyond resolving the round-1 findings, the commit adds three improvements: (1) volatile guard on the BPP once-per-boot flag, (2) exact-match log-marker assertions in both migration and idempotent NO-OP branches, and (3) bean-return invariant assertion in the fault-tolerance test. No regressions detected. The module is not expected to compile fully yet (Task-1 dependency scope) — this is known and not a finding."
+}

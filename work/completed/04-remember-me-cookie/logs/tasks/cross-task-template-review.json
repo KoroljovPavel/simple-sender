@@ -1,0 +1,57 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task",
+  "batch": [1, 2, 3, 4, 5],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [],
+  "checks_performed": {
+    "shared_resource_ownership": {
+      "result": "pass",
+      "evidence": "Tech-spec Shared Resources table (tech-spec.md:86-88) declares `RememberMeWebSessionIdResolver` with owner `SecurityConfig.webSessionIdResolver()` (Task 1) and consumer Spring `WebSessionManager` (framework-wide). Task 1 is the single task that creates both the resolver class and the @Bean registration. Tasks 2/3/4 are read-only audits (no instantiation, no @Bean creation). Task 5 is QA (read-only). Single owner, no competing creators."
+    },
+    "consumer_dependency": {
+      "result": "pass",
+      "evidence": "Tasks 2, 3, 4 each declare `depends_on: [1]` — they consume Task 1 deliverables on disk. Task 5 declares `depends_on: [2, 3, 4]`, which transitively depends on Task 1. All consumers correctly declare dependency on owner."
+    },
+    "no_competing_instances_same_wave": {
+      "result": "pass",
+      "evidence": "Wave 1: only Task 1 (creates resolver). Wave 2: Tasks 2, 3, 4 — all read-only audits, none create competing resolver instances. Wave 3: Task 5 — read-only QA. No two tasks in the same wave create the same resource."
+    },
+    "wave_dependency_graph": {
+      "result": "pass",
+      "evidence": "Wave 1 (Task 1, depends_on=[]) -> Wave 2 (Tasks 2,3,4 each depends_on=[1]) -> Wave 3 (Task 5 depends_on=[2,3,4]). All depends_on values reference existing task numbers. Each task's wave > wave of every dependency. No cycles."
+    },
+    "ac_carry_forward": {
+      "result": "pass",
+      "evidence": "User-spec AC-1..AC-8: Task 1 maps to AC-1..AC-8 via TDD anchor Scenarios A-H + AuthService extended cases (file:1.md:143-153). Task 5 enumerates AC-1..AC-8 explicitly in Acceptance Criteria (file:5.md:33-41) with smoke commands per AC (file:5.md:71-134). Tasks 2/3/4 reference relevant AC: Task 2 (Decisions 1,2,3,6 - AC-1,AC-6), Task 3 (AC-1,AC-2,AC-4,AC-6,AC-8 + OWASP A02/A07), Task 4 (Scenarios A-H coverage matrix). No AC dropped during decomposition."
+    },
+    "tdd_anchor_carry_forward": {
+      "result": "pass",
+      "evidence": "Tech-spec Testing Strategy lists Scenarios A-H for resolver + 3 AuthService cases (tech-spec.md:262-296). Task 1 TDD Anchor (1.md:143-153) lists all 8 resolver scenarios + 3 AuthService cases verbatim. No tests dropped. Task 4 audit explicitly verifies coverage of Scenarios A-H + 3 AuthService cases (4.md:107-114) — preserves traceability."
+    },
+    "shared_constant_REMEMBER_ME_ATTR": {
+      "result": "pass",
+      "evidence": "`REMEMBER_ME_ATTR` is a shared contract between `AuthService` (producer) and `RememberMeWebSessionIdResolver` (consumer). Both ends modified/created in single task (Task 1). No cross-task ownership concern — atomic creation of producer-consumer pair within one task is the correct pattern. Tech-spec Decision 2 specifies constant lives in resolver class (single owner), AuthService imports it."
+    },
+    "audit_task_consistency": {
+      "result": "pass",
+      "evidence": "Tasks 2 (code-reviewing), 3 (security-auditor), 4 (test-master) are all Audit Wave tasks with consistent shape: `verify: []`, `reviewers: []`, no production code, single auditor IS the review. All three depend_on Task 1 only (parallel within Wave 2). Cross-task pattern coherent."
+    },
+    "decision_distribution_across_tasks": {
+      "result": "pass",
+      "evidence": "Tech-spec Decisions 1-7 distributed appropriately: Task 1 implements Decisions 1,2,3,4,5,6 (1.md:31-60); Task 2 audits Decisions 1,2,3,6 (2.md:53,128-132); Task 3 audits Decisions 3,5,6 + Risks 1,2,3 (3.md:46-112); Task 4 honors Decision 7 (no IT) explicitly (4.md:22, 66, 137); Task 5 verifies all decisions via AC-1..AC-8 (5.md:31-41). No decision orphaned, no contradictions across tasks."
+    },
+    "risk_mitigation_traceability": {
+      "result": "pass",
+      "evidence": "Tech-spec Risks 1-4 traced across tasks: Risk 1 (cookie attr drift) — Task 1 Scenario F + Task 3 'Configurable cookie attributes still flow through'. Risk 2 (test infra Set-Cookie) — Task 4 explicit Decision 7 deferral section. Risk 3 (per-request mutation concurrency) — Task 1 Decision 1 + Task 2 race-freedom check + Task 3 'Per-request concurrency safety'. Risk 4 (Boot upgrade Cookie fields) — Task 1 implementation hints (1.md:420-421) + Task 3 edge case note (3.md:220-222). All risks have at least one downstream verification."
+    }
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  }
+}

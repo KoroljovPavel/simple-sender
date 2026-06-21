@@ -1,0 +1,446 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-06-07 13:06:26"
+  last_updated: "2026-06-07 13:06:26"
+  status: "completed"  # not_started | in_progress | completed
+  can_resume: true
+  current_question_num: 0
+  feature_size: "L"  # S | M | L — new trigger types + event pub/sub + 1:N schema/index change
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-06-07 13:06:26"
+    topic: "scope / subscriber-scoping / value / UI-vs-canvas"
+    agent_question: |
+      Batch 1: (1) all four sub-features in one spec? (2) triggers subscriber-scoped + how does
+      API identify the subscriber? (3) which job-to-be-done is priority? (4) testing strategy +
+      how much UI now given a future canvas?
+    user_answer: |
+      (1) All four. Also asked: should there be a trigger on a subscriber receiving/changing a
+      custom-field variable? It matters too.
+      (2) Yes, subscriber-scoped is correct. For API they must give our user id — maybe invent a
+      "short id" mechanism for subscribers for convenience? Or take telegramUserId so API users
+      can send for themselves.
+      (3) All three jobs equal.
+      (4) Think about it: if we move config to a canvas later, do we even need config UI now, or
+      will it migrate?
+    summary: >
+      All 4 in scope + a 5th trigger requested (custom_field_set). Subscriber-scoped confirmed;
+      open: external identity (telegramUserId vs internal id vs short-id). All 3 jobs equal.
+      UI scope to be decided against the future-canvas migration question.
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "12-funnels-triggers (Phase 3 of the Funnels roadmap)"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 88
+    status: "complete"
+    value: >
+      Additional funnel triggers beyond the existing on_start trigger: keyword trigger,
+      tag-added trigger, API-event trigger (POST /api/v1/events with event_name).
+      PLUS the EMIT_EVENT step + event-catch with the 1:1 -> 1:N relax (improvements.md
+      "Крок 1"): API event and internal emit share one event_name namespace; one event
+      can fan out to N funnels. Author use-case: broadcasts/external sources emit a named
+      event -> a dedicated "trigger funnel" responds with a message.
+    gaps: >
+      FIVE trigger types now: keyword, tag_added, custom_field_set (NEW, requested batch 1),
+      api-event, + EMIT_EVENT step. Per-type matching semantics still open (keyword case/partial;
+      field-set value predicate?). KEY INSIGHT to confirm: fan-out (1 event -> N funnels) needs
+      only an index relax (keep partial-unique for on_start, drop for event), NOT List<Trigger> —
+      List<Trigger>/multiple-triggers-per-funnel stays Epic 8. Event payload shape (data->vars?) open.
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature (new trigger types + internal event pub/sub on the existing funnel engine)"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 85
+    status: "complete"
+    value: >
+      Three equally-prioritized jobs-to-be-done: (a) re-engage subscribers by keyword
+      ("хочу бонус" -> funnel); (b) automation chains via tags / custom-field changes
+      (tag `paid` added, or field reaches a value -> follow-up funnel); (c) external systems
+      (broadcasts, CRM, payments) drive funnels via API event or internal EMIT_EVENT
+      ("broadcast emits event -> a trigger funnel responds with a message").
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Who specifically will use this"
+    required: false
+
+  success_criteria:
+    score: 85
+    status: "complete"
+    value: >
+      Each of the 5 trigger types starts the correct funnel for the correct subscriber:
+      keyword (contains, case-insensitive) on inbound text; tag_added and custom_field_set on the
+      respective subscriber-event write (from any source); api-event via POST /api/integrations/v1/events
+      identified by telegramUserId; EMIT_EVENT step emits into the same event namespace. One event name
+      fans out to 2+ funnels (separate funnels, index relaxed). In-flight waiting_for_reply consumes
+      text before a keyword trigger fires. Cascade A->B->A does not hang the system (per-subscriber
+      enroll rate-limit). API key is generated ON DEMAND in project settings (Generate/Regenerate, NOT on
+      create, NO backfill); /api/integrations/v1/** rejects requests without a valid key; /events is
+      rate-limited (fixed global). Index migration runs idempotently at startup (no manual index drop).
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 85
+    status: "complete"
+    value: >
+      Subscriber-scoped only (no project-wide segment triggers — that is broadcasts).
+      Phase-3 schema change limited to the trigger partial-unique INDEX relax (keep unique for
+      on_start, drop for event); NO List<Trigger> (multi-trigger-per-funnel = Epic 8). Public API:
+      MINIMAL foundation only (api-key auth filter + error envelope + fixed global rate-limit ~300/min;
+      key generated ON DEMAND in project settings, NO auto-gen on create, NO backfill);
+      per-project/super-admin-editable limits and full key management
+      (rotation, multiple keys, /subscribers, /funnels resources) = Epic 08. Namespace
+      /api/integrations/v1/** (version inside namespace; auth chain matches /api/integrations/**).
+      Migrations: hand-rolled idempotent startup migration now (FunnelStepIdBackfill pattern); Mongock
+      adoption is the NEXT separate task (improvements.md). auto-index-creation currently = true.
+      event `data` payload NOT mapped into funnel variables v1. No regex keyword matching (nice-to-have).
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 85
+    status: "complete"
+    value: >
+      Feature size L. Integration tests (Spring + MongoDB, existing IT patterns): one per trigger type
+      firing the right funnel for the right subscriber; keyword path through the webhook
+      (ProcessTelegramUpdateJob) incl. precedence vs in-flight waiting_for_reply; fan-out (1 event ->
+      N funnels); loop protection (A->B->A enroll rate-limit); the api-key-authenticated
+      POST /api/integrations/v1/events (valid key, missing/invalid key -> 401, unknown telegramUserId ->
+      404/no-op, rate-limit -> 429); the idempotent index startup-migration; api-key generation on
+      project create + backfill migration. Unit tests for keyword matching + EMIT_EVENT dispatch.
+      NO E2E (no new critical user-facing flow beyond trigger config in the existing editor; vitest for
+      the editor trigger-type selector / EMIT_EVENT step is enough).
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Step-by-step user interaction scenarios"
+    required: true
+
+  acceptance_criteria:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Testable checklist of what must work"
+    required: true
+
+  edge_cases:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Unusual scenarios, boundary conditions"
+    required: true
+
+  error_scenarios:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "What can go wrong, how to handle errors"
+    required: true
+
+  verification_strategy:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "How to verify feature works (agent and/or user)"
+    required: true
+
+  ui_ux_requirements:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Specific UI/UX requirements if applicable"
+    required: false
+
+  risks:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Risks and mitigations"
+    required: true
+
+  technical_decisions:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Key decisions (what we do/don't, why)"
+    required: false
+
+  deploy_approach:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "How to deploy: CI/CD, manual, Docker? What needs setup?"
+    required: false
+
+  manual_user_actions:
+    score: 0
+    status: "pending"
+    value: ""
+    gaps: "Steps user must do manually (create bot, get API keys, configure service)"
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 85
+    status: "complete"
+    value: >
+      (code-research.md) Trigger fire: FunnelTriggerServiceImpl.fire is chatId-keyed + single-result
+      (.orElse(null)) — NEW subscriber-keyed fan-out entrypoint needed (fireForSubscriber + keyword
+      fire); insertExecution/cancelExistingForPair reusable verbatim. Webhook: hook keyword in
+      ProcessTelegramUpdateJob plain-text branch (lines 191-207), AFTER upsert, with a new
+      waiting_for_reply precedence check. Subscriber hooks: fire tag_added/custom_field_set inside
+      SubscriberServiceImpl.addTag (~252) / recordCustomFieldsSet (~239), AFTER idempotency guard +
+      event write (sole writers, 2 call sites each). EMIT_EVENT: StepType enum + FunnelStep.eventName
+      (+copyOf) + StepExecutor.execute switch + FunnelService validate/map + frontend STEP_TYPES.
+      Public API: NEW api module; @Order(1) SecurityFilterChain securityMatcher("/api/integrations/**")
+      before the session /api/** chain; api-key gen in ProjectService.create (~91); Sha256Hex.hex for
+      keyHash, SecureRandom for plaintext. Rate-limit: reuse Redis fail-open INCR/EXPIRE idiom
+      (SubscriberServiceImpl.startRateLimitExceeded boolean variant). Frontend: FunnelTriggerSettings.vue
+      static badge -> trigger-type selector + per-type value editor (SearchableSelect for tag/field).
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 85
+    status: "complete"
+    value: >
+      Funnel engine (Phase 1, done), MENU/waiting_for_reply (Phase 2, done), Subscriber CRM (Epic 09),
+      Project module (Epic 05), common.crypto (Sha256Hex/SecureRandom), Redis (rate-limit), JobRunr
+      (webhook worker). NO migration framework yet (Mongock = next task). 'api' module greenfield.
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 80
+    status: "complete"
+    value: >
+      auto-index-creation=true creates but never drops -> dropIndex startup migration required for the
+      1:1->1:N relax. /api/integrations/** sits under /api/** so it needs a higher-@Order chain than the
+      session chain. 'events' name overloaded 3x -> name the new dispatcher distinctly (e.g.
+      FunnelEventService), do NOT reuse EventService. API keys stored hash-only (Sha256Hex) -> plaintext
+      knowable ONLY at generation. error-isolation convention: trigger fires never throw outward.
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 80
+    status: "complete"
+    value: >
+      NEW api_keys collection (keyHash unique, projectId index) — hash-only, 1 primary per project.
+      Funnel: keyword trigger needs a keyword LIST field (triggerValue single-string insufficient);
+      tag_added/custom_field_set/event reuse triggerValue exact-match (tagSlug / fieldKey / event_name).
+      FunnelStep: new eventName field for EMIT_EVENT (+ copyOf). Trigger partial-unique index reshaped
+      (unique only for on_start).
+    gaps: "Keyword storage shape (List field vs delimited) — confirm in Cycle 2"
+    required: false
+
+  migration_needs:
+    score: 90
+    status: "complete"
+    value: >
+      ONE idempotent startup ApplicationRunner (FunnelStepIdBackfill pattern, log-but-never-throw):
+      trigger-index reconciliation — dropIndex old projectId_triggerType_triggerValue_unique_active,
+      let auto-index recreate the on_start-only-unique shape; idempotent via listIndexes() check.
+      NO api-key backfill (API keys are generated lazily on demand in project settings, not on create).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/12-funnels-triggers/user-spec.md"
+  status: "approved"  # pending | created | approved
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "code_scanning -> phase2_user_experience (Cycle 2)"
+  questions_asked: 3  # batches
+  last_question: "API namespace placement (/api/integrations/v1/**)"
+  total_required_score: 0
+  total_optional_score: 0
+  completion_estimate: "Cycle 1 complete (~40%); awaiting code-researcher, then Cycle 2"
+  user_detail_level: "detailed"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  KEY INSIGHTS / DECISIONS (Cycle 1):
+  - Scope = FIVE triggers: keyword, tag_added, custom_field_set (NEW), api-event, + EMIT_EVENT step.
+  - Subscriber-scoped: every trigger fires for ONE subscriber -> one FunnelExecution. No project-wide
+    "start funnel for a segment" (that is broadcasts).
+  - External identity for API events: proposing telegramUserId as primary (zero new mechanism, lookup
+    via existing unique (projectId, telegramUserId); API users key their CRM on it). Also accept our
+    subscriberId if given. Short-id mechanism = deferred ergonomics (YAGNI now). TO CONFIRM.
+  - DE-RISK INSIGHT: fan-out (1 event -> N funnels) is achieved by N separate funnels each carrying the
+    event trigger -> needs only relaxing the partial-unique index (keep unique for on_start, drop for
+    event), NOT List<Trigger>. Multiple triggers on ONE funnel = Epic 8 (multi-entry), OUT of Phase 3.
+    => Phase 3 keeps single triggerType/triggerValue per funnel; data model change is just the index.
+  - tag_added + custom_field_set fire from SubscriberServiceImpl / SubscriberCustomFieldsService (sole
+    writers, already emit subscriber_events). ALL sources (manual UI, funnel step, API) should fire ->
+    CASCADE/LOOP risk (funnel Add-Tag step -> tag trigger -> funnel...). Loop protection needed (Cycle 2).
+  - UI-vs-canvas: config FORMS (trigger-type selector, EMIT_EVENT node form) migrate to canvas; only
+    list-layout chrome is throwaway (cheap). Non-technical authors need keyword/tag/field config UI ->
+    build MINIMAL editor UI now; no multi-trigger-per-funnel UI (not needed since fan-out = separate funnels).
+  CYCLE-1 CONFIRMED (batch 2-3):
+  - custom_field_set trigger: fire on ANY set/change, no value predicate v1. ✓
+  - API identity: telegramUserId primary (+ optional internal subscriberId); unknown -> 404/no-op,
+    event never auto-creates a subscriber; event `data` payload NOT mapped into funnel vars v1. ✓
+  - Index strategy: relax partial-unique (keep unique for on_start, drop for event) — NOT List<Trigger>. ✓
+  - Loop protection: per-subscriber enroll rate-limit (covers A->B->A that re-enter guard misses). ✓
+  - Keyword: contains, case-insensitive, multiple keywords per trigger (any match); precedence:
+    in-flight waiting_for_reply WINS over keyword-trigger start. ✓
+  - Migrations: variant (ii) — ship index change via hand-rolled idempotent startup migration
+    (FunnelStepIdBackfill pattern), user does NOT drop indexes by hand; adopt Mongock as the NEXT
+    separate task (recorded in improvements.md). Root cause: auto-index-creation=true. ✓
+  - API rate-limit on /api/v1/events: fixed global default (~300/min) now via existing Redis counters;
+    per-project + super-admin-editable = future (monetization). ✓
+  - PUBLIC-API FOUNDATION (scope expansion, user-driven): api-event needs api-key auth, which is not
+    built yet (Epic 08 territory). Decision: build MINIMAL foundation now, designed for Epic 08 to
+    extend — (a) generate 1 primary API key ON PROJECT CREATION (store hash+prefix per api_keys schema,
+    plaintext shown once), (b) backfill API keys for EXISTING projects (startup migration), (c) api-key
+    auth filter on /api/integrations/** (matches all versions), (d) cohesive versioned namespace
+    /api/integrations/v1/** — version INSIDE the namespace so the external API versions independently of
+    the session cabinet /api/v1/projects/**. NOT one mega-endpoint; POST /api/integrations/v1/events is
+    the first resource; future /api/integrations/v1/subscribers + /funnels (Epic 08) reuse the rails.
+    Project comes from the API key (no {projectId} in path), unlike the cabinet (path + session).
+  NAMESPACE DECISION (final): /api/integrations/v1/** confirmed by user (chose "integrations" over
+    external/public; version inside namespace over /api/v1/integrations).
+  CYCLE 2 CONFIRMED (code-informed):
+  - Keyword: dedicated keywords:List<String> field (NOT triggerValue), lowercase, contains, case-insensitive,
+    any-of-many. Precedence: subscriber in waiting_for_reply -> keyword SUPPRESSED (don't yank from menu;
+    free text ignored/logged as today).
+  - Loop guard: per-subscriber AUTO-enroll rate-limit, 20/min, Redis fail-open. Counts only auto-enrolls
+    (step/tag/field/event), NOT human-initiated (manual/start/keyword). No depth-guard in v1.
+  - API key (REVISED): do NOT auto-generate on project create, NO backfill. Lazy: project settings has a
+    "Generate" button (first time) then "Regenerate" (after). Plaintext shown once per (re)generation.
+    Stored hash-only (Sha256Hex). Projects without a generated key simply can't call /api/integrations.
+  - Small models: tag_added->triggerValue=tagSlug; custom_field_set->triggerValue=fieldKey;
+    api-event & EMIT_EVENT->event_name (slug, shared namespace); EMIT_EVENT emits for the running
+    subscriber (subscriber-scoped). Internal dispatcher named distinctly (FunnelEventService), NOT EventService.
+  AREAS OF UNCERTAINTY: keyword match semantics (contains/exact/case); custom_field_set value predicate
+    (likely no — fire on any change, value-condition = nice-to-have conditional branching); event `data`
+    payload mapping into funnel variables (likely defer); precedence keyword-trigger vs in-flight waiting_for_reply.
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

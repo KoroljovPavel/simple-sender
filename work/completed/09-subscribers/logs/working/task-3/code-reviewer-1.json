@@ -1,0 +1,15 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 3,
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberStubReplacementIT.java",
+      "line": "12",
+      "finding": "Residual 'NoOpSubscriberService' string appears in a comment in this test file. The AC scopes the grep guard to backend/src/main (which is clean), so this is not a violation — purely a cosmetic mention in a comment.",
+      "suggestion": "Optional: reword the comment to avoid resurfacing the deleted class name (e.g. 'after stub deletion there is exactly ONE SubscriberService bean'). No functional impact."
+    }
+  ]
+}

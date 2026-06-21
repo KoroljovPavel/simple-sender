@@ -1,0 +1,136 @@
+{
+  "feature": "03-i18n",
+  "task": 13,
+  "auditor": "security-auditor",
+  "date": "2026-05-08",
+  "scope": {
+    "files_reviewed": [
+      "frontend/server/middleware/strip-invalid-locale.ts",
+      "frontend/server/utils/locale-strip.ts",
+      "frontend/middleware/auth.global.ts",
+      "frontend/scripts/check-locales.mjs",
+      "frontend/scripts/check-locales.test.mjs",
+      "frontend/nuxt.config.ts",
+      "frontend/i18n/i18n.config.ts",
+      "frontend/shared/i18n-locales.ts",
+      "frontend/composables/useApiError.ts",
+      "frontend/composables/useApi.ts",
+      "frontend/components/LangSwitcher.vue",
+      "frontend/i18n/locales/uk.json",
+      "frontend/i18n/locales/en.json",
+      "frontend/pages/auth/login.vue",
+      "frontend/pages/auth/register.vue",
+      "frontend/pages/auth/forgot-password.vue",
+      "frontend/pages/auth/reset-password.vue",
+      "frontend/pages/auth/verify-email.vue",
+      "frontend/app.vue",
+      "frontend/layouts/auth.vue",
+      "frontend/layouts/default.vue",
+      "frontend/stores/auth.ts",
+      "frontend/tests/server/strip-invalid-locale.spec.ts"
+    ],
+    "decisions_anchored": [3, 5, 6, 9, 14],
+    "owasp_categories_checked": ["A01", "A02", "A03", "A04", "A05", "A06", "A07", "A08", "A09", "A10"]
+  },
+  "summary": {
+    "totalFindings": 4,
+    "critical": 0,
+    "high": 0,
+    "medium": 1,
+    "low": 1,
+    "informational": 2,
+    "all_8_focus_invariants_pass": true,
+    "status": "approved",
+    "verdict": "Feature is production-ready from a security perspective. All 8 focus invariants verified against the final state of the source. No critical or high-severity issues. One medium informational gap (no explicit cookieMaxAge — relies on module default), one low-severity defense-in-depth note around session-error fail-closed semantics, and two informational observations."
+  },
+  "passes": [
+    {
+      "invariant": "1. Cookie-flags parity (Decision 3, AC1)",
+      "evidence": "frontend/nuxt.config.ts:51-59 — `cookieKey: 'i18n_lang'`, `cookieSecure: process.env.NODE_ENV === 'production'`, `cookieCrossOrigin: false`. Module default for SameSite is `lax` when `cookieCrossOrigin: false` (verified at .output/server/chunks/build/server.mjs:40117 `sameSite: detect && detect.cookieCrossOrigin ? \"none\" : \"lax\"`); module default for expires is +365 days (server.mjs:40116 `expires: new Date(date.setDate(date.getDate() + 365))`); HttpOnly is unset (default false) — matches Decision 3 'Cookie не HttpOnly, бо клієнт читає його через useCookie'. Cookie is purely UI-state (not consumed for any auth decision in auth.global.ts or stores/auth.ts) — non-HttpOnly justification holds."
+    },
+    {
+      "invariant": "2. Security headers parity on /en/auth/** (Decision 14, AC8)",
+      "evidence": "frontend/nuxt.config.ts:8-10 generates `nonDefaultAuthRouteRules` from `NON_DEFAULT_LOCALES` via `Object.fromEntries`; lines 66-71 register both `/auth/**` and the spread `nonDefaultAuthRouteRules` (currently `{ '/en/auth/**': { headers: { ...AUTH_HEADERS } } }`). Single-source `NON_DEFAULT_LOCALES` (frontend/shared/i18n-locales.ts:1) eliminates parity-drift risk — adding `de` updates both the strip-middleware allow-list and the routeRules in lockstep. AUTH_HEADERS = `{ 'X-Robots-Tag': 'noindex, nofollow', 'Referrer-Policy': 'no-referrer' }` (nuxt.config.ts:3-6) shared between rules."
+    },
+    {
+      "invariant": "3. 302 headers preservation in strip-invalid-locale (Decision 5, Risk 'Security regression на 302 redirect leaks ?token= via Referer')",
+      "evidence": "frontend/server/middleware/strip-invalid-locale.ts:16-22 — when `decision.kind === 'redirect'` and `decision.isAuthZone`, `setResponseHeaders(event, { 'X-Robots-Tag': ..., 'Referrer-Policy': 'no-referrer' })` is called BEFORE `sendRedirect(event, decision.target, 302)`. h3's `setResponseHeaders` mutates `event.node.res` headers — those flush onto the 302 response itself, not a downstream final response. Browser receives `Referrer-Policy: no-referrer` in the 302, so it does NOT send Referer with the original `?token=` URL when following the redirect. Verified by Task 3 smoke check in decisions.md: `curl -sI '/fr/auth/verify-email?token=x'` → `302` + `x-robots-tag` + `referrer-policy: no-referrer` on the 302. Match for `isAuthZone` (locale-strip.ts:46) is precise: `target === '/auth' || target.startsWith('/auth/') || target.startsWith('/auth?')` — does not over-match `/authentic*` and does match the `?token=`-on-`/auth` query-only edge."
+    },
+    {
+      "invariant": "4. Open-redirect normalization (Decision 5)",
+      "evidence": "frontend/server/utils/locale-strip.ts:16-46 implements the documented order: (a) raw-backslash reject before regex (line 16), (b) 2-letter prefix regex with `(?=\\/|$)` lookahead (line 6, 20), (c) allow-list passthrough (line 26), (d) strip prefix + collapse leading `^/+` (lines 30-31), (e) `decodeURIComponent` in try/catch — malformed percent rejected (lines 33-37), (f) post-decode backslash recheck (lines 39-41), (g) post-decode safety-net collapse `^/+` (line 43). Tests cover the security cases: `/fr/%2Fevil.com` → `/evil.com` (no protocol-relative), `/fr/%252F%252Fevil.com` → no literal `//` (double-decode bypass blocked because decode happens once after collapse, then collapse runs again), `/fr/%5Cevil.com` → 400, `/fr//evil.com` → `/evil.com`, `/fr/\\evil.com` → 400 (frontend/tests/server/strip-invalid-locale.spec.ts:73-94)."
+    },
+    {
+      "invariant": "5. Prototype-pollution safety in check-locales.mjs (Decision 9)",
+      "evidence": "frontend/scripts/check-locales.mjs:5 declares `UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype'])`; line 7 uses `acc = Object.create(null)` so the accumulator has null prototype; line 10 `if (UNSAFE_KEYS.has(key)) continue` skips dangerous keys before recursion. JSON.parse in Node does NOT pollute Object.prototype for `__proto__` keys (it sets them as own properties), and the script never uses `Object.assign`/spread/merge on parsed payloads — it only walks them with `Object.keys`. Tests assert: `Object.getPrototypeOf(keys) === null`, no key starts with `__proto__`/`constructor`/`prototype`, and `({}).polluted === undefined` after a `{\"__proto__\": {...}}` payload (frontend/scripts/check-locales.test.mjs:83-113)."
+    },
+    {
+      "invariant": "6. ?token= URLs not leakable via Referer (Decision 5, AC8)",
+      "evidence": "Coverage is full: (a) `/auth/**` → matched by `/auth/**` routeRule, headers applied to 200 (nuxt.config.ts:67-69); (b) `/en/auth/**` → matched by generated `/en/auth/**` routeRule, identical headers (nuxt.config.ts:8-10, 70); (c) invalid prefixes like `/fr/auth/verify-email?token=x` → 302 carries the headers via strip-invalid-locale.ts:16-22. The hreflang/canonical link generator (verified at .output/server/chunks/build/server.mjs:40233-40296) only includes query params listed in `seo.canonicalQueries`; `app.vue` calls `useLocaleHead({ seo: true })` with boolean `true` (no `canonicalQueries`), so `?token=` NEVER appears in `<link rel=\"alternate\">` or `<link rel=\"canonical\">`. Browser address-bar history caching is the only remaining leak surface — out of scope for headers (mitigated by `noindex,nofollow` and short token TTL on backend)."
+    },
+    {
+      "invariant": "7. Fail-closed semantics in auth.global.ts (Decision 6)",
+      "evidence": "frontend/middleware/auth.global.ts:26-40 — `getBaseName(to)` is captured into `baseName` (line 26); `isPublicAuth = baseName !== undefined && PUBLIC_ROUTE_NAMES.includes(baseName)` (lines 27-29) — explicit undefined-guard means undefined baseName is NOT public; the protected branch on line 38-40 then redirects unauthenticated users to `localePath('/auth/login')`. Whitelist `PUBLIC_ROUTE_NAMES` (lines 4-10) is a frozen `as const` array of 5 explicit names — no `startsWith`, no regex, no open expression. Catch-all 404 / unmapped routes flow through the 'unknown baseName → unauth → login' path. Tests cover this branch (decisions.md, Task 7 verification: 10 cases including 'fail-closed on getBaseName undefined')."
+    },
+    {
+      "invariant": "8. Production-mode warning suppression (Decision 9)",
+      "evidence": "frontend/i18n/i18n.config.ts:4-5 — `silentTranslationWarn: process.env.NODE_ENV === 'production'` and `silentFallbackWarn: process.env.NODE_ENV === 'production'`. Note: under `legacy: false` (line 2) these flags are inert in Vue I18n v11 composition mode (this is a pre-existing observation from Task 12 code-audit, F-002, accepted as code-hygiene). The literal AC text per Decision 9 is satisfied — the documented intent (no info disclosure via console in prod) is anyway protected by build-time `check-locales.mjs` gate (`scripts/check-locales.mjs` + `prebuild` script in package.json:7), so missing-key paths cannot reach production at all. SEC-INFO-002 below tracks the v11-equivalent flag (`missingWarn`/`fallbackWarn`) as a defense-in-depth follow-up."
+    }
+  ],
+  "findings": [
+    {
+      "id": "SEC-001",
+      "severity": "medium",
+      "category": "OWASP-A05 (Security Misconfiguration) / invariant-1",
+      "location": "frontend/nuxt.config.ts:49-59 (`detectBrowserLanguage` block)",
+      "issue": "i18n cookie `i18n_lang` relies entirely on the @nuxtjs/i18n module default for `expires`/MaxAge (~365 days computed in server.mjs:40116 `new Date(date.setDate(date.getDate() + 365))`). There is no explicit `cookieMaxAge` — and Decision 3 / Context7 confirm v9 does not even accept that key, so the project has no project-side knob to verify, freeze, or shorten the lifetime. If a future @nuxtjs/i18n upgrade silently changes the default (e.g., Permanent vs 1y, or removes the expiry making it a session cookie), the project gets a behavioral regression that will not be caught by any test in the suite. The locale cookie is also non-HttpOnly and shared with the browser context across the entire site (`path: '/'`), so any extension/CSP-bypass that reads cookies has 1-year visibility into the user's locale preference (low-impact PII — only signals 'this user reads Ukrainian'). In production this is acceptable as documented in Decision 3, but the absence of an upstream-version pin/check makes the documented '1y TTL' an external-dependency contract, not an internal guarantee.",
+      "fix": "Two-part: (1) Add a regression smoke check in CI — `pnpm dev` + `curl -sI / -H 'Accept-Language: en'` and assert `Set-Cookie: i18n_lang=...; Max-Age=...; ...` lifetime is in the expected range (e.g., 30d–400d). One-liner per-CI run, catches upstream default drifts. (2) Document the upstream default in a code comment next to the `detectBrowserLanguage` block referencing `@nuxtjs/i18n` source location (`createI18nCookie` ~line 40109 in built server.mjs) and the version pin (`9.5.6`) so future upgraders see the contract. Optionally pin the dep to an exact version (`9.5.6` instead of `^9.5.6`) for reproducibility — already covered by lockfile but explicit pin makes intent clear.",
+      "anchored_to": "Decision 3, AC1 ('cookie Secure + SameSite Lax + 1y TTL'), Risk 'cookie defaults drift on upstream upgrade'"
+    },
+    {
+      "id": "SEC-002",
+      "severity": "low",
+      "category": "OWASP-A07 (Identification & Authentication Failures) / defense-in-depth",
+      "location": "frontend/middleware/auth.global.ts:17-24 + frontend/stores/auth.ts:11-19",
+      "issue": "Defense-in-depth gap on the `fetchUser()` failure path. `auth.global.ts` lines 17-24 call `await authStore.fetchUser()` inside a try/catch that comments 'Backend unreachable or non-401 error — treat as unauthenticated. The auth store only clears state on 401; transient errors leave it null.' This is correct ONLY if `userState.value === null` going in. If a user was previously authenticated, then network blips during a route transition will throw inside `fetchUser` (auth.ts:18 re-throws non-401), the auth.global catch swallows it, and `userState.value` remains the previously-stored user object. The route-transition then uses stale auth state — the user passes the `isPublicAuth && authStore.user !== null` check (line 31) on `/auth/login` and gets bounced to `/dashboard` even though their session may have actually expired server-side. This is not the primary fail-closed branch the invariant audits (that branch — undefined baseName + null user — is correctly fail-closed), but is a session-staleness amplifier introduced by the silent error swallow. Server-side request to `/api/auth/me` still gates real privilege; this is purely UX/state-staleness.",
+      "fix": "Two acceptable options, in priority: (a) On non-401 fetch errors, optimistically clear `userState.value` in auth.global.ts catch — symmetric with fail-closed. Cost: one network blip while authenticated logs the user out of UI state until next successful fetchUser. (b) Add structured logging at `auth.global.ts:21` for the swallowed error (referenced in Task 7 security-auditor-1.json informational finding) — at minimum `console.error('[auth] fetchUser failed', e)` so operators see auth-store-anomalies. Anchored to existing 'observability deferred to server-logger' note. Either fix is non-blocking; current behavior is acceptable for MVP.",
+      "anchored_to": "Decision 6 'fail-closed на undefined', Risk 'Auth middleware path-check ламається на префікс' (related but not identical), Task 7 review note"
+    },
+    {
+      "id": "SEC-INFO-001",
+      "severity": "informational",
+      "category": "OWASP-A05 / observation",
+      "location": "frontend/server/middleware/strip-invalid-locale.ts:11-14 + frontend/server/utils/locale-strip.ts:16, 39",
+      "issue": "Adversarial-probe observability gap. The middleware returns 400 on three discrete conditions — raw backslash in path, decoded backslash, and malformed percent-encoding — all of which are highly indicative of automated open-redirect / SSRF probe traffic. Currently there is no log emit, no metric, no structured event when these reject branches fire. In production an attacker sweeping for open-redirect candidates would generate dozens of 400s with `\\evil.com`-like signatures, but the application would have no record. This is consistent with the project-wide 'observability deferred to server-logger landing' (per Task 3 review notes, decisions.md), so flagged informational, not an active finding.",
+      "fix": "When the project lands its server-logger (separate epic, not this feature), wire a structured log on each `reject` branch with fields `{ event: 'locale_strip_reject', reason: 'raw_backslash' | 'decoded_backslash' | 'malformed_percent', path }`. Optionally emit a counter metric. Until then, accepted as known limitation; document in decisions.md alongside Task 3 review note.",
+      "anchored_to": "Decision 5 'reject backslash; reject malformed percent', Task 3 security-auditor-1.json informational finding"
+    },
+    {
+      "id": "SEC-INFO-002",
+      "severity": "informational",
+      "category": "OWASP-A09 (Security Logging & Monitoring) / invariant-8 follow-up",
+      "location": "frontend/i18n/i18n.config.ts:4-5",
+      "issue": "Documented duplicate of Task 12 code-audit F-002. `silentTranslationWarn` and `silentFallbackWarn` are vue-i18n Legacy-mode flags only — under `legacy: false` (composition mode) they are inert. Decision 9 declares the literal-text intent ('защита от info disclosure через console з missing-key paths у production logs'), and the literal AC is satisfied (the keys exist with the prescribed values). The behavioral intent is met by an even stronger gate: `scripts/check-locales.mjs` runs at `prebuild`, so `pnpm build` fails on missing/divergent keys — production cannot ship with missing keys at all. This is therefore a code-hygiene observation, not a real exposure, and is already accepted in Task 2 deviations and Task 12 audit. Repeating here for invariant-8 traceability.",
+      "fix": "(Optional, low-priority code-hygiene) Replace the two flags in i18n.config.ts with their composition-mode equivalents — `missingWarn: process.env.NODE_ENV !== 'production'` and `fallbackWarn: process.env.NODE_ENV !== 'production'` — so the runtime guard is actually active under v11. No behavioral risk to leave as-is.",
+      "anchored_to": "Decision 9, Task 2 deviations note, Task 12 code-audit F-002"
+    }
+  ],
+  "owasp_summary": {
+    "A01_Broken_Access_Control": "OK — `auth.global.ts` uses explicit name-whitelist `PUBLIC_ROUTE_NAMES` (closed list, no regex / no startsWith); `useRouteBaseName()` strips locale so /en/auth/login and /auth/login are checked identically; fail-closed on undefined baseName. No IDOR surface in this feature scope (no per-resource fetches in i18n code paths). One related defense-in-depth note tracked as SEC-002 (session-staleness on non-401 fetch error).",
+    "A02_Cryptographic_Failures": "OK — `i18n_lang` cookie has `Secure: process.env.NODE_ENV === 'production'`, SameSite=Lax (module default), 1y expiry; cookie carries no auth-significant data (verified — never read for auth decisions). No crypto operations in i18n feature scope. SEC-001 medium notes the implicit dependency on @nuxtjs/i18n upstream defaults for MaxAge.",
+    "A03_Injection": "OK — `decideLocaleStrip` is the only path-parsing entry point and is hardened (backslash reject, allow-list match, percent-decoded once-only after normalization, post-decode safety net, query separated by `indexOf('?')` not regex). JSON parsing in `check-locales.mjs` is read-only, no eval/dynamic-import. No user input flows into translations (i18n keys are static literals at call sites). XSS-safe — Vue i18n auto-escapes interpolated values; `t()` calls use named placeholders only.",
+    "A04_Insecure_Design": "OK — Decision 5 documents the threat model (open-redirect via path manipulation); Decision 6 documents the auth fail-closed contract; Decision 14 documents the parity threat between /auth/** and /en/auth/**. All three are implemented as a single-source-of-truth (`NON_DEFAULT_LOCALES`) so a future locale addition cannot drift any of the three controls. Threat model is explicit and traceable.",
+    "A05_Security_Misconfiguration": "OK with one medium — routeRules parity for headers is enforced by computed object spread (nuxt.config.ts:8-10), AUTH_HEADERS is a single shared constant. SEC-001 medium tracks the implicit cookie-MaxAge dependency on the i18n module default (no project-side regression test).",
+    "A06_Vulnerable_Components": "OK — primary deps (Nuxt 4.4.0, @nuxtjs/i18n 9.5.6, vee-validate 4.15.0, zod 3.24.1, pinia 3.0.0) are current as of audit date. No `pnpm audit` was run in this audit (sandbox), so transitive CVE coverage is delegated to the project's CI dep-scan. No obvious legacy/deprecated packages introduced by this feature; @playwright/test is dev-only.",
+    "A07_Identification_Authentication_Failures": "OK with one low — `auth.global.ts` is correctly fail-closed on undefined baseName, public whitelist is explicit, locale-aware redirects use `useLocalePath`. SEC-002 low flags the session-staleness amplifier on non-401 fetchUser errors (defense-in-depth, not a real bypass — server still gates with /api/auth/me).",
+    "A08_Software_Data_Integrity": "OK — `check-locales.mjs` uses `Object.create(null)` accumulator, filters `__proto__`/`constructor`/`prototype` before recursion, never merges parsed payloads back via Object.assign or spread. JSON.parse-only ingestion of locale dictionaries; no YAML/pickle/eval. CI integrity for `prebuild` hook is the standard npm-script chain.",
+    "A09_Security_Logging_Monitoring": "Informational gap — SEC-INFO-001 (no log on locale-strip reject branches) + SEC-INFO-002 (silent-warn flags inert under composition mode). Both deferred to project-wide server-logger epic, both accepted as known limitations in prior audits/decisions. Not blocking for feature ship.",
+    "A10_SSRF": "OK — no user input is passed to any server-side fetch in this feature scope. The only path-manipulation surface (`decideLocaleStrip`) does not fetch URLs, only redirects within the same origin (server-side redirect via `sendRedirect(event, target, 302)`). Open-redirect (a related class) is mitigated per Decision 5 normalization order — verified by tests including double-encoded payload."
+  },
+  "post_completion_recommendations": [
+    "Open SEC-001 (medium) as a follow-up task on the implementing scope — could be addressed in the next infra/CI iteration without blocking 03-i18n ship.",
+    "SEC-002 (low) is acceptable as-is for MVP; revisit when the server-logger epic lands and the empty-catch observability work is unified.",
+    "SEC-INFO-001 / SEC-INFO-002 (informational) — record in decisions.md as known limitations alongside Task 12 audit observations.",
+    "No high/critical findings — no fix-cycle is required for this audit Wave. Pre-deploy QA (Task 15) is unblocked from the security perspective."
+  ]
+}

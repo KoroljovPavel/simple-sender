@@ -1,0 +1,21 @@
+{
+  "summary": "Task 8 (app.vue + default.vue + auth.vue i18n shell wiring) is implemented correctly per all listed ACs and Decisions 13/15. useLocaleHead({ seo: true }) returns a Ref<I18nHeadMetaInfo> (verified against @nuxtjs/i18n v9 type defs) and is passed directly into useHead — no .value unwrapping or computed wrapper that would break reactivity. All three internal NuxtLink usages in default.vue are converted to NuxtLinkLocale with unprefixed `to` paths, navigateTo on logout is wrapped in localePath, LangSwitcher placement matches Decision 15 in both layouts, brand wordmark routes through t('brand.name'), and the locale dictionaries are correctly flattened from layout.default.* to layout.* with UK/EN parity preserved. No leftover hardcoded UA/EN literals remain across the three files, and no stale layout.default.* references exist anywhere in the frontend tree.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "file": "frontend/layouts/default.vue",
+      "line": 11,
+      "severity": "minor",
+      "category": "error-handling",
+      "note": "Empty catch in onLogout swallows network errors silently. The inline comment ('logout() always clears local user state via finally; ignore network errors so we always redirect') justifies the choice — local state clearing is guaranteed and the user must always reach /auth/login regardless of remote outcome. Pre-existing behavior, not introduced by Task 8. No action required; flagged only so it is consciously acknowledged in future audits."
+    },
+    {
+      "file": "frontend/layouts/default.vue",
+      "line": 33,
+      "severity": "minor",
+      "category": "readability",
+      "note": "LangSwitcher renders as the last child of the topbar 'flex items-center gap-3' row, right of Logout, matching Decision 15 verbatim. At very narrow viewports (< ~400px) the topbar may visually crowd because the user info span can grow to email-length. Not in scope for this task and not in any AC; mention here purely as a future-polish hint."
+    }
+  ],
+  "verdict": "OK"
+}

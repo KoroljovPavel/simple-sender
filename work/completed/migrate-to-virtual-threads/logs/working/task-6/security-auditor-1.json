@@ -1,0 +1,61 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 5,
+    "critical": 0,
+    "major": 0,
+    "minor": 5
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A07: Identification and Authentication Failures",
+      "title": "openSession does not invalidate a pre-existing anonymous session before changeSessionId",
+      "description": "openSession() at AuthService.java:583-586 calls request.getSession(true) followed by request.changeSessionId(). When a user logs in while already holding an authenticated session (e.g. re-login as a different user without first logging out), getSession(true) returns the EXISTING session, changeSessionId rotates its id, and saveContext(...) overwrites the SecurityContext attribute on top of any prior session state (other request-scoped attributes that pre-dated the auth swap are retained). The reactive predecessor had the same hazard (the comment block explicitly notes the prior WebSession-cache-invalidate ‘was a no-op only because the cached session-fetch produced the same zombie session’), so this is parity behaviour, not a regression. However, the servlet stack offers a strictly cleaner option: when an existing session is detected, fully invalidate it before materialising a fresh one. Spring Security's ChangeSessionIdAuthenticationStrategy performs exactly this rotate-not-invalidate dance so the current implementation is acceptable; flagging only because the comment block at lines 578-582 implies the prior reactive defense was a no-op — operators should know the new defense is strictly stronger but still does NOT clear residual session attributes from a pre-auth session.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:578-586",
+      "impact": "If unsanctioned middleware or future code writes sensitive request-scoped state into the anonymous session before login, that state survives across the auth boundary. Today there is no such writer, so the issue is hypothetical — but the comment block undersells the residual-attribute aspect.",
+      "recommendation": "Either (a) document explicitly that no anonymous-session attributes are carried across the login boundary by any current writer, or (b) replace lines 583-584 with: `HttpSession existing = httpRequest.getSession(false); if (existing != null) existing.invalidate(); HttpSession session = httpRequest.getSession(true); httpRequest.changeSessionId();`. Option (b) matches Spring Security's SessionFixationProtectionStrategy `migrateSessionAttributes=false` behaviour and is the strongest defense.",
+      "cwe": "CWE-384"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring Failures",
+      "title": "forgotPassword rate-limit trip does not emit an audit event",
+      "description": "When the per-IP forgot-password rate limit fires (AuthService.java:276-278), the method silently returns without logging any audit event. The brute-force threshold trip in login() at lines 482-487 DOES log an EVENT_LOGIN_FAILED with reason=brute_force, but forgotPassword's analogous over-limit path is invisible to operators. This is the same anti-enumeration shape as the success path (no event for unknown email), but anti-enumeration only requires the API response to be identical — a server-side audit row marking 'forgot_rate_limit_tripped from IP X' would not leak anything to the attacker and would give the SOC an attack indicator.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:268-278",
+      "impact": "An attacker enumerating accounts via forgot-password (e.g. as part of credential stuffing reconnaissance) generates no security telemetry beyond Redis counter values. Detection latency increases.",
+      "recommendation": "Add a server-only audit event in the over-limit branch, e.g. `eventService.logEvent(null, \"forgot_password_rate_limited\", ip, userAgent, null);` immediately before `return;` on line 277. Do not include the user-supplied email in metadata (preserves anti-enumeration semantic of the events log).",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "minor",
+      "category": "A02: Cryptographic Failures (PII in logs)",
+      "title": "Brute-force threshold-trip audit event persists user-supplied email into events.metadata",
+      "description": "checkBruteForce at AuthService.java:482-487 logs `Map.of(\"reason\", \"brute_force\", \"email\", email)` on threshold trip. The email is the attacker-supplied raw email value — but the same value also denotes a real victim account whenever the attacker is targeting one. Persisting attacker-supplied victim email into events.metadata creates a PII surface in the audit log that did not exist for forgotPassword (where the spec explicitly forbids it). The reactive predecessor had the same shape; this is parity behaviour and the events collection is operator-only, so impact is contained, but worth a second look during the next privacy review pass — either drop the email field here too, or accept the audit-utility-vs-PII tradeoff and document it explicitly.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:482-487",
+      "impact": "Email of a brute-force target appears in events collection. If the events collection is ever exported for analytics or shared with a 3rd party, raw victim emails are leaked.",
+      "recommendation": "Either (a) replace the email field with a SHA-256 hash of the canonicalized email (preserves correlation across attacks without leaking the raw address), or (b) drop the email entirely and rely on emailKey-based correlation via Redis. Option (a) is the smaller change. Mirrors the pattern locked in for forgotPassword (security-auditor #3 in earlier round).",
+      "cwe": "CWE-359"
+    },
+    {
+      "severity": "minor",
+      "category": "A04: Insecure Design (rate-limiting gap)",
+      "title": "verifyEmail and resetPassword endpoints have no rate limit on the token-presentation path",
+      "description": "verifyEmail (AuthService.java:172-198) and resetPassword (AuthService.java:324-351) accept attacker-supplied tokens with no per-IP rate limit. Token entropy is 43 base64url chars (~256 bits) per TokenService, so brute-forcing a specific valid token is computationally infeasible — but a misbehaving client (or an attacker with no goal beyond DoS) can issue unbounded requests, each triggering a Mongo lookup by hash. resetPassword additionally invokes BCrypt cost-12 (~250ms VT-CPU) on every request that passes the status/expiry gates, providing a CPU-amplification vector against any holder of a single valid token. checkRegisterRate, the forgotPassword rate limiter, and the resend-verification rate limiter all protect the issuance side; the consumption side is unprotected. This is parity with the reactive predecessor — not a regression — but worth a hardening pass.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:172-198, 324-351",
+      "impact": "Mongo lookup-by-hash spam at unbounded RPS; BCrypt amplification on resetPassword (each valid-shaped request burns ~250ms of VT-CPU). Under VT there is no implicit BCrypt cap (D4), so a single attacker holding one valid reset token can saturate backend CPU.",
+      "recommendation": "Add a per-IP `verify:rate:ip:` and `reset:rate:ip:` Redis bucket with the same SET-NX-EX 60s + fail-open pattern already used by forgotPassword. Apply the rate check BEFORE the lookup and BEFORE BCrypt. Suggested limits: 30 attempts/min/IP for verify, 10 attempts/min/IP for reset.",
+      "cwe": "CWE-307"
+    },
+    {
+      "severity": "minor",
+      "category": "best-practice",
+      "title": "Brute-force counter on register: increment happens before threshold check, then rejects after the fact",
+      "description": "checkRegisterRate at AuthService.java:434-453 calls `redisTemplate.opsForValue().increment(key)` first (line 438), THEN compares `count > REGISTER_IP_THRESHOLD` on line 449. An already-over-limit IP still consumes a Redis INCR per request, so the rate limiter does not actually cap Redis RPS — only the response code. The Mongo + BCrypt pipeline downstream is correctly gated (`throw` on line 450 stops execution), so the user-facing rate-limit IS enforced; the only inefficiency is that an attacker can keep moving the counter even after the limit triggers. Under heavy attack with REGISTER_RATE_TTL=60s and no INCR cap, the counter just grows without bound until TTL expires. Same shape pre-flip — not a regression.",
+      "location": "backend/src/main/java/com/botfunnel/auth/AuthService.java:434-453",
+      "impact": "Mild — Redis takes the INCR hit regardless of rate-limit state; counter values become meaningless above the threshold. No security impact, just an efficiency / instrumentation note.",
+      "recommendation": "Acceptable as-is for MVP. If/when register-storm protection becomes a priority, switch to `Set-If-Absent (SETNX)` semantics: GET counter first, compare against threshold, INCR only if under limit. Or use a Lua script to make the check-then-incr atomic. Today both options trade complexity for marginal benefit.",
+      "cwe": "CWE-770"
+    }
+  ]
+}

@@ -1,0 +1,211 @@
+{
+  "feature": "05-projects",
+  "audit_round": 1,
+  "auditor": "main agent (Task 11 — Code Audit)",
+  "scope": "Holistic cross-component audit of Tasks 1-10 (Waves 1-4).",
+  "summary": {
+    "verdict": "pass-with-recommendations",
+    "totals_by_severity": {
+      "critical": 0,
+      "high": 0,
+      "medium": 0,
+      "low": 5,
+      "info": 11
+    },
+    "scope_files_count": 27,
+    "ac_checks": {
+      "AC-T1": "pass — error bodies conform to {message, code} via common/ErrorResponse",
+      "AC-T2": "pass — AppException.notFound(String) and unprocessableEntity(String, String) present",
+      "AC-T3": "pass — no new deps in backend/build.gradle or frontend/package.json",
+      "AC-T4": "pass — application.properties + .env.example carry PROJECTS_MAX_PER_USER",
+      "AC-T5": "pass — frontend/scripts/check-locales.mjs exits 0; uk.json and en.json have 198 keys each, 0 diff",
+      "AC-T6": "pass — pages/dashboard.vue has 0 localStorage references",
+      "AC-T7-strict": "pass — auth.global.ts, SecurityConfig.java, JobRunrMongoConfig.java NOT modified in this feature",
+      "AC-T7-broader": "advisory — EventService.java was modified (Task 4 added logEventBlocking method); AbstractIntegrationTest.java NOT modified",
+      "AC-T8": "deferred to Task 12 (security audit)",
+      "AC-T9": "pass — Project entity uses non-unique @CompoundIndex without partialFilter (Decision 4)",
+      "AC-T10": "pass — confirmed in decisions.md Task 9 (file is gitignored, verified by direct read)",
+      "AC-T11": "pass — all Mongo queries in com.botfunnel.project.* + ProjectHardDeleteJob use derived finders or typed Criteria.where(field).in(List<String>)",
+      "AC-T12": "pass — frontend/stores/projects.ts:26 is the only source-file call to localStorage.setItem"
+    }
+  },
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "low",
+      "area": "zero-touch-contract",
+      "file": "backend/src/main/java/com/botfunnel/events/EventService.java",
+      "lines": "27-37",
+      "issue": "Task 4 added a NEW public method `logEventBlocking(...)` to EventService. EventService.java is listed in tech-spec.md:50 'Architecture / No changes (zero-touch contract — AC-T7)' as part of the broader zero-touch set. The strict AC-T7 wording (tech-spec.md:415) lists only auth.global.ts / SecurityConfig.java / JobRunrMongoConfig.java, so the strict AC passes — but the architectural intent ('No changes') was relaxed without an AC update.",
+      "recommendation": "Either (a) ratify the EventService extension in tech-spec.md Architecture by removing it from the zero-touch set (and document the new blocking-variant pattern for downstream cron jobs), or (b) leave the deviation recorded in decisions.md Task 4 and treat the broader list as advisory. Option (a) is preferred for future-proofing — the new blocking variant is a useful pattern other cron jobs will reuse.",
+      "cross_reference": "decisions.md Task 4 'Ordering-hazard fix' section explicitly documents this choice and rejects the alternative of injecting EventRepository into ProjectHardDeleteJob."
+    },
+    {
+      "id": "F2",
+      "severity": "low",
+      "area": "duplicate-code",
+      "file": "backend/src/main/java/com/botfunnel/project/ProjectController.java",
+      "lines": "125-148",
+      "issue": "`currentUserId()`, `capUserAgent()`, and `extractIp()` are duplicated byte-for-byte from `ProfileController` (lines 75-95 there). The comment at ProjectController:124 explicitly defers extraction: 'Copied verbatim from ProfileController. A shared util is deferred (no other consumer yet).' With the addition of ProjectController, there are now 2 consumers, so the original deferral rationale has been satisfied.",
+      "recommendation": "Hoist `currentUserId()` to a shared utility (e.g. `common/SecurityUtils.java` or a `WebExchangeContext` helper) before Wave 2 epics (`04-bots`, `05-subscribers`, ...) start. Each new project-scoped controller will currently re-copy this code. Doing it once now is cheaper than refactoring N call sites later. `capUserAgent` and `extractIp` belong with the same hoist.",
+      "cross_reference": "patterns.md (project-knowledge) currentUserId() reuse pattern."
+    },
+    {
+      "id": "F3",
+      "severity": "low",
+      "area": "duplicate-code",
+      "file": "frontend/pages/projects/new.vue",
+      "lines": "13-15, 26-32",
+      "issue": "Timezone dropdown source + Zod refine over `Intl.supportedValuesOf('timeZone')` is duplicated between `pages/projects/new.vue` and `pages/projects/[projectId]/settings.vue:31-52`. The two implementations also drift: `settings.vue:31-36` has a graceful fallback for old Safari where `Intl.supportedValuesOf` is missing; `new.vue:13` calls it directly without a guard, which would throw on the same browsers.",
+      "recommendation": "Extract a shared composable `useTimezoneOptions()` returning `{ timezones, isValid }`. Mount both pages on it. Single source of truth for old-Safari degradation and Zod refine matches the codebase's existing 'reactive Zod schema' pattern (patterns.md).",
+      "cross_reference": null
+    },
+    {
+      "id": "F4",
+      "severity": "low",
+      "area": "duplicate-code",
+      "file": "frontend/components/ProjectSelector.vue",
+      "lines": "17-25",
+      "issue": "Active-only filter (`p.deletedAt === null`) and createdAt-desc sort are repeated across three call sites: `stores/projects.ts:35,58` (`sortByCreatedAtDesc` helper + `runAutoSelect` filter), `components/ProjectSelector.vue:17-25` (filter + sort), `pages/projects/index.vue:63` (filter; sort by deletedAt is field-different but same comparator shape).",
+      "recommendation": "Expose `activeProjects` and `activeProjectsByCreatedAtDesc` as Pinia getters on the projects store. Components/pages consume the getters and remain thin. Eliminates three drift surfaces and centralizes the 'active' definition.",
+      "cross_reference": null
+    },
+    {
+      "id": "F5",
+      "severity": "low",
+      "area": "error-handling",
+      "file": "frontend/pages/dashboard.vue",
+      "lines": "8-10",
+      "issue": "`projectsStore.fetchAll()` is fire-and-forget without `.catch()` on dashboard mount. A transient backend error here surfaces as an unhandled promise rejection in the console — not user-facing damage, but noisy in dev and an observability gap in prod. `pages/projects/[projectId]/settings.vue:19-23` correctly wraps the same call with `.catch()` (per Task 8 review fix); `pages/projects/index.vue:55-58` also fires without `.catch()` (same pattern).",
+      "recommendation": "Either (a) make the store's `fetchAll` swallow errors internally (set `isLoaded=true` and an `error` ref the UI binds to), or (b) standardize on `.catch(console.warn)` at every call site. Option (a) is cleaner — centralizes the policy in the store instead of repeating it at consumer pages.",
+      "cross_reference": "decisions.md Task 8 — settings.vue added `.catch()` defensively, dashboard.vue / projects/index.vue did not."
+    },
+    {
+      "id": "F6",
+      "severity": "info",
+      "area": "dead-code",
+      "file": "backend/src/main/java/com/botfunnel/project/ProjectRepository.java",
+      "lines": "11",
+      "issue": "`findByIdAndOwnerId(String id, String ownerId)` is declared on the repository but never called from `ProjectService` or any other source file. The ownership check lives in `ProjectService.requireOwned` (line 50-64) via `findById(...)` + manual `ownerId.equals(...)`.",
+      "recommendation": "Either (a) delete the unused derived finder, or (b) refactor `requireOwned` to use it (which collapses the foreign-owner branch into a single Mongo query). Option (b) yields ~3 fewer lines in `requireOwned` and one fewer document fetch in the foreign-owner case. The current pattern is intentional only if a future caller needs the raw 'is this id mine?' check without the soft-delete branch — but no such caller exists.",
+      "cross_reference": null
+    },
+    {
+      "id": "F7",
+      "severity": "info",
+      "area": "store-bypass",
+      "file": "frontend/pages/projects/index.vue",
+      "lines": "34-58",
+      "issue": "Soft-deleted listing is fetched via `useApi()` directly inside the page (`refreshSoftDeleted`) instead of through a Pinia store action. The store does not expose a dedicated slot for soft-deleted projects today — `fetchAll(true)` would write them into `projects[]`, conflating active and soft-deleted state. The page therefore keeps a page-local `softDeletedProjects` ref.",
+      "recommendation": "Add `softDeletedProjects` ref + `fetchSoftDeleted()` action to the projects store. Pages consume the store; the 'all listings go through useApi + store' rule from the audit theme becomes cleanly enforced. Not blocking — current pattern uses `useApi()` (not raw `$fetch`) and is documented in decisions.md Task 7.",
+      "cross_reference": "decisions.md Task 7 'Banner placement' deviation note."
+    },
+    {
+      "id": "F8",
+      "severity": "info",
+      "area": "consistency",
+      "file": "frontend/composables/useApi.ts",
+      "lines": "70",
+      "issue": "`handleApiResponseError` writes `projectsStore.pendingBannerKey = 'errors.projects.unavailable'` directly to the public reactive ref. This is documented in decisions.md Task 5 as intentional (the store exposes it as a public ref instead of a setter). Direct mutation works in Pinia setup-style stores, but it leaks the 'how to update the banner' detail into every consumer.",
+      "recommendation": "Add a thin `setPendingBanner(key)` / `clearPendingBanner()` action pair on the store, and convert the public `pendingBannerKey` to a getter. Aligns with the rest of the store API (every other state change goes through an action). Not blocking — present pattern is documented and works.",
+      "cross_reference": "decisions.md Task 5 'Status-surface decision'."
+    },
+    {
+      "id": "F9",
+      "severity": "info",
+      "area": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/project/ProjectService.java",
+      "lines": "50-64",
+      "issue": "`requireOwned` is the single ownership entry point as required. Verified — only `ownerId.equals(project.getOwnerId())` call in `com.botfunnel.project.*` lives on line 56 inside `requireOwned`. Controller delegates every project-scoped handler to `requireOwned` before mutation (lines 60, 102, 141, 154 of `ProjectController` / `ProjectService.update/softDelete/restore`).",
+      "recommendation": "Maintain this invariant. Add a code-style rule (or PR-review checklist note) that any new project-scoped service method must start with `requireOwned(...)`. Future epics should treat this as a hard architectural rule.",
+      "cross_reference": "tech-spec.md Decision 1 + Architecture / Shared resources."
+    },
+    {
+      "id": "F10",
+      "severity": "info",
+      "area": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/project/dto/CreateProjectRequest.java",
+      "lines": "11-12",
+      "issue": "`@JsonIgnoreProperties(ignoreUnknown = true)` whitelist is applied consistently to `CreateProjectRequest`, `UpdateProjectRequest`, and (implicitly via no extra fields) `ProjectResponse`. Mass-assignment defense (Risk R2) holds across all request DTOs — `ownerId`, `id`, `deletedAt` cannot be set by a client.",
+      "recommendation": "No action. Note: `ProjectResponse` has no `ownerId` field (line 5 comment explicitly forbids it) — response-shape lock is also in place. Document this as the Wave 2 DTO baseline for downstream epics.",
+      "cross_reference": "tech-spec.md Risk 2 + Architecture / Risks. patterns.md DTO whitelist pattern."
+    },
+    {
+      "id": "F11",
+      "severity": "info",
+      "area": "architecture",
+      "file": "frontend/composables/useApi.ts",
+      "lines": "27-31, 56-71",
+      "issue": "404 interceptor regex `/^\\/api\\/v1\\/projects\\/([^/]+)$/` is correctly anchored at both ends and only fires when extracted ID equals `currentProjectId`. Sub-paths like `/api/v1/projects/{id}/bots` and the collection `/api/v1/projects` correctly do NOT match. Decision 11 / Risk R7 is implemented per spec.",
+      "recommendation": "No action. Verify-with-tests holds (Task 5 ships 9+ interceptor specs covering trailing slash, absolute URL, sub-path, foreign ID, non-404 status — see decisions.md Task 5 verification).",
+      "cross_reference": "tech-spec.md Decision 11 + Architecture / How it works (Stale currentProjectId self-healing)."
+    },
+    {
+      "id": "F12",
+      "severity": "info",
+      "area": "architecture",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "lines": "82-101",
+      "issue": "AC-17b cascade ordering correctly implemented: (1) sweep prior events for deletedIds via typed `Criteria.where('metadata.projectId').in(deletedIds)`, (2) emit one `project_hard_deleted` event per project via the new `EventService.logEventBlocking(...).block()`, (3) drop project documents. The `.block()` calls enforce the temporal sandwich required by AC-17b. No untyped strings — `deletedIds` is `List<String>` and `_id` uses typed `.in(List<String>)`.",
+      "recommendation": "No action. Note for downstream cron jobs: replicate the `logEventBlocking(...).block()` pattern when AC-style 'event survives cascade' requirements appear. Recording here so future cron-author audits see the precedent.",
+      "cross_reference": "tech-spec.md Architecture / Hard-delete cron. decisions.md Task 4 'Ordering-hazard fix'."
+    },
+    {
+      "id": "F13",
+      "severity": "info",
+      "area": "i18n",
+      "file": "frontend/i18n/locales/uk.json",
+      "lines": null,
+      "issue": "Locale parity verified: `uk.json` and `en.json` each carry exactly 198 keys, 0 diff. `node scripts/check-locales.mjs` exits 0. All four AC-25 required keys present in both locales (`errors.projects.delete.confirmTypeName`, `errors.projects.unavailable`, `errors.projects.restore.renamedDueToConflict`, `projects.create.limitReachedTooltip`).",
+      "recommendation": "No action. Tasks 5-9 added keys without breaking parity (verified post-Wave 3 — no drift introduced after Wave 1's foundation).",
+      "cross_reference": "tech-spec.md AC-T5."
+    },
+    {
+      "id": "F14",
+      "severity": "info",
+      "area": "config",
+      "file": "backend/src/main/resources/application.properties",
+      "lines": "30",
+      "issue": "`app.projects.max-per-user=${PROJECTS_MAX_PER_USER:5}` (env-driven with default 5). `.env.example:31` carries `PROJECTS_MAX_PER_USER=5`. AC-T4 satisfied.",
+      "recommendation": "No action.",
+      "cross_reference": "tech-spec.md AC-T4."
+    },
+    {
+      "id": "F15",
+      "severity": "info",
+      "area": "tech-spec-drift",
+      "file": "work/05-projects/tech-spec.md",
+      "lines": "415",
+      "issue": "AC-T7 in tech-spec.md:415 explicitly lists 3 files (auth.global.ts, SecurityConfig.java, JobRunrMongoConfig.java) as forbidden edits. Architecture section line 50 lists 5 files (the 3 above + EventService.java + AbstractIntegrationTest.java) under 'No changes (zero-touch contract — AC-T7)'. The two lists are inconsistent. Task 4 modified EventService.java with documented rationale — this is OK per the strict AC-T7 but flagged by the broader architecture.",
+      "recommendation": "Update tech-spec.md Architecture line 50 to align with AC-T7:415 — either remove EventService.java and AbstractIntegrationTest.java from the zero-touch list (matches actual intent post-Task-4), or strengthen AC-T7 by adding those two files (rejected: would retroactively block Task 4's documented and reviewed approach).",
+      "cross_reference": "decisions.md Task 4."
+    },
+    {
+      "id": "F16",
+      "severity": "info",
+      "area": "scope-drift",
+      "file": ".gitignore",
+      "lines": "11-14",
+      "issue": "Task 6 modified `.gitignore` (anchored `projects/` to `/projects/` to allow `frontend/pages/projects/`). This file is NOT in any task's `Files to modify` list in tech-spec.md but was an unavoidable infra change to enable the page tree. Documented in decisions.md Task 6 deviations with user approval.",
+      "recommendation": "No action. Recording for completeness — unplanned change with rationale.",
+      "cross_reference": "decisions.md Task 6 Deviations section."
+    }
+  ],
+  "cross_cutting_summary": {
+    "duplicate_resource_initialization": "None at the heavy-resource level (MongoTemplate, WebClient, Pinia stores are singletons via Spring DI / Pinia singleton). Mild duplication of utility helpers and view-layer filters — see F2, F3, F4.",
+    "shared_resources_compliance": "`ProjectService.requireOwned` is the platform-wide isolation primitive (verified — F9). No second ownership check anywhere in `com.botfunnel.project.*`.",
+    "dto_whitelist_pattern": "Applied consistently to both request DTOs (F10). Response DTO has no `ownerId` field (response-shape lock).",
+    "currentUserId_reuse": "Used identically in `ProjectController` and `ProfileController`; byte-for-byte copy with explicit deferred-extraction comment. Ready for extraction (F2).",
+    "anti_enumeration_404": "Uniform across foreign / soft-deleted / malformed / restore-on-active paths via `requireOwned` and `restore`'s deletedAt-FIRST guard (verified in `ProjectService.java:50-64,160-162`).",
+    "event_service_audit_emission": "Service-layer for normal mutations (create / update / softDelete / restore). Cron-side emission in `ProjectHardDeleteJob` via new blocking variant of EventService — see F1 / F12.",
+    "frontend_store_boundary": "All API access in pages/components goes through `useApi()` composable; no raw `$fetch` in `frontend/pages/` or `frontend/components/`. `pages/projects/index.vue:36` calls `useApi()` directly instead of via store action — see F7.",
+    "404_interceptor_safety": "Path regex correctly anchored to single-resource pattern; ID-match guard prevents over-reach (F11).",
+    "i18n_parity": "Zero drift between uk.json and en.json after Wave 1-3 (F13)."
+  },
+  "tools_used": [
+    "grep -rn (file scope, AC-T9 / AC-T11 / AC-T12 / AC-T6 / ownership-check sweeps)",
+    "git log --name-only / git diff (zero-touch verification across feature commits)",
+    "node frontend/scripts/check-locales.mjs (AC-T5 locale parity)",
+    "Direct file reads of all 27 in-scope files (post-Task-10 state on disk)"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "Round 2 (commit b50f7b4) closes the only minor gap from round 1 with two non-vacuous, behaviour-focused tests, and the helper rename preserved correctness across all 5 migrated AuthServiceTest cases. (1) setSessionId_secureExplicitFalse_winsOverHttpsSchemeSeed — sets cookieProps.secure=false on top of an https-scheme exchange (seed=true) and asserts cookie.isSecure()==false, locking the PropertyMapper override on `secure` in the true→false direction; if `map.from(cookieProps::getSecure).to(builder::secure)` were dropped, the seed `secure=true` would survive and the assertion would fail. (2) expireSession_withCustomCookieName_writesUnderConfiguredName — sets cookie.name=ALT, calls inherited expireSession, asserts no cookie at SESSION and a Max-Age=0 cookie at ALT; if the constructor's `setCookieName(cookieName)` propagation were removed, the parent's default name would persist and the ALT lookup would be null. Both pass the litmus test. The mockExchangeWithCachedSession(WebSession) rename correctly mirrors production semantics — ServerWebExchange.getSession() is Mono.cache'd in DefaultServerWebExchange, so AuthService.openSession's single getSession() invocation always returns the same instance; the previous two-Mono helper signature reflected an outdated invalidate()-then-fetch model that no longer exists in the production code. All five migrated call sites (login_success_redisDeleteFails_stillReturnsAuthResponse, login_success_setsRememberMeTtl_andPublishesRememberMeTrueAttribute, login_success_noRememberMe_setsTtl24Hours_andPublishesRememberMeFalseAttribute, login_success_resetsBruteForceCountersAndLogsEvent, login_pendingUser_succeedsWithEmailWarning) compile, run, and preserve their assertion meaning — verify(session).setMaxIdleTime(...) on the single cached instance is the production-faithful equivalent of the prior verify(preAuth).setMaxIdleTime(...). The AuthService.java refactor that moved `exchange.getAttributes().put(REMEMBER_ME_ATTR,...)` from inside the doOnNext chain to a synchronous pre-chain statement does not break any test: the rememberMe-true and rememberMe-false attribute-publication assertions both still pass after verifyComplete(), and the litmus property holds (removing the put() line still fails the containsEntry() assertion). No new vacuous tests, no mock-only assertions, no excessive mocking introduced. Test counts: 13 in RememberMeWebSessionIdResolverTest (was 11), 5 migrated calls in AuthServiceTest. Pyramid balance unchanged from round 1 (heavy unit, no integration in this task — integration is Task 6 per tech-spec).",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 2,
+      "passed": 2,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 13,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

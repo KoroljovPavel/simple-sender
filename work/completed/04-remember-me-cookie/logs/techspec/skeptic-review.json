@@ -1,0 +1,55 @@
+{
+  "status": "approved",
+  "summary": "Round 2 verification on the revised tech-spec. All round-1 fixes confirmed: every occurrence of the cookie-config reference now uses the correct expression `serverProperties.getReactive().getSession().getCookie()` returning `org.springframework.boot.web.server.Cookie`. New content (Decisions 6 and 7, register-auto-login regression case, TTL parameterization, technical-notes section) verified against code. Checked 28 claims; no critical or major mirages remain. Two minor observations are wording nits rather than factual mirages.",
+  "findings": [
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "tech-spec line 285-286: 'extend existing tests at lines 306, 343, plus register flow'.",
+      "reality": "Line 306 is the *body* line of `login_success_invalidatesPreAuthSession_andSetsRememberMeTtl` (its `@Test` annotation is on 305 and method signature on 306). Line 343 is the *@Test annotation* for `login_success_noRememberMe_setsTtl24Hours` (method signature on 344). The two cited line numbers point at slightly different artifact kinds (body line vs annotation line) — both still land inside the intended tests, so the reference works in practice but is internally inconsistent.",
+      "source": "tech-spec.md, Testing Strategy, line 285-286",
+      "fix": "Either cite both `@Test` annotation lines (305 and 343) or both signature lines (306 and 344) for consistency. Functionally not breaking — Task executor will find the correct tests either way."
+    },
+    {
+      "severity": "minor",
+      "type": "missing_pattern",
+      "claim": "tech-spec line 170-171 (Decision 5): 'Cookies issued before the fix (without `Max-Age`) continue to work until natural expiry or relogin'.",
+      "reality": "A cookie sent without `Max-Age`/`Expires` is a session cookie and is dropped by the browser at browser-close, not at any server-side 'natural expiry'. Server-side `WebSession.maxIdleTime` does evict the Mongo `sessions` document on its own schedule, but that does not extend the lifetime of the *cookie* on the client. The phrase 'natural expiry' is ambiguous — readers may interpret it as cookie-side rather than session-document-side.",
+      "source": "tech-spec.md, Decision 5, lines 170-172",
+      "fix": "Reword to: 'Pre-fix cookies remain valid until the browser closes (session cookie) or the user re-authenticates; the corresponding `sessions` document in Mongo continues to expire on its own `maxIdleTime` schedule. The deploy itself does not invalidate any session.' Optional — meaning is recoverable from context, but precision matters in a security-adjacent fix."
+    }
+  ],
+  "stats": {
+    "total_claims_checked": 28,
+    "confirmed": 26,
+    "mirages_found": 2,
+    "verified_claims": [
+      "All five occurrences of the cookie-config phrase in the revised spec use `serverProperties.getReactive().getSession().getCookie()` (returns `org.springframework.boot.web.server.Cookie`) — round-1 finding addressed",
+      "Decision 6: `AuthService.register(...)` invokes `openSession(saved, false, exchange)` at AuthService.java:167 — confirmed by direct read of lines 162-168",
+      "Decision 6 register auto-login comment at AuthService.java:162-166 explicitly documents 'rememberMe defaults to false'",
+      "Decision 7: `AuthControllerIT.java:326-329` contains the `bindToApplicationContext drops Set-Cookie` rationale comment — confirmed verbatim",
+      "Decision 7: AbstractIntegrationTest uses `WebTestClient.bindToApplicationContext(applicationContext)` at line 83 — confirmed",
+      "AuthService.openSession at AuthService.java:590 with signature `(User user, boolean rememberMe, ServerWebExchange exchange)` — confirmed",
+      "AuthService.openSession body lines 590-606 — confirmed (matches tech-spec citation)",
+      "AuthService.openSession comment at lines 598-602 explains the Mono.cache rationale for not calling invalidate — confirmed verbatim, supports tech-spec Solution paragraph and User-Spec Deviations technical note",
+      "AuthService.logout at line 250-254 calls `WebSession::invalidate` — confirms tech-spec claim that logout path is unchanged and `expireSession` will continue to fire",
+      "application.properties:14 — `server.reactive.session.cookie.http-only=true`",
+      "application.properties:15 — `server.reactive.session.cookie.secure=${SESSION_COOKIE_SECURE:false}`",
+      "application.properties:16 — `server.reactive.session.cookie.same-site=${SESSION_COOKIE_SAME_SITE:lax}`",
+      "application.properties:17 — `app.session.ttl-default-hours=${SESSION_TTL_DEFAULT_HOURS:24}` (default 24, matches Decision 4)",
+      "application.properties:18 — `app.session.ttl-remember-me-days=${SESSION_TTL_REMEMBER_ME_DAYS:30}` (default 30, matches Decision 4 and Verify-smoke `Max-Age=2592000` = 30*86400)",
+      "Decision 7 Scenario E parameterization values {30, 7, 60} — config key exists, type Integer, no constraint on value — parameterization is feasible",
+      "AuthServiceTest.java:305-341 — `login_success_invalidatesPreAuthSession_andSetsRememberMeTtl` test exists",
+      "AuthServiceTest.java:343-365 — `login_success_noRememberMe_setsTtl24Hours` test exists with `Duration.ofHours(24)` assertion",
+      "AuthServiceTest.java has `mockExchangeWithSessions` helper at line 119 — supports the new attribute-write verify approach in extended tests",
+      "SecurityConfig.java exists at the cited path; currently does NOT define a `WebSessionIdResolver` bean, so the new bean (Decision 1) will replace Boot's default via `@ConditionalOnMissingBean` — confirmed",
+      "SecurityConfig.java already injects `@Value` and `@Bean`; adding `ServerProperties` injection is a mechanical change, no architectural collision",
+      "REMEMBER_ME_ATTR string value `com.botfunnel.auth.rememberMe` matches the `com.botfunnel.auth` package convention — internally consistent",
+      "Verify-smoke `Max-Age=2592000` arithmetic: 30 days * 86400 s/day = 2592000 — correct",
+      "Files-to-modify list (SecurityConfig.java, AuthService.java, AuthServiceTest.java) all exist at cited paths",
+      "Files-to-read list (application.properties, AuthController.java, LoginRequest.java, AbstractIntegrationTest.java, AuthControllerIT.java) all exist at cited paths",
+      "Files-to-create paths use the same `backend/src/...` layout as existing classes — naming/placement consistent",
+      "AuthService imports `ServerWebExchange` and uses `exchange.getAttributes()`-compatible API surface — `getAttributes()` is on `ServerWebExchange` per Spring 6.x"
+    ]
+  }
+}

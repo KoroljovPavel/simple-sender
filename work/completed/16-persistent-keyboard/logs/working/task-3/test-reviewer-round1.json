@@ -1,0 +1,22 @@
+[
+  {
+    "severity": "major",
+    "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+    "line": 652,
+    "description": "The defensive guard has THREE branches — null rows, empty rows list, and a non-empty rows list containing a row with null/empty buttons (StepExecutor.isEmptyRow → `rows.stream().anyMatch(StepExecutor::isEmptyRow)`, StepExecutor.java:350-352). The test setKeyboard_nullOrEmptyRows_failsTerminally covers only the first two. The empty-buttons-row branch is untested: the task Edge-cases section explicitly calls this case out ('A row record with a null/empty buttons list ... treat it like the rows guard; do not silently emit an empty wire row'). Litmus failure: removing `|| rows.stream().anyMatch(StepExecutor::isEmptyRow)` from setKeyboard() makes zero tests fail, yet that omission would let a malformed snapshot build an empty wire row `[[]]` and send it (a real regression the guard exists to prevent).",
+    "recommendation": "Add a case to setKeyboard_nullOrEmptyRows_failsTerminally (or a sibling test) that builds a SET_KEYBOARD step whose keyboardRows contains a row with an empty buttons list, e.g. `step.setKeyboardRows(List.of(new KeyboardRow(List.of())))` (the `row()` helper already supports zero labels — `row()` yields exactly this). Assert outcome FAIL, reasonCode `empty_keyboard_rows`, and `verify(sender, never()).sendText(...)`. Optionally also assert the row-with-null-buttons variant `new KeyboardRow(null)` resolves the same way."
+  },
+  {
+    "severity": "minor",
+    "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+    "line": 617,
+    "description": "AC item 'No log statement carries rendered text or button labels — ids/codes only' and the over-4096 trim path (renderTrimmed → LOG_TEXT_TRIMMED WARN) are not asserted for the keyboard steps. The behavior is covered transitively because sendKeyboardText reuses the same renderTrimmed(...) that the MESSAGE tests already exercise for trim+WARN (lines 173-174) — so this is not load-bearing — but there is no keyboard-specific guard that a >4096 keyboardText trims+WARNs (not fails) and that the WARN carries no rendered text. A reviewer cannot see the PII/trim AC enforced from the keyboard tests alone.",
+    "recommendation": "Add setKeyboard_overLengthText_trimsAndWarns_doesNotFail: keyboardText of length >4096 (e.g. \"a\".repeat(5000)), assert outcome CONTINUE, capture the sent text and assert length == MAX_MESSAGE_LENGTH (4096), and assert warnMessages() anyMatch LOG_TEXT_TRIMMED + noneMatch the raw payload — mirroring lines 173-174. Cheap, and it pins the AC directly on this code path."
+  },
+  {
+    "severity": "info",
+    "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+    "line": 585,
+    "description": "Idiom/quality is strong and consistent with the existing file. ArgumentCaptor<Object> + cast-and-walk-keys matches the prescribed message_keyboardOnlyOnLastNonAlbumBlock_waitForReply idiom; pure-Mockito, no extra mocks. Assertions are meaningful (not bare counts): author-order via containsExactly on extracted text, object-form proof via containsExactlyInAnyOrderEntriesOf(Map.of(\"text\",\"A\")), resize_keyboard hardcoded-true, doesNotContainKey(\"remove_keyboard\") for the negative, and remove_keyboard exact-map for CLEAR. The null-defaults edge case is asserted both positively (is_persistent true / one_time_keyboard false) and structurally (markup.values() doesNotContainNull) — directly satisfying 'never emit a JSON null'. Variable rendering is verified behaviorally (HTML-escape of <b> → &lt;b&gt;), not as substring presence. Error-mapping trio fully covered: BLOCKED_BY_USER+CHAT_NOT_FOUND→CANCEL (reasonCode names verified against fromTerminalReason), OTHER→FAIL (3-arg ctor defaults to TerminalReason.OTHER, verified), invalid_bot_token→FAIL, AppException→FAIL with codeOrStatus \"404\" (notFound has code=null → status 404, verified). Tests confirmed green via `gradlew test --tests '*FunnelStepExecutorTest*'`."
+  }
+]

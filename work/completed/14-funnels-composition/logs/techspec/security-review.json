@@ -1,0 +1,55 @@
+{
+  "verdict": "pass",
+  "scope": "Architecture-level security review of tech-spec for 14-funnels-composition (SUBSCRIBE_TO_FUNNEL step). No code exists yet; findings are design-level guardrails for the implementation tasks.",
+  "summary": {
+    "multitenant_isolation": "PASS - spec mandates fail-closed projectId scoping at both save-time validation and runtime enroll (Decision 6, Risk 'Витік між тенантами', AC 'Резолв цілі fail-closed по projectId і при save, і при виконанні'). Matches existing requireFunnel anti-IDOR precedent.",
+    "runaway_dos": "PASS - spec routes enroll through FunnelEventService.enrollSpecificFunnel which applies depth-cap + auto-enroll rate-limit BEFORE the factory (Decision 2). Cross-execution A->B->A cycle is explicitly bounded by enrollDepth=parent+1 + maxEnrollDepth=10, not by per-tick budget. Direct-factory alternative was explicitly rejected because it skips rate-limit.",
+    "re_enter_guard": "PASS - reuses Phase-3 partial-unique-index guard; allowReEnter=false collision is a benign swallowed no-op, no resource exhaustion.",
+    "input_validation": "PASS - four new 422 codes cover all bad-target cases (required / not_found / step_not_found / inactive-at-activation).",
+    "secrets_injection": "PASS - no secrets; new config is opaque ObjectId references stored as POJO fields, no _class, no deserialization sink, no string-interpolated query."
+  },
+  "findings": [
+    {
+      "owasp": "A01:2021 Broken Access Control",
+      "description": "Multitenant isolation is correctly mandated. The runtime resolve in enrollSpecificFunnel must look up the target via a projectId-scoped path (execution.getProjectId()) and reject cross-project targets fail-closed, mirroring FunnelService.requireFunnel which filters by projectId and collapses cross-project/missing into a uniform result. Note: FunnelRepository.findById is NOT project-scoped (code-research s14.4 confirms), so the implementation MUST add the explicit targetFunnel.getProjectId().equals(execution.getProjectId()) check after load - the spec calls this out, but it is the single most important IDOR guard and is only enforced by convention in the runtime path (no DB-level project filter). Implementation should prefer FunnelRepository.findByProjectId... style scoping or an explicit equals-check; do not rely on the author-facing controller boundary, since runtime enroll does not pass through requireFunnel.",
+      "severity": "medium",
+      "recommendation": "In enrollSpecificFunnel, after loading the target funnel, verify targetFunnel.getProjectId().equals(execution.getProjectId()); on mismatch skip+WARN (treat as missing target), never enroll. Same fail-closed check in validateSteps SUBSCRIBE branch (author can only target same-project funnels). Add an explicit IT asserting a cross-project targetFunnelId is NOT enrolled (and surfaces as not_found at save). Handle malformed/invalid ObjectId hex on the targetFunnelId lookup as skip+WARN at runtime (and as funnel_subscribe_target_not_found at save), matching the requireFunnel IllegalArgumentException-to-404 precedent, so a probe learns nothing."
+    },
+    {
+      "owasp": "A04:2021 Insecure Design",
+      "description": "Runaway/DoS protection is sound by design. The spec correctly identifies that the per-tick step budget (FunnelExecutionEngine maxStepsPerTick) does NOT bound a cross-execution A->B->A cycle (child is a separate row picked up by the sweep), and mandates routing through enrollSpecificFunnel so BOTH per-subscriber backstops (depth-cap, verified Redis-independent and gated up front in FunnelEventService.dispatchForSubscriber lines 129-133; auto-enroll rate-limit at lines 138-142) are applied BEFORE the factory. The factory itself enforces only the re-enter unique index. Residual risk: the implementation must replicate the same up-front ordering (depth-cap first, then rate-limit, then resolve+insert) and must NOT bypass it by calling insertExecutionAt directly from StepExecutor. The new enrollSpecificFunnel is a NEW code path duplicating backstop logic conceptually shared with dispatchForSubscriber - if it forgets either check, the cycle is unbounded.",
+      "severity": "low",
+      "recommendation": "Implement enrollSpecificFunnel to apply (1) depth-cap (originDepth > maxEnrollDepth -> skip+WARN) and (2) rate-limit (autoEnrollRateLimitExceeded -> skip+WARN) BEFORE resolving/inserting, identical order to dispatchForSubscriber. StepExecutor must call enrollSpecificFunnel only, never insertExecutionAt directly. Add the depth-cap IT (cycle past max-enroll-depth -> skip+WARN, parent not failed) - already in Testing Strategy. Consider extracting the two backstops into a shared private guard reused by both dispatchForSubscriber and enrollSpecificFunnel to prevent drift."
+    },
+    {
+      "owasp": "A04:2021 Insecure Design",
+      "description": "Rate-limit fail-open behavior: autoEnrollRateLimitExceeded fails OPEN on any Redis error (returns false, lines verified in FunnelEventService). During a Redis outage the volume backstop is disabled, leaving only the Redis-independent depth-cap (max 10) to bound a cascade. This is an accepted availability-over-strictness tradeoff inherited from Phase 3 and is acceptable here because (a) SUBSCRIBE targets exactly ONE funnel (no fan-out multiplication) and (b) the depth-cap still hard-bounds chain length. Flagging for awareness, not as a defect - the spec inherits this consciously.",
+      "severity": "low",
+      "recommendation": "No change required for this phase. Ensure the inherited fail-open path is exercised/asserted at least once (the depth-cap still bounds the chain when Redis is down). Document that the depth-cap is the outage-safe backstop."
+    },
+    {
+      "owasp": "A04:2021 Insecure Design",
+      "description": "Re-enter guard semantics do not enable resource exhaustion. allowReEnter=false collision -> swallowed DuplicateKeyException -> benign no-op (verified in insertOneFunnel). allowReEnter=true -> cancel-then-insert (bounded: one cancel + one insert per enroll). No uncontrolled multiplication. The semantic edge (return-to-caller no-op when parent still in-flight, Risk 2 / code-research s14.7) is a correctness/UX concern, not a security one; the recommended endParentAfter=true pattern avoids it.",
+      "severity": "low",
+      "recommendation": "No security change needed. Keep the separate greppable-WARN for the allowReEnter=false no-op (AC mandates it) so silent non-returns are observable/auditable."
+    },
+    {
+      "owasp": "A03:2021 Injection",
+      "description": "No injection vectors in the new step config. New fields (targetFunnelId, targetEntryStepId, endParentAfter) are stored as flat POJO scalars on the embedded FunnelStep with no _class type marker and no migration, and are used only as Mongo _id lookups (findById) and snapshot cursor values, not interpolated into query strings or shell/log injection sinks. endParentAfter is a boolean. No deserialization of untrusted polymorphic input (A08).",
+      "severity": "low",
+      "recommendation": "Ensure log lines for the new WARN ids (FUNNEL_SUBSCRIBE_SKIP_*) log ids only (funnelId/subscriberId/projectId), not user-controlled free text, matching the greppable id-only convention - prevents log injection/forging and keeps alert rules stable."
+    },
+    {
+      "owasp": "A09:2021 Security Logging and Monitoring Failures",
+      "description": "Spec mandates greppable WARN logs for every silent-skip branch (depth-cap exceeded, rate-limit exceeded, draft/deleted target, deleted entry-step fallback, re-enter no-op). This gives an audit/monitoring trail for runaway attempts and stale-reference enroll drops, consistent with existing LOG_DROP_DEPTH_CAP / LOG_DROP_VOLUME / LOG_DROP_FANOUT conventions. Adequate for this feature.",
+      "severity": "low",
+      "recommendation": "Use distinct, stable greppable log ids per skip reason (do not collapse depth-cap and rate-limit drops into one id) so existing/new log-based alerts can distinguish a malicious runaway (rate/depth drops) from benign stale references (target-missing). Align prefixes with the Phase-3 LOG_DROP_* family."
+    },
+    {
+      "owasp": "A05:2021 Security Misconfiguration",
+      "description": "Backstop limits are externalized as env-overridable properties (FUNNEL_MAX_ENROLL_DEPTH=10, FUNNEL_AUTO_ENROLL_RATE_PER_MIN=20, FUNNEL_MAX_FANOUT_PER_EVENT=50). Reused, not changed, by this feature. A misconfigured very-high max-enroll-depth would weaken the only Redis-independent cycle bound. Informational - defaults are sane and unchanged.",
+      "severity": "low",
+      "recommendation": "No change. Optionally assert in an IT that the depth-cap default (10) is the effective bound for SUBSCRIBE chains so an accidental prod override is caught by deployment review."
+    }
+  ]
+}

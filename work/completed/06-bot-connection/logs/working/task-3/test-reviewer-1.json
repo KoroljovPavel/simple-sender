@@ -1,0 +1,49 @@
+{
+  "status": "passed",
+  "summary": "Eleven tests across three files cover every surface introduced by Task 3 — the BotStatus Jackson round-trip, all three BotRepository derived queries, and all three indexes including partial-filter enforcement. Tests use the right tooling for each layer (plain JUnit for the pure enum/Jackson test, AbstractIntegrationTest + Testcontainers Mongo for repository/index behaviour, StepVerifier for reactive assertions). Implementation matches the task TDD-anchor list one-to-one; assertions are concrete (DuplicateKeyException type, partial-filter expression parsed via Document.parse, uniqueness flags), with no mock-return anti-patterns. A few tests could tighten their assertions to be more discriminating against future regressions, but none are empty or mock-only.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java:78-80",
+      "issue": "findByProjectId_returnsAllStatusesForProject uses .expectNextCount(2) only — it counts rows but never verifies the two rows actually carry the two different statuses promised by the test name (\"AllStatuses\"). A repository bug that silently filters by status, or returns duplicates of the same row, could still produce a count of 2 and pass.",
+      "recommendation": "Replace expectNextCount(2) with two .assertNext(...) blocks (or .recordWith(ArrayList::new).expectNextCount(2).consumeRecordedWith(list -> ...)) that assert the collected set of statuses equals {CONNECTED, DISCONNECTED} and the collected telegramBotIds equal {444L, 555L}. This makes the test fail if either status-filtering creeps in or duplication occurs."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java:62-71",
+      "issue": "findFirstByTelegramBotIdAndStatus_returnsConnectedBotByTelegramId seeds only a single CONNECTED row, so the test would still pass if the repository ignored the status argument entirely (the query would still return the only row in the collection). The litmus question \"if the status filter were removed, would this test fail?\" answers no.",
+      "recommendation": "Seed an additional DISCONNECTED row with the SAME telegramBotId=123L in a different project, then assert the query returns the CONNECTED one (assert bot.getStatus() == BotStatus.CONNECTED and bot.getProjectId() == \"proj-3\"). This makes the test discriminate against an implementation that omits the status filter."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java:54-59",
+      "issue": "findByProjectIdAndStatus_returnsEmptyWhenNoConnectedBot has only a single DISCONNECTED row in the whole collection. The test would still pass if findByProjectIdAndStatus ignored projectId and only filtered by status — there is no CONNECTED row anywhere to leak through.",
+      "recommendation": "Add a CONNECTED row for a DIFFERENT projectId (e.g. proj-OTHER with telegramBotId=999L) before the query under test. Then the empty result genuinely proves both filters work in tandem: status must equal CONNECTED AND projectId must equal proj-2."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/BotRepositoryTest.java:47-48, 67-68",
+      "issue": "Uses fully-qualified org.assertj.core.api.Assertions.assertThat(...) inside StepVerifier .assertNext lambdas while a static import is already present at the top of BotIndexTest. BotRepositoryTest has no static import for AssertJ at all, leading to verbose inline FQNs. Style nit, no behavioural impact.",
+      "recommendation": "Add `import static org.assertj.core.api.Assertions.assertThat;` to BotRepositoryTest and replace the four inline FQN calls with the imported static method."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 8,
+      "failed": 3
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 2,
+      "integration": 9,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,97 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17],
+  "iteration": 2,
+  "status": "changes_required",
+  "summary": "5 critical cross-task issues: (1) Task 5 depends on Task 3 but both are in wave 2 — same-wave dependency violates parallel-wave semantics; (2) Task 11 depends on Task 10 but both are in wave 4 — same-wave dependency; (3) Task 8 calls TelegramSendException.terminalReason added by Task 6 yet does NOT declare depends_on: [6] (and both are in wave 3 anyway); (4) No task owns adding SUBSCRIBER_EXPORT_TOKEN_KEY to .env.example — Task 1 explicitly defers it as 'operator concern', Task 9 enumerates only the other 4 vars, Task 16 verifies presence assuming someone added it; (5) Task 11 uses error code 'tag_slug_taken' for an AddTagDialog 409 assertion while the canonical code defined by Task 4 + tech-spec line 348 is 'tag_name_taken'. Plus 2 major issues around duplicate Tag.subscriberCount mutation paths and unused TagService.incrementCounter method.",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "decomposition",
+      "task": 5,
+      "section": "frontmatter",
+      "issue": "Task 5 declares `depends_on: [1, 3]` AND `wave: 2`. Task 3 is also `wave: 2`. A task cannot depend on another task in the same wave — same-wave tasks are supposed to run in parallel. Task 5 even acknowledges this in its body ('that's compatible with the parallel-friendly wave model so long as the dependency is declared') but this contradicts the wave model rather than respecting it: if Task 5 truly serializes after Task 3, Task 5 must be in wave 3 (or later).",
+      "fix": "Move Task 5 to `wave: 3`. Update dependents: Task 8 already declares `depends_on: [3, 4, 5]` and `wave: 3` — moving Task 5 to wave 3 makes Task 8 invalid for the same reason, so Task 8 must move to wave 4 (and downstream Tasks 10/11 to wave 5, etc.). Alternative: split Task 5 into two pieces — (a) `CustomFieldsController` + DTOs + validator (no SubscriberService dependency, stays wave 2 alongside Task 3) and (b) `SubscriberCustomFieldsController` PATCH endpoint that calls `recordCustomFieldsSet` (depends on Task 3, moves to wave 3). The split avoids cascading wave-shifts."
+    },
+    {
+      "severity": "critical",
+      "category": "decomposition",
+      "task": 11,
+      "section": "frontmatter",
+      "issue": "Task 11 declares `depends_on: [2, 8, 9, 10]` AND `wave: 4`. Task 10 is also `wave: 4`. Same-wave dependency violation. Task 11 also documents a multi-task file edit (`frontend/pages/projects/[projectId]/subscribers/index.vue`) that requires Task 10's scaffold to land first — confirming the serialization is real, not merely a soft preference.",
+      "fix": "Move Task 11 to `wave: 5`. This pushes Tasks 12/13/14 (audit wave) from `wave: 5` to `wave: 6`, Task 15 from `wave: 6` to `wave: 7`, Task 16 from `wave: 7` to `wave: 8`, Task 17 from `wave: 8` to `wave: 9`. Alternative: merge Task 11's Recent-exports dialog mount into Task 10 (single owner of the `subscribers/index.vue` toolbar) and keep Task 11 limited to /tags + /custom-fields + Playwright + runbook — at which point Task 11's only Task-10 dependency would be the `subscribers/index.vue` page shell which Task 2 already provides, making `depends_on: [2, 8, 9]` correct and the wave assignment valid."
+    },
+    {
+      "severity": "critical",
+      "category": "decomposition",
+      "task": 8,
+      "section": "frontmatter",
+      "issue": "Task 8's `POST /subscribers/{id}/messages` handler branches on `TelegramSendException.terminalReason == BLOCKED_BY_USER | CHAT_NOT_FOUND | OTHER` (see task body lines 46-48, 111). `TelegramSendException.TerminalReason` is added by Task 6. Task 8 declares `depends_on: [3, 4, 5]` — Task 6 is missing from the dependency list. Compounded: Task 6 and Task 8 are BOTH in `wave: 3`, so even adding the dep would still violate the same-wave rule. Task 8's body acknowledges 'Implicit: Task 6 must land before personal-message tests can assert markBlocked/markDeleted side effects' — turning the implicit into an explicit `depends_on` makes the same-wave conflict visible.",
+      "fix": "Add `6` to Task 8's `depends_on` array (→ `[3, 4, 5, 6]`) AND move Task 8 to `wave: 4` (one wave after Task 6). This cascades into Tasks 10/11 wave-shifts (already required for finding #2). Alternative: merge Task 6 into Task 8 as a sub-step — both touch the bot↔subscriber boundary and would naturally co-review."
+    },
+    {
+      "severity": "critical",
+      "category": "consistency",
+      "task": 16,
+      "section": "Acceptance Criteria",
+      "issue": "Task 16 AC bullet 'All six env vars present in .env.example with documentation comments' assumes SUBSCRIBER_EXPORT_TOKEN_KEY was added by some upstream task. Inventory: Task 1 owns `application.properties` line for the property but EXPLICITLY DEFERS the .env.example entry to 'operator concern, not this task' (line 42); Task 3 adds SUBSCRIBER_RATE_LIMIT_START_PER_MIN only; Task 9 step 8 enumerates exactly 4 entries (SUBSCRIBER_EXPORT_RETENTION_DAYS, SUBSCRIBER_DOWNLOAD_RATE_LIMIT_PER_MIN, SUBSCRIBER_EXPORT_URL_TTL_HOURS, SUBSCRIBER_PERSONAL_MESSAGE_RATE_LIMIT_PER_MIN) and does NOT include SUBSCRIBER_EXPORT_TOKEN_KEY. No task owns adding the placeholder line + documentation comment for SUBSCRIBER_EXPORT_TOKEN_KEY. Task 16 grep `grep -nE '^(SUBSCRIBER_EXPORT_TOKEN_KEY|...)=' .env.example` will return only 5 lines and the AC will fail.",
+      "fix": "Assign SUBSCRIBER_EXPORT_TOKEN_KEY to Task 1's `.env.example` deliverables (it owns the property and is the natural single-source for the crypto-key env var, mirroring how BOT_TOKEN_ENCRYPTION_KEY ownership lives in the crypto module). Update Task 1's `.env.example` to add `SUBSCRIBER_EXPORT_TOKEN_KEY=` (empty placeholder) with the doc comment '32 bytes / 64 hex chars; generate with `openssl rand -hex 32`. NEVER commit a real value.' Alternative: add it to Task 9 (since Task 9 already owns 4 of the 6 export-related env vars). Either way, append AC: 'SUBSCRIBER_EXPORT_TOKEN_KEY line added to .env.example as empty placeholder with doc comment mirroring BOT_TOKEN_ENCRYPTION_KEY precedent.'"
+    },
+    {
+      "severity": "critical",
+      "category": "consistency",
+      "task": 11,
+      "section": "TDD Anchor",
+      "issue": "Task 11 Vitest case `AddTagDialog_apiConflict_rendersSubmitError` (line 90) asserts the backend returns 409 with code `tag_slug_taken` and resolves locale key `errors.tags.create.codes.tag_slug_taken`. Canonical error code per Task 4 line 57 (`AppException.conflict(\"tag_name_taken\", ...)`) and tech-spec line 348 (`tag_name_taken (409)`) is `tag_name_taken`, NOT `tag_slug_taken`. This mismatch means: (a) the Vitest test will be testing a code the backend never emits → false positive; (b) Task 2's locale-key seeding may have used `tag_name_taken` (the canonical one) → the test will fail to find the i18n key OR Task 2 used `tag_slug_taken` and the dialog will never resolve the real backend error.",
+      "fix": "Rename in Task 11 line 90: `tag_slug_taken` → `tag_name_taken` (both in the assertion comment and the locale-key reference). Cross-check Task 2's locale seeding plan (Task 2 line 34 lists `tags.*` keys but does not enumerate the error-code subkeys explicitly — verify or fix in Task 2's `errors.tags.create.codes.*` namespace to ensure `tag_name_taken` is present in both uk.json and en.json)."
+    },
+    {
+      "severity": "major",
+      "category": "decomposition",
+      "task": 3,
+      "section": "What to do",
+      "issue": "Task 3 step 1 extends SubscriberService with six new methods including `addTag(projectId, subscriberId, slug)` and `removeTag(...)`. The atomic `$inc subscriberCount` on the Tag document is performed INSIDE SubscriberServiceImpl.addTag/removeTag. Meanwhile Task 4 ships `TagService.incrementCounter(projectId, slug, delta)` (line 37) for exactly the same purpose. Task 8 calls only `subscriberService.addTag/removeTag`, never `tagService.incrementCounter`. Result: `TagService.incrementCounter` is dead code — defined by Task 4, never called by any other task. Conversely, the atomic counter mutation is now owned by two different tasks (Task 3 implements it in SubscriberServiceImpl; Task 4 implements it in TagService), violating single-owner.",
+      "fix": "Pick one owner: (a) DELETE `TagService.incrementCounter` from Task 4 entirely — counter mutation lives only inside `SubscriberServiceImpl.addTag/removeTag` per Decision 10 sole-writer pattern. Task 4 keeps `findOrCreate`, `create`, `list`, `updateLabel`, `deleteWithCascade` only. OR (b) keep `TagService.incrementCounter` and require Task 3's `SubscriberServiceImpl.addTag/removeTag` to CALL `tagService.incrementCounter(...)` rather than embed the `mongoTemplate.update` directly — single source for the counter primitive, but adds cross-service coupling. Option (a) is the cleaner choice per Decision 10's 'SubscriberServiceImpl is the SOLE writer'. Either way, decisions must be reflected in both Task 3 and Task 4."
+    },
+    {
+      "severity": "major",
+      "category": "carry-forward",
+      "task": 3,
+      "section": "What to do",
+      "issue": "tech-spec Task 3 entry (line 526) says 'Extend `SubscriberService` interface with three new methods (`markBlockedByChatId`, `markDeletedByChatId`, `unsubscribeManual`)'. Task 3 task file expands this to SIX methods (adds `recordCustomFieldsSet`, `addTag`, `removeTag`) to satisfy Decision 10 sole-writer ownership and the call sites in Tasks 5 + 8. This is a substantive carry-forward deviation from tech-spec: the interface contract grew during decomposition but tech-spec was not updated.",
+      "fix": "Update tech-spec Task 3 entry to mention all six methods OR call out the decomposition refinement in a post-completion note. Task 5's post-completion checklist already includes 'add recordCustomFieldsSet to Task 3 method list in tech-spec' — extend this to also cover addTag/removeTag. Without the tech-spec sync, future readers and reviewers see a 3-method contract in the spec but a 6-method contract in code."
+    },
+    {
+      "severity": "major",
+      "category": "decomposition",
+      "task": 5,
+      "section": "Files to modify",
+      "issue": "Task 5 ships a NEW file `backend/src/main/java/com/botfunnel/subscriber/SubscriberCustomFieldsController.java` (acknowledged in Task 5 line 153/178 as an extension to tech-spec Task 5's 'Files to modify' list, with a post-completion checklist item to update tech-spec). This is a real new artifact not enumerated by tech-spec. Acceptable refinement (sibling controller avoids Task 8 / Task 5 merge collision on SubscriberController), but should be reflected in tech-spec via the post-completion update — and Task 8 (line 568 'SubscriberController endpoints') description currently still lists tag attach/detach + manual unsubscribe + send-message on `SubscriberController` and does NOT mention that custom-fields PATCH lives on a sibling controller. A future Task 8 reviewer might be surprised that PATCH /custom-fields is missing.",
+      "fix": "Add a one-line clarification in Task 8: 'Note: PATCH /subscribers/{id}/custom-fields lives on the sibling `SubscriberCustomFieldsController` (owned by Task 5) — NOT on `SubscriberController`. Do not duplicate or move.' This is a 2-line edit, prevents Task 8's reviewers from flagging the PATCH endpoint as missing."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 11,
+      "section": "Files to modify",
+      "issue": "Task 11 documents that `frontend/pages/projects/[projectId]/subscribers/index.vue` is a multi-task file co-owned with Task 10. Task 10 also lists the same file in its 'Files to modify' (line 116). Both tasks include explicit coordination guidance (Task 10: 'Does NOT modify i18n/locales/*'; Task 11: '<!-- TASK-11 RecentExportsDialog mount --> marker'). This is fine if the same-wave dependency from finding #2 is fixed (Task 11 must land after Task 10). But the merge coordination depends on serialized execution — if Task 11 starts before Task 10 (same wave 4), conflict is certain.",
+      "fix": "Already addressed via finding #2 (move Task 11 to wave 5). Once serialized, the marker-comment strategy is sound. No additional change needed beyond fixing finding #2."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 7,
+      "section": "frontmatter",
+      "issue": "Task 7 is in `wave: 2` and depends only on Task 1 (`depends_on: [1]`). This is internally consistent. But Task 7 extends `ProjectHardDeleteJob` to cascade-delete from GridFS files keyed by `metadata.projectId` — and Task 9 ships the code that PUTS files into GridFS with that `metadata.projectId`. If Task 7 runs in wave 2 but Task 9 runs in wave 3, there's no production-data ordering issue (Task 7 just adds cascade logic; GridFS files are seeded by tests). However, Task 7's IT (`ProjectHardDeleteJobIT` extension) seeds a GridFS file with `metadata.projectId` directly via `MongoTemplate` + `GridFsOperations` — no Task 9 dependency needed for the test. The wave assignment is correct in practice, but the cross-task contract on the `metadata.projectId` key shape is implicit; if Task 9 ever changes the metadata key from `projectId` to `project_id`, Task 7's cascade silently misses files.",
+      "fix": "Add a one-line note in BOTH Task 7 (cascade implementation) and Task 9 (GridFS write): 'GridFS metadata key is `projectId` (top-level inside the metadata document) — this is the cross-task contract used by ProjectHardDeleteJob cascade. Do not rename without updating Task 7.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 17,
+    "issues_found": 10,
+    "critical": 5,
+    "major": 3,
+    "minor": 2
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "task": "6 — engine slow-lane wire-format ITs for SET_KEYBOARD/CLEAR_KEYBOARD + keyword-dispatch",
+  "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+  "status": "approved",
+  "summary": "Tests-only change. All production signatures, wire shapes (Decision 5), no-park contract (Decision 4), and body-assert idioms (Decision 9) verified against production code and reference ITs. Helper builders, seedExecution varargs, and synchronous dispatch path all check out. drainRecordedRequests correctly clears the JVM-singleton cumulative request log before the body-asserting takeRequest(), with no response/request queue interaction bug. Suite is green (60 tests). Only minor cosmetic findings.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": 1408,
+      "description": "Tautological assertion: assertThat(done.getStatus()).isNotEqualTo(ExecutionStatus.waiting_for_reply) immediately follows assertThat(done.getStatus()).isEqualTo(ExecutionStatus.completed). Since status was just pinned to completed, it can never equal waiting_for_reply — the second assert adds no coverage. The inline 'no-park contract' comment overstates what it verifies.",
+      "recommendation": "Drop the redundant isNotEqualTo line; the isEqualTo(completed) already encodes the no-park (fire-and-forget) contract. If you want the no-park intent documented, keep it as a comment on the equality assert rather than a second assertion."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": 1495,
+      "description": "drainRecordedRequests() drains the MockWebServer REQUEST log; enqueueOk() enqueues RESPONSES into a separate QueueDispatcher queue. The two queues are independent, so calling drain after enqueueOk(1) (test 1/2) does not consume the queued OK response — verified safe. Noting only because the call ordering (enqueueOk then drain then sweep) could read as coupling at a glance; it is not.",
+      "recommendation": "No change required. Optionally a one-line comment clarifying 'drains requests, not the enqueued response' would preempt future confusion, but the existing helper comment is already thorough."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": 1426,
+      "description": "buttonLabelText_dispatchesMatchingKeywordFunnel asserts dispatch identity + enrollDepth 0 only; it does not drain or assert Telegram traffic. Verified that dispatchForSubscriber performs a synchronous mongoTemplate.insert (FunnelExecutionFactory.insertExecutionAt) with no @Async / JobRunr enqueue and no send on this path, so the immediate mongoTemplate.find sees the row and no stray request lands in the singleton log. Preconditions (CONNECTED bot for projectId via @BeforeEach, active keyword funnel with lowercase 'menu' substring of lowercased 'Menu') are all satisfied.",
+      "recommendation": "No change required. Test correctly pins the dispatch leg only; the text→dispatch webhook leg is covered elsewhere (ProcessTelegramUpdateJobTest.plainText_dispatchesKeyword) as the comment states."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": 1419,
+      "description": "Cross-file consistency confirmed: KeyboardRow(List<KeyboardButton>) and KeyboardButton(String) are records; FunnelStep.setIsPersistent/​setOneTimeKeyboard take boxed Boolean (auto-boxed from the helper's boolean params — fine); StepType.SET_KEYBOARD/CLEAR_KEYBOARD exist; FunnelEventService.dispatchForSubscriber(String,String,String,String,int) and TRIGGER_KEYWORD constant exist; FunnelService.TRIGGER_KEYWORD == FunnelEventService.TRIGGER_KEYWORD == 'keyword'; FunnelExecution.getEnrollDepth() exists. Wire shape in StepExecutor.buildReplyKeyboardMarkup matches the asserts: keyboard=array-of-arrays-of-{text}, is_persistent from step, resize_keyboard hardcoded true, one_time_keyboard from step, remove_keyboard=true for CLEAR, body.text=keyboardText.",
+      "recommendation": "No change required. All callsites match production signatures."
+    }
+  ]
+}

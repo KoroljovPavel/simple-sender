@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "summary": "Round 2 cleanly resolves every round-1 finding. All 6 items (2 major + 4 minor) are addressed with substantive test additions, not surface tweaks. The end-to-end EventService->EventRepository->Mongo audit chain is now exercised by AuthControllerIT.verifyEmail_validToken_userActive_tokenCleared via Awaitility-poll on eventRepository.findAll(); the >30d soft-delete repurpose path now has IT coverage (register_softDeletedEmail_olderThan30Days_succeeds_andRepurposesDocument) that asserts same _id, status=pending, deletedAt=null, AND isSuperAdmin=false (which doubles as a regression guard for the security-auditor superadmin-inheritance fix); cleanState() wipes the events collection and Redis keys and no longer swallows mailpit deletion exceptions; verifyEmail_blankToken_returns400_withoutDbCall locks in the guard before the hash call (verifyNoInteractions assertion is strong); resendVerification_unknownEmail IT asserts all three anti-enumeration properties (200 + zero Mailpit + Redis key set); invalid-token IT now asserts both message text AND absence of the TOKEN_EXPIRED code, removing the enumeration drift risk. Two acknowledged-but-deferred minors (Answers.RETURNS_DEEP_STUBS pattern, TokenService 32-byte vs 43-char invariant) are explicitly out of scope for round 2 and the underlying invariants are still tested. Round 2 also added 4 new unit tests covering security-auditor fixes (superAdmin reset, register IP rate limit, Redis fail-open). Two minor cosmetic observations remain (see findings) but do not block.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:283 (resendVerification_unknownEmail_returns200_andSendsNoEmail_andSetsRedisKey)",
+      "issue": "Hard-coded `Thread.sleep(500)` is used to rule out async Mailpit delivery before asserting `getMessageCount() == 0`. This is a sleep-to-prove-a-negative anti-pattern: it slows the suite, and the 500ms window is arbitrary — a slow CI runner could still race past it. The rest of the file uses Awaitility (waitForMessage) for the positive case but cannot easily express 'remained zero for N seconds'. The risk that this flakes is low because the unknown-email branch never enters the email dispatch code path, but the comment 'brief window to rule out async lag' suggests the test author was uncertain.",
+      "recommendation": "Replace with Awaitility's `await().during(...)` pattern: `await().pollDelay(Duration.ofMillis(300)).atMost(Duration.ofSeconds(2)).untilAsserted(() -> assertThat(mailpit().getMessageCount()).isZero());`. This explicitly asserts the count remained zero for the duration and surfaces a clearer failure if it ever changes. Alternatively, since unknown-email completes synchronously without entering EmailService, the sleep can be deleted entirely — confirm by reading AuthService.resendVerification's not-pending branch (it returns Mono.empty() without invoking emailService)."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/auth/AuthControllerIT.java:182-214 (register_softDeletedEmail_olderThan30Days_succeeds_andRepurposesDocument)",
+      "issue": "The IT asserts the repurpose flow correctly for the carry-over fields the round-1 finding flagged most loudly (deletedAt, isSuperAdmin, _id stability, status=pending, name update), but does not assert the other carry-over resets that AuthService.applyRegistrationAsync performs: `passwordResetTokenHash`, `passwordResetExpiresAt`, `passwordResetUsedAt`. If a future refactor accidentally drops those resets, a soft-deleted account with an outstanding reset token could be re-registered and the new owner would inherit a valid reset token. The unit test at AuthServiceRegistrationTest:200 also doesn't seed those fields, so this regression would land silently.",
+      "recommendation": "Extend the existing IT: seed `existing.setPasswordResetTokenHash(\"old-hash\"); existing.setPasswordResetExpiresAt(Instant.now().plus(Duration.ofHours(1))); existing.setPasswordResetUsedAt(null);` before save, then after the register call assert `assertThat(saved.getPasswordResetTokenHash()).isNull();` and the same for the other two. Three extra lines, one strong defense-in-depth assertion."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 31,
+      "passed": 31,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 25,
+      "integration": 9,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-card-preview",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "All five round-1 gaps are closed and the new tests are load-bearing. (1) data:image/... URL → icon/label fallback with explicit DOM-absent assertion. (2) Positive caption assertion: IMAGE + http(s) url + caption → [data-test=funnel-canvas-preview-caption] renders exact text. (3) ALBUM http(s): thumb src asserted to equal album0.png (the FIRST item, not album1.png); caption asserted to 'Album caption'. ALBUM non-http items[0] (tg-file-id-opaque) → no thumb img, fallback span present, opaque id absent from DOM. (4) buildEdges MESSAGE-guard: DELAY + timeoutTargetStepId → zero timeout edges (litmus: deleting the stepType === 'MESSAGE' guard makes the edge appear, test fails); MESSAGE + timeoutTargetStepId → timeout edge with correct source/target (litmus: removing emit path makes findEdge throw). (5) Dead key 'funnels.canvas.preview.imageUnavailable' removed from REQUIRED_KEYS list and from both locale files; remaining preview keys still enforced. No existing tests removed or weakened.",
+  "status": "passed",
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 9,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

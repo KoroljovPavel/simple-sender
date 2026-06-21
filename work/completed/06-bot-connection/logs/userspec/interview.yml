@@ -1,0 +1,739 @@
+# Interview Plan for Feature Planning — 06-bot-connection
+
+interview_metadata:
+  started: "2026-05-13 19:23:45"
+  last_updated: "2026-05-13 20:45:00"
+  status: "completed"
+  can_resume: false
+  current_question_num: 5
+  feature_size: "L"
+
+# ============================================================================
+# Conversation History
+# ============================================================================
+conversation_history:
+  - question_num: 0
+    timestamp: "2026-05-13 19:20:00"
+    topic: "scope_decomposition"
+    agent_question: |
+      User invoked /new-user-spec and asked me to plan Epic 04 (Telegram bots) from
+      workflow/04-телеграм-боти/README.md. I analyzed the README and proposed
+      decomposition into three sub-features (04a/04b/04c) since the original epic
+      is too large for one user-spec (~30 AC, 4 distinct domains).
+    user_answer: |
+      User agreed with the decomposition. Asked me to write notes for each sub-feature
+      into workflow/04-телеграм-боти/{04a,04b,04c}/notes.md (done). Asked about /start
+      payload — confirmed it's safe to defer if we (a) save raw_updates with full payload
+      and (b) command parser returns (command, payload) tuple from day one.
+      Renamed first sub-feature from "04a-bot-connection" to "06-bot-connection"
+      (continuing work/ folder numbering after 05-projects).
+    summary: |
+      Decomposition agreed. This feature is the FIRST of three sub-features from Epic 04.
+      Scope locked: Settings→Bot UI, connect/disconnect, getMe validation, AES-256-GCM
+      encryption at-rest, webhook setup/cleanup, bot uniqueness, masked token UI,
+      test message. NOT in scope: webhook ingestion endpoint (06b), TelegramSender
+      service (06c, used here as stub for test message), /start /stop processing
+      (06b + Epic 05/06).
+
+  - question_num: 5
+    timestamp: "2026-05-13 20:15:00"
+    topic: "cycle2_batch4_completeness_fixes"
+    agent_question: |
+      After completeness-checker found 3 issues, follow-up:
+      Q19. i18n error scheme: useApiError resolves by HTTP STATUS only (codes
+        ignored). Re-map: 400 (bean-validation @Pattern → token format),
+        422 (token_invalid), 409 (bot_already_connected), 502 (telegram_unavailable),
+        429 (rate_limit_exceeded). Keys: errors.bot.connect.{status}.
+      Q20. deleteWebhook failure during Disconnect: option (б) best-effort —
+        3 retries, on persistent failure log warning + proceed locally
+        (status=disconnected, token+secret nulled). Orphan webhook in Telegram
+        is harmless: subsequent updates to our endpoint fail secret check → 401.
+      Q21. test-message without 06b: endpoint exists, returns 422
+        errors.bot.testMessage.422 "send /start first" until chat_id is known
+        (06b/Epic 05 populates this via subscriber upsert).
+    user_answer: |
+      Q19: agreed.
+      Q20: б (best-effort).
+      Q21: agreed (endpoint exists, returns 422 until chat_id available).
+    summary: |
+      All completeness gaps resolved. i18n scheme aligned with actual useApiError
+      (status-only). Disconnect is best-effort against Telegram failures (always
+      succeeds locally). Test-message endpoint exists from day one but degrades
+      gracefully to 422 until 06b lands.
+
+  - question_num: 4
+    timestamp: "2026-05-13 20:00:00"
+    topic: "cycle2_batch3"
+    agent_question: |
+      Q15. UI flow detailed: Connect state (input + inline hint + spinner), Connected
+        state (@username, first_name, masked token "1234567890:•••...xyz", Disconnect +
+        Send Test buttons, inline note about /start prerequisite). Errors: inline for
+        validation, toast for transient server errors.
+      Q16. Env: BOT_TOKEN_ENCRYPTION_KEY_V1 (32-byte hex, openssl rand -hex 32);
+        APP_URL must be HTTPS in prod. TokenEncryptor fail-fast on missing/short key.
+        Local dev needs ngrok. Production prep deferred to GitHub Actions secrets.
+      Q17. Risks: R1 token leak (encryption+masked+log assert), R2 leakage on 409
+        (generic msg), R3 key rotation deferred with keyVersion field ready, R4 race
+        (service pre-check + partial unique index + DuplicateKeyException), R5 webhook
+        secret leak (header verify — implementation in 06b, secret generation here).
+      Q18. Token caching: NOT in 06 (1-2 decrypts per session). Deferred to 06c.
+    user_answer: |
+      Q15: agreed.
+      Q16: all OK.
+      Q17: agreed.
+      Q18: agreed.
+    summary: |
+      Cycle 2 batch 3 closed — final batch. UI flow locked, env vars defined,
+      risk register finalized, token caching deferred to 06c.
+      Cycle 2 fully complete. All required phase2/phase3 items ≥ 85%.
+
+  - question_num: 3
+    timestamp: "2026-05-13 19:50:00"
+    topic: "cycle2_batch2"
+    agent_question: |
+      Q10. Error taxonomy: 5 codes — token_format_invalid (400), token_invalid (400),
+        bot_already_connected (409, generic message no leakage), telegram_unavailable
+        (502 for 5xx+timeout), rate_limit_exceeded (429). i18n keys errors.bot.connect.codes.*
+      Q11. keyVersion field: add NOW (cheap future-proof; active rotation infra deferred).
+      Q12. Verification: 10-step manual smoke checklist on staging (BotFather create,
+        connect, test message, BotFather webhook check, uniqueness via second project,
+        disconnect, reconnect with new doc).
+      Q13. Sidebar: NO top-level "Bot" entry; access only via Settings → Bot sub-nav;
+        warning banner on project home if bot not connected.
+      Q14. Schema final: bots {_id, projectId, telegramBotId, telegramUsername, telegramFirstName,
+        encryptedToken(nullable), keyVersion, webhookSecret(nullable), status,
+        createdAt, connectedAt, disconnectedAt(nullable)}.
+        Indexes: {projectId:1}, partial unique {telegramBotId:1,status:1} on status="connected".
+        Events: bot_connected / bot_disconnected / bot_test_message_sent (others reserved).
+    user_answer: |
+      Q10: agreed.
+      Q11: agreed.
+      Q12: sufficient.
+      Q13: agreed.
+      Q14: sufficient.
+    summary: |
+      Cycle 2 batch 2 closed. Error taxonomy locked. keyVersion field added now.
+      Manual smoke checklist locked. Settings is the only entry point. Bot schema
+      and events finalized.
+
+  - question_num: 1
+    timestamp: "2026-05-13 19:28:00"
+    topic: "cycle2_batch1"
+    agent_question: |
+      Q5. setWebhook failure: hard-fail with inline 3-retry exponential backoff (1s/2s/4s),
+        no doc persisted if final fail. HTTP 502 with code `telegram_unavailable`.
+        Invariant: bot doc exists ONLY if webhook fully registered.
+      Q6. Avatar display: option A — drop from MVP, show only @username + first_name
+        (avoids token-in-URL risk + extra Telegram calls).
+      Q7. Manual user actions formal text: (1) BotFather /newbot, (2) owner must /start
+        once for test message, (3) BotFather bot deletion detected lazily on next call.
+      Q8. Disconnect: simple confirmation modal (Cancel/Disconnect), NO type-name-to-confirm.
+      Q9. Settings refactor: option A — convert single settings.vue to folder
+        settings/index.vue (general+danger) + settings/bot.vue + horizontal sub-nav.
+    user_answer: |
+      Q5: agreed (asked why 502 — answered: 502 distinguishes upstream failure from
+        our own bug; 422 doesn't fit transient external; single code
+        `telegram_unavailable` for all transient external failures including timeout).
+      Q6: A (drop avatar).
+      Q7: all correct.
+      Q8: yes (simple modal).
+      Q9: A (folder + sub-nav).
+    summary: |
+      Cycle 2 batch 1 closed. Key decisions:
+      - Hard-fail webhook setup with 3 inline retries; 502 + `telegram_unavailable`
+      - NO avatar (only @username + first_name)
+      - User-facing manual actions documented (BotFather + first /start)
+      - Disconnect modal simple confirmation (no type-name)
+      - Settings becomes folder; sub-route /projects/{id}/settings/bot
+    topic: "cycle1_batch1"
+    agent_question: |
+      Q1. Testing strategy: WireMock backend integration tests (no real Telegram in CI),
+        unit tests for TokenEncryptor, Vitest for frontend page, NO E2E — manual smoke
+        checklist on staging instead. Agreed?
+      Q2. Constraints details:
+        a) Rate-limit `brute:bot-connect:{userId}` 10/15min (Redis), fail-open. Agreed?
+        b) Pre-getMe regex validation `^\d+:[A-Za-z0-9_-]{35}$` returning `token_format_invalid`
+           BEFORE network call. Agreed?
+      Q3. User problem first-person framing: 10-min onboarding gatekeeper. Sample prose
+        proposed verbatim.
+      Q4. Disconnect data model: soft-disconnect (doc stays with `disconnectedAt`,
+        `encryptedToken` + `webhookSecret` NULLED). Reconnect = NEW document. Same bot
+        OR different bot — both create new doc; old stays for audit. Agreed?
+    user_answer: |
+      Q1: agreed without E2E, manual smoke on staging.
+      Q2: agreed (both rate-limit and pre-regex).
+      Q3: framing accepted.
+      Q4: accepted — soft-disconnect + new-doc-on-reconnect.
+    summary: |
+      Cycle 1 closed. Testing strategy locked (WireMock + Vitest + manual smoke).
+      Constraints final: rate-limit + pre-regex. Disconnect model: soft + new-doc.
+      Code research findings (read separately at code-research.md):
+      - bot module is GREENFIELD (no skeleton exists)
+      - No WebClient bean configured anywhere — build fresh TelegramApiClient
+      - No AES utilities — build TokenEncryptor over javax.crypto AES/GCM/NoPadding
+      - WireMock NOT on classpath — add to build.gradle test deps
+      - settings.vue is a SINGLE FILE; convert to folder for sub-routes (settings/index.vue + settings/bot.vue)
+      - i18n parity gate enforces uk/en sync — add bot.* + errors.bot.*
+      - PII rule from EventService: never log raw tokens in event metadata
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "06-bot-connection"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 95
+    status: "complete"
+    value: |
+      Page "Settings → Bot" inside a project allows the project owner to connect their
+      Telegram bot by pasting the bot token. On Connect: validate token via Telegram
+      getMe API; if valid — encrypt token (AES-256-GCM, keyVersion=1) and persist,
+      display bot @username + first_name (no avatar in MVP), and auto-register webhook
+      at {APP_URL}/webhooks/telegram/{projectId} with a per-project random 32-byte hex
+      secret token. Disconnect best-effort calls deleteWebhook in Telegram (3 retries,
+      log+proceed on persistent failure), clears the encrypted token and webhook
+      secret, marks the bot as disconnected (soft — document preserved for audit,
+      reconnect creates a NEW document). Bot uniqueness: same Telegram bot cannot
+      be in two `status=connected` documents at once across the platform.
+      Token shown in UI masked as "1234567890:•••...xyz".
+      Test-message endpoint exists from day one; returns 422 until 06b/Epic 05
+      provide subscribers.chatId via /start.
+    gaps: ""
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: |
+      Without a connected bot the project is inert — no subscribers can arrive, no
+      messages can be sent, no funnel/broadcast logic has anything to operate on.
+      This feature is the gatekeeper for ALL downstream value from the platform
+      (Epics 05, 06, 07, 08).
+    gaps: "Needs first-person framing from user perspective; confirm the platform-MVP
+      framing (10-min onboarding goal from project.md)."
+    required: true
+
+  target_users:
+    score: 50
+    status: "partial"
+    value: |
+      Project owner (role = User from project.md). The page lives under the
+      project-scoped settings, so access is gated by ProjectService.requireOwned.
+      Super Admin can VIEW projects but NOT see the raw token (per project.md role
+      table). Subscribers are not relevant — they don't see this UI.
+    gaps: "Confirm Super Admin behavior on this page (read-only with masked token, or
+      no access?). What about multi-owner future (currently 1 owner per project)?"
+    required: false
+
+  success_criteria:
+    score: 85
+    status: "complete"
+    value: |
+      Draft AC list from workflow/.../06-bot-connection-equivalent (was 04a) notes:
+      1. Valid token → @username + bot name shown
+      2. Invalid token → localized error with code
+      3. Already-connected bot in another project → 409 without leakage of other project
+      4. Token persisted encrypted; never plaintext in DB
+      5. Webhook auto-registered in Telegram with secret token
+      6. Disconnect → deleteWebhook called, secret + token cleared
+      7. UI shows masked token; no "Show full token" button
+      8. Test message reaches owner chat (requires owner to /start once)
+      9. All endpoints go through ProjectService.requireOwned
+    gaps: "Finalize AC after Cycle 2 (some depend on edge-case decisions); confirm
+      ordering and acceptable phrasing."
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: |
+      Known constraints:
+      - Telegram requires HTTPS for webhooks (production-only; dev needs ngrok/cloudflared)
+      - Token at-rest encrypted with BOT_TOKEN_ENCRYPTION_KEY (env var)
+      - One bot per project on MVP (project.md, Entity Hierarchy)
+      - Bot uniqueness across the platform (uniq Telegram bot id among connected bots)
+      - Stack: Spring WebFlux + reactive WebClient for Telegram API; MongoDB; per-project access via requireOwned
+      - Production deployment platform TBD; APP_URL must be configurable
+      - No raw token ever shown in UI or returned in API responses
+    gaps: "Confirm: rate-limit on connect attempts (brute force on token guessing)?
+      Token format validation pre-getMe? Webhook URL format / project_id verification on Telegram side?"
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      - Unit tests: TokenEncryptor (round-trip + tampered-ciphertext rejection +
+        wrong-key rejection).
+      - Backend integration: @SpringBootTest + WebTestClient. WireMock (add to
+        build.gradle.kts test deps) mocks api.telegram.org. Covers happy-path
+        getMe→setWebhook, 401→token_invalid, 5xx with retry exhaustion→
+        telegram_unavailable (502), timeout→telegram_unavailable, deleteWebhook,
+        uniqueness via partial unique index with DuplicateKeyException catch.
+      - Frontend Vitest: settings/bot.vue page with mocked useApi — form validation,
+        connect/disconnect flows, masked token display, error toast/inline rendering,
+        confirmation modal on disconnect.
+      - NO E2E (Playwright). Real-Telegram coverage via manual smoke on staging
+        (10-step checklist defined in verification_strategy).
+      - i18n parity gate (prebuild) catches uk/en bot.* drift.
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+phase2_user_experience:
+
+  user_stories:
+    score: 85
+    status: "complete"
+    value: |
+      US1 — First-time connect:
+        As a project owner, I open Settings → Bot, paste my Telegram token from
+        BotFather, click Connect, and see my bot's @username + first_name +
+        masked token + Disconnect/Send Test buttons within 5 seconds.
+      US2 — Verify it works:
+        I send /start to my bot in Telegram from my own account, return to the
+        app, click "Send Test Message", and receive "Bot connected ✅" in Telegram.
+      US3 — Replace bot:
+        I disconnect the current bot (confirm modal), paste a different token,
+        click Connect, and the new bot replaces the old (a new bots document is
+        created; old one stays disconnected for audit).
+      US4 — Recover from bad token:
+        I paste an invalid/revoked token; the form shows inline error "Token is
+        invalid or revoked" without losing my input.
+      US5 — Bot uniqueness:
+        I try to connect a bot that's already connected to another of my projects
+        (or another user's project); I see a 409 error "this bot is already
+        connected to another project" without learning anything about that project.
+    gaps: ""
+    required: true
+
+  acceptance_criteria:
+    score: 95
+    status: "complete"
+    value: |
+      AC list (testable, finalized; ordered by user flow):
+
+      AC1. POST /api/v1/projects/{projectId}/bot/connect with valid token returns
+        200 + {telegramBotId, telegramUsername, telegramFirstName, status:"connected",
+        connectedAt}; bots document persisted with encryptedToken + webhookSecret +
+        keyVersion=1. Response NEVER contains the raw or encrypted token.
+      AC2. ConnectBotRequest.token field carries @Pattern("^\\d+:[A-Za-z0-9_-]{35}$").
+        Tokens failing the pattern return 400 (bean-validation, no AppException)
+        BEFORE any network call to Telegram. Frontend resolves errors.bot.connect.400.
+      AC3. Token failing getMe (Telegram responds 401) returns 422 via
+        AppException.unprocessableEntity("token_invalid", ...). Frontend resolves
+        errors.bot.connect.422 = "Token is invalid or revoked". No bots document persisted.
+      AC4. Telegram returns 5xx OR request times out on getMe OR setWebhook → 3 inline
+        retries with 1s/2s/4s exponential backoff; after all 3 exhausted returns
+        502 with code `telegram_unavailable`. Frontend resolves errors.bot.connect.502.
+        No bots document persisted.
+      AC5. Connecting a bot whose telegramBotId already has a bots document with
+        status="connected" (own project, foreign project, soft-deleted project)
+        returns 409 with code `bot_already_connected`. Generic message; response
+        never reveals foreign project name/owner. Triggered by either service-level
+        pre-check OR DuplicateKeyException on the partial unique index — both paths
+        produce the same 409.
+      AC6. Connect succeeds → side effects in this order: (a) getMe verified,
+        (b) setWebhook called with secret, (c) document persisted. Failure at
+        any step aborts the flow — the document is persisted ONLY if all three
+        succeeded. No `pending_webhook` state exists in the schema.
+      AC7. Webhook URL registered in Telegram equals `${APP_URL}/webhooks/telegram/{projectId}`
+        with secret_token = random 32-byte hex generated per Connect.
+      AC8. POST /api/v1/projects/{projectId}/bot/disconnect:
+        (a) calls deleteWebhook in Telegram with 3 retries on 5xx/timeout;
+        (b) on persistent Telegram failure, logs WARN ("orphan webhook may remain")
+            and PROCEEDS;
+        (c) sets bots.status=disconnected, encryptedToken=null, webhookSecret=null,
+            disconnectedAt=now in a single atomic Mongo update;
+        (d) returns 200 with {status:"disconnected"} on success of (c) regardless
+            of (a)/(b) outcome.
+        Returns 404 if no `status=connected` bot exists for projectId.
+      AC9. GET /api/v1/projects/{projectId}/bot returns the current bot with
+        status="connected" (200), or 404 if none. Response shape matches AC1.
+      AC10. POST /api/v1/projects/{projectId}/bot/test-message (no body) sends
+        "Bot connected ✅" via Telegram sendMessage to the owner's chat_id, looked
+        up by `subscribers.{projectId, telegramUserId=currentUser-telegram-link}`.
+        In 06 MVP, subscribers collection is empty (06b/Epic 05 populate it) —
+        therefore the endpoint returns 422 errors.bot.testMessage.422 = "Send
+        /start to your bot in Telegram first, then try again". Endpoint exists
+        from day one and starts working transparently once 06b lands. UI shows
+        the button always with an inline hint below it.
+      AC11. All bot endpoints call ProjectService.requireOwned(currentUserId(),
+        projectId, includeSoftDeleted=false) FIRST. Hostile request bodies with
+        {ownerId: "<other-user-id>"} ignored — owner derived from
+        ReactiveSecurityContextHolder. Foreign/soft-deleted/malformed projectId
+        all collapse to 404 (per anti-enumeration pattern in patterns.md).
+      AC12. Connect endpoint rate-limited per user: Redis `brute:bot-connect:{userId}`
+        INCR + 15-min EXPIRE on first set. 11th attempt within 15min returns 429
+        with code `rate_limit_exceeded`. Fail-open if Redis unreachable
+        (DoS-mitigation, not auth gate — same shape as auth brute-force).
+      AC13. UI never receives or displays the raw token. API responses for any
+        bot endpoint never contain the encryptedToken field. Logback test
+        configuration includes an appender that asserts no regex match of
+        `\d+:[A-Za-z0-9_-]{35}` in rendered log output across all bot tests.
+      AC14. UI shows masked token "{first 10 digits}:•••...{last 3 chars}"
+        (e.g. "1234567890:•••...xyz"). Read-only display, no "Show full token"
+        button.
+      AC15. Disconnect button opens a shadcn-vue confirmation modal with text
+        "Disconnect bot @{username}? Incoming messages will stop and the webhook
+        will be removed. You can reconnect anytime." Cancel/Disconnect buttons.
+        Only on Disconnect click is the API called.
+      AC16. Frontend `pages/projects/[projectId]/settings.vue` is refactored to a
+        folder: `settings/index.vue` (existing general + danger), new `settings/bot.vue`.
+        Horizontal sub-nav within Settings links between them ("General" / "Bot").
+      AC17. i18n keys:
+        - bot.* (page strings — title, button labels, hints, modal text)
+        - errors.bot.connect.{400,422,409,502,429} for connect endpoint errors
+        - errors.bot.testMessage.{422,502} for test-message endpoint errors
+        - errors.bot.disconnect.{404,502} for disconnect endpoint errors (502
+          only for hypothetical future hardening — current AC8 spec returns 200
+          on Telegram failure)
+        Both uk.json and en.json files updated. `prebuild` parity gate passes.
+      AC18. Backend module `com.botfunnel.bot` package created from scratch with:
+        Bot entity (@Document, @CompoundIndexes), BotRepository, BotService,
+        BotController, TelegramApiClient (@Component, WebClient-based with
+        connect 5s / read 10s timeouts), TokenEncryptor (@Component, AES-256-GCM
+        with random 12-byte IV per encryption, 128-bit auth tag, key from
+        `app.bot.encryption.key-v1`, fail-fast constructor on missing/wrong-length key).
+      AC19. EventService.logEvent emits on each state change:
+        - `bot_connected` { botId, telegramBotId, telegramUsername }
+        - `bot_disconnected` { botId, telegramBotId, telegramWebhookCleared:boolean }
+        - `bot_test_message_sent` { botId, chatId }
+        Metadata NEVER contains the raw or encrypted token.
+      AC20. New env vars in `.env.example` and `application.properties`:
+        - BOT_TOKEN_ENCRYPTION_KEY_V1 (no default, fail-fast on startup)
+        - Mapping: app.bot.encryption.key-v1=${BOT_TOKEN_ENCRYPTION_KEY_V1:}
+        APP_URL already present; documented as MUST be HTTPS in prod for webhooks.
+      AC21. Race-test: two concurrent Connect requests with the same token (different
+        owners or same owner second-tab) — exactly one succeeds (201/200), the
+        other returns 409 `bot_already_connected`. Verifiable via WireMock-backed
+        integration test using parallel WebTestClient calls.
+    gaps: "AC10 contains a forward-dependency note on owner_chat_id source — to
+      resolve in decisions: minimal sender vs stub vs deferred until 06b."
+    required: true
+
+  edge_cases:
+    score: 90
+    status: "complete"
+    value: |
+      Identified gaps from notes:
+      - Bot already connected to another project (409 + leakage policy)
+      - Invalid token shape (pre-getMe validation?)
+      - getMe returns 401 (revoked) vs timeout vs malformed body
+      - Bot is valid but webhook is already set (by user via BotFather?) — overwrite or warn?
+      - Concurrent connect attempts (race on uniqueness)
+      - Reconnect with the SAME bot to the SAME project (re-rotate secret?)
+      - Reconnect with a DIFFERENT bot (new doc or update existing?)
+      - User refreshes bot identity (changed @username/avatar in BotFather)
+    gaps: "Decisions on each edge case TBD."
+    required: true
+
+  error_scenarios:
+    score: 95
+    status: "complete"
+    value: |
+      Error taxonomy aligned with actual useApiError (resolves by HTTP status only):
+
+      POST /api/v1/projects/{projectId}/bot/connect:
+      - 400 — bean-validation. Triggered by @Pattern("^\\d+:[A-Za-z0-9_-]{35}$")
+        on token field of ConnectBotRequest. Goes through GlobalErrorHandler's
+        WebExchangeBindException branch, no AppException needed. Frontend resolves
+        errors.bot.connect.400 = "Bot token has invalid format". Inline form error.
+      - 422 token_invalid — AppException.unprocessableEntity("token_invalid", ...).
+        Triggered by Telegram getMe 401. errors.bot.connect.422 = "Token is invalid
+        or revoked". Inline form error.
+      - 409 bot_already_connected — AppException.conflict OR
+        DuplicateKeyException → mapped to 409 by GlobalErrorHandler.
+        errors.bot.connect.409 = "This bot is already connected to another project".
+        Generic, NO foreign project name/owner. Inline form error.
+      - 502 telegram_unavailable — AppException via custom factory or
+        ResponseStatusException(BAD_GATEWAY). Triggered after 3 retries on
+        Telegram 5xx OR timeout (during getMe OR setWebhook).
+        errors.bot.connect.502 = "Telegram is currently unavailable. Try again
+        in a minute." Toast notification.
+      - 429 rate_limit_exceeded — AppException.tooManyRequests. Triggered when
+        Redis brute:bot-connect:{userId} ≥ 10 within 15min.
+        errors.bot.connect.429 = "Too many attempts. Wait 15 minutes." Toast.
+
+      POST /api/v1/projects/{projectId}/bot/disconnect:
+      - 404 — no connected bot to disconnect (project_not_found path via
+        requireOwned OR no bots doc with status=connected).
+      - Best-effort with Telegram: deleteWebhook 3 retries; on persistent
+        failure log WARN + proceed locally. Endpoint ALWAYS returns 200 if
+        local update succeeded. No 502 from this endpoint.
+
+      POST /api/v1/projects/{projectId}/bot/test-message:
+      - 200 — message sent successfully.
+      - 422 chat_id_unknown — owner has not /started the bot yet (chat_id not
+        in subscribers). errors.bot.testMessage.422 = "Send /start to your bot
+        in Telegram first, then try again". Inline note next to button.
+      - 502 telegram_unavailable — same shape as connect endpoint.
+
+      GET /api/v1/projects/{projectId}/bot:
+      - 200 — current connected bot.
+      - 404 — no connected bot.
+
+      Backend "code" field exists on ErrorResponse (for logs/monitoring) but
+      frontend useApiError ignores it. See decisions.md if we ever extend
+      useApiError to support code-based resolution.
+    gaps: ""
+    required: true
+
+  verification_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      Manual smoke checklist on staging (post-deploy, ~10 minutes):
+      1. Create test bot via @BotFather (/newbot → SmokeTest_XYZ_bot).
+      2. Login as smoke_test_owner@..., open /projects/{id}/settings/bot.
+      3. Paste token → Connect. Expect: @SmokeTest_XYZ_bot + first_name + masked
+         token + Disconnect/Send-Test buttons visible within 5s.
+      4. From own Telegram account, write /start to the bot.
+      5. Click "Send Test Message" → expect "Bot connected ✅" in Telegram.
+      6. In BotFather: /mybots → SmokeTest → Bot Settings → Webhook — URL must
+         contain `{APP_URL}/webhooks/telegram/{projectId}`.
+      7. Create a second test project (same user), paste the SAME token →
+         expect 409 with "already connected to another project" toast/inline.
+      8. Return to first project, Disconnect → modal → Confirm → UI returns to
+         empty Connect state.
+      9. In BotFather check webhook field — must be empty/cleared.
+      10. Reconnect same token → expect new document (verify via admin Mongo
+          inspection: 2 bots docs for projectId, one disconnected one connected).
+      Each step has a checkbox in the staging-smoke template.
+      Automated coverage: WireMock-based @SpringBootTest covers steps 1-5,7,8,10
+      logically; step 6,9 only verifiable against real Telegram.
+    gaps: ""
+    required: true
+
+  ui_ux_requirements:
+    score: 90
+    status: "complete"
+    value: |
+      shadcn-vue + Tailwind; settings sub-page under /projects/{projectId}/settings/bot;
+      no dark/light toggle; mobile-friendly down to 768px (per ux-guidelines.md).
+      Form: single token input + Connect button → switches to connected view (avatar,
+      @username, name, masked token, Disconnect button, Send Test Message button).
+    gaps: "Confirmation modal on Disconnect (per destructive-action guideline)?
+      Loading states during getMe? Inline vs toast error?"
+    required: false
+
+  risks:
+    score: 95
+    status: "complete"
+    value: |
+      Known risks:
+      - R1 (security): leaked token via logs or API response — mitigated by encryption + mask + audit
+      - R2 (security): leaked other-project info on uniqueness 409 — mitigated by generic message
+      - R3 (operations): BOT_TOKEN_ENCRYPTION_KEY rotation has no implementation (gap)
+      - R4 (UX): user expects "Show full token" — explicit decision to omit
+    gaps: "Confirm R3 mitigation: defer with documentation, vs implement keyVersion field?
+      Other risks?"
+    required: true
+
+  technical_decisions:
+    score: 95
+    status: "complete"
+    value: |
+      Pre-decisions (need confirmation):
+      - Encryption: AES-256-GCM (project-knowledge mentions libsodium OR node:crypto in README,
+        but our stack is Java — use Java's javax.crypto.Cipher with AES/GCM/NoPadding)
+      - Uniqueness via service-level pre-check (no partial unique index in Spring Data Mongo,
+        per patterns.md "Service-level uniqueness pre-check")
+      - Webhook URL: APP_URL + /webhooks/telegram/{projectId}; secret token = 32-byte hex random
+      - On disconnect: soft (keep doc with disconnectedAt), reconnect = NEW doc (cleaner
+        historical link from subscribers)
+    gaps: "Confirm all decisions; missing: caching strategy of decrypted token, webhook
+      secret regeneration policy."
+    required: false
+
+  deploy_approach:
+    score: 90
+    status: "complete"
+    value: |
+      Env additions to .env.example:
+      - BOT_TOKEN_ENCRYPTION_KEY_V1 (32-byte hex, generate via `openssl rand -hex 32`)
+      - APP_URL already present; production must be HTTPS for Telegram webhooks
+      application.properties mapping:
+      - app.bot.encryption.key-v1=${BOT_TOKEN_ENCRYPTION_KEY_V1:}
+      Startup: TokenEncryptor @Component constructor asserts key is non-blank
+      and decodes to 32 bytes; fail-fast otherwise.
+      Local dev: docs/local-setup.md to include ngrok instructions (`ngrok http 8080`
+      → copy https URL → set APP_URL=https://xxx.ngrok-free.app).
+      Production: env vars stored in GitHub Actions secrets when prod platform
+      is finalized (CLAUDE.md: ALL deployments via GitHub CI/CD only).
+    gaps: ""
+    required: false
+
+  manual_user_actions:
+    score: 95
+    status: "complete"
+    value: |
+      Steps the user must perform OUTSIDE our app (documented in onboarding UX
+      and Settings → Bot inline hints):
+      1. Create the Telegram bot via @BotFather: open Telegram → /newbot →
+         enter display name → enter username (ends with `bot`) → receive token.
+      2. Copy the token (single secret line). Paste into our Settings → Bot.
+      3. After Connect succeeds, open Telegram → find your bot by @username →
+         send /start. This message gives our service the owner's chat_id so
+         the Send Test Message button can reach the user.
+      4. (Out of scope; informational) Deleting the bot in BotFather is detected
+         lazily — we discover it on next send attempt (401 handling lives in 06c).
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+phase3_integration:
+
+  integration_points:
+    score: 90
+    status: "complete"
+    value: |
+      Backend:
+      - New module: backend/.../bot (per architecture.md package list)
+      - Uses ProjectService.requireOwned (from 05-projects)
+      - Uses EventService.logEvent for audit
+      - Uses GlobalErrorHandler / AppException for error mapping
+      - Telegram API via Spring WebClient (reactive)
+      Frontend:
+      - New page: /projects/{projectId}/settings/bot (or extend existing /settings if any)
+      - Pinia store for bot state (project-scoped)
+      - useApi composable + useApiError for error handling
+      - i18n keys under errors.bot.* and bot.* feature namespaces
+    gaps: "Confirm: is there an existing /settings page in 03-projects to extend, or new route?
+      Sidebar entry for 'Bot' or under 'Settings'?"
+    required: true
+
+  dependencies:
+    score: 80
+    status: "partial"
+    value: |
+      - 03-projects (ProjectService.requireOwned) ✓ implemented
+      - 02-auth (session) ✓ implemented
+      - 03-i18n ✓ implemented
+      - 06b-webhook-ingestion: NOT a dependency (this feature only registers the webhook URL;
+        endpoint implementation is the NEXT feature)
+      - 06c-telegram-sender: needed for test-message; can start with stub
+    gaps: "Confirm strategy for test-message stub vs include minimal sender."
+    required: false
+
+  technical_constraints:
+    score: 85
+    status: "complete"
+    value: |
+      - Reactive stack (no blocking calls)
+      - MongoDB reactive driver
+      - getMe + setWebhook latency budget (sync UX during Connect — acceptable <3s)
+      - WebClient timeout config required
+      - Reactor backpressure not a concern at this scale (1 op per user click)
+    gaps: "Specific Telegram API timeouts to set; rate-limit on Connect endpoint
+      (brute-force token guessing protection)."
+    required: false
+
+  data_requirements:
+    score: 95
+    status: "complete"
+    value: |
+      New MongoDB collection: bots
+      Fields (draft):
+      - _id, projectId (ref Project, indexed)
+      - telegramBotId (Long, unique among non-disconnected docs)
+      - telegramUsername, telegramFirstName, telegramAvatarFileId/Url
+      - encryptedToken (binary, with nonce + tag for GCM), keyVersion (for future rotation)
+      - webhookSecret (32-byte hex)
+      - status (connected | disconnected | token_invalid)
+      - createdAt, connectedAt, disconnectedAt
+      Indexes:
+      - {projectId: 1} (find current bot for project)
+      - {telegramBotId: 1, status: 1} (uniqueness pre-check)
+      Events emitted:
+      - bot_connected, bot_disconnected, bot_reconnected, bot_token_invalidated, bot_test_message_sent
+    gaps: "Confirm field set; avatar storage (URL pointing to Telegram, or downloaded?);
+      keyVersion field decision."
+    required: false
+
+  migration_needs:
+    score: 100
+    status: "complete"
+    value: "Greenfield collection — no migration."
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/06-bot-connection/user-spec.md"
+  status: "approved"
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+  required_threshold: 85
+  optional_threshold: 50
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Propose solutions based on PK, not just ask questions"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase4_completion"
+  questions_asked: 4
+  last_question: "Q15-Q18 (cycle2_batch3)"
+  total_required_score: 92
+  total_optional_score: 92
+  completion_estimate: "92%"
+  user_detail_level: "detailed"
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Seed context already accumulated from pre-interview discussion:
+  - Decomposition Epic 04 → 06/06b/06c agreed
+  - /start payload deferred safely (raw_updates + parser tuple from day one)
+  - "Show full token" explicitly cut
+  - Polling-mode dev cut (ngrok instructions instead)
+  - Soft disconnect + new-doc-on-reconnect is the leading proposal
+  - Source notes: workflow/04-телеграм-боти/04a-bot-connection/notes.md
+
+  Cycle 1 priority order (lowest score first among required):
+  1. testing_strategy (0%) — must decide WireMock vs real; E2E or not
+  2. constraints (40%) — need full list (rate-limit on connect, token format pre-validation)
+  3. success_criteria (55%) — finalize AC list
+  4. user_problem (60%) — first-person framing
+  5. feature_description (85%) — confirm disconnect data model
+
+  Cycle 2 priority (from phase2/phase3):
+  - error_scenarios, edge_cases, verification_strategy, deploy_approach, manual_user_actions
+  - ui_ux_requirements (modal on disconnect, loading states)
+  - integration_points (existing /settings page or new route?)
+  - data_requirements (full schema + indexes + events)
+  - technical_decisions (encryption details, secret rotation, keyVersion)

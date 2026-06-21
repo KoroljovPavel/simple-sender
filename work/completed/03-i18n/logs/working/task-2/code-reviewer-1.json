@@ -1,0 +1,21 @@
+{
+  "task": "2",
+  "round": 1,
+  "reviewer": "code-reviewer",
+  "verdict": "approved",
+  "summary": "Task 2 implementation faithfully matches Decision 4 (verbatim detectBrowserLanguage shape, no cookieMaxAge — verified absent in @nuxtjs/i18n@9.5.6 DetectBrowserLanguageOptions), Decision 14 (Object.fromEntries map over NON_DEFAULT_LOCALES with shared AUTH_HEADERS named constant prevents header-drift), and stub locale parity (Task 4 prebuild script will pass). Module bootstrap is clean; no critical/major findings.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/i18n/i18n.config.ts:4-5",
+      "issue": "silentTranslationWarn / silentFallbackWarn are vue-i18n Legacy-mode option names. With legacy: false (Composition mode, line 2) the active runtime path is createComposer, which reads missingWarn / fallbackWarn instead. Grep of the installed vue-i18n@10.0.8 esm-bundler runtime and @nuxtjs/i18n@9.5.6 dist shows zero references to silentTranslationWarn/silentFallbackWarn in the runtime code path — these flags are silently dropped under legacy:false, so Decision 9 / AC14 'no info disclosure через console' is not actually enforced at runtime in production. Implementation is spec-faithful (tech-spec line 119 + task line 43 explicitly name silentTranslationWarn/silentFallbackWarn), so this is a spec-level concern, not an implementer mistake. Reported as minor for downstream awareness — fix would itself be a deviation requiring approval.",
+      "fix": "Out of Task 2 scope. For follow-up: either (a) add a User-Spec Deviation entry and switch to missingWarn / fallbackWarn (the Composition-mode equivalents, both typed boolean | RegExp), or (b) accept that the legacy flags are aspirational and rely on the build-gate (check-locales.mjs in Task 4) as the sole guard."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/shared/i18n-locales.ts:1,3",
+      "issue": "Trailing semicolons on `export const ... as const;` and `export type ... = ... [number];`. Rest of the frontend codebase (frontend/composables/useApi.ts, frontend/middleware/auth.global.ts, the new frontend/nuxt.config.ts edits, frontend/i18n/i18n.config.ts) follows no-semicolon style. Two-line file but inconsistent with project convention.",
+      "fix": "Remove the two trailing semicolons to match no-semicolon project style: `export const NON_DEFAULT_LOCALES = ['en'] as const` and `export type NonDefaultLocale = typeof NON_DEFAULT_LOCALES[number]`."
+    }
+  ]
+}

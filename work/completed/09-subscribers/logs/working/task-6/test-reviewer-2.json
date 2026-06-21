@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review of Task 6 tests (subscriber CRM hook in TelegramSender). All 4 round-1 findings are genuinely resolved, verified by targeted mutation testing on the live code: removing .toLowerCase(Locale.ROOT) fails http400ChatNotFoundCaseInsensitiveMarksDeleted ('Wanted but not invoked: markDeletedByChatId'); removing the 'description != null' guard fails http400NullDescriptionDoesNotMark_noNpe (NPE makes the thrown exception not a TelegramSendException, tripping the isInstanceOf assertion). The retargeted sendText_otherClientError test now uses a non-'chat not found' body and adds verifyNoInteractions(subscriberService); enumShapeIsStable now pins identity+ordinal order via containsExactly plus per-name .name() checks. All three classes are green on unmutated code. No new issues introduced. The IT verify(...)/never() assertions verify real collaborator side-effect dispatch driven by production code (not the mock-return anti-pattern) and survive the litmus test (deleting dispatchSubscriberHook or its routing condition makes them fail).",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "redundant_testing",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderSubscriberHookIT.java:162 (http400OtherDescriptionDoesNotMark) vs backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:489 (sendText_otherClientError_throwsTelegramSendException_noRetry)",
+      "issue": "Mild overlap between the retargeted unit test (sendText_otherClientError, body 'message is too long', verifyNoInteractions) and the IT http400OtherDescriptionDoesNotMark (body 'message text is too long', never() on both mark methods). Both assert that a non-chat-not-found 400 does not flip the subscriber. Each still earns its place — the IT additionally verifies the EVENT_TELEGRAM_SEND_FAILED audit fires for the OTHER 400, which the unit test does not — so this is acceptable, not a defect. Noted only for awareness.",
+      "recommendation": "No change required. If consolidation is ever desired, keep the IT (it asserts the audit-then-no-flip behavior end-to-end) and rely on the unit test purely for the no-retry / error-shape assertions."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 4,
+      "integration": 7,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

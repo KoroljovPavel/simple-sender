@@ -1,0 +1,149 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 Details section says 'FunnelStep.java — flat POJO… Поля додати поряд з eventName (:62)'. The eventName field is at line 62 in the actual file — correct. However the hint says 'геттери/сеттери внизу у стилі наявних (:144-145)' — actual eventName getter/setter is at lines 144-145. These line references are accurate. No issue.",
+      "fix": "N/A — line references verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 Details section states 'FunnelStepDto.java — record (:22-42); лише stepType має @NotNull (:23), решта nullable per-type. Додати три поля в кінець record (після eventName, :41)'. Actual FunnelStepDto record span is lines 22-42, @NotNull on line 23, last field eventName at line 41. Line numbers are accurate. No issue.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 states 'FunnelService.toSteps (:575)' and 'FunnelService.toStepDto (:860)'. Actual line numbers: toSteps at 575, toStepDto at 860. Correct. However the hint references 'setEventName(blankToNull(dto.eventName())) (:611)' — actual line is 611. All correct.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 states 'FunnelService.isMessageStep (:386-388)' and 'previewStep (:377-383)'. Actual: isMessageStep at line 386, previewStep method signature at 363 (not 377-383). Line 377 is the isMessageStep call within previewStep and 382-383 is the non_message return. The task's description text says 'previewStep (`:377-383`) дає non_message' pointing to the specific return location inside previewStep (not the method signature). This is an imprecise reference but not misleading — it identifies the placeholder return lines, not the method start.",
+      "fix": "Minor: clarify that :377-383 refers to lines inside previewStep, not the method signature (which starts at :363)."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 states 'FunnelService.validateSteps switch (:647-668)'. Actual switch statement is at line 648, and the closing brace of the loop body (including requireExistingTarget calls at 666-667) is at 668. The task says ':647-668' but the method starts at 633 — the range :647-668 refers to the for-loop body+switch, not the method. This is the correct target range for adding the new case. References are effectively accurate.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 states 'StepExecutor.execute switch (:93-112)'. Actual: the switch starts at line 93 ('return switch (step.getStepType())') and closes at line 112 ('}}'). Verified correct.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 Details references 'validateSteps :633' — actual is 633. References 'update :176, activate :281, testRun :351' for validateSteps callsites. Verified: update calls validateSteps at line 176, activate at 281, testRun at 351. All correct.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 references 'requireFunnel :434-437' (catch IllegalArgumentException) and ':439-441' (filter getProjectId). Actual requireFunnel: catch block approximately at lines 434-437, filter at 439-441. Verified close enough — actual code: catch at 434 ('} catch (IllegalArgumentException e)'), 437 ('throw AppException.notFound'), filter at 439 ('.filter(f -> projectId.equals(f.getProjectId()))'). Correct.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 instructs adding 'activation-перевірку' in activate 'після validateSteps, перед checkTriggerConflict/setStatus(active)'. Current activate (lines 273-290): calls validateSteps at 281, then checkTriggerConflict at 285, then setStatus(active) at 287. The activation-check block should be inserted between 281 and 285. This is feasible and correctly described.",
+      "fix": "N/A — feasible, correct target location."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 says to add validateSteps projectId parameter and update 'три внутрішні callsites'. There are exactly 3 callsites (lines 176, 281, 351). The current signature is 'void validateSteps(List<FunnelStep> steps)' — projectId is NOT in scope in a static sense but is available as a parameter at all 3 callsites. The change is feasible. However the task note says 'Overload або зміна сигнатури' — changing signature is the cleanest since all 3 callsites already have projectId in scope. No issue.",
+      "fix": "N/A — feasible."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 says 'FunnelExecutionFactory.java:93' — the current insertExecution sets currentStepId from snapshot.get(0) at line 93. Verified correct.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 states 'FunnelExecutionEngine.java:257 switch result.outcome()'. Actual: switch on result.outcome() is at line 257. Verified correct.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 states 'FunnelExecutionEngine.java:518 complete(exec, now)'. Actual: 'private void complete(FunnelExecution exec, Instant now)' is at line 518. Verified correct.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 references 'FunnelEventService.java:192' for insertOneFunnel pattern. Actual: 'private boolean insertOneFunnel' is at line 192. Verified correct.",
+      "fix": "N/A — verified correct."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 says 'funnelEventService уже інжектиться (:71/:78)'. Actual: field declaration 'private final FunnelEventService funnelEventService' is at line 71; constructor assignment 'this.funnelEventService = funnelEventService' is at line 85 (not 78). The constructor parameter is at line 78 in the constructor signature. Reference slightly imprecise but identifies the correct injection — no action needed.",
+      "fix": "Minor: line 78 is the constructor parameter; the field is at 71 and the assignment is at 85. Not a correctness problem."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 Details states 'StepExecutor.java — новий case у execute switch; Outcome.COMPLETE + StepResult.complete(); виклик уже-інжектованого funnelEventService'. The Outcome enum is in StepExecutor (line 329: 'public enum Outcome { CONTINUE, DELAY, CANCEL, FAIL, WAIT_FOR_REPLY }'). Task correctly identifies it needs to be extended. The StepResult record with its static factories (cont, delay, cancel, fail, waitForReply) is at line 338 onward. Adding COMPLETE to Outcome and complete() factory to StepResult is feasible — it's an additive change to an inner enum and record.",
+      "fix": "N/A — feasible."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 says 'Outcome.COMPLETE + StepResult.complete()' in step 4 as part of StepExecutor, but the FunnelExecutionEngine.drive switch is exhaustive (all 5 Outcome values covered: CONTINUE, DELAY, WAIT_FOR_REPLY, CANCEL, FAIL). Adding COMPLETE to the Outcome enum will make the drive switch non-exhaustive but it is NOT a Java switch expression — it is a switch statement with explicit cases (no default). Java switch statements do NOT require exhaustiveness, so this WON'T cause a compile error. However task text says 'exhaustive switch'і компілюються з новим типом' in AC — this is only true for switch expressions (like in StepExecutor.execute which uses 'return switch'), not for the switch statement in FunnelExecutionEngine.drive. The task must add the case COMPLETE to drive manually — the compile won't force it. This is feasible but developers must be careful not to rely on compile-time enforcement for the drive switch.",
+      "fix": "Clarify in AC: the drive switch in FunnelExecutionEngine is a statement (not expression), so it will NOT fail to compile when COMPLETE is added to Outcome without a case. The task must explicitly add the case COMPLETE branch in drive — this is already described in step 5, but the AC claim about 'exhaustive switch'і компілюються' is only applicable to switch expressions, not the drive switch statement."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 2,
+      "issue": "Task 2 test file target is FunnelServiceEmitEventTest. The actual class is focused on EMIT_EVENT validation (eventName slug, round-trip). Adding SUBSCRIBE_TO_FUNNEL validation tests there is consistent — the class already extends AbstractIntegrationTest and covers FunnelService validation paths. The helper 'emitStep(String eventName)' creates a FunnelStepDto with 17 constructor args (the current record has 17 fields). Adding 3 new fields (targetFunnelId, targetEntryStepId, endParentAfter) in Task 1 will make the record have 20 fields. The existing emitStep() helper in the test will break (wrong arity). Task 2 acknowledges this: 'Helper subscribeStep(...) — конструктор виріс на 3 поля в Task 1; узгодити порядок аргументів з фактичним record після Task 1.' However the task does NOT mention updating the existing emitStep() helper. After Task 1, the existing test helper becomes invalid and the existing passing test emitEvent_requiresValidEventNameSlug will break until the helper is updated.",
+      "fix": "Task 2 should explicitly note that after Task 1 expands FunnelStepDto to 20 fields, the existing emitStep() helper in FunnelServiceEmitEventTest also needs to be updated to pass null for the 3 new fields, in addition to creating the new subscribeStep() helper."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 hint 'Дзеркали взірця eventName всюди (поле → геттер/сеттер → copyOf → DTO → toSteps → toStepDto)' is appropriate guidance — it points to a pattern, not a full implementation. No issue.",
+      "fix": "N/A."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 17,
+    "critical": 0,
+    "major": 1,
+    "minor": 16
+  }
+}

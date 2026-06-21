@@ -1,0 +1,254 @@
+{
+  "status": "fail",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "tasks": false
+  },
+  "requirements_total": 32,
+  "requirements_covered": 29,
+  "requirements_partial": 2,
+  "requirements_missing": 1,
+
+  "_requirements_index": {
+    "AC1":  "POST valid secret → 200 OK, P99 <100ms under parallel load (100 req, Flux.range parallel)",
+    "AC2":  "Bad/missing secret → 401 empty body",
+    "AC3":  "Non-existent / soft-deleted / no-CONNECTED-bot / malformed-ObjectId projectId → 404 (anti-enumeration)",
+    "AC4":  "Payload >1 MB → 413 scoped to /webhooks/telegram/**, NOT global codec bump",
+    "AC5":  "Same (projectId, update_id) twice → one raw_updates doc, one job, one event. Race test via Flux.parallel(2)",
+    "AC6":  "Owner /start private, ownerChatId IS NULL → atomic findAndModify. Second /start from another user does NOT overwrite",
+    "AC7":  "/start ref_X: startPayload=ref_X; /start (no payload): startPayload='' empty string NOT null; /start ref_a b c: startPayload=full-tail; /start@SomeBot ref_X: suffix stripped, startPayload=ref_X",
+    "AC8":  "/stop → no-op markUnsubscribed + cancelActiveFor stubs + event telegram_command_stop",
+    "AC9":  "/start in group/supergroup/channel → event only, no ownerChatId populate, no Subscriber upsert",
+    "AC10": "Plain text private → SubscriberService stub + event telegram_message_received. Non-private → event only",
+    "AC11": "Non-message updates → raw_update saved, event telegram_update_other with metadata.updateKind=<field>",
+    "AC11a":"Update without message OR message.from==null → safe-navigate, no NPE, event telegram_update_other",
+    "AC12": "Unknown command /foo bar → event telegram_message_received, no stub calls",
+    "AC13": "raw_updates.createdAt TTL 90d (expireAfterSeconds=7776000). Partial filter: TTL only on pending/done. failed rows NOT auto-deleted",
+    "AC14": "Worker exception → processingStatus=failed + processingError; JobRunr retry. After exhaustion → manual redrive via dashboard",
+    "AC15": "SecurityConfig: /webhooks/telegram/** permitAll BEFORE /api/** authenticated. CSRF disabled only for webhook path. POST /api/v1/... without X-XSRF-TOKEN → 403",
+    "AC16": "4 Micrometer counters verified in integration tests: telegram_webhook_received_total{projectId}, telegram_webhook_duration_seconds Timer, telegram_webhook_rejected_total{reason=...}, telegram_worker_outcome_total{outcome=...}",
+    "AC17": "Bot.ownerChatId Java-field-only add, no Mongo migration, no index, legacy docs read as null",
+    "AC18": "Token-scrubber applied to ALL log sites. ListAppender tests per log site",
+    "AC19": "Inbound payload as typed record TelegramUpdate with snake_case fields. Nested records: Message, Chat, User, CallbackQuery. @JsonIgnoreProperties(ignoreUnknown=true)",
+    "C1":   "SLA P99 <100ms — 1 Mongo read + 1 reactive insert + 1 sync enqueue on bounded-elastic",
+    "C2":   "1 MB limit scoped to /webhooks/telegram/** via WebFilter, NOT global bump. Default 256KB preserved elsewhere",
+    "C3":   "HTTPS only in production",
+    "C4":   "SecurityConfig permitAll ordering first-match rule",
+    "C5":   "CSRF scoped disable via requireCsrfProtectionMatcher negated matcher",
+    "C6":   "Secret stored as SHA-256 hex, verified constant-time via MessageDigest.isEqual",
+    "C7":   "@JsonIgnoreProperties mass-assignment defense",
+    "C8":   "Token-scrubber on all log sites",
+    "C9":   "Idempotency via unique compound index (projectId, updateId) + DuplicateKeyException catch",
+    "C10":  "Worker concurrency = JobRunr default, no per-chat ordering in 04b",
+    "C11":  "ownerChatId populate atomic findAndModify with ownerChatId=null predicate, first-wins",
+    "C12":  "No polling mode for local dev. ngrok + setWebhook",
+    "C13":  "MVP scope: 1-on-1 DM only, group/channel/inline silent ignore",
+    "C14":  "New dependency: io.micrometer:micrometer-core in backend/build.gradle"
+  },
+
+  "forward_traceability": {
+    "AC1":  {"status": "covered", "where": "Decision 11, Task T10 (TelegramWebhookControllerIT AC1 latency assert via Flux.range(0,100).parallel(10)), Testing Strategy"},
+    "AC2":  {"status": "covered", "where": "Decision 2, Decision 3, Task T10 (AC2 test case in TelegramWebhookControllerIT)"},
+    "AC3":  {"status": "covered", "where": "Decision 1 (4-case 404: missing/soft-deleted/disconnected/malformed-ObjectId), Task T10 (AC3 4 cases in TelegramWebhookControllerIT)"},
+    "AC4":  {"status": "covered", "where": "Decision 13, Task T10 (WebhookPayloadSizeFilter + AC4 test in TelegramWebhookControllerIT)"},
+    "AC5":  {"status": "covered", "where": "Decision 4, Task T10 (AC5 race-test Flux.range(0,2).parallel(2) in TelegramWebhookControllerIT)"},
+    "AC6":  {"status": "covered", "where": "Decision 5, Task T10 (AC6 atomic write in TelegramWebhookControllerIT), Task T9 (ownerChatId findAndModify in worker)"},
+    "AC7":  {"status": "partial", "where": "Decision 6, Task T3 (TelegramCommandParser), Task T9 (worker /start branch). Gap: the AC7 sub-case '/start in group with @botname suffix' is implied by T3+T9 but AC9 and AC7 interact — the tech-spec worker branch for group /start (Architecture 'How it works' line 72) writes event but does NOT strip @botname before parsing; T3 TelegramCommandParser handles stripping for all text. Covered by T3 unit tests. Partial only because the specific AC7 multi-word payload sub-case '/start ref_a b c' full-tail trimming is specified in T3 but the integration test (TelegramWebhookControllerIT) does not explicitly list a multi-word payload test case — only the unit test at T3 covers it end-to-end."},
+    "AC8":  {"status": "covered", "where": "Task T9 (ProcessTelegramUpdateJob /stop branch), Testing Strategy (AC8 in ProcessTelegramUpdateJobTest)"},
+    "AC9":  {"status": "covered", "where": "Architecture 'How it works' worker branch for group /start, Task T9, Testing Strategy (AC9 in ProcessTelegramUpdateJobTest)"},
+    "AC10": {"status": "covered", "where": "Architecture 'How it works' worker plain-text branches, Task T9, Testing Strategy (AC10 in ProcessTelegramUpdateJobTest)"},
+    "AC11": {"status": "covered", "where": "Architecture 'How it works' non-message branch, Task T9, Testing Strategy (AC11 in ProcessTelegramUpdateJobTest)"},
+    "AC11a":{"status": "covered", "where": "Architecture 'How it works' missing-message/from==null safe-navigate, Task T9, Testing Strategy (AC11a in ProcessTelegramUpdateJobTest)"},
+    "AC12": {"status": "covered", "where": "Architecture 'How it works' unknown command branch, Task T9, Testing Strategy (AC12 in ProcessTelegramUpdateJobTest)"},
+    "AC13": {"status": "covered", "where": "Decision 8, Task T5 (RawUpdate @Indexed TTL + partialFilter), Testing Strategy (RawUpdateRepositoryTest index visibility)"},
+    "AC14": {"status": "covered", "where": "Decision 9, Task T9 (exception catch → processingStatus=failed + processingError + rethrow), Testing Strategy (AC14 in ProcessTelegramUpdateJobTest)"},
+    "AC15": {"status": "covered", "where": "Decision (SecurityConfig), Task T10 (SecurityConfig modification + AC15 CSRF regression test in TelegramWebhookControllerIT + WebhookSecurityBlockTest)"},
+    "AC16": {"status": "covered", "where": "Decision 10, Task T1 (micrometer-core dep), Task T9 (worker counter), Task T10 (controller 4 counters + AC16 assert in TelegramWebhookControllerIT)"},
+    "AC17": {"status": "covered", "where": "Decision 7 (Bot.ownerChatId already present, no migration), Architecture 'Reuse unchanged' + 'Bot (no schema change)'"},
+    "AC18": {"status": "covered", "where": "Architecture 'How it works' step 4 (all log sites scrubbed), Task T9 (scrubTokens wrap), Task T10 (AC18 ListAppender per-site in TelegramWebhookControllerIT)"},
+    "AC19": {"status": "covered", "where": "Decision 6, Task T4 (TelegramUpdate + nested records), Testing Strategy (TelegramUpdateDeserializationTest)"},
+    "C1":   {"status": "covered", "where": "Decision 11, Architecture How-it-works inbound path"},
+    "C2":   {"status": "covered", "where": "Decision 13"},
+    "C3":   {"status": "covered", "where": "Risk table R1 + deployment note — no explicit tech-spec decision but user-spec states 'production APP_URL already HTTPS', correctly left as infra concern"},
+    "C4":   {"status": "covered", "where": "Decision (SecurityConfig section), Task T10"},
+    "C5":   {"status": "covered", "where": "Decision (SecurityConfig section), Task T10, Risk R8"},
+    "C6":   {"status": "covered", "where": "Decision 2, Decision 15"},
+    "C7":   {"status": "covered", "where": "Decision 6, Task T4"},
+    "C8":   {"status": "covered", "where": "Architecture How-it-works step 4, Task T9, AC18 testing"},
+    "C9":   {"status": "covered", "where": "Decision 4"},
+    "C10":  {"status": "covered", "where": "Decision 17"},
+    "C11":  {"status": "covered", "where": "Decision 5"},
+    "C12":  {"status": "covered", "where": "Decision 18"},
+    "C13":  {"status": "covered", "where": "Architecture How-it-works non-message branch ('inline_query' etc silent ignore), Task T9"},
+    "C14":  {"status": "covered", "where": "Decision 10, Task T1"}
+  },
+
+  "findings": [
+    {
+      "id": "F1",
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "AC1: P99 <100ms asserted via Flux.range(0,100).parallel(10) — 'Sequential POST sanity-check insufficient'",
+      "detail": "Tech-spec Testing Strategy (TelegramWebhookControllerIT AC1) correctly specifies 'Flux.range(0,100).parallel(10).flatMap(req→POST webhook)' with per-request nanoTime collection. However, Task T10 description only says 'Integration test TelegramWebhookControllerIT covers AC1–AC6, AC15, AC16, AC18' without explicitly stating the 100-parallel load shape in the task description. The test specification is in the Testing Strategy section, not in the task. This is acceptable — Testing Strategy is authoritative — but there is a minor structural gap: T10's Verify-smoke only says 'TelegramWebhookControllerIT green' without re-stating the P99 assertion. The user-spec is explicit that a sequential sanity-check is insufficient (AC1 text). Risk: an implementor reading T10 alone may write a sequential test and miss the P99 parallel requirement.",
+      "severity": "minor"
+    },
+    {
+      "id": "F2",
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "AC7: '/start without payload → startPayload='' empty string, NOT null, NOT absent key — stable contract for Epic 05/06'",
+      "detail": "The worker branch description in Architecture 'How it works' step 2 says 'payload string ... always non-null, possibly empty string' and Testing Strategy lists 'AC7 — /start no-payload → startPayload=\"\"'. The Data Models section confirms payload is passed to FunnelTriggerService.fire(...). However, no tech-spec Decision or Architecture text explicitly specifies HOW the empty string contract is enforced (i.e., that TelegramCommandParser must return \"\" not null for the no-payload case, and that the worker must NOT convert empty string to null before passing to EventService). The unit test covers it (T3), but the contractual requirement — the reason it matters for Epic 05/06 — is not captured in a Decision. If the test is later modified without awareness of the Epic 05/06 contract, the regression is silent. Severity minor because the test does exist.",
+      "severity": "minor"
+    },
+    {
+      "id": "F3",
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "AC5: Race-test 'exactly 1 enqueued job' — JobRunrInMemoryConfig.getJobs().size()==1",
+      "detail": "Tech-spec Testing Strategy AC5 lists: 'StorageProvider.getJobs(...).size()==1'. The Architecture 'Shared Resources' table shows JobRunr StorageProvider as a singleton. However, the tech-spec does not specify WHICH JobRunr InMemoryStorageProvider API method to call to count enqueued jobs, nor does T10 task description specify it. This is consistent with the user-spec's concrete requirement ('exactly 1 enqueued job'). The gap: if the in-memory storage API for counting pending jobs is `getJobs(StateName.ENQUEUED, 0, 100, null).size()` vs a different method, an implementor may write an assertion that passes trivially (e.g., asserts on a list that never grows because InMemoryConfig doesn't persist). Severity minor — this is implementation detail, but worth flagging because the existing codebase has no `BackgroundJob.enqueue` one-shot precedent and the InMemoryStorageProvider API for counting is non-obvious.",
+      "severity": "minor"
+    },
+    {
+      "id": "F4",
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "AC16: telegram_webhook_rejected_total{reason=payload_too_large} — counter incremented on 413",
+      "detail": "Architecture 'How it works' inbound path step 1 says WebhookPayloadSizeFilter short-circuits with 413. The Decisions section (Decision 10) lists 'telegram_webhook_rejected_total{reason=payload_too_large}' as a controller-side rejection reason. However, the Architecture description shows the payload size filter runs BEFORE the controller (step 1 before step 3). This means the MeterRegistry counter increment for 'payload_too_large' must occur inside WebhookPayloadSizeFilter, not inside TelegramWebhookController. Task T10 description says 'Inject MeterRegistry for 4 counters (Decision 10) with appropriate tags' in the context of TelegramWebhookController. Neither T10 description nor Architecture explicitly states that WebhookPayloadSizeFilter must also inject MeterRegistry and tick the counter. The Testing Strategy AC16 assert does not distinguish which component emits payload_too_large. This is a gap: without explicit specification, an implementor may forget to inject MeterRegistry into the filter, leaving payload_too_large counter permanently at 0 while tests only verify it after a controller-path 413 (which can't happen if filter fires first).",
+      "severity": "critical"
+    },
+    {
+      "id": "F5",
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "AC13: TTL partial-filter syntax — 'processingStatus IN (pending, done)' must match enum string values stored by Spring Data",
+      "detail": "Tech-spec Decision 8 and Data Models show partialFilter as \"{ 'processingStatus': { $in: ['pending', 'done'] } }\" (lowercase strings). RawUpdateStatus enum is declared as PENDING | DONE | FAILED (uppercase). Spring Data MongoDB by default stores enum values as their name() string — so stored values are 'PENDING', 'DONE', 'FAILED' (uppercase), NOT 'pending', 'done'. The partial filter with lowercase strings will NEVER match any document, making the TTL apply to ALL rows including FAILED — exactly the opposite of AC13's requirement. This is a critical correctness gap: the TTL index definition in the tech-spec uses wrong case for enum string values. The user-spec AC13 text also says 'processingStatus IN (\"pending\",\"done\")' (lowercase) suggesting the user-spec itself may be the source of confusion, but the tech-spec must resolve this. The fix is either: (a) store enum as lowercase via @JsonSerialize / Spring Data @Field annotation, or (b) change partialFilter to ['PENDING','DONE']. Neither option is addressed in any Decision.",
+      "severity": "critical"
+    },
+    {
+      "id": "F6",
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "AC15: 'CSRF відключений через requireCsrfProtectionMatcher exclusion (НЕ глобальний .disable()). Тест: POST /api/v1/... без X-XSRF-TOKEN все ще повертає 403'",
+      "detail": "Tech-spec specifies 'csrf.requireCsrfProtectionMatcher(new NegatedServerWebExchangeMatcher(new PathPatternParserServerWebExchangeMatcher(\"/webhooks/telegram/**\")))'. Spring Security's WebFlux CSRF config uses ServerCsrfTokenRepository and the requireCsrfProtectionMatcher API. However, the tech-spec does not verify that the SPA's existing session-based CSRF (which presumably uses a cookie/header exchange) is not broken by the negated matcher. The test AC15 guards against '403 on POST /api/v1/...' but only checks the ABSENCE of the token, not the presence. Also, the tech-spec does not specify what happens with the existing CSRF token repository configuration — if existing SecurityConfig uses `.csrf().disable()` globally, the tech-spec's 'change to requireCsrfProtectionMatcher' is a behavior change that needs a Decision. The Decisions section has no Decision about the current SecurityConfig CSRF state. Decision 3 mentions 'GlobalErrorHandler' but not the current CSRF state. Severity major — if existing config is already .disable(), the proposed change could introduce a regression; if existing config is properly configured, it needs documentation.",
+      "severity": "major"
+    },
+    {
+      "id": "F7",
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "AC11: 'my_chat_member' — user-spec states Epic 05 may later distinguish my_chat_member with separate event type, 04b is generic ignore",
+      "detail": "Architecture 'How it works' worker path lists: 'Non-message updates (callback_query, edited_message, channel_post, edited_channel_post, etc.)'. The TelegramUpdate record (Data Models) only models: message, edited_message, channel_post, edited_channel_post, callback_query. 'my_chat_member' and 'chat_member' are NOT modeled as fields in the TelegramUpdate record. This means: (a) if Telegram sends a my_chat_member update, TelegramUpdate deserialization ignores it via @JsonIgnoreProperties, and (b) the worker CANNOT detect 'my_chat_member' as updateKind because the field is not present in the record. The updateKind for these events would fall into 'unknown' rather than 'my_chat_member'. This contradicts user-spec AC11 which says 'metadata.updateKind=<ім'я поля>' — meaning the field NAME from the Telegram JSON should appear as updateKind. For my_chat_member updates, the actual Telegram JSON field is 'my_chat_member', but since TelegramUpdate record doesn't model it, the worker cannot extract the field name. Severity major — the updateKind granularity for unlisted update types is lost, making future Epic 05 migration harder.",
+      "severity": "major"
+    },
+    {
+      "id": "F8",
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC14: Worker exception handling — 'rethrow to trigger JobRunr retry'",
+      "detail": "Architecture 'How it works' step 3 says: 'catch in worker, write processingStatus=failed + processingError=ex.getMessage() via atomic findAndModify, increment worker_outcome_total{outcome=failure}, rethrow'. The rethrow path means the processingStatus=failed write happens, then JobRunr retries. On the NEXT retry attempt, the worker will load the RawUpdate with processingStatus=FAILED and attempt to process it again. If the retry succeeds, it writes processingStatus=DONE. But there is no specification for what happens if the worker is called when processingStatus is already FAILED (e.g., guard check at start of handle()). If the failure was due to corrupt payload, every retry will fail → write failed → rethrow, which is correct for JobRunr. But if a previous run left processingStatus=DONE and then JobRunr somehow retries (e.g., crash after done-write but before JobRunr ack), the worker would re-process a DONE update. No idempotency guard for worker re-entry (checking processingStatus before processing). Severity minor for a correctly-designed JobRunr setup, but the tech-spec should note the at-least-once delivery contract.",
+      "severity": "minor"
+    },
+    {
+      "id": "F9",
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC4: WebhookPayloadSizeFilter — checks Content-Length header only",
+      "detail": "Decision 13 and Architecture specify: 'Checks request.getHeaders().getContentLength() > 1_048_576'. This relies on the presence and accuracy of the Content-Length header. HTTP/1.1 chunked transfer encoding does NOT include Content-Length. Telegram Bot API uses HTTPS POST with JSON bodies — in practice Content-Length is always sent. However, the tech-spec does not address what happens when Content-Length is -1 (absent/chunked): the filter would pass the request through (getContentLength() returns -1, which is < 1_048_576). A malicious actor could send a chunked payload >1MB without Content-Length and bypass the filter. The tech-spec should either: (a) note this is an accepted limitation (Telegram always sends Content-Length), or (b) specify reading the body up to limit. Severity minor — Telegram API is the only caller and always sends Content-Length, but the gap is unacknowledged.",
+      "severity": "minor"
+    },
+    {
+      "id": "F10",
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "Decision 1: soft-delete check — 'projectRepository.findById(projectId)' chained after botRepository",
+      "detail": "Architecture 'How it works' says the project lookup is 'chained' after bot lookup. The soft-delete check is `project.deletedAt != null`. However, `botRepository.findByProjectIdAndStatus(projectId, CONNECTED)` only checks that the bot exists with CONNECTED status — it does NOT verify the projectId is a valid project. If the project was hard-deleted (removed from `projects` collection entirely) but `bots` collection still has a CONNECTED bot (race or cleanup bug), `projectRepository.findById(projectId)` would return empty, and the tech-spec does not specify what to return in that case. Decision 1 only mentions `deletedAt != null` check. The tech-spec should specify behavior when project is hard-deleted (findById returns empty) vs soft-deleted (findById returns doc with deletedAt != null). Severity minor — production hard-delete would presumably also delete bots, but the gap is present.",
+      "severity": "minor"
+    },
+    {
+      "id": "F11",
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC6: ownerChatId atomic populate — second /start from different user does NOT overwrite",
+      "detail": "The tech-spec correctly specifies atomic findAndModify with predicate ownerChatId=null. However, the user-spec AC6 also requires: 'Second /start от другого пользователя → ownerChatId НЕ перезаписывается'. The worker branch in Architecture says: 'Whether populate happened or not, call SubscriberService.upsertFromTelegramUpdate(...)'. This is correct for the normal subscriber flow. But for the OWNER CHAT ID scenario, the test in TelegramWebhookControllerIT AC6 is specified as a controller-level test ('two parallel /start POSTs from different chats → bot.ownerChatId == firstChatId'). However, the actual ownerChatId write happens in the WORKER (ProcessTelegramUpdateJob), not in the controller. The AC6 controller-level IT test can only verify the HTTP response (200/200), not the ownerChatId state — which requires waiting for the worker to execute. With JobRunrInMemoryConfig, jobs are enqueued but NOT executed. The AC6 assertion 'bot.ownerChatId == firstChatId' cannot be verified in TelegramWebhookControllerIT with InMemory config — it must be in ProcessTelegramUpdateJobTest. The Testing Strategy places AC6 in TelegramWebhookControllerIT. This is a testing architecture error.",
+      "severity": "critical"
+    },
+    {
+      "id": "F12",
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC16: telegram_webhook_duration_seconds — Timer (P99 verified in AC1)",
+      "detail": "Decision 10 specifies 'telegram_webhook_duration_seconds (Timer wrapped around controller body)'. The Architecture 'How it works' step 6 mentions 'Timer telegram_webhook_duration_seconds stop'. The tech-spec does not specify WHERE the timer starts — specifically whether it starts before or after the payload size filter (T10 description conflates filter and controller). If the Timer is inside the controller, it does not measure the filter overhead. If it wraps the entire filter chain, it needs to be placed differently. Also, AC1 says 'P99 verifiable in AC1' — but AC1's integration test measures P99 via per-request nanoTime externally (client-side), not via the Micrometer Timer. The tech-spec should clarify whether the Timer P99 in AC16 is the same as the external nanoTime P99 in AC1, or if AC16 counter assert only verifies count (not histogram percentiles). Severity minor.",
+      "severity": "minor"
+    },
+    {
+      "id": "F13",
+      "type": "overengineering",
+      "source": "tech-spec",
+      "requirement": "T6 + T7: NoOpSubscriberServiceTest + NoOpFunnelTriggerServiceTest — tests for no-op stubs",
+      "detail": "Task T6 specifies 'NoOpSubscriberServiceTest confirming Mono.empty() return' and T7 specifies 'NoOpFunnelTriggerServiceTest'. Testing that a no-op implementation returns Mono.empty() adds test maintenance burden for zero functional value. The no-op behavior is verified indirectly by the worker tests (AC7–AC10 spy assertions confirm the stubs are called and produce no side effects). Dedicated test files for no-op stubs are YAGNI-level micro-tests. Severity minor — this is a minor style issue, not a structural problem.",
+      "severity": "minor"
+    },
+    {
+      "id": "F14",
+      "type": "gap",
+      "source": "tech-spec",
+      "requirement": "Decision 15 [TECHNICAL]: sha256Hex promotion — justified?",
+      "detail": "Decision 15 is marked [TECHNICAL] and states 'DRY threshold reached: producer (Connect) + verifier (Webhook) = 2 consumers'. The justification is sound — two callers using the same SHA-256 algorithm must produce identical bytes or secret verification fails. The promotion to common/crypto/Sha256Hex is well-reasoned (next to TokenEncryptor per architecture.md). The Decision does NOT appear in User-Spec Deviations. Per analysis methodology: Decision 15 is a pure infrastructure/engineering refactoring (DRY extraction), not new functionality. The user-spec 'Технические решения' section (line 100) mentions 'SHA-256 hash' as the storage mechanism but does not mandate sharing a utility class. This is a valid [TECHNICAL] decision that does not require a User-Spec Deviations entry. No finding raised — correctly categorized.",
+      "severity": "minor",
+      "_verdict": "ok — [TECHNICAL] engineering refactor, no user-spec deviation required"
+    },
+    {
+      "id": "F15",
+      "type": "gap",
+      "source": "tech-spec",
+      "requirement": "Decision 19 [TECHNICAL]: No Deploy/Post-deploy tasks — justified?",
+      "detail": "Decision 19 references 'deployment.md line 5 says platform TBD'. The rationale is sound: no CI/CD pipeline exists, staging-smoke is manual via ngrok. This matches user-spec 'Пользователь проверяє' section which describes manual staging-smoke. The decision is correctly classified [TECHNICAL] and explains the gap. No User-Spec Deviation entry needed — deployment mechanism is not specified in user-spec. No finding raised.",
+      "severity": "minor",
+      "_verdict": "ok — justified by deployment.md TBD state, consistent with user-spec manual smoke approach"
+    },
+    {
+      "id": "F16",
+      "type": "structural_gap",
+      "source": "tech-spec",
+      "requirement": "T10: Task contains decision-level content not found or incomplete in Decisions section",
+      "detail": "Task T10 is the most overloaded task: it bundles TelegramWebhookController + WebhookPayloadSizeFilter + SecurityConfig changes + all 4 counter injections + full integration test suite (AC1–AC6, AC15, AC16, AC18) + WebhookSecurityBlockTest. The task description contains operational decisions that are NOT in the Decisions section: (1) 'onErrorMap(IllegalArgumentException → notFound) for malformed ObjectId' — the exception mapping strategy for malformed ObjectId appears in Architecture but has no dedicated Decision entry; (2) 'Failure of enqueue fails the response (not fire-and-forget)' — Decision 11 covers this but T10 re-states it; (3) the CSRF NegatedMatcher configuration syntax is described inline in T10. These are all documented in Architecture/Decisions, so not a structural_gap per se. However, the T10 scope bundling is a task-level overengineering concern. Severity major — a task this large (controller + filter + security config + full IT suite) violates the atomic-task principle and makes code review, rollback, and parallel execution impractical.",
+      "severity": "major"
+    },
+    {
+      "id": "F17",
+      "type": "undocumented_deviation",
+      "source": "tech-spec",
+      "requirement": "Decision 14 [TECHNICAL]: Stub services in final packages — user-spec line 137 already specifies this",
+      "detail": "Decision 14 is marked '[TECHNICAL] (also referenced in user-spec line 137 as a decision)'. The user-spec 'Технические решения' section (line 137) explicitly states: 'Stub-сервисы живут в финальных пакетах subscriber/ и funnel/ (не в _stubs/ подпапке). 04b коммітить інтерфейс + no-op impl; Epic 05/06 замінять impl на реальний без рефакторинга пакетної структури.' This is NOT a [TECHNICAL] decision — it is a user-spec-mandated decision that was pre-locked by the user-spec author. Marking it [TECHNICAL] is incorrect metadata. This does not create a user-spec deviation since the tech-spec follows the user-spec. However, the [TECHNICAL] label is misleading — it implies the tech-spec author invented this, when actually the user-spec mandated it. This is a metadata accuracy issue, not a functional gap. Severity minor.",
+      "severity": "minor"
+    },
+    {
+      "id": "F18",
+      "type": "undocumented_deviation",
+      "source": "tech-spec",
+      "requirement": "User-Spec Deviations section states 'None' — verify correctness",
+      "detail": "The User-Spec Deviations section says 'None' and then explains Decision 1 (project soft-delete check). The explanation is correct: AC3 already enumerates 'soft-deleted projectId → 404' as required; the tech-spec's mechanism (second indexed lookup) implements AC3 without deviating from it. No new functionality is added. The verification of all 19 Decisions confirms: Decisions 1-13 each reference a specific user-spec AC. Decisions 14-19 are marked [TECHNICAL] or infrastructure. No Decision introduces functionality not requested by user-spec. User-Spec Deviations 'None' is correct. No finding raised.",
+      "severity": "minor",
+      "_verdict": "ok — all decisions traced back to user-spec ACs or marked [TECHNICAL] as pure infrastructure"
+    },
+    {
+      "id": "F19",
+      "type": "underengineering",
+      "source": "tech-spec",
+      "requirement": "AC18 + AC2: Token-scrubber in WebhookPayloadSizeFilter",
+      "detail": "The filter (WebhookPayloadSizeFilter) fires before the controller and could theoretically log the Content-Length or path in debug/warn mode. AC18 requires token-scrubber on ALL log sites in webhook handler and worker. The Architecture step 4 (worker) and TelegramWebhookController are covered. WebhookPayloadSizeFilter is not mentioned in the token-scrubber coverage list. If the filter logs a rejection (413 path), it might log the request path or headers — which should also be scrubbed. This is a minor gap since the filter likely does not log payload content, but the tech-spec should confirm this.",
+      "severity": "minor"
+    },
+    {
+      "id": "F20",
+      "type": "gap",
+      "source": "user-spec",
+      "requirement": "AC5: 'exactly 1 event' — one event per duplicate update",
+      "detail": "User-spec AC5 states: 'one event' — exactly one event should be produced for a duplicate update_id scenario. The tech-spec specifies that on DuplicateKeyException, the controller returns 200 silently WITHOUT enqueuing a job. Since no job is enqueued, no worker runs, so no event is written. This correctly produces zero additional events (the first request produces the event). However, the Testing Strategy for AC5 in TelegramWebhookControllerIT asserts 'rawUpdateRepository.count()==1' and 'StorageProvider.getJobs().size()==1' but does NOT assert 'events.count()==1'. With InMemory JobRunr (jobs not executed), events are never written by IT tests anyway. The events assertion is only possible in ProcessTelegramUpdateJobTest. The tech-spec implicitly covers this via the 'no enqueue on duplicate' path but does not explicitly test 'exactly 1 event' end-to-end. User-spec AC5 says 'один event' — this sub-requirement is untested. Severity minor.",
+      "severity": "minor"
+    }
+  ],
+
+  "summary": "29/32 requirements covered, 2 partial (AC7 multi-word-payload integration test not explicit in T10, AC5 event-count assertion not testable in IT layer). 1 missing (AC6 ownerChatId assertion placed in wrong test layer — TelegramWebhookControllerIT with InMemory JobRunr cannot execute worker to verify ownerChatId). Critical findings: F4 (payload_too_large counter must be in WebhookPayloadSizeFilter, not controller — unspecified in T10), F5 (TTL partial-filter uses lowercase enum strings 'pending'/'done' but Spring Data stores enum as uppercase PENDING/DONE — filter will never match, TTL will apply to ALL rows including FAILED — opposite of AC13 intent), F11 (AC6 ownerChatId test incorrectly placed in TelegramWebhookControllerIT where InMemory JobRunr cannot execute workers). Major findings: F6 (current SecurityConfig CSRF state not documented — cannot verify scoped-disable change is correct without reading existing config), F7 (my_chat_member and unlisted Telegram update types lose updateKind granularity since TelegramUpdate record does not model them), F16 (T10 too overloaded — bundles controller + filter + security + full IT suite — violates atomic-task principle). Minor findings: F1 (P99 parallel-load requirement not re-stated in T10 Verify-smoke), F2 (empty-string contract not captured in a Decision), F3 (JobRunr InMemory API for counting pending jobs non-obvious), F8 (worker re-entry idempotency not specified), F9 (Content-Length-absent chunked bypass acknowledged risk), F10 (hard-deleted project findById empty case unspecified), F12 (Timer start position and P99 source ambiguous), F13 (no-op stub tests are YAGNI), F17 (Decision 14 [TECHNICAL] label incorrect — user-spec mandated), F19 (token-scrubber coverage for filter log sites unconfirmed), F20 (events count in AC5 not tested end-to-end)."
+}

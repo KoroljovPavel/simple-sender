@@ -1,0 +1,76 @@
+{
+  "summary": "All 9 TDD anchors are present and the spec mirrors profile.spec/new.spec idioms cleanly (vi.hoisted, mockNuxtImport, mountSuspended, settle helper, per-test reset). However several tests fail the litmus check or leave first-class branches of the page un-pinned. The most consequential gaps: (a) renameSucceeds_storeReflectsNewName asserts a mutation performed entirely by the test's own default mockImplementation, so the page logic could be deleted and the test would still pass; (b) the danger-zone redirect tests rely on the softDelete mock removing the row from .projects, so the page's deletedAt-based filter is never actually exercised; (c) AC-22d's DELETE error path (404/401 inline error via apiError(err,'projects.delete')) is not covered; (d) task.md edge case 'submit with no changes → no PATCH' is not covered even though the page has an explicit guard for it; (e) the positive timezone-change branch is missing (only the no-op branch is tested). Style and isolation are otherwise solid.",
+  "verdict": "request_changes",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 126,
+      "issue": "renameSucceeds_storeReflectsNewName fails the litmus test. The default update.mockImplementation in beforeEach (lines 65-76) itself mutates projectsStoreMock.currentProject to the merged row. The page's onSubmit code does nothing to currentProject — it just awaits store.update. If the entire onSubmit body were replaced with `await projectsStore.update(current.id, partial)` and nothing else, this test would still pass. It verifies the mock's behavior, not the page's. The TDD anchor's intent ('selector у topbar оновлюється без reload') is a Pinia-reactivity claim that belongs in stores/projects.spec.ts, not here.",
+      "suggestion": "Replace the assertion with something the page actually owns. Two options: (1) assert the rendered name field reflects the new value after submit — `expect((wrapper.find('[data-test=\"settings-name-input\"]').element as HTMLInputElement).value).toBe('New Name')` after settle; or (2) assert the inline success indicator appears — `expect(wrapper.find('[data-test=\"settings-saved\"]').exists()).toBe(true)`. Either pins behavior owned by the page rather than by the mock. Otherwise consider deleting the test as redundant with renameSubmit_callsStoreUpdate_withPartial."
+    },
+    {
+      "severity": "major",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 166,
+      "issue": "deleteConfirm_redirects_toDashboard_whenNoOtherActive does not exercise the page's deletedAt-filter contract. The default softDelete mock (lines 79-85) drops the row from projectsStoreMock.projects entirely. The page's redirect logic is `projects.filter(p => p.deletedAt === null).length === 0 ? '/dashboard' : '/projects'`. If the page were refactored to `projects.length === 0` (dropping the active-only filter), this test would still pass — because the mock pre-removes the row. The contract that 'soft-deleted projects still in the store don't count as active' is unverified.",
+      "suggestion": "Add an explicit variant that keeps the row in the list with deletedAt set, to pin the filter. Example: override the softDelete mock in this single test to mutate-in-place rather than remove — `projectsStoreMock.softDelete.mockImplementationOnce(async (id) => { projectsStoreMock.projects = projectsStoreMock.projects.map(p => p.id === id ? { ...p, deletedAt: '2026-05-12T00:00:00Z' } : p) })` — then assert navigateToMock was called with '/dashboard'. This way the page's filter actually has to fire to compute the correct count."
+    },
+    {
+      "severity": "major",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 224,
+      "issue": "Missing test for DELETE error path (AC-22d / explicit AC line in task.md: 'Помилки DELETE (404 stale, 401 expired) показуються через handler apiError(err, projects.delete)'). The page has a catch block at line 146 that sets deleteError + flips isDeleting back, with a `[data-test=\"delete-project-error\"]` render at line 299 — none of it is exercised. A refactor that swallows the error or skips the isDeleting reset would not break any test.",
+      "suggestion": "Add `deleteConfirm_404_showsInlineErrorAndDoesNotNavigate`: in beforeEach-style setup but with `projectsStoreMock.softDelete.mockRejectedValueOnce({ statusCode: 404 })`, open the modal, type the exact name, click confirm, settle, then assert: `wrapper.find('[data-test=\"delete-project-error\"]').exists() === true`, `wrapper.find('[data-test=\"delete-project-error\"]').text()` matches the localized 404 fragment, `navigateToMock` was NOT called, and the modal is still open (`[data-test=\"delete-project-modal\"]` still exists)."
+    },
+    {
+      "severity": "major",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 88,
+      "issue": "Missing test for the 'no changes → skip PATCH' branch (task.md Edge cases: 'Submit без жодних змін у формі: partial = {} → НЕ робити PATCH'). Source code has an explicit guard at line 100: `if (Object.keys(partial).length === 0) { saveStatus.value = 'saved'; return }`. Removing that guard would let an empty-payload PATCH fire; no test catches that regression. This is a small but observable contract (avoid RTT spam + audit-event spam per task description).",
+      "suggestion": "Add `submitWithNoChanges_doesNotCallUpdate_andShowsSaved`: mountSuspended, do not edit any field, trigger submit on `[data-test=\"settings-form\"]`, settle, then assert `expect(projectsStoreMock.update).not.toHaveBeenCalled()` and `expect(wrapper.find('[data-test=\"settings-saved\"]').exists()).toBe(true)`."
+    },
+    {
+      "severity": "major",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 113,
+      "issue": "timezone change is only tested in the 'untouched → omitted' direction. The positive branch — user picks a different valid timezone → partial.timezone is included — is unverified. The page's logic at line 96 has three branches (empty, unchanged, changed); only 'unchanged' is exercised. A refactor that swaps the comparison (e.g. always omits, or always includes) would not fail this spec. AC-22c's contract that timezone changes are part of the PATCH delta is not pinned.",
+      "suggestion": "Add `timezoneChanged_includesInPartial`: mount with the default project (timezone 'Europe/Berlin'), set the select to a different IANA value present in Intl.supportedValuesOf — e.g. `await wrapper.find('[data-test=\"settings-timezone-select\"]').setValue('Europe/London')` — submit, settle, then `const [, partial] = projectsStoreMock.update.mock.calls[0]; expect(partial).toEqual({ timezone: 'Europe/London' })`. This pins both 'changed branch fires' AND 'name/description not in partial when untouched'."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 178,
+      "issue": "navigateTo assertion does not verify locale-aware navigation. The page calls `navigateTo(localePath(redirectPath))`. The localePath mock is an identity function (line 26), so `navigateToMock.toHaveBeenCalledWith('/dashboard')` passes regardless of whether the page wraps in localePath() or not. A refactor that drops localePath() — a contract called out in patterns.md (referenced from the task) — would not fail.",
+      "suggestion": "Either (a) make the localePath mock visibly prefix paths so the test fails if bypassed — `mockNuxtImport('useLocalePath', () => () => (path: string) => '/uk' + path)` and assert `navigateToMock.toHaveBeenCalledWith('/uk/dashboard')`; or (b) spy on the inner localePath function and assert it was invoked with '/dashboard' before navigateTo. Option (a) is simpler and mirrors what real locale prefixing does."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 100,
+      "issue": "Missing 'description unchanged → omitted from partial' assertion. Parallel to the timezoneUntouched test, the description branch (line 93 in settings.vue: `if (values.description !== currentDescription) { partial.description = values.description }`) has no explicit untouched-omission test. descriptionEmptySubmit covers the 'was set, now empty' branch; we lack the 'was set, still same' branch.",
+      "suggestion": "Add `descriptionUntouched_omitsFieldFromPartial`: mount with default project (description 'Old desc'), set ONLY the name field to 'Renamed', submit, settle, assert `expect(projectsStoreMock.update.mock.calls[0][1]).not.toHaveProperty('description')` and `.toEqual({ name: 'Renamed' })`. Mirrors the timezoneUntouched style for symmetry."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 214,
+      "issue": "projectNotInStore_rendersFallback could be slightly stronger. Currently asserts the banner exists, the form is absent, and navigateTo was not called. Could also assert that the danger-zone delete button is absent — the v-else template wraps both the form and the danger zone, so a refactor that accidentally hoists the danger-zone outside the v-else would not fail this test.",
+      "suggestion": "Add one more assertion: `expect(wrapper.find('[data-test=\"delete-project-open\"]').exists()).toBe(false)` and `expect(wrapper.find('[data-test=\"settings-danger-zone\"]').exists()).toBe(false)`. Confirms the fallback hides BOTH sections, not just the form."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 198,
+      "issue": "renameTo409 resets the update mock with mockReset() then chains mockRejectedValueOnce. The mockReset wipes the default mockImplementation set up in beforeEach, but since the test only triggers one submit and asserts the error UI, the reset is fine. Just worth noting — a future maintainer who adds a second submit in this test would lose the default merge behavior and may be confused. Document with a one-line comment.",
+      "suggestion": "Add a comment above line 199: `// Reset the default merging impl so mockRejectedValueOnce is the only behavior for this submit.` Or use `mockImplementationOnce(() => Promise.reject({ statusCode: 409 }))` instead of `mockReset() + mockRejectedValueOnce`, which preserves the default for any subsequent calls in the test."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/tests/pages/projects/settings.spec.ts",
+      "line": 137,
+      "issue": "deleteModal_buttonDisabledUntilExactNameMatch covers 4 sub-cases inside one it() block (partial, trim-trailing-space, lowercase, exact). That matches the TDD anchor wording exactly so it's defensible, but if one sub-case regresses the failure message will be ambiguous (which input caused the disabled-state mismatch?). Splitting would surface the regression more clearly.",
+      "suggestion": "Optional: split into 4 separate it() blocks (`partialName_disabled`, `nameWithTrailingSpace_enabled`, `lowercaseName_disabled`, `exactName_enabled`) each running through the modal-open flow. Faster diagnosis on regression; same total runtime. Acceptable to leave as-is since the TDD anchor is written as one logical case."
+    }
+  ]
+}

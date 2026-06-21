@@ -1,0 +1,68 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 8,
+      "issue": "Task 8 AC (line 93) asserts `status:\"CONNECTED\"` (uppercase), but user-spec AC1 — the authoritative source — states `status:\"connected\"` (lowercase). Backend `BotStatus` enum serializes as uppercase by default in Jackson unless `@JsonValue` or `EnumNamingStrategy` is configured. Task 7 explicitly flags this ambiguity ('If the backend lands with uppercase serialization, follow up by aligning either side — user-spec AC1 is the source of truth') but Task 8 bakes in the uppercase form in its AC without resolving it. The wire format is unresolved and contradictory between tasks.",
+      "fix": "Decide the canonical wire format before Task 8 executes. Option A: add `@JsonValue` / `@JsonProperty(\"connected\")` on `BotStatus.CONNECTED` to enforce lowercase — satisfies user-spec AC1 and Task 7. Option B: update user-spec AC1 to uppercase. Either decision must be reflected consistently in Task 7's `BotStatus` union, Task 8's AC, and Task 9's branch condition (`bot.current.status == \"CONNECTED\"` vs `\"connected\"`)."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 8,
+      "issue": "Task 8 implementation hints contain full pseudocode algorithms for `BotControllerIT` including exact `MockWebServer` API call sequences (`mockTelegram.enqueue(new MockResponse().setResponseCode(401)...)`), precise retry scripting instructions ('script MockResponse().setResponseCode(503) four times'), exact field-level assertion code paths for AC10/AC20, and a complete `static {}` block + `@AfterAll` teardown pattern. These are implementations prescribing the solution rather than pointing to patterns.",
+      "fix": "Replace step-by-step code blocks with pattern references: 'follow the MockWebServer lifecycle pattern from ProjectControllerIT; enqueue appropriate responses for each scenario listed in the TDD Anchor'. Leave the actual retry count / response scripting to the implementing agent."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 8,
+      "issue": "Task 8 Details section for `BotControllerIT.java` contains a complete implementation description including a `static { mockTelegram = new MockWebServer(); try { mockTelegram.start(); } catch (IOException e) { … } }` block verbatim, full `@BeforeEach` instructions listing every repository clean + Redis flush + seed sequence. This crosses the line from hint to prescribed implementation.",
+      "fix": "Collapse to: 'Initialize MockWebServer statically so @DynamicPropertySource can read its URL before context boot; shut down in @AfterAll. Follow ProjectControllerIT's @BeforeEach clean-and-seed pattern extended to the bots/events collections.'"
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 references `frontend/pages/projects/[projectId]/settings/bot.vue` as 'currently a placeholder created in Task 5' and the `settings/` folder as already existing. In the actual codebase, only `frontend/pages/projects/[projectId]/settings.vue` exists — the `settings/` subdirectory and all its contents (including `index.vue`, `bot.vue`, and `SettingsSubnav.vue`) are deliverables of Task 5, which is a dependency (`depends_on: [4, 5, 7]`). If Task 5 is not yet done when Task 9 executes, the placeholder file and folder won't exist and the agent will start from scratch rather than replacing a placeholder. The dependency is declared correctly, but the description creates a misleading assumption about the pre-existing state.",
+      "fix": "Rewrite the premise: 'Task 5 delivers the settings/ folder, bot.vue placeholder, and SettingsSubnav.vue. Verify these exist before starting. If Task 5 is incomplete, resolve it first.' The existing depends_on is correct; only the descriptive assumption needs adjustment."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 9,
+      "issue": "Task 9 implementation hints mention `reka-ui` as a possible peer-dep the shadcn-vue CLI may add ('e.g. radix-vue / reka-ui / similar'), but `radix-vue@^1.9.13` is already present in `frontend/package.json` and shadcn-vue 1.x uses radix-vue, not reka-ui (reka-ui is the shadcn-vue 2.x ecosystem). This creates a false expectation for the implementing agent that the CLI might pull in reka-ui.",
+      "fix": "Replace with: 'radix-vue@^1.9.13 is already installed. The CLI (shadcn-vue@^1.0.3) should not add new peer-deps beyond what is already present. Run pnpm install only if the CLI modifies package.json.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 7,
+      "issue": "Task 7 describes `inFlight: Promise<Bot | null> | null` as mirroring `stores/projects.ts:46`, but the actual type at line 46 is `Promise<void> | null` (because fetchAll returns void). The description says 'same shape as stores/projects.ts:46' which is only true structurally (Promise or null), not in generic type. The bot store's type is correct for its use-case; the 'same shape' wording is misleading.",
+      "fix": "Clarify: 'Module-scoped inFlight variable typed as Promise<Bot | null> | null — same dedup pattern as projects.ts line 46, but typed to the return value of fetch() rather than void.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 7,
+      "issue": "TDD Anchor for the watcher test instructs 'flip useProjectsStore().currentProjectId from \"a\" to \"b\"' — but `currentProjectId` in projects.ts is a `ref<string | null>` that is not directly mutable from outside the store (it's mutated via `selectProject()`). The test approach of directly mutating `useProjectsStore().currentProjectId` assumes the ref is exposed writably, which it is (Pinia setup-stores expose refs writably), but the comment 'Pinia setup stores expose writable refs' should be explicit in the test setup to avoid confusion.",
+      "fix": "In the TDD Anchor wording, clarify: 'Call useProjectsStore().selectProject(\"b\") or mutate currentProjectId.value directly — both work because Pinia exposes the ref writably.' This prevents agents from attempting an invalid direct property assignment."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 9,
+      "issue": "Task 9 references `frontend/tests/pages/projects/settings.spec.ts` as the closest existing analogue (for the mock pattern). This file exists at exactly that path. However the new spec must be placed at `frontend/tests/pages/projects/[projectId]/settings/bot.spec.ts` — a deeper nesting than the reference. The reference import in settings.spec.ts is `from '../../../pages/projects/[projectId]/settings.vue'`, so the agent must adjust all relative import paths for the deeper directory. This is not flagged in the task.",
+      "fix": "Add a note: 'The new spec is one directory deeper than settings.spec.ts — all relative imports (types/*, pages/*, helpers/*) need one additional ../ level compared to the reference file.'"
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 8
+  }
+}

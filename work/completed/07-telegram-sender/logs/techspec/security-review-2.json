@@ -1,0 +1,34 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A02 Cryptographic Failures",
+      "title": "Decrypt catch may swallow pre-decrypt CipherInitException",
+      "description": "Tech-spec step 3 narrows the catch to AEADBadTagException, IllegalArgumentException, and GeneralSecurityException. Spring Boot's TokenEncryptor commonly throws javax.crypto.NoSuchPaddingException, NoSuchAlgorithmException, or InvalidKeyException at first init (covered by GeneralSecurityException — good). However, BadPaddingException is the legacy non-AEAD form; modern AES-GCM in JDK 21 should throw AEADBadTagException, but JCE provider variants can still surface BadPaddingException directly. Both extend GeneralSecurityException, so the listed catch covers them. The remaining gap: javax.crypto.IllegalBlockSizeException is also GeneralSecurityException — covered. Net: the explicit list is technically complete, but the tech-spec should clarify that GeneralSecurityException is the umbrella covering BadPaddingException/IllegalBlockSizeException/InvalidKeyException, and that NullPointerException / IllegalStateException from a misconfigured TokenEncryptor bean MUST propagate (not be swallowed) so ops sees real config failures as 500 rather than misleading 422 invalid_bot_token.",
+      "location": "Section: Architecture > How it works > step 3 (line 56)",
+      "impact": "Negligible runtime risk — the listed exceptions cover all crypto failure modes. Documentation gap only: a future reader could re-broaden the catch to Exception, re-introducing the round-1 issue.",
+      "recommendation": "Add one sentence to step 3: 'Any other Throwable (NPE, IllegalStateException from misconfigured bean) must propagate to GlobalErrorHandler as 500 — do not classify config errors as invalid_bot_token.' Add a unit test in Task 4 stubbing TokenEncryptor to throw IllegalStateException and asserting the response is 500, not 422.",
+      "cwe": "CWE-396"
+    }
+  ],
+  "round2_fix_verification": {
+    "A02_catch_scope": "RESOLVED — line 56 now explicitly lists AEADBadTagException, IllegalArgumentException, GeneralSecurityException with 'scoped to the decrypt call only (not a blanket Exception around the whole chain)'. Catch is appropriately narrow. Minor doc clarification noted as new finding above.",
+    "A02_plaintext_lifetime": "RESOLVED — lines 67-68 explicitly document 'reachable until subscription completes — up to the 30s overall timeout in the worst case (large retry_after waits + transient retries)'. Honest disclosure aligned with the rejected-cache decision.",
+    "A03_token_shape_ordering": "RESOLVED — step 4 (line 57) now numbered BEFORE URI construction (step 6) with explicit non-negotiable ordering note: 'shape validation must precede the wire call to prevent a tampered-Mongo token from being concatenated into the WebClient URI template'.",
+    "A04_test_message_rate_limit": "RESOLVED — R11 (line 387) flags as out-of-scope with rationale (authenticated session, single-user manual click, bounded by Telegram's own response). Documented; not gated.",
+    "A09_chatId_PII": "RESOLVED — R12 (line 388) flags chatId/messageId as PII without retention policy, scoped as cross-cutting concern for future analytics/compliance epic.",
+    "A09_system_context_attribution": "RESOLVED — R8 (line 384) documented; explicitly defers to Epic 06/07 design."
+  },
+  "new_concerns_scan": {
+    "expanded_architecture": "No new attack surfaces. The added Math.max(0, Math.min(retryAfter, 30)) clamp (line 64) correctly defends against negative-retry_after spin loops AND against pathological large values (caps single-delay at 30s while the outer 30s timeout caps total budget). No SSRF — base URL is configuration-controlled, only the token portion comes from decrypted-and-validated bot doc.",
+    "new_test_scenarios": "sendText_429NegativeRetryAfter_clampsToZero_thenCapsAtOverallTimeout (line 306) explicitly tests the spin-loop defense — strong. sendText_corruptedCiphertext_throwsBotTokenInvalidException_beforeHttp (line 316) verifies AEADBadTagException path. Token-leak tests split per log site (lines 325-329) provide thorough scrubber coverage including transport-error path that echoes URI.",
+    "new_risks_R11_R12": "Both appropriately scoped as out-of-scope with documented rationale. Acceptable risk acceptance posture — does not introduce vulnerability, only acknowledges existing platform conventions."
+  }
+}

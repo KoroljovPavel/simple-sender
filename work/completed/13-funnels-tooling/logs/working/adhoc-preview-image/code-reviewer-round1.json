@@ -1,0 +1,19 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "adhoc-preview-image",
+  "round": 1,
+  "verdict": "approved",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "minor",
+      "category": "correctness",
+      "file": "frontend/components/funnels/FunnelMessagePreview.vue",
+      "line": 53,
+      "issue": "imageLoadFailed is reset by watch(imageUrl). The reset keys on the URL VALUE, not the step identity. If step A (SEND_IMAGE) fails to load url X and the author switches to a different SEND_IMAGE step B that carries the SAME imageUrl X, imageUrl does not change value, the watcher does not fire, and imageLoadFailed stays true — step B shows the placeholder even though its <img> never got a fresh chance. The spec wording 'resets when URL changes' is satisfied literally, but the intent 'fresh chance per step' is not fully met for the identical-URL-across-steps case.",
+      "impact": "Narrow cosmetic edge: only two distinct steps with byte-identical image URLs where the first one's load failed. No crash, no security impact, no broken existing behavior. Vue also reuses the same <img> DOM node (same :src) so @error would not naturally re-fire in this case anyway.",
+      "recommendation": "Optional: also reset on step identity, e.g. watch(() => [imageUrl.value, props.step?.id], () => { imageLoadFailed.value = false }). Not blocking."
+    }
+  ],
+  "notes": "Verified against the 11-dimension methodology, all spec requirements, and the live test run. Image rendered ONLY for SEND_IMAGE with non-blank trimmed imageUrl via :src binding (NOT v-html) — confirmed imageUrl computed guards stepType==='SEND_IMAGE' and whitespace-trims; referrerpolicy=no-referrer present; visually constrained (max-h-64 w-full object-contain border rounded). Fallback path correct: blank/whitespace URL → null → placeholder; @error → imageLoadFailed=true → placeholder; broken-img icon avoided (img removed via v-if, not left in DOM). Caption still renders as TEXT via {{ }} below the image; empty caption → image-only (v-if rendered.rendered.length>0 || stepType!=='SEND_IMAGE'); SEND_MESSAGE/MENU/non-message untouched (showImage and showImagePlaceholder both gated on stepType==='SEND_IMAGE'). i18n keys previewImageUnavailable + previewImageAlt present in BOTH en.json and uk.json (parity confirmed, lines 722-723). Vue idioms sound: computed/ref/watch correct, no v-html sink (source guard test enforces this statically). FunnelStep type carries imageUrl?: string|null and caption?: string|null (types/funnel.ts:53-54) — cross-file usage matches. Full spec suite: 15/15 tests PASS (5 new + 10 existing), no regression. Single minor finding F1 is an optional hardening, not blocking."
+}

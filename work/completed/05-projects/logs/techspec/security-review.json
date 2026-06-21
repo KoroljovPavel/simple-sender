@@ -1,0 +1,182 @@
+{
+  "verdict": "pass",
+  "iterations": 1,
+  "summary": {
+    "totalFindings": 7,
+    "critical": 0,
+    "high": 0,
+    "medium": 2,
+    "low": 5
+  },
+  "findings": [
+    {
+      "severity": "medium",
+      "owasp": "A01",
+      "category": "A01-Broken-Access-Control",
+      "issue": "ProjectService.requireOwned discipline is the entire access-control surface for this and every future /api/v1/projects/{id}/... epic, but the spec does not codify a CI-enforceable check. Risks page (R1) reduces this to a code-review checklist item ('every /api/v1/projects/{id}/* calls requireOwned'). Human review is forgettable; one future controller method missing requireOwned silently leaks foreign data with no test failure.",
+      "location": "tech-spec.md Decision 1, Risks R1, AC-T7 (zero-touch security)",
+      "impact": "A future controller method omitting requireOwned (typo, copy-paste, refactor) returns a foreign user's data with HTTP 200. Because 404 vs 200 is the only signal, integration tests for the new module would still pass — the leak is invisible without a cross-user test paired with each new endpoint.",
+      "recommendation": "Add a structural enforcement in this feature: (a) write an ArchUnit / pattern test that asserts every public method on a *Controller class under com.botfunnel matching `/api/v1/projects/{id}/...` invokes ProjectService.requireOwned (lookup via classes().that().resideInPackage and methods().that().areAnnotatedWith(@RequestMapping)), OR (b) move requireOwned into a WebFilter that runs on path pattern `/api/v1/projects/{projectId}/**` before the controller dispatch, populating a `Project` exchange attribute. Option (a) requires no architecture change; add a `requireOwned-coverage` test under backend/src/test/java/com/botfunnel/architecture/. Even a `grep -r 'PathVariable.*projectId' src/main/java | xargs grep -L 'requireOwned'` smoke check in CI is materially better than a checklist item."
+    },
+    {
+      "severity": "medium",
+      "owasp": "A04",
+      "category": "A04-Insecure-Design",
+      "issue": "Decision 8 explicitly skips rate-limiting on /api/v1/projects/* and grounds the decision in 'worst case is 5 active quota'. That reasoning ignores three real abuse vectors that the quota does not bound: (1) PATCH on a single project — unlimited rename storms (audit log spam, lock contention on `events`); (2) DELETE+RESTORE oscillation — 5-active limit does not cap DELETE/RESTORE call rate; (3) authenticated 404-probe enumeration of project IDs by ObjectId guess is rate-unlimited (anti-enumeration helps, but high-rate probing can still extract timing signal or DoS the requireOwned read path).",
+      "location": "tech-spec.md Decision 8",
+      "impact": "Authenticated user (own session, or session-jacking via XSS in another sub-app) can: spam `events` collection growth via PATCH/DELETE/RESTORE oscillation (storage cost); cause Mongo connection-pool exhaustion on hot project rows; produce noisy audit logs that drown real signals (A09 amplification). 404-probe scanning is theoretical but real — even with uniform 404, response timing differs by orders of magnitude between Mongo-hit (deletedAt-filter rejection) and Mongo-miss (missing _id).",
+      "recommendation": "Either (a) add a per-user/per-IP INCR limiter on POST/PATCH/DELETE/RESTORE following the dual-key pattern documented in patterns.md for auth (`brute:fail:{email}` + `brute:fail:ip:{ip}`) — e.g. `mut:projects:{userId}` threshold 30/min, fail-open on Redis outage, OR (b) update Decision 8 to enumerate the unbounded vectors above and document the operational mitigation (Mongo write rate alarms, audit-log volume alarms). Current Decision 8 only addresses the POST-create vector and is incomplete."
+    },
+    {
+      "severity": "low",
+      "owasp": "A01",
+      "category": "A01-Broken-Access-Control",
+      "issue": "Decision 14 (POST /restore on already-active project → 404) implements the anti-enumeration intent but the code path described in 'How it works' has a subtle ordering bug: it does `requireOwned(includeSoftDeleted=true)` (succeeds for own active project), THEN checks `deletedAt != null`. If a future contributor refactors and skips the second check, an active project becomes restore-target and gets the auto-suffix '(restored)' silently appended. The anti-enumeration property holds; the data-integrity property does not.",
+      "location": "tech-spec.md Decision 14, How it works (Soft-delete + restore section)",
+      "impact": "Defense-in-depth: a refactor regression renames an active project. User experience bug, not a security breach, but undermines the audit trail (event metadata says 'renamedDueToConflict=true' for a project that wasn't restored).",
+      "recommendation": "Specify in tech-spec that ProjectService.restore implements the deletedAt!=null guard as the FIRST check after requireOwned, with a unit test asserting that calling restore on an active project never invokes the rename path. Add an integration assertion that no `project_renamed` or `project_restored` event is written when restore is called on active."
+    },
+    {
+      "severity": "low",
+      "owasp": "A03",
+      "category": "A03-Injection",
+      "issue": "Hard-delete cron uses `Query.query(where('metadata.projectId').in(deletedIds))` (Decision 5, How it works). The `deletedIds` come from a database query (`findByDeletedAtBefore`), so they are server-controlled — no injection risk in the current spec. However, the spec does NOT explicitly forbid future contributors from passing user-supplied `projectId` strings into Mongo Criteria. Because requireOwned converts malformed projectId via `.onErrorMap(IllegalArgumentException.class, ...)` (How it works, Scenario 5), the framework path is safe. Risk is documentation-only: no spec line says 'never construct Mongo Query/Criteria from untrusted strings'.",
+      "location": "tech-spec.md How it works (Hard-delete cron) and Scenario 5",
+      "impact": "If a future endpoint accepts a string filter (e.g. project search by name) and passes the raw string into `Criteria.where('name').is(input)` instead of using a parameterized derived finder, NoSQL operator injection is possible (`{name: {$ne: null}}` payloads). Not a vulnerability in this spec's listed code, but absence of guidance compounds across epics.",
+      "recommendation": "Add an explicit constraint to AC-T9 (or a new AC-T11): 'All Mongo queries in com.botfunnel.project.* use ReactiveMongoRepository derived finders or `Query.query(Criteria.where(...).is(...))` with typed values. No String concatenation into Criteria. No use of `Criteria.where(...).is(rawJson)`.' This freezes the guidance for code-reviewer to reference."
+    },
+    {
+      "severity": "low",
+      "owasp": "A05",
+      "category": "A05-Security-Misconfiguration",
+      "issue": "AC-T7 (zero-touch on SecurityConfig.java) is correct — `pathMatchers('/api/**').authenticated()` covers the new `/api/v1/projects/**` paths. However, the spec relies on the implicit ordering rule (specific permitAll before catch-all authenticated) without an integration test that asserts an unauthenticated request to `/api/v1/projects` returns 401. The `ProjectControllerIT` test list (line 308) does include 'Without session → 401' which is good. Risk: the test is `@WithMockAppUser`-scoped; unauthenticated WebTestClient calls may inherit CSRF or Cookie state. Spec should explicitly require the 401 test be run WITHOUT any session/CSRF mutator.",
+      "location": "tech-spec.md AC-T7, Testing Strategy / Integration tests (line 308)",
+      "impact": "If `WebTestClient.mutateWith(csrf())` is applied at the class level, the 'Without session → 401' assertion may falsely pass while the real request flow returns 200 (because SecurityConfig accepts CSRF + session as separate gates). Misconfiguration-by-test-pollution.",
+      "recommendation": "Refine the test bullet to: 'Bare WebTestClient.get().uri(\"/api/v1/projects\").exchange() (no session, no CSRF mutator) returns 401 — assertion uses a fresh test client instance, not the @WithMockAppUser-mutated one.' Same for POST/PATCH/DELETE/RESTORE without session."
+    },
+    {
+      "severity": "low",
+      "owasp": "A08",
+      "category": "A08-Software-Data-Integrity",
+      "issue": "Mass-assignment defense relies on `@JsonIgnoreProperties(ignoreUnknown=true)` on DTOs (Risk 2, Data Models lines 211 and 218). This Jackson annotation is a *whitelist by record-shape*, which is correct — but the integration test bullet on line 304 asserts a hostile body `{name, ownerId: \"<other-user>\"}` results in DB record's `ownerId` equaling the authenticated user. The test does not assert the *response body* also strips `ownerId`. If a future code change ever adds `ownerId` to ProjectResponse (e.g. for admin tooling), the existing IT would still pass while leaking ownership info to the client.",
+      "location": "tech-spec.md Risk 2, line 304 (mass-assignment IT)",
+      "impact": "Information disclosure if response shape regresses. Today ProjectResponse (line 205-209) does not contain ownerId — confirmed safe. But the test does not lock in the *shape*; only the DB write.",
+      "recommendation": "Add an explicit assertion: 'Response body for POST/GET/PATCH/RESTORE must NOT contain `ownerId` field — verified via `responseBody.jsonPath('$.ownerId').doesNotExist()`'. This locks in the contract."
+    },
+    {
+      "severity": "low",
+      "owasp": "A09",
+      "category": "A09-Logging-Monitoring",
+      "issue": "Audit-event coverage looks complete for mutations (project_created, _updated, _renamed, _soft_deleted, _restored, _hard_deleted), but the spec does NOT log an event for *failed* access-control checks. `requireOwned` rejects foreign / soft-deleted-by-default-GET / malformed projectId by throwing `notFound`, with no audit entry. A tenant-isolation breach attempt is invisible in `events`. Existing patterns.md reference (auth events) shows brute-force counters DO write events; project-access-deny does not.",
+      "location": "tech-spec.md Audit event types table (line 247-254)",
+      "impact": "A coordinated attempt to enumerate other tenants' project IDs (rate-unlimited per Decision 8) produces zero audit signal. Forensic blindness — no way to detect targeted scanning post-incident.",
+      "recommendation": "Add an audit event `project_access_denied` (or `project_not_found_or_foreign`) emitted from requireOwned on the rejection path, with metadata `{attemptedProjectId, reason: 'foreign'|'soft_deleted'|'malformed'|'missing'}`. Even at INFO level (not WARN — to avoid log-injection by attacker controlling projectId path component) this gives operations a queryable signal. Threshold-based alarms can then fire on `>50 deny events / user / hour`."
+    },
+    {
+      "severity": "low",
+      "owasp": "A05",
+      "category": "A05-Security-Misconfiguration",
+      "issue": "Frontend persists `currentProjectId` to `localStorage['bot-funnel.currentProjectId']`. Spec correctly notes this is not a secret (just an opaque ObjectId hex string). XSS exposure analysis: an XSS-injected script in any same-origin page can read this key and call any /api/v1/projects/{id}/... endpoint as the user (CSRF cookie is HttpOnly=false by design — see SecurityConfig.java:56 `withHttpOnlyFalse()`). The localStorage value adds no incremental risk over what XSS already gives an attacker (full session). However, the spec does not document this analysis; future contributors may casually add other state (e.g. cached project list, then later cached subscriber data) to localStorage thinking 'we already do this for projectId'. The slope from 'opaque ID' to 'subscriber PII in localStorage' is unguarded.",
+      "location": "tech-spec.md Decision 10, Shared resources table (line 97)",
+      "impact": "Hardening drift across future epics. By itself, persisting a project ID is fine. But establishing 'localStorage is OK' as a precedent without scope-locking it invites bot tokens, subscriber lists, broadcast contents into localStorage in 04-bots / 05-subscribers / 07-broadcasts.",
+      "recommendation": "Strengthen Decision 10 with an explicit scope-lock paragraph: 'Only opaque resource identifiers (ObjectId hex) may be persisted in localStorage. No tokens, no PII, no list data, no cached server responses. Any future epic adding a localStorage write must amend this decision and pass a fresh security review.' Add an AC: 'AC-T11: `frontend/stores/projects.ts` is the only file in this PR that calls `localStorage.setItem`; `grep -rn localStorage.setItem frontend/` confirms.'"
+    }
+  ],
+  "covered_concerns_with_no_issue_found": [
+    {
+      "concern": "A01 — ownerId never read from request body",
+      "status": "ok",
+      "evidence": "Risk 2 mitigation explicit: 'Сервіс ніколи не читає ownerId з request body — тільки з SecurityContext.' DTOs (lines 211-223) have no ownerId field. IT assertion line 304 enforces."
+    },
+    {
+      "concern": "A01 — 404 anti-enumeration uniformity (foreign / soft-deleted / malformed)",
+      "status": "ok",
+      "evidence": "Decision 2 + AC-9 + Scenario 5 + IT cases on line 307. Malformed projectId mapped to 404 via .onErrorMap(IllegalArgumentException). All three states return identical body."
+    },
+    {
+      "concern": "A02 — no secrets in this feature",
+      "status": "ok",
+      "evidence": "Confirmed by spec — bot tokens come in 04-bots. AC-T8 (gitleaks pre-commit) catches accidental commits."
+    },
+    {
+      "concern": "A03 — Mongo query construction",
+      "status": "ok-with-low-finding",
+      "evidence": "All queries use Spring Data derived finders (line 25) or typed Criteria.where(...).in(deletedIds) where deletedIds are server-controlled. See low-severity finding #4 about future-proofing."
+    },
+    {
+      "concern": "A04 — name-conflict race window justification",
+      "status": "ok",
+      "evidence": "Risk 3 explicit: race-window 10–60ms acceptable because business cap of 5 active per user prevents flood. Decision 4 documents the partialFilterExpression-not-supported tradeoff. Fallback path documented."
+    },
+    {
+      "concern": "A04 — soft-delete TTL governance",
+      "status": "ok",
+      "evidence": "Decision 5 + Risk 4. 7-day grace, daily cron, JobRunr distributed lock. Restore-after-hard-delete returns 404 (Risk 4)."
+    },
+    {
+      "concern": "A05 — CSRF inheritance",
+      "status": "ok",
+      "evidence": "AC-T7 zero-touch on SecurityConfig.java. /api/v1/projects/** is covered by existing pathMatchers('/api/**').authenticated(). Existing CookieServerCsrfTokenRepository + ServerCsrfTokenRequestAttributeHandler stack applies."
+    },
+    {
+      "concern": "A06 — vulnerable components",
+      "status": "ok",
+      "evidence": "AC-T3: no new dependencies. Confirmed in 'Dependencies / New packages: None' (line 260)."
+    },
+    {
+      "concern": "A07 — auth failures",
+      "status": "ok",
+      "evidence": "Inherits from 02-auth. 401 on missing session (line 308). No new auth surface."
+    },
+    {
+      "concern": "A08 — mass-assignment defense",
+      "status": "ok-with-low-finding",
+      "evidence": "@JsonIgnoreProperties(ignoreUnknown=true) on all DTOs (lines 211, 218). Hostile-body IT (line 304). See low-severity finding #6 about response-shape lock-in."
+    },
+    {
+      "concern": "A08 — concurrent update strategy (last-write-wins)",
+      "status": "ok",
+      "evidence": "User-spec Constraint explicit. No optimistic locking is intentional MVP tradeoff with explicit revisit-trigger (collaboration epic)."
+    },
+    {
+      "concern": "A09 — audit events on every mutation",
+      "status": "ok-with-low-finding",
+      "evidence": "Audit events table line 247-254 covers all 6 mutations including hard-delete event-survives-cascade ordering (Decision 5, AC-17b). See low-severity finding #7 about access-deny logging gap."
+    },
+    {
+      "concern": "A09 — no secrets in metadata",
+      "status": "ok",
+      "evidence": "Metadata schema in event table contains projectId, name, previousName, renamedDueToConflict — no tokens, passwords, or PII. Aligns with patterns.md line 52 'Do not log raw secrets'."
+    },
+    {
+      "concern": "A09 — structured INFO log on cron",
+      "status": "ok",
+      "evidence": "AC-17c explicit: deletedCount, eventsRemovedCount, runDurationMs. Zero-running days visible. Test asserts via OutputCaptureExtension (line 321)."
+    },
+    {
+      "concern": "A10 — SSRF",
+      "status": "n/a",
+      "evidence": "No outbound HTTP from projects feature."
+    },
+    {
+      "concern": "Path-traversal in projectId",
+      "status": "ok",
+      "evidence": "Mongo throws IllegalArgumentException on non-ObjectId; requireOwned catches via .onErrorMap → 404 (How it works, Scenario 5). No filesystem path interpolation. URL pattern `/api/v1/projects/{projectId}` is not used as a filesystem path anywhere."
+    },
+    {
+      "concern": "Information leak in error messages",
+      "status": "ok",
+      "evidence": "ErrorResponse contract is {message, code} (AC-T1). Bean-validation messages contain field names only (AC-2/3 — e.g. 'name: must not be blank'). 404 message is generic 'Project not found' (line 67). No stack traces leaked (GlobalErrorHandler.handleThrowable maps to 'Internal server error')."
+    },
+    {
+      "concern": "localStorage CSRF/XSS implications",
+      "status": "ok-with-low-finding",
+      "evidence": "Value is opaque ObjectId, not a secret. CSRF cookie is httpOnly=false by design (SPA must read it) — XSS already grants full session access, so localStorage adds no incremental risk for THIS feature. See low-severity finding #8 about scope-lock for future epics."
+    },
+    {
+      "concern": "404 interceptor false-positive triggering data loss",
+      "status": "ok",
+      "evidence": "Decision 11 + Risk R7 + AC-24 + path regex `^/api/v1/projects/[^/]+$` exact match + currentProjectId equality check. Unit test covers all 4 cases (line 292). 'Data loss' here means clearing currentProjectId only — nothing destructive on server. Refetch + auto-select recovers UX."
+    }
+  ]
+}

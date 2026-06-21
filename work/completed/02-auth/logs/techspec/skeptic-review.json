@@ -1,0 +1,178 @@
+{
+  "verdict": "fail",
+  "mirages": [
+    {
+      "claim": "build.gradle uses `jobrunr-spring-boot-3-starter` (listed under 'Using existing' dependencies)",
+      "location_in_spec": "Dependencies section — 'Using existing', item: `jobrunr-spring-boot-3-starter`",
+      "actual_state": "NOT present in backend/build.gradle. Current build.gradle has only: spring-boot-starter-data-mongodb-reactive, spring-boot-starter-data-redis-reactive, spring-boot-starter-security, spring-boot-starter-webflux, spring-boot-devtools, spring-boot-starter-test, reactor-test, spring-security-test, junit-platform-launcher."
+    },
+    {
+      "claim": "architecture.md currently lists `jjwt` as a key backend dependency (from initial planning) — described as a fact to be remedied",
+      "location_in_spec": "User-Spec Deviations section: 'architecture.md (jjwt listed as key dependency)'",
+      "actual_state": "CONFIRMED — architecture.md does list `jjwt — JWT generation and validation` under Key Dependencies → Backend. The claim is accurate. However, the tech-spec also says 'jjwt dependency removed from build.gradle' — jjwt was NEVER in build.gradle, so there is nothing to remove from build.gradle."
+    },
+    {
+      "claim": "deployment.md lists `JWT_SECRET`, `JWT_ACCESS_TTL_MINUTES`, `JWT_REFRESH_TTL_DAYS` (described as existing vars that will be removed)",
+      "location_in_spec": "User-Spec Deviations section: 'deployment.md (JWT env vars)'",
+      "actual_state": "CONFIRMED — deployment.md does list JWT_SECRET, JWT_ACCESS_TTL_MINUTES, JWT_REFRESH_TTL_DAYS in the env vars table. The claim is correct."
+    },
+    {
+      "claim": "ux-guidelines.md says 'Account deletion: requires current password' (described as existing guideline that will be overridden)",
+      "location_in_spec": "Decision 5 and User-Spec Deviations: 'intentionally contradicts the current ux-guidelines.md'",
+      "actual_state": "CONFIRMED — ux-guidelines.md line 37 says exactly: 'Account deletion: modal with consequences listed; requires current password'. The claim is accurate."
+    },
+    {
+      "claim": "MONGODB_URI and REDIS_URL env vars are not bound in application.properties (described as a bug from Epic 01 to fix)",
+      "location_in_spec": "Task 1 description: 'Fix missing env var bindings in application.properties (MONGODB_URI, REDIS_URL)'",
+      "actual_state": "CONFIRMED — application.properties does NOT contain spring.data.mongodb.uri=${MONGODB_URI} or spring.data.redis.url=${REDIS_URL}. The bug exists as described."
+    },
+    {
+      "claim": "Mailpit service exists in infra/docker-compose.yml (Task 1: 'Add Mailpit service to infra/docker-compose.yml')",
+      "location_in_spec": "Architecture 'What we're building/modifying': 'infra/docker-compose.yml — Add: Mailpit service'",
+      "actual_state": "Mailpit is NOT present in docker-compose.yml. Current services: only 'mongodb' and 'redis'. This is correct — tech-spec says to ADD it, not that it already exists. No mirage here."
+    },
+    {
+      "claim": "spring-session-data-mongodb dependency exists in build.gradle (listed under 'Using existing' — actually it's listed under 'New' but the architecture.md Redis scope says 'JWT refresh token blacklist, brute-force rate limiting counters, session data')",
+      "location_in_spec": "Dependencies section — 'New (backend — backend/build.gradle)': spring-session-data-mongodb",
+      "actual_state": "NOT present in build.gradle. This is expected (it is listed as 'New'), so not a mirage. Correct claim."
+    },
+    {
+      "claim": "architecture.md Redis scope description says 'JWT refresh token blacklist, brute-force rate limiting counters, session data, analytics cache'",
+      "location_in_spec": "Decision 1 and architecture.md update decision: 'Redis scope updated'",
+      "actual_state": "CONFIRMED — architecture.md table row for Redis says 'JWT refresh token blacklist, brute-force rate limiting counters, session data, analytics cache (1-min TTL)'. The tech-spec correctly identifies this as needing update."
+    },
+    {
+      "claim": "common package contains AppException and ErrorResponse (described as 'Extend: AppException, ErrorResponse DTO, global error handler')",
+      "location_in_spec": "Architecture 'What we're building/modifying': 'backend/src/main/java/com/botfunnel/common/ — Extend: AppException, ErrorResponse DTO...'",
+      "actual_state": "common package contains ONLY package-info.java. AppException and ErrorResponse do NOT exist yet. The spec says 'Extend' implying they already exist — this is a MIRAGE. They will be created new, not extended."
+    },
+    {
+      "claim": "Frontend has layouts/default.vue, layouts/auth.vue, middleware/auth.ts, stores/auth.ts, composables/useApi.ts (described as modifications to existing frontend)",
+      "location_in_spec": "Architecture 'What we're building/modifying' and Task 8",
+      "actual_state": "None of these directories or files exist. frontend/ contains only: app.vue, nuxt.config.ts, package.json, pnpm-lock.yaml. These are new files to create, not modifications. No mirage — they are listed as new (Task 8: 'new' in parentheses)."
+    },
+    {
+      "claim": "Frontend package.json includes @pinia/nuxt, @tanstack/vue-query, vee-validate, zod, shadcn-vue, @nuxtjs/tailwindcss",
+      "location_in_spec": "Dependencies section — 'New (frontend — frontend/)'",
+      "actual_state": "frontend/package.json dependencies contains ONLY 'nuxt': '^4.4.0'. None of the listed frontend libraries are installed. This is expected (they are new), so not a mirage."
+    },
+    {
+      "claim": "SecurityConfig.java exists at backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "location_in_spec": "Architecture 'What we're building/modifying': 'backend/src/main/java/com/botfunnel/security/SecurityConfig.java — Extend'",
+      "actual_state": "VERIFIED — file exists at the exact path stated."
+    },
+    {
+      "claim": "application.properties has spring.data.mongodb.auto-index-creation=false set globally",
+      "location_in_spec": "Data Models section — sessions collection note: 'spring.data.mongodb.auto-index-creation=false is set globally'",
+      "actual_state": "VERIFIED — application.properties line 3 contains exactly: spring.data.mongodb.auto-index-creation=false"
+    },
+    {
+      "claim": "SecurityConfig currently has a TODO comment about JWT/OAuth2 for auth epic",
+      "location_in_spec": "Architecture section: SecurityConfig.java — Extend: add session-based SecurityContext...",
+      "actual_state": "VERIFIED — SecurityConfig.java line 21 contains: '// TODO: wire JWT/OAuth2 in auth epic; until then, authenticated() blocks all other paths'. The file is a skeleton awaiting extension."
+    },
+    {
+      "claim": "docker-compose.yml has MongoDB on port 27017 and Redis on port 7.4 image",
+      "location_in_spec": "Testing Strategy: 'AbstractIntegrationTest: MongoDB 8.0, Redis 7.4'",
+      "actual_state": "VERIFIED — docker-compose.yml shows mongo:8.0 and redis:7.4, matching the versions stated in the testing strategy."
+    },
+    {
+      "claim": "backend/build.gradle adds `spring-boot-starter-mail` and Testcontainers deps (listed as 'New')",
+      "location_in_spec": "Dependencies section — 'New (backend)' and Task 1 description",
+      "actual_state": "NOT present — confirmed new additions. No mirage."
+    },
+    {
+      "claim": "'common' package described as 'Extend' implying existing content beyond package-info",
+      "location_in_spec": "Architecture 'What we're building/modifying': 'backend/.../common/ — Extend: AppException, ErrorResponse DTO, global error handler'",
+      "actual_state": "MIRAGE — 'Extend' is misleading. common/ contains only package-info.java (a placeholder). There is no existing AppException, ErrorResponse, or ControllerAdvice to extend. Everything in common/ will be created from scratch."
+    },
+    {
+      "claim": "jjwt removed from build.gradle — 'jjwt dependency removed from build.gradle and architecture.md'",
+      "location_in_spec": "Decision 1 rationale: 'jjwt dependency removed from build.gradle and architecture.md'",
+      "actual_state": "MIRAGE — jjwt was NEVER in build.gradle (grep returns no matches). The tech-spec implies an active removal from build.gradle, but there is nothing to remove. The actual task is only to remove the jjwt reference from architecture.md."
+    }
+  ],
+  "verified": [
+    {
+      "claim": "backend/build.gradle exists at backend/build.gradle",
+      "location": "Architecture — 'What we're building/modifying'"
+    },
+    {
+      "claim": "infra/docker-compose.yml exists",
+      "location": "Architecture — 'What we're building/modifying'"
+    },
+    {
+      "claim": "backend/src/main/resources/application.properties exists",
+      "location": "Architecture — 'What we're building/modifying'"
+    },
+    {
+      "claim": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java exists",
+      "location": "Architecture — 'What we're building/modifying'"
+    },
+    {
+      "claim": "backend/src/main/java/com/botfunnel/common/ package exists (package-info.java)",
+      "location": "Architecture — 'What we're building/modifying'"
+    },
+    {
+      "claim": "spring.data.mongodb.auto-index-creation=false is set in application.properties",
+      "location": "Data Models section — sessions collection note"
+    },
+    {
+      "claim": "docker-compose.yml uses mongo:8.0 image",
+      "location": "Testing Strategy — AbstractIntegrationTest spec"
+    },
+    {
+      "claim": "docker-compose.yml uses redis:7.4 image",
+      "location": "Testing Strategy — AbstractIntegrationTest spec"
+    },
+    {
+      "claim": "docker-compose.yml has only mongodb and redis services (no Mailpit yet)",
+      "location": "Task 1 description: 'Add Mailpit service to infra/docker-compose.yml'"
+    },
+    {
+      "claim": "frontend/package.json exists and has only 'nuxt' as dependency (no Pinia, Vue Query, etc.)",
+      "location": "Dependencies section — 'New (frontend)'"
+    },
+    {
+      "claim": "frontend/nuxt.config.ts exists with minimal config (no modules)",
+      "location": "Task 8: 'Update nuxt.config.ts to add all required modules'"
+    },
+    {
+      "claim": ".env.example exists at root with MONGODB_URI and REDIS_URL vars",
+      "location": "Task 1: 'Add session and mail properties to .env.example'"
+    },
+    {
+      "claim": "MONGODB_URI and REDIS_URL are NOT bound in application.properties (Epic 01 bug)",
+      "location": "Task 1: 'Fix missing env var bindings in application.properties'"
+    },
+    {
+      "claim": "jjwt is listed as key dependency in architecture.md",
+      "location": "User-Spec Deviations: 'architecture.md (jjwt listed as key dependency)'"
+    },
+    {
+      "claim": "JWT_SECRET, JWT_ACCESS_TTL_MINUTES, JWT_REFRESH_TTL_DAYS exist in deployment.md env vars table",
+      "location": "User-Spec Deviations: 'deployment.md (JWT env vars)'"
+    },
+    {
+      "claim": "ux-guidelines.md says account deletion requires current password",
+      "location": "Decision 5 and User-Spec Deviations"
+    },
+    {
+      "claim": "spring-boot-starter-data-mongodb-reactive in build.gradle",
+      "location": "Dependencies — 'Using existing'"
+    },
+    {
+      "claim": "spring-boot-starter-data-redis-reactive in build.gradle",
+      "location": "Dependencies — 'Using existing'"
+    },
+    {
+      "claim": "spring-boot-starter-security in build.gradle",
+      "location": "Dependencies — 'Using existing'"
+    },
+    {
+      "claim": "spring-boot-starter-test in build.gradle",
+      "location": "Dependencies — 'Using existing'"
+    }
+  ],
+  "summary": "Checked 25+ claims. Found 3 real mirages. (1) The tech-spec says 'jjwt dependency removed from build.gradle' (Decision 1 rationale) — jjwt was NEVER in build.gradle, so this is a false claim about an active removal. (2) The tech-spec uses 'Extend' for the common/ package implying existing AppException/ErrorResponse — in reality common/ contains only a placeholder package-info.java, so everything is created from scratch. (3) jobrunr-spring-boot-3-starter is listed under 'Using existing' dependencies but is NOT present in build.gradle. The remaining claims about existing files (SecurityConfig.java, application.properties, docker-compose.yml with correct MongoDB 8.0 and Redis 7.4 images, .env.example) are all verified. Claims about what needs to be ADDED are correctly framed as new additions."
+}

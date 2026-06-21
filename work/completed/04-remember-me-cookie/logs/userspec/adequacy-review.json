@@ -1,0 +1,6 @@
+{
+  "status": "approved",
+  "findings": [],
+  "worst_category": null,
+  "summary": "Round-2 re-validation: all four round-1 findings addressed. (1) Scope leak resolved — 'Технические решения' now lists policy-level decisions only (sliding off, no pre-fix invalidation, fallback is session-only, security flags read from config, no extra logging, UX deferred); explicit deferral note 'Конкретні класи, методи override та обраний спосіб тестування — визначаються в техспеку'; no class names, file paths, line numbers, or prescribed test method names remain. Remaining references to `app.session.ttl-remember-me-days` and `server.reactive.session.cookie.name` are config-key contracts, not implementation. (2) AC-7 covers re-login with flag change (and Scenario 3 + Constraint on backward compat together cover natural migration on next login). (3) Absent-vs-false attribute conflation resolved — Constraint line 112-114 and decision line 146-147 explicitly state that missing attribute on non-login flows defaults to session-only cookie (no exception thrown). (4) Observability decision recorded: no extra logs from cookie-writer component, observability provided by existing auth-event logs (login_success, logout) in `events`. Feasibility, sizing (S), and approach remain sound for the Java 21 + Spring Boot 3.5.x + WebFlux + spring-session-data-mongodb stack."
+}

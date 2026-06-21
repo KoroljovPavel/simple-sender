@@ -1,0 +1,77 @@
+{
+  "status": "needs_improvement",
+  "summary": "Round-2 fix adds a Vue root-mount probe before clicking the register submit and is a meaningful step over the unguarded round-1 spec. Verified against Vue 3.5.33 source: rootContainer.__vue_app__ is set in app.mount() (runtime-core.cjs.js:4229) and app._instance is exposed in dev builds (NODE_ENV !== 'production' || __VUE_PROD_DEVTOOLS__ — runtime-core.cjs.js:4231 / esm-bundler.js:4252-4255). In dev mode, which is exactly what playwright.config.ts.webServer launches via `pnpm dev`, the probe resolves and is a strict improvement over no gate. The QA-flagged AC-28 race (native HTML GET on /auth/register because @submit.prevent had not attached) is closed for the registration submit specifically. HOWEVER, two structural gaps remain: (1) the probe targets ROOT app mount, not nested-Suspense page hydration — Nuxt's nuxt-root.vue wraps content in <Suspense @resolve='onResolve' /> and the page-level NuxtPage uses its own Suspense, so app._instance.isMounted can flip true while the page component is still resolving (window still exists, just much narrower); (2) the probe reads private Vue/Nuxt internals (_instance.isMounted) that are explicitly stripped in prod builds — running `pnpm build && pnpm preview` (deferred verification listed in QA report) will block on this waitForFunction forever and time out. QA report explicitly defers prod-build verification of AC-28; this fix does not unblock that deferral. Recommended hardening: replace the private-API probe with a behavior-driven gate that exercises hydration (verify-input-is-reactive — fill invalid email, expect validation error, then re-fill valid) OR await `expect(page.locator('[data-test=\"email-error\"], [data-test=\"submit-error\"]')).toBeAttached()` after a deliberately invalid submit to prove vee-validate is wired before the real submit. Round-1 minor findings (test.step wrapping, ProjectSelector dropdown close anti-pattern, dashboard-empty-state hidden assertion after first create, locale-tolerant URL regex tightening) are inherited unchanged by round 2 — none were addressed in commit 4f1dc9c which only adds the hydration probe. The single-test-block contract holds (playwright --list reports 1 test). Locale-stability of URL regexes is unchanged from round 1 (tolerant /(?:\\\\?.*)?$/ suffixes — same minor anti-pattern flagged in round 1).",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:40-43",
+      "issue": "Probe reads private Vue internal `__vue_app__._instance.isMounted`. In Vue 3.5.33 source (runtime-core esm-bundler.js:4252-4255) `app._instance = vnode.component` is wrapped in `if (NODE_ENV !== 'production' || __VUE_PROD_DEVTOOLS__)`. Under dev (`pnpm dev`, current `webServer` setup) this works. Under prod build (`pnpm build && pnpm preview` — which QA report explicitly defers as next AC-28 verification step) `app._instance` is `undefined` and the probe will hang for the entire matcher budget (default 30s), then time out with a confusing 'waitForFunction timeout' error rather than a meaningful failure. This is a forward-compat hazard the moment CI moves to a prod-bundle e2e run, and it directly contradicts the round-2 fix's stated purpose of unblocking AC-28.",
+      "recommendation": "Replace the private-API probe with a behavior-driven hydration assertion. Concrete option A (recommended): trigger client-side validation before the real submit — `await page.locator('#email').fill('not-an-email'); await page.locator('button[type=\"submit\"]').click(); await expect(page.locator('[data-test=\"email-error\"]')).toBeVisible(); await page.locator('#email').fill(email);` — once `email-error` is visible, vee-validate is hydrated, which proves `@submit.prevent` is wired. Option B: rely on Playwright's auto-waiting — `await expect(page.locator('button[type=\"submit\"]')).toBeEnabled()` is not enough (the button is server-rendered enabled), but `await page.locator('button[type=\"submit\"]').evaluate(b => { /* arbitrary handler-check */ })` is brittle. Option A is recommended because it asserts the actual user-observable contract (validation works → submit is wired) and is locale-agnostic (asserts on data-test, not text)."
+    },
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:40-43",
+      "issue": "Probe targets the ROOT Vue app mount, not page-level hydration. Nuxt's nuxt-root.vue (node_modules/nuxt/dist/app/components/nuxt-root.vue:1-18) wraps AppComponent in <Suspense @resolve='onResolve'> with onResolve = nuxtApp.deferHydration(). NuxtPage (which renders /auth/register.vue) is itself inside another Suspense boundary. `vueApp.mount(...)` in entry.js:67 sets `rootContainer.__vue_app__ = app` and `app._instance = vnode.component` synchronously after render returns — but render of the outer Suspense can complete with the inner page tree still pending. `app._instance.isMounted` flips true once the OUTER root component instance reports mounted; the page component inside the inner Suspense can still be resolving. Practical impact: the race window is much narrower than the round-1 unguarded spec, but the probe is NOT a strict guarantee that the page's `@submit.prevent` handler is attached. The fact that current local runs (chromium dev, /auth/register has no top-level await in <script setup>) succeed is coincidental — adding an async plugin or an async middleware in the future widens the gap.",
+      "recommendation": "Either supplement the root-mount probe with `await expect(page.locator('[data-test=\"email-error\"], #email')).toBeEditable()` AND a hydration-reactivity check (fill→expect-error→refill, as in finding above), OR replace the probe entirely with `await page.locator('#email').fill('not-an-email'); await page.locator('button[type=\"submit\"]').click(); await expect(page.locator('[data-test=\"email-error\"]')).toBeVisible();` followed by clearing the field. The behavior check provably exercises the page-level reactive system and is invariant under Suspense reshuffles, async plugins, prod-vs-dev build, and Nuxt major-version upgrades. It also makes the test self-documenting: 'submit is reactive' is asserted in the spec, not inferred from a private-API probe."
+    },
+    {
+      "severity": "major",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:40-43",
+      "issue": "Probe is brittle to Nuxt/Vue version upgrades. `_instance` is a Vue-private deep-internal handle gated on dev-vs-prod NODE_ENV in 3.5.x; Vue maintainers have refactored this surface across 3.x minors (e.g. devtools-related fields moved between major minors) and explicitly mark such fields as unstable in JSDoc/d.ts. `__vue_app__` is more stable but still not a public testing API. A Nuxt 4 or Vue 3.6+ upgrade can silently change the shape (e.g. rename `_instance` to `_appInstance`, lift dev-gate, or expose via a different root marker) and the probe will start returning `undefined` everywhere — breaking ALL e2e specs that adopt this pattern. This violates the test-master 'test behavior, not implementation' principle.",
+      "recommendation": "Standardize on a hydration contract owned by the app, not Vue/Nuxt internals. Either: (a) set `document.documentElement.dataset.nuxtReady = 'true'` from a client-only Nuxt plugin on `app:suspense:resolve` and gate via `await expect(page.locator('html')).toHaveAttribute('data-nuxt-ready', 'true')` — this is a 5-line plugin (frontend/plugins/hydration-ready.client.ts) and survives every framework upgrade; or (b) use behavior-driven gates per finding above; or (c) accept the QA-suggested `await expect(page.locator('#email')).toBeEditable()` which is bounded by matcher timeout and uses public Playwright API. Option (a) is preferred if multiple e2e specs need hydration gating; option (b) is preferred if /auth/register is the only place that races."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/e2e/projects.spec.ts:67-73",
+      "issue": "Round-1 finding (dashboard empty-state → welcome transition) was partially addressed: line 72 now asserts `await expect(emptyState).toBeHidden()` after the first project create, which closes the AC-18 → AC-19 transition gap. Good. However the round-1 finding also noted the absence of a positive welcome-content assertion (data-test='dashboard-welcome'). Round-2 commit 4f1dc9c does not touch this region; the negative assertion alone is acceptable for now but the positive welcome assertion remains a coverage gap if the future implementation hides empty-state without rendering welcome (e.g. a loading-spinner state stuck). Re-flagging as inherited.",
+      "recommendation": "Either: (a) add `data-test=\"dashboard-welcome\"` to the welcome block in pages/dashboard.vue (Wave 3 fix, out of Task 10 scope) and assert `await expect(page.locator('[data-test=\"dashboard-welcome\"]')).toBeVisible()` here; or (b) record in decisions.md that the negative hidden-empty-state assertion is the chosen golden-path proxy for AC-19 dashboard transition and the positive welcome assertion is intentionally not in MVP."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:138",
+      "issue": "Round-1 inherited: `await page.keyboard.press('Escape')` to close the dropdown before clicking the restore button couples the test to the ProjectSelector's keyboard-handling implementation. Round-2 commit 4f1dc9c does not address this. If a future refactor of ProjectSelector switches close mechanism (Headless UI Menu, click-outside-only) this line breaks even though user-facing behavior is unchanged.",
+      "recommendation": "Replace with a click-outside or simply remove and rely on Playwright's auto-scroll + retry — `await deletedRow.locator('[data-test^=\"restore-button-\"]').click()` may already work because the click lands outside the panel. If not, click on a known outside locator: `await page.locator('[data-test=\"recently-deleted-section\"]').click({ position: { x: 5, y: 5 } });` exercises the real close-on-outside-click handler."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:17",
+      "issue": "Round-1 inherited: entire ~130-line golden-path lives inside a single `test()` block with no `test.step()` wrappers. CI trace viewer shows only 'golden path: register → ...' and the failing locator, not which logical step tripped. Round-2 commit 4f1dc9c does not address this. With round-2's hydration probe in place, a timeout on the probe is now possible (per major findings above) — when that fires in CI the failure attribution will be 'waitForFunction timeout' with no logical step context. Adding `test.step()` becomes more valuable, not less, after round-2.",
+      "recommendation": "Wrap each commented section (Step 1 register, Step 2 empty-state, Step 3 create #1, ..., Step 11 restore) in `await test.step('register fresh user', async () => { ... })`. Zero behavioral impact, free CI failure-attribution. Same pattern as Playwright official 'organize tests' guidance."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:54,62,70,79,82,97,125",
+      "issue": "URL regexes use `/\\\\/dashboard(?:\\\\?.*)?$/` and similar — tolerant of query strings but DO NOT explicitly tolerate the `/en` locale prefix that Nuxt i18n produces with `prefix_except_default`. The default locale (uk) is `prefix_except_default = uk`, so `/dashboard` (no prefix) is the uk URL and `/en/dashboard` is the en URL. The current regex `/\\\\/dashboard(?:\\\\?.*)?$/` matches `/dashboard?foo` and matches `/en/dashboard` (because `.+/dashboard` is a suffix match) — so this is incidentally fine for the en case. However it ALSO matches `/api/billing/dashboard` or any path ending in `/dashboard`, which is over-permissive. Round-1 already flagged this as locale-tolerance / regex-tightening; round-2 does not address.",
+      "recommendation": "Tighten to `/^(?:\\\\/en)?\\\\/dashboard(?:\\\\/?\\\\?.*)?$/` and apply the same pattern to /projects, /projects/new, /projects/[id]/settings. Anchored to start, locale-prefix optional, query/trailing-slash tolerant. Locale-stability stays intact; over-match risk goes away."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/e2e/projects.spec.ts:30",
+      "issue": "Subsequent form submits (projects/new — line 64, 81 — and settings rename — line 102) do NOT have a hydration gate. The round-2 fix asserts these are 'client-side via Vue Router so no further gate is needed' (line 38-39 comment). This is roughly correct — once the SPA is fully hydrated, route changes via NuxtLink/router.push do not re-execute SSR; the new page component mounts via Suspense without a fresh native-HTML window. However the FIRST route change (clicking the empty-state CTA at line 58) is technically still a client-side navigation through router.push, but the destination page (/projects/new) renders its form via vue-template-compiled `@submit.prevent` immediately and the input is reactive by the time `page.locator('[data-test=\"project-name-input\"]').fill(...)` resolves. Playwright auto-wait on fill() will retry until input is editable, which effectively gates on hydration. The reasoning holds — but this is not asserted by the test; it's inferred. If a future task introduces a top-level `await` in pages/projects/new.vue's `<script setup>` (e.g. an async useFetch for timezone autodetect), the same race could surface for project-creation submit.",
+      "recommendation": "No change required for current code. Document in decisions.md: 'E2E hydration gate applies only to /auth/register because (a) it is reached by hard navigation (page.goto), (b) it is the first interactive form before any SPA hydration has occurred. Subsequent forms (/projects/new, /projects/:id/settings) reach via client-side router.push from an already-hydrated SPA and inherit hydration from the parent app instance.' This makes the inference explicit and gives future maintainers a contract to check when adding async setup() in those pages."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 8,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

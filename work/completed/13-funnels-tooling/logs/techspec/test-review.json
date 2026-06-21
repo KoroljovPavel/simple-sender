@@ -1,0 +1,36 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "area": "unit",
+      "issue": "Preview unit tests say 'correct escaping under parse_mode' but do not enumerate the three modes (None / HTML / MarkdownV2) the renderer actually implements, nor its documented edge cases: literal {{ -> {, }} -> }, unclosed { left verbatim (never throws), integral Double drops the .0, and the full MarkdownV2 special-char set (_ * [ ] ( ) ~ ` > # + - = | { } . !) escaped only inside substituted values while author markup is left untouched. Since preview's whole reason to exist is byte-for-byte parity with runtime escaping (OWASP A03 / XSS-drift mitigation), a generic 'correct escaping' anchor lets the implementer ship a test that passes on the trivial None path while HTML/MarkdownV2 drift silently.",
+      "severity": "medium",
+      "recommendation": "Make the preview escaping anchors behavioral and per-mode: (1) parseMode=null -> raw value passes through unescaped; (2) HTML -> a value containing & < > is entity-escaped, surrounding author markup untouched; (3) MarkdownV2 -> a value containing a representative subset of the special set (e.g. _ * [ . !) is backslash-escaped; (4) {{ }} render as literal braces and an unclosed { is left verbatim with no exception; (5) an integral Double custom value renders without trailing .0. Each assertion should compare the exact rendered string, not substring presence. Cheapest place is direct unit tests on VariableTemplateRenderer-driven previewStep, since the renderer is pure static."
+    },
+    {
+      "area": "unit",
+      "issue": "Test-run unit anchors cover ownerChatId=null, subscriber missing, subscriber not ACTIVE, empty/invalid funnel, and happy-path call order (cancelExistingForPair -> insertExecution depth=0). But the restart-policy semantics (Decision 3) — that the SECOND call cancels the prior in-flight pair before inserting, avoiding DuplicateKeyException on the partial-unique funnelId_subscriberId index — is only asserted at the integration layer. A unit anchor verifying cancelExistingForPair is invoked BEFORE insertExecution on a re-test (ordering), and that insertExecution is always called with enrollDepth=0, would catch a regression where someone reorders or drops the cancel without needing a full Mongo spin-up.",
+      "severity": "low",
+      "recommendation": "Add a unit anchor: on a repeat test-run for the same (funnel, subscriber), assert cancelExistingForPair(projectId, funnelId, subscriberId) is invoked before insertExecution, and that insertExecution receives enrollDepth=0. Use ordered verification (InOrder) on the collaborators. This is genuine behavior (call sequencing is the regression risk), not a mock-return tautology."
+    },
+    {
+      "area": "integration",
+      "issue": "The stop-all integration anchor asserts active executions become cancelled + stepRunStatus=done and terminal ones are untouched, but does not assert the cross-funnel / cross-project SCOPING claimed as a fail-closed tenant-hardening invariant (Decision 7: scope by projectId AND funnelId). Without a sibling execution in a different funnel (and ideally a different project) that must remain untouched, a bug that widens the bulk-update filter to projectId-only — cancelling executions of OTHER funnels — would pass every listed test.",
+      "severity": "medium",
+      "recommendation": "Add to the Stop-all IT a control execution belonging to a different funnelId (same project) and assert it is NOT modified after POST /executions/stop; if cheap, also seed a same-funnelId execution under a different projectId and assert it is untouched. Assert modifiedCount equals only the in-scope active count."
+    },
+    {
+      "area": "integration",
+      "issue": "Anti-IDOR is asserted as 'all endpoints -> unified 404 for foreign/nonexistent funnel/project'. For test-run and preview this 404 must take precedence over the new 422 (funnel_owner_not_linked) and over 404-for-unknown-stepId — i.e. a foreign funnel must return the requireFunnel 404 even when ownerChatId would also be null, so the endpoint does not leak existence via a 422-vs-404 oracle. The current anchor does not pin this precedence.",
+      "severity": "low",
+      "recommendation": "In the anti-IDOR IT, for test-run and preview specifically, hit a funnel owned by another user whose owner is also unlinked and assert the response is 404 (requireFunnel) — never 422 — confirming authorization is checked before owner-resolution / business validation."
+    },
+    {
+      "area": "unit",
+      "issue": "Duplicate name-truncation anchor reads 'name >128 truncated'. The load-bearing edge is the boundary: the ' (копія)' suffix must not push a near-limit name over @Size(max=128) and cause a 400, and truncation must keep the result valid AND still carry the suffix semantics intended by the AC. A single >128 case can pass while an off-by-one at exactly 128 (or a suffix-then-truncate vs truncate-then-suffix ordering bug) slips through.",
+      "severity": "low",
+      "recommendation": "Add boundary anchors: original name length such that name + ' (копія)' == 128 (must NOT truncate, no 400) and == 129 (must truncate to exactly 128, no 400). Assert the persisted name length is <=128 and that duplicate returns 201 (not 400) in the over-limit case, matching AC 'суфікс не спричиняє 400'."
+    }
+  ],
+  "notes": "Strategy is adequate for an L feature and the pyramid is healthy (many service unit tests + per-endpoint IT with @SpringBootTest/MockMvc/embedded Mongo + MockWebServer, vitest for new components). E2E='None' is correctly justified per architecture.md (Playwright limited to golden-path locale flow); no over-testing observed — each layer earns its place and there is no redundant duplication between unit and IT. All five findings are coverage-tightening, not blockers: zero critical, zero high. The most valuable to act on are the per-mode preview-escaping anchors (medium — directly guards the stated XSS/markup-drift mitigation) and the stop-all cross-funnel scoping control (medium — guards a tenant-isolation invariant that every currently-listed assertion would pass while broken). The MockWebServer send-assertion for test-run happy-path (driving a sweep as in FunnelExecutionEngineIT) is the right call and confirms async-delivery-registered semantics without faking. Primitives were verified against source: FunnelExecutionFactory.cancelExistingForPair/insertExecution and VariableTemplateRenderer's three escaping modes + documented edge cases all exist as the spec describes."
+}

@@ -1,0 +1,325 @@
+# Interview Plan — 11-funnels-interactive (Funnels Phase 2: Interactive + keyboard)
+
+interview_metadata:
+  started: "2026-06-06 00:00:00"
+  last_updated: "2026-06-06 00:00:00"
+  status: "completed"
+  can_resume: true
+  current_question_num: 0
+  feature_size: "L"   # new state-machine surface: wait-for-reply status, callback ingestion, branching, inline keyboards
+
+conversation_history:
+  - question_num: 1
+    topic: "step_model / scope / branch representation / timeout"
+    summary: >
+      Q1 step model: composite MENU step only (msg+buttons+wait+branch in one node), NOT separate
+      Wait/Branch types → AGREED. Q2 free-text reply: buttons-only (callback) in Phase 2, defer text
+      matching → AGREED. Q3 branch representation: user wants self-contained branches that can even
+      "open another funnel" (cross-funnel jump). Q4 timeout: user challenges "навіщо таймаут?" —
+      questions whether a wait timeout is needed at all.
+  - question_num: 2
+    topic: "scope deferrals + button schema + idempotency confirmed"
+    summary: >
+      Q3 cross-funnel jump: DEFER (user agreed). Q4 timeout: take optional/off-by-default (agreed).
+      Q5 button schema: callback-only, <=8, 1/row, <=64 chars (agreed). Q6 always answerCallbackQuery +
+      advance only if execution is waiting_for_reply on that exact MENU step; double-click/stale-button =
+      silent ignore (agreed). User shared FUTURE vision (all deferred): button opens another funnel,
+      sub-funnel returns to parent menu, API-request step, VIP-tag transfers subscriber fully to another
+      funnel. These confirm cross-funnel handoff + menu-loop/return-to-menu are OUT of Phase 2.
+  - question_num: 3
+    topic: "nesting depth, terminal branches, analytics hook, keyboard-after-click, canvas future"
+    summary: >
+      Q7 nested menus inside a branch: YES, allow (depth cap 3, shared 50-step total cap). Q8 terminal
+      branches: YES, no return-to-menu in Phase 2. User then floated FUTURE canvas/graph editor with
+      arrows + fan-in ("4 blocks lead into 1") — recorded as future in docs/roadmap/funnels.md; Phase 2
+      stays a TREE model (nested terminal branches, no fan-in/loop), canvas = future one-time tree→graph
+      migration. Q9 analytics hook: AGREED — emit funnel_button_clicked event via EventService +
+      lastButtonClicked on execution; dashboards belong to Analytics epic 09. Q10 keyboard after click:
+      do NOT remove keyboard, always answerCallbackQuery, idempotently ignore repeat/stale clicks.
+      Recorded all deferrals to docs/roadmap/funnels.md. AWAITING confirm on tree-vs-graph + Q10.
+  - question_num: 4
+    topic: "MODEL PIVOT — graph data model (option B), no canvas"
+    summary: >
+      User asked how hard tree→graph migration is; I explained the canvas UI cost (4-6w) dominates and
+      is model-independent, the data+engine migration is days. User CHOSE option B: GRAPH data model
+      (every step has a stable id; MENU buttons carry target=stepId edges; flat list, only MENU
+      branches/waits; normal steps linear fall-through; button can target "End") but KEEP the vertical-
+      list editor (NO canvas). Confirmed B (only MENU branches/waits + "End" target) and C (accept bigger
+      engine scope: currentStepIndex→currentStepId, infinite-loop guard per tick, broken-edge validation,
+      Phase-1 funnel migration to step ids without breaking in-flight executions). PENDING A: enable
+      loops (return-to-menu) + fan-in intra-funnel NOW (recommended, near-free from graph model). Q7
+      nesting/depth-3 is now MOOT (flat graph, no nesting; nested menu = another MENU step targeted by a
+      button; bounded by the 50-step total cap). Revised docs/roadmap/funnels.md: graph data model is IN
+      Phase 2, only the visual CANVAS + cross-funnel jump/return + API step + VIP transfer + free-text
+      remain deferred.
+  - question_num: 5
+    topic: "AC + edges + button types + versioning"
+    summary: >
+      Edge model: each step has ONE outgoing edge (default=next in list); MENU is the exception (per-button
+      target + optional timeout target). Loop = button targets an earlier MENU; returning to a MENU RE-SENDS
+      it (variant a, user picked). Repeatable button (e.g. check-balance) = loop back to its menu. Edge-case
+      table accepted (stale/double click → answerCallbackQuery + silent ignore; blocked-during-wait → cancelled;
+      /stop cancels waiting; edit→snapshot isolation; paused drains; loop-without-wait → per-tick step-limit guard
+      → failed; answerCallbackQuery best-effort; bot disconnected → failed). Q2 timeout optional/off, optional
+      timeout target — OK. Q3 button label plain text <=64, message text via VariableTemplateRenderer — OK.
+      Q4 testing depth — enough. BUTTON TYPES (new): each MENU button is callback (label+target) OR url
+      (label+http(s) link, no callback, no flow advance); >=1 callback button required per MENU; <=8 total,
+      1/row, label <=64. Versioning (draft/publish + migrate in-flight) DEFERRED to roadmap (done).
+  - question_num: 6
+    topic: "broken-edge validation + deploy/migration"
+    summary: >
+      Broken edge (target step deleted) → 422 funnel_broken_edge on ACTIVATE, inline in editor, draft can
+      still save — AGREED. Deploy: NO deploy infra exists yet; user verifies LOCALLY only. No new secrets,
+      no manual steps. One new config app.funnel.max-steps-per-tick (loop guard). Step-id backfill migration
+      automatic. CONFIRMED. Interview complete — proceeding to completeness check + user-spec draft.
+
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "11-funnels-interactive (roadmap Phase 2 — Interactive + keyboard)"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 82
+    status: "partial"
+    value: >
+      Phase 2 of funnels. ONE new composite MENU step = message + inline buttons + wait-for-callback +
+      per-button branch. Buttons-only (callback_query); free-text matching deferred. Each button leads to
+      its own self-contained branch (nested sub-steps). User floated "button opens another funnel"
+      (cross-funnel jump) — scope TBD. Requires: reply_markup + answerCallbackQuery in TelegramSender,
+      callback_query DTO + ingestion in webhook worker, new ExecutionStatus waiting_for_reply, branch
+      representation in the snapshot, branch-analytics hook.
+    gaps: "FINAL MODEL = graph (stable step ids + MENU button target edges, list editor, loops + fan-in enabled, no canvas). Remaining: AC set, edge/error scenarios, testing depth, deploy/migration."
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 90
+    status: "complete"
+    value: >
+      Linear funnels can only push; they cannot react. The product's core value ("серце продукту")
+      is two-way flows: present buttons, wait for the subscriber's choice, branch accordingly — incl.
+      a reusable main menu the subscriber returns to (loops) and shared follow-up steps (fan-in).
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 40
+    status: "pending"
+    value: "Small-business owners / marketers building Telegram funnels (project owners)."
+    gaps: "Confirm"
+    required: false
+
+  success_criteria:
+    score: 88
+    status: "complete"
+    value: >
+      A subscriber receives a menu with inline buttons, taps one, and lands in the correct branch;
+      loops (return-to-menu) and fan-in work; timeout (when set) routes; stale/double taps are ignored;
+      /stop cancels a waiting run; broken edges block activation. Verified locally via engine/webhook ITs
+      and a manual Telegram button walkthrough.
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 50
+    status: "partial"
+    value: >
+      Must reuse Phase-1 engine: snapshot isolation, atomic-claim CAS, at-most-once per step,
+      JobRunr sweep, lowercase ExecutionStatus name() index literals. Flat FunnelStep POJO (no _class).
+      TelegramSender currently has no reply_markup; callback_query is an opaque JsonNode.
+      Editor desktop-first; no drag-and-drop.
+    gaps: "New ExecutionStatus value (waiting_for_reply), how branching coexists with flat ordered-list snapshot + currentStepIndex jumps"
+    required: true
+
+  testing_strategy:
+    score: 88
+    status: "complete"
+    value: >
+      L feature. Backend: engine ITs (callback advance, loop+guard, fan-in, timeout, idempotent double-tap,
+      cancel-waiting) with deterministic Clock; webhook callback_query ingestion ITs; TelegramSender ITs
+      (reply_markup + answerCallbackQuery, mockwebserver). Frontend: vitest editor tests + 1 Playwright
+      happy-path. Mirror Phase-1 race/crash IT patterns.
+    gaps: ""
+    required: true
+
+phase2_user_experience:
+  user_stories:
+    score: 90
+    status: "complete"
+    value: >
+      Author: builds an interactive funnel in the vertical-list editor — adds a MENU step (message +
+      inline buttons), each callback button targets another step or "End"; can wire loops (button →
+      earlier MENU) and fan-in (several buttons → one step); optional URL buttons; optional wait timeout
+      with a target. Subscriber: /start → gets messages + a menu with inline buttons → taps a button →
+      lands in the matching branch → may loop back to a menu and tap again.
+    gaps: ""
+    required: true
+  acceptance_criteria:
+    score: 90
+    status: "complete"
+    value: >
+      Build /start → Send "Привіт {first_name}" → MENU(3 buttons). "Купити"→Send→End;
+      "Питання"→Send→loops back to MENU; "Меню"→fan-in to same MENU. /start → greeting + 3-button
+      keyboard; tap Купити → payment text + completed + spinner cleared; tap Питання → text + menu
+      re-sent (loop); URL button opens link without advancing; stale/double tap ignored; /stop cancels a
+      waiting execution; timeout (if set) routes to its target; broken edge blocks activation (422).
+    gaps: ""
+    required: true
+  edge_cases:
+    score: 92
+    status: "complete"
+    value: >
+      Stale-button tap (execution advanced/completed/cancelled) → answerCallbackQuery + silent ignore.
+      Double tap → claim CAS → first wins, second ignored. Blocked-bot during wait → next branch send →
+      BLOCKED_BY_USER → cancelled. /stop during wait → cancelActiveFor cancels waiting_for_reply. Funnel
+      edited while waiting → snapshot isolation (runs old graph). Paused → no new executions, active drain.
+      Loop without a wait/delay → per-tick step-limit guard → failed. Bot disconnected at callback → pin
+      check → failed. URL-only menu → rejected (needs >=1 callback button).
+    gaps: ""
+    required: true
+  error_scenarios:
+    score: 90
+    status: "complete"
+    value: >
+      answerCallbackQuery fails (Telegram 5xx) → best-effort, log, do NOT block branch advance.
+      Callback for unknown/expired execution → ignore. Broken edge at activate → 422 funnel_broken_edge.
+      MENU without a callback button → 422 on save/activate. Telegram send terminal failure inside branch
+      → maps to cancelled/failed exactly as Phase 1 StepExecutor.
+    gaps: ""
+    required: true
+  verification_strategy:
+    score: 88
+    status: "complete"
+    value: >
+      Local only (no deploy infra yet). Backend: engine ITs (callback advance, loop+guard, fan-in,
+      timeout, idempotent double-tap, cancel-waiting) with deterministic Clock per Phase-1 patterns;
+      webhook callback_query ingestion ITs; TelegramSender ITs for reply_markup + answerCallbackQuery
+      (mockwebserver). Frontend: vitest for MENU/button/target editor + 1 Playwright happy-path.
+      Manual: press buttons on a test bot in Telegram locally.
+    gaps: ""
+    required: true
+  ui_ux_requirements:
+    score: 85
+    status: "complete"
+    value: >
+      Keep vertical-list editor (no canvas). MENU step modal: message + parse_mode + ordered buttons
+      (type callback/url, label, target via SearchableSelect over steps / "End", or URL) + optional
+      timeout (value/unit + target). Button targets picked by SearchableSelect (reuse). Desktop-first.
+      i18n keys uk/en. Broken-edge + missing-callback errors inline near control (resolveFunnelError).
+    gaps: ""
+    required: false
+  risks:
+    score: 88
+    status: "complete"
+    value: >
+      Biggest: engine model change (currentStepIndex→currentStepId, non-monotonic edges break the
+      guard=size+1 ceiling → replace with per-tick step-limit; loop/cycle handling). FunnelStep.copyOf
+      reference-copies — a mutable buttons list breaks snapshot deep-copy isolation (needs explicit copy).
+      Adding waiting_for_reply touches partial-filter $in + static drift assertion + all cancel paths but
+      must be EXCLUDED from the sweep/claim. Phase-1 funnel/in-flight migration to step ids. Telegram
+      answerCallbackQuery required (spinner). Mitigation: mirror Phase-1 race/crash ITs.
+    gaps: ""
+    required: true
+  technical_decisions:
+    score: 80
+    status: "partial"
+    value: >
+      MENU composite step only (no separate Wait/Branch). Graph data model (stable step ids + edges),
+      list editor, no canvas. Loops + fan-in enabled; cross-funnel jump deferred. Buttons callback/url.
+      Timeout optional/off, optional target. Re-send menu on loop-back (variant a). answerCallbackQuery
+      best-effort. Snapshot isolation kept (no versioning). Branch analytics = funnel_button_clicked event
+      + lastButtonClicked on execution. Broken edge → 422 funnel_broken_edge.
+    gaps: "Final engine representation details belong to tech-spec"
+    required: false
+  deploy_approach:
+    score: 85
+    status: "complete"
+    value: >
+      No deployment infra yet — local-only verification (user tests locally). Plain code, no new secrets,
+      no manual deploy steps. One new config: app.funnel.max-steps-per-tick (loop guard) with a default.
+    gaps: ""
+    required: false
+  manual_user_actions:
+    score: 85
+    status: "complete"
+    value: >
+      None new for setup. To exercise: a connected bot (existing) + press buttons in Telegram. Data
+      migration (step-id backfill for existing funnels) runs automatically, no operator action.
+    gaps: ""
+    required: false
+
+phase3_integration:
+  integration_points:
+    score: 90
+    status: "complete"
+    value: >
+      TelegramSender (+reply_markup on sendText/sendPhoto, +answerCallbackQuery). webhook
+      ProcessTelegramUpdateJob.dispatch (callback_query DTO + new arm → FunnelTriggerService.advanceOnCallback).
+      FunnelExecutionEngine (currentStepId, waiting_for_reply, callback-resume entry point distinct from
+      delay-resume +1). FunnelExecution (status enum + index→id + buttons in snapshot). FunnelService.validateSteps
+      (+button/edge/menu validation). DTOs + frontend types/funnel.ts, components/funnels/*, stores/funnels.ts.
+    gaps: ""
+    required: true
+  dependencies:
+    score: 90
+    status: "complete"
+    value: "Phase-1 funnel engine (10-funnels, done); bot module (TelegramSender); webhook ingestion; subscriber CRM. EventService for analytics hook."
+    gaps: ""
+    required: false
+  technical_constraints:
+    score: 88
+    status: "complete"
+    value: >
+      Reuse atomic-claim CAS + stillClaimed conditional writes; lowercase ExecutionStatus name() index
+      literals + static drift assertion; flat FunnelStep POJO (no _class); JobRunr @Recurring sweep
+      (waiting_for_reply EXCLUDED from sweep, INCLUDED in cancel paths). 50-step cap (whole graph).
+    gaps: ""
+    required: false
+  data_requirements:
+    score: 88
+    status: "complete"
+    value: >
+      FunnelStep gains: id, buttons[] (type, label, target/url), timeout fields. FunnelExecution:
+      status waiting_for_reply, currentStepId (replacing/alongside index), lastButtonClicked. New event
+      funnel_button_clicked in events collection. No new collection.
+    gaps: ""
+    required: false
+  migration_needs:
+    score: 85
+    status: "complete"
+    value: >
+      Backfill stable step ids on existing Phase-1 funnels (additive). In-flight Phase-1 executions are
+      linear (no menus) — must not break when index→id lands (support both / map). No destructive change.
+    gaps: ""
+    required: false
+
+phase4_completion:
+  userspec_file: "work/11-funnels-interactive/user-spec.md"
+  status: "approved"
+
+decision_rules:
+  required_threshold: 85
+  optional_threshold: 50
+
+progress:
+  current_phase: "completeness_check"
+  questions_asked: 6
+  completion_estimate: "92%"
+  user_detail_level: "unknown"
+
+notes: |
+  - Roadmap dictates name + high-level scope. Phase-1 engine fully read (StepExecutor, FunnelExecutionEngine,
+    FunnelTriggerServiceImpl, TelegramSender, ProcessTelegramUpdateJob, TelegramUpdate dto).
+  - Key architectural seams to resolve in interview: branch representation in a flat ordered snapshot,
+    waiting_for_reply status, callback ingestion path (callback_query currently opaque + answerCallbackQuery),
+    composite Menu step vs separate Wait-for-Reply + Branch.

@@ -1,0 +1,54 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "adhoc-duplicate-ux",
+  "round": 1,
+  "verdict": "approved",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 3,
+      "passed": 3,
+      "failed": 0,
+      "note": "Both bug-fix tests were empirically verified to FAIL against the reverted (old buggy) implementation: editor test failed on the navigateTo('/projects/p1/funnels/f1-copy') assertion; list test failed on the fetch('all') refetch assertion. The failure-path guard correctly stays green in both versions (no nav on error). All 38 tests in the two specs pass against the fixed code."
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 38,
+      "e2e": 0,
+      "assessment": "healthy",
+      "note": "Component mount specs (Nuxt test-utils mountSuspended) are the correct test type for UI interaction logic per the project's UI-app testing strategy; the E2E equivalent is test.skip without a live backend, so these are the always-on guard."
+    }
+  },
+  "checks": {
+    "editorSuccessTest": {
+      "verdict": "real_behavior",
+      "tautological": false,
+      "failsAgainstOldBug": true,
+      "detail": "Asserts storeMock.duplicate called with 'f1', success toast fired, error NOT fired, and navMock called with '/projects/p1/funnels/f1-copy' — the NEW id resolved from the FunnelResponse the store returns (draft({id:'f1-copy'})). useLocalePath is mocked to identity, so the bare path with the new id is what navigateTo receives. Litmus: removing the navigateTo line in the impl makes navMock never receive that path → assertion fails (verified empirically)."
+    },
+    "editorFailureTest": {
+      "verdict": "valid_guard",
+      "tautological": false,
+      "failsAgainstOldBug": "n/a_by_design",
+      "detail": "duplicate rejects 500 → asserts error toast fired, success NOT fired, navMock NOT called. This is a guard for the new code's error path (ensures the new navigateTo is not reached on failure). It is not a regression-catcher for the original bug (old code had no nav either), which is correct and expected for a negative-path test. Assertions match the reviewer's required shape (error toast AND no navigation)."
+    },
+    "listRefetchTest": {
+      "verdict": "real_behavior",
+      "tautological": false,
+      "failsAgainstOldBug": true,
+      "gapClosed": true,
+      "detail": "The prior weak assertion was that the DUPLICATE mock itself pushed 'a-copy' into storeMock.funnels — so the row appeared because the mock faked a store sync that the real store does not perform (syncRow is a no-op for an unknown id). That test could pass while the real row never appeared. The rewrite makes duplicate.mockResolvedValue NOT touch the list; only fetch.mockImplementation repopulates it. fetch is mockClear()'d after the mount fetch, then the test asserts fetch was called again with 'all' (statusFilter default, verified at index.vue:26) AND funnel-row-a-copy now exists. Litmus: removing the refetch line in the impl means fetch is not re-called and the new row never renders → both assertions fail (verified empirically)."
+    },
+    "flakiness": {
+      "verdict": "clean",
+      "detail": "No timing/order dependence in the duplicate tests; they use the shared settle() helper (no raw setTimeout). beforeEach fully resets duplicate/fetch/nav/toast mocks and clears the reactive funnels array. The fake-timer block is scoped to a separate describe and torn down (runOnlyPendingTimers + useRealTimers) so it does not bleed into these specs."
+    },
+    "mocks": {
+      "verdict": "sound",
+      "detail": "navigateTo mocked via mockNuxtImport (not a brittle module spy); useLocalePath mocked to identity so the asserted path is the page's own composed string. store fetch/duplicate are plain vi.fn()s; the list's funnels is a real reactive() array so a fetch-driven splice re-renders the list exactly as the Pinia ref would. Editor mounts use the teleport stub to keep DialogPortal content reachable and to avoid happy-dom unmount races. Three+ collaborators are mocked but this is the sanctioned UI-component test setup (store + nav + toast are framework boundaries, not business logic), so it does not trip the excessive-mocking rule."
+    }
+  },
+  "notes": "Verified empirically, not just by reading: reverted both one-line impl fixes to reproduce the old behavior and re-ran the targeted tests — the editor success test failed on the navigateTo assertion and the list test failed on the fetch('all') refetch assertion, then both passed once restored (38/38 green). Tests assert REAL behavior with the NEW funnel id / refetch path, are non-tautological, and the previously-masked list gap (mock faking the store sync) is now closed because only the refetch can surface the new row. No flaky patterns; mocks are sound. Implementation files were restored to the committed state after verification (git working tree clean for frontend/pages)."
+}

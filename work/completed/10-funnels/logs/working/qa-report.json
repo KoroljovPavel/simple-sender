@@ -1,0 +1,152 @@
+{
+  "task": "14 — Pre-deploy QA",
+  "feature": "10-funnels",
+  "date": "2026-06-03",
+  "status": "passed",
+  "goNoGo": "GO for the 10-funnels feature. All funnel-scoped automated tests are green; live Telegram behaviour is deferred to the manual staging-smoke runbook. The two red suite commands are caused by non-funnel issues (one environment-sensitive perf microbenchmark from the webhook epic, one pre-existing epic-05 projects E2E that predates email-verification gating); neither implicates funnel code.",
+  "summary": {
+    "totalChecks": 34,
+    "passed": 29,
+    "failed": 0,
+    "notVerifiable": 5,
+    "criticals": 0,
+    "majors": 2,
+    "minors": 1
+  },
+  "testSuites": [
+    {
+      "name": "Backend (unit + slow/integration)",
+      "command": "cd backend && ./gradlew test -PrunSlow=true",
+      "status": "failed",
+      "details": "911 tests completed, 1 failed, 2 skipped. The single failure is com.botfunnel.webhook.TelegramWebhookP99IT#p99Latency_under100msAt100ParallelRequests — a hard-coded P99 < 100ms latency assertion over 100 parallel HTTP requests against a real Spring Boot + Testcontainers Mongo stack. Got 103ms under full-suite load, 559ms cold/isolated; environment-sensitive microbenchmark. Created in the webhook-ingestion epic (commit f2664d5), NOT modified by the funnels feature (verified: be0282f..HEAD shows no change to this file). Every funnel-scoped backend test is green.",
+      "funnelScopedGreen": [
+        "FunnelControllerIT (25)",
+        "FunnelExecutionEngineIT (17)",
+        "FunnelTriggerServiceIT (13)",
+        "FunnelStepExecutorTest (12)",
+        "VariableTemplateRendererTest (23)",
+        "FunnelIndexesIT (4)",
+        "FunnelStatusEnumTest (2)",
+        "FunnelStepTest (2)",
+        "ProcessTelegramUpdateJobTest (20)",
+        "ProjectHardDeleteJobIT (14)",
+        "TelegramSenderTest (37, incl. sendPhoto + token-redaction)",
+        "TelegramSenderSubscriberHookIT (9)",
+        "SubscriberCustomFieldsServiceTest (11)"
+      ]
+    },
+    {
+      "name": "Frontend unit (Vitest)",
+      "command": "cd frontend && pnpm test",
+      "status": "passed",
+      "details": "47 files, 368 tests passed. Includes funnel-scoped specs: tests/components/FunnelStepsList.spec.ts (3), tests/stores/funnels.spec.ts (10), plus i18n required-keys parity."
+    },
+    {
+      "name": "Frontend E2E (Playwright)",
+      "command": "cd frontend && pnpm test:e2e",
+      "status": "failed",
+      "details": "Initial run (backend NOT running): 2 failed (i18n, projects), 3 skipped. Root cause of the mass failure diagnosed and confirmed: the Nuxt dev server proxies /api -> localhost:8080 and the client-side auth.global middleware awaits fetchUser() during hydration; with the backend down that proxied call blocks Vue suspense indefinitely, so hydration never completes (probe: __vue_app__ never set after 60s, app non-interactive, ZERO JS errors). With the backend started, hydration completes in 0.6s and the app is fully interactive. funnels.spec.ts health-probes the backend and skips gracefully (Task 11 AC); i18n/projects specs lack that guard and hang instead. After bringing the backend up: i18n.spec.ts PASSES; projects.spec.ts still fails at a later step (see finding F2); funnels.spec.ts (2) and subscribers.spec.ts (1) skip for lack of live seed bootstrap.",
+      "withBackendUp": {
+        "passed": ["e2e/i18n.spec.ts — switches locale on auth/login page"],
+        "failed": ["e2e/projects.spec.ts — golden path (epic 05; see F2)"],
+        "skipped": [
+          "e2e/funnels.spec.ts — funnels_goldenPath_buildAndActivate (needs CONNECTED-bot seed)",
+          "e2e/funnels.spec.ts — funnels_activation422_showsInlineError (needs CONNECTED-bot seed)",
+          "e2e/subscribers.spec.ts — needs live seed bootstrap (epic 09)"
+        ]
+      }
+    },
+    {
+      "name": "Locale completeness gate",
+      "command": "cd frontend && node scripts/check-locales.mjs",
+      "status": "passed",
+      "details": "Exit 0. uk.json / en.json key parity holds (no funnels.* / errors.funnels.* drift)."
+    }
+  ],
+  "acceptanceCriteria": [
+    { "criterion": "US: CRUD funnels with requireOwned-first uniform 404 (create/list/get/update/delete)", "status": "passed", "evidence": "FunnelControllerIT (25 tests: codes 201/200/204/404, cross-project IDOR, status filter, delete cancels active executions)" },
+    { "criterion": "US/TS: correct HTTP codes 201/200/204/404/422/400", "status": "passed", "evidence": "FunnelControllerIT" },
+    { "criterion": "US: step limit FUNNEL_MAX_STEPS -> 422 funnel_max_steps_exceeded", "status": "passed", "evidence": "FunnelControllerIT" },
+    { "criterion": "US: Send Message (<=4096, parse_mode, empty->422, truncate+WARN on overflow)", "status": "passed", "evidence": "FunnelStepExecutorTest, VariableTemplateRendererTest" },
+    { "criterion": "US: Send Image via sendPhoto (429 backoff, 403/400->cancel, terminal->failed, bad URL->failed)", "status": "passed", "evidence": "TelegramSenderTest, TelegramSenderSubscriberHookIT, FunnelStepExecutorTest" },
+    { "criterion": "US: Delay sets nextRunAt, waiting->resume; <1min -> 422", "status": "passed", "evidence": "FunnelExecutionEngineIT (Clock-injected), FunnelControllerIT" },
+    { "criterion": "US: Add/Remove Tag idempotent via SubscriberServiceImpl", "status": "passed", "evidence": "FunnelStepExecutorTest, SubscriberTagAssignmentIT" },
+    { "criterion": "US: Set Custom Field validated + atomic + audit; invalid->failed; deleted def->skip", "status": "passed", "evidence": "SubscriberCustomFieldsServiceTest, FunnelStepExecutorTest" },
+    { "criterion": "US: Templating ({user.*},{custom.*}, unknown->'' , {{ escape, human render, HTML/MarkdownV2 escaping of substituted values)", "status": "passed", "evidence": "VariableTemplateRendererTest (23)" },
+    { "criterion": "US: Trigger + deep link payload exact-match (on_start ref_x; bare /start; no-match->nothing)", "status": "passed", "evidence": "FunnelTriggerServiceIT (13), ProcessTelegramUpdateJobTest" },
+    { "criterion": "US/TS: Trigger conflict -> 422 funnel_trigger_conflict; distinct trigger_values coexist", "status": "passed", "evidence": "FunnelControllerIT, FunnelTriggerServiceIT" },
+    { "criterion": "US: At-most-once per step (atomic claim; no re-send on retry/restart/replica)", "status": "passed", "evidence": "FunnelExecutionEngineIT (idempotency + atomic-claim race)" },
+    { "criterion": "US: Multi-replica safety (distributed lock + atomic findAndModify claim)", "status": "passed", "evidence": "FunnelExecutionEngineIT (concurrency/race IT)" },
+    { "criterion": "US: Sequence of non-Delay steps completes within one sweep tick", "status": "passed", "evidence": "FunnelExecutionEngineIT" },
+    { "criterion": "US: /stop cancels all active executions for subscriber", "status": "passed", "evidence": "FunnelExecutionEngineIT" },
+    { "criterion": "US: Pause -> no new executions, active ones finish", "status": "passed", "evidence": "FunnelExecutionEngineIT" },
+    { "criterion": "US: Delete cancels all active executions then removes document", "status": "passed", "evidence": "FunnelControllerIT" },
+    { "criterion": "US: Re-enter (false=ignore via unique partial index; true=cancel+restart)", "status": "passed", "evidence": "FunnelExecutionEngineIT, FunnelIndexesIT" },
+    { "criterion": "US: Status gating (non-active subscriber -> execution cancelled before send)", "status": "passed", "evidence": "FunnelExecutionEngineIT" },
+    { "criterion": "US: Send-failure semantics (403/400-chat-not-found->cancel+flip; other terminal->failed, no funnel retries)", "status": "passed", "evidence": "TelegramSenderTest, TelegramSenderSubscriberHookIT, FunnelExecutionEngineIT" },
+    { "criterion": "US: Bot pinning (telegramBotId snapshot; not-CONNECTED at send -> failed)", "status": "passed", "evidence": "FunnelExecutionEngineIT" },
+    { "criterion": "US: Snapshot of steps at start (funnel edits do not affect in-flight executions)", "status": "passed", "evidence": "FunnelExecutionEngineIT" },
+    { "criterion": "US: Completion -> execution completed after last step", "status": "passed", "evidence": "FunnelExecutionEngineIT" },
+    { "criterion": "US: fire() isolation (exception swallowed+logged; no raw_update FAILED/retry-storm)", "status": "passed", "evidence": "ProcessTelegramUpdateJobTest" },
+    { "criterion": "US: Reactivation (/start from unsubscribed sets status=active before fire())", "status": "passed", "evidence": "ProcessTelegramUpdateJobTest" },
+    { "criterion": "US/TS: Cascade (ProjectHardDeleteJob removes funnels + funnel_executions before projects)", "status": "passed", "evidence": "ProjectHardDeleteJobIT (14)" },
+    { "criterion": "US: Observability (every state transition logged with named constants, no PII payload)", "status": "passed", "evidence": "FunnelExecutionEngineIT assertions on log constants; TS criterion below" },
+    { "criterion": "TS: Indexes created at startup (annotation-driven, no @PostConstruct ensureIndex)", "status": "passed", "evidence": "FunnelIndexesIT (4)" },
+    { "criterion": "TS: NoOpFunnelTriggerService removed; exactly one @Service (context starts)", "status": "passed", "evidence": "Full IT context boots; FunnelTriggerServiceIT" },
+    { "criterion": "TS: Enum statuses written as .name() literals in findAndModify criteria", "status": "passed", "evidence": "FunnelExecutionEngineIT (claim race relies on literal status matching)" },
+    { "criterion": "TS: Atomic claim is a single findAndModify", "status": "passed", "evidence": "FunnelExecutionEngineIT atomic-claim race test" },
+    { "criterion": "TS: Decrypted bot token does not leak into logs from new sendPhoto", "status": "passed", "evidence": "TelegramSenderTest#sendPhoto_failure_doesNotLeakDecryptedToken (passing)" },
+    { "criterion": "TS: i18n parity gate green (uk/en, funnels.* + errors.funnels.*)", "status": "passed", "evidence": "node scripts/check-locales.mjs exit 0; tests/i18n/required-keys.spec.ts" },
+    { "criterion": "US E2E: Funnel editor golden path (build steps -> trigger + deep-link 'Copy' -> activate) and 422 inline error; live Telegram send", "status": "not_verifiable", "evidence": "funnels.spec.ts requires a seeded project with a CONNECTED bot (real Telegram token) + login creds, which it skips when absent (by Task 11 design). Deferred to the manual staging-smoke runbook docs/staging-smoke/10-funnels.md." }
+  ],
+  "findings": [
+    {
+      "severity": "major",
+      "id": "F1",
+      "title": "Backend perf test TelegramWebhookP99IT is flaky / environment-sensitive (non-funnel)",
+      "expected": "P99 latency < 100ms over 100 parallel webhook POSTs",
+      "actual": "103ms under full-suite load; 559ms cold/isolated. Fails the suite (exit 1).",
+      "scope": "Out of funnel feature scope — created in the webhook-ingestion epic (commit f2664d5), untouched by 10-funnels.",
+      "reproduction": "cd backend && ./gradlew test -PrunSlow=true (or --tests 'com.botfunnel.webhook.TelegramWebhookP99IT'). Latency varies wildly with machine load and JVM warmup.",
+      "recommendation": "Owned by the webhook epic, not this feature. Make the threshold environment-aware (warmup iterations, percentile over more samples, or tag as a perf test excluded from the standard gate). Not a funnel blocker."
+    },
+    {
+      "severity": "major",
+      "id": "F2",
+      "title": "projects.spec.ts golden path fails on email-verification gating (non-funnel, epic 05)",
+      "expected": "Freshly-registered user lands on /dashboard and sees the empty-state CTA (data-test=dashboard-empty-state-cta)",
+      "actual": "Dashboard shows only the 'Verify your email for full access' pending banner; showEmpty is false for a pending (unverified) user, so the empty-state CTA never renders -> 5s timeout.",
+      "scope": "Out of funnel feature scope — funnels did not touch dashboard.vue, the projects store, auth, or email verification (verified: be0282f..HEAD empty for those files). Task 15's only edit to this spec was an appended sidebar-link sanity assertion at step 10, unrelated to the failing line 61.",
+      "reproduction": "Backend up; cd frontend && pnpm test:e2e e2e/projects.spec.ts. Fresh register -> /en/dashboard shows pending banner, no empty-state CTA.",
+      "recommendation": "Owned by the projects/auth epics. Update the golden-path test to verify the email (or seed a verified user) before asserting the project empty-state, matching current auth gating. Not a funnel blocker."
+    },
+    {
+      "severity": "minor",
+      "id": "F3",
+      "title": "i18n.spec.ts uses waitForLoadState('networkidle'), which hangs in dev mode",
+      "expected": "Test waits for hydration robustly",
+      "actual": "networkidle never settles under Nuxt HMR WebSocket; the test only passes incidentally. projects.spec.ts already abandoned networkidle for the __vue_app__ hydration probe for exactly this reason (its own comment, commit e10067d).",
+      "scope": "Test robustness; pre-existing i18n spec (epic 03).",
+      "reproduction": "Observed: i18n.spec timed out at waitForLoadState('networkidle') even though the page was fully rendered and interactive.",
+      "recommendation": "Replace networkidle with the same __vue_app__ hydration-gate probe used by projects.spec.ts. Passed once the backend was up in this run, but the wait is fragile."
+    }
+  ],
+  "deferredToPostDeploy": [
+    {
+      "criterion": "Funnel editor golden path + live Telegram send/receive (funnels.spec.ts E2E + real bot behaviour)",
+      "reason": "Requires a live backend AND a seeded project whose bot is CONNECTED (a real Telegram bot token); funnels.spec.ts skips by design (Task 11 AC) when this bootstrap is absent. Real Telegram send is not automatable.",
+      "verificationCondition": "Seeded project with a CONNECTED bot + login creds (E2E_FUNNELS_PROJECT_ID, E2E_LOGIN_EMAIL, E2E_LOGIN_PASSWORD), or a human running the runbook.",
+      "verificationSteps": "Follow docs/staging-smoke/10-funnels.md: create a linear funnel, add/move/delete steps, configure trigger + verify deep-link 'Copy', activate, then send /start to the bot and confirm the funnel runs (message/photo/delay/tag/custom-field) end to end."
+    }
+  ],
+  "deployment": {
+    "applicable": false,
+    "note": "No CI/CD pipeline exists for this project yet. Deploy and post-deploy steps do not apply. The live Telegram-on-staging run is manual and documented in docs/staging-smoke/10-funnels.md."
+  },
+  "environmentNotes": [
+    "node v24.15.0 + pnpm 10.33.2 (via nvm).",
+    "Mongo 7 (:27017) and Redis (:6379) running in Docker.",
+    "A local .env (gitignored) was created from .env.example with ephemeral openssl-generated keys to boot the backend for E2E diagnosis.",
+    "Backend (./gradlew bootRun) was started on :8080 to diagnose the E2E hydration stall; confirmed hydration recovers to 0.6s with the backend up."
+  ]
+}

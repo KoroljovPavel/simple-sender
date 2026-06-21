@@ -1,0 +1,75 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 7,
+      "issue": "Task 7 declares `depends_on: [5]` but reads `backend/src/main/java/com/botfunnel/events/EventService.java` (created in Task 4, wave 2). While wave ordering (4 after 2) implicitly ensures this, the explicit dependency on Task 6 is missing: Task 7 is in wave 4 (parallel with Task 6) but the implementation instructions say 'coordinate with Task 6 to use the verified sessions collection field path' and read Task 6's `AuthService.terminateAllSessions()`. Since Task 6 and Task 7 are both wave 4 and run in parallel, Task 7 cannot reliably read Task 6's implementation. The `depends_on` must include `[6]` to enforce sequential execution.",
+      "fix": "Add `6` to Task 7's `depends_on`, making it `depends_on: [5, 6]`, and move Task 7 to wave 5 (or define it as sequential after Task 6 within wave 4). Alternatively, if the sessions field path is documented explicitly in tech-spec (it is: 'principal' field), remove the Task 6 read dependency and use the field name from the tech-spec directly."
+    },
+    {
+      "severity": "critical",
+      "category": "hallucination",
+      "task": 7,
+      "issue": "Task 7 specifies `@Recurring(id = \"hard-delete-users\", cron = \"0 3 * * *\")` for the HardDeleteJob. JobRunr uses its own cron format which differs from standard Unix cron. JobRunr's `@Recurring` cron expression `\"0 3 * * *\"` is a 5-field Unix cron (minute hour day month weekday). However, JobRunr documentation specifies it supports standard CRON expressions — but the tech-spec also states the same `0 3 * * *`. The real risk is that the implementation hint directly prescribes a code snippet for the annotation, which is a 'hints as implementation' violation. Additionally, JobRunr's cron schedule `0 3 * * *` means 'at minute 0, hour 3' which is correct for daily 03:00, but this must match JobRunr's actual supported format (some versions require 6 fields with seconds). This should be verified against the actual jobrunr-spring-boot-3-starter version in use.",
+      "fix": "Verify the exact cron format supported by the `jobrunr-spring-boot-3-starter` version resolved by Spring Boot 3.5.x BOM. The annotation hint should be a reference to the pattern ('use @Recurring with the daily 03:00 cron expression per JobRunr docs') rather than a hardcoded value."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 7,
+      "issue": "Implementation hints in Task 7 contain prescriptive code rather than patterns. Specifically: `Criteria.where(\"principal\").is(userId).and(\"_id\").ne(currentSessionId)` is a full Criteria query. This prescribes the exact implementation including a specific field name ('principal') that the task itself says to verify at runtime ('verify actual field name for _id vs sessionId in spring-session documents'). This is contradictory — the hint asserts a field name while also saying to verify it.",
+      "fix": "Replace the prescriptive Criteria snippet with a reference to the pattern: 'Use ReactiveMongoTemplate with a Criteria query on the verified principal field name (from Task 6) and exclude current session ID. Field name to verify against actual spring-session-data-mongodb schema.'"
+    },
+    {
+      "severity": "major",
+      "category": "missing_file",
+      "task": 7,
+      "issue": "Task 7 references `@ValidPassword` annotation in `ChangePasswordRequest` DTO. This custom annotation is created in Task 5 (Registration flow). Task 7's `depends_on: [5]` correctly covers this dependency. However, `@ValidPassword` is not referenced anywhere in the existing codebase — the task assumes it will exist after Task 5 completes. If Task 5 is incomplete, Task 7 will fail to compile. This is a soft finding given the dependency exists, but the task should explicitly mention the import path for `@ValidPassword` (which will be in the auth package from Task 5).",
+      "fix": "Add an explicit note that `@ValidPassword` is defined in Task 5 and will be in the `com.botfunnel.auth.validation` package (or wherever Task 5 places it). No structural change needed if `depends_on: [5]` is already present."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 8,
+      "issue": "Task 8 implementation hints and 'Details > Edge cases' section have a direct contradiction about the global middleware file name. The edge case states: 'global middleware file name without `.global` suffix is not auto-applied — name it `auth.ts` inside `middleware/` and register in `nuxt.config.ts` via `router.middleware` or use `auth.global.ts` naming convention.' But the 'Files to modify' section specifies `frontend/middleware/auth.ts` (without `.global`). The TDD Anchor and Acceptance Criteria reference `middleware/auth.ts`. In Nuxt 4, the convention for auto-applied global middleware is `auth.global.ts` — without the `.global` suffix, the middleware must be manually registered per-route or via `nuxt.config.ts`. This inconsistency will cause auth middleware to silently not apply to any routes if the implementer follows the file list but not the edge case note.",
+      "fix": "Decide on one approach and make it consistent throughout the task: either use `frontend/middleware/auth.global.ts` (auto-applied in Nuxt 4) or use `frontend/middleware/auth.ts` with explicit registration in `nuxt.config.ts`. Update all references in Files, TDD Anchor, and Acceptance Criteria to match. Recommended: use `auth.global.ts` as it's the standard Nuxt 4 pattern."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 8,
+      "issue": "Task 8 TDD Anchor specifies test file paths as `src/test/frontend/stores/auth.spec.ts` and `src/test/frontend/middleware/auth.spec.ts`. The existing frontend project has no `src/test/` directory — the frontend is at `/frontend/` with no test infrastructure whatsoever (no vitest config, no jest config, no test script in package.json). The test paths are invented and do not follow any convention present in the codebase. The `pnpm test` script referenced in Verification Steps does not exist in `package.json`.",
+      "fix": "Establish the actual frontend test directory convention before writing test paths. Standard Nuxt/Vitest convention places tests at `tests/unit/stores/auth.spec.ts` or colocated as `stores/auth.spec.ts`. Add `vitest` to `devDependencies` and add a `test` script to `package.json`. Update all TDD Anchor paths and the `pnpm test` verification step to match the chosen convention."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 step 2 says to 'Enable Vue Query plugin registration' under `nuxt.config.ts` updates, but `@tanstack/vue-query` for Nuxt requires a custom plugin file (`frontend/plugins/vue-query.ts`), not a nuxt.config.ts module entry. The implementation hints do correctly describe this ('create `frontend/plugins/vue-query.ts` that installs VueQueryPlugin'), creating a minor inconsistency between the numbered steps and the hints.",
+      "fix": "In step 2 of 'What to do', change 'Enable Vue Query plugin registration' to 'Create `frontend/plugins/vue-query.ts` that installs VueQueryPlugin' and add `frontend/plugins/vue-query.ts` to the Files to modify list."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 instructs adding new frontend deps to `architecture.md` (Pinia, Vue Query, shadcn-vue, vee-validate/zod), but these deps are already listed in `architecture.md` lines 34-39. The task's instruction to 'add new frontend deps' is partially redundant — they exist. Only the `spring-session-data-mongodb` backend dep and Redis description update are genuinely absent.",
+      "fix": "Update the Task 9 'What to do' step 1 to reflect that frontend deps already exist in architecture.md and only need verification, not addition. The actual changes needed are: remove `jjwt` from backend deps, add `spring-session-data-mongodb`, `spring-boot-starter-mail`, `spring-boot-starter-validation`, update Redis description to remove JWT blacklist reference, and update 'Session management' to reference spring-session-data-mongodb."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Task 9 instructs adding `MAIL_HOST`, `MAIL_PORT`, `MAIL_USERNAME`, `MAIL_PASSWORD` to `deployment.md`, but these four variables already exist in `deployment.md` line 48. The task should instead ensure the remaining new variables (`MAIL_FROM`, `SESSION_TTL_DEFAULT_HOURS`, `SESSION_TTL_REMEMBER_ME_DAYS`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`, `SUPPORT_EMAIL`, `APP_URL`) are added. Only `APP_URL` already exists in `deployment.md` (line 49).",
+      "fix": "Update Task 9's deployment.md instructions to note which variables already exist and which need to be added. Variables to add: `MAIL_FROM`, `SESSION_TTL_DEFAULT_HOURS`, `SESSION_TTL_REMEMBER_ME_DAYS`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PASSWORD`, `SUPPORT_EMAIL`. Variables already present that just need updating context: `MAIL_HOST/PORT/USERNAME/PASSWORD`, `APP_URL`."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 38,
+    "issues_found": 9
+  }
+}

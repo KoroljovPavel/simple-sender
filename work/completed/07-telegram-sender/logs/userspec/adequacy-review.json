@@ -1,0 +1,28 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "category": "overengineering",
+      "severity": "minor",
+      "issue": "Some tech-spec-level details remain in user-spec: explicit test class names (AC19 `TelegramSenderTest`, AC21 `TelegramSenderIT`, AC22 references `BotServiceTest.sendTestMessage_returns422_noTelegramCalls_noEvents`, AC23 `BotControllerIT`), exact exception class hierarchy declarations (AC13: \"extends `AppException`\", \"internal-only\"), specific Reactor operator suggestion in R9 (`Flux.delayElements`), and the `TelegramRateLimitException` / `TelegramSendResult<T>` types are still named at the user-spec level (Технічні рішення). However, this is consistent with precedent `work/completed/06-bot-connection/user-spec.md` which itself names `requireOwned`, `Retry.backoff`, `TokenEncryptor`, `EventService.logEvent`, specific test patterns, etc. Severity downgraded to minor — the spec is materially cleaner than round 1 and aligns with the project's accepted style for pure-infrastructure features.",
+      "why_matters": "Test class names in particular are still implementation choices and pinning them in user-spec ACs reduces the tech-spec author's freedom. But the level of detail does not block adequacy — it tracks the established house style.",
+      "fix": "Optional: in tech-spec planning, treat the named test classes as suggestions rather than requirements; AC19-AC23 should be interpreted as \"unit coverage of these scenarios; integration coverage of E2E flow; existing BotService/BotController tests adapted\" rather than literal class names. No change required to user-spec."
+    },
+    {
+      "category": "sizing",
+      "severity": "minor",
+      "issue": "Spec is declared `size: M` but the explicit note at the bottom of `Технічні рішення` acknowledges that 23 AC + 6 integration points \"exceeds standard M thresholds\" and references the precedent `06-bot-connection` (declared `size: L` with the same AC count). The justification (\"pure-infrastructure feature with single new bean\") is reasonable, but the size declaration does not match the project's own precedent for similar work.",
+      "why_matters": "Size labels drive iteration planning. If 06-bot-connection at 23 AC was L, then 07-telegram-sender at 23 AC + a schema change + a service-rewire should also be L for consistency. Mislabel risks under-allocating review/QA capacity.",
+      "fix": "Consider promoting `size: M` → `size: L` to match precedent, OR add a one-line justification in the frontmatter comment explaining why this feature is M despite the count (e.g. \"narrower scope — no UI, no new endpoint, single backend bean — compared to 06\"). Non-blocking."
+    },
+    {
+      "category": "underengineering",
+      "severity": "minor",
+      "issue": "Jitter shape for the 429 retry remains unspecified. The spec says \"чекаємо `retry_after` секунд + малий jitter\" (AC and Сценарій 1, step 6) but does not define the jitter window (e.g. \"uniform 0-500ms\"). Round-1 minor finding on this point asked to specify jitter shape; the rewrite did not address it. Additionally, behavior when `parameters.retry_after` is missing or negative is described only via the outer-cap rule (\"sender не намагається довше, ніж overall timeout\") without specifying an immediate fallback delay (e.g. \"treat as 1s default and re-issue\"). Workable but loose — tech-spec author has to invent values that user-spec didn't pin.",
+      "why_matters": "Unspecified jitter means tech-spec / implementer makes the call. If the chosen value is too low (e.g. 0-50ms) it provides little thundering-herd protection in future Epic 07; too high (e.g. 0-5s) eats into the 30s outer cap. Better to commit to a range now while the trade-off is visible.",
+      "fix": "Add to AC8 or to Технічні рішення: \"jitter — uniform random 0-500ms added on top of `retry_after`\". And: \"when `retry_after` is missing or non-positive, treat as 1s and re-issue (still bounded by overall 30s).\" Non-blocking — the outer 30s cap prevents pathological behavior, but the spec gap will resurface as a tech-spec question."
+    }
+  ],
+  "worst_category": "overengineering",
+  "summary": "Round-2 verdict: APPROVED. All three round-1 major findings (tech-spec leak, wall-clock contradiction, unbounded 429 loop) are addressed — AC are written behaviorally, R4 + Технічні рішення reconcile the retry-budget vs overall-timeout (overall 30s = outer cap, retry budget = theoretical max), and AC8 explicitly handles missing/negative/large `retry_after` via the 30s ceiling. Both round-1 minors on rationale (separate bean vs `TelegramApiClient`, retry ladder divergence) now have explicit justification in Технічні рішення. `attempts` field is defined in AC14, concurrency-fairness gap is flagged as R9 + deferred scope. Three minor residual issues remain (some tech-spec-level naming still present, M-vs-L size question, jitter shape unspecified) but none are blocking — they match house style or are quality-of-life polish for tech-spec planning."
+}

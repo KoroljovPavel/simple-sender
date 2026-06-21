@@ -1,0 +1,30 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 2,
+  "round": 1,
+  "verdict": "OK",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/VariableTemplateRenderer.java",
+      "line": "130-132",
+      "finding": "renderValue(Double) uses Long.toString(d.longValue()) for integral doubles. longValue() truncates toward zero, which is correct for values produced by CustomFieldValueValidator (finite doubles). However, for very large integral doubles (> Long.MAX_VALUE = ~9.2e18) longValue() overflows silently. In domain context (ages, prices, counts) this is harmless, but the implicit assumption is undocumented.",
+      "recommendation": "Acceptable as-is given domain constraints. Optionally add a comment noting the assumption: '// safe for domain values; CustomFieldValueValidator guarantees finite; Long.MAX_VALUE is ~9.2e18'."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/VariableTemplateRenderer.java",
+      "line": "68-69",
+      "finding": "render() guards null/empty template but has no null-check on subscriber. Passing null subscriber would NPE at the first resolve() call. The method's Javadoc does not declare this pre-condition.",
+      "recommendation": "Either add Objects.requireNonNull(subscriber, \"subscriber\") at the top of render() for a fast-fail with a clear message, or document the null-subscriber pre-condition in the Javadoc. The engine (Task 6) always supplies a resolved subscriber, so this does not affect correctness in the current call site."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/VariableTemplateRendererTest.java",
+      "line": "—",
+      "finding": "There is no test for a lone '}' without a preceding '{' (e.g. template \"foo } bar\"). The render loop handles it correctly (the default out.append(c); i++ branch), but the case is untested.",
+      "recommendation": "Add a one-liner test: assertThat(VariableTemplateRenderer.render(\"foo } bar\", null, s)).isEqualTo(\"foo } bar\");"
+    }
+  ],
+  "summary": "The implementation is correct, pure, and complete. Placeholder parsing is single-pass with proper escape-first ordering ({{ checked before {), unclosed brace emits the rest verbatim, substituted values are appended after escape() so re-parsing is structurally impossible, and all required type renderings (Double integral, Boolean, Instant ISO-8601) are correct. HTML and MarkdownV2 escaping match the spec (only substituted values, author markup untouched; full 18-char MarkdownV2 charset). Purity constraints (no I/O, no Spring, no PII logging) are respected. Style is consistent with TelegramCommandParser. All 17 unit tests pass. Three minor findings are noted: a silent Long overflow for pathologically large doubles (acceptable in domain), missing null-check on the subscriber parameter, and a missing edge-case test for a lone '}'. None of these block acceptance."
+}

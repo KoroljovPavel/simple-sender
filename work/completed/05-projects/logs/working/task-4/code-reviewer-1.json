@@ -1,0 +1,37 @@
+{
+  "round": 1,
+  "task": "4",
+  "reviewer": "code-reviewer",
+  "summary": "ProjectHardDeleteJob implements the AC-17b cascade ordering correctly via Option A (new EventService.logEventBlocking + chained .block() at each step), preserves typed Criteria (AC-T11), and pattern-matches HardDeleteJob for cutoff/+1ns/@Recurring shape. Structured INFO log emitted on every path including zero-deletion-day. Cross-file signatures (Project getters, ProjectRepository.findByDeletedAtBefore, EventService.logEventBlocking) all match. No critical or major issues — only minor stylistic suggestions.",
+  "findings": [
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": "21-24",
+      "issue": "Class-level Javadoc-style comment leans toward 'what the class does' rather than 'why non-obvious'. CLAUDE.md and project-knowledge patterns prefer no comments unless WHY is non-obvious; the AC-17b ordering note inside the method body already carries the load-bearing WHY.",
+      "suggestion": "Trim the class-level block to one line referencing AC-17b (e.g., `// Daily cron — cascade order is load-bearing for AC-17b; see hardDeleteSoftDeletedProjects body.`), or remove it entirely and rely on the inline cascade comment at lines 70-81 which already explains the WHY in detail."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": "31-32",
+      "issue": "EVENTS_COLLECTION / PROJECTS_COLLECTION are local constants for string literals that already exist as the canonical source on the entity annotations (`@Document(collection = \"events\")` on Event.java:12, `@Document(collection = \"projects\")` on Project.java:15). Two sources of truth for the same string drift over time.",
+      "suggestion": "Either (a) leave as-is and accept the duplication for readability, or (b) drop the constants and inline the string literals since the Mongo template API takes raw collection names anyway and the entity annotation is the documented single source. Optional — no other file in the codebase extracts these to constants either."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": "86",
+      "issue": "`eventsDelete == null ? 0L : eventsDelete.getDeletedCount()` defends against a null `DeleteResult`. `Mono.block()` on `ReactiveMongoTemplate.remove(...)` never emits empty in practice — the Mongo driver always returns a DeleteResult on a successful ack — so the null branch is dead code.",
+      "suggestion": "Either accept the defensive style and leave it, or simplify to `long eventsRemovedCount = eventsDelete.getDeletedCount();`. Optional — defensive null-check is cheap and self-documenting."
+    },
+    {
+      "severity": "nit",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": "63-64",
+      "issue": "Zero-deletion-day log omits the `cutoff` value. Reference HardDeleteJob.java:49 includes `cutoff={}` in its empty-branch log, which is useful for diagnosing clock-skew / TZ confusion when investigating a quiet day.",
+      "suggestion": "Optional — if operations want cutoff visibility on quiet days, append ` cutoff={}` to the structured line on both the empty-set branch and the deletion branch. AC-17c only mandates the three fields (deletedCount, eventsRemovedCount, runDurationMs) so this is purely an observability enhancement."
+    }
+  ],
+  "approved": true
+}

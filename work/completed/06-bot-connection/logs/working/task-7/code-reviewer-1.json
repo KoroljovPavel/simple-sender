@@ -1,0 +1,45 @@
+{
+  "summary": "Task 7 is well-aligned with the spec: lowercase BotStatus union, flat Bot interface, setup-store with action surface matching tech-spec, dedup pattern mirroring stores/projects.ts, token-handling discipline (call-stack + body only — no ref, no URL, no log), watcher gated by import.meta.client, and no localStorage. Tests are thorough and exercise the security invariants (URL hygiene + $state snapshot). One major correctness issue: the inFlight dedup is global (not keyed by projectId), so a project-switch while a fetch is mid-flight returns the old project's promise and writes its bot into current — exactly the 'stale data stomp' edge case the tech-spec calls out (lines 240–243). Plus a minor reactivity issue and a missing import.meta.client gate on the synchronous current.value=null in the watcher (it runs during SSR if any code mutates currentProjectId server-side).",
+  "findings": [
+    {
+      "id": "BOT-STORE-001",
+      "severity": "major",
+      "file": "frontend/stores/bot.ts",
+      "line": 10,
+      "description": "Dedup token `inFlight` is not keyed by projectId. If `fetch('a')` is still pending when the user switches to project 'b', the watcher fires `fetch('b')` (line 63), which sees a truthy `inFlight` and returns the same promise — when it eventually resolves with project 'a's bot, it writes that bot into `current.value`. The user now sees bot data for the previously-selected project. The tech-spec explicitly calls this out as the 'project switch mid-fetch' edge case (tech-spec lines 240–243) and recommends 'capture projectId in the action and discard the result if it no longer equals the current selection.' The current implementation does neither — it neither keys the dedup by projectId nor stale-guards the assignment to `current.value`.",
+      "recommendation": "Either (a) key the in-flight map by projectId (`const inFlight = new Map<string, Promise<Bot | null>>()`) so concurrent fetches for different projects don't collide, or (b) capture `projectId` at call time and, after the await, only assign to `current.value` when `projectsStore.currentProjectId === projectId`. Option (b) is closer to the stores/projects.ts:124-127 `handleStaleCurrent` precedent the tech-spec references. Add a regression test that starts a fetch for 'a', switches to 'b' before resolution, resolves 'a', and asserts `current.value` is NOT the bot for 'a'."
+    },
+    {
+      "id": "BOT-STORE-002",
+      "severity": "minor",
+      "file": "frontend/stores/bot.ts",
+      "line": 56,
+      "description": "The watcher's synchronous-clear branch `current.value = null` runs on every fire — including a hypothetical SSR fire if `currentProjectId` ever mutates server-side. The fetch-side is correctly gated by `import.meta.client` (line 62), but the clear-side is not. Today this is benign because `currentProjectId` is initialized from `readPersisted()` which returns `null` on SSR and nothing else writes to it during the server pass, so the watcher does not actually fire under SSR. But the asymmetry between the gated fetch and the un-gated clear is a latent footgun for any future code path that mutates `currentProjectId` during SSR (e.g. a server middleware that resolves the project from the URL).",
+      "recommendation": "Either gate the whole watcher body with `if (!import.meta.client) return`, or document explicitly that the clear-on-SSR is intentional. The cheapest fix: move `if (!import.meta.client) return` to the top of the callback and drop the `&& import.meta.client` on the inner branch. This also makes the watcher symmetric with the rest of the SSR-aware code in stores/projects.ts."
+    },
+    {
+      "id": "BOT-STORE-003",
+      "severity": "minor",
+      "file": "frontend/stores/bot.ts",
+      "line": 12,
+      "description": "Naming the local action `fetch` shadows the global `fetch` inside the factory scope. There is no functional collision here (network calls go through `useApi()`), but the convention in stores/projects.ts uses verbs like `fetchAll`, `create`, `update`, etc. — never the bare `fetch` identifier. If at some later point someone adds a direct `fetch(url)` call inside this factory (e.g. for a non-`useApi` request), the shadow will silently route it to this store action instead of the global. Cosmetic; flag for consistency with the reference store.",
+      "recommendation": "Optional rename to `fetchOne` or `load` for symmetry with stores/projects.ts naming. Not blocking — if the team prefers the bare `fetch` name on this store because it has only one resource, that's defensible. If kept, the existing inline comment block is sufficient."
+    },
+    {
+      "id": "BOT-STORE-004",
+      "severity": "minor",
+      "file": "frontend/stores/bot.ts",
+      "line": 46,
+      "description": "`disconnect()` and `sendTestMessage()` have no concurrent-call guard. A double-click on a 'Disconnect' button fires two POSTs (the second arriving after the first set `current.value = null`). Backend Task 8 likely tolerates idempotent disconnect, but the second call would race the watcher's eventual refetch. Same applies to `sendTestMessage` — a user impatiently clicking twice sends two test messages. Not a critical bug because the affected actions don't mutate state from the response (disconnect just nulls; sendTestMessage doesn't touch `current`), and the UI (Task 9) will gate the buttons during in-flight. But worth either documenting or adding a per-action busy flag at the store level if the UI ever forgets.",
+      "recommendation": "Either document explicitly that 'duplicate-call guarding for `disconnect` / `sendTestMessage` is the UI's responsibility (Task 9 button-disable during in-flight)', or expose `isDisconnecting` / `isSendingTest` flags for the UI to bind. No fix required if Task 9 owns the UX guard."
+    },
+    {
+      "id": "BOT-TYPES-001",
+      "severity": "low",
+      "file": "frontend/types/bot.ts",
+      "line": 4,
+      "description": "`telegramBotId: number` is correct given the Telegram bot ID range fits in JS safe-integer space today, and matches the tech-spec annotation on line 50 of task 7.md and tech-spec lines 309–310 (`Long telegramBotId`). For comparison: stores/projects.ts treats `id: string` because MongoDB ObjectIds are hex strings. The risk is purely future-proofing: if Telegram ever expands beyond 2^53, this `number` would silently round. Documentation-only concern.",
+      "recommendation": "Optional: add an inline comment on the `telegramBotId` field stating 'Telegram bot IDs fit in JS Number.MAX_SAFE_INTEGER as of 2026; revisit if Telegram bot-id schema ever shifts.' No code change."
+    }
+  ]
+}

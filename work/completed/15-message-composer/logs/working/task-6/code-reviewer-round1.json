@@ -1,0 +1,41 @@
+{
+  "task": 6,
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "mode": "self-applied (nested sub-agent spawning restricted per task brief)",
+  "scope": "frontend/types/funnel.ts, frontend/tests/types/funnel-blocks.spec.ts",
+  "summary": "Pure-types change mirrors the FINAL backend DTO contract (ContentBlockDto, MediaItemDto, FunnelStepDto.blocks, PreviewStepRequest, PreviewStepResponse incl. nested RenderedBlock/RenderedMediaItem). Field names, optionality, and nesting match the Java records byte-for-byte. No runtime/business logic touched. types/funnel.ts and stores/funnels.ts compile clean.",
+  "dimensions_checked": [
+    "correctness (DTO mirror)",
+    "naming",
+    "consistency with file style",
+    "comments WHY not WHAT",
+    "no dead references to removed types/fields",
+    "security (SSRF/XSS notes preserved in comments, no logic)"
+  ],
+  "findings": [
+    {
+      "id": "C1",
+      "severity": "info",
+      "title": "MediaItem.type uses full BlockType union, not narrowed to IMAGE|VIDEO|AUDIO|FILE",
+      "detail": "Album items semantically exclude TEXT/ALBUM, but backend MediaItemDto.type is typed as the full BlockType enum (enforcement of the IMAGE|VIDEO|AUDIO|FILE subset lives in FunnelService Decision 5, not the type). Mirroring the full BlockType keeps exact parity with the backend serialization contract; narrowing the TS type would diverge from the DTO and is intentionally avoided.",
+      "action": "accept as-is (matches backend source of truth)"
+    },
+    {
+      "id": "C2",
+      "severity": "info",
+      "title": "Decision number in preview comments updated 9 -> 8",
+      "detail": "Original comments cited 'Decision 9' for preview; the committed backend DTOs cite 'Decision 8' for the multiblock preview. Aligned comments to the backend's decision reference to avoid drift.",
+      "action": "applied"
+    },
+    {
+      "id": "C3",
+      "severity": "info",
+      "title": "Expected downstream breakage in Wave-4-owned files",
+      "detail": "Removing SEND_MESSAGE/SEND_IMAGE/MENU, flat msg fields, and rendered/text preview fields breaks consumer SPEC/COMPONENT files (tests/components/funnels/FunnelMessagePreview.spec.ts, tests/pages/funnel-editor.spec.ts, tests/components/*.spec.ts, tests/stores/funnels.spec.ts, e2e/funnels.spec.ts). These are owned by Task 7/8 per the task brief; NOT fixed here.",
+      "action": "documented as known handoff (decisions.md)"
+    }
+  ],
+  "verdict": "approved",
+  "blocking": false
+}

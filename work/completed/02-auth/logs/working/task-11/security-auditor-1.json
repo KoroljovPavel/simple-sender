@@ -1,0 +1,45 @@
+{
+  "verdict": "approved",
+  "summary": "Task 11 implements /dashboard and /profile cleanly against the session-cookie + CSRF model. All sensitive operations go through useApi() (CSRF header attached), all user-supplied values are rendered via {{ }} (auto-escaped) with no v-html, no localStorage/sessionStorage/console writes, the delete-account flow respects Decision 5 (active session + modal, no password), and the terminate-all/delete navigation pattern correctly handles the post-invalidation race. Only minor (non-blocking) observations.",
+  "findings": [
+    {
+      "severity": "minor",
+      "owasp": "A04",
+      "file": "frontend/pages/profile.vue",
+      "line": 170,
+      "issue": "Comment on onTerminateAllSessions (line 175-176) claims clearing authStore.user = null before navigateTo('/auth/login') prevents 'an extra GET /api/auth/me'. In practice the auth middleware (frontend/middleware/auth.global.ts:11-18) calls authStore.fetchUser() whenever authStore.user === null. So clearing the store ACTUALLY triggers a GET /api/auth/me on the /auth/login navigation; that call returns 401, the store stays null, and middleware then no-ops on the public-auth branch. Functionally safe (no redirect loop, no 401 reaches the user), but the comment misrepresents the runtime behaviour and may mislead future maintainers.",
+      "suggestion": "Either (a) update the comment to reflect reality — 'we clear the store so the middleware sees no user and lands on /auth/login without redirecting back to /profile; the extra /api/auth/me hit is harmless and returns 401', or (b) suppress the fetchUser call entirely for /auth/** routes in the middleware (skip fetch when isPublicAuthRoute(to.path) and user is null)."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A04",
+      "file": "frontend/pages/profile.vue",
+      "line": 430,
+      "issue": "Delete-account modal has no ESC handler and no backdrop-click handler, so it can only be dismissed via the Cancel button. Not a security defect (the in-flight guard `if (isDeleting.value) return` is in place on closeDeleteModal and confirmDelete already protects against double-submit), but a UX/a11y gap that may push someone to wire ESC/backdrop later. If/when added, ensure both call closeDeleteModal() (which has the isDeleting guard) and not isDeleteModalOpen.value = false directly.",
+      "suggestion": "If wiring ESC/backdrop-close later: keydown.esc on the modal root → closeDeleteModal(); @click.self on the backdrop → closeDeleteModal(). Do NOT bypass closeDeleteModal()'s isDeleting guard."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A07",
+      "file": "frontend/pages/profile.vue",
+      "line": 89,
+      "issue": "Resend-verification request body sends `{ email: authStore.user?.email ?? '' }`. The endpoint is public by Decision 7 and accepts an email regardless, but on a route protected by auth middleware authStore.user should never be null when this function fires. Still, the empty-string fallback masks a bug class — if user state is somehow cleared between page load and click, the request would be a malformed POST with empty email, hitting the server's anti-enumeration timing path.",
+      "suggestion": "Guard at function entry: `if (!authStore.user?.email) return` — the section is only mounted for pending users with a known email anyway. Defense in depth; no correctness change in the happy path."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A09",
+      "file": "frontend/pages/profile.vue",
+      "line": 56,
+      "issue": "All five catch blocks (saveName, onResend, onChangePassword, onTerminateAllSessions, confirmDelete) silently swallow exceptions and map them to safe local strings — which is correct for the user-facing surface. However, this means a transient backend error (e.g., 5xx on PATCH /api/profile or POST /change-password) is invisible to the user beyond a generic 'try later' message and invisible to operations entirely (no console, no Sentry, no telemetry). Not a security flaw on its own, but combined with the logout/terminate paths, a partial-failure (e.g., terminate-all-sessions returns 200 server-side but the response Mono errors mid-flight) leaves the local store cleared while the server-side state is unknown.",
+      "suggestion": "When a frontend error reporter is wired in a later epic, route these catches through it (e.g., `reportError(e, { op: 'terminate-all-sessions' })`) without surfacing details to the user. Out of scope for Task 11; flagging for the future logging/monitoring pass."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A05",
+      "file": "frontend/pages/profile.vue",
+      "line": 226,
+      "issue": "Email field uses `<input :value=\"authStore.user?.email ?? ''\" type=\"email\" readonly>` — `readonly` does NOT mark the field disabled-for-form-submission, only non-editable. Since this form has no submit (the section is purely display), there is no exploitation path. Just noting that if a future refactor wraps this section in a <form> with a submit handler, the email field would be included in the submission payload."
+    }
+  ]
+}

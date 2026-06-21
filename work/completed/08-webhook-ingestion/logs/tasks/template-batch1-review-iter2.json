@@ -1,0 +1,65 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 2,
+      "section": "Context Files",
+      "issue": "`architecture.md` listed twice (lines 88 and 90). Duplicate entry.",
+      "fix": "Remove the duplicate `architecture.md` link near the end of the Context Files block."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "TDD Anchor",
+      "issue": "The `@Disabled` test was correctly removed from the TDD Anchor enumeration, but the parenthetical line `(removed from TDD Anchor list — the failedStatus_excludedFromTtlPartialFilter test is @Disabled manual-procedure and cannot drive TDD; see Details for the manual entry.)` remains and explicitly references a test name that does not appear anywhere else in the file (the Details step 4 bullet describes the manual procedure but never names the method). This dangling reference is confusing.",
+      "fix": "Either (a) drop the parenthetical entirely since the TDD Anchor list now only contains in-scope items, or (b) keep it but remove the named-test reference (`failedStatus_excludedFromTtlPartialFilter`) — replace with a generic phrasing like `(the manual TTL-eviction procedure documented in Details step 4 intentionally is not a TDD anchor since it cannot drive TDD)`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "What to do (step 4, Partial-filter exclusion bullet)",
+      "issue": "The bullet still instructs creating a test method annotated `@Disabled`. Per the project's own iter1 fix-note, the `@Disabled` test was supposed to be removed entirely (the cited fix-summary says `removed @Disabled test from TDD Anchor list`, but the test itself is still requested in step 4). A `@Disabled` test in `src/test` is dead code that test-reviewer will flag.",
+      "fix": "Either drop step 4's `Partial-filter exclusion` bullet entirely and move the manual procedure to a top-level Details note (e.g. `**Manual procedure (not a test):** to verify TTL exclusion of FAILED rows, run ...`), or commit to having the `@Disabled` test and acknowledge it in AC. Current state is inconsistent: the test is required by What-to-do but its TDD-Anchor entry is removed, leaving the test as orphan with no AC enforcement."
+    },
+    {
+      "severity": "minor",
+      "category": "carry-forward",
+      "task": 1,
+      "section": "Reviewers / frontmatter",
+      "issue": "Tech-spec Implementation Tasks → Task 1 lists `Reviewers: code-reviewer` (singular). Task file matches (`reviewers: [code-reviewer]`). No issue — this is a confirmation, not a finding. (Noted only because Task 1 is the only task in the batch with a non-default reviewer set; double-check intentional.)",
+      "fix": "No fix required — task aligns with tech-spec. Confirm intent during execution."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 3
+  },
+  "notes": {
+    "iteration1_fixes_verified": [
+      "T1-T5: project.md and architecture.md present in Context Files (verified across all 5 tasks).",
+      "T1-T5: testing.md NOT referenced (correct — file does not exist in project-knowledge/references/).",
+      "T2: `plaintextSecret` no longer appears; `secretHex` correctly used at the `BotService.connectAfterPreChecks` call site (Details, Files section).",
+      "T2: `@MockitoSpyBean` contradiction removed; the constant-time-primitive test now uses `MockedStatic<MessageDigest>` with explicit `no Spring context` note in step 6 and the test-cases enumeration (line 52 + Implementation hints line 130).",
+      "T4: Jackson version reference standardised to `2.12+` (Description line 24, Edge cases line 112). No remaining stale `2.18+`/`2.15+` mentions.",
+      "T5: `expireAfter` API correctly clarified as returning `Optional<Duration>` (Edge cases line 111) with explicit Spring API note.",
+      "T5: `@Disabled` test removed from TDD Anchor enumeration (lines 54-60). However see finding #2/#3 above — leftover parenthetical and orphan What-to-do bullet still reference the removed test."
+    ],
+    "cross_task_checks": {
+      "shared_resources": "MeterRegistry shared-resource ownership correct: T1 (MeterRegistryConfig) is sole owner; consumer tasks (T9 controller, T10 filter, T11 worker — not in this batch) will depend on T1. T1 is in Wave 1 with no `depends_on`, which is correct as the foundational task.",
+      "dependency_graph": "All 5 tasks in this batch declare `depends_on: []` and `wave: 1`. No cycles. Cross-references match tech-spec Wave 1 layout.",
+      "decomposition": "5 tasks for Wave 1, each touching ≤4 files with single-responsibility scope. No merge/split candidates. Total feature scope (per tech-spec) is ~14 tasks across 5 waves; 5 tasks for Wave 1 leaf foundations is proportional.",
+      "carry_forward": "AC and TDD items from tech-spec Implementation Tasks for T1-T5 are present in each task file. No drop-offs detected."
+    },
+    "approval_rationale": "Zero critical findings. Three minor findings are stylistic/cleanup — none block execution. Status: approved. Minor cleanups recommended before T9-T11 reference these artifacts."
+  }
+}

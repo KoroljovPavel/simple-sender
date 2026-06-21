@@ -1,0 +1,27 @@
+{
+  "summary": "Security audit of Task 7 (auth.global.ts locale-aware refactor + spec rewrite). Verdict: OK. The implementation correctly enforces fail-closed semantics on unresolved baseName per Decision 6, the PUBLIC_ROUTE_NAMES whitelist is a 1:1 match with the actual frontend/pages/auth/ filesystem (5 entries: login, register, forgot-password, reset-password, verify-email — none missing, none extra), and both navigateTo() calls take hardcoded literal path strings ('/dashboard', '/auth/login') wrapped in useLocalePath() — no user-controlled input flows into the redirect target, eliminating open-redirect risk. The baseName !== undefined guard before .includes() makes the fail-closed contract explicit and defends against future foot-guns. Authenticated + undefined-baseName passthrough is intentional (Decision 6 goal is to prevent unauthenticated users from reaching unmapped routes; authed users hitting a 404 is UX, not a security boundary). Hydration via useState<unknown>('auth-user').value mutation remains valid — it targets the same Nuxt state key the Pinia store reads via useState<User|null>('auth-user'). The try/catch around authStore.fetchUser() preserves prior behavior: transient errors leave state null and route to login (covered by backendError_protectedRouteByName_redirectsToLogin). No hardcoded secrets, no OWASP Top 10 hits. Two non-blocking informational notes below relate to defense-in-depth opportunities, not regressions.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "info",
+      "category": "A09 — Security Logging and Monitoring",
+      "title": "Silent error swallow in fetchUser try/catch leaves no audit trail",
+      "description": "The try { await authStore.fetchUser() } catch {} block (auth.global.ts:18-24) silently swallows non-401 backend errors with no log/metric. This is unchanged from pre-Task-7 behavior and is the correct UX choice (transient backend outages should not crash navigation). However, repeated 5xx during fetchUser silently denies access to protected routes via the fail-closed branch — without a log, this is invisible to operators. Consistent with the deferred 'server-logger landing' tracked in task-3 security-auditor-1 notes and decisions.md §Task 3.",
+      "location": "frontend/middleware/auth.global.ts:18-24",
+      "impact": "Repeated transient backend errors silently degrade auth UX with no observability — operationally hard to detect, but no security boundary is breached (fail-closed still holds).",
+      "recommendation": "Defer to the future server-logger landing (per Decision 6 / task-3 follow-up). When that lands, emit a low-cardinality client-side log (e.g., console.warn with a stable code like AUTH_FETCH_TRANSIENT) without including error details that could leak backend internals. Out of scope for Task 7.",
+      "cwe": "CWE-778"
+    },
+    {
+      "severity": "info",
+      "category": "best-practice",
+      "title": "PUBLIC_ROUTE_NAMES drift risk if a new auth page is added without whitelist update",
+      "description": "The whitelist currently mirrors frontend/pages/auth/ exactly (5:5). There is no static check tying the whitelist to the actual page filesystem — a future contributor could add e.g. frontend/pages/auth/sso-callback.vue and forget to extend PUBLIC_ROUTE_NAMES, which would silently make the new auth page unreachable for unauthenticated users (UX regression, not a security hole — fail-closed correctly errs on the safe side). The inverse — adding a non-auth page and accidentally listing it as public — is the only direction that would weaken access control, but is implausible given the array uses literal 'auth-' names.",
+      "location": "frontend/middleware/auth.global.ts:4-10",
+      "impact": "No security regression risk in the dangerous direction (extra entry would have to be a clearly auth-prefixed name to slip through review). Risk is one-sided UX (missing entry locks out an auth page). Out of scope for Task 7.",
+      "recommendation": "Optional follow-up: add a Vitest unit test that asserts PUBLIC_ROUTE_NAMES matches the set of basenames discovered under frontend/pages/auth/ via fs.readdirSync. Keeps the whitelist honest without changing runtime semantics. Safe to defer.",
+      "cwe": "CWE-1059"
+    }
+  ],
+  "verdict": "OK"
+}

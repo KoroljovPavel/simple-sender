@@ -1,0 +1,38 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 3,
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelServiceTriggerTypeTest.java:326",
+      "issue": "TDD anchor specifies `FunnelExecutionEngineIT::test_run_enters_on_start_entryStepId` but the test lives in FunnelServiceTriggerTypeTest instead. Coverage is real and assertions are correct (currentStepId == \"entry\"), but the anchor class contract is not met. A future engineer looking for the test in FunnelExecutionEngineIT will not find it.",
+      "recommendation": "Either move `test_run_enters_on_start_entryStepId` into FunnelExecutionEngineIT (preferred — keeps all engine behaviour tests together) or update the TDD anchor in task-3.md to reflect the actual location. No assertion change needed — the test logic is sound."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/funnel/FunnelControllerIT.java:1960",
+      "issue": "TDD anchor specifies `FunnelExecutionEngineIT` (regression) for the `funnel_broken_edge` 422 case, but the existing tests (`activateBrokenEdgeReturns422`, `activateBrokenNextEdgeReturns422`) live in FunnelControllerIT. The regression is still caught; the anchor class is wrong.",
+      "recommendation": "Update task-3.md TDD anchor to reference FunnelControllerIT for the broken-edge regression bullet, or add a cross-reference comment. The existing FunnelControllerIT tests are adequate — no new test needed."
+    }
+  ],
+  "summary": "All required IT coverage is present and correct. The graph-mode null-next termination test (`next_null_ends_branch_no_fallthrough`) correctly uses `seedGraphExecution` with id-bearing steps, ensuring `graphMode()` returns true and the new branch executes — the NOTE concern about legacy-path preservation is addressed. Assertions on status, currentStepId, and sentCount are value-based and order-independent. The on_start entry test asserts `currentStepId == \"entry\"` (not array[0]). The applyTriggers suite covers the full acceptance matrix: valid on_start entryStepId accepted and persisted, dangling id rejected (422), null id accepted, and non-event/non-on_start type rejected. The step-budget backstop test remains valid after the advanceToNext rewrite (cyclic funnel uses explicit next edges, so graphMode=true and the budget still trips). Two minor location mismatches between TDD anchor class names and actual test locations — no assertion quality issues. No critical or major findings.",
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 9,
+      "passed": 9,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 9,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

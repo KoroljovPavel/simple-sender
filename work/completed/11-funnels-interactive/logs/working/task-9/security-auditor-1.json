@@ -1,0 +1,84 @@
+{
+  "auditor": "security-auditor",
+  "task": "Task 9 — Security Audit of feature 11-funnels-interactive (OWASP Top 10)",
+  "scope_head": "305b59f",
+  "verdict": "CLEAN",
+  "summary": "Full-feature OWASP Top 10 audit of the Phase-2 funnels interactive surface (callback_query webhook ingest -> advanceOnCallback -> resumeOnCallback; MENU editor + URL buttons + reply_markup; answerCallbackQuery). Every spec-declared control (Decisions 6/9/10 + Risks) is present and correct in code. No critical/high/medium findings. Two informational notes only.",
+  "targeted_checks": {
+    "idor_owner_auth": {
+      "status": "OK",
+      "evidence": [
+        "FunnelTriggerServiceImpl.java:251-255 advanceOnCallback owner check: !subscriber.getId().equals(exec.getSubscriberId()) || !projectId.equals(exec.getProjectId()) -> silent no-op (LOG_CALLBACK_OWNER_MISMATCH).",
+        "FunnelExecutionEngine.java:314-327 claimForCallback CAS is scoped by subscriberId (_id == execId AND subscriberId == sub.id AND status==waiting_for_reply AND stepRunStatus==pending) — a forged executionId belonging to another subscriber fails the predicate atomically (second defense layer).",
+        "FunnelTriggerServiceImpl.java:259-262 status must be waiting_for_reply; :266-270 currentStepId must resolve to a MENU step in the snapshot — a callback to an already-passed step is a no-op."
+      ]
+    },
+    "strict_callback_data_parse": {
+      "status": "OK",
+      "evidence": [
+        "FunnelTriggerServiceImpl.java:336-363 parseCallbackData runs BEFORE any DB lookup: null reject; >64 UTF-8 bytes reject (MAX_CALLBACK_DATA_BYTES); split(\":\", -1) requires EXACTLY 2 parts (trailing-empty preserved so a:b: / a: / :b reject); left segment must match ^[0-9a-fA-F]{24}$ ObjectId-hex; right segment Integer.parseInt with NumberFormatException reject; index bounded 0..7 (MAX_BUTTON_INDEX).",
+        "FunnelTriggerServiceImpl.java:241 mongoTemplate.findById uses the shape-validated id (parameterized, no query injection). buttons.size() upper bound enforced post-snapshot at :276."
+      ]
+    },
+    "url_scheme_enforcement": {
+      "status": "OK",
+      "evidence": [
+        "FunnelService.java:400-422 requireHttpUrl: pre-parse whitespace reject (url.equals(url.strip()) blocks \" http://x\"); new URI(url) with malformed -> 422 not 500; scheme checked by equalsIgnoreCase 'http'/'https' (NOT startsWith) — rejects javascript:/data:/tg://, and HTTP:// / hTtP:// accepted as legitimate; uri.getHost() null/blank reject (http:/// and empty-host).",
+        "Backend is the authoritative gate (FunnelStepForm.vue:45/120 IMAGE_URL_RE is a UX mirror only, server does not trust it)."
+      ]
+    },
+    "mass_assignment_defense": {
+      "status": "OK",
+      "evidence": [
+        "ButtonDto.java:11 @JsonIgnoreProperties(ignoreUnknown=true).",
+        "FunnelStepDto.java:21 @JsonIgnoreProperties(ignoreUnknown=true) (+ only @NotNull stepType bean-validated).",
+        "CallbackQuery.java:26 @JsonIgnoreProperties(ignoreUnknown=true); TelegramUpdate.java:17 same. No owner-bound field (projectId/subscriberId/ownerId/id) is read from any request body — toSteps (FunnelService:262-301) mints/preserves step id server-side and rewrites order from array index; execution ids/owner come from resolved bot+subscriber, never the payload."
+      ]
+    },
+    "no_pii_in_events": {
+      "status": "OK",
+      "evidence": [
+        "FunnelTriggerServiceImpl.java:388-403 recordButtonClick funnel_button_clicked metadata = projectId/funnelId/executionId/subscriberId/currentStepId/buttonIndex — ids/codes only, no from.first_name/username/text.",
+        "ProcessTelegramUpdateJob.java:322-332 logEventCallbackQuery telegram_callback_query metadata = projectId/chatId/data, where data is the internal callback_data code {executionId}:{buttonIndex} (Decision 9 explicitly allows codes); cq.from() (User) is modelled but NEVER surfaced into metadata (CallbackQuery.java:13-14 documents this).",
+        "grep for first_name/username/from./.text in event-metadata sites returned no hits."
+      ]
+    },
+    "token_scrub": {
+      "status": "OK",
+      "evidence": [
+        "TelegramSender.java:173-192 answerCallbackQuery wraps the send in try/catch(RuntimeException) and logs TELEGRAM_ANSWER_CALLBACK_FAILED with TelegramApiClient.scrubTokens(ex.getMessage()) (line 190) — no token leak in WARN or exception.",
+        "All new/affected sender warn/error sites scrub (lines 190,241,274,317,392,440) or use compile-time-constant sentinel strings only; callback-path logs in FunnelTriggerServiceImpl use named constants + ids only (no payload, no token).",
+        "answerCallbackQuery reuses the same AES-GCM decrypt + CONNECTED filter + 5xx/429 retry seam (sendOnce/sendWithRateLimitRetry, TelegramSender.java:187-188); token decrypted only in sendOnce local, never logged/stored."
+      ]
+    }
+  },
+  "owasp": {
+    "A01_broken_access_control": "OK — IDOR closed by two layers (owner check + subscriberId-scoped CAS); currentStepId server-read so a stale-step callback no-ops; FunnelService CRUD keeps Phase-1 requireOwned-first uniform-404 pattern (FunnelService.java:233-246).",
+    "A02_crypto": "OK — no new crypto; answerCallbackQuery reuses existing AES-GCM decrypt path unchanged.",
+    "A03_injection": "OK — callback_data shape-validated before parameterized findById; URL scheme strict-parsed (no scheme-injection); frontend renders all author/subscriber content via {{ }} interpolation (no v-html in components/funnels or the funnels page); MENU text still goes through VariableTemplateRenderer with parse_mode escaping like SEND_MESSAGE (StepExecutor.java:112).",
+    "A04_insecure_design": "OK — MENU requires >=1 callback button (FunnelService.java:382-384) so no permanent stuck state; per-tick budget maxStepsPerTick replaces size+1 guard -> failed + FUNNEL_STEP_BUDGET_EXCEEDED on a no-park loop (FunnelExecutionEngine.java:234-241); answerCallbackQuery best-effort, never blocks advance (FunnelTriggerServiceImpl.java:307-329).",
+    "A05_misconfiguration": "OK — app.funnel.max-steps-per-tick default 100 > 50-step max (application.properties:54); NO security/CSRF/CORS/filter/config file touched by the feature (git diff confirms none), so the scoped webhook CSRF-disable was not widened and no new permissive route added.",
+    "A07_auth_failures": "OK — bot path keeps CONNECTED filter; no new public route bypasses auth.",
+    "A08_data_integrity": "OK — @JsonIgnoreProperties on all new DTOs/records; FunnelStep.copyOf:99 defensively copies the buttons list (new ArrayList<>) so an in-flight waiting_for_reply snapshot is isolated from later funnel edits.",
+    "A09_logging_monitoring": "OK — token-scrub on all new log sites; no PII in events; greppable markers (FUNNEL_STEP_BUDGET_EXCEEDED, FUNNEL_CALLBACK_*, TELEGRAM_ANSWER_CALLBACK_FAILED) present.",
+    "A10_ssrf": "OK — URL button is rendered into reply_markup and only Telegram/the subscriber's client dereferences it; the backend never fetches it (StepExecutor.buildReplyMarkup:137-158). sendPhoto/imageUrl likewise handed to Telegram, never dereferenced server-side (TelegramSender.java:196-197)."
+  },
+  "findings": [
+    {
+      "severity": "info",
+      "owasp": "A09",
+      "file": "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+      "line": 330,
+      "issue": "telegram_callback_query event stores the raw callback_data (data) verbatim. This is the internal code {executionId}:{buttonIndex} and is explicitly permitted as a non-PII code by Decision 9, so this is conformant. Noted only because the worker logs the value before advanceOnCallback's strict parse runs — a client could submit arbitrary <=payload as callback_data and it lands in the event store unparsed (bounded by the upstream WebhookPayloadSizeFilter / Telegram's 64-byte ceiling on legitimate buttons). No exploit: it is event metadata, not used in any query or render, and carries no PII.",
+      "recommendation": "Acceptable as-is. Optionally cap/normalize the data marker length in logEventCallbackQuery if event-store hygiene is a concern, but not required."
+    },
+    {
+      "severity": "info",
+      "owasp": "A04",
+      "file": "work/11-funnels-interactive/decisions.md",
+      "line": 86,
+      "issue": "Task 4 deviation: funnel_broken_edge graph validation runs inside the shared validateSteps and therefore blocks BOTH update (draft save) and activate — stricter than the user-spec phrasing 'a draft with a broken edge can be saved, only activation is blocked'. This is a product/UX decision, not a security weakness (stricter = fail-closed). Recorded by the implementer for the audit wave.",
+      "recommendation": "No security action. If the product wants drafts with broken edges to save, split the graph-edge pass into an activate-only branch (does not affect any security control — URL scheme, IDOR, mass-assignment all remain enforced on activate)."
+    }
+  ]
+}

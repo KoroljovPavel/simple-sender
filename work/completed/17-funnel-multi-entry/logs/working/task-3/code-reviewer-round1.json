@@ -1,0 +1,27 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/dto/TriggerDto.java",
+      "line": 39,
+      "issue": "MAX_KEYWORDS duplicated from FunnelService — drift risk. TriggerDto.MAX_KEYWORDS = 50 is a copy of FunnelService.MAX_KEYWORDS (private static final, not accessible from DTO). The comment acknowledges this. The two constants can silently diverge (e.g. someone bumps the service cap but forgets the DTO). The task spec explicitly accepted this tradeoff.",
+      "fix": "Consider extracting the constant to a shared location (e.g. FunnelConstants.MAX_KEYWORDS) so there is a single source of truth referenced by both TriggerDto and FunnelService. Low priority — acceptable as-is given the explicit comment and the aligned values."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/dto/TriggerDtoTest.java",
+      "line": 51,
+      "issue": "In roundTripsTriggerArray, the third trigger is typed 'keyword' but carries entryStepId='step-9'. Per Decision 10, keyword triggers never hold a non-null entryStepId (mid-entry is event-only). The DTO is intentionally permissive so this is shape-valid and the round-trip fidelity test is correct — but the fixture signals an invalid domain combination, making it misleading for future readers.",
+      "fix": "Change the keyword trigger's entryStepId to null (its correct domain value). If you want to test that arbitrary entryStepId values survive the round-trip at the DTO layer, add a dedicated serialization-fidelity test with a comment explaining the intent instead of embedding the semantically wrong value in the primary round-trip fixture."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/dto/TriggerDtoTest.java",
+      "line": 89,
+      "issue": "Comment in deserializeIgnoresUnknownProperties implies there is an active assertion about the 'status' field not leaking in ('it cannot leak in'), but there is no such assertion — the protection is enforced by the record structure (no status accessor exists). The comment is accurate in spirit but could mislead a reader into thinking the test is verifying something it is not.",
+      "fix": "Tighten the comment: 'status has no corresponding record component in UpdateFunnelRequest, so @JsonIgnoreProperties(ignoreUnknown=true) makes deserialization succeed rather than throw — the record simply has no accessor to leak it through.' Optionally add: assertThat(back.allowReEnter()).isFalse() (or any other field) to make it clear the object is otherwise intact."
+    }
+  ],
+  "summary": "Approved. The implementation is clean and correctly scoped to Task 3. TriggerDto is a faithful record mirroring the domain Trigger field-for-field, @JsonIgnoreProperties(ignoreUnknown=true) is preserved on all incoming DTOs (TriggerDto and UpdateFunnelRequest), FunnelResponse/FunnelSummaryResponse correctly omit it as output-only records. The @Valid @Size(max=MAX_TRIGGERS) on the triggers array and @Size(max=MAX_KEYWORDS) per trigger are wired correctly per Decision 14. The test suite is thorough: round-trip, mass-assignment defense, FunnelResponse/FunnelSummaryResponse, size cap violation, off-by-one boundary, and @Valid cascade into nested elements — all six TDD Anchor cases are implemented and meaningful. Three minor findings: (1) MAX_KEYWORDS constant duplication risk, (2) semantically misleading keyword+entryStepId fixture in roundTripsTriggerArray, (3) slightly overstated comment about status leak protection in the mass-assignment test. None are blocking."
+}

@@ -1,0 +1,29 @@
+{
+  "summary": "Task 5 (Funnel CRUD service + controller) reviewed against OWASP Top 10 with focus on A01 (anti-IDOR), A03 (NoSQL injection / deep-link construction), mass-assignment, and error-code leakage. No critical or high-severity findings. Anti-IDOR is correctly implemented: requireOwned runs FIRST in every method, cross-project/missing funnel collapses to a uniform 404 via findById().filter(projectId-matches).orElseThrow(notFound), and status transitions are gated to explicit activate/pause endpoints (DTOs carry @JsonIgnoreProperties and no status field). NoSQL queries use bound Criteria/derived queries with no string concatenation. Trigger-conflict is defended in depth (service pre-check + partial-unique index -> 422, never 500). Two minor findings: a malformed funnelId hex can bypass the uniform-404 contract and surface as 500, and CORS omits PUT while the controller exposes a PUT mapping.",
+  "findings": [
+    {
+      "severity": "minor",
+      "owasp": "A01:2021 Broken Access Control (anti-enumeration)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "196",
+      "finding": "requireFunnel() calls funnelRepository.findById(funnelId) directly. ProjectService.requireOwned wraps findById in a try/catch for IllegalArgumentException (bad ObjectId hex collapses to uniform 404), but requireFunnel does not. If @Id String is mapped to a Mongo ObjectId, a malformed funnelId (e.g. 'abc') against a valid, owned projectId would throw IllegalArgumentException, bubble to GlobalErrorHandler's Throwable handler, and return 500 instead of the uniform 404. This both breaks the anti-enumeration contract (a 500 vs 404 distinguishes 'malformed id' from 'not found') and is inconsistent with the explicit project-id handling in requireOwned. Note: the exemplar SubscriberCustomFieldsController has the same direct-findById pattern, so this is a codebase-wide convention, but the funnel module explicitly advertises uniform-404 anti-IDOR. The IT only covers malformedProjectIdReturns404, not a malformed funnelId.",
+      "recommendation": "Mirror ProjectService.requireOwned: wrap funnelRepository.findById(funnelId) in try/catch(IllegalArgumentException) and rethrow AppException.notFound(MESSAGE_NOT_FOUND), so malformed funnelId yields the same uniform 404. Add an IT (e.g. crossProject/malformedFunnelIdReturns404) asserting a non-ObjectId funnelId returns 404, not 500. Confirm via test whether findById actually throws on bad hex for this entity before deciding it is a no-op."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A05:2021 Security Misconfiguration (CORS)",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": "corsConfigurationSource (setAllowedMethods)",
+      "finding": "FunnelController exposes PUT /{funnelId} (and PATCH as an alias), but the global CORS config setAllowedMethods lists only GET, POST, PATCH, DELETE, OPTIONS - PUT is missing. Browser-based SPA clients on the configured app.url origin will have their PUT preflight rejected. This is not an injection or access-control bypass (it fails closed, blocking the request), so it is a functional/best-practice gap rather than a vulnerability, but it is an inconsistency between the exposed REST surface and the CORS allowlist introduced/relevant to this task.",
+      "recommendation": "Either add PUT to CORS allowedMethods to match the controller's PUT mapping, or drop the PUT handler and keep only PATCH (the two share identical full-replace semantics anyway). Aligning the allowlist with the actually-exposed verbs avoids silent client breakage and keeps the surface minimal."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A03:2021 Injection (deep-link / open-redirect hygiene)",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "374",
+      "finding": "resolveDeepLink builds 't.me/' + botUsername + '?start=' + triggerValue. triggerValue is constrained by TRIGGER_VALUE_PATTERN ^[A-Za-z0-9_-]{0,64}$ (safe, no injection). botUsername, however, comes from Bot.telegramUsername and is concatenated unvalidated/unencoded. In Phase 1 this value originates from Telegram's verified getMe and is host-trusted, so the practical risk is low; flagged only as defense-in-depth. If a malformed/attacker-influenced username ever reached this field, the unencoded concatenation into a t.me URL could distort the deep-link. This is informational given the current trust boundary.",
+      "recommendation": "Optionally validate/whitelist Bot.telegramUsername against the Telegram username grammar (^[A-Za-z0-9_]{5,32}$) at the point it is stored, or URL-encode the components when constructing the deep-link. No change required if the upstream bot-connect flow already guarantees the username shape - confirm that guarantee exists."
+    }
+  ]
+}

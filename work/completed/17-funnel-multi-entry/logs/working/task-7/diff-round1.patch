@@ -1,0 +1,317 @@
+c14edfd feat: task 7 — editor page wiring for the trigger array (57 seconds ago) <johnypashka>
+.../projects/[projectId]/funnels/[funnelId].vue    | 103 ++++++++++------
+ frontend/tests/pages/funnel-editor.spec.ts         | 135 +++++++++++++++------
+ 2 files changed, 162 insertions(+), 76 deletions(-)
+
+frontend/pages/projects/[projectId]/funnels/[funnelId].vue
+  @@ -12,9 +12,9 @@ import {
+  -import FunnelTriggerSettings from '~/components/funnels/FunnelTriggerSettings.vue'
+  +import FunnelTriggersPanel from '~/components/funnels/FunnelTriggersPanel.vue'
+   import FunnelMessagePreview from '~/components/funnels/FunnelMessagePreview.vue'
+  -import type { FunnelResponse, FunnelStatus, FunnelStep, FunnelTriggerType, StepType } from '~/types/funnel'
+  +import type { FunnelResponse, FunnelStatus, FunnelStep, FunnelTrigger, StepType } from '~/types/funnel'
+   
+   definePageMeta({ layout: 'default' })
+   
+  @@ -31,9 +31,10 @@ const funnelId = computed(() => String(route.params.funnelId))
+  -const triggerType = ref<FunnelTriggerType>('on_start')
+  -const triggerValue = ref('')
+  -const keywords = ref<string[]>([])
+  +// Phase 8 (17-funnel-multi-entry): the funnel carries a LIST of triggers (Decision 1), each with its own
+  +// triggerType/triggerValue/keywords + entryStepId. The panel (FunnelTriggersPanel) edits them via
+  +// v-model:triggers; the page owns the array, the autosave gate and the PATCH payload.
+  +const triggers = ref<FunnelTrigger[]>([])
+   const loaded = ref(false)
+   const loadError = ref<string | null>(null)
+   const saving = ref(false)
+  @@ -90,26 +91,33 @@ const STATUS_VARIANT: Record<FunnelStatus, 'secondary' | 'default' | 'outline'>
+  -// Is the CURRENT trigger draft complete enough to PATCH? The backend rejects an incomplete trigger with a
+  -// 422 (keyword needs ≥1 keyword; tag_added/custom_field_set/event need a non-empty triggerValue), so
+  -// switching the type alone — before the required value is filled — must NOT auto-save. activate() reuses
+  -// this so a genuine activate of an incomplete funnel still round-trips and surfaces the inline 422.
+  -function triggerReady(): boolean {
+  -  switch (triggerType.value) {
+  +// Is a SINGLE trigger draft complete enough to PATCH? Per-element (Phase 8): the backend rejects an
+  +// incomplete trigger with a 422 (keyword needs ≥1 keyword; tag_added/custom_field_set/event need a
+  +// non-empty triggerValue), so switching ONE trigger's type — before its required value is filled — must
+  +// NOT auto-save. The debounced autosave only fires once EVERY trigger is ready (triggers.every(...)), and
+  +// activate() reuses the same gate so a genuine activate of an incomplete funnel still surfaces the 422.
+  +function triggerReady(trigger: FunnelTrigger): boolean {
+  +  switch (trigger.triggerType) {
+       case 'on_start':
+  -      return TRIGGER_VALUE_RE.test(triggerValue.value ?? '')
+  +      return TRIGGER_VALUE_RE.test(trigger.triggerValue ?? '')
+       case 'keyword':
+  -      return (keywords.value ?? []).length >= 1
+  +      return (trigger.keywords ?? []).length >= 1
+       case 'tag_added':
+       case 'custom_field_set':
+  -      return (triggerValue.value ?? '').trim().length > 0
+  +      return (trigger.triggerValue ?? '').trim().length > 0
+       case 'event':
+  -      return EVENT_NAME_RE.test(triggerValue.value ?? '')
+  +      return EVENT_NAME_RE.test(trigger.triggerValue ?? '')
+       default:
+         return false
+     }
+   }
+   
+  +// A funnel always needs at least the on_start main entry, so the panel always has a row to render even
+  +// when the backend returns an empty/absent triggers array (edge case).
+  +function defaultTriggers(): FunnelTrigger[] {
+  +  return [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }]
+  +}
+  +
+   function statusOf(err: unknown): number | null {
+     const e = err as { statusCode?: number; status?: number; response?: { status?: number } }
+     return e?.statusCode ?? e?.status ?? e?.response?.status ?? null
+  @@ -128,9 +136,17 @@ function resolveFunnelError(err: unknown, contextKey: string): string {
+  +// Re-entrancy guard: applyResponse() re-assigns `triggers` from the server, which the deep watch would
+  +// otherwise treat as a fresh edit and re-schedule a PATCH — an infinite persist→applyResponse→watch loop
+  +// (the server-echoed array always has a new identity). Suppress exactly one watch cycle when we apply a
+  +// server response.
+  +let applyingResponse = false
+   function applyResponse(res: FunnelResponse) {
+     funnel.value = res
+     steps.value = [...res.steps]
+  +  applyingResponse = true
+  +  // Fall back to a lone on_start trigger so the panel always has the main entry (edge case: empty/absent).
+  +  triggers.value = res.triggers?.length ? res.triggers.map((tr) => ({ ...tr })) : defaultTriggers()
+   }
+   
+   async function load() {
+  @@ -138,9 +154,6 @@ async function load() {
+  -    triggerType.value = (res.triggerType as FunnelTriggerType) ?? 'on_start'
+  -    triggerValue.value = res.triggerValue ?? ''
+  -    keywords.value = res.keywords ?? []
+       loaded.value = true
+     } catch (err) {
+       // Anti-IDOR uniform 404 for missing/cross-owner funnel → graceful redirect to the list.
+  @@ -161,23 +174,30 @@ onMounted(() => {
+  -// PATCH the FULL funnel (metadata + trigger + entire ordered steps array). Position = order, so the
+  +// Per-element trigger sanitizer: send ONLY the fields the element's type owns — never leak a stale value
+  +// from a previously-selected type (Edge cases). keyword owns `keywords` and clears triggerValue; the other
+  +// types own `triggerValue` and clear `keywords`. entryStepId is carried as-is (null for non-event types).
+  +function sanitizeTrigger(tr: FunnelTrigger): FunnelTrigger {
+  +  const isKeyword = tr.triggerType === 'keyword'
+  +  return {
+  +    triggerType: tr.triggerType,
+  +    triggerValue: isKeyword ? null : (tr.triggerValue ?? ''),
+  +    keywords: isKeyword ? (tr.keywords ?? []) : [],
+  +    entryStepId: tr.entryStepId ?? null,
+  +  }
+  +}
+  +
+  +// PATCH the FULL funnel (metadata + trigger array + entire ordered steps array). Position = order, so the
+   // server rewrites FunnelStep.order from the array index — the client never sends `order`.
+   async function persist(): Promise<boolean> {
+     if (!funnel.value) return false
+     saving.value = true
+     saveError.value = null
+     try {
+  -    // Send only the value the active type owns — never leak a stale value from a previously-selected type
+  -    // (Edge cases). keyword owns `keywords` and clears triggerValue; on_start/tag_added/custom_field_set/
+  -    // event own `triggerValue` and clear `keywords`.
+  -    const isKeyword = triggerType.value === 'keyword'
+       const res = await funnelsStore.update(funnelId.value, {
+         name: funnel.value.name,
+         description: funnel.value.description,
+  -      triggerType: triggerType.value,
+  -      triggerValue: isKeyword ? null : triggerValue.value,
+  -      keywords: isKeyword ? keywords.value : [],
+  +      triggers: triggers.value.map(sanitizeTrigger),
+         allowReEnter: funnel.value.allowReEnter,
+         steps: steps.value,
+       })
+  @@ -216,18 +236,30 @@ function openEdit(index: number) {
+  -// Persist trigger edits (debounced) so the activated funnel uses the value the user sees. Only schedule a
+  -// PATCH once the active type's required value is present (triggerReady) — switching the type alone, or
+  -// editing toward a still-empty value, must NOT auto-save (the backend 422s an incomplete trigger). A
+  -// genuine activate of an incomplete funnel still surfaces that 422 via activate()→persist().
+  +// Persist trigger edits (debounced) so the activated funnel uses the values the user sees. Only schedule a
+  +// PATCH once EVERY trigger's required value is present (triggers.every(triggerReady)) — switching one
+  +// trigger's type alone, or editing toward a still-empty value, must NOT auto-save (the backend 422s an
+  +// incomplete trigger). A genuine activate of an incomplete funnel still surfaces that 422 via
+  +// activate()→persist().
+   let triggerTimer: ReturnType<typeof setTimeout> | null = null
+   function scheduleTriggerPersist() {
+     if (!loaded.value) return
+  -  if (!triggerReady()) return
+  +  // Skip the watch cycle caused by applyResponse() re-assigning `triggers` from the server (not a user
+  +  // edit) — otherwise persist→applyResponse→watch→persist loops forever.
+  +  if (applyingResponse) {
+  +    applyingResponse = false
+  +    return
+  +  }
+  +  // ALWAYS cancel a pending flush first: if a later edit makes the array incomplete (e.g. an empty event
+  +  // trigger was just added), an earlier scheduled PATCH must NOT fire — otherwise it would flush a
+  +  // not-ready array and 422. Only (re)arm the timer when EVERY trigger is ready.
+     if (triggerTimer) clearTimeout(triggerTimer)
+  +  triggerTimer = null
+  +  if (!triggers.value.every(triggerReady)) return
+     triggerTimer = setTimeout(() => void persist(), 600)
+   }
+  -watch([triggerType, triggerValue, keywords], scheduleTriggerPersist, { deep: true })
+  +// Deep watch: trigger edits mutate fields INSIDE the array elements, not just the array reference.
+  +watch(triggers, scheduleTriggerPersist, { deep: true })
+   onBeforeUnmount(() => {
+     if (triggerTimer) clearTimeout(triggerTimer)
+   })
+  @@ -442,10 +474,9 @@ async function confirmStopAll() {
+  -        <FunnelTriggerSettings
+  -          v-model:trigger-type="triggerType"
+  -          v-model:trigger-value="triggerValue"
+  -          v-model:keywords="keywords"
+  +        <FunnelTriggersPanel
+  +          v-model:triggers="triggers"
+  +          :steps="steps"
+             :bot-username="botUsername"
+             :deep-link="funnel.deepLink"
+           />
+  +67 -36
+
+frontend/tests/pages/funnel-editor.spec.ts
+  @@ -65,8 +65,9 @@ function draft(over: Partial<FunnelResponse> = {}): FunnelResponse {
+  -    triggerType: 'on_start',
+  -    triggerValue: '',
+  +    // Phase 8 (17-funnel-multi-entry): a funnel carries a LIST of triggers (the flat trio is gone). Always
+  +    // at least the on_start main entry; tests add event triggers via the panel.
+  +    triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+       allowReEnter: false,
+       steps: [],
+       deepLink: null,
+  @@ -173,15 +174,20 @@ describe('funnels/[funnelId] editor page', () => {
+  -  // ─── Trigger auto-save readiness (Task 15 finding) ────────────────────────────
+  -  // Switching the trigger type must NOT fire a PATCH while the new type's required value is still empty
+  -  // (backend returns 422). The debounced auto-save only schedules once the active type is "ready".
+  -  describe('trigger auto-save readiness', () => {
+  +  // ─── Trigger array auto-save readiness (Phase 8 — 17-funnel-multi-entry) ───────
+  +  // The page holds triggers as a FunnelTrigger[] edited through the REAL FunnelTriggersPanel (mounted, not
+  +  // stubbed — a stub would hollow out every assertion below). The debounced PATCH is per-element-gated:
+  +  // it only fires once triggers.every(triggerReady), so adding/switching one trigger whose required value
+  +  // is still empty must NOT fire a premature 422. The on_start main entry is pinned by the panel; event
+  +  // triggers are added via the panel's Add button.
+  +  describe('trigger array auto-save readiness', () => {
+       beforeEach(() => {
+         vi.useFakeTimers()
+       })
+       afterEach(() => {
+  -      vi.runOnlyPendingTimers()
+  +      // Discard (do NOT fire) any pending debounce timer from the mounted-but-not-unmounted wrapper —
+  +      // firing it would call the shared update spy during the NEXT test's mount, after its mockClear().
+  +      vi.clearAllTimers()
+         vi.useRealTimers()
+       })
+   
+  @@ -199,71 +205,122 @@ describe('funnels/[funnelId] editor page', () => {
+  -      // load() runs on a microtask; advance enough to settle the initial mount with fake timers.
+  +      // load() runs on a microtask; advance enough to settle the initial mount with fake timers, then clear
+  +      // any on-mount autosave (a ready on_start value persists once) so each test counts only its own edits.
+         await tick(700)
+         storeMock.update.mockClear()
+         return wrapper
+       }
+   
+  -    it('does NOT PATCH when the type switches to keyword with no keywords yet', async () => {
+  +    it('loads the trigger array from the funnel response and renders the Triggers panel', async () => {
+         const wrapper = await mountLoaded()
+  -      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('keyword')
+  +      // The real panel is mounted (not stubbed) and shows the on_start main entry slot.
+  +      expect(wrapper.find('[data-test="funnel-triggers"]').exists()).toBe(true)
+  +      expect(wrapper.find('[data-test="funnel-trigger-on-start"]').exists()).toBe(true)
+  +      // No event rows yet (the seed funnel only carries the on_start entry).
+  +      expect(wrapper.find('[data-test="funnel-triggers-empty"]').exists()).toBe(true)
+  +    })
+  +
+  +    it('persists the trigger array (not the flat trio) on save once an event trigger is completed', async () => {
+  +      const wrapper = await mountLoaded()
+  +      // Add an event trigger (starts empty → incomplete → no PATCH yet).
+  +      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+         await tick(700)
+         expect(storeMock.update).not.toHaveBeenCalled()
+  -    })
+   
+  -    it('does NOT PATCH when the type switches to tag_added / custom_field_set / event with an empty value', async () => {
+  -      for (const ty of ['tag_added', 'custom_field_set', 'event']) {
+  -        const wrapper = await mountLoaded()
+  -        await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue(ty)
+  -        await tick(700)
+  -        expect(storeMock.update, `type ${ty} must not auto-save while empty`).not.toHaveBeenCalled()
+  -      }
+  +      // Fill the new event row's slug → the array is now fully ready → one PATCH.
+  +      const eventInput = wrapper.findAll('[data-test="funnel-trigger-event-input"]')
+  +      expect(eventInput.length).toBe(1)
+  +      await eventInput[0].setValue('order_paid')
+  +      await tick(700)
+  +
+  +      expect(storeMock.update).toHaveBeenCalledTimes(1)
+  +      const body = storeMock.update.mock.calls[0][1]
+  +      // The payload carries the ARRAY, never the flat trio.
+  +      expect(Array.isArray(body.triggers)).toBe(true)
+  +      expect(body.triggerType).toBeUndefined()
+  +      expect(body.triggerValue).toBeUndefined()
+  +      expect(body.keywords).toBeUndefined()
+  +      // on_start main entry + the completed event trigger.
+  +      expect(body.triggers).toHaveLength(2)
+  +      const ev = body.triggers.find((tr: { triggerType: string }) => tr.triggerType === 'event')
+  +      expect(ev.triggerValue).toBe('order_paid')
+  +      // event owns triggerValue and clears keywords (per-element sanitizer).
+  +      expect(ev.keywords).toEqual([])
+       })
+   
+  -    it('PATCHes keyword with keywords set and triggerValue null once a keyword is added', async () => {
+  +    it('does NOT PATCH while any trigger is incomplete (event added, value empty)', async () => {
+         const wrapper = await mountLoaded()
+  -      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('keyword')
+  +      // Add an event trigger but leave its slug empty → the array is NOT every(ready) → no premature 422.
+  +      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+         await tick(700)
+         expect(storeMock.update).not.toHaveBeenCalled()
+  +    })
+   
+  -      await wrapper.get('[data-test="funnel-trigger-keyword-input"]').setValue('hello')
+  -      await wrapper.get('[data-test="funnel-trigger-keyword-add"]').trigger('click')
+  +    it('PATCHes once every trigger is ready (valid event slug + entry step)', async () => {
+  +      // Seed a saved step so the panel can resolve a mid-entry: a new event defaults its entryStepId to the
+  +      // FIRST step id (event is mid-entry — Decision 10), proving the entry step is carried in the payload.
+  +      const wrapper = await mountLoaded({
+  +        steps: [{ stepType: 'MESSAGE', id: 'step1', blocks: [{ type: 'TEXT', text: 'Hi' }] }],
+  +      })
+  +      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+  +      await tick(700)
+  +      expect(storeMock.update).not.toHaveBeenCalled()
+  +
+  +      await wrapper.findAll('[data-test="funnel-trigger-event-input"]')[0].setValue('signup')
+         await tick(700)
+   
+         expect(storeMock.update).toHaveBeenCalledTimes(1)
+         const body = storeMock.update.mock.calls[0][1]
+  -      expect(body.triggerType).toBe('keyword')
+  -      expect(body.keywords).toEqual(['hello'])
+  -      expect(body.triggerValue).toBeNull()
+  +      const ev = body.triggers.find((tr: { triggerType: string }) => tr.triggerType === 'event')
+  +      expect(ev.triggerValue).toBe('signup')
+  +      // event is mid-entry: the panel defaulted entryStepId to the funnel's first step (not null).
+  +      expect(ev.entryStepId).toBe('step1')
+       })
+   
+  -    it('PATCHes event with triggerValue set and keywords [] once a valid slug is typed', async () => {
+  +    it('a ready trigger waits while a second trigger is still being edited (triggers.every gate)', async () => {
+         const wrapper = await mountLoaded()
+  -      await wrapper.get('[data-test="funnel-trigger-type-select"]').setValue('event')
+  +      // Two event triggers: fill the first, leave the second empty → every(ready) is false → no PATCH.
+  +      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+  +      await tick(50)
+  +      await wrapper.get('[data-test="funnel-trigger-add"]').trigger('click')
+  +      await tick(50)
+  ... (33 lines truncated)
+  @@ -873,9 +930,7 @@ function summary(over: Partial<FunnelSummaryResponse> = {}): FunnelSummaryRespon
+  -    triggerType: 'on_start',
+  -    triggerValue: '',
+  -    keywords: null,
+  +    triggers: [{ triggerType: 'on_start', triggerValue: '', keywords: null, entryStepId: null }],
+       allowReEnter: false,
+       stepCount: 2,
+       createdAt: '2026-01-01T00:00:00Z',
+  +95 -40
+[full diff: rtk git diff --no-compact]

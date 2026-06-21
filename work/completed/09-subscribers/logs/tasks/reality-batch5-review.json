@@ -1,0 +1,71 @@
+{
+  "validator": "reality-checker",
+  "batch": [13, 14, 15],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 instructs running './gradlew test' and './gradlew test -PrunSlow=true' \"из корня репозитория\" (from the repo root), but the Gradle wrapper is located at backend/gradlew — there is no gradlew at the repository root. The repo root has no settings.gradle either; backend/settings.gradle defines rootProject.name='bot-funnel-backend'. Running './gradlew test' from repo root will fail with 'command not found' or 'no such file'.",
+      "fix": "Change the two gradlew commands in 'What to do' steps 2–3 and in the Verification Steps + Acceptance Criteria to: 'cd backend && ./gradlew test' and 'cd backend && ./gradlew test -PrunSlow=true'. This matches the pattern used in Task 16 (line 110: 'cd backend && ./gradlew test') which is correctly written."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 15,
+      "issue": "Task 15 description and Acceptance Criteria repeatedly state '11 технических AC из tech-spec', but the tech-spec 'Acceptance Criteria' section (lines 481–500) contains 16 bullet items, not 11. The Details section of the same task correctly corrects this at line 140 ('Всього, по факту, 16 пунктів в Acceptance Criteria tech-spec. Покрити всі.'), but the Description, Acceptance Criteria, and 'What to do' steps 3, 8, and 40 all say '11'. This creates an ambiguous contract: an agent reading only the Description/AC section would audit only 11 items and declare completion prematurely.",
+      "fix": "Replace all occurrences of '11 технических AC' (lines 20, 25, 40, 58) with '16 технических AC' in the Description, What to do, and Acceptance Criteria sections. The Details section mapping (items 12–16) is already correct and should be kept."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Task 14 Context Files section uses incorrect relative paths for project knowledge files. Lines 82–86 reference '.claude/skills/project-knowledge/references/project.md', '.claude/skills/test-master/SKILL.md', etc. using a path relative to the task file (work/09-subscribers/tasks/14.md). The actual path from repo root is '.claude/skills/...' but from the task file location it should be '../../../.claude/skills/...'. By contrast, Task 13 (lines 100–106) and Task 15 (lines 68–71) correctly use '../../../.claude/skills/...' for the same files. The skill Required Skills section (line 16) also uses '.claude/skills/test-master/SKILL.md' without the leading '../../../'.",
+      "fix": "Update all context file links in Task 14 from '.claude/skills/...' to '../../../.claude/skills/...', matching the pattern used in Tasks 13 and 15. Affected lines: 16, 82, 83, 84, 85, 86, 87, 88, 89."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 14,
+      "issue": "Task 14's @Tag('slow') audit table template (in the Details section) lists exactly 3 expected slow tests: SubscriberControllerLatencyIT, SubscriberExportEstimateLatencyIT, SubscriberExportHeapIT. However, the tech-spec Testing Strategy (line 379) also marks SubscriberExportFilterEstimateTest as '@Tag(\"slow\")' (a unit test that seeds 100k subscribers). The template includes a catch-all row '<any other test with @Tag(slow)>' which would FLAG SubscriberExportFilterEstimateTest as unexpected — generating a false-positive audit finding against a test that is legitimately @Tag('slow') by tech-spec design.",
+      "fix": "Add SubscriberExportFilterEstimateTest as a 4th row to the @Tag('slow') audit table template with 'Expected: yes'. Change the row: '| SubscriberExportFilterEstimateTest | yes | yes | OK |'. This aligns the template with the tech-spec Testing Strategy (line 379) and prevents a false-positive P0 finding in the test audit."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 13,
+      "issue": "Task 13's Step 1 ('Build the inventory') instructs reading 'work/09-subscribers/decisions.md agent reports to enumerate every file touched by Tasks 1–11'. At the time the task runs (Wave 5, after Tasks 1–11), decisions.md will contain per-task entries only if agents wrote them. Currently decisions.md is a template stub with no entries (34 lines total, all comment/template). If Tasks 1–11 agents skip or partially fill decisions.md, the security audit inventory could be incomplete. The task does not have a fallback instruction for this case.",
+      "fix": "Add a fallback instruction to Step 1: 'If decisions.md entries are missing for some tasks, fall back to the per-task Files to modify lists in tech-spec Implementation Tasks section (lines 506–599) as the authoritative inventory.' This is already listed in the Context Files but not explicitly called out as the fallback in Step 1."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 14,
+      "issue": "Task 14's Step 2 instructs using 'git diff --name-only main...HEAD -- \\'**/test/**\\' \\'**/tests/**\\' \\'**/e2e/**\\'' to enumerate test files. The glob pattern '**/test/**' may not match 'backend/src/test/java/...' on some shells/git versions because the path segment is 'src/test', not starting with 'test'. The pattern '**/e2e/**' correctly matches 'frontend/e2e/*.spec.ts'.",
+      "fix": "Use a more reliable pattern: 'git diff --name-only main...HEAD -- \\'backend/src/test/**\\' \\'frontend/tests/**\\' \\'frontend/e2e/**\\'' to precisely target the known test tree locations."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 6
+  },
+  "notes": {
+    "tdd_anchor": "Correctly absent from all three tasks (Tasks 13, 14, 15 are non-code audit/QA tasks — no TDD Anchor is appropriate).",
+    "test_commands_verified": {
+      "./gradlew_test": "gradlew EXISTS at backend/gradlew — correct location. Task 15 direction to run from repo root is WRONG (finding #1).",
+      "pnpm_test": "package.json scripts.test = 'vitest' — correct. Task 15 uses 'cd frontend && pnpm test' — correct.",
+      "pnpm_test_e2e": "package.json scripts['test:e2e'] = 'playwright test' — correct. playwright.config.ts testDir='./e2e' matches frontend/e2e/. Task 15 uses 'cd frontend && pnpm test:e2e' — correct.",
+      "pnpm_prebuild": "package.json scripts.prebuild = 'node scripts/check-locales.mjs' — correct. Task 15 uses 'cd frontend && pnpm prebuild' — correct.",
+      "gradlew_slow": "Same wrong-directory issue as './gradlew test' — see finding #1."
+    },
+    "referenced_files_not_yet_created": "Tasks 13, 14, 15 are Wave 5 tasks with depends_on: [1-11]. All subscriber/tag/export source files referenced in their inventories (Subscriber.java, SubscriberServiceImpl.java, SignedDownloadToken.java, etc.) are correctly NOT YET on disk — they will be created by Wave 1–4 tasks. This is expected and not a finding.",
+    "skill_files_verified": "security-auditor/SKILL.md, test-master/SKILL.md, pre-deploy-qa/SKILL.md — all exist at .claude/skills/*/SKILL.md.",
+    "test_infrastructure_verified": "AbstractIntegrationTest.java EXISTS at backend/src/test/java/com/botfunnel/. ConcurrencyTestUtils.java EXISTS at backend/src/test/java/com/botfunnel/common/test/ with parallelInvoke() method confirmed. patterns.md:181 correctly documents the parallelInvoke idiom.",
+    "telegram_send_exception": "TelegramSendException currently lacks TerminalReason enum — it will be added by Task 6. Tasks 13/14/15 correctly depend on [1-11] so Task 6 must complete first. Not a finding.",
+    "concurrent_test_naming": "SubscriberExportFilterEstimateTest (unit, @Tag slow) and SubscriberExportEstimateLatencyIT (integration, @Tag slow) are two distinct tests as confirmed by Task 15 line 112 which references both. Not a naming inconsistency.",
+    "decisions_md_state": "decisions.md currently empty (stub only) — no tasks 1-11 completed yet. This is consistent with all three tasks being in planned state."
+  }
+}

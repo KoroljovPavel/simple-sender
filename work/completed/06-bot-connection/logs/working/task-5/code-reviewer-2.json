@@ -1,0 +1,12 @@
+{
+  "summary": "All four code-side findings from round 1 are resolved cleanly and the round 2 changes do not introduce new issues. The locale-prefix regex now derives from the single source of truth (`NON_DEFAULT_LOCALES`) with `uk` correctly dropped, the duplicated active-state and base class strings are extracted into `linkBase` / `linkActive` consts, `data-test=\"bot-page\"` is added on the bot placeholder root, and the identity-mock tautology in the spec is closed by an explicit `expect(localePathSpy).toHaveBeenCalledWith(...)` assertion. The bonus `aria-current=\"page\"` work elevates the active-state contract from a Tailwind-class coincidence to an accessibility-first assertion and adds a symmetric `/en/...` test for the General branch — both net positives. The fifth round 1 item (decisions.md note for the `{'@'}` literal escape) is not yet logged; flagged as minor (paperwork only, no code impact).",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "work/06-bot-connection/decisions.md",
+      "line": 0,
+      "issue": "Round 1 finding #5 asked for a note in `work/06-bot-connection/decisions.md` that the `{'@'}` literal-interpolation escape was applied in Task 5 against Task 4-authored locale strings (`bot.connect.form.tokenHint`, `bot.disconnect.modal.body`) to unblock vitest module resolution. The fix commit only addresses the four code-level items; the decisions log still has no Task 5 round-2 entry covering this cross-task scope acknowledgement. Without the note, a future re-touch of Task 4 has no record of why those vue-i18n string escapes look unusual and risks silently undoing them.",
+      "suggestion": "Append a one-paragraph note to `work/06-bot-connection/decisions.md` under the Task 5 section noting that `{'@'}` literal escape was applied in Task 5 against Task 4's locale strings (vue-i18n v9 canonical escape form) to unblock the prebuild locale-parity gate, and that re-touching Task 4 must preserve the escape. Paperwork only; no code change required. (This is the same minor flagged in round 1 — restating because the post-completion checkbox in the task file explicitly covers `decisions.md` updates.)"
+    }
+  ]
+}

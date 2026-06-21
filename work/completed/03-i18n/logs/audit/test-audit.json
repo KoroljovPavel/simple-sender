@@ -1,0 +1,132 @@
+{
+  "feature": "03-i18n",
+  "task": 14,
+  "auditor": "test-master agent",
+  "date": "2026-05-08",
+  "summary": "Holistic test audit for feature 03-i18n. All 12 spec files in scope reviewed against the six audit dimensions. 4 new unit specs (useApiError, LangSwitcher, strip-invalid-locale, check-locales) + 1 updated middleware spec (auth.global) + 1 E2E spec match the M-feature pyramid target exactly. The optional check-locales.test.mjs is present and exceeds the tech-spec requirement (covers both __proto__ and constructor.prototype payloads plus null-prototype invariant). Testing Strategy critical paths from tech-spec lines 196-200 and 208 are fully mapped to concrete test cases with meaningful, behavior-level assertions; every test passes the litmus test (assertions are rooted in observable outcomes, not mock wiring). AC18 dual-scope compliance verified via git diff: all 8 authorized exceptions (auth.global.spec.ts + 7 page specs) received exactly the authorized scope of changes — single mockNuxtImport('useLocalePath', () => () => (path) => path) line each; UA literal asserts (e.g. /коректний email/i, /не співпадають/i, /15 хв/) preserved unchanged; verify-email.spec.ts did not require a `t`-collision rename (rename happened in the .vue source, not the spec); the existing tests/stores/auth.spec.ts (outside the 8-file authorized list) was not touched during the feature. Mock hygiene is clean: every Nuxt composable boundary uses mockNuxtImport, no real-network call in the unit layer, Playwright is the only real-network surface (correct). One low-severity finding on a minor coverage gap (no explicit 429 case in useApiError) and two informational notes are recorded below. No blocking findings.",
+  "findings": [
+    {
+      "file": "frontend/tests/composables/useApiError.spec.ts",
+      "dimension": "coverage",
+      "severity": "low",
+      "issue": "Tech-spec Testing Strategy line 196 names 401/403/429 as expected status codes for handler tests. The spec covers 401 (lines 26-32), 403 (lines 34-43, exercising the context-generic fallback) and 500 (lines 45-51, exercising the global generic fallback), but no test exercises 429 explicitly. Functionally the 429 branch reuses the same lookup chain as 401, so the fallback gradient is covered, but the literal 429 case named in the tech-spec is not asserted by name.",
+      "recommendation": "Add a single test: `handler_429LoginContext_returnsRateLimitKey` — teMock returns true only for `errors.login.429`, call handler({statusCode: 429}, 'login'), assert tMock was called with 'errors.login.429' and result === 'MSG:errors.login.429'. ~6 lines following the existing 401 pattern. Non-blocking; test pyramid and behavioral coverage already validate the underlying chain."
+    },
+    {
+      "file": "frontend/tests/components/LangSwitcher.spec.ts",
+      "dimension": "meaningful_assertions",
+      "severity": "informational",
+      "issue": "The cookie assertion on line 75 (`expect(cookieRef.value).toBe('en')`) succeeds because the test's own `setLocaleSpy.mockImplementation` writes `cookieRef.value = code`. The implementation under test never reads/writes `useCookie('i18n_lang')` directly — it delegates to `setLocale`, and the @nuxtjs/i18n contract guarantees the module updates the cookie. The assertion therefore proves \"setLocale was awaited and we trust the module\" rather than \"the component itself touched the cookie\". This is the canonical pattern endorsed by tech-spec line 197 (\"Cookie через mocked useCookie — асертимо value, не deep mock-плумбінг\"), so the choice is intentional. Worth recording for future readers: AC15 \"cookie оновлений\" is verified end-to-end by the E2E spec, where the real module does write the cookie. No change recommended.",
+      "recommendation": "No action. The end-to-end cookie-write contract is exercised by `e2e/i18n.spec.ts` (URL changes to /en/auth/login implies the locale was persisted and SSR resolved it from cookie on next render). Optional future hardening: assert `setLocaleSpy` was awaited before the click handler returned, to prove the await ordering of Decision 12."
+    },
+    {
+      "file": "frontend/scripts/check-locales.test.mjs",
+      "dimension": "coverage",
+      "severity": "informational",
+      "issue": "Tech-spec line 200 marks this file as optional (\"опційний\"). It IS present and is more rigorous than the spec demands: it exercises both __proto__ and constructor.prototype payloads (lines 83-113), asserts the accumulator has a null prototype (catches removal of `Object.create(null)`), asserts the legitimate sibling key still arrives (catches over-aggressive filtering), and includes a defensive `({}).polluted === undefined` check that would only fail under a future unsafe-merge refactor. compareKeySets is covered separately. Bonus tests beyond the tech-spec list — record as positive deviation.",
+      "recommendation": "No action. Documenting as positive deviation: the prototype-pollution fixture is well-engineered and tied to the canonical Object.create(null) + UNSAFE_KEYS guard (Decision 9). Each assertion targets a specific implementation guard, so refactors that weaken the protection will fail the suite."
+    }
+  ],
+  "pyramid_breakdown": {
+    "unit_new": 4,
+    "unit_new_files": [
+      "frontend/tests/composables/useApiError.spec.ts",
+      "frontend/tests/components/LangSwitcher.spec.ts",
+      "frontend/tests/server/strip-invalid-locale.spec.ts",
+      "frontend/tests/middleware/auth.global.spec.ts (updated, counted as the M-feature 'updated middleware spec')"
+    ],
+    "unit_updated_middleware": 1,
+    "unit_updated_middleware_files": [
+      "frontend/tests/middleware/auth.global.spec.ts"
+    ],
+    "integration": 0,
+    "integration_note": "Intentionally zero per Testing Strategy line 204 — feature is 100% frontend, no backend/DB surface.",
+    "e2e": 1,
+    "e2e_files": ["frontend/e2e/i18n.spec.ts"],
+    "helper_tests": 1,
+    "helper_test_files": ["frontend/scripts/check-locales.test.mjs"],
+    "helper_test_runner": "node:test (separate from Vitest pyramid; covers prebuild script that has no other test surface)",
+    "matches_m_feature_target": true,
+    "target_definition": "M-feature: 4 new unit + 1 updated middleware + 1 E2E (+ optional helper test for prebuild script)"
+  },
+  "coverage_check": {
+    "useApiError_factory_returns_handler": "useApiError.spec.ts:20-24 (factory_returnsFunction)",
+    "useApiError_401_specific_key": "useApiError.spec.ts:26-32 (handler_401LoginContext_returnsSpecificKey)",
+    "useApiError_403_context_generic_fallback": "useApiError.spec.ts:34-43 (handler_403LoginContextMissing_fallsBackToContextGeneric)",
+    "useApiError_429_specific_key": "PARTIAL — 429 not asserted by literal status; chain covered by 403 case. See findings/low-severity item.",
+    "useApiError_global_generic_fallback": "useApiError.spec.ts:45-51 (handler_unknownContext_fallsBackToErrorsGeneric)",
+    "useApiError_extract_from_statusCode": "useApiError.spec.ts:53-58 (handler_extractsStatusFromStatusCodeField)",
+    "useApiError_extract_from_status": "useApiError.spec.ts:60-65 (handler_extractsStatusFromStatusField)",
+    "useApiError_extract_from_response_status": "useApiError.spec.ts:67-72 (handler_extractsStatusFromResponseStatusField)",
+    "useApiError_undefined_to_generic": "useApiError.spec.ts:74-95 (three cases: empty obj, null, undefined)",
+    "useApiError_te_gates_t": "useApiError.spec.ts:97-103 (handler_callsTOnlyAfterTeConfirms)",
+    "useApiError_string_status_normalized": "useApiError.spec.ts:105-110",
+    "useApiError_NaN_skips_specific_lookup": "useApiError.spec.ts:112-119",
+    "LangSwitcher_renders_both_locales": "LangSwitcher.spec.ts:46-52",
+    "LangSwitcher_active_highlight": "LangSwitcher.spec.ts:54-61",
+    "LangSwitcher_setLocale_called_with_en": "LangSwitcher.spec.ts:63-69",
+    "LangSwitcher_cookie_value_updated": "LangSwitcher.spec.ts:71-76 (proxied through setLocaleSpy.mockImplementation per tech-spec line 197 canonical pattern; AC15 satisfied)",
+    "LangSwitcher_idempotent_on_active_locale": "LangSwitcher.spec.ts:78-84 (bonus coverage)",
+    "auth_global_unauth_authLogin_passthrough": "auth.global.spec.ts:36-43",
+    "auth_global_unauth_dashboard_redirect_uk": "auth.global.spec.ts:45-54 (asserts localePath('/auth/login') called and navigateTo('/auth/login'))",
+    "auth_global_unauth_dashboard_redirect_en": "auth.global.spec.ts:56-67 (localePath returns '/en/auth/login' under en)",
+    "auth_global_authed_authLogin_redirect_uk": "auth.global.spec.ts:69-79",
+    "auth_global_authed_authLogin_redirect_en": "auth.global.spec.ts:81-91",
+    "auth_global_authed_dashboard_passthrough": "auth.global.spec.ts:93-101",
+    "auth_global_failClosed_undefined_baseName": "auth.global.spec.ts:103-120 (both unauthed and authed branches)",
+    "auth_global_backendError_treated_as_unauth": "auth.global.spec.ts:122-129 (bonus)",
+    "auth_global_validSession_hydrates": "auth.global.spec.ts:131-139 (bonus)",
+    "strip_invalid_locale_invalid_prefix_redirect": "strip-invalid-locale.spec.ts:7-13 (/fr/dashboard)",
+    "strip_invalid_locale_default_locale_prefix_redirect": "strip-invalid-locale.spec.ts:15-21 (/uk/dashboard)",
+    "strip_invalid_locale_valid_en_passthrough": "strip-invalid-locale.spec.ts:23-27",
+    "strip_invalid_locale_no_prefix_passthrough": "strip-invalid-locale.spec.ts:29-33",
+    "strip_invalid_locale_authzone_preserves_query_and_flag": "strip-invalid-locale.spec.ts:35-43 (/fr/auth/verify-email?token=abc)",
+    "strip_invalid_locale_collapse_double_slash": "strip-invalid-locale.spec.ts:45-51 (/fr//evil.com)",
+    "strip_invalid_locale_backslash_rejected": "strip-invalid-locale.spec.ts:53-58",
+    "strip_invalid_locale_bonus_coverage": "9 additional cases (regex lookahead, malformed percent, %2F, %5C, double-encoding, uppercase, exact 2-letter, /fr/auth without slash, multi-locale allow-list, query-only, root, /fr/auth?token=x)",
+    "check_locales_parse_ok": "check-locales.test.mjs:29-40",
+    "check_locales_missing_file": "check-locales.test.mjs:42-53",
+    "check_locales_invalid_json": "check-locales.test.mjs:55-67",
+    "check_locales_key_divergence": "check-locales.test.mjs:69-81",
+    "check_locales_prototype_pollution": "check-locales.test.mjs:83-101 (__proto__ payload + null prototype + sibling key + Object.prototype assertion)",
+    "check_locales_constructor_prototype_pollution": "check-locales.test.mjs:103-113 (bonus — covers the constructor escape hatch)",
+    "check_locales_compareKeySets_both_sides": "check-locales.test.mjs:115-121",
+    "e2e_url_no_prefix_uk": "e2e/i18n.spec.ts:6-7",
+    "e2e_button_text_uk": "e2e/i18n.spec.ts:9 (\"Увійти\")",
+    "e2e_html_lang_uk": "e2e/i18n.spec.ts:8",
+    "e2e_click_en_url_changes": "e2e/i18n.spec.ts:13-14 (/en/auth/login)",
+    "e2e_html_lang_en_after_switch": "e2e/i18n.spec.ts:15",
+    "e2e_button_text_en_after_switch": "e2e/i18n.spec.ts:16 (\"Sign in\")",
+    "e2e_zod_live_switch_en_validation": "e2e/i18n.spec.ts:18-20 (\"Invalid email format\")",
+    "overall_assessment": "All Testing Strategy bullets from tech-spec lines 196-200 and 208 are mapped to concrete tests. One non-blocking gap: 429 not asserted by literal status code in useApiError (covered transitively by 403 fallback case)."
+  },
+  "ac18_compliance": {
+    "passed": true,
+    "authorized_exceptions_verified": 8,
+    "authorized_exception_files": [
+      "frontend/tests/middleware/auth.global.spec.ts",
+      "frontend/tests/pages/auth/login.spec.ts",
+      "frontend/tests/pages/auth/register.spec.ts",
+      "frontend/tests/pages/auth/forgot-password.spec.ts",
+      "frontend/tests/pages/auth/reset-password.spec.ts",
+      "frontend/tests/pages/auth/verify-email.spec.ts",
+      "frontend/tests/pages/dashboard.spec.ts",
+      "frontend/tests/pages/profile.spec.ts"
+    ],
+    "diff_check_method": "git show fbd0c9c (Task 9) and git show c3b1521 (Task 10) — each touched 5 files (login/register/forgot/reset/verify) and 2 files (dashboard/profile) respectively, all single-line +1 additions. git show 79da8f6 (Task 7) recreated auth.global.spec.ts with locale-aware test cases per Decision 6. No follow-up review-fix commits modified UA literals.",
+    "page_specs_diff": "Each of the 7 page specs received exactly: `mockNuxtImport('useLocalePath', () => () => (path: string) => path)` — single line, identity passthrough, preserves uk-default behavior. UA literal asserts (/коректний email/i, /не співпадають/i, /цифр/i, /15 хв/, /невірний/i, /вже існує/i, /Підтвердіть email/i, /Перейти до профілю/i, /введіть поточний пароль/i, /невірний поточний пароль/i, /проект/i, /бот/i, /підписник/i, etc.) confirmed unchanged.",
+    "verify_email_t_rename_status": "Not required in the spec file. The `t`-collision rename happened inside `pages/auth/verify-email.vue` (renamed inner shadow `t` to `rawToken`), not in the test. The spec was a clean +1 line for the useLocalePath mock.",
+    "auth_global_diff": "Task 7 rewrote the spec under the locale-aware design (Decision 6). Tests use `useRouteBaseName()` and `useLocalePath` mocks; assertions cover both uk and en branches plus fail-closed semantics. No vue-i18n mock, no t() shadow — just composable boundary mocks.",
+    "non_authorized_specs_unmodified": true,
+    "non_authorized_specs_check": "frontend/tests/stores/auth.spec.ts — `git log` shows last touch was 9f8778c (Task 8 of feature 02), not modified by any 03-i18n task. UA literals N/A (this spec asserts on User objects, not strings). No vue-i18n imports introduced anywhere outside the new useApiError.spec.ts and LangSwitcher.spec.ts (where `useI18n` is mocked legitimately).",
+    "out_of_scope_mutations_detected": false
+  },
+  "mock_hygiene": {
+    "passed": true,
+    "notes": "All Nuxt composables (useI18n, useApi, useCookie, useRouteBaseName, useLocalePath, useAuthStore, useRoute, navigateTo) are mocked via `mockNuxtImport` from `@nuxt/test-utils/runtime` — the Nuxt-canonical spelling that hooks into the unimport boundary. `vi.hoisted` correctly used to lift spy references for use inside the mockNuxtImport factory closure. No real-network calls in the unit layer (grep for fetch/http/axios returns only Pinia store action names like fetchUser). The E2E spec `e2e/i18n.spec.ts` is the only test surface that issues real HTTP — correct, that is Playwright's job. LangSwitcher.spec.ts uses module-level `ref()` for shared state with a clear comment explaining why the refs are NOT recreated in beforeEach (to preserve closure identity inside spy mockImplementation). Lint-level concern: none."
+  },
+  "prototype_pollution_fixture_present": true,
+  "prototype_pollution_notes": "frontend/scripts/check-locales.test.mjs:83-113 contains TWO fixtures: (1) classic `{\"__proto__\": {\"polluted\": \"yes\"}, \"real\": \"ok\"}` payload; (2) bonus `{\"constructor\": {\"prototype\": {\"polluted\": \"yes\"}}, \"real\": \"ok\"}` payload covering the constructor escape hatch. Both assert the accumulator has a null prototype (`Object.getPrototypeOf(keys) === null` — catches removal of `Object.create(null)`), that no collected key starts with the dangerous prefix (catches removal of UNSAFE_KEYS filter), that the legitimate sibling `real` is still collected (catches over-aggressive filtering), and that `({}).polluted === undefined` (defensive — would fail only under a future unsafe-merge refactor). Exceeds the tech-spec line 200 requirement.",
+  "verdict": "pass",
+  "blocking_findings": false
+}

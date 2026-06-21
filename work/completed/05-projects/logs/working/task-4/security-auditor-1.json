@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "task": "4",
+  "reviewer": "security-auditor",
+  "summary": "Task 4 cron path is clean across OWASP A01 (no cross-owner contamination — ownerId is derived from the persisted Project document, never from a caller-controllable source), A03 (Mongo Criteria.where(...).in(typedList) only, hardcoded field names — AC-T11 freeze point holds), A04 (cascade ordering is enforced by real synchronous .block() barriers, AC-17b architecturally guaranteed), A08 (no untrusted deserialization), and A09 (INFO log emits only counts + duration, no project name/id/ownerId leak — strictly less than the users-job precedent which logs ids). No new dependencies (A06), no crypto/auth surface (A02/A07), no SSRF (A10). No hardcoded secrets.",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "line": "94",
+      "owasp": "A09",
+      "issue": "Project name (user-supplied free-text, length-validated but not content-validated) is persisted into Event.metadata.name of the project_hard_deleted row. The cron itself never echoes metadata.name into the INFO log, and the events collection is internal — so there is no log-injection or XSS vector through THIS task. However, future epics that render metadata.name from project_hard_deleted rows in any UI/admin surface MUST HTML-escape. Flagging as a downstream contract note, not a defect in Task 4.",
+      "suggestion": "No code change required for Task 4. When the first consumer of project_hard_deleted events (admin audit UI, GDPR export, etc.) is built, add an output-encoding test that feeds a project name like <script>alert(1)</script> through soft-delete → cron → consumer rendering, and asserts the script tag is escaped. Consider documenting this contract in tech-spec line 269 (events table) so the audit-trail consumer doesn't re-rediscover it."
+    }
+  ],
+  "approved": true
+}

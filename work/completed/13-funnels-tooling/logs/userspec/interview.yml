@@ -1,0 +1,426 @@
+# Interview Plan for Feature Planning
+#
+# Tracks progress of adaptive discovery interview for a new feature/bug/refactoring.
+# Updated after EACH user response with scoring, values, and remaining gaps.
+#
+# Scoring: 0-100% (how well we understand this aspect)
+# Status: pending → partial → complete
+# Required: true = must reach threshold, false = cover if relevant
+
+# ============================================================================
+# Interview Metadata (Session Recovery)
+# ============================================================================
+interview_metadata:
+  started: "2026-06-07 00:00:00"  # Timestamp (YYYY-MM-DD HH:MM:SS)
+  last_updated: "2026-06-07 00:45:00"
+  status: "completed"  # not_started | in_progress | completed
+  can_resume: true
+  current_question_num: 3
+  feature_size: "L"  # S | M | L
+
+# ============================================================================
+# Conversation History (for session recovery)
+# ============================================================================
+# Preserves complete Q&A. Update after EVERY user response.
+#
+conversation_history:
+  - question_num: 1
+    timestamp: "2026-06-07 00:10:00"
+    topic: "cycle1: scope / test-for-me model / value / testing"
+    agent_question: |
+      Q1 scope+split (all 4 tools one spec?); Q2 "Test for me" model (ownerChatId-as-recipient vs
+      Manychat code-linking); Q3 value/pain driver; Q4 testing strategy (IT per backend tool, vitest
+      components, no new E2E).
+    user_answer: |
+      1. згоден (all 4 in one spec, agreed build order)
+      2. ownerChatId = тестовий отримувач (no Manychat linking)
+      3. болю немає, єдине незручно — постійно тунель прокидувати поки локально перевіряю
+      4. ок
+    summary: "All 4 tools, one spec. Test-for-me uses ownerChatId (no code-linking). Value=iteration speed/no-local-tunnel, no acute pain. Testing approved."
+  - question_num: 2
+    timestamp: "2026-06-07 00:30:00"
+    topic: "cycle2: tool-4 scope / test-run policies / duplicate trigger / placement+deploy"
+    agent_question: |
+      Q1 Tool4 scope (build preview panel (а) + leave validation; backend render endpoint; sample-data
+      fallback; SEND_MESSAGE/SEND_IMAGE/MENU). Q2 Tool1 policies (restart, pre-validate, draft-ok, 422
+      remediation). Q3 Tool2 trigger: (А) keep vs (Б) reset to defaults. Q4 button placement + deploy.
+    user_answer: |
+      1 а   (build preview panel only; backend render default accepted; validation left as-is, no (б))
+      2 ок  (restart + pre-validate + draft-testable + 422 remediation)
+      3 б   (reset trigger to on_start/'' defaults)
+      4 деплою нема. все інше ок  (NO deploy pipeline; button placement confirmed)
+    summary: "Tool4=preview panel only (backend endpoint), validation untouched. Tool1 policies ok. Duplicate resets trigger (Б). No deploy pipeline → local verification only. Placement confirmed."
+  - question_num: 3
+    timestamp: "2026-06-07 00:40:00"
+    topic: "cycle3 cleanup: preview endpoint shape / owner-not-linked error code"
+    agent_question: |
+      A) Preview = per-step POST /{funnelId}/steps/{stepId}/preview; non-message step types show a
+      neutral placeholder (not hidden). B) Owner-not-linked error code literal = funnel_owner_not_linked (422).
+    user_answer: "так (both confirmed)"
+    summary: "Preview is per-step with placeholder for non-message steps. Error code = funnel_owner_not_linked."
+# Format:
+# - question_num: 1
+#   timestamp: "2025-11-12 15:20:33"
+#   topic: "user_problem"
+#   agent_question: |
+#     [Full question text]
+#   user_answer: |
+#     [Full answer text]
+#   summary: "Brief summary"
+
+# ============================================================================
+# Phase 1: High-Level Feature Understanding
+# ============================================================================
+# Interview Cycle 1 scope
+phase1_feature_overview:
+
+  feature_name:
+    score: 100
+    status: "complete"
+    value: "13-funnels-tooling (Funnels Phase 4 — Author tooling)"
+    gaps: ""
+    required: true
+
+  feature_description:
+    score: 85
+    status: "complete"
+    value: |
+      Funnels Phase 4 "Author tooling" (roadmap funnels.md:25). Four author-facing tools on top
+      of the done Phase 2 engine:
+        1. "Test for me" — link service account to Telegram, run a funnel against author's own TG.
+        2. Duplicate funnel — clone for variations.
+        3. "Force stop all running executions" — cancel all in-flight execs for a funnel (w/ confirm).
+        4. Message preview + pre-save validation.
+      NOTE: Bot.ownerChatId already exists (Epic 04b — first private /start wins). validateSteps
+      (backend) + FunnelStepForm.vue client mirror already exist — so #4 is partly built.
+      SCOPE CONFIRMED (Q1): all 4 tools in ONE user-spec / one vertical increment. Internal build
+      order agreed: duplicate + force-stop first (CRUD-cheap), then "Test for me", preview last.
+    gaps: "Per-tool acceptance depth → Cycle 2"
+    required: true
+
+  work_type:
+    score: 100
+    status: "complete"
+    value: "feature (author-tooling bundle on top of done Phase 2 engine)"
+    gaps: ""
+    required: true
+
+  user_problem:
+    score: 85
+    status: "complete"
+    value: |
+      No acute pain (Q3: "болю немає"). Value = author iteration speed + safety, completing the
+      funnels MVP toolset. Today to test a funnel the author must manually /start the bot with the
+      right payload/tag, AND — when developing locally — keep a public webhook tunnel (ngrok/
+      cloudflared) running so Telegram→localhost updates arrive. "Test for me" direct-enroll bypasses
+      the trigger, so starting a funnel needs no inbound update → no tunnel for linear funnels (only
+      interactive MENU button-presses still need inbound callback). Force-stop covers the safety gap:
+      no way today to halt a broken run across all in-flight subscribers. Honest framing: convenience/
+      MVP-completion tooling, not a burning pain — do NOT overstate value in the spec.
+    gaps: ""
+    required: true
+
+  target_users:
+    score: 90
+    status: "complete"
+    value: "Funnel authors = project owners (User role). Same person who builds funnels in the editor."
+    gaps: ""
+    required: false
+
+  success_criteria:
+    score: 90
+    status: "complete"
+    value: |
+      All 4 tools usable from the funnel editor:
+      1. "Test for me": author clicks → matching subscriber (Bot.ownerChatId) is enrolled directly
+         (bypass triggers, depth=0), receives the funnel on their own Telegram. Re-click restarts.
+      2. Duplicate: produces an independent DRAFT copy (graph copied verbatim, trigger reset to
+         on_start/"", name "<name> (копія)").
+      3. Force-stop: cancels every in-flight execution (running|waiting|waiting_for_reply) of the
+         funnel, returns count.
+      4. Preview: a Telegram-style preview panel renders SEND_MESSAGE / SEND_IMAGE caption / MENU
+         via the backend (byte-identical to VariableTemplateRenderer). Validation is left AS-IS.
+    gaps: ""
+    required: true
+
+  constraints:
+    score: 90
+    status: "complete"
+    value: |
+      - "Test for me" recipient = Bot.ownerChatId (Q2 decision). NO Manychat-style code-linking —
+        reuse the existing 04b first-private-/start-wins linkage. Must handle ownerChatId=null
+        (owner never DMed the bot) with a UI prompt "write /start to your bot to link".
+      - Duplicate must NOT copy the trigger as-is for on_start (partial-unique index
+        (projectId, on_start, triggerValue) filtered status=active → conflict). Copy lands as draft.
+      - Force-stop only flips active statuses (running|waiting|waiting_for_reply) → cancelled.
+      - One user-spec, one vertical increment (Q1).
+      - Funnel editor is desktop-first ≥1024px (ux-guidelines).
+      - Tool 4 scope (Q1=а): build the preview PANEL only; do NOT rewrite validation (already done
+        BE+FE); pre-activate validation-summary (option б) is OUT. Preview rendered by a backend
+        endpoint (no FE escaping re-impl — avoids parse_mode/XSS drift).
+      - Duplicate trigger policy (Q3=б): RESET trigger to on_start/"" defaults (not keep-verbatim).
+      - NO deploy pipeline exists (project-wide TBD per memory + Q4 "деплою нема") → no CI/CD assumed,
+        verification is local; no post-deploy live MCP step.
+    gaps: ""
+    required: true
+
+  testing_strategy:
+    score: 90
+    status: "complete"
+    value: |
+      L feature. Agreed (Q4): integration tests per backend tool (@SpringBootTest + MockMvc + real
+      embedded Mongo; MockWebServer for the Telegram send in "Test for me") — duplicate copies graph
+      but resets trigger/status; force-stop flips only active statuses; test-for-me enrolls directly +
+      422 when ownerChatId=null. Vitest on new components (preview panel, confirm dialogs, duplicate
+      action). NO new Playwright E2E (kept to golden-path locale only — architecture.md).
+    gaps: ""
+    required: true
+
+# ============================================================================
+# Phase 2: User Experience & Scenarios
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 3)
+phase2_user_experience:
+
+  user_stories:
+    score: 90
+    status: "complete"
+    value: |
+      - As an author editing a funnel, I click "Test for me" in the editor header and immediately
+        receive the funnel run on my own Telegram (the bot I connected), without manually crafting a
+        /start payload or matching a trigger. Re-clicking restarts the test from step 1.
+      - As an author, I click "Duplicate" (list row or editor header) and get an independent draft
+        copy I can tweak into a variation without touching the original.
+      - As an author whose funnel misbehaves, I click "Stop all running" (confirm dialog) and every
+        in-flight subscriber run of that funnel is cancelled; I see how many were stopped.
+      - As an author writing a message step, I see a Telegram-style preview of the rendered message
+        (variables substituted, formatting applied) on the right of the editor.
+    acceptance_criteria:
+      - "Test for me enrolls the ownerChatId subscriber directly (depth=0), bypassing trigger match."
+      - "Test for me on a funnel whose author has never DMed the bot (ownerChatId=null) → 422 with a
+        'send /start to your bot first' remediation message, never 500."
+      - "Test for me when the resolved subscriber is missing or not ACTIVE → same 422 remediation."
+      - "Re-clicking Test for me cancels the prior in-flight run for that (funnel, subscriber) and
+        starts fresh (cancelExistingForPair → insertExecution)."
+      - "Test for me runs validateSteps first; empty/invalid funnel → same 422 codes as activate."
+      - "A draft (non-active) funnel CAN be test-run."
+      - "Duplicate creates status=draft, trigger reset to on_start/'', name '<name> (копія)' truncated
+        to 128; steps graph copied verbatim (ids/edges preserved); keywords/allowReEnter/description
+        copied; returns 201 + FunnelResponse."
+      - "Force-stop flips only running|waiting|waiting_for_reply → cancelled AND stepRunStatus=done;
+        terminal rows untouched; returns count of cancelled executions; scoped by projectId+funnelId."
+      - "Preview endpoint renders SEND_MESSAGE text / SEND_IMAGE caption / MENU body via
+        VariableTemplateRenderer (correct parse_mode escaping); substitutes the author's subscriber
+        data when linked, else sample data + a 'link your bot' hint."
+      - "All new endpoints go through FunnelService.requireFunnel (anti-IDOR, uniform 404)."
+      - "New i18n keys added in BOTH uk.json and en.json (parity gate); missing codes
+        funnel_invalid_trigger_type / funnel_invalid_keywords added to errors.funnels."
+    edge_cases:
+      - "ownerChatId set to a NON-owner due to the documented 04b first-/start-wins race → test sends
+        to that chat; acceptable (same trust model as 04b), not solved here."
+      - "Empty funnel test-run would silently complete → blocked by the validateSteps pre-check."
+      - "Duplicate of a funnel with name near 128 chars → suffix truncation, no 400."
+      - "Force-stop on a funnel with zero in-flight runs → count 0, 200 (not an error)."
+      - "MENU step has no required text → preview must not assume a body is present."
+      - "Preview with unresolved author subscriber → sample-data render, never 500 (renderer requires
+        non-null Subscriber → supply a stub)."
+      - "Re-test concurrent with a sweep tick → claim-CAS makes cancel deterministic."
+    error_scenarios:
+      - "ownerChatId null / subscriber absent / not ACTIVE → 422 remediation code (e.g.
+        funnel_owner_not_linked), surfaced inline via resolveFunnelError, not a global toast."
+      - "Invalid/empty funnel on test-run → existing 422 funnel_* codes."
+      - "Telegram send failure during test → engine's existing telegram_send_failed audit + execution
+        failed; the HTTP test-trigger call still returns 2xx (enroll succeeded; delivery is async)."
+      - "Duplicate name collision is impossible (name not unique); no special handling."
+    verification_strategy: |
+      Pre-deploy only (no live environment — deploy TBD). Backend: integration tests per tool against
+      embedded Mongo + MockWebServer (Telegram). Frontend: vitest on the preview panel + confirm
+      dialogs + new store actions. Manual local check via the dev's own bot + tunnel for the
+      interactive paths. NO new Playwright E2E. No post-deploy MCP step (no environment).
+    ui_ux_requirements: |
+      - Buttons: Duplicate + Stop-all in BOTH the list row and the editor header; Test-for-me +
+        Preview-toggle only in the editor header (context = open funnel).
+      - Stop-all is destructive → confirm via the shadcn Dialog pattern (no AlertDialog in repo),
+        mirroring the existing delete-confirm in funnels/index.vue.
+      - Success feedback via sonner toast ("Тест надіслано", "Дубльовано", "Зупинено N запусків").
+      - Preview panel on the right of the editor (desktop-first ≥1024px per ux-guidelines).
+      - Errors inline near the control (resolveFunnelError), not toast, for 422 business codes.
+    risks:
+      - "Force-stop MUST set stepRunStatus=done (not just status) or it race-loses to a mid-tick
+        persistProgress — mirror FunnelService.delete exactly (claim-CAS contract)."
+      - "Exposing validateSteps (private→package/public) for the test-run pre-check must not change
+        its behavior; keep the same codes."
+      - "Preview re-implemented on FE would drift from parse_mode escaping (XSS/markup) → use backend
+        endpoint (mitigated by Q1=а decision)."
+      - "FunnelExecutionFactory is package-private → test-run logic must live in the funnel package."
+    technical_decisions: |
+      - Test recipient = Bot.ownerChatId; no Manychat code-linking (reuse 04b linkage).
+      - Direct enroll via FunnelExecutionFactory.insertExecution(depth=0), NOT fire()/dispatch.
+      - Re-test policy = restart (cancelExistingForPair first).
+      - Duplicate: copyOf verbatim graph, reset trigger to defaults, status=draft.
+      - Force-stop: extract FunnelService.delete's bulk-cancel into stopAllExecutions(funnelId).
+      - Preview: backend endpoint over VariableTemplateRenderer; sample-data fallback when unlinked.
+      - Validation: leave as-is (already BE+FE); only add the two missing i18n error codes.
+      - No DB schema change, no migration.
+    deploy_approach:
+      score: 80
+      value: |
+        No deployment pipeline exists yet (project-wide TBD; Q4 "деплою нема"). Feature ships as code
+        merged to main and is verified locally. No CI/CD deploy job, no Docker/infra change, no
+        secrets, no DB migration to run. (CLAUDE.md's "deploy via CI/CD only" applies once a pipeline
+        exists; today there is none.)
+    manual_user_actions: |
+      One-time per project: the author must send a private /start to their connected bot so
+      Bot.ownerChatId is populated — this is the link that "Test for me" uses. If not done, the tool
+      returns the remediation message. No API keys / external setup needed for these tools.
+
+# ============================================================================
+# Phase 3: Integration & Technical Context
+# ============================================================================
+# Interview Cycle 2 scope (together with Phase 2)
+phase3_integration:
+
+  integration_points:
+    score: 90
+    status: "complete"
+    value: |
+      Backend funnel module (com.botfunnel.funnel): new endpoints on FunnelController under
+      /api/v1/projects/{projectId}/funnels — POST /{id}/duplicate, POST /{id}/executions/stop,
+      POST /{id}/test-run, POST /{id}/steps/{stepId}/preview (shapes TBD in tech-spec). Service:
+      FunnelService gains duplicate + stopAllExecutions + a test-run method (in funnel package to
+      reach package-private FunnelExecutionFactory); validateSteps exposed for the test-run pre-check.
+      Reads Bot.ownerChatId (bot module), resolves subscriber via SubscriberService.findByChat,
+      enrolls via FunnelExecutionFactory.insertExecution, renders via VariableTemplateRenderer.
+      Frontend: funnels/index.vue (row actions), funnels/[funnelId].vue (header actions + preview
+      panel), stores/funnels.ts (duplicate/stopAll/testRun/preview actions), new components for the
+      preview panel + stop-all confirm. i18n funnels.editor.* + errors.funnels.* additions.
+    gaps: ""
+    required: true
+
+  dependencies:
+    score: 90
+    status: "complete"
+    value: |
+      Funnels Phase 1-3 (engine, FunnelExecutionFactory, statuses, indexes) — done. Bot.ownerChatId
+      (Epic 04b) — done, read-only here. SubscriberService.findByChat (Epic 09). TelegramSender +
+      StepExecutor (engine). VariableTemplateRenderer. shadcn Dialog + sonner (present). No new deps.
+    gaps: ""
+    required: false
+
+  technical_constraints:
+    score: 90
+    status: "complete"
+    value: |
+      - funnels trigger partial-unique index (active+on_start) → duplicate must be status=draft.
+      - funnel_executions re-enter partial-unique index → test-run handles DuplicateKeyException
+        (restart policy).
+      - Claim-CAS terminal-cancel: force-stop MUST set stepRunStatus=done + status=cancelled.
+      - FunnelExecutionFactory package-private; validateSteps/applyTrigger private (expose as needed).
+      - Lowercase enum name() literals are load-bearing — never rename.
+      - FunnelExecutionRepository declares no query methods — bulk ops via MongoTemplate.
+      - Preview escaping must match VariableTemplateRenderer (security: A03 markup injection).
+    gaps: ""
+    required: false
+
+  data_requirements:
+    score: 90
+    status: "complete"
+    value: |
+      No new collections, no schema changes. Duplicate writes a new funnels doc. Force-stop updates
+      funnel_executions in place. Test-run inserts a funnel_executions doc (via the factory). Preview
+      is read-only (renders, persists nothing).
+    gaps: ""
+    required: false
+
+  migration_needs:
+    score: 100
+    status: "complete"
+    value: "None. No schema/index change; nothing to backfill or migrate."
+    gaps: ""
+    required: false
+
+# ============================================================================
+# Phase 4: Completion
+# ============================================================================
+phase4_completion:
+  userspec_file: "work/13-funnels-tooling/user-spec.md"
+  status: "approved"  # pending | created | approved
+
+# ============================================================================
+# Decision Rules
+# ============================================================================
+decision_rules:
+
+  required_threshold: 85
+  optional_threshold: 50
+
+  # Stop criteria (BOTH must be true to exit a cycle)
+  stop_criteria:
+    - "All required items in current cycle scope score >= 85%"
+    - "Structural: every required item has non-empty value, no TBD, gaps empty or conscious limitations"
+
+  priority_order:
+    - "Required items with score < 85% (lowest score first)"
+    - "Optional items mentioned by user in context"
+    - "Other optional items if user seems knowledgeable"
+
+  question_strategy:
+    - "3-4 questions per batch about different gaps"
+    - "Run as many batches as needed — batch size is NOT cycle limit"
+    - "Propose solutions based on PK, not just ask questions"
+    - "Challenge with substance: counterexamples, code references, unexplored scenarios"
+    - "After each response: update scores, values, gaps, conversation_history, save"
+
+# ============================================================================
+# Interview Progress
+# ============================================================================
+progress:
+  current_phase: "phase1_feature_overview"
+  questions_asked: 0
+  last_question: ""
+  total_required_score: 0
+  total_optional_score: 0
+  completion_estimate: "0%"
+  user_detail_level: "unknown"  # brief | moderate | detailed
+
+# ============================================================================
+# Notes
+# ============================================================================
+notes: |
+  Free-form notes:
+  - Important insights
+  - Areas of uncertainty
+  - Pivot points
+  - Scope changes
+
+# ============================================================================
+# USAGE INSTRUCTIONS
+# ============================================================================
+#
+# 1. INIT: Created by init-feature-folder.sh at work/{feature}/logs/userspec/interview.yml
+#    Set metadata.started, metadata.status: in_progress
+#
+# 2. INITIAL SCORING: After user's free-form description, score ALL items
+#    Detailed 80-95%, brief 50-70%, vague 20-40%, not mentioned 0%
+#
+# 3. INTERVIEW LOOP (save after EVERY response):
+#    a) Find required items with score < 85% in current cycle scope
+#    b) Ask 3-4 questions about different gaps
+#    c) Propose solutions based on PK
+#    d) User answers
+#    e) Update: conversation_history, scores, values, gaps, metadata
+#    f) Save immediately
+#    g) Check stop criteria (score >= 85% AND structural: value filled, no TBD, gaps resolved)
+#    h) Not done → repeat. Done → next cycle.
+#
+# 4. CYCLES:
+#    Cycle 1: phase1_feature_overview items
+#    Cycle 2: phase2_user_experience + phase3_integration items
+#    Cycle 3: ALL items still below threshold (cleanup pass)
+#
+# 5. RESUME: If metadata.status is "in_progress"
+#    Load, show conversation summary, resume from current state
+#
+# 6. COMPLETION: After user approves user-spec.md
+#    Set phase4_completion.status: approved
+#    Set metadata.status: completed

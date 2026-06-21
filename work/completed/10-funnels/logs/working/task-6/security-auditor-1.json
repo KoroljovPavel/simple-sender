@@ -1,0 +1,21 @@
+{
+  "summary": "Task 6 (FunnelExecutionEngine + StepExecutor) is clean against all targeted OWASP areas: A09/PII logging discipline holds (every log statement in both classes carries only ids/codes/lengths/terminal-reason — never rendered text, caption, or custom-field value), A03 NoSQL injection is impossible (all Mongo Criteria use bound .is()/.in()/.lte() values with enum .name() literals, zero string concatenation of untrusted input), SSRF is avoided (imageUrl is passed only to TelegramSender.sendPhoto and never dereferenced by the backend), and plaintext tokens never reach the engine/executor (TelegramSender owns decrypt; executor passes only bot.getId()). Subscriber mutations stay project-scoped at the persistence layer (addTag/removeTag/setOne all match subscriberId AND projectId). The ONLY finding is OUT OF SCOPE of the Task 6 diff: the working-tree (uncommitted) modification to application.properties introduces a live Telegram bot token in a comment line — a hardcoded secret that must be removed before any commit. No critical findings within the Task 6 code itself.",
+  "findings": [
+    {
+      "severity": "critical",
+      "owasp": "A02 Cryptographic Failures / A05 Security Misconfiguration (hardcoded secret)",
+      "file": "backend/src/main/resources/application.properties",
+      "line": "28 (working-tree change, uncommitted)",
+      "finding": "The uncommitted working-tree modification to application.properties adds a commented-out line containing a live Telegram bot token: `#8998527537:AAFMehsshbFz3QLRZB8MElyJ4zcHgofJdNM`. This matches the Telegram bot-token shape (\\d{1,20}:[A-Za-z0-9_-]{30,50}) that the project's own scrubTokens regex redacts. It is NOT part of the Task 6 commit (verified: absent from HEAD), but it is staged in the working tree and would be committed by a `git add .`. Being commented out does not protect it — secret scanners and a Mongo/repo leak still expose it, and the token grants full control of the bot.",
+      "recommendation": "Remove the token line from application.properties immediately (do NOT comment it — delete it). If this token was ever pushed anywhere, rotate it via BotFather (/revoke) since it must be treated as compromised. Keep the bot token only in encrypted at-rest storage (TokenEncryptor) / environment, never in source or comments. The repo's gitleaks pre-commit hook should catch this — verify the hook is installed (bash scripts/install-hooks.sh)."
+    },
+    {
+      "severity": "info",
+      "owasp": "A09 Security Logging and Monitoring (test coverage note, not a code defect)",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java",
+      "line": "291-307 (stateTransitionsEmitNamedLogConstantsWithoutPayload)",
+      "finding": "The no-PII-in-logs regression test attaches its ListAppender only to the FunnelExecutionEngine logger, not to the StepExecutor logger. StepExecutor.sendMessage/sendImage/setCustomField were verified by inspection to log only executionId/stepIndex/lengths/codes (no rendered text, caption, or custom-field value), so there is no live PII leak. But a future edit to a StepExecutor log line that interpolates rendered content would not be caught by this test. Code is currently compliant with Decision 16; this is a defense-in-depth coverage gap only.",
+      "recommendation": "Extend the observability test (or add a sibling unit test in FunnelStepExecutorTest) to also assert against a ListAppender on the StepExecutor logger, so the PII-free invariant is locked on both classes that emit funnel logs."
+    }
+  ]
+}

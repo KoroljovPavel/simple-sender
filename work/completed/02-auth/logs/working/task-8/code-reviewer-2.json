@@ -1,0 +1,33 @@
+{
+  "summary": "Round 2 cleanly addresses both round-1 majors and four of five minors. Middleware now always runs fetchUser when user is null (covers SSR hydration on /auth/** with valid session) and wraps the call in try/catch to swallow non-401 errors so a backend hiccup degrades to /auth/login instead of crashing navigation. Layout swallows logout errors so navigateTo always fires. The dead requiresAuth helper is gone, the `to` parameter is now properly typed as RouteLocationNormalized, and the explicit `vue` dep is removed from package.json/pnpm-lock. As a bonus the diff adds CSRF defense-in-depth in useApi.ts (Decision 12), reading XSRF-TOKEN cookie on the client and attaching X-XSRF-TOKEN to non-safe methods. Tests grow accordingly: pre-arming user state for the 401 case (was tautological), 500-propagation, logout-error, valid-session-on-/auth/login, and backend-error-on-protected-route paths. Two minors from round 1 are intentionally untouched (staleTime magic number; inline error narrowing in fetchUser) and one was flagged optional (useApi memoization). No new critical or major issues introduced.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/plugins/vue-query.ts",
+      "line": 8,
+      "issue": "Carry-over from round 1: `staleTime: 5_000` is still a magic number and very aggressive for an SSR-hydrated cache (queries become stale after 5 s, defeating the dehydrate/hydrate cycle right above). Not addressed in round 2.",
+      "fix": "Promote to a named constant (e.g. `const DEFAULT_STALE_TIME_MS = 30_000`) and align with the project's caching policy. Optional for this task; flag for follow-up if intentional."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/stores/auth.ts",
+      "line": 11,
+      "issue": "Carry-over from round 1: inline triple-fallback cast `(e as { statusCode?: number; status?: number; response?: { status?: number } })` still duplicates knowledge of how $fetch (FetchError) and ofetch surface status. If a non-FetchError throws, the cast still succeeds silently and `code` is undefined.",
+      "fix": "Extract a `getErrorStatus(e: unknown): number | undefined` helper, or use `import { FetchError } from 'ofetch'` and `if (e instanceof FetchError) ...`. Reusable across stores."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/composables/useApi.ts",
+      "line": 19,
+      "issue": "Header merge in the CSRF onRequest hook calls `new Headers(options.headers as HeadersInit | undefined)`. ofetch's `ResolvedFetchOptions.headers` is typed as `Headers` after normalization, but ofetch also accepts `HeadersInit` (plain object, array of tuples, Headers) on the way in. The cast is fine because Headers' constructor accepts all three shapes, but if a caller passes an existing `Headers` instance with duplicate values (e.g. multiple Set-Cookie), the constructor copies them correctly only because we then call `set` (not `append`) for the X-XSRF-TOKEN. Worth a one-line comment so future readers don't `headers.append` and create dual tokens.",
+      "fix": "Add a short comment: `// `set` (not `append`) — a new request must overwrite any pre-existing X-XSRF-TOKEN.` Optional; current behaviour is correct."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/composables/useApi.ts",
+      "line": 1,
+      "issue": "`readXsrfCookie` regex `/(?:^|;\\s*)XSRF-TOKEN=([^;]+)/` works, but cookie names are case-insensitive only in some servers; Spring's CookieCsrfTokenRepository writes exactly `XSRF-TOKEN`, so this is fine. However, the regex also matches a token whose value contains spaces (uncommon but RFC 6265 allows certain characters). Spring's token is a UUID so this is safe, but `decodeURIComponent` will throw on malformed % sequences and that throw will propagate inside ofetch's onRequest, aborting the request.",
+      "fix": "Wrap the decodeURIComponent in a try/catch returning null on decoding failure, so a corrupt cookie can't kill outgoing API calls. One-line defensive guard."
+    }
+  ]
+}

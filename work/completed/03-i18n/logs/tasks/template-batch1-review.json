@@ -1,0 +1,75 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 1,
+      "section": "TDD Anchor",
+      "issue": "Task 1 has no TDD Anchor section. Per template comment, TDD Anchor is deleted for non-code tasks (user instructions, deploy, config). Task 1 is Playwright infrastructure bootstrap with skill `infrastructure-setup` — config + scripts only, no behavioral logic. Omission is consistent with template guidance, but the task file gives no explicit signal that this is intentional (vs. accidentally dropped).",
+      "fix": "Optional: add a one-line note in Description or What to do explaining TDD Anchor is intentionally absent because Task 1 produces only config/scripts (verified via Verify-smoke `pnpm test:e2e --list`). Currently absence is consistent with template rule for non-code tasks."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 3,
+      "section": "frontmatter.wave",
+      "issue": "Tech-spec assigns Task 3 to `Wave 2 (паралельно — i18n foundation)` alongside Task 2. Task file has `wave: 3` and `depends_on: [2]`. Logical correctness: Task 3 imports `NON_DEFAULT_LOCALES` from Task 2's `frontend/shared/i18n-locales.ts`, so it cannot run in parallel with Task 2 — wave promotion is correct. However, the deviation from tech-spec wave layout is undocumented in the task body.",
+      "fix": "Either (a) keep wave=3 and add a brief note in Description acknowledging the deviation from tech-spec wave 2 layout (`Task 3 promoted to wave 3 due to runtime dependency on Task 2's NON_DEFAULT_LOCALES export`), or (b) update tech-spec to place Task 3 in Wave 3 to match. Logical wave assignment is correct as-is; documentation is the gap."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 1,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use absolute filesystem paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/03-i18n/logs/working/task-1/...`). Tasks 2, 3, 5 use feature-relative paths (`work/03-i18n/logs/working/task-N/...`). Inconsistency across batch; task-creator.md guidance says paths should be anchored to feature_path (relative form). Absolute paths leak the developer's home directory and are environment-specific.",
+      "fix": "Replace absolute paths in Task 1 Reviewers section with feature-relative paths: `work/03-i18n/logs/working/task-1/{reviewer}-{round}.json`"
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 4,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use absolute filesystem paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/03-i18n/logs/working/task-4/...`) instead of feature-relative paths used in Tasks 2, 3, 5.",
+      "fix": "Replace absolute paths with `work/03-i18n/logs/working/task-4/{reviewer}-{round}.json` to match template and other tasks in the batch."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 4,
+      "section": "Required Skills",
+      "issue": "Skill link uses `[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)` — a relative path that resolves from the task file's directory (`work/03-i18n/tasks/`) and would NOT find the actual SKILL.md (it would seek `work/03-i18n/tasks/.claude/skills/code-writing/SKILL.md` which doesn't exist). Tasks 1, 2, 3, 5 use the correct relative path `../../../.claude/skills/code-writing/SKILL.md`.",
+      "fix": "Update Task 4 Required Skills link to `[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)` to match other tasks and resolve correctly from task file location."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 2,
+      "section": "TDD Anchor",
+      "issue": "Task 2 is a config/bootstrap task. Its TDD Anchor section states `Bootstrap-задача без unit-тестів` and contains a sanity check (`pnpm test → 9 existing specs pass`) which is not in template format `tests/path::test_name — what it verifies`. Should be either deleted (per template guidance for non-code tasks: bootstrap is essentially config) or restructured.",
+      "fix": "Either (a) delete the TDD Anchor section since Task 2 is a config bootstrap with no behavioral logic to test (smoke curl checks already verify the integration in Verification Steps), or (b) keep with an explicit rationale note that no new tests are written but existing test suite must remain green as a regression guard."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "What to do",
+      "issue": "Step 7 contains an executable smoke sequence (`mv en.json en.json.bak ... ; restore`) inside `What to do`. This duplicates content already present in `Verification Steps → Smoke`. `What to do` should describe implementation steps, not verification execution.",
+      "fix": "Remove step 7 from `What to do` (it's verification, not implementation) — the same sequence already lives in Verification Steps → Smoke."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Acceptance Criteria",
+      "issue": "AC `frontend/tests/server/strip-invalid-locale.spec.ts написано до реалізації, всі fixtures з Testing Strategy покриті, всі тести зелені` mixes process (TDD ordering) with outcome (tests pass). The 'written before implementation' part is not testable from the final artifact — it describes process, not observable state.",
+      "fix": "Split into two AC items: (1) outcome — `frontend/tests/server/strip-invalid-locale.spec.ts exists and all listed fixtures pass`; (2) move TDD ordering note to `What to do` step 7 rather than AC. AC should describe verifiable end-state, not authoring process."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 8
+  }
+}

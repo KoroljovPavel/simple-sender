@@ -1,0 +1,37 @@
+{
+  "validator": "task-validator",
+  "batch": [11, 12, 13, 14],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 11,
+      "section": "Acceptance Criteria",
+      "issue": "AC are audit-process checks (\"прочитані всі тестові файли\", \"coverage-таблиця складена\") rather than testable feature behaviors. This is expected for an audit task (the artifact is a report, not code), but they describe completion of activities rather than concrete pass/fail outcomes.",
+      "fix": "No change required — acceptable for an Audit Wave task whose deliverable is a quality report. Noted for transparency only."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 13,
+      "section": "Verification Steps",
+      "issue": "Verification Steps contains only a `### Smoke` subsection (no `### Automated`). For a deploy task this is appropriate, but it deviates from the template's default Automated-first layout.",
+      "fix": "No change required — deploy task runs no test suite; smoke-style post-deploy checks (pipeline green, countDocuments==0, /health, log inspection) are the correct verification surface."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 4,
+    "issues_found": 2
+  },
+  "notes": {
+    "tdd_anchor": "All four tasks correctly omit the TDD Anchor section. Tasks 11 (test-master audit), 12 (pre-deploy-qa), 13 (deploy-pipeline), 14 (post-deploy-qa) are Audit/Final Wave tasks that produce reports/deployments, not code. Per template comment ('For non-code tasks ... delete this section'), absence is correct, not a finding.",
+    "reviewers": "All four tasks declare reviewers: [] in frontmatter and a matching 'None/Нет/Немає' Reviewers section body. Consistent. Audit/QA/deploy tasks are self-verifying (the auditor/QA agent IS the review).",
+    "frontmatter": "All frontmatter fields present with correct types: status=planned (iteration 1), depends_on is an array of numbers, wave is a number, skills is an array, verify=[] is an array, reviewers=[] is an array. No extra fields.",
+    "dependency_and_wave_ordering": "No cycles. Wave ordering is strictly monotonic vs depends_on: T11 depends_on [1-8] (waves 1-4) at wave 5; T12 depends_on [9,10,11] (wave 5) at wave 6; T13 depends_on [12] (wave 6) at wave 7; T14 depends_on [13] (wave 7) at wave 8. Every dependency sits in an earlier wave. No violation.",
+    "skill_match": "Skills match task content: test-master (test audit), pre-deploy-qa (acceptance testing), deploy-pipeline (CI/CD deploy), post-deploy-qa (live verification). No code-writing/prompt-master mismatch.",
+    "carry_forward": "Tech-spec Implementation Tasks entries for Task 9-14 contain only Description + Skill + Reviewers (no per-task Acceptance Criteria or TDD Anchor). Therefore there is nothing to carry forward into tasks 11-14, and no AC/TDD items were dropped. The AC present in tasks 12/14 are correctly derived aggregate acceptance checks across the whole feature (QA pattern), not per-task carry-forward.",
+    "context_files": "All tasks include the mandatory context files (user-spec.md, tech-spec.md, decisions.md, project.md, architecture.md) as markdown links. Task 13 additionally links deployment.md and project CLAUDE.md (deploy-relevant). Task 11/12 link patterns.md (testing section). No broken [](path) or [name]() links observed.",
+    "resource_sharing": "Tech-spec Shared Resources table (TelegramSender singleton, VariableTemplateRenderer static) is owned/consumed entirely within Wave 1-4 implementation tasks. Tasks 11-14 are audit/QA/deploy/verify and create no resources, so cross-task resource-sharing checks are N/A for this batch."
+  }
+}

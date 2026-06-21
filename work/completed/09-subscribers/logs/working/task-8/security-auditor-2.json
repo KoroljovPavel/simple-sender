@@ -1,0 +1,44 @@
+{
+  "verdict": "approved",
+  "status": "approved",
+  "round": 2,
+  "scope": "Task 8 — round-2 re-review of round-1 fixes (commit 71cfece, diffed against edacea9). Focus: the one applied fix (events-feed projectId self-scoping, round-1 finding #2) + acceptance of the three intentionally-skipped minors.",
+  "methodology": "Verified the applied fix in context (data-model consistency check across ALL subscriber_events writers, scoping-value provenance, regression-masking analysis), confirmed compileTestJava is clean and the four affected integration test classes pass green, and re-validated the rationale for each skipped finding against tech-spec Decisions 9/10.",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "appliedFixVerification": {
+    "finding": "Round-1 #2 — events endpoint Mongo query scoped by subscriberId only (latent IDOR-regression class, CWE-639).",
+    "change": "GET /{projectId}/subscribers/{id}/events now builds Query.query(Criteria.where(\"subscriberId\").is(id).and(\"projectId\").is(project.getId())) (SubscriberController.java:186). Also tightened: effectiveLimit now maps limit<=0 to DEFAULT_EVENTS_LIMIT (50) instead of clamping to 1, symmetric with the list endpoint's clampLimit.",
+    "correct": true,
+    "evidence": [
+      "DATA MODEL: SubscriberEvent has a String projectId field (SubscriberEvent.java:26). The new predicate is a parameterized value match on an existing field — Spring Data Criteria, no operator/field injection.",
+      "SCOPING VALUE: project.getId() is the canonical id returned by projectService.requireOwned (the uniform anti-IDOR gate), identical to the value already used by requireOwnedSubscriber and by both writeSubscriberEvent calls — so the query predicate and the persisted rows use the same id source. No type/format mismatch (both String ObjectId-hex).",
+      "NO REGRESSION-MASKING: exhaustively enumerated every subscriber_events writer. The ONLY two writers are the two writeSubscriberEvent helpers (SubscriberController.java:314-323 and SubscriberServiceImpl.java:312-321), both of which setProjectId(...) to the owning project id. TagService is NOT a subscriber_events writer (it injects the platform-wide EventService; the file match was a doc comment). ProjectHardDeleteJob only REMOVES from subscriber_events during cascade. Therefore no legitimately-owned event row can ever lack projectId, so the new predicate cannot hide a row the owner is entitled to see.",
+      "TEST COVERAGE: SubscriberProfileIT seeds events with setProjectId(projectId) (line 185); events_returnsLast50SortedDesc and events_limitMax200_clamped exercise the new predicate. SubscriberProfileIT ran 5 tests / 0 skipped / 0 failures. SubscriberControllerIT, SubscriberTagAssignmentIT, SubscriberPersonalMessageIT also green. compileTestJava exit 0.",
+      "NO NEW ATTACK SURFACE: change is strictly additive (one more AND predicate + a default-limit branch). It cannot widen access, change error mapping, or introduce a 500 path — a non-matching projectId simply yields an empty list, which is the same uniform-deny shape the requireOwnedSubscriber 404 already enforces upstream."
+    ]
+  },
+  "skippedFindingsAccepted": [
+    {
+      "finding": "Round-1 #1 — no controller-side audit log for personal-message blocked/deleted outcomes (CWE-778, A09).",
+      "decision": "Accepted as-is.",
+      "rationale": "Decision 10 assigns subscriber_blocked / subscriber_deleted to the sender hook (the writer-ownership model), and the sender writes terminalReason to the platform-wide audit `events` collection. The controller correctly does NOT double-write personal_message_* on those branches (SubscriberController.java:264-269). This was flagged round-1 as a defense-in-depth observation, not a spec gap; the audit trail exists, just in the sender-owned collection. No critical/major implication. Confirmed unchanged in 71cfece."
+    },
+    {
+      "finding": "Round-1 #3 — DELETE /{id}/tags/{slug} path-variable slug has no @Pattern/length bound (CWE-20).",
+      "decision": "Accepted as-is.",
+      "rationale": "The slug flows only as a parameterized $pull match value (Update().pull(\"tags\", slug)); an arbitrary/oversized slug is a benign 204 no-op (the $inc(-1) fires only when the pull modifies a doc). No injection — never a field name or operator. Robustness nit, not a vulnerability. Confirmed unchanged."
+    },
+    {
+      "finding": "Round-1 #4 — personal-message rate token consumed before the CONNECTED-bot existence check (CWE-799).",
+      "decision": "Accepted as-is.",
+      "rationale": "Decision 9 explicitly states 'every call counts' and the bucket does not bypass. A no-bot project can only exhaust its own owner's 60/min bucket without any Telegram send; self-expires in 60s. Cannot be leveraged against Telegram or another tenant. Confirmed unchanged (SubscriberController.java:290-303)."
+    }
+  ],
+  "findings": [],
+  "conclusion": "Round-1 finding #2 fix is correct, data-model-consistent, regression-free, and covered by passing integration tests; it introduces no new security issue (strictly additive deny-narrowing predicate). The three skipped minors remain non-critical and their round-1 rationale holds against Decisions 9/10. Zero critical findings — APPROVED."
+}

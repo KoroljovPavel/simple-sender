@@ -1,0 +1,21 @@
+{
+  "reviewer": "test-master",
+  "task": "fix-album-type",
+  "round": 1,
+  "verdict": "OK",
+  "coverage": {
+    "executor_album_mapping": "FunnelStepExecutorTest.message_albumElementTypeDerivesFromItemKind asserts IMAGE->photo, VIDEO->video on the AlbumItem.type list. Existing caption-on-first test migrated to typed items.",
+    "validation_predicate": "FunnelControllerIT: updateAlbumInvalidTypeMixReturns422 (IMAGE+AUDIO), updateAlbumImageFileMixReturns422 (IMAGE+FILE), updateAlbumMissingItemTypeReturns422 (null kind), updateAlbumPhotoVideoMixSucceeds (mix OK), updateAlbumAllAudioSucceeds (homogeneous OK). Covers both sides of the predicate + the missing-kind reject.",
+    "round_trip": "saveFetchRoundTripPreservesBlocks now asserts items[0].type survives save->fetch; updateAlbumPhotoVideoMixSucceeds asserts both item types round-trip.",
+    "copyOf": "FunnelStepTest.copyOf_copiesBlocksToNewListInstance migrated to typed MediaItem; snapshot-isolation assertion unchanged."
+  },
+  "findings": [
+    {
+      "id": "TR-1",
+      "severity": "info",
+      "finding": "No existing assertion weakened. Migrated MediaItem(2-arg) constructions to 3-arg with explicit BlockType; the 3 existing album-reject ITs (under-two/over-ten/caption-on-non-first) keep asserting funnel_step_invalid and now use typed items so they fail for the intended reason, not a spurious null-type reject.",
+      "action": "accepted"
+    }
+  ],
+  "notes": "Test pyramid balanced: unit (executor mapping, copyOf) + integration (validation matrix + round-trip). Full suite green at 1107 tests."
+}

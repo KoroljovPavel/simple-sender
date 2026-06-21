@@ -1,0 +1,48 @@
+{
+  "verdict": "issues_found",
+  "findings": [
+    {
+      "area": "integration",
+      "detail": "fire() error-isolation (Decision 6 / user-spec AC 'fire() isolation', line 78) is the single most safety-critical invariant of the trigger layer: an exception thrown inside fire() would propagate into ProcessTelegramUpdateJob.dispatch (catch-Throwable + rethrow + JobRunr default-10-retries), marking raw_update FAILED and causing a webhook retry-storm (re-upsert + re-fire). The Testing Strategy lists trigger creation, matching, and re-enter, but NO test asserting that a forced failure inside fire() is swallowed+logged and does NOT propagate / does NOT FAIL the inbound update. This is an L-feature engine guarantee with zero declared coverage.",
+      "severity": "high",
+      "recommendation": "Add an IT (or focused unit test on the real FunnelTriggerService): inject a fault (e.g. make FunnelExecutionRepository.insert throw, or stub a downstream to throw) and assert (a) fire() returns normally (no exception escapes), (b) the surrounding ProcessTelegramUpdateJobTest path leaves raw_update NOT in FAILED and triggers no retry/re-fire, (c) a WARN/error log line is emitted. Mirror ProcessTelegramUpdateJobTest's existing startCommandFiresFunnelTrigger setup."
+    },
+    {
+      "area": "integration",
+      "detail": "Reactivation ordering (user-spec AC line 79): a /start from an 'unsubscribed' subscriber must have upsertFromTelegramUpdate set status=active BEFORE fire() runs, otherwise the engine's pre-send status-gate (non-active -> cancelled) would self-cancel the first send. This is a cross-component ordering invariant between the webhook worker and the engine status-gate, exactly the kind of interaction unit tests miss. Not listed in Unit, Integration, or AVP sections.",
+      "severity": "high",
+      "recommendation": "Add an IT: simulate /start from a subscriber currently in 'unsubscribed' status through the real ProcessTelegramUpdateJob path (or assert ordering directly), then run the sweep and assert the first step actually sends (execution advances, not cancelled). Assert on the resulting execution status (running/waiting/completed) and that a send occurred against MockWebServer — not merely that fire() was called."
+    },
+    {
+      "area": "concurrency",
+      "detail": "At-most-once 'instance restart mid-step' (user-spec AC line 66 explicitly names 'рестарт інстанса') and code-research risk (lines 432-435: 'sends THEN marks done can double-send if it crashes after send / before status flip'). The strategy tests idempotency as 're-run of a claimed step does not duplicate send' and the 2-replica claim race separately, but the classic double-send window — crash AFTER send, BEFORE stepRunStatus=done, then JobRunr retry — is not itemized as its own scenario. For a concurrency-critical L engine this is the highest-value regression test and should be explicit, not folded into generic idempotency.",
+      "severity": "medium",
+      "recommendation": "Add an IT that drives an execution to in_progress, simulates a send having occurred (MockWebServer recorded 1 request), leaves stepRunStatus=in_progress (simulating crash before done-flip), then re-invokes the sweep/step-runner and asserts MockWebServer received NO second send for that step and the step is reconciled to done exactly once. This is distinct from the replica-race test (which proves only one replica claims) — it proves retry-after-send safety."
+    },
+    {
+      "area": "integration",
+      "detail": "Send Image failure matrix (user-spec AC line 59) is more specific than the engine-level test list: sendPhoto must handle 429 internal backoff+retry, 403/400-chat-not-found -> flip blocked/deleted + execution cancelled, AND 'undostupnyy/nevalidnyy URL (Telegram responded with error) -> terminal -> failed'. Task 3 verify-smoke covers sendPhoto at the TelegramSender unit level, but the Integration section's send-fail line only states generic '403->cancelled / 5xx-exhausted->failed' and does not itemize the SEND_IMAGE invalid-URL terminal->failed path nor that it flows through the engine to execution=failed.",
+      "severity": "medium",
+      "recommendation": "Add explicit IT cases for the SEND_IMAGE step executor: (1) MockWebServer returns 400/404 for an invalid image URL -> assert execution -> failed and no funnel-level retry; (2) MockWebServer 403 -> assert execution -> cancelled and subscriber flipped blocked (reuse TelegramSenderSubscriberHookIT assertions). Assert on persisted execution.status and subscriber.status, not just that sendPhoto threw."
+    },
+    {
+      "area": "integration",
+      "detail": "Observability is a stated acceptance criterion (user-spec AC line 81): every execution state transition (claim win/loss, step in_progress/done, send-fail terminal reason, completed/cancelled/failed) must be logged because the JobRunr dashboard is DISABLED and logs are the only runtime visibility. No test in any section verifies log emission on terminal/cancel/claim-loss paths. Lower severity (log-assertion tests are commonly skipped) but it is explicitly elevated to an AC here.",
+      "severity": "low",
+      "recommendation": "If feasible, add a light log-capture assertion (e.g. an OutputCaptureExtension / ListAppender on the engine logger) on at least the terminal paths (send-fail terminal reason, claim-loss, completed) to lock the log constants in place — mirroring how ProcessTelegramUpdateJob log-constants are referenced. Alternatively, document explicitly in the AVP that observability is verified by manual log review in the runbook, so it is not silently dropped."
+    },
+    {
+      "area": "unit",
+      "detail": "Text >4096 after substitution (user-spec AC line 58): the rule is trim-to-limit + WARN, and crucially the step must CONTINUE (not fail). The Unit section lists 'SendMessage (trim >4096)' but does not state an assertion that the execution proceeds (step done, not failed) after trimming. A test that only checks the trimmed length but not the continue-vs-fail semantics would pass even if a regression made over-length text fail the step.",
+      "severity": "low",
+      "recommendation": "Ensure the SendMessage executor test asserts BOTH: (a) outgoing text length == 4096 (trimmed), and (b) the step result is success/done (execution advances), not failed. Add the WARN-log assertion if log capture is already in place per the observability finding."
+    },
+    {
+      "area": "e2e",
+      "detail": "E2E golden path covers create -> add/move/delete step -> trigger + deep-link/Copy -> activate. The activation-error UX (user-spec Scenario 3 + AC 'conflict -> 422 with human-readable code', and editor 'Activate with 422 validation errors displayed' from Task 10) is a user-facing reactive path that the happy-path E2E does not exercise. For an L feature where validation feedback is a core editor interaction, the failure branch (activate with 0 steps / missing required fields / trigger conflict -> visible error) is worth one assertion either in E2E or a component/page test.",
+      "severity": "low",
+      "recommendation": "Add a component/page-level (Vitest) or E2E assertion that attempting to activate an invalid funnel surfaces the mapped errors.funnels.* message (e.g. funnel_trigger_conflict / empty-steps). This need not be full E2E — a page test stubbing a 422 from the store is sufficient and cheaper, avoiding E2E-pyramid bloat."
+    }
+  ],
+  "summary": "The Testing Strategy is strong and well-matched to an L concurrency engine: atomic-claim 2-replica race, per-step idempotency, deterministic Delay via Clock injection (no real sleep), snapshot isolation, re-enter (both modes via unique partial index), send-fail semantics, status-gating, bot-pinning, cascade, and sub-minute @Recurring registration are all explicitly covered on the right infra (AbstractIntegrationTest + Testcontainers Mongo + JobRunrInMemoryConfig + MockWebServer + ClockConfig), with direct sweep-method invocation rather than scheduler-waiting. Pyramid balance is healthy (heavy unit + IT, thin E2E golden path + component + i18n parity gates). However, several user-spec acceptance criteria lack a declared, behavior-asserting test. Two are high severity: fire() error-isolation (the webhook retry-storm guard, Decision 6) and reactivation ordering (status=active before fire() so the first send is not self-cancelled) — both are cross-component invariants that unit tests cannot catch and neither is itemized in the strategy. Medium gaps: the crash-after-send/before-done double-send window (named in AC as 'instance restart' but folded into generic idempotency rather than tested explicitly) and the SEND_IMAGE-specific failure matrix (invalid-URL terminal->failed). Low gaps: observability log-emission (an explicit AC, untested because dashboard is disabled), the trim-and-continue (not fail) assertion for >4096 text, and the activation-error UX branch. Recommend adding the two high-severity ITs before implementation and itemizing the restart/double-send and SEND_IMAGE cases so they are not silently merged into broader tests."
+}

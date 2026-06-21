@@ -1,0 +1,37 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "11",
+  "round": 2,
+  "summary": "Round-2 re-review of Task 11 frontend. All five round-1 follow-ups are resolved and verified statically against source and (for the backend contract) against SubscriberExportController.listExports. The major finding (DONE-only / limit-ignored list) is correctly identified as a Task 9 backend contract, not a Task 11 frontend bug; the dialog keeps forward-compatible PENDING/RUNNING/FAILED/PURGED branches, documents the contract accurately in loadExports(), and now exercises every branch via the new RecentExportsDialog.spec.ts with mocked rows. The four minors (misleading rename tooltip, BOOLEAN select defaultValueAttrs omission, dead formatDate + omitted Created column, refresh-URL terminal-vs-retryable disable) are all addressed coherently. Locale files were not edited (last touched by Task 2 commit d53bed3, clean git status); all referenced i18n keys exist with EN/UK parity and the absent tags/customFields.columns.created keys justify the omitted column. Canonical slug regex unchanged (^[a-z0-9_-]{1,32}$). No new or unresolved issues. Verdict: approve.",
+  "findings": [
+    {
+      "severity": "info",
+      "file": "frontend/components/subscribers/RecentExportsDialog.vue",
+      "line": "59-62, 110-130",
+      "finding": "RESOLVED (round-1 major + low). The loadExports() comment accurately describes the Task 9 contract: SubscriberExportController.listExports (verified, method signature `listExports(@PathVariable String projectId)`) returns findByProjectIdAndStatusOrderByCreatedAtDesc(projectId, ExportStatus.DONE) and has no @RequestParam for limit, so DONE-only + limit ignored is correct. The PENDING/RUNNING progress and FAILED/PURGED branches are forward-compatible and now covered by RecentExportsDialog.spec.ts (rowStateMachine test mounts DONE/RUNNING/FAILED/PURGED rows). refreshUrl() now disables the row ONLY on TERMINAL_REFRESH_CODES (export_purged/export_failed) via errorCode(err) reading err.data.code; retryable 409/429/503 keep the button enabled — matched by the two refresh tests. encodeURIComponent(row.exportId) added on the refresh-url path. Branches are coherent and the comment is accurate.",
+      "suggestion": "No action. Forward-compatible by design; the contract divergence is owned by Task 9 backend."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/components/tags/RenameTagDialog.vue",
+      "line": "70-78",
+      "finding": "RESOLVED (round-1 minor). The delete-cascade tooltip is gone; the only 'tooltip' occurrences are in the explanatory comment (lines 72-73), no Tooltip component import or usage remains. Slug renders read-only inside a dashed/disabled-styled span (data-test tag-rename-slug-readonly) using the neutral tags.columns.slug label. PATCH body still excludes slug (label-only), matching Decision 11.",
+      "suggestion": "No action."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/components/customFields/AddCustomFieldDialog.vue",
+      "line": "191-206",
+      "finding": "RESOLVED (round-1 minor). The BOOLEAN tri-state <select> now carries an explicit comment explaining defaultValueAttrs is intentionally omitted (vee-validate only needs v-model on a native select, BOOLEAN schema is z.any() with no per-type refine). EditCustomFieldDialog.vue (lines 178-190) has the matching comment and same rationale. Consistent across both dialogs.",
+      "suggestion": "No action."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/pages/projects/[projectId]/tags/index.vue",
+      "line": "63-65",
+      "finding": "RESOLVED (round-1 minor). The dead formatDate helper is removed from both tags/index.vue and custom-fields/index.vue (grep confirms 0 references). Each page carries a comment explaining the Created column is omitted because Task 2 seeded no *.columns.created key and locales must not be edited. Verified: tags.columns.created and customFields.columns.created are absent from both en.json and uk.json. custom-fields/index.vue still defines+uses formatDefault (intentional, renders the defaultValue column).",
+      "suggestion": "No action. If Task 2 is reopened, seed *.columns.created and add the column."
+    }
+  ],
+  "verdict": "approve"
+}

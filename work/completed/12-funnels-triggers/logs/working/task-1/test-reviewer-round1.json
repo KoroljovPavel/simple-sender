@@ -1,0 +1,25 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "1",
+  "round": 1,
+  "verdict": "approve-with-suggestions",
+  "summary": "All eight TDD anchors from the task are covered with behavior-asserting tests; two extra tests add real value (reject-keywords-on-non-keyword-trigger documents the reject decision; onStart-defaults guards the no-regression path). Test types are correct: pure-domain classes are unit tests with no mocking; FunnelService validation is exercised as IT (the service depends on Mongo + ProjectService + repositories, so an IT is the right seam per the 3+ dependency rule). Assertions check real results (response values, persisted Mongo documents, HTTP 422). One minor precision improvement: assert the specific business code, not just the 422 status.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelServiceKeywordTest.java, FunnelServiceTriggerTypeTest.java, FunnelServiceEmitEventTest.java",
+      "line": "multiple (assert422 helpers)",
+      "finding": "The 422 assertions check only HttpStatus value (422), not the AppException business code. A mis-mapped exception (e.g. CODE_INVALID_TRIGGER_TYPE thrown where CODE_INVALID_KEYWORDS is expected) would still pass. The existing FunnelControllerIT asserts $.code precisely.",
+      "suggested_fix": "Extend the assert422 helpers to also assert the expected getCode() (funnel_invalid_trigger_type / funnel_invalid_keywords / funnel_invalid_trigger_value / funnel_step_invalid) so each 422 path is pinned to its specific business code.",
+      "action": "fix"
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelServiceTriggerTypeTest.java",
+      "line": "triggerValue_validatedPerType",
+      "finding": "Reuses one funnel id across multiple update calls. Acceptable because update is full-replace (each call overwrites the whole trigger triplet), so there is no cross-assertion state leak.",
+      "suggested_fix": "None.",
+      "action": "no-fix"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "summary": "Task 9 test changes are in strict compliance with the authorized AC18/Decision 16 exception. Each of the 5 page specs (login, register, forgot-password, reset-password, verify-email) gets exactly one new line — `mockNuxtImport('useLocalePath', () => () => (path: string) => path)` — and nothing else. No test cases removed, no test names changed, no UA-literal assertions altered, no expect payloads modified. The 21 existing cases (5+4+3+4+5) remain the regression net for the new t()-backed templates. UA literals asserted by tests (/коректний email/i, /8/, /15 хв/, /невірний/i, /не співпадають/i, /цифр/i, /вже існує/i) all map 1:1 to entries in frontend/i18n/locales/uk.json. Verify-email asserts data-test attributes only, so no string mapping is required. The VITEST env-var conditional in nuxt.config.ts is correct — vitest itself sets process.env.VITEST='true' (verified in node_modules/vitest/dist/chunks/resolveConfig.*.js: `VITEST: 'true'`), so the truthy branch reliably disables detectBrowserLanguage during the test run and pins the locale to uk. The identity-passthrough mock for useLocalePath preserves payload shape so toHaveBeenCalledWith({ path: '/auth/login', query: { registered: '1' } }) and analogous assertions stay green without modification. The commit message claims `pnpm test 88 passed` (matches prior baseline). I could not re-execute the test runner in this sandboxed review environment (no node binary in PATH; broader filesystem search blocked), so the green-suite claim is taken from the commit narrative — but the static contract (diff scope, regex-to-locale-key mapping, mock idiom) is clean and the per-task constraints are satisfied. Per the task's TDD anchor explicitly stating 'Do NOT write new tests', the absence of new translation tests is correct, not a coverage gap.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/pages/auth/*.spec.ts (all 5)",
+      "issue": "The new `mockNuxtImport('useLocalePath', () => () => (path: string) => path)` is an identity-passthrough stub — fine for the uk-default behaviour, but it cannot detect a regression where production code calls `localePath('/dashboard')` vs. forgets to wrap a path. Today's UA-only suite cannot distinguish those two cases.",
+      "recommendation": "Out of scope for Task 9 (per task spec, no new tests are added — UA literals are the regression net). The localePath wrapping is enforced via Cyrillic-grep + the dedicated EN-locale tests planned in later tasks (Task 10+). Document only; do not change."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/nuxt.config.ts:40",
+      "issue": "`process.env.VITEST` is checked truthy. Vitest sets it to the string 'true' (verified in node_modules/vitest dist), so the truthy check works, but it would also flip on if someone set VITEST=0 or VITEST=false in a shell — those are still truthy strings.",
+      "recommendation": "Optional hardening: `process.env.VITEST === 'true'` to make the contract explicit. Not blocking — the standard Vitest idiom across the ecosystem is the truthy check, and Task 9's task file itself prescribes `process.env.VITEST` (truthy form). Leave as-is unless there's a documented reason to harden."
+    }
+  ],
+  "verdict": "OK"
+}

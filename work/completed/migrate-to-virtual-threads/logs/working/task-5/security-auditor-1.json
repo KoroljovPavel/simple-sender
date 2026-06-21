@@ -1,0 +1,47 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "extractIp fallback differs subtly from source-of-truth for empty-string getRemoteAddr",
+      "description": "In the source-of-truth AuthService.extractIp (lines 649-652), the fallback path uses `remote != null && remote.getAddress() != null ? remote.getAddress().getHostAddress() : \"unknown\"`. In the new HttpRequestUtils.extractIp (lines 39-40), the equivalent guard is `remote != null ? remote : \"unknown\"`. The servlet `HttpServletRequest.getRemoteAddr()` is contractually expected to return either a non-null IP string or null when no address is known, so in practice the two behaviours align. However, if a custom servlet filter (e.g., a future test fixture or proxy filter) injects an empty string `\"\"` for the remote address, the new code will return `\"\"` whereas the reactive predecessor would surface `\"unknown\"` only when `remote.getAddress()` itself was null — they diverge only on the `\"\"` corner. Brute-force counter keys (`brute:fail:ip:`) would then be keyed on the empty string and collide across all such requests, weakening the per-IP rate limit. Low likelihood in production because servlet containers (Tomcat) populate getRemoteAddr from the socket and never return empty string.",
+      "location": "backend/src/main/java/com/botfunnel/common/HttpRequestUtils.java:39-40",
+      "impact": "Theoretical: if a future filter ever populates getRemoteAddr() with an empty string, the brute-force counter would collide across requests. Practically near-zero under Tomcat default.",
+      "recommendation": "Tighten the guard to `return (remote != null && !remote.isEmpty()) ? remote : \"unknown\";` so the empty-string corner falls through to the explicit `unknown` sentinel that AuthService/ProjectController treat as the canonical \"no IP resolved\" key.",
+      "cwe": "CWE-307"
+    },
+    {
+      "severity": "minor",
+      "category": "A09: Security Logging and Monitoring",
+      "title": "EmailService error log includes recipient email address in cleartext",
+      "description": "The new D15 try/catch in EmailService.sendAsync logs `Email send failed to {to}: {e.toString()}` (line 92). The recipient address is PII and ends up in ERROR-level logs verbatim. The pre-migration log used the same recipient (the reactive `.subscribe(null, log::error)` wrapped the exception message which itself includes the SMTP envelope target). Behavioural parity is preserved. Flagging only because the migration is an opportunity to fix it. The exception's `toString()` may also surface SMTP server response bodies that occasionally contain bounce-reason fragments.",
+      "location": "backend/src/main/java/com/botfunnel/email/EmailService.java:92",
+      "impact": "Recipient email addresses are written to application logs on SMTP failure. If log aggregation crosses a different retention/access boundary than the application database (per GDPR data-class mapping), this is a minor data-class leak. No new regression vs the pre-migration code.",
+      "recommendation": "Either (a) accept as parity with prior behaviour and document in deployment.md that application logs contain recipient PII on email failures, or (b) hash/truncate the recipient in the log line: `log.error(\"Email send failed to {}: {}\", maskEmail(to), e.toString())` where `maskEmail` keeps the domain and masks the local part. Out of scope for this task per spec — flagged for future hardening.",
+      "cwe": "CWE-532"
+    }
+  ],
+  "notes": {
+    "checks_performed": [
+      "X-Forwarded-For trust boundary parity vs AuthService.extractIp (lines 642-653) and ProjectController.extractIp (lines 138-148): leftmost-trimmed-entry algorithm preserved exactly, including the `xff.isBlank()` guard and the comma>0 substring split. Empty-XFF-entry (`\",,,\"`) behaviour preserved (returns empty string) per task spec line 152.",
+      "Reverse-proxy trust note carried into HttpRequestUtils.extractIp Javadoc (lines 25-27) — content materially equivalent to the AuthService comment.",
+      "USER_AGENT_MAX constant value matches both AuthService (line 54) and ProjectController (line 30): 500. No magic-number drift.",
+      "HttpRequestUtils.extractUserAgent null-on-absent-header semantics preserved (line 51) — matches ProjectController.capUserAgent(null) → null; persisted event fields stay null instead of empty per spec.",
+      "Private constructor on HttpRequestUtils (line 20) — utility class cannot be instantiated; reflection guard verified by HttpRequestUtilsTest.cannotBeInstantiated.",
+      "EmailService.sendAsync (lines 82-94): MimeMessage build + JavaMailSender.send wrapped in try { ... } catch (Exception e). The `Exception` umbrella catches MailException (RuntimeException), MessagingException (checked), AddressException, and IllegalStateException — preserves the silent-failure contract per D15. US-AC11 (register) and US-AC13 (forgot-password/reset-password) return 200 on SMTP failure as before; one ERROR log signals the regression. Verified by tests sendVerificationEmail_fireAndForget_exceptionDoesNotPropagate, sendVerificationEmail_smtpFailureLogsError, sendVerificationEmail_buildFailureLogsError.",
+      "Email header injection via recipient parameter: EmailService.sendAsync receives `to` from upstream auth flows; MimeMessageHelper.setTo invokes InternetAddress.parse which throws AddressException on malformed addresses containing CR/LF — that exception is now swallowed by the new catch (matches prior `.subscribe(null, log::error)` behaviour). No header-injection regression.",
+      "HTML escaping in email body (htmlEscape, lines 109-117) is unchanged — defence-in-depth for {NAME}, {TOKEN}, {APP_URL}, {SUPPORT_EMAIL} placeholders preserved.",
+      "EventService new contract per D12: `logEvent` now throws on persistence failure (line 29). The file contains no `log.error(...)` and no exception-message construction that would surface PII. Mongo driver exceptions propagate verbatim — PII (userId, ipAddress, metadata) IS embedded in the saved Event document and Mongo error messages may include partial document fragments on certain failure modes (e.g., DuplicateKeyException includes the conflicting key). GlobalErrorHandler is owned by Task 3 and returns generic 500 — exception messages do not reach API responses. No PII regression in EventService itself.",
+      "Hardcoded secrets scan across the 4 modified files: none found. No API keys, tokens, passwords, or connection strings in source.",
+      "OWASP A03 (Injection): no SQL/NoSQL injection vector introduced; all repository inputs are typed domain objects or already-validated strings. HTML escaping for email templates preserved.",
+      "OWASP A07 (Auth Failures): the brute-force counter key (`brute:fail:ip:`) depends on extractIp resolution — the parity preservation above is the operative guarantee. See Finding 1 for the one residual subtlety."
+    ]
+  }
+}

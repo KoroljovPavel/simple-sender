@@ -1,0 +1,20 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTriggersFieldTest.java",
+      "line": 13,
+      "issue": "Compile-time proof of removed getters is incomplete. The class comment claims the absence of getTriggerType/getTriggerValue/getKeywords serves as a 'compile-time proof', but the test never calls or even references those old methods — so the proof is only the natural absence of calls, not an enforced negative assertion. If the old getters were accidentally re-introduced (e.g. during a merge), this test would still compile and pass without detecting the regression.",
+      "fix": "The current approach is acceptable because any attempt to call the removed getters on Funnel would cause a compile error in this very file. Document this more precisely: the proof works because the test compiles against the live Funnel class, so re-adding the old getters would not break the test — but removing them from Funnel and having downstream tasks call them would break compilation elsewhere. Consider adding a brief clarifying comment that the proof is compile-scope (not a negative-assertion), or add a reflection-based assertion in FunnelIndexAssertionsTest that explicitly confirms the old accessor names do not exist on Funnel.class (mirrors the index-name negative assertion pattern already used there)."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexAssertionsTest.java",
+      "line": 43,
+      "issue": "The def-field assertion checks only that 'projectId' and 'onStartTriggerValue' are substrings of the def string, but does not assert ordering or the exact MongoDB field-key format (e.g. the literal '1' direction). A def value of {'onStartTriggerValue': 1, 'projectId': 1} would pass these assertions even though the index key order matters for query plans. Low impact here because the decision pins the exact string in the task spec and this is a unit-level annotation check, but the test is slightly weaker than it could be.",
+      "fix": "Replace the two contains() calls with a single assertion on the exact def string: assertThat(onStartIndex.def()).isEqualTo(\"{'projectId': 1, 'onStartTriggerValue': 1}\"). This mirrors how FunnelStatusEnumTest pins exact string values rather than checking substrings."
+    }
+  ],
+  "summary": "All four TDD-anchor tests are present and cover the task's specified contracts meaningfully. TriggerTest verifies the full get/set round-trip per field plus the on_start null-entryStepId invariant with explicit assertions and correct nullable-start assertions. FunnelTriggersFieldTest covers both the triggers-list round-trip and the onStartTriggerValue null/empty/set/null lifecycle. FunnelIndexAssertionsTest covers the static-block safety (forcing class init without ExceptionInInitializerError) and the index shape (old index absent, new partial-unique present, unique=true, correct partialFilter substrings). Tests are correct pyramid level (pure unit, zero I/O, no Spring context), use AssertJ with concrete values, and match the FunnelStepTest / FunnelStatusEnumTest precedent. Two low-severity findings: (1) the 'compile-time proof' of removed getters is conceptually correct but underdocumented and could be strengthened by a reflection-based negative assertion; (2) the def-field assertion uses substring contains() rather than an exact-match, making it slightly weaker on field ordering. Neither finding blocks approval — the core invariants are solidly pinned."
+}

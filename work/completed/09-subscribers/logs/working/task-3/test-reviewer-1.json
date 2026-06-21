@@ -1,0 +1,78 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 3,
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberServiceImplIT.java",
+      "test": "duplicateKeyException_onInsertRace_recoversAndUpdates",
+      "finding": "The test does NOT genuinely exercise the DuplicateKeyException race branch. It enqueues TWO distinct RawUpdate documents (seedStart(300L,1L) and seedStart(300L,2L)) and runs them through parallelInvoke(2). The race the production code defends against is the unique (projectId, telegramUserId) index colliding on insertNew(); but for that catch block to fire, BOTH workers must pass the findByProjectIdAndTelegramUserId 'not found' check and then both reach subscriberRepository.insert(). With only 2 virtual threads contending on a fast embedded Mongo, it is entirely possible (and likely on most runs) that worker A completes its insert+commit BEFORE worker B does its lookup — in which case B takes the 'existing.isPresent()' refresh branch and the DuplicateKeyException catch is NEVER entered. The test then passes with size==1 having exercised zero lines of the catch block. Litmus test: delete the entire `catch (DuplicateKeyException race)` block (lines 127-133 of SubscriberServiceImpl) and this test will still pass on the runs where the lookup-then-refresh path is taken — i.e. it does not reliably protect the recovery code. It is also order/timing dependent, so it is simultaneously a weak-coverage AND a flakiness finding.",
+      "suggestion": "Make the race deterministic so the catch block is guaranteed to execute. Option A (preferred, deterministic): pre-insert the subscriber row for telegramUserId=300L directly via subscriberRepository.insert(...) inside the test, then in production add a test-only seam OR — without touching prod — assert the catch path by a unit test in SubscriberStatusMachineTest: stub subscriberRepository.findByProjectIdAndTelegramUserId to return empty on the first call and a present subscriber on the second call, and stub subscriberRepository.insert(any()) to throw new DuplicateKeyException(\"dup\"); then verify upsertFromTelegramUpdate(...) issues exactly one findAndModify (the refresh) and NO subscriber_registered event — proving the re-read-and-apply recovery. Option B (keep the IT but harden it): assert not only size==1 but also that exactly ONE subscriber_registered event exists for that subscriberId (the winner) and ZERO test exceptions propagated — and additionally drive enough concurrency (e.g. parallelInvoke(8) all on the same telegramUserId) to make at least one true insert-collision overwhelmingly likely. The current 2-thread / 2-distinct-RawUpdate setup proves neither."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberStatusMachineTest.java",
+      "test": "addTag_onFirstAdd_writesEventAndIncrementsCounter / removeTag_onPresent_writesEventAndDecrementsCounter / addTag_onAlreadyPresent_isNoop / removeTag_onAbsent_isNoop",
+      "finding": "stubSubscriberUpdate() uses Answers.RETURNS_DEEP_STUBS on MongoTemplate and stubs the full fluent chain mongoTemplate.update(Subscriber.class).matching(any()).apply(any()).first(). Deep-stub chains are brittle: the stub matches ONLY if production calls the exact same fluent method sequence with arguments the matchers accept. If a future refactor of addTag/removeTag changes the builder order (e.g. .apply(...).matching(...)) or switches to mongoTemplate.update(query, update, Subscriber.class) overload, .first() would return a fresh deep-stub UpdateResult whose getModifiedCount() returns 0 — silently flipping every addTag/removeTag scenario into the no-op branch and making the 'writesEvent' assertions vacuously... no, they would FAIL, but the no-op tests would pass for the wrong reason. The deeper issue: the unit test is verifying interaction shape (tagService.incrementCounter called, event saved) rather than the atomicity invariant. The real behavioural guarantee — counter $inc and event happen IFF modifiedCount>0 and on the SAME path — is only meaningfully covered by SubscriberServiceImplIT.addTag/removeTag (which use real Mongo and assert Tag.subscriberCount). The unit tests are acceptable as fast guards but the IT is doing the real work; flag the deep-stub fragility so a future refactor doesn't get a false green.",
+      "suggestion": "Keep the unit tests but make the deep-stub less position-dependent if possible, OR rely on the IT (which already asserts Tag.subscriberCount==1 / ==0 and exactly one event row) as the authoritative atomicity test. At minimum, in addTag_onAlreadyPresent_isNoop / removeTag_onAbsent_isNoop, ALSO assert verify(mongoTemplate, never()).<no further mutation> is not needed, but DO assert verify(tagService, never()).incrementCounter(...) AND verify(subscriberEventRepository, never()).save(any()) together (already present) — that pair is the real invariant and is fine. No code change strictly required; this is a robustness note. Prefer treating the IT as the load-bearing test for the atomic-counter invariant."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberServiceImplIT.java",
+      "test": "duplicateKeyException_onInsertRace_recoversAndUpdates (and parallel101DistinctUsers in SubscriberRateLimitIT)",
+      "finding": "The IT duplicate-key test asserts only `subscriberRepository.findAll().filteredOn(...).hasSize(1)`. It does not assert that no exception leaked (parallelInvoke DOES propagate worker exceptions via Future.get(), so a leaked DuplicateKeyException would fail the test — that part is implicitly covered), but it also does not assert the post-state of the surviving row (status ACTIVE, lastSeenAt/identity refreshed) nor the event count. So even when the recovery path IS taken, the test does not verify the 'apply update' half of 'recovers AND updates' described in the test name and the TDD anchor.",
+      "suggestion": "After the hasSize(1) assertion, fetch the single surviving subscriber and assert getStatus()==ACTIVE and that the subscriber_registered event count for that id is exactly 1 (one winner registered; the loser must NOT have written a second registration event). This closes the 'AND updates' clause and guards against a regression where the catch block re-inserts or double-writes the registration event."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberRateLimitIT.java",
+      "test": "redisDown_failsOpen_proceedsAndLogsWarn",
+      "finding": "The test stubs a freshly-mocked ValueOperations whose increment(anyString()) throws, then doReturn(failing).when(redisTemplate).opsForValue(). This correctly forces the catch branch. However it asserts only (a) the subscriber is persisted and (b) a WARN containing the constant string was logged. It does NOT assert that the subscriber count / rate-limit was BYPASSED rather than still consulted — i.e. it does not prove fail-open returned false from startRateLimitExceeded. Because there is only one /start, persistence alone is consistent with both 'fail-open returned false' (correct) and a hypothetical 'rate limit not yet reached' (would also persist). The WARN assertion does carry the load here (it only fires inside the catch), so coverage is adequate, but the assertion is slightly indirect.",
+      "suggestion": "This is acceptable as-is given the WARN-constant assertion uniquely pins the catch path. Optional hardening: also assert rateLimitEvents()==0 to make explicit that the fail-open path did NOT emit a spurious rate_limit_exceeded platform event when Redis was down. Litmus is satisfied because removing the catch block would surface RedisConnectionFailureException to the caller and fail both the persistence and the WARN assertions."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/subscriber/SubscriberStatusMachineTest.java",
+      "test": "class-level @MockitoSettings(strictness = Strictness.LENIENT)",
+      "finding": "The whole unit test class runs LENIENT, which disables Mockito's unnecessary-stubbing detection. With LENIENT, a stub that production never calls (e.g. a findByProjectIdAndTelegramUserId stub in a test where the code took the not-found path) will not be flagged, which can mask a test that is asserting against a path it never actually drove. The justification in the comment (shared mocks across scenarios) is reasonable, but per-method state machine tests are small enough to avoid the blanket setting.",
+      "suggestion": "Prefer dropping the class-level LENIENT and using lenient().when(...) only on the specific stubs that are conditionally consumed, or split into per-scenario @Nested classes. Low priority — does not affect current correctness, only future-proofing against silently-dead stubs."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 6,
+    "ddAnchorCoverage": {
+      "required": 31,
+      "present": 31,
+      "missing": [],
+      "note": "All 31 TDD-anchor methods exist (some renamed but behaviour-equivalent: markBlocked_onActive_flipsAndWritesEvent and unsubscribeManual_onActive_flipsAndWritesManualReason are extra positive-path tests; markBlockedByChatId active-flip implicitly covers markDeleted shape). State-machine transitions assert status + timestamp ($set) + event type + metadata for each transition, and idempotency tests assert no findAndModify + no event save. Reactivation tests correctly assert subscribedAt/tags/customFields are NOT in $set ($unset clears terminal timestamps) — a genuine preservation assertion, not a tautology."
+    },
+    "litmusTest": {
+      "checked": 28,
+      "passed": 26,
+      "failed": 2,
+      "failedTests": [
+        "SubscriberServiceImplIT::duplicateKeyException_onInsertRace_recoversAndUpdates (catch block not reliably exercised; passes via lookup-refresh branch on most runs)",
+        "addTag/removeTag deep-stub chain (atomicity invariant proven only by the IT, not the unit test)"
+      ]
+    },
+    "specificChecksRequested": {
+      "statusMachineIsTrueUnit": "PASS — no Spring, mocked repos/TagService/EventService, Clock.fixed(NOW). Each transition asserts status + timestamp + event type + metadata; idempotency asserts no findAndModify + no save.",
+      "rateLimit101Boundary": "PASS — parallelInvoke(101) over distinct telegramUserId=100000+i in one project; asserts 100 persisted + exactly 1 rate_limit_exceeded. INCR atomicity makes the count==101 drop deterministic; not flaky on that axis.",
+      "existingSubscriberBypass": "PASS — existingSubscriberRestart200Times asserts 1 subscriber + zero rate-limit events (lookup-before-incr).",
+      "perProjectIsolation": "PASS — rateLimit_isolatedPerProject: 100+100 across two projects, both fully persisted, zero rate-limit trips; guards the {projectId} key shape.",
+      "redisFailOpenViaSpyBean": "PASS — @MockitoSpyBean StringRedisTemplate, opsForValue() stubbed to throw RedisConnectionFailureException for one method only; NOT REDIS.stop(); WARN constant SUBSCRIBER_START_RATE_REDIS_FAIL_OPEN asserted via ListAppender on the SubscriberServiceImpl logger. Mockito.reset in @BeforeEach correctly restores live-Redis delegation for sibling tests.",
+      "duplicateKeyRace": "WEAK — see major finding; the catch branch is not reliably entered.",
+      "decision10Isolation": "PASS — SubscriberEventsIsolationIT asserts both directions: subscriber_events has the lifecycle row, platform events has telegram_command_* AND zero subscriber_* rows, for both /start and /stop.",
+      "ac24SingleBean": "PASS — SubscriberStubReplacementIT asserts getBeansOfType(SubscriberService).size()==1 and simpleName==SubscriberServiceImpl."
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 14,
+      "integration": 14,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

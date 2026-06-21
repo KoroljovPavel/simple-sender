@@ -1,0 +1,61 @@
+{
+  "validator": "reality-checker",
+  "batch": [16, 17],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 17,
+      "issue": "Task 17 declares `depends_on: [16]` only, but its entire execution hinges on `docs/staging-smoke/09-subscribers.md` being present in the deployed commit. That runbook is authored by Task 11. If Task 11 has not been completed before Task 17 runs, Task 17 cannot execute its central activity (step 2 reads the runbook fully before starting; step 3 drives it end-to-end). Task 11 is not listed anywhere in Task 17's dependency chain, leaving the executor potentially blocked with no warning.",
+      "fix": "Add Task 11 to `depends_on` in Task 17's frontmatter: `depends_on: [11, 16]`. Alternatively, add a precondition check in step 1 of Task 17: confirm `docs/staging-smoke/09-subscribers.md` exists in the repo at HEAD before proceeding, and surface a blocker if absent."
+    },
+    {
+      "severity": "major",
+      "category": "hallucination",
+      "task": 16,
+      "issue": "Tech-spec Solution section (line 12) states 'Four new env vars (`SUBSCRIBER_EXPORT_TOKEN_KEY`, `SUBSCRIBER_EXPORT_RETENTION_DAYS`, `SUBSCRIBER_RATE_LIMIT_START_PER_MIN`, `SUBSCRIBER_DOWNLOAD_RATE_LIMIT_PER_MIN`)'. Task 16 (and the tech-spec's own AC section at line 493 and Implementation Tasks at line 627) correctly documents SIX env vars, including `SUBSCRIBER_EXPORT_URL_TTL_HOURS` and `SUBSCRIBER_PERSONAL_MESSAGE_RATE_LIMIT_PER_MIN` added by Decisions 15 and 9 respectively. The Solution section is stale. While Task 16 itself is internally consistent (all 6 vars are correctly listed in steps 2, 5, grep pattern, and AC checklist), an executor reading only the Solution section for context will be surprised to find two undocumented vars. Additionally, Task 16 step 2 references Tasks 3 and 9 as the owners of `.env.example` edits for all six vars, but `SUBSCRIBER_EXPORT_URL_TTL_HOURS` is not mentioned in Task 3's 'Files to modify' entry — only in Task 9. This is consistent, but the attribution comment 'Task 3 or Task 9 left a gap' in the STOP warning could confuse an executor trying to trace ownership of `SUBSCRIBER_EXPORT_URL_TTL_HOURS`.",
+      "fix": "Update tech-spec Solution section to list all six env vars. In Task 16 step 2 STOP comment, attribute `SUBSCRIBER_EXPORT_URL_TTL_HOURS` and `SUBSCRIBER_PERSONAL_MESSAGE_RATE_LIMIT_PER_MIN` exclusively to Task 9 (not Task 3)."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 16,
+      "issue": "Task 16 step 13 instructs the executor to 'Pull the deploy workflow logs and the app boot logs (path depends on platform — see `deployment.md` once step 6 documents it)'. At execution time, `deployment.md` Platform is 'TBD' and CI/CD is 'TBD'. Step 6 says to fill in the platform only IF a new workflow was authored in step 3. However, step 3 may result in the user deferring the platform choice (path b: 'Defer deploy to a separate feature/epic and close this task as deploy-infra-pending'). In that scenario step 13 becomes unreachable, but the task description does not make this mutual-exclusion explicit — steps 8-14 are written as sequential instructions with no 'skip-if-infra-pending' clause. An executor following the task literally could get confused about whether to proceed to step 8 after a path-b outcome in step 3.",
+      "fix": "Add an explicit early-exit clause after step 3 path-b: 'If user selects path (b), skip steps 4-14, write a decisions.md entry marking this task as deploy-infra-pending, and stop. Do not push to main.' The current Edge Cases section mentions this, but it is not wired into the What to do step flow."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 16,
+      "issue": "Task 16 step 9 CI green-gate lists 'gitleaks job' as a required check, but `.github/workflows/` does not exist in the repository. The task correctly handles the case where no workflow exists (step 3, path b), but if the executor authors a new workflow in step 3, they need to also include a gitleaks job in that workflow — this is mentioned in passing in the Verification Steps section but not explicitly called out as a requirement when authoring the first workflow in step 3. The `deploy-pipeline` skill is referenced but the task does not confirm gitleaks is part of that skill's CI/CD Convention template.",
+      "fix": "In step 3 path (a) — authoring the first workflow — explicitly state that the new workflow MUST include a gitleaks scan step (mirror patterns.md rule 'gitleaks runs here and will block any accidentally-committed real secret' cited in Implementation hints). Confirm the deploy-pipeline SKILL.md 'CI/CD Convention' section includes gitleaks before relying on it."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 17,
+      "issue": "Task 17 step 6 instructs an optional `mongosh` index spot-check using `$STAGING_MONGODB_URI` shell variable. The task's edge cases section correctly warns 'Never paste the staging connection string into chat, commits, or screenshots', but the Implementation hints section does not provide a concrete scrubbing pattern for the mongosh output beyond '`mongosh ... --eval ... {projection: 1}`'. For `db.subscribers.getIndexes()`, the output contains no PII but does contain collection/index names; the hint is adequate. However, the task references the variable `$STAGING_MONGODB_URI` as if it is already defined in the executor's shell, with no guidance on where to obtain it (deploy logs? GitHub Actions secret? ops wiki?). If the executor cannot find the URI, the step silently becomes unexecutable.",
+      "fix": "Add a note in step 6: 'Obtain `STAGING_MONGODB_URI` from the deploy logs or GitHub Actions environment (check deployment.md once Task 16 fills in the platform section). Never type it into chat; use shell variable assignment in the terminal only.'"
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 16,
+      "issue": "Task 16 has no TDD Anchor section — this is intentional and correct for a deploy task. The CI gate (step 9) serves as the automated quality gate. No finding here beyond a confirmation.",
+      "fix": "No action required — deploy tasks are exempt from TDD Anchor by design."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 17,
+      "issue": "Task 17 has no TDD Anchor section — this is intentional and correct for a post-deploy verification task. The runbook execution is the verification mechanism. No finding here beyond a confirmation.",
+      "fix": "No action required — post-deploy verification tasks are exempt from TDD Anchor by design."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "claims_verified": 31,
+    "issues_found": 7
+  }
+}

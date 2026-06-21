@@ -1,0 +1,42 @@
+{
+  "status": "issues_found",
+  "summary": "Tech-spec demonstrates strong security posture: per-call AES-GCM decryption with no caching, plain-text parse_mode default, anti-enumeration 404, token scrubber on every external-string log site, 30s outer timeout that defeats pathological retry_after DoS, and SecurityConfig left untouched. Three minor gaps and two best-practice improvements warrant attention before implementation: missing rate limit on /test-message (auth'd-user abuse vector), under-specified scope of the decryption-failure catch block (could mask non-crypto exceptions), and chatId PII in audit metadata without retention guidance. No critical findings.",
+  "findings": [
+    {
+      "owasp_category": "A04 Insecure Design",
+      "severity": "minor",
+      "description": "POST /api/v1/projects/{projectId}/bot/test-message has no per-user/per-bot rate limit documented. An authenticated user could repeatedly fire the test-message button (or script the endpoint) and exhaust the Telegram bot-level ~25 msg/sec quota, indirectly DoS-ing legitimate Epic 06/07 traffic on the same bot. R9 documents the lack of per-bot fairness as out-of-scope but does not address caller-side throttling for the /test-message endpoint specifically.",
+      "recommendation": "Either (a) add a small per-bot or per-user cooldown (e.g., one test message per 10s) at BotController.sendTestMessage, OR (b) explicitly document in tech-spec Risks that authenticated abuse is accepted because the endpoint is gated by project-ownership and the impact is bounded by Telegram's own 429 handling that the sender already implements correctly."
+    },
+    {
+      "owasp_category": "A02 Cryptographic Failures",
+      "severity": "minor",
+      "description": "Tech-spec step 3 of the sender flow says 'Catch decryption failures and post-decrypt shape mismatch... -> BotTokenInvalidException(botId)'. The exception type to catch is not specified. A blanket `catch (Exception e)` would swallow unrelated runtime errors (NPE, IllegalStateException from misconfigured TokenEncryptor, etc.) and mis-report them as `invalid_bot_token` 422, hiding real ops issues. R7 mentions the ops-vs-user-fixable confusion but not the catch scope.",
+      "recommendation": "Specify in the tech-spec or the Task 4 description that the catch must be narrow: `catch (javax.crypto.AEADBadTagException | java.security.GeneralSecurityException | IllegalArgumentException e)`. Other Throwable types must propagate to GlobalErrorHandler. Add a unit test asserting an unexpected RuntimeException from a stubbed TokenEncryptor does NOT map to invalid_bot_token."
+    },
+    {
+      "owasp_category": "A09 Security Logging and Monitoring",
+      "severity": "minor",
+      "description": "The success and failure audit events carry `chatId` (Telegram user identifier) in metadata. chatId is PII under GDPR (it identifies a Telegram account). Tech-spec does not mention retention period, access controls on the events collection, or whether chatId should be hashed/truncated for audit storage. With Epic 06/07 broadcasts the events table will grow rapidly; PII at scale without a retention policy is a compliance risk.",
+      "recommendation": "Either (a) add a tech-spec note that chatId is acceptable in audit metadata under the platform's existing retention policy (and link to that policy), OR (b) store a one-way hash of chatId in audit metadata and keep the raw chatId only in transient logs. Defer the decision to Epic 06/07 if scope is too broad here, but flag it in Risks."
+    },
+    {
+      "owasp_category": "A02 Cryptographic Failures",
+      "severity": "minor",
+      "description": "The decrypted token is captured in the Reactor chain closure for the entire 30s outer-timeout window (across multiple WebClient retries and 429-wait cycles). Decision 2 correctly rejects a long-lived cache, but the per-call plaintext lifetime is still up to 30s in heap-resident closure state. Mirrors the existing BotService.disconnect pattern, so not a regression — but the decision rationale claims 'never store the plaintext beyond Mono completion' without acknowledging the in-flight window.",
+      "recommendation": "Update Decision 2 rationale to explicitly state: 'Plaintext token lives in the chain closure for the duration of one sendText call (bounded by the 30s outer timeout). On success/error, the closure is GC-eligible. No reference is held beyond Mono completion.' This is honest documentation; no code change needed."
+    },
+    {
+      "owasp_category": "A09 Security Logging and Monitoring",
+      "severity": "minor",
+      "description": "R8 documents that `ownerId == null` for future Epic 06/07 system-context callers reduces audit attribution for `telegram_message_sent` / `telegram_send_failed` events. For 04c the only caller is BotService.sendTestMessage which always passes a concrete ownerId, but the tech-spec ships the null-ownerId path live (the sender API accepts nullable ownerId per Decision 4). Once Epic 06/07 lands, broadcast/funnel-driven sends will produce un-attributed events — operationally hard to investigate abuse or accidental loops.",
+      "recommendation": "Add a tech-spec acceptance criterion (or follow-up issue) that Epic 06/07 design must define a system-context attribution scheme (sentinel userId like 'system:funnel-worker' or per-job correlation id) BEFORE merging the first non-test caller. Reference this from Decision 4. No 04c code change needed."
+    },
+    {
+      "owasp_category": "A03 Injection",
+      "severity": "minor",
+      "description": "TelegramApiClient construction uses `DefaultUriBuilderFactory` with `EncodingMode.NONE` (per code-research §2.1) and the same shape will be mirrored in TelegramSender. The token is interpolated into the URI path via `/bot{token}/sendMessage`. With EncodingMode.NONE, if a future caller or storage corruption produced a token containing URI-special characters (`/`, `?`, `#`, `%`), they would be passed through unencoded and could alter the request path. The pre-call `requireValidTokenShape` guard mitigates this (regex `^\\d{1,20}:[A-Za-z0-9_-]{30,50}$` permits no URI-special characters), so the defense is sound — but the chain depends on the guard running BEFORE the wire call.",
+      "recommendation": "Make the dependency explicit in tech-spec step 3: `requireValidTokenShape(token)` MUST be called synchronously after decrypt and before any code path that constructs the WebClient request — not in a `.doOnNext` further down the chain where reordering could let a bad token reach the wire. Confirm in Task 4 review checklist. Optional hardening: switch sender's WebClient to `EncodingMode.TEMPLATE_AND_VALUES` so the {token} placeholder is URL-encoded as a defense in depth (the guard remains primary)."
+    }
+  ]
+}

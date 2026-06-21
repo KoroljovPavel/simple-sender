@@ -1,0 +1,116 @@
+{
+  "status": "approved",
+  "round": 2,
+  "summary": {
+    "totalFindings": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "round1Closure": {
+    "totalRound1Findings": 14,
+    "closed": 14,
+    "carriedOver": 0,
+    "details": [
+      {
+        "round1Finding": "CRITICAL — CSRF verb-list incompleteness / AND-scoping",
+        "status": "closed",
+        "evidence": "tech-spec.md line 29 — Architecture now says: `CsrfFilter.DEFAULT_CSRF_MATCHER` used directly (public static final in 6.x, covers POST/PUT/DELETE/PATCH); webhook path negated via `AndRequestMatcher(CsrfFilter.DEFAULT_CSRF_MATCHER, NegatedRequestMatcher(antMatcher(\"/webhooks/telegram/{projectId}\")))`. Verb enumeration delegated to Spring Security's own constant — eliminates manual-list drift risk. AND-scoping explicit. AC15 / TC11 integration tests verify cookie write path."
+      },
+      {
+        "round1Finding": "CRITICAL — XOR handler downgrade",
+        "status": "closed",
+        "evidence": "tech-spec.md line 29 — Architecture explicitly names `XorCsrfTokenRequestAttributeHandler` paired with `CookieCsrfTokenRepository.withHttpOnlyFalse()` to preserve BREACH mitigation. Round 2 nit: line 57 (`How it works` prose) still says `CsrfTokenRequestAttributeHandler` generically without the `Xor` prefix — documentation polish only, not security regression because the binding source-of-truth (line 29 architecture spec) names XOR."
+      },
+      {
+        "round1Finding": "MAJOR — RememberMeCookieSerializer cookie attributes",
+        "status": "closed",
+        "evidence": "tech-spec.md line 30 + D3 (line 102) — `PropertyMapper.alwaysApplyingWhenNonNull()` explicitly wires `setCookieName`, `setUseHttpOnlyCookie`, `setUseSecureCookie`, `setSameSite`, `setCookiePath`, `setDomainName` from `ServerProperties.getServlet().getSession().getCookie()`. AC18 (Task 12) now asserts HttpOnly/Secure/SameSite cookie attributes (not just Max-Age)."
+      },
+      {
+        "round1Finding": "MAJOR — WebhookPayloadSizeFilter PathPattern + chunked rejection",
+        "status": "closed",
+        "evidence": "Task 9 description (line 427) explicitly states: 'preserving PathPattern path matching (`/webhooks/telegram/{projectId}` single-segment) + chunked Transfer-Encoding rejection + missing-Content-Length rejection per patterns.md Webhook Ingestion section.' Both bypass vectors covered."
+      },
+      {
+        "round1Finding": "MAJOR — Session fixation invalidate-and-recreate",
+        "status": "closed",
+        "evidence": "tech-spec.md line 29 — Architecture explicitly notes: 'on successful login, `request.changeSessionId()` is invoked before `securityContextRepository.saveContext(...)` to mint a fresh JSESSIONID (mirrors current WebSession.invalidate() + new session semantics).' Servlet 3.1 changeSessionId() is preferred over invalidate-and-recreate to preserve session attributes — appropriate ordering. Task 6 description (line 405) echoes the invariant."
+      },
+      {
+        "round1Finding": "MAJOR — BCrypt back-pressure removal observability",
+        "status": "closed",
+        "evidence": "User-accepted per D4 (line 110-118). No tech-spec change required; risk explicitly documented in R7."
+      },
+      {
+        "round1Finding": "MAJOR — Token-scrubber site preservation",
+        "status": "closed",
+        "evidence": "New TC10 (line 354) enumerates 6 scrubber sites under per-site ListAppender<ILoggingEvent> tests: controller DuplicateKey WARN, controller enqueue-failure ERROR, filter 413 WARN, worker INFO/WARN/ERROR sites, sender 4xx/5xx/429/timeout sites. Test discipline preserves regression-detection at the call-site granularity recommended in patterns.md."
+      },
+      {
+        "round1Finding": "MAJOR — requireOwned anti-enumeration 404",
+        "status": "closed",
+        "evidence": "Task 7 description (line 412): 'preserving anti-enumeration 404 mapping (uniform 404 for foreign-owned / soft-deleted / IllegalArgumentException on bad ObjectId hex).' Explicit enumeration of all three 404 cases including the IllegalArgumentException → 404 mapping that Round 1 flagged."
+      },
+      {
+        "round1Finding": "MAJOR — Brute-force INCR+EXPIRE atomicity",
+        "status": "closed",
+        "evidence": "Task 6 description (line 405) + Task 7 description (line 412) both state: 'brute-force Redis INCR+EXPIRE+DEL atomicity (sync Lettuce primitives)' / 'Brute-force INCR+EXPIRE+DEL atomicity preserved via sync Lettuce primitives.' Note: the 'EXPIRE-only-when-INCR-returns-1' branch (per patterns.md bot-connect variant) is not literally enumerated in task text, but 'atomicity preserved' is a reasonable umbrella reading; security-audit at Task 15 (line 478-481) will validate the exact branch logic at code-review time."
+      },
+      {
+        "round1Finding": "MAJOR — Spring Session in-flight bytes-shape",
+        "status": "closed",
+        "evidence": "AC16 strengthened per Task 12 (line 453): 'load a hand-crafted BSON fixture document into sessions representing the pre-flip ReactiveMongoSessionRepository byte-shape (per R5) — assert the post-flip MongoIndexedSessionRepository reads the principal field correctly.' Lifts R5 from manual operator step to automated regression gate. Closes the silent-deserialization-corruption risk."
+      },
+      {
+        "round1Finding": "MINOR — CORS migration",
+        "status": "closed",
+        "evidence": "tech-spec.md line 29 — Architecture explicitly names `org.springframework.web.cors.UrlBasedCorsConfigurationSource` (servlet package, distinct from the WebFlux reactive equivalent). Existing CORS settings carry via the same property surface."
+      },
+      {
+        "round1Finding": "MINOR — SecurityContextHolder MODE_THREADLOCAL under VT",
+        "status": "closed",
+        "evidence": "Implicit Spring default behaviour acknowledged in the architecture (auto-config picks servlet stack per WebApplicationType). No InheritableThreadLocal opt-in path in the spec. Acceptable as a documented invariant; runbook covers it under Task 11 VT pinning probe."
+      },
+      {
+        "round1Finding": "MINOR — Mass-assignment DTO whitelist",
+        "status": "closed",
+        "evidence": "Confirmed out-of-scope per user direction; `@JsonIgnoreProperties(ignoreUnknown = true)` invariant unchanged across the migration. Existing reactive-path ITs migrate verbatim to MockMvc under Task 6/7 — DTO contracts not modified."
+      },
+      {
+        "round1Finding": "MINOR — EventService collapse silent audit-write failure",
+        "status": "closed",
+        "evidence": "D12 (line 190-198) collapses API to `Event logEvent(...)` that propagates exceptions to the caller. The bare API itself enforces the 'caller-receives-Event-or-exception' contract — no silent loss at the API boundary. Round 2 nit: the spec does not explicitly forbid callers from try/catch-swallowing exceptions for security-relevant audit events; this is left to code-reviewer at Task 14 + security-auditor at Task 15."
+      }
+    ]
+  },
+  "newTechnicalAcceptanceCriteria": {
+    "TC10": {
+      "description": "Per-site ListAppender token-scrubber assertions at 6 enumerated sites.",
+      "securityImpact": "Closes Round 1 MAJOR — token-leak regression risk via imperative rewrite.",
+      "assessment": "Strong — matches patterns.md per-site discipline."
+    },
+    "TC11": {
+      "description": "XSRF-TOKEN co-emitted with SESSION on login response.",
+      "securityImpact": "Closes the csrfCookieMaterializer-removal regression risk explicitly.",
+      "assessment": "Strong — directly verifies the CSRF cookie write path that the WebFlux materializer used to handle."
+    },
+    "TC12": {
+      "description": "Per-file coverage floor ≥80% line+branch for 7 new/rewritten high-risk files.",
+      "securityImpact": "Defense-in-depth against test-coverage drift on the most security-sensitive files (RememberMeCookieSerializer, WebhookPayloadSizeFilter, TelegramApiClient, TelegramSender, GlobalErrorHandler).",
+      "assessment": "Strong — supplements aggregate coverage guard TC2 with per-file floor that prevents subtle drift hiding inside a healthy global number."
+    }
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "A02: Cryptographic Failures",
+      "title": "Documentation polish — `How it works` CSRF prose names plain handler, contradicts Architecture section's XOR handler binding",
+      "description": "tech-spec.md line 29 (Architecture, source of truth) correctly specifies `XorCsrfTokenRequestAttributeHandler` paired with `CookieCsrfTokenRepository.withHttpOnlyFalse()` for BREACH mitigation. However, line 57 (`How it works` narrative prose) says: `MVC CsrfFilter invokes CsrfTokenRequestAttributeHandler.handle(request, response, deferredToken)` — uses the plain handler name without the `Xor` prefix. This is documentation drift, not a security regression because the Architecture binding is the source of truth and Task 3 (line 383) references `D15 CSRF handler choice` — but a future implementer scanning only the `How it works` section could misread the prose as endorsing the plain handler.",
+      "location": "tech-spec.md line 57",
+      "impact": "Implementer reading the `How it works` runtime-flow narrative could implement the plain `CsrfTokenRequestAttributeHandler` and miss XOR randomization, re-opening the BREACH attack surface. Code-reviewer at Task 14 / security-auditor at Task 15 should catch it, but the spec itself should be self-consistent.",
+      "recommendation": "Update tech-spec.md line 57 to read: `MVC CsrfFilter invokes XorCsrfTokenRequestAttributeHandler.handle(request, response, deferredToken)` so the prose matches Architecture line 29's binding. Single-word edit.",
+      "cwe": "CWE-1059"
+    }
+  ]
+}

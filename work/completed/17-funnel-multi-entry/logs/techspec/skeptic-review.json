@@ -1,0 +1,12 @@
+{
+  "verdict": "pass",
+  "summary": "Verified all file paths, classes, methods, fields, indexes, regexes and reused primitives cited by tech-spec 17-funnel-multi-entry against the actual codebase. Every MODIFY-target file exists; every referenced primitive (insertExecutionAt, resumeOnCallback/claimForCallback/stillClaimed, FunnelTriggerIndexReconciliation BeanPostProcessor, FunnelEventService backstops + enrollSpecificFunnel, applyTrigger/checkTriggerConflict/saveHandlingTriggerConflict/validateSteps/requireExistingTarget, hasWaitingForReplyExecution probe, SearchableSelect, FunnelStepsList emits, FunnelTriggerSettings defineModel, subscribeEntryOptions, __START__ sentinel) exists as described. Index names, static-block literal assertions, EVENT_NAME_PATTERN regex, the funnel_executions re-enter index filter, LOG_BROKEN_CURSOR precedent, and the -PrunSlow gradle flag all match. The two files the spec proposes to CREATE (Trigger.java, FunnelTriggersPanel.vue) are correctly absent. No mirages found.",
+  "findings": [
+    {
+      "severity": "low",
+      "claim": "Tech-spec Architecture/Frontend and Decision 13 reference FunnelStepsList.vue emitting a `move` (reorder ↑/↓) capability the new Triggers panel would clone its add/delete/select structure from.",
+      "reality": "FunnelStepsList.vue does emit move/edit/delete/add/select. The tech-spec explicitly clones only add/delete/select (not reorder), which is consistent — triggers are unordered. No discrepancy, noting only that the panel intentionally drops the `move` emit. Informational, not a mirage.",
+      "location": "Architecture > Frontend; Decision 13"
+    }
+  ]
+}

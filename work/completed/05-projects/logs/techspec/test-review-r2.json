@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round 2 re-validation confirms all 5 round-1 findings are resolved with concrete, behavioral test plans. Audit event ITs now spell per-event metadata field assertions (projectId, name, previousName), AC-14b adds both toast branches, SSR-context test for stores/projects.spec.ts uses import.meta.client=false, tests/i18n/required-keys.spec.ts asserts the 4 AC-25 keys explicitly in both locales, and a 'Tests intentionally NOT written' subsection documents R3/R4 omissions with rationale. Round-2 additions (6 anti-enumeration IT cases for PATCH/DELETE/RESTORE × foreign/malformed and the bare-WebTestClient 401 wording) are sufficient and correctly worded. One minor gap remains: PATCH on soft-deleted-own-id is not explicitly listed in the anti-enumeration matrix (DELETE-on-soft-deleted is covered at line 338, GET at line 323, but PATCH-on-soft-deleted is not). This is a low-severity completeness issue, not a blocker.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "tech-spec.md Section: Testing Strategy > Integration tests > ProjectControllerIT (anti-enumeration parity matrix)",
+      "issue": "The round-2 anti-enumeration matrix at lines 324-330 covers PATCH/DELETE/RESTORE × foreign/malformed (6 cases) plus GET on foreign/malformed/soft-deleted-own-id (line 323). DELETE on already-soft-deleted-own-id → 404 is covered at line 338. However, PATCH on soft-deleted-own-id → 404 is not explicitly listed. AC-10 mandates 404 uniformity for single-resource access on soft-deleted-by-default, and Decision 2 + the requireOwned(includeSoftDeleted=false) guard apply to PATCH the same as GET/DELETE. Without an explicit IT case, a regression that flips includeSoftDeleted to true on the PATCH path would not be caught.",
+      "recommendation": "Add one bullet under the anti-enumeration parity subsection: 'PATCH /{soft-deleted-own-id} → 404 (verifies requireOwned(includeSoftDeleted=false) on PATCH path matches GET behavior — AC-10 verb-parity).' This closes the matrix to 3 verbs × 3 cases (foreign / malformed / soft-deleted-own) for full anti-enumeration coverage."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 18,
+      "passed": 17,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 9,
+      "integration": 2,
+      "e2e": 1,
+      "assessment": "healthy"
+    }
+  }
+}

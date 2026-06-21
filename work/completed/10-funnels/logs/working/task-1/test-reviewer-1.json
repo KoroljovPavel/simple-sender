@@ -1,0 +1,48 @@
+{
+  "reviewer": "test-reviewer",
+  "task": 1,
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java",
+      "finding": "Three `assertThat(variable).isNotNull()` assertions (lines after each `byKey(...)` call) are tautological. The `byKey` helper never returns null — it throws `AssertionError` with a descriptive message if no matching index is found. The subsequent `isNotNull()` checks add zero protection and create false confidence that a null-check guard exists, while the real failure path goes through the helper throw.",
+      "recommendation": "Remove the three `assertThat(lookup).isNotNull()`, `assertThat(sweep).isNotNull()`, and `assertThat(cascade).isNotNull()` assertions. The `byKey` throw already produces a clear failure. If you want explicit null safety before further chaining, change the call to `assertThat(byKey(...)).isNotNull()` directly without storing in a variable — but in this code the variable is always non-null so the assertion is still dead. Simply remove them."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepTest.java",
+      "finding": "`deepCopyProducesIndependentStep` only populates 4 of 11 fields before copying (stepType, order, text, parseMode). The remaining 7 fields (imageUrl, caption, delayValue, delayUnit, tagSlug, customFieldKey, customFieldValue) are null/0 in both source and copy, so their independence is never exercised. In particular, `customFieldValue` is typed as `Object` — if a caller ever stores a mutable object (Map, List), the field-wise copy in `copyOf` would silently become shallow for that field. The test does not catch this risk.",
+      "recommendation": "Add a second scenario that populates all type-specific fields and asserts independence, OR extend the existing test to set one representative value per type-specific group. At minimum, add: `original.setCustomFieldValue(\"raw-value\")` and verify `copy.getCustomFieldValue()` equals it but remains independent after mutation. For the structural concern about mutable Object values: either document in the Javadoc that `customFieldValue` must be immutable at call-site, or add a defensive copy for known mutable types (e.g. copy a Map via `new HashMap<>(...)`). If the contract is intentionally \"callers must provide immutables\", add a test asserting String customFieldValue independence."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java",
+      "finding": "`contextStartsAndCollectionsExistWithoutError` checks `mongoTemplate.getCollectionNames()` which may return collection names populated before the test collections are explicitly touched. Auto-index-creation creates indexes on context startup by scanning `@Document` entities, but if the collections have not been inserted into, they may not appear in `getCollectionNames()` until first use. This could make the test pass vacuously (if collections were created by other IT test fixtures) or fail non-deterministically depending on test ordering.",
+      "recommendation": "Add explicit `mongoTemplate.getCollection(\"funnels\")` and `mongoTemplate.getCollection(\"funnel_executions\")` touch calls (e.g. `mongoTemplate.collectionExists(\"funnels\")`) before the assertion, or change the assertion to verify index count is >1 on each collection (the presence of non-default indexes proves both creation and index materialization). Alternatively, rely entirely on the two companion index tests since they already prove collection creation implicitly."
+    },
+    {
+      "severity": "low",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepTest.java",
+      "finding": "No test covers the edge case where `triggerValue` is an empty string (`\"\"`). The task spec edge-cases section explicitly calls out that `triggerValue` can be `\"\"` (bare `/start`) and that the partial-unique index must treat it as a valid distinct key. This is an index-semantics concern, not a FunnelStep concern — but there is no IT coverage in `FunnelIndexesIT` either that inserts two `Funnel` documents with different `triggerValue` (one empty, one non-empty) under the same `projectId` and `triggerType=active` to confirm the partial-unique index resolves correctly.",
+      "recommendation": "Add a test in `FunnelIndexesIT` that inserts two active funnels with `triggerValue=\"\"` and `triggerValue=\"promo\"` in the same project and confirms no duplicate-key exception is thrown (they are different trigger values). Also insert two active funnels with the same empty `triggerValue` in the same project and confirm a `DuplicateKeyException` IS thrown. This pins the empty-string index semantics documented in the task edge-cases."
+    }
+  ],
+  "summary": "Tests cover all five TDD anchor cases and all relevant acceptance criteria. FunnelStatusEnumTest pins the full byte-match contract for all 11 lowercase constants plus the StepType uppercase discriminators. FunnelStepTest verifies deep-copy independence bidirectionally and handles the null guard. FunnelIndexesIT asserts actual index metadata (keys, unique flag, partialFilterExpression content including $in literals and declared order) as required by the TDD anchor. No critical or major issues. Four minor/low findings: tautological isNotNull() assertions after byKey() calls, incomplete field coverage in the deep-copy test, a potential test-ordering fragility in contextStartsAndCollectionsExistWithoutError, and a missing empty-string triggerValue index edge case.",
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 7,
+      "failed": 1
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 3,
+      "integration": 3,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "validator": "reality-checker",
+  "batch": [4, 5, 6],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "Task 4 'Details' section states validateSteps lines ~656–699 contain switch cases SEND_MESSAGE/SEND_IMAGE/MENU. This is CONFIRMED correct. However, the task also says to re-use requireHttpUrl (~815) for media-URL validation. The actual requireHttpUrl at line 815 is hard-wired to the string literal 'MENU url button' in all its error messages (e.g. 'MENU url button must use the http or https scheme'). If directly re-used for ContentBlock media-URL validation it will emit misleading 'MENU url button' error messages. Task says 'reuse' but doesn't flag this message-text conflict.",
+      "fix": "The implementer must either extract a shared private requireValidUrl(String url, String errorPrefix) helper or accept that error messages will say 'MENU url button' for media URL validation errors. Task should explicitly call this out rather than implying a clean reuse."
+    },
+    {
+      "severity": "critical",
+      "category": "missing_function",
+      "task": 4,
+      "issue": "PreviewStepResponse is currently a record with a single 'rendered' field: `record PreviewStepResponse(String rendered, boolean sampleData, String kind)`. Task 4 must replace 'rendered' with 'renderedBlocks: List<RenderedBlock>' (or List<String> per tech-spec). The existing FunnelMessagePreview.spec.ts tests (frontend/tests/components/funnels/FunnelMessagePreview.spec.ts) and funnels.spec.ts (frontend/tests/stores/funnels.spec.ts line 242) explicitly reference the 'rendered' field and construct PreviewStepResponse objects with it. The task and tech-spec do not mention that these existing frontend tests will break and must be updated as part of Task 4 (or Task 6/8).",
+      "fix": "Task 4 must explicitly list the frontend test files that use PreviewStepResponse.rendered and coordinate their update: frontend/tests/stores/funnels.spec.ts (lines 241-244) and frontend/tests/components/funnels/FunnelMessagePreview.spec.ts (line 39, 65, 74, 84, 105, 128). Without this, CI will fail after Task 4 backend changes propagate. Either Task 4 scope must include updating these tests, or a cross-task dependency must be stated."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 5,
+      "issue": "Task 5 'TDD Anchor' specifies 12 new tests in FunnelTriggerServiceIT. The existing FunnelTriggerServiceIT.java has NO advanceOnCallback tests at all (confirmed by grep returning 0 matches). However, line 363 of that file creates a step with StepType.SEND_MESSAGE, and line 370 with StepType.DELAY. After Task 1 removes SEND_MESSAGE from StepType enum, this existing test code will fail to compile. Task 5 does not mention updating the existing SEND_MESSAGE reference in FunnelTriggerServiceIT (line 363) to the new StepType.MESSAGE.",
+      "fix": "Task 5 must include updating FunnelTriggerServiceIT line ~363 where StepType.SEND_MESSAGE is used in test seed data. Replace with StepType.MESSAGE (and add required blocks field) so the file compiles after Task 1."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 6,
+      "issue": "Task 6 depends_on: [4]. But existing frontend tests in funnels.spec.ts (line 237) construct a PreviewStepRequest with 'stepType: SEND_MESSAGE' and 'text' field, and FunnelMessagePreview.spec.ts (line 24, 44) does the same. After Task 6 removes SEND_MESSAGE from StepType and removes the 'text' top-level field from PreviewStepRequest, these tests will fail TypeScript compilation (npx nuxi typecheck). Task 6 explicitly says 'if npx nuxi typecheck complains about existing call-sites — do NOT rewrite foreign logic; document as known-handoff for Task 8'. However, the funnels.spec.ts test (line 237) passes PreviewStepRequest with old shape — this is not a component (Wave 4 scope) but a STORE TEST that tests preview action. It falls in between the responsibility boundary. The task's guidance is ambiguous about store tests.",
+      "fix": "Task 6 must clarify whether funnels.spec.ts (tests/stores/funnels.spec.ts, lines 235-265) is in scope for update. The test uses PreviewStepRequest with the old shape (stepType, text, parseMode) and PreviewStepResponse with 'rendered'. Since it is a store test (not a Wave-4 UI component), 'do not touch Task 8 scope' does not apply. Recommend explicitly listing this file as requiring update in Task 6 or Task 8, with clear ownership."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4's 'Details' section states: 'toStepDto (~954–976) виставляють плоскі msg-поля — замінити на blocks'. The actual toStepDto method at lines 954–975 is a method call to FunnelStepDto constructor that passes 20 positional arguments including text, parseMode, imageUrl, caption. After Task 4 removes these from FunnelStepDto record constructor and adds blocks, the entire constructor call signature changes. The task correctly identifies this but does not note that the FunnelStepDto record declaration itself must be updated (the record's canonical constructor). This is implicit from other steps but deserves explicit mention since FunnelStepDto is a record, not a class, and all call sites must be updated atomically.",
+      "fix": "Minor clarification needed: explicitly state that FunnelStepDto record constructor signature changes and that toStepDto (line 954) and toSteps (line 618-619 where setText/setParseMode etc. are called on FunnelStep) must both be updated atomically. Already implied by the task but easy to miss."
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 4,
+      "issue": "Task 4 states requireText (~839) and requireImageUrl (~854) are 'dead helpers' to remove. However, requireText is ALSO called from inside validateMenu — see FunnelService.java line ~683 case SEND_MESSAGE -> requireText. Wait: validateMenu itself does NOT call requireText — only case SEND_MESSAGE and SEND_IMAGE switch branches do. But there is a subtlety: requireTimeout (line 878) contains string literals 'MENU timeout' in its error messages. Task 4 says to re-use requireTimeout for MESSAGE-step buttons/timeout validation, but those error messages say 'MENU timeout requires...' which will be misleading. This is the same category of issue as requireHttpUrl.",
+      "fix": "Same remediation as requireHttpUrl finding: extract shared helpers or update error message strings when re-using MENU-specific validators for MESSAGE step validation."
+    },
+    {
+      "severity": "major",
+      "category": "tdd",
+      "task": 5,
+      "issue": "Task 5's TDD Anchor requires 12 tests in FunnelTriggerServiceIT covering advanceOnCallback paths. The FunnelExecutionEngineIT is also expected to remain green (timeout-resume parity). However, the task states 'Verify: ./gradlew test --tests FunnelExecutionEngineIT' but does NOT list FunnelExecutionEngineIT in the TDD Anchor section — meaning those tests are existing regression tests. Since Task 1 will have removed StepType.MENU, FunnelExecutionEngineIT likely contains MENU-step references that will break compilation. Task 5 does not mention updating FunnelExecutionEngineIT if it references SEND_MESSAGE/SEND_IMAGE/MENU. This is a cross-task gap the executor needs to be aware of.",
+      "fix": "Grep FunnelExecutionEngineIT for StepType.SEND_MESSAGE, StepType.SEND_IMAGE, StepType.MENU references and confirm they are handled in the appropriate task's scope (likely Task 3's or Task 4's regression update). Task 5 should explicitly state it is NOT responsible for those regressions but will verify they are green."
+    },
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 4,
+      "issue": "Task 4 'Implementation hints' section contains detailed pseudocode-style instructions: 'для message-кроку ітерувати request.blocks(), рендерити кожен text+caption через VariableTemplateRenderer.render(..., parseMode, subscriber), медіа-URL/items проводити як є БЕЗ фетчу; зібрати renderedBlocks; kind=\"message\"'. This is step-by-step algorithm, not a hint pointing to a pattern. The 'Details' section compounds this with 'У previewStep: ітерувати блоки, рендерити через VariableTemplateRenderer, БЕЗ медіа-фетчу'. Per the validation checklist, hints with step-by-step algorithms are severity major.",
+      "fix": "Hints should point to the existing previewStep method (lines 379-400) as the pattern to extend, noting that VariableTemplateRenderer.render() is the escaping hook. Remove the prescriptive iteration algorithm."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 6,
+      "issue": "Task 6 references 'frontend/tests/types/subscriber-filters.spec.ts' as the precedent for an optional compile-time type-fixture test. This file exists and is confirmed valid. However, the test path Task 6 proposes for the new fixture is 'tests/types/funnel-blocks.spec.ts'. The existing types test lives at 'frontend/tests/types/subscriber-filters.spec.ts' — the new file would be at 'frontend/tests/types/funnel-blocks.spec.ts'. This path is consistent with the project structure. No issue with the path itself, but the task should note that the subscriber-filters.spec.ts test uses runtime functions (toListQuery, defaultFilter) — not a pure compile-only fixture — so it is not a perfect precedent for a pure type-assignability test.",
+      "fix": "Minor: the 'optional fixture' guidance is sound but the precedent example is imperfect (subscriber-filters.spec.ts tests runtime functions, not just types). Clarify that the new funnel-blocks.spec.ts should be a minimal assignability fixture in vitest style."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 5,
+      "issue": "Task 5's 'Implementation hints' section mentions 'Decision 8' in 'Зберегти інваріант answerCallbackQuery на КОЖНОМУ exit-шляху'. The tech-spec does not have a Decision 8 that covers answerCallbackQuery — the tech-spec Decisions go up to Decision 8 (Preview multiblock). The FunnelTriggerServiceImpl.java source code's Javadoc references its OWN internal 'Decision 8' (answerCallbackQuery on every exit path) which is a different numbering from the feature tech-spec Decisions. This creates potential confusion.",
+      "fix": "Minor ambiguity: clarify in task that 'Decision 8' in this context refers to the in-file FunnelTriggerServiceImpl comment convention, not the feature tech-spec Decision 8 (preview multiblock)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 10
+  }
+}

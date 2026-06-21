@@ -1,0 +1,38 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "4",
+  "round": 1,
+  "commit": "17c5117",
+  "summary": "FunnelEventService dispatcher + FunnelExecutionFactory cycle-break + project-scoped SubscriberService.findById. Architecture is sound: the factory removes any FunnelEventService->FunnelTriggerServiceImpl edge and has no engine edge, so the Task-5 StepExecutor->FunnelEventService edge cannot close a cycle (confirmed by IT context boot). Error-isolation, PII-safe logging, and the three backstops are correctly implemented. A few minor findings.",
+  "findings": [
+    {
+      "id": "CR-1",
+      "severity": "minor",
+      "dimension": "Error Handling / Resource ordering",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "finding": "The volume rate-limit (depth>0) is consulted BEFORE the subscriber is resolved. An auto-enroll dispatch for a non-existent / foreign-project subscriberId still consumes one Redis token (INCR) before the no-subscriber no-op. Harmless (bounded per subscriberId, no PII), but it lets an attacker-influenced subscriberId burn rate-limit tokens it will never enroll under.",
+      "recommendation": "Acceptable as-is for this task: the depth cap + fan-out ceiling still bound the cascade, the token key is per-subscriberId, and resolving the subscriber first would add a DB read on every depth-0 path (the common case) for marginal benefit. Documented; no change required.",
+      "action": "wontfix"
+    },
+    {
+      "id": "CR-2",
+      "severity": "minor",
+      "dimension": "Readability / magic literal",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelEventService.java",
+      "finding": "Trigger-type comparison uses FunnelService.TRIGGER_KEYWORD / passes triggerType strings straight to the repo query. This matches the existing fire() convention (string triggerType) and reuses the canonical FunnelService constant, so no new magic literals are introduced.",
+      "recommendation": "No change — consistent with project convention.",
+      "action": "wontfix"
+    },
+    {
+      "id": "CR-3",
+      "severity": "minor",
+      "dimension": "Cross-file consistency",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionFactory.java",
+      "finding": "LOG_EXECUTION_STARTED keeps the same string literal ('FUNNEL_FIRE_EXECUTION_STARTED') as the removed FunnelTriggerServiceImpl.LOG_FIRE_STARTED, so existing log-based alerts/greps still match. The log line now additionally includes enrollDepth, which is additive and safe.",
+      "recommendation": "No change.",
+      "action": "wontfix"
+    }
+  ],
+  "verdict": "approve",
+  "notes": "No critical or major findings. Cycle-break verified structurally (constructor of FunnelEventService injects FunnelExecutionFactory, not FunnelTriggerServiceImpl; factory injects only MongoTemplate + Clock). PII rule honoured (ids/codes only). Tests cover fan-out, all three backstops incl. Redis-down, keyword matching, error-isolation, and the anti-IDOR findById."
+}

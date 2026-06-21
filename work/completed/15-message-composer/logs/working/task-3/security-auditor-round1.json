@@ -1,0 +1,20 @@
+{
+  "reviewer": "security-auditor",
+  "task": 3,
+  "round": 1,
+  "mode": "self-review (nested sub-agent spawning restricted in this environment)",
+  "scope": [
+    "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelExecutionEngineIT.java"
+  ],
+  "owasp_checks": {
+    "A01_broken_access_control_IDOR": "buildReplyMarkup (unchanged) encodes callback_data={executionId}:{index}; the keyboard now anchors to the last non-album block instead of a MENU step but the wire contract and owner/IDOR checks (advanceOnCallback) are unchanged and owned by Task 5. No trust-boundary change in the executor.",
+    "A03_injection_XSS": "Every TEXT text and every media caption (incl. the first album item) is rendered through VariableTemplateRenderer.render(..., block.parseMode(), subscriber), which escapes substituted values per parseMode (HTML/MarkdownV2). The executor never assembles raw markup. message_substitutesVariablesInTextAndAllCaptions asserts &lt;b&gt; escaping across all 5 send types.",
+    "A10_SSRF": "PASS — Decision 6 upheld. block.mediaUrl()/item.mediaUrl() are passed verbatim to the sender; the executor performs ZERO HTTP dereference of any media URL. Telegram fetches the URL server-side. http(s)-scheme validation is enforced at save (Task 4).",
+    "secrets": "No hardcoded secrets/tokens. Token decrypt/scrub is entirely inside the Task 2 TelegramSender.send path, untouched here.",
+    "logging_PII": "renderTrimmed WARN logs only the log-code + execution id + step index + lengths — never the rendered text/caption (Decision 16). Verified by message_trimsTextOver4096AndWarns asserting the payload 'aaaa' is absent from WARN output."
+  },
+  "findings": [],
+  "conclusion": "No security findings. Anti-SSRF, parseMode-escaping (XSS), no-PII logging, and the callback wire-contract are all preserved by the composer branch. No new attack surface introduced."
+}

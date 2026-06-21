@@ -1,0 +1,143 @@
+{
+  "task": "Task 9: Security Audit (16-persistent-keyboard)",
+  "auditor": "security-auditor (independent, Audit Wave — no separate reviewers)",
+  "date": "2026-06-11",
+  "methodology": "OWASP Top 10 (2021), full-file review of the final state of all source files created/modified in tasks 1-7; five tech-spec-pinned focus areas (preview XSS, validation completeness, log hygiene, preview IDOR, wire-body injection) verified explicitly plus the remaining OWASP categories across the changed components.",
+  "verdict": "PASS",
+  "counts": { "critical": 0, "major": 0, "minor": 0, "info": 8 },
+  "scope_reviewed": [
+    "backend/src/main/java/com/botfunnel/funnel/StepType.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelStep.java",
+    "backend/src/main/java/com/botfunnel/funnel/KeyboardRow.java",
+    "backend/src/main/java/com/botfunnel/funnel/KeyboardButton.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+    "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/FunnelStepDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/KeyboardRowDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/KeyboardButtonDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/PreviewStepRequest.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/PreviewStepResponse.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelController.java (read-only — preview endpoint scoping)",
+    "backend/src/main/java/com/botfunnel/bot/TelegramSender.java (read-only — 6-arg sendText serialization + scrub pipeline)",
+    "backend/src/main/java/com/botfunnel/funnel/VariableTemplateRenderer.java (read-only — keyboard-text escaping)",
+    "frontend/types/funnel.ts",
+    "frontend/components/funnels/FunnelStepForm.vue",
+    "frontend/components/funnels/FunnelMessagePreview.vue",
+    "frontend/i18n/locales/uk.json (new keyboard keys)",
+    "frontend/i18n/locales/en.json (new keyboard keys)"
+  ],
+  "findings": [],
+  "confirmed_invariants": [
+    {
+      "id": "INV-1",
+      "title": "Preview XSS surface — backend renders keyboard text via VariableTemplateRenderer (escaped per parse mode), labels echoed verbatim but clamped; frontend renders via {{ }} only, zero v-html (Decision 7, focus area 1)",
+      "owasp": "A03:2021 Injection (XSS)",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "FunnelService.previewStep keyboard branch (FunnelService.java:428-441): keyboardText rendered through renderTextBlock -> VariableTemplateRenderer.render(text, keyboardParseMode, subscriber) as exactly one TEXT RenderedBlock — the same renderer/parse-mode escaping as the runtime engine, so substituted variable values are escaped (HTML: & < > \"; MarkdownV2: full special set — VariableTemplateRenderer.java:168-211). Author markup is intentionally left untouched (Telegram parse-mode semantics), matching engine behavior — preview is byte-faithful.",
+        "Button labels are NEVER variable-rendered (they are the keyword link); clampKeyboardLabels (FunnelService.java:470-498) echoes them verbatim but TRUNCATES to the validation caps: <=10 rows, <=4 buttons/row, label substring(0,64). So the preview response can never reflect an unbounded/unvalidated payload even though it accepts live (possibly unvalidated) form state. null rows/buttons/text are skipped defensively (no NPE).",
+        "FunnelMessagePreview.vue keyboard branch (lines 234-261): keyboardText output via {{ keyboardText }} (line 239), each label via {{ label }} (line 258) — all {{ }} interpolation, never v-html. Line breaks via CSS whitespace-pre-wrap, not markup.",
+        "grep over frontend/components/funnels + types/funnel.ts + both locale files for v-html|innerHTML|outerHTML|dangerouslySet|insertAdjacentHTML|document.write returns ONLY affirming comments — zero actual HTML sinks. The no-v-html source guard holds for the new keyboard render path.",
+        "New locale keys (uk.json / en.json keyboard*, previewKeyboard*) are plain text with no raw HTML, so no component is forced to inject markup."
+      ]
+    },
+    {
+      "id": "INV-2",
+      "title": "Input validation completeness — caps 10x4, text <=4096, label <=64, trimmed-duplicate block, CLEAR_KEYBOARD strict field rejection, all -> 422 funnel_step_invalid, no NPE on null shapes (Decision 6, focus area 2)",
+      "owasp": "A03:2021 / A04:2021 Insecure Design",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "validateSetKeyboard (FunnelService.java:1291-1326): requireKeyboardText (non-blank, <=MAX_KEYBOARD_TEXT 4096 HARD — line 1347-1354), requireParseMode (null|HTML|MarkdownV2 — line 1230-1234), rows null/empty -> 422, rows>10 -> 422, per-row null/empty-buttons -> 422, buttons>4 -> 422, per-button null/blank text -> 422, text>64 (MAX_KEYBOARD_BUTTON_TEXT = MAX_KEYWORD_LENGTH 64) -> 422, duplicate on TRIMMED text via HashSet.add -> 422. Every throw is invalidStep -> AppException.unprocessableEntity(CODE_INVALID_STEP) (line 1356-1358).",
+        "validateClearKeyboard (FunnelService.java:1332-1344): mandatory text + parse mode, then STRICT rejection — keyboardRows != null -> 422, isPersistent != null -> 422, oneTimeKeyboard != null -> 422 (an empty-but-non-null list still counts as present). Symmetric, no silently-ignored fields.",
+        "Null-shape safety: toKeyboardRows (FunnelService.java:806-827) carries a null row through as null, a null buttons list as KeyboardRow(null), a null button element as null — all reach validateSetKeyboard which rejects them with a 422 (the null/null-buttons/null-button guards at lines 1306, 1314) rather than NPE. The DTO->domain mapper never dereferences a nullable nested field unsafely.",
+        "Frontend mirror (FunnelStepForm.vue:629-670): KEYBOARD_TEXT_MAX 4096 (raw length, matching backend text.length()), KEYBOARD_MAX_ROWS 10, KEYBOARD_MAX_BUTTONS_PER_ROW 4, KEYBOARD_BUTTON_TEXT_MAX 64; keyboardHasDuplicate uses Set over button.text.trim() — byte-for-byte parity with the backend trimmed-duplicate check (HashSet of button.text().trim()). Mirror is a UX backstop; the 422 is authoritative.",
+        "CLEAR_KEYBOARD onSubmit (FunnelStepForm.vue:976-989) emits ONLY stepType/keyboardText/keyboardParseMode/id/next — never keyboardRows/isPersistent/oneTimeKeyboard, so a well-formed editor never trips the strict rejection; a hand-crafted body still 422s."
+      ]
+    },
+    {
+      "id": "INV-3",
+      "title": "Log hygiene — keyboard StepExecutor cases and their error mapping log ids/codes only; no rendered text, labels, or chat content (focus area 3)",
+      "owasp": "A09:2021 Security Logging and Monitoring Failures",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "setKeyboard/clearKeyboard/sendKeyboardText (StepExecutor.java:343-379): the ONLY log site on the keyboard send path is the shared renderTrimmed (StepExecutor.java:274-283), whose WARN logs LOG_TEXT_TRIMMED (a static code), execution.getId(), execution.getCurrentStepIndex(), originalLength (int), trimmedTo (int) — ids + a code + lengths only, NEVER the rendered text or any label.",
+        "The defensive guard returns StepResult.fail(\"empty_keyboard_rows\") (line 346) — a static code string, no logging of content, no labels.",
+        "Error mapping is byte-for-byte the shared trio: TelegramSendException -> fromTerminalReason (returns reason.name() — an enum constant), BotTokenInvalidException -> fail(\"invalid_bot_token\") (constant), AppException -> fail(codeOrStatus(ex)) (ex.getCode() or HTTP status int — never ex.getMessage()). None of these branches log a payload.",
+        "Downstream sender error logging (TelegramSender.sendMapped catch, TelegramSender.java:339-340) runs scrubTokens(ex.getMessage()) — the existing scrub pipeline, and it never logs the request body/reply_markup/labels. This path is unchanged by the feature.",
+        "validate* messages name fields/limits in plain English but never echo author content (e.g. \"SET_KEYBOARD has duplicate button texts\" — no label value), consistent with the PII-free convention."
+      ]
+    },
+    {
+      "id": "INV-4",
+      "title": "Anti-IDOR on the preview path — requireOwned FIRST then projectId-scoped funnel lookup, then step lookup; fail-closed uniform 404 (Decision 7, focus area 4)",
+      "owasp": "A01:2021 Broken Access Control",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "FunnelController.previewStep (FunnelController.java:122-129): projectId/funnelId/stepId from @PathVariable; ownerId from currentUserId() (SecurityContextHolder -> AppUserDetails, lines 131-137) — never from the body.",
+        "FunnelService.previewStep (FunnelService.java:406-410) calls requireFunnel(ownerId, projectId, funnelId) FIRST, then findStep on the resolved funnel. requireFunnel (lines 593-606) calls projectService.requireOwned(ownerId, projectId) before any DB read, then filters the loaded funnel by projectId.equals(f.getProjectId()) — a cross-project or missing funnelId collapses to the same notFound(MESSAGE_NOT_FOUND); a malformed ObjectId also collapses to 404 (no existence leak / enumeration).",
+        "findStep (FunnelService.java:554-559) searches ONLY funnel.getSteps() of the already-ownership-verified funnel — a foreign stepId yields Optional.empty -> 404. No lookup bypasses the ownership scope.",
+        "The keyboard branch gates on step.getStepType() — the SAVED step's type (FunnelService.java:428,437), NOT request.stepType() (which is documented dead code in PreviewStepRequest). A client cannot drive the keyboard render path by claiming a stepType in the body; only a genuinely-saved SET_KEYBOARD/CLEAR_KEYBOARD step reaches it. No new lookup was introduced."
+      ]
+    },
+    {
+      "id": "INV-5",
+      "title": "No wire-body injection via button labels — reply_markup built as LinkedHashMap/List, buttons in object form {\"text\":...}, serialized verbatim by Jackson; no string concatenation, no sibling-key injection (Decision 5, focus area 5)",
+      "owasp": "A03:2021 Injection",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "buildReplyKeyboardMarkup (StepExecutor.java:396-414): builds a LinkedHashMap with EXACTLY the keys keyboard / is_persistent / resize_keyboard / one_time_keyboard. Each button is a fresh LinkedHashMap with the single literal key \"text\" mapped to button.text() as a VALUE (line 402-403). The label is data, never a key, never concatenated into a string. There is no path where a label becomes a JSON key or a non-text button field — sibling keys (selective, web_app, request_contact, input_field_placeholder) are simply not emitted.",
+        "REMOVE_KEYBOARD_MARKUP (StepExecutor.java:387) is a constant Map.of(\"remove_keyboard\", true) — no user input at all.",
+        "resize_keyboard is hardcoded literal true (line 411 — never read from the step); is_persistent / one_time_keyboard fall back to literal true/false on null (lines 410,412) so a JSON null is never emitted; they are Boolean values, not user-controlled keys.",
+        "TelegramSender.sendText 6-arg (TelegramSender.java:149-161) places the markup Object under contentFields.put(\"reply_markup\", replyMarkup) ONLY when non-null, then the body is serialized by the HTTP client's Jackson mapper — the label enters the JSON as a Jackson-escaped string value. No string concatenation into the request body anywhere on this path.",
+        "Engine slow-lane IT (Decision 9, Task 6) asserts the exact /sendMessage body shape via MockWebServer JsonNode walk, pinning that only the documented keys appear."
+      ]
+    },
+    {
+      "id": "INV-6",
+      "title": "Mass-assignment — new DTO fields are content-only; no ownerId/projectId/botId/order readable from the body; @JsonIgnoreProperties drops unknown fields (patterns.md DTO whitelist)",
+      "owasp": "A08:2021 / A01:2021",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "FunnelStepDto (FunnelStepDto.java:27-61) appends only keyboardText/keyboardParseMode/keyboardRows/isPersistent/oneTimeKeyboard — all content fields. No ownerId/projectId/botId. order is intentionally absent (server rewrites from array index — toSteps step.setOrder(i), FunnelService.java:753). Carries @JsonIgnoreProperties(ignoreUnknown=true).",
+        "PreviewStepRequest (PreviewStepRequest.java:28-35) carries stepType/blocks/keyboardText/keyboardParseMode/keyboardRows only, @JsonIgnoreProperties(ignoreUnknown=true). No identity fields; request.stepType() is dead (the service gates on the saved type), so even a spoofed stepType cannot redirect rendering.",
+        "KeyboardRowDto / KeyboardButtonDto (net-new) carry @JsonIgnoreProperties(ignoreUnknown=true) and only buttons / text respectively — consistent with the other funnel DTOs; a hostile payload with extra fields is silently ignored, never a 400/500.",
+        "PreviewStepResponse (PreviewStepResponse.java:21-22) returns EXACTLY {renderedBlocks, sampleData, kind, keyboardRows} — no ownerChatId / subscriber identity leaks to the client (the stub subscriber is never serialized; only rendered text + raw labels go out)."
+      ]
+    },
+    {
+      "id": "INV-7",
+      "title": "Variable-substitution injection in keyboardText — single-pass non-recursive renderer, substituted values escaped per parse mode",
+      "owasp": "A03:2021 Injection",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "keyboardText flows through the SAME VariableTemplateRenderer.render as every other send/preview text. Substitution is single-pass and non-recursive (VariableTemplateRenderer.java render loop): a {user.*}/{custom.*} value containing braces is NOT re-parsed, so a value cannot inject a new placeholder; values are escaped per parseMode (HTML & < > \"; MarkdownV2 full set). The keyboard path adds no new substitution mechanism.",
+        "Button labels are NOT passed through the renderer at all (verbatim, by design — they are the keyword link), so there is no variable-substitution surface on labels; their only transform is the length clamp in preview / verbatim store + Jackson-escape at send."
+      ]
+    },
+    {
+      "id": "INV-8",
+      "title": "SSRF (A10) and copyOf snapshot integrity — no URLs in reply-keyboard buttons; keyboardRows defensively deep-copied",
+      "owasp": "A10:2021 Server-Side Request Forgery / A08:2021 Data Integrity",
+      "severity": "info",
+      "status": "CONFIRMED",
+      "evidence": [
+        "A10 (SSRF) is N/A for this feature: a reply-keyboard KeyboardButton carries ONLY a text label (KeyboardButton.java — single text component); there is no url/web_app field, so no user-controlled URL enters any server-side request. Stated explicitly rather than skipped. (The MESSAGE-composer media-URL SSRF surface is unchanged and out of scope here.)",
+        "FunnelStep.copyOf (FunnelStep.java:116-154): keyboard scalars (keyboardText/keyboardParseMode immutable Strings, isPersistent/oneTimeKeyboard boxed Booleans) reference-copied; keyboardRows defensively copied via new ArrayList<>(source.keyboardRows) (line 152, null stays null) — elements (KeyboardRow/KeyboardButton) are immutable records, so the snapshot is isolated from later edits/duplicate (user-spec Risk 1). No shared-mutable-state integrity gap.",
+        "keyboard hint (Decision 8) is computed client-side from useFunnelsStore summaries (FunnelStepForm.vue:677-687) over already-loaded FunnelSummaryResponse data — no new endpoint, no new data exposure; the hint is advisory and never gates submit."
+      ]
+    }
+  ],
+  "deviations_from_spec": [],
+  "notes": [
+    "Minor parity observation (NOT a security issue): SET_KEYBOARD onSubmit emits TRIMMED button texts (FunnelStepForm.vue:967 b.text.trim()), whereas the backend toKeyboardRows stores button text VERBATIM and trims only inside the duplicate check (FunnelService.java:822,1321). The net effect is benign — the editor sends pre-trimmed labels, the backend accepts them, and the duplicate check is trim-based on both sides. No injection or bypass; flagged only as a normalization note for the code audit (Task 8).",
+    "The frontend keyboard validation mirror (caps/duplicates/text) is UX-only; the authoritative gate is validateSetKeyboard/validateClearKeyboard (422). A bypassed client check does not weaken the posture.",
+    "previewStep falls back to a stub subscriber when the owner bot is not linked (FunnelService.java:415-418); the stub carries sample identity values and is never persisted/serialized as identity — only the rendered text reaches the client, consistent with the no-identity-leak contract of PreviewStepResponse."
+  ]
+}

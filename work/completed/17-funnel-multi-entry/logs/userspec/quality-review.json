@@ -1,0 +1,79 @@
+{
+  "status": "approved",
+  "checks": {
+    "completeness": "pass",
+    "edge_cases": "pass",
+    "acceptance_criteria": "pass",
+    "contradictions": "pass",
+    "template_compliance": "pass",
+    "size_check": "pass"
+  },
+  "findings": [
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "interview.yml conversation_history is empty ([]). All phase-level items (user_problem, target_users, success_criteria, etc.) have score: 0 and status: pending. The knowledge is preserved only in the feature_description notes block and YAML comments — not in the structured conversation_history format the template expects. This makes the interview unresumable in a fresh session.",
+      "location": "work/17-funnel-multi-entry/logs/userspec/interview.yml — conversation_history",
+      "fix": "Backfill conversation_history with the 8 user-message exchanges summarized in the feature_description value block. Update per-item scores and statuses to reflect completed state. This is cosmetic for the spec but important for audit trail completeness."
+    },
+    {
+      "check": "completeness",
+      "severity": "minor",
+      "issue": "\"Зачем\" section describes business value primarily in terms of internal architecture benefits (\"передумова для canvas-редактора\", \"замикає внутрішньоворонкову петлю\"). The concrete end-user value (funnel author's pain point before this feature) is not explicitly stated — the reader must infer it. The section does name the persona (автор воронок) and the capability, but not the friction being removed.",
+      "location": "user-spec.md — ## Зачем",
+      "fix": "Add one sentence stating the current pain: \"Зараз автор не може завести підписника в середину воронки без нового /start — кожна нова гілка потребує окремої воронки і нового ручного входу.\""
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "Criterion for UI i18n (\"Усі рядкові підписи UI — через t('key') (uk + en parity)\") describes an implementation constraint, not an observable behavior. It is testable (lint check catches missing keys), but phrased as a code requirement rather than a user-observable outcome. Not a blocker, but could be phrased as \"UI labels for the Triggers panel appear in both Ukrainian and English without missing-key placeholders\".",
+      "location": "user-spec.md — ## Критерії приёмки, last criterion",
+      "fix": "Rephrase as a behavioral observable: \"Панель 'Тригери' та всі її підписи відображаються мовою інтерфейсу (uk/en) без відсутніх ключів (parity).\""
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "No acceptance criterion explicitly covers the case where a redirect arrives while the execution is currently in_progress (sweep tick owns the row, stepRunStatus=in_progress). The code-research (§4, Redirect CAS race) identifies this as a landmine: \"a redirect arriving while the sweep owns the row (in_progress) loses the CAS — define the outcome.\" The user-spec Ризик 2 mentions the CAS race for waiting_for_reply but does not describe what the expected observable behavior is when the redirect CAS fails against an in_progress execution (drop silently? retry? schedule?). An acceptance criterion or explicit constraint covering this edge case is absent.",
+      "location": "user-spec.md — ## Критерії приёмки / ## Риски (Ризик 2)",
+      "fix": "Add a criterion: \"Якщо redirect-CAS програє (виконання вже in_progress під sweep-ом) — redirect мовчки пропускається (drop); виконання продовжує поточний крок без збою sweep-у.\" Or explicitly state the chosen behavior in Ризик 2 mitigation."
+    },
+    {
+      "check": "edge_cases",
+      "severity": "minor",
+      "issue": "The spec covers redirect-vs-start and broken-cursor edges well. However, the edge case of what happens when the fired event matches multiple triggers in the SAME funnel (two triggers with different event_names both fire simultaneously for one subscriber) is not addressed. Given the \"one execution per funnel per subscriber\" invariant, only one redirect can win — the behavior when two events fire near-simultaneously is unspecified.",
+      "location": "user-spec.md — ## Как должно работать / ## Риски",
+      "fix": "Add a note in Ограничения or Риски: concurrent trigger fires for the same subscriber+funnel are handled by the CAS discipline — the first to claim the execution wins; subsequent fires either hit a redirect (if execution still in-flight) or are treated as no-op/swallowed. If the intended behavior differs, make it explicit."
+    },
+    {
+      "check": "acceptance_criteria",
+      "severity": "minor",
+      "issue": "Acceptance criterion 9 references BeanPostProcessor pattern by implementation name (\"FunnelTriggerIndexReconciliation BeanPostProcessor-патерн\") and explicitly contrasts with ApplicationRunner. This is an implementation detail, not an observable acceptance criterion. It cannot be verified by a QA agent without reading the source code.",
+      "location": "user-spec.md — ## Критерії приёмки, criterion starting with 'Index reshape'",
+      "fix": "Rephrase as an observable outcome: \"Застосунок стартує без IndexKeySpecsConflict після деплою нової схеми тригерів; індекс унікальності on_start застосовується до запуску MongoTemplate.\""
+    }
+  ],
+  "interview_coverage": {
+    "covered": [
+      "Epic 8 split into #17 (model+engine+minimal list editor) and #18 (canvas) — both decisions appear in Технические решения and Что делаем",
+      "ONE execution per funnel per subscriber (no parallel runs) — covered in Что делаем and multiple criteria",
+      "Redirect semantics: in-flight execution currentStepId → trigger branch, unpark waiting_for_reply — covered in Что делаем, Как должно работать, criteria 5",
+      "Start fresh at entryStepId when no in-flight execution — covered in Что делаем, criteria 6",
+      "allowReEnter respected for fresh-start branch — covered in criteria 6 and Технические решения",
+      "Loop protection: natural only (no artificial redirect counter) — covered in Ризик 4 and criteria 10",
+      "Test strategy: extend FunnelExecutionEngineIT (slow), FunnelTriggerIndexReconciliationIT, funnel-editor.spec.ts, no E2E — covered in Тестирование",
+      "Multiple triggers CAN point at same entry step; duplicate event_name within funnel REJECTED — covered in criteria 4",
+      "Migration = WIPE (no prod data, Decision 4) — covered in Ограничения and Технические решения",
+      "Editor = Triggers panel with N event-triggers, SearchableSelect for entry-step binding — covered in Как должно работать and criteria 11",
+      "LISTEN vs FIRE split (EMIT_EVENT already exists; #17 adds listen-side only) — covered in Зачем and Ограничения",
+      "Composite 'Виконати дії' action-grouping node is OUT of scope — covered in Ограничения",
+      "Snapshot-isolation preserved (redirect walks stepsSnapshot only) — covered in criteria 7 and Ограничения",
+      "FunnelTriggerIndexReconciliation BeanPostProcessor pattern for index reshape — covered in criteria 9",
+      "enrollDepth backstops must not be broken by redirect — mentioned in Ризик 4 mitigation"
+    ],
+    "missing": [
+      "Explicit observable behavior when redirect CAS fails (execution in_progress during sweep tick) — discussed in interview notes as a landmine but not translated into a spec criterion or stated decision",
+      "Behavior when two trigger events fire near-simultaneously for the same subscriber+funnel — not addressed in spec or risks"
+    ]
+  },
+  "summary": "Специфікація якісна і готова до переходу в tech-spec: всі обов'язкові розділи наповнені, критерії приймання конкретні та перевірювані, ризики мають митигації, а рішення інтерв'ю відображено повністю. Виявлено 5 minor-знахідок (незаповнений conversation_history, одна відсутня поведінка при CAS-програші redirect-а, два критерії сформульовані як імплементаційні деталі, а не observable outcomes, одна неохоплена edge case з одночасними тригерами) — жодна не блокує затвердження."
+}

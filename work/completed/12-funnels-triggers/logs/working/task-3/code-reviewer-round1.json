@@ -1,0 +1,53 @@
+{
+  "reviewer": "code-reviewer",
+  "task": "3",
+  "round": 1,
+  "skill": "code-reviewing",
+  "fallback_note": "Agent/Task spawning tool unavailable in this environment; review performed by apikey-domain teammate loading the code-reviewing skill directly.",
+  "scope": {
+    "changed_files": [
+      "backend/src/main/java/com/botfunnel/api/ApiKey.java",
+      "backend/src/main/java/com/botfunnel/api/ApiKeyRepository.java",
+      "backend/src/main/java/com/botfunnel/api/ApiKeyService.java",
+      "backend/src/test/java/com/botfunnel/api/ApiKeyServiceTest.java",
+      "backend/src/test/java/com/botfunnel/api/ApiKeyRepositoryIT.java"
+    ]
+  },
+  "summary": "Clean greenfield com.botfunnel.api: domain/repository/service separation mirrors Bot/Project conventions; reuses Sha256Hex + SecureRandom + HexFormat idioms verbatim. Hash-only-at-rest, 256-bit entropy, lookup-by-hash, and on-demand-only constraints (Decision 8) all met. Cross-file signatures verified. No critical or major findings.",
+  "findings": [
+    {
+      "severity": "minor",
+      "dimension": "Testing Coverage",
+      "file": "backend/src/test/java/com/botfunnel/api/ApiKeyServiceTest.java",
+      "line": null,
+      "finding": "lastUsedAt is exposed as a settable field for the Task-7 filter, but no test pins its behavior: generate() sets lastUsedAt to null, and regenerate() should reset it. Not asserted.",
+      "suggested_fix": "Add an assertion in generate_storesHashNotPlaintext (or a dedicated test) that stored.getLastUsedAt() is null after generate, and that regenerate over an existing key (with lastUsedAt previously stamped) resets it to null.",
+      "valid": true
+    },
+    {
+      "severity": "minor",
+      "dimension": "Readability & Maintainability",
+      "file": "backend/src/main/java/com/botfunnel/api/ApiKeyService.java",
+      "line": 60,
+      "finding": "generate() resets lastUsedAt to null on every (re)generate via setLastUsedAt(null). Correct, but the WHY (a regenerated key starts unused; never carry over a previous key's lastUsedAt) is not commented.",
+      "suggested_fix": "Add a short comment explaining lastUsedAt is cleared so a regenerated key does not inherit the prior key's usage timestamp.",
+      "valid": true
+    },
+    {
+      "severity": "minor",
+      "dimension": "Architecture / Reuse",
+      "file": "backend/src/main/java/com/botfunnel/api/ApiKey.java",
+      "line": 25,
+      "finding": "Project/Bot declare indexes via @CompoundIndexes class-level annotations; ApiKey uses field-level @Indexed(unique=true). Both are valid and auto-index-creation handles both, but the field-level form is a slight stylistic divergence from the two referenced entities (single-field unique indexes legitimately use @Indexed, so this is acceptable).",
+      "suggested_fix": "No change required; documented for transparency. Field-level @Indexed is the idiomatic choice for single-field unique indexes.",
+      "valid": false
+    }
+  ],
+  "verdict": "approve_with_minor",
+  "cross_file_checks": {
+    "Sha256Hex.hex(String)": "verified — static, throws NPE on null; guarded at lookup boundary",
+    "SecureRandom + HexFormat.of().formatHex": "verified — matches BotService.connectAfterPreChecks mechanics; 32-byte constant correctly NOT copied from WEBHOOK_SECRET_BYTES(16)",
+    "@Indexed(unique=true)": "verified against Bot/Project auto-index-creation convention",
+    "MongoRepository derived queries": "verified against BotRepository convention"
+  }
+}

@@ -1,0 +1,50 @@
+{
+  "status": "approved_with_suggestions",
+  "summary": "Task 1 correctly implements Decision 10 (explicit @Bean SimpleMeterRegistry) and Risk R11 (@ConditionalOnMissingBean) with full project-context test coverage that matches the two TDD anchors verbatim. The out-of-scope @SpringBootApplication(excludeName=...) edit is genuinely required — I reproduced the ClassNotFoundException on MetricsAutoConfiguration at boot when reverting only that one line — so the deviation from the task's stated file list is justified, not a hack. Three minor style/accuracy nits remain; no critical or major issues.",
+  "criticalIssues": [],
+  "suggestions": [
+    {
+      "file": "backend/src/main/java/com/botfunnel/BotFunnelApplication.java",
+      "line": 6,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "The comment attributes the resolution failure to 'AnnotationBeanNameGenerator', but that class only reads @Component(value=...) for bean-name derivation — it does not eagerly resolve arbitrary Class[] arrays in other annotations. The actual trigger surfaced in the failure stack is TypeMappedAnnotation.getValue inside auto-configuration import/ordering (resolving @AutoConfiguration(after = MetricsAutoConfiguration.class) for the import sorter), once @ConditionalOnBean(MeterRegistry.class) starts matching because we now provide a MeterRegistry bean. Also: the @ConditionalOnClass on this autoconfig is @ConditionalOnClass(Metrics.class) (micrometer-core, present), NOT @ConditionalOnClass(MetricsAutoConfiguration.class) as the comment states. Suggest tightening: `@AutoConfiguration(after=…)` annotation values reference actuator classes (MetricsAutoConfiguration / CompositeMeterRegistryAutoConfiguration); Spring resolves these class literals during autoconfig sorting, which throws CNFE because actuator is intentionally absent (Decision 10).",
+      "benefit": "Comment becomes accurate so future maintainers don't chase a phantom AnnotationBeanNameGenerator path while debugging upgrades.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/main/java/com/botfunnel/common/metrics/MeterRegistryConfig.java",
+      "line": 9,
+      "severity": "minor",
+      "category": "best-practices",
+      "suggestion": "Existing @Configuration precedent in this project uses Javadoc (/** … */) for class-level documentation — see JobRunrMongoConfig at backend/src/main/java/com/botfunnel/jobs/JobRunrMongoConfig.java, which is the explicit style cite in patterns.md and task.md hint. Convert the // line block above the class to /** … */ for symmetry. Same suggestion applies to the line-comment block in BotFunnelApplication.java if you want full repo-wide consistency. The code-writing skill universal-patterns.md line 109 calls out 'JSDoc/TSDoc for public APIs' — Javadoc is the Java equivalent.",
+      "benefit": "Class-level docs participate in IDE hover/tooling and stay queryable via `javadoc` task; aligns with the only existing precedent for single-bean @Configuration in this repo.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/common/metrics/MeterRegistryConfigTest.java",
+      "line": 36,
+      "severity": "minor",
+      "category": "maintainability",
+      "suggestion": "patterns.md line 32 reads: 'No mocking of the database in integration tests — use real embedded MongoDB. Exception: skeleton/security-only tests that never query MongoDB may use @MockitoBean for connection factories (see Decision 6 in Epic 01 tech-spec). This exception is scoped to Epic 01 only.' This test correctly never queries Mongo and the @MockitoBean trio is the documented HealthEndpointTest precedent, but patterns.md technically scopes the exception to Epic 01 only. Two options: (a) leave as-is and update patterns.md to drop the 'Epic 01 only' clause now that the exception is being reused (lighter than @Testcontainers when no DB access is needed); (b) switch this test to extend AbstractIntegrationTest which costs ~mongo+redis container startup but stays inside the documented integration-test envelope. Option (a) is preferred — the mocked-connection-factory pattern is the right tool when bean wiring is the only assertion target.",
+      "benefit": "Closes the docs-vs-practice gap so future tasks don't have to re-litigate which integration-test pattern to use.",
+      "optional": true
+    },
+    {
+      "file": "backend/src/test/java/com/botfunnel/common/metrics/MeterRegistryConfigTest.java",
+      "line": 50,
+      "severity": "minor",
+      "category": "readability",
+      "suggestion": "Test asserts an extra invariant beyond the three the task spec / TDD anchor required: `assertThat(meterRegistry).isSameAs(fromContext)` (singleton-identity check between the field-injected bean and the explicit getBean lookup). Harmless and arguably useful as a regression guard against future bean-scope mistakes (e.g. someone accidentally adding @Scope(PROTOTYPE)). If you want to keep it, leave a one-line comment explaining the singleton-identity assertion — otherwise a future reader will assume it's redundant boilerplate and prune it.",
+      "benefit": "Either makes the extra assertion's intent explicit or trims unused noise.",
+      "optional": true
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 4,
+    "testCoverageAssessment": "adequate"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "reviewer": "code-reviewer",
+  "scope": "manual-fix-subscribe-exclude",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [],
+  "summary": "The fix is correct and well-contained. `currentFunnelId` is a `computed(() => String(route.params.funnelId ?? ''))` — identical pattern to the existing `projectId` computed, so the same route-resolution guarantee applies. All callers (AddStepDialog, EditStepDialog, FunnelCanvasSidePanel) mount inside /projects/[projectId]/funnels/[funnelId], so the param is always present and the filter reliably excludes exactly the current funnel. In older tests that mock `useRoute` without `funnelId` (composer, keyboard, side-panel specs), `currentFunnelId` resolves to `''`, which matches no funnel id — the filter is a no-op, no regression. The `subscribeTargetStatus` computed (line 537-539) reads directly from `storeFunnels` (not from the filtered `subscribeTargetOptions`), so a legacy step whose stored `targetFunnelId` equals the current funnel id still resolves its status correctly and does not crash — the stored value remains in `subscribeTargetFunnelId` ref, is carried through on submit unchanged, and the SearchableSelect shows it in its closed-input label. The `hideTargetPickers` guard on the entry-step picker (`v-if=\"!hideTargetPickers\"`, line 1585) is a completely separate `v-if` from the new filter — no interference. The emitted `FunnelStep` contract is unchanged: `subscribeTargetFunnelId.value` is read directly from the ref, not from the options array. The new test covers the primary case (exclude self, keep others) with proper store seeding and dropdown open idiom consistent with existing specs. No critical or major issues found."
+}

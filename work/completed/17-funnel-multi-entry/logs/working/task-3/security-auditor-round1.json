@@ -1,0 +1,78 @@
+{
+  "task": "task-3",
+  "feature": "17-funnel-multi-entry",
+  "round": 1,
+  "commit": "184bade",
+  "reviewer": "security-auditor",
+  "status": "APPROVED",
+  "summary": "All request-bound DTOs carry @JsonIgnoreProperties(ignoreUnknown=true). The trigger-array DoS surface (Decision 14) is closed at the contract boundary: @Size(max=50) on UpdateFunnelRequest.triggers + @Valid cascade enforces the per-trigger keyword cap in TriggerDto. Response DTOs (FunnelResponse, FunnelSummaryResponse) expose no over-permissive or server-internal fields. No injection surface, no secrets or PII in DTO fields. One low-severity observation (no per-keyword length cap annotation on TriggerDto.keywords) is correctly delegated to FunnelService per the design — not a gap. No findings require a code change before Task 4.",
+  "owasp_coverage": {
+    "A03_injection": "PASS — no raw query construction in DTOs; triggerType/triggerValue/keywords are plain strings passed to FunnelService which owns slug-regex validation (TRIGGER_VALUE_PATTERN, EVENT_NAME_PATTERN). No injection surface introduced.",
+    "A04_insecure_design_dos": "PASS — @Size(max=50) on UpdateFunnelRequest.triggers closes the array-bloat DoS surface (Decision 14). @Valid cascade into TriggerDto enforces @Size(max=50) on keywords per trigger element, bounding the N×keyword scan cost. Service-side re-checks (MAX_KEYWORDS, MAX_KEYWORD_LENGTH) remain in FunnelService untouched.",
+    "A05_security_misconfiguration": "PASS — @JsonIgnoreProperties(ignoreUnknown=true) present on both request-bound DTOs (UpdateFunnelRequest, TriggerDto). FunnelResponse and FunnelSummaryResponse are response-only (server-authored, never deserialized from untrusted input); omission of @JsonIgnoreProperties there is correct.",
+    "A06_vulnerable_components": "N/A — no new dependencies introduced (user-spec constraint upheld).",
+    "A07_auth_failures": "PASS — DTOs carry no auth-bypass surface; projectId/funnelId are path variables enforced by FunnelController.currentUserId() + FunnelService.requireFunnel() anti-IDOR discipline, unchanged by this task.",
+    "A08_software_integrity": "PASS — no deserialization of polymorphic types; flat records with no _class discriminator, matching the FunnelStepDto precedent.",
+    "A09_logging": "PASS — DTO fields (triggerType, triggerValue, keywords, entryStepId) carry no PII. No logging introduced in this task. Service-level WARN markers (Task 5) are the logging boundary — not touched here."
+  },
+  "findings": [
+    {
+      "id": "SEC-T3-001",
+      "severity": "LOW",
+      "category": "A04 — Insecure Design / DoS surface",
+      "title": "Per-keyword string length cap not annotated on TriggerDto.keywords",
+      "location": "backend/src/main/java/com/botfunnel/funnel/dto/TriggerDto.java:33",
+      "description": "TriggerDto.keywords carries @Size(max=50) bounding the count, but has no @Size(max=64) annotation on individual keyword strings. An attacker can submit keywords of arbitrary length within the 50-element ceiling. The per-keyword length cap (MAX_KEYWORD_LENGTH=64) is enforced in FunnelService.applyTrigger and is explicitly deferred to Task 4 per the task spec and tech-spec Decision 14 commentary. This is an expected gap at this wave boundary — flagged for completeness only.",
+      "impact": "A request body with 50 keywords each of e.g. 10 000 characters (~500 KB) passes DTO validation and reaches FunnelService. FunnelService rejects it with 422, so no persistence or keyword-scan amplification occurs. Overhead is bounded by Spring's request-size limit (existing infrastructure). No data integrity or security breach.",
+      "owasp": "A04:2021 — Insecure Design (DoS surface)",
+      "recommendation": "Task 4 must preserve FunnelService.MAX_KEYWORD_LENGTH (64) enforcement on each keyword string within applyTrigger, which is already spec'd. Optionally, add @Size(max=64) on each List<String> element via a custom constraint or a @Valid cascade with a wrapper — but this is purely defense-in-depth and lower priority than the service check.",
+      "action_required": false,
+      "expected_in_task": 4
+    }
+  ],
+  "findings_by_severity": {
+    "critical": 0,
+    "high": 0,
+    "medium": 0,
+    "low": 1,
+    "informational": 0
+  },
+  "mass_assignment_defense": {
+    "UpdateFunnelRequest": "PRESENT — @JsonIgnoreProperties(ignoreUnknown=true) at class level; hostile fields (e.g. status, projectId, id) are silently dropped. Confirmed by TriggerDtoTest::deserializeIgnoresUnknownProperties.",
+    "TriggerDto": "PRESENT — @JsonIgnoreProperties(ignoreUnknown=true) at class level; unknown fields within a trigger element are dropped (test covers bogus:1 inside the array element).",
+    "FunnelResponse": "N/A — response DTO, not deserialized from untrusted input. No @JsonIgnoreProperties needed.",
+    "FunnelSummaryResponse": "N/A — response DTO, not deserialized from untrusted input. No @JsonIgnoreProperties needed."
+  },
+  "dos_bounding_decision14": {
+    "trigger_array_cap": "@Size(max=50) on UpdateFunnelRequest.triggers — PRESENT",
+    "per_trigger_keyword_count_cap": "@Size(max=50) on TriggerDto.keywords via @Valid cascade — PRESENT",
+    "per_keyword_length_cap": "Service-side only (FunnelService.MAX_KEYWORD_LENGTH=64, Task 4 scope) — NOT annotated on DTO, expected gap",
+    "array_cap_value_alignment": "MAX_TRIGGERS=50 aligned with max-fanout-per-event/max-steps order of magnitude per Decision 14 — CORRECT"
+  },
+  "response_field_exposure": {
+    "FunnelResponse": "Exposes: id, projectId, name, description, status, allowReEnter, triggers (array), steps, deepLink, createdAt, updatedAt. No internal server fields (e.g. onStartTriggerValue, internal CAS fields) exposed. deepLink is correctly documented as derived from on_start triggerValue by FunnelService mapper (Task 4).",
+    "FunnelSummaryResponse": "Exposes: id, projectId, name, description, status, allowReEnter, triggers (array), stepCount, createdAt, updatedAt. No over-permissive fields.",
+    "verdict": "PASS — no onStartTriggerValue or other server-internal denormalized field leaks into the response contract."
+  },
+  "injection_surface": {
+    "triggerType": "String, passed to FunnelService.normalizeTriggerType which validates against VALID_TRIGGER_TYPES allowlist — SAFE",
+    "triggerValue": "String, passed to FunnelService slug-regex validators (TRIGGER_VALUE_PATTERN, EVENT_NAME_PATTERN) — SAFE",
+    "keywords": "List<String>, normalized in FunnelService (lowercase, trim, de-dupe, length cap) — SAFE",
+    "entryStepId": "String, resolved against stepsSnapshot in Task 4/5 — SAFE at DTO boundary"
+  },
+  "pii_secrets_audit": {
+    "verdict": "PASS — no PII, API keys, secrets, or credential fields in any DTO. triggerValue/eventName are user-defined slugs with slug-regex constraints applied at service layer."
+  },
+  "test_coverage_security_relevant": {
+    "TriggerDtoTest::deserializeIgnoresUnknownProperties": "Covers mass-assignment defense at both UpdateFunnelRequest and TriggerDto level — ADEQUATE",
+    "TriggerDtoTest::sizeCapViolationFlaggedByValidator": "Covers trigger-array DoS bounding — ADEQUATE",
+    "TriggerDtoTest::validCascadesIntoTriggerDto": "Proves @Valid cascade reaches per-trigger keyword cap — ADEQUATE",
+    "missing": "No test for a keyword string exceeding 64 chars being rejected (delegated to Task 4 service-level test, per spec). Acceptable at this boundary."
+  },
+  "known_non_findings": [
+    "Module does not compile (FunnelService.update() still references removed flat fields triggerType/triggerValue/keywords from UpdateFunnelRequest) — expected, noted in brief as Task 4 scope.",
+    "FunnelService trigger validation (entryStepId resolution, slug regex, duplicate event_name) not present — expected, Task 4 scope.",
+    "onStartTriggerValue sync absent from DTOs — correct: it is a server-internal field, must NOT appear in request or response DTOs.",
+    "Per-keyword length @Size annotation absent — correctly deferred to service layer per Decision 14 commentary."
+  ]
+}

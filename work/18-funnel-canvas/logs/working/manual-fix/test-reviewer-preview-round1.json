@@ -1,0 +1,52 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-card-preview",
+  "round": 1,
+  "verdict": "pass",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:730",
+      "issue": "Test title claims 'javascript:/data: url' coverage but the body only exercises 'javascript:alert(1)'. The data: URL scheme is not explicitly asserted. The implementation's HTTP_URL_RE regex correctly rejects both, so behavior is correct, but the stated coverage is overstated.",
+      "recommendation": "Either split into two tests or add a second block with mediaUrl: 'data:image/png;base64,abc' and assert funnel-canvas-preview-thumb absent + funnel-canvas-preview-media-fallback present. Alternatively rename the test to 'javascript: url' if data: coverage is not needed at this layer."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts:667",
+      "issue": "The http(s) thumbnail test passes caption: 'cap' on the IMAGE block but never asserts that [data-test=\"funnel-canvas-preview-caption\"] renders the caption text. The caption rendering path (previewCaption computed + v-if in template) is untested as a positive assertion.",
+      "recommendation": "After confirming the img element, add: const caption = wrapper.find('[data-node-id=\"s1\"]').find('[data-test=\"funnel-canvas-preview-caption\"]'); expect(caption.exists()).toBe(true); expect(caption.text()).toBe('cap'). Litmus: removing the v-if previewCaption block in the template would leave this failing."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelCanvas.spec.ts",
+      "issue": "ALBUM block coverage absent. previewThumbUrl and previewCaption for ALBUM read from block.items?.[0] (a different path than other media types). No test exercises an ALBUM block — neither the http(s) thumbnail path nor the caption path nor the icon fallback is verified for ALBUM.",
+      "recommendation": "Add one test: messageStep with blocks: [{ type: 'ALBUM', items: [{ mediaUrl: 'https://cdn.example.com/img.jpg', caption: 'Album cap' }] }]. Assert funnel-canvas-preview-thumb src === 'https://cdn.example.com/img.jpg' and funnel-canvas-preview-caption text === 'Album cap'. A second test with items[0].mediaUrl = 'file_id' asserts fallback. These cover the ALBUM branch in isHttpUrl guard that is currently dead to the test suite."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/i18n/required-keys.spec.ts:106",
+      "issue": "funnels.canvas.preview.imageUnavailable is listed in REQUIRED_KEYS (and therefore gets a non-empty value assertion) but the key is not referenced anywhere in FunnelCanvasNode.vue source. The component uses funnels.canvas.preview.mediaType.* and funnels.canvas.preview.urlButton only. The test guards a dead key — no production code path resolves it.",
+      "recommendation": "Either remove the key from REQUIRED_KEYS (and from uk.json / en.json if unused) or wire it to the component. If the intent was to use it as the IMAGE fallback label instead of funnels.canvas.preview.mediaType.IMAGE, update the component to reference imageUnavailable and add a test for that label. As-is the guard provides false confidence that the key is used."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 15,
+      "passed": 15,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 15,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  },
+  "summary": "All 12 new/updated test cases are load-bearing and value-based. Gating logic (MESSAGE+buttons→no next, no buttons→no timeout) is covered by two dedicated tests plus three updated pre-existing tests. Both keep-if-set anti-orphaned-edge guards have explicit dedicated tests that would fail if the safety condition were removed. URL button preview/no-handle and btn:i indexing are tested. XSS paths (innerHTML, javascript: scheme) are covered with structural HTML assertions rather than substring checks. The arrow markerEnd test correctly distinguishes a real arrowclosed marker from the always-present empty url('#') attribute. The three pre-existing tests were legitimately updated to the new gating semantics — none were weakened or had assertions removed without replacement. Four minor findings: data: URL scheme not explicitly exercised (only javascript:), caption element not asserted as a positive test, ALBUM block branch untested, and one dead i18n key guarded in required-keys but absent from source. No critical or major gaps."
+}

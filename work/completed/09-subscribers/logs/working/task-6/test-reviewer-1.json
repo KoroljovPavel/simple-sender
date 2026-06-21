@@ -1,0 +1,49 @@
+{
+  "status": "needs_improvement",
+  "summary": "All 8 TDD anchors are present and pass; the audit-before-mark InOrder and the hook-failure (propagate + greppable WARN) assertions are implemented exactly as the task requires, and the unit ctor/getter coverage is sound. Two task-listed edge cases are untested and fail the litmus test: case-insensitive 'chat not found' matching and the null/empty-description NPE-safety branch — each is a production line that can be deleted with the whole suite still green. Two minor issues round it out: the pre-existing TelegramSenderTest 'otherClientError' case now silently exercises the CHAT_NOT_FOUND hook (violating the task's 'mock unused in existing paths' premise, no verifyNoInteractions net), and enumShapeIsStable asserts size+names but not order.",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderSubscriberHookIT.java (no test) — production: TelegramSender.java:330 terminalReasonFor()",
+      "issue": "Case-insensitive 'chat not found' matching is never exercised. Both the IT (http400ChatNotFoundMarksDeleted, line 120 'Bad Request: chat not found') and the existing TelegramSenderTest line 491 use an already-lowercase description. The task explicitly lists this as required behavior ('must match case-insensitively (Telegram has been observed sending both \"chat not found\" and \"Bad Request: chat not found\")') and Edge cases note the toLowerCase(Locale.ROOT) call. Litmus test: delete `.toLowerCase(Locale.ROOT)` from TelegramSender.java:330 and every test still passes — the case-folding line earns nothing.",
+      "recommendation": "Add an IT case http400ChatNotFoundCaseInsensitiveMarksDeleted with a mixed/upper-case description, e.g. description \"Bad Request: CHAT NOT FOUND\" or \"Chat Not Found\". Assert markDeletedByChatId(PROJECT_ID, TELEGRAM_BOT_ID, CHAT_ID) is called once and markBlockedByChatId is never called. This pins the toLowerCase(Locale.ROOT) line so its removal turns the test red."
+    },
+    {
+      "severity": "major",
+      "category": "missing_coverage",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderSubscriberHookIT.java (no test) — production: TelegramSender.java:329 terminalReasonFor() null-guard",
+      "issue": "The 400-with-empty/null-description -> OTHER (no NPE) branch is untested. http400OtherDescriptionDoesNotMark uses a non-empty unrelated description, so the `description != null` guard at TelegramSender.java:329 is never driven by a null/empty value. The task Edge cases call this out explicitly: 'HTTP 400 with empty / null description -> OTHER (no NPE)' and 'verify the new mapping logic null-safes the substring check'. Litmus test: remove the `description != null &&` guard and no current test exercises a null description, so a regression that NPEs on a 400 with no description body would ship undetected.",
+      "recommendation": "Add an IT case http400NullDescriptionDoesNotMark: enqueue a 400 whose JSON omits the description field (e.g. {\"ok\":false,\"error_code\":400}) or an empty body. Assert the call throws TelegramSendException, eventService.logEvent(... EVENT_TELEGRAM_SEND_FAILED ...) still fires, and verifyNoInteractions on the mark-* methods (neither markBlockedByChatId nor markDeletedByChatId called). This both pins the null-guard and proves OTHER routing on a missing description."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:487 sendText_otherClientError_throwsTelegramSendException_noRetry",
+      "issue": "This pre-existing test uses description 'Bad Request: chat not found' (line 491), which post-Task-6 now maps to CHAT_NOT_FOUND and fires subscriberService.markDeletedByChatId against the shared mock during the run. That contradicts the task's stated invariant for the ctor surgery ('the mock is unused in those paths — no terminal-reason-mapped exception thrown') and leaves the test name misleading (it is now a terminal-DELETE case, not an 'other' client error). It is harmless today only because the mock is a no-op, and no verifyNoInteractions(subscriberService) regression net (which the task marked 'OPTIONAL but recommended') guards against accidental behavior change. The test also no longer asserts the new terminalReason on the exception it constructs.",
+      "recommendation": "Either (a) change this test's description to a genuinely OTHER 400 (e.g. 'Bad Request: message text is too long') and add verify(subscriberService, never()).markDeletedByChatId(any(),any(),any()) to keep it a true 'other client error' case, or (b) keep the chat-not-found body but rename the test to reflect the CHAT_NOT_FOUND mapping and add assertThat(tse.getTerminalReason()).isEqualTo(TerminalReason.CHAT_NOT_FOUND). Separately, add Mockito.verifyNoInteractions(subscriberService) (or a verifyNoMoreInteractions after the expected ones) in the existing success/transient/timeout paths as the recommended regression net so the ctor wiring can't silently start flipping subscribers."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSendExceptionTerminalReasonTest.java:39 enumShapeIsStable",
+      "issue": "The 'defensive against silent reorders' intent (stated in the test's own comment and the TDD anchor) is only partially met: the test asserts values().length == 3 and each name(), but not ordinal/order. A reorder of the enum constants would not turn this test red. Impact is low because the hook routes on reference equality (== TerminalReason.BLOCKED_BY_USER / CHAT_NOT_FOUND), not on ordinal, so a reorder does not mis-route in practice — but the test does not deliver the reorder protection it advertises.",
+      "recommendation": "If reorder protection is the stated goal, assert order explicitly: assertThat(TerminalReason.values()).containsExactly(TerminalReason.BLOCKED_BY_USER, TerminalReason.CHAT_NOT_FOUND, TerminalReason.OTHER). Otherwise soften the comment to 'guards against renames and accidental additions/removals' to match what is actually verified."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 5,
+    "litmusTest": {
+      "checked": 9,
+      "passed": 7,
+      "failed": 2
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 4,
+      "integration": 5,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

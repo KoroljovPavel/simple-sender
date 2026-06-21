@@ -1,0 +1,22 @@
+{
+  "reviewer": "security-auditor",
+  "task": 3,
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "major",
+      "owasp": "A01",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberServiceImpl.java:210-221",
+      "finding": "unsubscribeManual(String subscriberId) resolves the subscriber by _id ONLY and mutates its status with NO projectId scoping. addTag/removeTag correctly scope updates by (projectId + _id) — but unsubscribeManual does not. The controller-level requireOwned(currentUserId, projectId, false) (Task 8) only proves the caller owns the {projectId} in the URL path; it does NOT prove the resolved subscriber belongs to that project. If the Task 8 SubscriberController passes the {id} path-variable straight into unsubscribeManual without verifying loadedSubscriber.projectId == projectId, an owner of project A can POST /projects/{A}/subscribers/{B-subscriber-id}/unsubscribe and flip a foreign tenant's subscriber to UNSUBSCRIBED — a cross-tenant IDOR write. The service offers zero defense-in-depth: unlike every other method here it ignores projectId entirely.",
+      "suggestion": "Add projectId to the scope. Either (a) change the signature to unsubscribeManual(String projectId, String subscriberId) and resolve via findByIdAndProjectId / Criteria.where(\"_id\").is(id).and(\"projectId\").is(projectId) — mirroring addTag/removeTag — throwing notFound when no match (preserves anti-enumeration: a foreign subscriber looks identical to a missing one), or (b) load by id then assert s.getProjectId().equals(projectId) before the flip, throwing AppException.notFound(MESSAGE_SUBSCRIBER_NOT_FOUND) on mismatch. Do not rely solely on the future controller to enforce tenant isolation; the sole-writer service is the right place for defense-in-depth (consistent with addTag/removeTag in this same file)."
+    },
+    {
+      "severity": "minor",
+      "owasp": "A09",
+      "file": "backend/src/main/java/com/botfunnel/subscriber/SubscriberServiceImpl.java:226-237",
+      "finding": "recordCustomFieldsSet writes the full oldValues and newValues maps verbatim into subscriber_events.metadata, a collection with a 365d TTL. Custom-field values are operator-defined and may hold PII (phone, email, address, etc.). This is the documented Decision 10 design and the data is tenant-scoped + cascade-deleted on project hard-delete (Task 7) + bounded by the 365d TTL, so it is acceptable for MVP — but it is a GDPR-relevant data-retention surface worth flagging: a deleted/unsubscribed subscriber's PII snapshots persist in the audit trail for up to a year, and any future right-to-erasure / data-export feature must account for subscriber_events, not just the subscribers collection.",
+      "suggestion": "No code change required for this task. Track as a compliance note: ensure a future GDPR-erasure path purges subscriber_events rows for the erased subscriberId (not just the subscribers doc), and confirm the 365d audit retention is documented in the privacy/retention policy. Optionally consider storing only changedKeys + value hashes rather than raw before/after values if full-value audit is not strictly required by the product."
+    }
+  ]
+}

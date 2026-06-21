@@ -1,0 +1,174 @@
+{
+  "validator": "reality-checker",
+  "mode": "cross-task-integration",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "id": "CT-001",
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 9,
+      "issue": "Task 9 adds `mockNuxtImport('useLocalePath', ...)` to login.spec.ts and register.spec.ts, but register.spec.ts asserts `navigateToMock.toHaveBeenCalledWith({ path: '/auth/login', query: { registered: '1' } })`. After Task 9 wraps navigateTo as `navigateTo({ path: localePath('/auth/login'), query: ... })`, the identity-passthrough mock must also be applied to `useLocalePath` before the existing assertion checks. However, the mock returns `(path) => path`, which produces the SAME string. But `localePath` from `useLocalePath()` is a function itself — the mock `() => () => (path) => path` gives `localePath('/auth/login')` = '/auth/login'. The real risk: Task 9 wraps the path part only — `navigateTo({ path: localePath('/auth/login'), query: { registered: '1' } })` — and the existing test asserts `{ path: '/auth/login', query: { registered: '1' } }`. This WILL match with identity passthrough. However, Task 9 does NOT declare `depends_on: [6]` (LangSwitcher), yet the Verify-user section explicitly requires `<LangSwitcher>` to be mounted (from Task 6) to test the locale toggle. This is a documentation mismatch but not a runtime blocker.",
+      "fix": "Add Task 6 to depends_on of Task 9 for correctness of Verify-user steps, OR explicitly note in Task 9 that LangSwitcher is needed for user-verify only and document Task 6 as a soft dependency."
+    },
+    {
+      "id": "CT-002",
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "Task 3 is assigned `wave: 3` with `depends_on: [2]`, but tech-spec groups it as Wave 2 (lines 285, 295). The task itself documents this as a 'Wave deviation note'. While the deviation is correctly self-documented and justified (Task 3 imports `NON_DEFAULT_LOCALES` created by Task 2), the `depends_on` list does NOT include Task 2 in any other dependent task's depends_on chain that could catch this ordering at the orchestration level. Specifically: Tasks 4, 5, 6, 7 also have `depends_on: [2]` and wave 3 — they all run in parallel with Task 3 in Wave 3. But none of Tasks 4/5/6/7 depend on Task 3. This is correct since Task 3 (strip middleware) is independent from locale dictionaries (Task 4), composable (Task 5), component (Task 6), auth middleware (Task 7). Cross-task ordering is fine. However, if an orchestrator reads the wave-3 parallel group and tries to run Task 3 in parallel with Task 2 (due to the wave spec conflict between tech-spec and task file), it would fail. The task file overrides to wave 3 correctly, but a stale orchestration reading only the tech-spec would break.",
+      "fix": "The tech-spec Implementation Tasks section (lines 285-295) should be updated to reflect Task 3 as Wave 3, not Wave 2. The task file is already correct; the discrepancy is in the tech-spec."
+    },
+    {
+      "id": "CT-003",
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 8,
+      "issue": "Task 8 declares `depends_on: [4, 6, 7]` but does NOT include Task 5 (`useApiError` composable). Task 8 does not directly use `useApiError`, so this dependency omission is technically correct. HOWEVER, Task 8's Details section says 'Task 7: auth.global.ts is locale-aware, so localePath(\"/auth/login\") redirects work in both locales — without Task 7 the EN logout flow would still redirect to a non-prefixed path.' This creates a subtle runtime dependency: if Task 8 is executed before Task 7 completes (which cannot happen since Task 7 is in depends_on), the logout redirect breaks. The dependency chain is correct. The real issue is different: Task 8 `depends_on: [4, 6, 7]` but Task 7 itself `depends_on: [2]` — and Task 4 `depends_on: [2]`. So the wave 4 entry point depends on wave 3 being fully complete. This is correctly modeled. No actual critical issue here — flagging as false alarm on further review. Downgrading to major.",
+      "fix": "No action needed; dependency chain is correct."
+    },
+    {
+      "id": "CT-004",
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 11,
+      "issue": "Task 11 `depends_on: [1, 4, 6, 8, 9, 10]` but does NOT include Task 7 (auth middleware refactor). The E2E spec opens `/auth/login` which goes through `auth.global.ts` middleware. Under the old path-based middleware, `/en/auth/login` (post-LangSwitcher click) would pass through correctly since `startsWith('/auth/')` fails for the EN path — but the middleware handles UNAUTHENTICATED users on auth pages by passing through (no redirect needed). However, after Task 7 refactors to `useRouteBaseName()`, the behavior for unauthenticated users on `/auth/login` is the same: passthrough. The E2E test does NOT log in, so it navigates to `/auth/login` as unauthenticated — both old and new middleware allow this. BUT: the E2E also clicks EN and lands on `/en/auth/login`. If Task 7 is not done, the old path-based middleware might behave differently on EN paths in some edge cases. The test flow (unauthenticated, visiting auth pages only) is actually safe with or without Task 7. Not truly critical. However, it IS a latent risk that Task 11 does not declare Task 7 as a dependency even though auth middleware is exercised during the E2E flow.",
+      "fix": "Add Task 7 to depends_on of Task 11 for correctness. Low practical risk since unauthenticated auth-page flow is passthrough in both middleware versions, but proper dependency declaration prevents future ordering issues."
+    },
+    {
+      "id": "CT-005",
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 9,
+      "issue": "Task 9 adds `mockNuxtImport('useLocalePath', () => () => (path: string) => path)` to login.spec.ts, register.spec.ts, and reset-password.spec.ts. Task 10 adds the SAME mock to dashboard.spec.ts and profile.spec.ts. These mocks use an identical pattern — consistent. HOWEVER, Task 9 also states: 'forgot-password.spec.ts and verify-email.spec.ts: only add the useLocalePath mock if the spec actually mounts a component that calls useLocalePath().' This conditional instruction creates inconsistency across tasks: if the executing agent for Task 9 decides forgot-password.vue DOES call useLocalePath (because it has `<NuxtLinkLocale>` which may internally use it), and the agent for Task 10 does not account for this, there will be divergent spec states. The inconsistency in how the mock decision is made across tasks (Task 9 is conditional; Task 10 is unconditional) can lead to flaky tests if the implementation choice differs from the assumption.",
+      "fix": "Make the useLocalePath mock rule consistent: either add it unconditionally to ALL specs that mount pages in this feature (simpler), or provide a concrete decision per file rather than a conditional 'if it fails'. Document the final decision in decisions.md."
+    },
+    {
+      "id": "CT-006",
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 10,
+      "issue": "Task 10 documents a planned deviation from tech-spec Decision 11: passing `ComputedRef` directly to `useForm({ validationSchema: schemaComputed })` instead of `toTypedSchema(unref(schemaComputed))`. Task 9 also uses the computed+toTypedSchema pattern for auth pages but uses `toTypedSchema(unref(schemaComputed))` wording in its 'Implementation hints' section (line 173: 'Pass the schema to useForm as `validationSchema: computed(() => toTypedSchema(schema.value))`. vee-validate v4 accepts a computed/Ref for validationSchema'). This creates an inconsistency: Task 9 hints at `computed(() => toTypedSchema(...))` (wrapping toTypedSchema in another computed) while Task 10 explicitly says pass `schemaComputed` (which already IS a computed wrapping toTypedSchema) directly without unref(). If Task 9's agent implements it the way Task 10 documents (correct: `const schemaComputed = computed(() => toTypedSchema(z.object({...}))); useForm({ validationSchema: schemaComputed })`), they will match. But if Task 9's agent reads 'computed(() => toTypedSchema(schema.value))' as wrapping an already-computed schema in ANOTHER computed, the result is a ComputedRef<ComputedRef<...>> which vee-validate may handle differently. The two tasks describe the same pattern with different wording, creating implementation ambiguity.",
+      "fix": "Align Task 9's implementation hints with Task 10's explicit formulation: `const schemaComputed = computed(() => toTypedSchema(z.object({...}))); useForm({ validationSchema: schemaComputed })`. Remove the `computed(() => toTypedSchema(schema.value))` pattern from Task 9 hints as it implies double-wrapping."
+    },
+    {
+      "id": "CT-007",
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 7,
+      "issue": "Task 7 rewrites auth.global.spec.ts completely with new TDD Anchor cases using `useRouteBaseName` and `useLocalePath` mocks. The existing spec (read from codebase) has 6 cases using path-based `makeRoute('/dashboard')` approach and mocks `navigateTo` + `useApi`. Task 7's TDD Anchor lists 10 new cases. The existing tests' assertions `navigateToMock.toHaveBeenCalledWith('/auth/login')` and `navigateToMock.toHaveBeenCalledWith('/dashboard')` will need to become `navigateToMock.toHaveBeenCalledWith('/auth/login')` and `navigateToMock.toHaveBeenCalledWith('/dashboard')` with the identity-passthrough `useLocalePath` mock (for uk locale). This is correct. HOWEVER, the existing spec also mocks `useAuthStore` indirectly via `useState('auth-user').value` — the new spec must preserve this OR switch to `mockNuxtImport('useAuthStore', ...)`. Task 7 says 'leave the `useState<unknown>('auth-user').value = null/ACTIVE_USER` mechanism' — but the existing spec does NOT mock useAuthStore via mockNuxtImport, it uses useState directly. If Task 7's agent adds `mockNuxtImport('useRouteBaseName', ...)` and `mockNuxtImport('useLocalePath', ...)` while preserving useState mutation, the existing `useApi` mock (for authStore.fetchUser) must also be preserved. Task 7 explicitly says 'Зберегти pattern vi.hoisted для navigateToMock і apiMock' — consistent.",
+      "fix": "No change needed in task; just flag that the agent must preserve both the useState mutation AND the apiMock pattern. The task description is sufficient but could be more explicit about the coexistence of both approaches."
+    },
+    {
+      "id": "CT-008",
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 9,
+      "issue": "Task 9 states that login.spec.ts currently asserts `navigateToMock.toHaveBeenCalledWith('/dashboard')` (line 81 in the actual file). After Task 9 wraps `navigateTo('/dashboard')` with `localePath('/dashboard')`, the call becomes `navigateTo(localePath('/dashboard'))`. With identity-passthrough mock for `useLocalePath`, `localePath('/dashboard')` returns `'/dashboard'`, so the assertion `toHaveBeenCalledWith('/dashboard')` still passes. This is correct. BUT Task 9's 'Authorized exception' section only mentions `login.spec.ts`, `register.spec.ts`, `reset-password.spec.ts` as needing `useLocalePath` mock. It does NOT mention `forgot-password.spec.ts` needing any navigateTo-related fix — and indeed forgot-password.vue has no `navigateTo` calls. However, `verify-email.vue` also has no `navigateTo` calls per Task 9 description. This is consistent. The concern is that `forgot-password.vue` has TWO `<NuxtLink to='/auth/login'>` replaced with `<NuxtLinkLocale>` — if forgot-password.spec.ts does mount the component AND checks link hrefs, it may need the useLocalePath mock. The actual forgot-password.spec.ts was not read but Task 9 says 'verify-email.spec.ts: only add the useLocalePath mock if the spec actually mounts a component that calls useLocalePath()'. The vagueness here is a cross-task risk.",
+      "fix": "Read forgot-password.spec.ts before implementation. The vague 'add if it fails' instruction in Task 9 should be replaced with a concrete determination based on spec contents."
+    },
+    {
+      "id": "CT-009",
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 10,
+      "issue": "Task 10 adds `useLocalePath` mock to dashboard.spec.ts and profile.spec.ts. The dashboard.spec.ts currently asserts `banner.find('a[href=\"/profile\"]')` (line 43-45 of actual file). Task 10 notes: 'Task 4 installs i18n module: if in jsdom-test-environment prefix_except_default behaves differently (e.g., no runtime config) — fallback plan: snapshot href.' The real concern is that `<NuxtLinkLocale to=\"/profile\">` in jsdom without a properly initialized i18n plugin may render as `<a href=\"undefined\">` or `<a href=\"/profile\">` depending on how @nuxt/test-utils mounts i18n. The identity-passthrough `useLocalePath` mock does NOT mock `NuxtLinkLocale` itself — it mocks only the `useLocalePath` composable. If `<NuxtLinkLocale>` is a component registered by @nuxtjs/i18n and not properly mocked, it may either throw or render wrong hrefs. Task 10 acknowledges this but the mitigation ('fallback: snapshot href') is not defined in the task. This creates a risk that the dashboard.spec.ts assertion on `a[href='/profile']` breaks without a clear fix path defined in the task.",
+      "fix": "Add explicit guidance: if `<NuxtLinkLocale>` is not auto-resolved in jsdom, either (a) add `mockNuxtImport('NuxtLinkLocale', ...)` as a stub that renders `<a :href='to'>`, OR (b) use `wrapper.find('[data-test=\"to-profile-link\"]')` with a data-test attribute on the link. Document the chosen approach in Task 10."
+    },
+    {
+      "id": "CT-010",
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 2,
+      "issue": "Task 2 creates `frontend/shared/i18n-locales.ts` exporting `NON_DEFAULT_LOCALES`. Task 3 imports from this file. Task 2's Details section says the file 'Imports in nuxt.config.ts (for routeRules map) and later in Task 3 server-middleware (allow-list).' However, `nuxt.config.ts` is a build-time config file that uses the Vite/Rollup module resolution context, while `frontend/server/middleware/strip-invalid-locale.ts` runs in the Nitro server context. Nitro has its own module resolution (`~/` alias). Task 3's Implementation hints explicitly call out: 'Nitro alias `~/` may not be configured by default for server middleware in Nuxt 4 — if import fails, use relative path `../../shared/i18n-locales`. This is a real and documented risk. What is NOT documented: if the agent for Task 2 creates the file at `frontend/shared/i18n-locales.ts` and the agent for Task 3 uses the fallback relative path `../../shared/i18n-locales`, this relative path from `frontend/server/middleware/strip-invalid-locale.ts` resolves to `frontend/shared/i18n-locales.ts`. That is correct: `frontend/server/middleware/` → `../../` → `frontend/` → `shared/i18n-locales`. So the fallback path is correct. The risk is documented, mitigation is correct. This is major only because the primary import (`~/shared/i18n-locales`) may silently fail in Nitro context, and the test won't catch it (unit tests mock the allow-list directly).",
+      "fix": "No task change needed; the fallback is correctly documented. Add a note to verify the import works in the smoke check output by grepping Nitro startup logs for module-not-found errors."
+    },
+    {
+      "id": "CT-011",
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 9,
+      "issue": "Task 9 references `errors.login.429`, `errors.login.401`, `errors.login.403`, `errors.register.409`, etc. as keys that Task 4 must create. Task 4's 'What to do' step 1 says to include `errors.{contextKey}.{code}` per code-research §2 mapping table — 9 contexts with specific codes. The tasks do NOT collectively enumerate the exact set of error keys needed across ALL consumer tasks. Task 9 consumes `errors.login.*`, `errors.register.*`, `errors.resetPassword.*`. Task 10 consumes `errors.profile.saveName`, `errors.profile.resend`, `errors.profile.changePassword`, `errors.profile.terminateSessions`, `errors.profile.deleteAccount`. The contextKey for Task 10 includes nested dot-notation (`profile.saveName`, `profile.changePassword`, etc.) which means the `errors` namespace needs to support `errors.profile.saveName.{code}` — a 3-level nesting under errors. Task 5 (useApiError) builds the key as `errors.{contextKey}.{code}` via template literal — so `contextKey='profile.saveName'` gives `errors.profile.saveName.{code}`. This means `uk.json` must have `errors.profile.saveName.generic` nested as `errors -> profile -> saveName -> generic`. This 3-level nesting under `errors` is not explicitly documented in Task 4's namespace structure — Task 4 shows `errors.{contextKey}.{code}` which for `contextKey=login` gives 2 levels (`errors -> login -> {code}`), but for `contextKey=profile.saveName` gives 3 levels (`errors -> profile -> saveName -> {code}`). If Task 4's agent creates only a 2-level errors structure, Tasks 9-10's useApiError calls will silently fall back to `errors.generic` for all profile actions.",
+      "fix": "Task 4 must explicitly document that `errors` namespace includes 3-level paths for profile context keys: `errors.profile.saveName.*`, `errors.profile.changePassword.*`, `errors.profile.resend.*`, `errors.profile.terminateSessions.*`, `errors.profile.deleteAccount.*`. Add these paths explicitly to Task 4's 'What to do' step 1 rather than relying on `contextKey` inference."
+    },
+    {
+      "id": "CT-012",
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 6,
+      "issue": "Task 6 provides a full spec skeleton as an implementation hint, including `import LangSwitcher from '../../components/LangSwitcher.vue'` at the end of mock declarations. This import is AFTER the `mockNuxtImport` calls but BEFORE the `describe` block. The spec skeleton is well-structured with the critical note about `vi.hoisted` not being able to use `ref` from vue. HOWEVER, the `useCookie` mock `mockNuxtImport('useCookie', () => (key: string) => key === 'i18n_lang' ? cookieRef : ref(null))` uses `ref(null)` inside the factory. The task explicitly warns that `ref` is not available inside `vi.hoisted`, but the `mockNuxtImport` factory is 'lazily invoked' so `ref` IS available. This is consistent with the explanation. The cross-task concern: Task 6 uses `useCookie` mock for the `i18n_lang` key. Task 2 configures the module-level cookie with `cookieKey: 'i18n_lang'`. These must match. They DO match — consistent. But NO OTHER TASK mocks `useCookie` for `i18n_lang` — Task 6 is the only one. If another task's component also reads `useCookie('i18n_lang')`, it won't have a mock.",
+      "fix": "No change needed; each spec scope is isolated. The concern is theoretical."
+    },
+    {
+      "id": "CT-013",
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 14,
+      "issue": "Task 14 (Test Audit) says 'AC18 compliance: existing UA-specs not mutated — єдиний дозволений виняток `auth.global.spec.ts`'. But Tasks 9 and 10 both introduce ADDITIONAL authorized exceptions to existing spec files (login.spec.ts, register.spec.ts, reset-password.spec.ts, dashboard.spec.ts, profile.spec.ts). Task 14's AC18 compliance check section only mentions `auth.global.spec.ts` as the authorized exception, without acknowledging the 5 additional authorized exceptions introduced by Tasks 9 and 10. If Task 14 auditor reads only the tech-spec Decision 16 (which lists only auth.global.spec.ts as authorized exception) without reading Task 9 and Task 10 task files, the auditor will incorrectly flag these 5 specs as AC18 violations.",
+      "fix": "Task 14 must reference the authorized exceptions documented in Tasks 9 and 10 task files, or a consolidated decisions.md entry. Add to Task 14 Context Files: Task 9.md and Task 10.md to ensure the auditor reads the expanded authorized-exception list."
+    },
+    {
+      "id": "CT-014",
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 15,
+      "issue": "Task 15 (Pre-deploy QA) references audit reports from Tasks 12-14 (`logs/audit/code-audit.json`, `security-audit.json`, `test-audit.json`). Task 14 (Test Audit) says AC18 compliance check uses 'єдиний дозволений виняток auth.global.spec.ts' without acknowledging the 5 additional authorized exceptions from Tasks 9 and 10. If Task 14 generates a blocking finding for these 5 specs, Task 15 would incorrectly be blocked. Task 15 does not have a mechanism to override audit findings that are based on incomplete information from Task 14.",
+      "fix": "Same fix as CT-013: Task 14 must enumerate all 6 authorized exceptions (auth.global.spec.ts + 5 from Tasks 9/10). Task 15 should cross-reference decisions.md for the authorized exceptions list rather than only audit report findings."
+    },
+    {
+      "id": "CT-015",
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 12,
+      "issue": "Task 12 (Code Audit) dimension 8 (D16 conformance) says 'D16: existing test files (UA-literals) not modified except auth.global.spec.ts.' Same problem as CT-013: the authorized exception list is incomplete. The Code Audit will incorrectly flag modifications to login.spec.ts, register.spec.ts, reset-password.spec.ts, dashboard.spec.ts, profile.spec.ts as D16 violations.",
+      "fix": "Same fix: Task 12 must reference the authorized exceptions from Tasks 9 and 10 in the D16 conformance check. Add Task 9.md and Task 10.md to Context Files of Task 12."
+    },
+    {
+      "id": "CT-016",
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 11,
+      "issue": "Task 11's TDD Anchor describes the E2E scenario: step 9 says 'fill email field with value `invalid` and submit the form (click submit button or blur, depending on how live-validation is configured after Task 9)'. The actual validation trigger (submit vs blur) is implementation-dependent on how Task 9 implements vee-validate. Task 11's Implementation hints say 'simpler — click submit, since Zod errors are displayed immediately on submit attempt'. This is fine. However, the assertion 'step 4: verify that the visible submit button has text `Увійти`' requires reading `auth.login.submit` from `uk.json` (Task 4). Task 11 says 'read en.json (created in Task 4) to get exact strings for assertions.' But it also needs `uk.json` for the initial uk-locale assertion. Both locale files are listed in Context Files, so this is consistent. Minor only: Task 11 depends on Task 4 but the specific key `auth.login.submit` is not defined in Task 4 explicitly — Task 4 says 'auth.login.*' covering 'button states (submit, submitting)'. The exact key name (`auth.login.submit` vs `auth.login.signIn` vs `auth.login.loginButton`) is at Task 4 implementor's discretion.",
+      "fix": "Task 11 should explicitly state it will read uk.json and en.json AFTER Task 4 creates them, and use whatever key Task 4 chose for the submit button. Add a note that the assertion must use the actual key value from the created files, not a hardcoded assumption."
+    },
+    {
+      "id": "CT-017",
+      "severity": "minor",
+      "category": "hints",
+      "task": 10,
+      "issue": "Task 10's Implementation hints section contains a full code block with complete reactive schema pattern (lines 172-190 in task file), including the full `toTypedSchema(z.object({...}).refine(...))` implementation with actual field names and validation messages. This is a full algorithm implementation in a hint block — prescribes the exact solution rather than pointing to a pattern. Per validator rules, hints containing full logic code blocks should be flagged as major in the 'hints' category.",
+      "fix": "Replace the full code block with a reference: 'Follow the same computed+toTypedSchema pattern as Task 9 auth pages. See vee-validate v4 docs for ComputedRef validationSchema. Key point: pass schemaComputed (not schemaComputed.value) to validationSchema.' The full block is too prescriptive for a hint."
+    },
+    {
+      "id": "CT-018",
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 9,
+      "issue": "Task 9 says for forgot-password.vue: 'Still inject `useApiError()` at the top of setup (per Decision 10) so the import is consistent across files; do not change the silent-catch UX.' This means forgot-password.vue will call `useApiError()` in setup but never use the returned handler in catch. Task 5 implements useApiError as `useApiError()` calls `useI18n()` inside the factory. A spurious call to `useApiError()` in forgot-password.vue is harmless (no lifecycle violation since it's in setup), but adds an unused import/call. More importantly, Task 9 says 'The page does not surface API error messages today (silent catch per email-enumeration protection). Still inject useApiError()'. This is explicitly an intentional consistency pattern — no bug. However, if the code auditor in Task 12 runs a 'useApiError called but return value unused' check, it would flag this as a finding. It's a minor inconsistency between intent (consistency) and code-audit perspective (unused return value).",
+      "fix": "Add a comment to forgot-password.vue's setup: `// useApiError injected for consistency per Decision 10; not used (silent catch is intentional for email-enumeration protection)`. This would also satisfy the Task 12 code auditor."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 15,
+    "claims_verified": 87,
+    "issues_found": 18,
+    "by_severity": {
+      "critical": 4,
+      "major": 9,
+      "minor": 5
+    }
+  },
+  "cross_task_summary": {
+    "duplicate_heavy_resource_init": "PASS — useI18n() is auto-injected by @nuxtjs/i18n plugin as a single instance per Vue app. No task creates a competing i18n instance. LangSwitcher (Task 6) is mounted once in layouts (Task 8) — no duplicate mounting. useApiError factory (Task 5) is called once per page setup — correct factory pattern, no lifecycle issues.",
+    "shared_resource_ownership": "PASS — Shared Resources table in tech-spec correctly identifies useI18n(), locale messages, and i18n_lang cookie with single ownership. All tasks correctly consume them without competing initialization.",
+    "setLocale_single_call_pattern": "PASS — Only LangSwitcher.vue (Task 6) calls setLocale(). No other task introduces a competing setLocale call. Cookie is written atomically by the module. No race condition surface outside LangSwitcher.",
+    "nonddefault_locales_constant": "MAJOR — see CT-010. Single source of truth is correctly created in Task 2 and consumed by Task 3, but Nitro module resolution alias risk is documented without a smoke verification step that definitively confirms the import works.",
+    "locale_key_parity": "MAJOR — see CT-011. Task 4 must create 3-level nested error keys for profile context keys (errors.profile.saveName.*, errors.profile.changePassword.*, etc.) but this 3-level requirement is not explicitly documented in Task 4.",
+    "uselocalepath_mock_pattern": "CONSISTENT across Tasks 6, 7, 9, 10 — all use `() => () => (path: string) => path` identity passthrough. The mock factory shape is identical across all 5 affected spec files. No inconsistency in the mock pattern itself.",
+    "authorized_exceptions_ac18": "INCONSISTENT — Tasks 12, 13, 14, 15 reference only auth.global.spec.ts as the AC18 authorized exception, but Tasks 9 and 10 introduce 5 additional authorized exceptions (login, register, reset-password, dashboard, profile specs). The audit tasks will incorrectly flag these. See CT-013, CT-014, CT-015.",
+    "zod_computed_pattern": "POTENTIALLY INCONSISTENT — Task 9 and Task 10 describe the same vee-validate reactive schema pattern with slightly different wording that could lead to different implementations. See CT-006.",
+    "errors_namespace_structure": "RISK — Task 4 must produce 3-level nested error keys for profile context keys used in Task 10. This requirement is implicit in the contextKey design of useApiError (Task 5) but not explicitly stated in Task 4. See CT-011."
+  }
+}

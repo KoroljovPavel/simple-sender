@@ -1,0 +1,42 @@
+{
+  "status": "passed",
+  "summary": "The 6 new keyboard-branch specs in FunnelMessagePreview.spec.ts are behavior-driven and strong. Every TDD Anchor case is covered (SET_KEYBOARD text+rows mock, CLEAR_KEYBOARD text-only/no-mock, exact payload shape, debounced re-trigger on keyboard-field edits, hostile label/text as literal text), plus an extra empty-rows edge case beyond the anchor. All new tests pass the litmus test: removing the keyboard render/payload/watch logic makes the corresponding test fail. Negative assertions (no inline funnel-preview-buttons, no block stack, no injected img/b elements) guard against false positives. Existing DELAY-placeholder and static no-v-html source guard remain untouched and green. Minor, non-blocking observations only.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts:452 (CLEAR_KEYBOARD case)",
+      "issue": "The empty renderedBlocks desync edge case for a keyboard response (rendered.kind==='keyboard' with renderedBlocks: []) is documented in task 5 Edge cases ('renderedBlocks empty in a keyboard response (desync) -> render nothing rather than crash') and handled by the component (keyboardText computed returns null -> the v-if=\"keyboardText !== null\" hides the text node), but no spec exercises it. The MESSAGE branch has an equivalent guard test ('renders safely when renderedBlocks is shorter than blocks'); the keyboard branch has none. A regression that crashes or renders a stray empty text node on an empty-renderedBlocks keyboard response would not be caught.",
+      "recommendation": "Add: it('keyboard response with empty renderedBlocks renders no text node, no crash') -> previewMock.mockResolvedValueOnce({ renderedBlocks: [], sampleData: false, kind: 'keyboard', keyboardRows: null }); mount setKeyboardStep(); assert wrapper.find('[data-test=\"funnel-preview-keyboard-text\"]').exists() === false AND wrapper.find('[data-test=\"funnel-preview-keyboard\"]').exists() === false AND the panel still mounts (no thrown error)."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts:518 (hostile keyboard label and rendered text case)",
+      "issue": "The keyboard hostile-content test asserts literal text + absence of injected img/b elements (good), but unlike the MESSAGE-branch sibling at line 166-172 it does not re-assert the static no-v-html source guard. This is acceptable because the MESSAGE test already scans the entire component source (which now includes the keyboard branch), so the source-level invariant is covered once. Flagged only so the reviewer is aware the keyboard branch relies on the MESSAGE test for the source-scan half of the guard; if the two cases are ever split into separate files the source guard must move with them.",
+      "recommendation": "No change required now. If the suite is later reorganized, keep at least one test in the same file that scans componentSource for /v-html\\s*=/ and /\\.innerHTML\\s*=/ so the keyboard branch is never left without the source-level guard."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "frontend/tests/components/funnels/FunnelMessagePreview.spec.ts:490 (editing a keyboard field re-triggers the debounced preview)",
+      "issue": "The test verifies call COUNT increments after each 600ms debounce window (3 calls total) but never asserts the payload of the re-triggered calls. The MESSAGE-branch sibling ('reactive block change re-triggers debounced preview', line 132) additionally asserts toHaveBeenLastCalledWith the mutated content, proving the new value (not a stale one) reached the backend. Without that, a bug where the watcher fires but runPreview reads stale props (or sends the wrong row payload) on the row-edit step would still pass.",
+      "recommendation": "After the keyboardText edit at line 502-504 add: expect(previewMock).toHaveBeenLastCalledWith('f1','s1', expect.objectContaining({ keyboardText: 'Новий текст' })). After the row edit at line 510-512 add: expect(previewMock).toHaveBeenLastCalledWith('f1','s1', expect.objectContaining({ keyboardRows: [{ buttons: [{ text: 'B' }] }] })). This proves the mutated value, not just a call, propagated."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 6,
+      "passed": 6,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 6,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,124 @@
+{
+  "verdict": "pass",
+  "sources": {
+    "user_spec": true,
+    "tech_spec": true,
+    "code_research": true,
+    "tasks": true
+  },
+  "requirements_total": 22,
+  "requirements_covered": 21,
+  "requirements_partial": 1,
+  "requirements_missing": 0,
+  "findings": [
+    {
+      "id": "F-01",
+      "type": "partial",
+      "requirement": "US-Preview-1: Preview panel shown during editing of a message step (always-visible right panel, not explicitly triggered)",
+      "detail": "User-spec says 'під час редагування message-кроку автор бачить праворуч панель прев'ю' — implying the panel is visible while editing (reactive to current unsaved content). Tech-spec Task 6 and Decision 9 implement preview as a manually toggled panel (toggle switch in the header) that calls POST /preview for the SAVED step. The user-spec says 'перемикач Прев'ю' in the UI placement section — so the toggle is user-spec. However, PreviewStepRequest in Data Models notes 'опційно поточний (незбережений) контент кроку для прев'ю на льоту; інакше прев'ю бере збережений крок за stepId' and defers the on-the-fly-vs-saved decision to task-decomposition. If 'saved-only' is chosen, a freshly typed but not-yet-auto-saved message won't render in the preview, which is a partial mismatch with user-spec expectation. The deferred decision is acknowledged in the spec but is a gap risk.",
+      "severity": "minor",
+      "recommendation": "adjust — resolve the on-the-fly-vs-saved decision explicitly before task execution. The PreviewStepRequest already has the field for unsaved content; the task description should mandate its use so the preview stays in sync with the currently-typed text, not the last auto-save flush."
+    },
+    {
+      "id": "F-02",
+      "type": "partial",
+      "requirement": "US-Shared-2: 422 with business code shown inline (resolveFunnelError), not as toast",
+      "detail": "Task 5 (Verify-user) says 'Test for me при незв'язаному боті показує inline-підказку'. Decision 5 and i18n Task 4 cover the funnel_owner_not_linked code. However, the tech-spec Acceptance Criteria item '422 з бізнес-кодом мапиться inline (resolveFunnelError), мережева/непередбачена → toast' is correct in AC but none of the task descriptions explicitly wire resolveFunnelError for the duplicate and stop-all actions (those return non-422 success or generic network errors). The gap is narrow: stop-all has no 422 path, duplicate has no 422 path either, so resolveFunnelError applies only to test-run and preview. Task 5 description focuses on test-run inline but does not mention preview's inline handling. Low risk given store actions RETHROW and [funnelId].vue already has resolveFunnelError, but the task description for Task 6 (preview panel) does not mention error display.",
+      "severity": "minor",
+      "recommendation": "adjust — add to Task 6 description: error handling for the preview endpoint (404 for unknown stepId, network error → placeholder or toast per convention)."
+    },
+    {
+      "id": "F-03",
+      "type": "underengineering",
+      "requirement": "US-TestRun-4: Pre-validate before enroll; same 422 codes as activation",
+      "detail": "Decision 4 and Task 2 correctly call validateSteps before enroll. However, the IT test matrix in Testing Strategy only covers 'ownerChatId=null → 422 funnel_owner_not_linked' in the integration tests section for the 422 path. The pre-validate 422 paths (funnel_no_steps, funnel_step_invalid, funnel_broken_edge, etc.) are listed only in unit tests. For an L-size feature, having zero IT coverage of the pre-validate rejection paths means that the endpoint wiring (controller → service → validateSteps → 422 response body) is not integration-tested. Unit tests cover service logic but not the HTTP response shape.",
+      "severity": "minor",
+      "recommendation": "adjust — add at least one IT case for test-run pre-validate rejection (e.g. empty funnel → 422 funnel_no_steps) to verify the full HTTP path, not just unit-level service logic."
+    },
+    {
+      "id": "F-04",
+      "type": "underengineering",
+      "requirement": "US-Preview-3: Preview for non-message steps shows neutral placeholder 'Цей крок не надсилає повідомлення'",
+      "detail": "Decision 9 and Task 2 cover non-message steps returning a placeholder response. However, no unit test is specified for the 'unknown stepId → 404' path via preview (the Testing Strategy unit-test bullet says 'невідомий stepId → 404 (через requireFunnel-патерн / not-found)' — this is ambiguous. requireFunnel resolves the funnel by funnelId, not stepId. If the stepId does not exist within the resolved funnel's steps, the 404 must come from explicit stepId lookup in the service, not from requireFunnel. The spec does not clearly establish whether a missing stepId returns 404 or another code, and no IT covers it.",
+      "severity": "minor",
+      "recommendation": "fix — clarify in Task 2 description that stepId not-found inside the funnel's steps list returns 404 (not requireFunnel's 404, but an explicit step-level not-found). Add IT case."
+    },
+    {
+      "id": "F-05",
+      "type": "underengineering",
+      "requirement": "US-TestRun-6: HTTP remains 2xx when Telegram-send later fails (async delivery)",
+      "detail": "The IT for test-run happy path relies on MockWebServer receiving sendMessage. If MockWebServer is NOT enqueued, the send would fail asynchronously. The spec correctly states '2xx = enroll зареєстровано' and covers this semantically. However, the IT description ('MockWebServer отримав sendMessage') tests the happy-path send but does not include a negative IT for 'MockWebServer returns error → execution goes to failed, HTTP was still 2xx'. This is an IT coverage gap for the async-failure-is-silent guarantee. Not a blocking issue given the architecture is correct, but the guarantee is untested.",
+      "severity": "minor",
+      "recommendation": "keep — the architectural guarantee (HTTP 2xx before engine sweep) is established by design and the existing engine IT harness covers engine failure paths. Acceptable trade-off for scope."
+    },
+    {
+      "id": "F-06",
+      "type": "scope_creep",
+      "requirement": null,
+      "detail": "Decision 11 is marked [TECHNICAL] and is correctly classified as a pure decomposition/sequencing decision with no user-spec impact. It has no entry in User-Spec Deviations but the spec itself acknowledges this in the Deviations section: 'Decision 11 — суто технічний [TECHNICAL], не змінює жодної вимоги user-spec.' This is correct per the rules (pure infrastructure concern). No issue.",
+      "severity": null,
+      "recommendation": "keep — correctly handled, no deviation entry needed for infrastructure decomposition decisions."
+    },
+    {
+      "id": "F-07",
+      "type": "underengineering",
+      "requirement": "US-StopAll-3: Lічильник = modifiedCount, best-effort race acceptable",
+      "detail": "The stop-all IT verifies '200 + count; усі активні execution-и cancelled+stepRunStatus=done'. This is good. However, no IT covers the concurrent-with-engine-tick scenario to validate that claim-CAS actually wins deterministically (that a mid-tick persistProgress does not resurrect after bulk-cancel). Decision 7 and the Risks section correctly describe the race mitigation, but the IT only tests quiescent state. For an L feature that introduces bulk mutation of running executions, an IT with a simulated mid-tick state (execution in stepRunStatus=in_progress at time of bulk cancel) would strengthen confidence.",
+      "severity": "minor",
+      "recommendation": "adjust — add an IT that places an execution in stepRunStatus=in_progress and then calls executions/stop, verifying the execution ends up cancelled and a subsequent engine sweep does not flip it back."
+    },
+    {
+      "id": "F-08",
+      "type": "gap",
+      "requirement": "US-TestRun-5: Draft funnel can also be test-run",
+      "detail": "The user-spec explicitly lists 'Draft-воронку теж можна протестувати' as an acceptance criterion. The tech-spec confirms this is supported (insertExecution does no status check). However, neither the unit test list nor the IT list includes a specific test case for 'test-run on a draft funnel → 2xx'. The only IT for test-run happy-path is 'зв'язаний бот → новий execution (depth=0)' without specifying funnel status. This is a minor coverage gap, not a design gap.",
+      "severity": "minor",
+      "recommendation": "adjust — explicitly add to Task 2 IT description: 'test-run on draft funnel → 2xx' to ensure the no-status-check contract is regression-tested."
+    },
+    {
+      "id": "F-09",
+      "type": "overengineering",
+      "requirement": null,
+      "detail": "Task 7 (Code Audit), Task 8 (Security Audit), Task 9 (Test Audit) are three separate audit tasks, each as a full skill invocation. For a feature of this size (4 endpoints + frontend wiring, no new schema), three independent audit passes by separate agents on overlapping files (FunnelController, FunnelService) may produce redundant findings and require triple context loading. A single holistic audit task (code + security combined) plus a separate test audit would be more proportional. This is a process-level overengineering concern, not a functionality one.",
+      "severity": "minor",
+      "recommendation": "keep — audit granularity is a team quality policy decision, not a spec defect. The separation into dedicated skills (code-reviewing, security-auditor, test-master) is intentional per methodology."
+    }
+  ],
+  "forward_traceability": {
+    "US-TestRun-1 (enroll via ownerChatId, bypass trigger matching)": "Decision 1, 2 → Task 2",
+    "US-TestRun-2 (422 funnel_owner_not_linked, never 500)": "Decision 5 → Task 2, Task 4",
+    "US-TestRun-3 (restart on re-click via cancelExistingForPair)": "Decision 3 → Task 2",
+    "US-TestRun-4 (pre-validate before enroll, same 422 codes)": "Decision 4 → Task 2",
+    "US-TestRun-5 (draft funnel testable)": "Decision 2 → Task 2 (test case implicit, see F-08)",
+    "US-TestRun-6 (2xx = enroll registered, async delivery)": "Solution section, Testing Strategy → Task 2",
+    "US-Duplicate-1 (draft status, trigger reset, name with suffix truncated to 128)": "Decision 6 → Task 1",
+    "US-Duplicate-2 (verbatim graph copy via copyOf, keywords/allowReEnter/description copied)": "Decision 6 → Task 1",
+    "US-Duplicate-3 (201 + FunnelResponse, original unchanged)": "Solution section → Task 1",
+    "US-Duplicate-4 (name >128 truncated, not 400)": "Decision 6 → Task 1",
+    "US-Duplicate-5 (empty/draft original also duplicatable)": "Decision 6 → Task 1",
+    "US-StopAll-1 (running|waiting|waiting_for_reply → cancelled + stepRunStatus=done)": "Decision 7 → Task 1",
+    "US-StopAll-2 (scoped by projectId+funnelId, returns count, 0 not error)": "Decision 7, 8 → Task 1",
+    "US-StopAll-3 (modifiedCount best-effort, concurrent race acceptable)": "Decision 8 → Task 1",
+    "US-Preview-1 (right-panel during editing for message steps, toggle switch)": "Decision 9 → Task 5, Task 6 (partial, see F-01)",
+    "US-Preview-2 (backend render via VariableTemplateRenderer, byte-identical escaping)": "Decision 9 → Task 2, Task 6",
+    "US-Preview-3 (non-message steps show neutral placeholder)": "Decision 9 → Task 2, Task 6",
+    "US-Preview-4 (stub subscriber with sample data when owner not linked)": "Decision 9 → Task 2",
+    "US-Shared-1 (all endpoints via requireFunnel, anti-IDOR, unified 404)": "Solution section → Tasks 1, 2",
+    "US-Shared-2 (422 inline via resolveFunnelError, network error → toast)": "AC section → Tasks 3, 4, 5 (partial, see F-02)",
+    "US-Shared-3 (i18n parity both locales, funnel_owner_not_linked + 2 missing codes)": "Decision 10 → Task 4"
+  },
+  "reverse_traceability": {
+    "Decision 1 (ownerChatId, no code-linking)": "US-TestRun-1 + Обмеження",
+    "Decision 2 (direct enroll via insertExecution depth=0)": "US-TestRun-1 + Технические решения",
+    "Decision 3 (restart policy via cancelExistingForPair)": "US-TestRun-3 + Технические решения",
+    "Decision 4 (pre-validate before enroll)": "US-TestRun-4 + Технические решения",
+    "Decision 5 (422 funnel_owner_not_linked, never 500)": "US-TestRun-2 + Критерии приёмки",
+    "Decision 6 (duplicate: draft status, trigger reset, verbatim graph, name truncation)": "US-Duplicate-1..5",
+    "Decision 7 (stop-all updateMulti with stepRunStatus=done)": "US-StopAll-1 + Обмеження",
+    "Decision 8 (modifiedCount best-effort)": "US-StopAll-3",
+    "Decision 9 (preview endpoint, VariableTemplateRenderer, stub subscriber)": "US-Preview-1..4",
+    "Decision 10 (i18n parity for funnel_invalid_trigger_type/keywords)": "US-Shared-3 + Критерии приёмки",
+    "Decision 11 (backend decomposition wave sequencing) [TECHNICAL]": "No user requirement — pure infrastructure sequencing, acceptable per rules"
+  },
+  "notes": "Overall the tech-spec is well-structured and demonstrates strong bidirectional traceability. All 11 Decisions map directly to user-spec requirements or acceptance criteria. Decision 11 is correctly tagged [TECHNICAL] and is a pure infrastructure concern exempt from User-Spec Deviations. The User-Spec Deviations section is clean — there are no undocumented deviations and no scope creep introducing new functionality. The Solution section has real technical substance (extraction paths, concrete class references, CAS correctness reasoning, MarkdownV2 escaping rationale) well beyond paraphrasing the user-spec. Architecture identifies shared resources correctly. The eight findings are all minor: five test-coverage gaps, one partially-deferred design decision (on-the-fly vs saved preview), one process observation about audit granularity, and one error-handling description gap in Task 6. None rise to critical or major severity. No YAGNI abstractions, no unnecessary layers, no premature optimizations were found. The spec is executable as written."
+}

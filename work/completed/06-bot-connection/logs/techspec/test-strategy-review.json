@@ -1,0 +1,136 @@
+{
+  "status": "pass",
+  "summary": "The testing strategy for this L-sized feature is comprehensive and well-aligned with the user-spec acceptance set. Every AC (1-23) maps to at least one automated test (unit, integration, or component) with E2E explicitly and justifiably excluded. The test pyramid is healthy for an L feature (heavy unit coverage on crypto + error mapping, ~20 integration scenarios with MockWebServer for Telegram, ~7 frontend component scenarios, manual smoke checklist for end-to-end). Critical scenarios specifically requested in the review brief are all present: compensating deleteWebhook (AC9), race condition (AC12), rate limit including DEL on success (AC11), anti-enumeration 404 (AC16), no-token-in-metadata negative assertion (AC23). Test infrastructure is correctly scoped (MockWebServer as testImplementation only; D9 + R10 explicitly document this; no new production dependencies). A handful of minor gaps and improvement opportunities exist but none block approval.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy -> Integration tests (AC9 / Decision 1)",
+      "issue": "The compensating-deleteWebhook code path is exercised twice in production (persist failure AND DuplicateKeyException from the partial unique index), but the integration tests only explicitly enumerate the persist-failure variant ('Persist fail compensation (AC9)' via Mockito-spy on save). The race-condition test ('Race condition (AC12)') verifies the 200/409 outcome but does not assert that the losing concurrent request also triggered a compensating deleteWebhook on MockWebServer.",
+      "recommendation": "Add a single assertion inside the AC12 race-condition integration test: after the parallel Connect requests resolve, inspect the MockWebServer recorded requests and assert that for the losing request, both a setWebhook and a subsequent deleteWebhook were issued (i.e. >=2 setWebhook calls total and >=1 deleteWebhook on the losing path). Alternatively, add a dedicated test 'DuplicateKeyException compensation' that seeds a connected Bot with telegramBotId=X, scripts MockWebServer to return getMe id=X + setWebhook OK, then issues Connect and asserts (a) 409 returned, (b) MockWebServer recorded the setWebhook AND deleteWebhook in that order. This closes the test gap for the second compensating-deleteWebhook trigger that tech-spec explicitly calls out."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy -> Integration tests (AC11 DEL on success)",
+      "issue": "The Rate-limit integration test scenario notes 'A successful Connect deletes the counter' as a trailing sentence, but it is not structured as a verifiable assertion in the scenario flow. The 10 scripted-401 attempts cause the counter to reach 11 (since INCR runs on every attempt including failures), and the 11th call returns 429 - so the same scenario cannot also demonstrate the DEL-on-success branch.",
+      "recommendation": "Split AC11 into two integration scenarios: (1) 'Rate limit threshold trip' - 10 scripted-401 Connects, 11th returns 429, assert Redis key 'brute:bot-connect:{userId}' value == 11 and TTL in (0, 900]; (2) 'Successful Connect resets brute-force counter (AC11 DEL branch)' - pre-seed Redis key 'brute:bot-connect:{userId}' to a value like 5 with TTL 600s, perform a happy-path Connect with MockWebServer scripted to return valid getMe + setWebhook, assert HTTP 200 AND assert the Redis key no longer exists (DEL semantic). This makes the DEL-on-success branch a first-class verified path rather than an aside."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy -> Integration tests (AC10 fresh webhook secret per Connect)",
+      "issue": "AC10 requires the webhook secret passed to setWebhook to be 'a fresh random value generated per Connect.' The current strategy verifies the URL shape and that the secret is stored as a hash (AC20), but does not assert that two Connect calls produce two different plaintext secrets. A bug where the secret is generated once at boot (constant) would pass the existing AC10 + AC20 checks because both would store the same hash of the same constant.",
+      "recommendation": "Add a small assertion inside or alongside an existing happy-path-style integration scenario: perform a Connect, capture the X-Telegram-Bot-Api-Secret-Token header value received by MockWebServer; Disconnect; perform a second Connect with the same token; capture the second header value; assert the two captured secrets are NOT equal. Alternatively, add a focused unit test on the secret-generation helper in BotService asserting two consecutive calls return different 16-byte values. This guarantees the 'fresh per Connect' clause of AC10 is regression-protected."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy -> Frontend component tests (AC22 error branches)",
+      "issue": "Frontend test enumeration covers Connect error statuses 400/401/409/422/429/500/502, but: (a) 401 is not part of user-spec AC22 (the user-spec lists 400/422/500/502/409/429 for connect; 401 is mapped to 422 by the backend per AC3 - the frontend should never see a 401 from this endpoint), (b) Disconnect 404 is not explicitly enumerated in the frontend test plan even though user-spec AC22 includes errors.bot.disconnect.404, (c) TestMessage 502 i18n key is declared 'reserved for forward compatibility' but the frontend component plan only mentions 422 - this is acceptable but should be made explicit.",
+      "recommendation": "Tighten the frontend component spec enumeration in the tech-spec: (a) drop 401 from the Connect error branches list (the backend maps Telegram 401 -> 422 'invalid_bot_token' per AC3, so the frontend never observes 401 on this endpoint); (b) add an explicit 'Disconnect 404 surfaces errors.bot.disconnect.404 toast' scenario; (c) keep TestMessage 502 out of scope but note 'errors.bot.testMessage.502 is reserved for 06b; no frontend test in 06' to make the intentional gap visible in the test plan. Each error branch should still go through useApiError() so the resolution-fallback chain (errors.{ctx}.{status} -> errors.{ctx}.generic -> errors.generic) is exercised."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: Testing Strategy -> Integration tests (AC11 Redis down fail-open)",
+      "issue": "The 'Redis down (AC11 fail-open)' scenario uses 'Mockito.when(redisTemplate.opsForValue()).thenThrow(...)' to simulate Redis outage. Mocking a Spring bean inside an integration test that otherwise uses real infrastructure introduces an inconsistency: the test no longer exercises the real Redis client failure code path (connection errors, timeouts) - it tests that an arbitrary thrown exception is swallowed. This is a soft litmus-test concern: a refactor that changes the failure type from a Mockito-injected RuntimeException to a real RedisConnectionFailureException could pass the test but break production fail-open.",
+      "recommendation": "Prefer one of: (a) point ReactiveRedisTemplate at an unreachable host:port in this test class via @DynamicPropertySource (e.g. localhost:1) and assert Connect still returns 200 - this exercises the real connection-failure exception class and the actual onErrorResume filter in BotService; (b) if (a) is too slow, keep the Mockito approach but assert the swallowed exception is a RedisConnectionFailureException (or whichever specific class BotService filters on) rather than a generic RuntimeException. The current 'thenThrow(...)' wording leaves the exception type unspecified, which weakens the litmus-test value of the scenario."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "Section: Testing Strategy -> Unit tests (Telegram error mapping)",
+      "issue": "Unit tests for TelegramApiClient cover error mapping but the strategy does not explicitly call out a test for the retry filter discrimination (4xx must NOT be retried per Decision 11; 5xx + IOException + TimeoutException MUST be retried). A bug where the retry filter accidentally matches 4xx (e.g. wrong predicate) would cause invalid-token Connects to issue 4 calls to Telegram instead of 1, increasing rate-limit risk against Telegram.",
+      "recommendation": "Add a unit test against TelegramApiClient + MockWebServer: enqueue a single 401 response, call getMe, assert (a) the returned Mono completes with an AppException mapped from 401, (b) MockWebServer.getRequestCount() == 1 (no retry). Mirror this with a 503 scenario asserting requestCount == 4 (initial + 3 retries) to confirm the retry policy is correctly wired for transient failures only. This explicitly anchors Decision 11's filter contract in a test."
+    }
+  ],
+  "coverage_gaps": [
+    {
+      "ac": "AC9",
+      "gap": "Compensating deleteWebhook on DuplicateKeyException path is described in tech-spec but not separately asserted by an integration test - only the persist-failure variant is enumerated. The race-condition test verifies status codes but not the MockWebServer interaction sequence for the losing request.",
+      "impact": "low"
+    },
+    {
+      "ac": "AC10",
+      "gap": "No assertion that two Connect calls produce two different plaintext webhook secrets. A regression that constants the secret would pass AC10 (URL shape) + AC20 (hashed in Mongo) but violate AC10's 'fresh random value generated per Connect' clause.",
+      "impact": "low"
+    },
+    {
+      "ac": "AC11",
+      "gap": "DEL-on-success branch is mentioned as a trailing sentence in the rate-limit scenario but is not structured as its own verified scenario. The 11-attempt scenario cannot demonstrate DEL because the 11th attempt returns 429, not a success.",
+      "impact": "low"
+    },
+    {
+      "ac": "AC21",
+      "gap": "Settings folder split + sub-nav rendering is verified only via Task 5 Verify-user (manual). No automated frontend test asserts that SettingsSubnav renders both tabs with the correct localized hrefs, or that clicking the Bot tab navigates to settings/bot. Acceptable for routing-shape verification given the small surface, but should be acknowledged.",
+      "impact": "negligible"
+    },
+    {
+      "ac": "AC22",
+      "gap": "Frontend component test enumeration mentions 401 (not in user-spec) and omits explicit Disconnect 404 + acknowledgment of reserved TestMessage 502. Each error branch should be tested through useApiError so the i18n fallback chain is exercised.",
+      "impact": "low"
+    }
+  ],
+  "ac_coverage_matrix": {
+    "AC1": ["Integration: Happy path connect"],
+    "AC2": ["Integration: Format-invalid token (zero MockWebServer requests)"],
+    "AC3": ["Integration: Telegram 401 on getMe"],
+    "AC4": ["Integration: Telegram 5xx retry exhausted", "Unit: TelegramApiClient setWebhook 5xx retry-exhausted -> 502"],
+    "AC5": ["Integration: Telegram 4xx config error", "Unit: TelegramApiClient setWebhook 4xx config -> 500"],
+    "AC6": ["Integration: Platform-wide uniqueness"],
+    "AC7": ["Integration: Per-project uniqueness"],
+    "AC8": ["Integration: Happy path connect (MockWebServer interaction order)", "Task 6 Verify-smoke unit (side-effect order)"],
+    "AC9": ["Integration: Persist fail compensation (Mockito-spy save error)"],
+    "AC10": ["Integration: Happy path connect (webhook URL assertion)"],
+    "AC11": ["Integration: Rate limit", "Integration: Redis down fail-open"],
+    "AC12": ["Integration: Race condition (Flux.range(0,2).parallel)"],
+    "AC13a": ["Integration: Disconnect happy", "Integration: Disconnect Telegram down"],
+    "AC13b": ["Integration: Disconnect Telegram down (WARN log)"],
+    "AC13c": ["Integration: Disconnect happy (atomic Mongo update)"],
+    "AC13d": ["Integration: Disconnect happy, Disconnect Telegram down, Disconnect no row"],
+    "AC14": ["Integration: Get bot"],
+    "AC15": ["Integration: Test message in 06 (422 + zero MockWebServer requests)"],
+    "AC16": ["Integration: Anti-enumeration (foreign / soft-deleted / malformed -> 404; hostile ownerId echoed nowhere)"],
+    "AC17": ["Integration: No token in response or event metadata", "BotTokenLeakTest reflective assertion", "Unit: Token masking helper"],
+    "AC18": ["Frontend component: Connected view masked placeholder", "Unit: Token masking helper edge cases"],
+    "AC19": ["Frontend component: Disconnect Dialog copy + Cancel/Confirm behavior"],
+    "AC20": ["Integration: Webhook secret in Mongo is hashed (64 hex, != plaintext, SHA-256 equality)", "Unit: Webhook-secret hashing determinism"],
+    "AC21": ["Task 5 Verify-user (manual)"],
+    "AC22": ["i18n parity smoke step (pnpm prebuild)", "Frontend component: useApiError resolves each error status"],
+    "AC23": ["Integration: bot_connected/bot_disconnected events emitted", "Integration: No token in event metadata (regex negative assertion)"]
+  },
+  "metrics": {
+    "filesReviewed": 3,
+    "acTotal": 23,
+    "acCovered": 23,
+    "acPartiallyCovered": ["AC9 (compensation on DKE path)", "AC10 (fresh secret per Connect)", "AC11 (DEL on success)", "AC21 (no automated test)"],
+    "criticalScenariosCovered": {
+      "compensating_deleteWebhook_AC9": "partial - persist-failure variant covered; DKE-on-race variant not explicitly asserted",
+      "race_condition_AC12": "yes",
+      "rate_limit_AC11_with_DEL": "partial - threshold trip covered; DEL-on-success branch not a dedicated scenario",
+      "anti_enumeration_404_AC16": "yes",
+      "no_token_in_metadata_AC23": "yes (explicit regex negative assertion on event metadata)"
+    },
+    "e2eExclusionJustified": true,
+    "testInfrastructure": {
+      "newTestDeps": ["com.squareup.okhttp3:mockwebserver (testImplementation only)"],
+      "newProductionDeps": [],
+      "isolationOk": true,
+      "documentedIn": ["Decision 9", "Dependencies", "Risks R10"]
+    },
+    "frontendErrorBranchCoverage": {
+      "connect": {"covered": ["400", "409", "422", "429", "500", "502"], "extraneous": ["401"], "missing": []},
+      "disconnect": {"covered": [], "missing": ["404"]},
+      "testMessage": {"covered": ["422"], "deferred": ["502 (reserved for 06b)"]}
+    },
+    "pyramidBalance": {
+      "unit": 13,
+      "integration": 20,
+      "frontendComponent": 7,
+      "e2e": 0,
+      "assessment": "healthy"
+    },
+    "coverageAssessment": "adequate"
+  }
+}

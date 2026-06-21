@@ -1,0 +1,44 @@
+{
+  "validator": "test-reviewer",
+  "round": 2,
+  "status": "pass",
+  "summary": "All 5 round-1 findings resolved. Re-enter guard AC and menu precedence are now explicitly mapped to existing tests in a 'Covered by existing tests' block (all cited method names verified to exist in the codebase: FunnelEventServiceTest.reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches, reEnter_allowReEnterFunnel_cancelsExistingThenInserts, ProcessTelegramUpdateJobTest.plainText_keywordSuppressedWhileWaitingForReply). Keyword-tap IT entry point is pinned to FunnelEventService.dispatchForSubscriber with the webhook leg explicitly delegated to ProcessTelegramUpdateJobTest.plainText_dispatchesKeyword (both in Testing Strategy and Task 6 — recommendation option from round 1, written down as required). CLEAR_KEYBOARD preview now covered on both sides: FunnelControllerIT asserts keyboardRows=null for CLEAR_KEYBOARD, FunnelMessagePreview.spec.ts names an explicit CLEAR_KEYBOARD render branch (text only, no rows mock); Decision 7 updated to state both types get preview coverage. FunnelStepForm.keyboard.spec.ts list extended with the 4096-cap mirror, a no-resize_keyboard-control assertion, and a CLEAR_KEYBOARD emit case (the emitted step structurally cannot carry resize_keyboard — the field does not exist on FunnelStep per Data Models — so the no-control assertion fully covers that AC). Bonus addition is sound: FunnelControllerIT PATCH→GET round-trip case directly backs the toStepDto-wiring tech-spec AC. No new gaps introduced: every user-spec AC maps to a named test or cited existing test; assertions described are behavioral (wire bodies via JsonNode, execution statuses, 422 codes, emitted step shapes, store-driven hint visibility) — no string-presence-only anchors; pyramid stays unit-heavy with slow-lane ITs and justified zero E2E. The dispatchForSubscriber keyword case in engine IT slightly overlaps FunnelEventServiceIT's generic keyword dispatch but adds feature-specific value (button-label text as the matched keyword within the keyboard flow) — not flagged.",
+  "findings": [],
+  "resolvedFromRound1": [
+    {
+      "severity": "major",
+      "resolved": true,
+      "note": "Re-enter guard AC mapped via 'Covered by existing tests' block citing both FunnelEventServiceTest.reEnter_* tests (option (a) from round-1 recommendation); Task 11 instructed to keep suites green. Cited methods verified present."
+    },
+    {
+      "severity": "minor",
+      "resolved": true,
+      "note": "Keyword-tap IT entry point pinned: engine IT drives FunnelEventService.dispatchForSubscriber; webhook leg explicitly cited to ProcessTelegramUpdateJobTest.plainText_dispatchesKeyword in both Testing Strategy and Task 6."
+    },
+    {
+      "severity": "minor",
+      "resolved": true,
+      "note": "Menu precedence cited to ProcessTelegramUpdateJobTest.plainText_keywordSuppressedWhileWaitingForReply in 'Covered by existing tests'. Method verified present."
+    },
+    {
+      "severity": "minor",
+      "resolved": true,
+      "note": "CLEAR_KEYBOARD preview cases added: backend FunnelControllerIT (kind=keyboard, keyboardRows=null) and frontend FunnelMessagePreview.spec.ts (explicit CLEAR_KEYBOARD text-only branch); Decision 7 amended."
+    },
+    {
+      "severity": "minor",
+      "resolved": true,
+      "note": "FunnelStepForm.keyboard.spec.ts list extended: 4096-cap mirror, no-resize_keyboard-control assertion, CLEAR_KEYBOARD emit case preserving id/next."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 4,
+      "integration": 2,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,92 @@
+{
+  "validator": "reality-checker",
+  "batch": [6, 7, 8, 9, 10],
+  "iteration": 2,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "hints",
+      "task": 7,
+      "issue": "Implementation hint line 126 states '@Recurring and @Job annotations from org.jobrunr.jobs.annotations package'. This is incorrect for @Recurring. In JobRunr 6.x/7.x, @Job lives in org.jobrunr.jobs.annotations, but @Recurring lives in org.jobrunr.scheduling.annotations.Recurring. An implementor following this hint verbatim will use the wrong import for @Recurring, causing a compile error or using the wrong annotation.",
+      "fix": "Split the hint into two: '@Job annotation is from org.jobrunr.jobs.annotations.Job; @Recurring annotation is from org.jobrunr.scheduling.annotations.Recurring. Verify exact packages after adding the jobrunr-spring-boot-3-starter dependency.'"
+    },
+    {
+      "severity": "major",
+      "category": "feasibility",
+      "task": 9,
+      "issue": "Step 1 instructs to 'Update Session management section' in architecture.md to reflect spring-session-data-mongodb. No such section exists in the current architecture.md. The file has: Tech Stack, Project Structure, Key Dependencies, Data Model, External Integrations, and Data Flow sections. The auth module description in Project Structure mentions 'auth (JWT, session)' inline — there is no standalone Session management section to update. An agent following this instruction will either misinterpret it (modifying the wrong section) or fail to act on it.",
+      "fix": "Replace 'Update Session management section' with: 'In the Project Structure section, update the auth module description from auth (JWT, session) to auth (spring-session-data-mongodb, session). If needed, add a brief note in Key Dependencies Backend section that session management uses spring-session-data-mongodb, not JWT.'"
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 8,
+      "issue": "Task 8 frontmatter declares depends_on: [6, 7], but the Dependencies section says 'None from backend — this is parallel to Tasks 8-9 in wave 5'. The depends_on [6, 7] is structurally correct per the tech-spec (wave 5 runs after wave 4), but the inline comment is self-referential and misleading: 'parallel to Tasks 8-9' should be 'parallel to Task 9'. This creates minor confusion for agents reading the task but does not block implementation.",
+      "fix": "Change Dependencies note to: 'None from backend — this task is parallel to Task 9 in wave 5. Requires Node/pnpm environment.'"
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 6,
+      "issue": "Details section 'Sessions collection field path verification' (lines 116-121) contains a full code block showing the expected session document JSON schema and a specific reactiveMongoTemplate.findAll(Document.class, \"sessions\").blockFirst() call. While framed as 'verify this', it prescribes a specific imperative debugging technique including the full method chain. This is borderline prescriptive. The schema shown is a reasonable hint about expected structure, but the .blockFirst() debugging approach is an implementation prescription rather than a pattern pointer.",
+      "fix": "Acceptable as-is given the nature of the verification task — keep the schema example but note it as indicative only. No critical change needed; acceptability judgment is the reviewer's."
+    },
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 7,
+      "issue": "Task 7 ProfileService uses EventService for logging password_changed and account_deleted events (lines 34, 37), and EventService.java is created in Task 4. EventService.java is not listed in Context Files, making it harder for the implementing agent to see the EventService API without looking it up. The dependency is noted in the Dependencies section but not surfaced as a readable context file.",
+      "fix": "Add to Context Files: '- [backend/src/main/java/com/botfunnel/events/EventService.java](../../../backend/src/main/java/com/botfunnel/events/EventService.java)'"
+    }
+  ],
+  "previous_findings_resolved": {
+    "task_6_delete_result": {
+      "was": "critical: ReactiveMongoTemplate.remove() documented as Mono<Long>",
+      "now": "RESOLVED — task 6 now correctly states 'reactiveMongoTemplate.remove(query, \"sessions\") → Mono<DeleteResult>' and implementation hint uses DeleteResult::getDeletedCount",
+      "status": "resolved"
+    },
+    "task_7_wave_depends_on": {
+      "was": "wave=5, depends_on includes 6",
+      "now": "RESOLVED — task 7 has wave: 5 and depends_on: [5, 6] which is correct per tech-spec",
+      "status": "resolved"
+    },
+    "task_7_prescriptive_sessions_field": {
+      "was": "prescriptive sessions field path imposed without verification",
+      "now": "RESOLVED — task 7 now says 'verify the actual field path in the sessions MongoDB collection' and 'Do NOT guess the field name — use the one verified in Task 6'",
+      "status": "resolved"
+    },
+    "task_8_auth_global": {
+      "was": "middleware named auth.ts (not global)",
+      "now": "RESOLVED — task 8 now explicitly creates 'frontend/middleware/auth.global.ts' with explanation that *.global.ts is required for auto-application",
+      "status": "resolved"
+    },
+    "task_8_test_paths": {
+      "was": "test paths used src/test/frontend/ prefix (non-existent)",
+      "now": "RESOLVED — task 8 now uses 'frontend/tests/' convention (e.g., frontend/tests/stores/auth.spec.ts) and task 10 aligns with the same prefix (frontend/tests/pages/auth/login.spec.ts)",
+      "status": "resolved"
+    },
+    "task_8_vitest_setup": {
+      "was": "vitest not in scope",
+      "now": "RESOLVED — task 8 explicitly installs vitest, @vue/test-utils, @nuxt/test-utils, creates vitest.config.ts and adds test script to package.json",
+      "status": "resolved"
+    },
+    "task_9_accurate_scope": {
+      "was": "task 9 scope inaccurate — listed items already in architecture.md as missing",
+      "now": "RESOLVED — task 9 accurately identifies that jobrunr, spring-boot-starter-mail, and frontend packages are already in architecture.md (verified: lines 28-38) and only spring-session-data-mongodb and spring-boot-starter-validation are missing. deployment.md items correctly split between already-present (MAIL_HOST/PORT/USERNAME/PASSWORD, APP_URL) and missing (MAIL_FROM, SESSION_TTL_*, SUPER_ADMIN_*, SUPPORT_EMAIL)",
+      "status": "resolved"
+    },
+    "task_10_jwt_hallucination": {
+      "was": "critical: Task 10 referred to verification token as JWT-like and suggested decoding it",
+      "now": "RESOLVED — Task 10 edge cases now correctly state 'the email verification token is a raw 32-byte base64url random value — it contains no claims or email. Show a small email input field for the user to enter their email when requesting a resend.'",
+      "status": "resolved"
+    }
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "claims_verified": 47,
+    "issues_found": 5,
+    "previous_criticals_resolved": 3,
+    "previous_majors_resolved": 5
+  }
+}

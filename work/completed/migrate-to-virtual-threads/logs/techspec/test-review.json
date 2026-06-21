@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round 2 re-validation: all 7 round-1 MAJOR findings are closed by the tech-spec / code-research updates. Recipe A now enumerates `.expectErrorMatches`, `.expectErrorSatisfies`, `.expectErrorMessage`, `.expectErrorMessageContaining`, `.expectNextCount`, `.thenAwait`/`withVirtualTime`, multi-emit Flux, mockito-stubbing variants (`Flux.fromIterable`, `Mono.just(count)`, `Mono.error`), backpressure mutators (`.thenCancel`, `.thenRequest`), and `.expectAccessibleContext` — the actual surface in the 15 StepVerifier files is now translation-covered (R1 closure verified at code-research.md lines 921-942). D14 carve-out is implementable: new `TelegramWebhookP99IT` and `BotConnectRaceIT` classes are explicitly declared `@SpringBootTest(RANDOM_PORT)` + `TestRestTemplate`; original `*ControllerIT` files stay MockMvc-only (architecture section line 43, Task 7 line 415, Task 9 line 431). AC16 now loads a hand-crafted pre-flip BSON fixture into `sessions` (Task 12 line 453) — R5 lifted from manual. AC17 pins the joined-error message format `\"<field>: <defaultMessage>\"` (Task 12 line 454) — guards the joiner shape that `useApiError` parses. AC18 asserts HttpOnly/Secure/SameSite + XSRF-TOKEN co-emission (Task 12 line 455). Task 10 mandates `try { ... } finally { ready.countDown(); }` for `ConcurrencyTestUtils.parallelInvoke` (line 435). Bot-connect race moves to real-transport `BotConnectRaceIT` per D14 — eliminating the MockMvc in-process serialisation concern at its root. TC12 adds the per-file ≥80% line+branch coverage floor for the 7 named high-risk files (line 356). One minor residual: the `parallelInvoke` helper code sample in code-research.md §Recipe-F (lines 1096-1112) still shows the unsafe version without `try { ... } finally { ready.countDown(); }`, no bounded `ready.await(timeout)`, no `f.get(timeout)` — Task 10's description mandates the safer version, but an implementer copying the recipe snippet verbatim would get the hang-on-throw version. Status: passed (zero critical, zero major). One minor finding documented for code-research recipe alignment with the Task 10 mandate.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "Section: code-research.md §4 Recipe F (lines 1096-1112) — parallelInvoke reference implementation",
+      "issue": "The reference `parallelInvoke(int n, Callable<T> task)` helper in code-research.md still shows the unsafe shape (raw `ready.countDown(); start.await(); return task.call();` body, unbounded `ready.await()`, unbounded `f.get()`). Task 10 in tech-spec mandates `try { ... } finally { ready.countDown(); }` plus bounded waits — but the canonical recipe snippet that implementers would copy is the unsafe one. The two artifacts disagree; the recipe is the higher-fidelity reference. An implementer who reads Task 10 + Recipe F together may copy the recipe verbatim and miss the hang-on-throw safety net Task 10 requires.",
+      "recommendation": "Update code-research.md lines 1096-1112 to align with Task 10's mandate. Concrete replacement: `public static <T> List<T> parallelInvoke(int n, Callable<T> task) throws InterruptedException { CountDownLatch ready = new CountDownLatch(n); CountDownLatch start = new CountDownLatch(1); List<Future<T>> futures = new ArrayList<>(n); try (ExecutorService es = Executors.newVirtualThreadPerTaskExecutor()) { for (int i = 0; i < n; i++) { futures.add(es.submit(() -> { try { ready.countDown(); start.await(); return task.call(); } finally { /* idempotent — countDown above is the real release; this finally guards against task.call() throwing AFTER countDown but BEFORE start.await, which is impossible by ordering, but kept for symmetry if reordered */ } })); } if (!ready.await(30, TimeUnit.SECONDS)) throw new IllegalStateException(\"parallelInvoke: not all VTs reached barrier within 30s\"); start.countDown(); return futures.stream().map(f -> { try { return f.get(30, TimeUnit.SECONDS); } catch (Exception e) { throw new RuntimeException(e); } }).toList(); } }`. The crucial reorder: `ready.countDown()` must run FIRST (before any work) so a throw in `task.call()` does not strand the latch. Bounded `ready.await(30, SECONDS)` and `f.get(30, SECONDS)` surface deadlocks as test failures, not hangs."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "litmusTest": {
+      "checked": 0,
+      "passed": 0,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 15,
+      "integration": 16,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

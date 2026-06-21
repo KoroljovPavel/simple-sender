@@ -1,0 +1,35 @@
+{
+  "status": "passed",
+  "summary": "All 8 TDD anchors for HttpRequestUtilsTest, 5 for UserServiceTest, 2 for EventServiceTest, and the EmailServiceTest D15 deltas are present with correct semantics. Litmus test passes on every business-logic assertion: removing the production line under test (status mutation in softDelete, save propagation in EventService, try/catch in EmailService, leftmost-IP parsing in HttpRequestUtils) flips the assertion to red. Awaitility / StepVerifier / Reactor imports have been fully evicted from the three rewritten test files. The three task acceptance gates (EmailService silent-fail, EventService new throws-contract per D12, HttpRequestUtils private-ctor invariant) are each covered by a dedicated test.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/email/EmailServiceTest.java:108-121 (sendVerificationEmail_smtpFailureLogsError)",
+      "issue": "Test asserts `errors.hasSize(1)` on ERROR-level logs, but a sibling test (`sendVerificationEmail_buildFailureLogsError`) demonstrates that a template-loading failure would also emit an ERROR. The `smtpFailure` test relies on the on-classpath `verify-email.html` resource loading successfully to keep the ERROR count at exactly 1. If that resource is later renamed or moved, both `_smtpFailureLogsError` and `_buildFailureLogsError` will assert `hasSize(2)` and fail with a noisy error rather than a targeted one. Not a correctness defect today — flagged as a brittleness note.",
+      "recommendation": "Optional hardening: assert on the ERROR with `startsWith(\"Email send failed to\")` instead of (or in addition to) total ERROR count. Use `.filteredOn(e -> e.getFormattedMessage().startsWith(\"Email send failed to\")).hasSize(1)`. Keeps the contract assertion (silent-but-logged on send failure) decoupled from incidental template-loading log noise."
+    },
+    {
+      "severity": "minor",
+      "category": "anti_pattern",
+      "location": "backend/src/test/java/com/botfunnel/common/HttpRequestUtilsTest.java:90-94 (cannotBeInstantiated)",
+      "issue": "The private-ctor invariant uses `ctor.canAccess(null)` from a test in the same package. Because `HttpRequestUtilsTest` lives in `com.botfunnel.common`, the assertion `canAccess(null) == false` rules out both `public` and package-private constructors (good) — but the message on failure is opaque (`expecting false but was true`) and doesn't communicate the intent. Not a correctness issue, but a junior reader may not realise this is the D13 anti-instantiation gate.",
+      "recommendation": "Either (a) add a comment explaining the gate, or (b) assert directly on the modifier: `assertThat(java.lang.reflect.Modifier.isPrivate(ctor.getModifiers())).isTrue();` — gives a self-documenting failure message and is independent of the caller's package."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 8,
+    "litmusTest": {
+      "checked": 17,
+      "passed": 17,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 24,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

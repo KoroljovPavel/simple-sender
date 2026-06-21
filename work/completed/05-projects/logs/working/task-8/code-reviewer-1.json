@@ -1,0 +1,27 @@
+{
+  "summary": "Implementation correctly covers AC-22a..d, the PATCH partial-diff semantics, case-sensitive trim-compare, useApiError factory pattern, and post-delete redirect logic. Only minor polish items remain (dead template ref, missing autofocus on the type-the-name input that the spec asked for, an unused i18n interpolation arg, and a minor SSR-guard inconsistency vs. sibling pages).",
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/settings.vue",
+      "line": 290,
+      "issue": "Template ref `ref=\"deleteInput\"` is declared on the type-the-name input but never bound to a `useTemplateRef`/`ref()` variable in <script setup>, and is never used. The task spec (8.md, line 46) explicitly requires `autofocus` on this input when the modal opens, but the input has neither the `autofocus` HTML attribute nor a programmatic `nextTick(() => deleteInput.value?.focus())` after `openDeleteModal()`.",
+      "suggestion": "Either (a) remove the dead `ref=\"deleteInput\"` and add `autofocus` to the `<input>` element, or (b) declare `const deleteInput = useTemplateRef<HTMLInputElement>('deleteInput')` and call `await nextTick(); deleteInput.value?.focus()` at the end of `openDeleteModal()` so keyboard focus lands on the type-the-name field as the spec requires."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/settings.vue",
+      "line": 286,
+      "issue": "`t('errors.projects.delete.confirmTypeName', { name: project.name })` passes a `{name}` interpolation argument, but the localized values in both `uk.json` and `en.json` (line 220 in each) do not contain a `{name}` placeholder — the project name is silently dropped from the rendered prompt. Task spec line 46 expected the user to see their project's name in the prompt.",
+      "suggestion": "Either drop the `{ name }` arg from this `t()` call (cosmetic fix, keeps locale ownership in Task 2) and rely on the standalone label `projects.settings.delete.typeNameLabel` which already exists at uk.json line 192, OR file a follow-up against Task 2 locales to embed `{name}` in `errors.projects.delete.confirmTypeName`. Today the arg is dead."
+    },
+    {
+      "severity": "nit",
+      "file": "frontend/pages/projects/[projectId]/settings.vue",
+      "line": 16,
+      "issue": "`projectsStore.fetchAll()` is fire-and-forget without `.catch()`. If the request rejects, it surfaces as an unhandled Promise rejection at the page level. The sibling `pages/projects/index.vue` (line 56) also wraps the call inside `if (import.meta.client) { ... }` to avoid an SSR-time call on this auth-protected route — this page does not, so on SSR the request fires server-side as well.",
+      "suggestion": "Mirror the pattern from `pages/projects/index.vue`: `if (import.meta.client) { if (!projectsStore.isLoaded) projectsStore.fetchAll().catch((err) => console.warn('[projects/settings] fetchAll failed', err)) }`. Non-blocking — the watcher already handles late hydration once data arrives."
+    }
+  ]
+}

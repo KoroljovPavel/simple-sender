@@ -1,0 +1,28 @@
+{
+  "status": "passed",
+  "summary": "Round-2 re-review: all three round-1 findings are resolved with genuine behavioral assertions verified against the component. MAJOR-1 (sentinel->step-1-id EMIT direction): the new test 'picking the \"from start\" sentinel maps the entry to step 1 id (not null)' starts the row on s2, clicks the __START__ option, and asserts emitted entryStepId === 's1'. This now exercises modelToEntry's sentinel branch (line 79: model === ENTRY_START ? firstStepId.value : model) — if that regressed to returning null, the test fails. MAJOR-2 (addEvent entryStepId default): the 'adds an event trigger' test now asserts next[1].entryStepId === 's1', locking in addEvent's firstStepId.value default (line 109) — the event-requires-non-null-entry invariant (Decision 14). MINOR (negative-only sentinel display): the 'null/__START__ entry maps to step 1' test now positively asserts closedValue === sentinelLabel (locale-agnostic, reads the actual rendered __START__ option label), proving entryToModel('s1') resolves to the sentinel rather than merely that the step label is absent. All 8 tests pass; full suite 526 pass. The unaddressed round-1 minor (trim-normalization of duplicate guard) remains a low-severity gap but does not block; the exact-match duplicate path is correctly proven and not false-green. lock-type wiring on the mounted FunnelTriggerSettings (both on_start and event rows) is a code-reviewer concern, not a test-quality one. Litmus passes on the two previously-failing tests.",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_coverage",
+      "location": "frontend/tests/components/funnels/FunnelTriggersPanel.spec.ts:148 (flags a duplicate event name)",
+      "issue": "Carry-over from round 1 (not regression-blocking). The duplicate guard test still covers only exact-string duplicates ('purchase' vs 'purchase'). duplicateIndices normalizes with .trim() (component line 89) and skips empty keys via `if (!key) continue`. Neither the trim normalization nor the empty-skip branch is asserted, so a regression dropping .trim() ('purchase' vs 'purchase ') or one flagging two blank rows would not be caught. The exact-match case itself is correctly proven (genuinely fails if the guard is removed) — this is an incompleteness, not a false-green.",
+      "recommendation": "Add a whitespace-difference case: mount [onStart(), event('purchase'), event('purchase ')] and assert '[data-test=\"funnel-trigger-duplicate-2\"]' is present (pins trim). Add an empty-value case: mount [onStart(), event(''), event('')] and assert neither '[data-test=\"funnel-trigger-duplicate-1\"]' nor '-2' is present (pins the `if (!key) continue` branch)."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 2,
+    "litmusTest": {
+      "checked": 8,
+      "passed": 8,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 8,
+      "integration": 0,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

@@ -1,0 +1,41 @@
+{
+  "reviewer": "code-reviewer",
+  "task": 6,
+  "round": 1,
+  "verdict": "fail",
+  "findings": [
+    {
+      "id": "F1",
+      "severity": "critical",
+      "category": "FunnelStepForm contract",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "line": 1296,
+      "title": "v-if/v-else broken: callback button shows URL input when hideTargetPickers=true",
+      "description": "The original template was `v-if=\"row.type === 'callback'\"` / `v-else` (URL input). The new code changes the condition to `v-if=\"row.type === 'callback' && !hideTargetPickers\"` but keeps `v-else` unchanged. When `hideTargetPickers=true` and a button type is `callback`, the `v-if` evaluates to `false`, so the `v-else` branch (the URL `<input>`) renders for a callback button. On the canvas side panel, every callback button row incorrectly shows a URL text input instead of nothing.",
+      "impact": "Regression: on the canvas, MESSAGE steps with callback buttons render a URL input in the side panel for each callback row. This is visible UI breakage. The URL input also pollutes `row.url` binding, potentially overwriting a previously-set url field. The spec says 'Do NOT change any field-editing logic' — this changes button-row rendering for callback type.",
+      "recommendation": "Nest the picker hide inside the callback branch, keeping v-else tied to the url-type check only:\n  <template v-if=\"row.type === 'callback'\">\n    <SearchableSelect v-if=\"!hideTargetPickers\" .../>\n  </template>\n  <template v-else>\n    <!-- URL input -->\n  </template>"
+    },
+    {
+      "id": "F2",
+      "severity": "minor",
+      "category": "code correctness / misleading comment",
+      "file": "frontend/components/funnels/FunnelCanvas.client.vue",
+      "line": 265,
+      "title": "Comment claims unsaved-step routing by stepIndex but code only routes by id",
+      "description": "The comment reads: 'an unsaved node is matched by its array index via the selected node's stepIndex'. The SelectedNode interface has no stepIndex field; the actual match on line 270 is `s.id != null && s.id === sel.step?.id`. If a user opens the side panel for an unsaved step (id=null) and submits, the update is silently dropped (the .map() finds no match and emits the original unchanged array).",
+      "impact": "Silently ignores edits on unsaved (just-added) steps. Since Task 7 is expected to persist and mint ids before meaningful editing, this may be acceptable in practice. But the incorrect comment will mislead future maintainers into believing stepIndex routing is implemented when it is not.",
+      "recommendation": "Either: (a) remove the misleading comment and note that unsaved nodes are not matched until Task 7 persists them; OR (b) implement stepIndex-based fallback if editing unsaved nodes before persist is a required flow (it is not mandated by the task spec, so option a is preferred)."
+    }
+  ],
+  "summary": "One critical regression in FunnelStepForm.vue: the v-if/v-else restructuring for the callback button target picker breaks the button-type branching when hideTargetPickers=true — a callback button row incorrectly renders the URL input instead of nothing, violating the 'no change to field-editing logic' contract. All other deliverables are correct: withDefaults prop is clean; the three target SearchableSelects are properly hidden (timeout target and SUBSCRIBE entry pickers use separate v-if guards); palette lists exactly 9 step types + trigger + note + start; start-node lifecycle (add/disable/remove) is correctly implemented; delete confirmation shows the mapping-layer disconnectedCount; side panel reuses FunnelStepForm and FunnelTriggerSettings unchanged; no v-html on note text; i18n keys are present in both en/uk with parity; tests cover all TDD Anchor cases. The critical finding must be fixed before this passes.",
+  "pass_criteria_assessment": {
+    "FunnelStepForm_only_hideTargetPickers_prop": "FAIL — prop addition is correct (withDefaults) but the v-if/v-else restructuring introduces a rendering regression for callback buttons when hideTargetPickers=true",
+    "hidden_values_preserved_on_submit": "PASS — submit logic (onSubmit, lines 911-1016) is unchanged; menuButtons ref preserves targetStepId unchanged; only the picker UI is (incorrectly) hidden+replaced",
+    "palette_9_types_only": "PASS — exactly 9 step types + trigger + note + start, no new executable types",
+    "start_node_lifecycle": "PASS — onStartExists computed, addStart guards duplicate, delete removes on_start trigger",
+    "delete_disconnect_count": "PASS — uses deleteStepNode from mapping layer for exact count",
+    "side_panel_reuses_forms": "PASS — FunnelStepForm with hideTargetPickers, FunnelTriggerSettings unchanged",
+    "no_v_html_on_note_text": "PASS — no v-html anywhere in new components",
+    "tests_all_anchor_cases": "PASS — all 6 Group B canvas cases + 4 Group A side-panel cases present"
+  }
+}

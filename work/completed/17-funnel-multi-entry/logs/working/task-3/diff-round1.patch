@@ -1,0 +1,261 @@
+184bade feat: task 3 — DTO contract List<TriggerDto> (41 seconds ago) <johnypashka>
+.../com/botfunnel/funnel/dto/FunnelResponse.java   |  16 +-
+ .../funnel/dto/FunnelSummaryResponse.java          |  13 +-
+ .../java/com/botfunnel/funnel/dto/TriggerDto.java  |  40 +++++
+ .../botfunnel/funnel/dto/UpdateFunnelRequest.java  |  37 +++--
+ .../com/botfunnel/funnel/dto/TriggerDtoTest.java   | 166 +++++++++++++++++++++
+ 5 files changed, 243 insertions(+), 29 deletions(-)
+
+backend/src/main/java/com/botfunnel/funnel/dto/FunnelResponse.java
+  @@ -5,21 +5,21 @@ import com.botfunnel.funnel.FunnelStatus;
+  -// Full single-funnel view: metadata + complete ordered steps + deepLink. Returned by GET /{id},
+  -// PUT/PATCH, activate and pause. deepLink is non-null ONLY for an active funnel that has a CONNECTED
+  -// bot (t.me/<botUsername>?start=<triggerValue>); null for draft/paused or when no bot is connected.
+  -// steps order is the array position (the server rewrote FunnelStep.order from it on the last update).
+  +// Full single-funnel view: metadata + entry triggers + complete ordered steps + deepLink. Returned by
+  +// GET /{id}, PUT/PATCH, activate and pause. `triggers` is the multi-entry array (on_start + mid-entry
+  +// redirects) that replaced the former flat triggerType / triggerValue / keywords trio (Phase 8 /
+  +// 17-funnel-multi-entry / Decision 1, 12); keywords now live per-trigger inside each TriggerDto. deepLink
+  +// is non-null ONLY for an active funnel that has a CONNECTED bot (t.me/<botUsername>?start=<on_start
+  +// triggerValue>); null for draft/paused or when no bot is connected — it is derived from the on_start
+  +// trigger's value by the FunnelService mapper (Task 4). steps order is the array position.
+   public record FunnelResponse(
+           String id,
+           String projectId,
+           String name,
+           String description,
+           FunnelStatus status,
+  -        String triggerType,
+  -        String triggerValue,
+           boolean allowReEnter,
+  -        // Phase 3 (Decision 3): normalized keyword list (lowercase). Null/empty for non-keyword triggers.
+  -        List<String> keywords,
+  +        List<TriggerDto> triggers,
+           List<FunnelStepDto> steps,
+           String deepLink,
+           Instant createdAt,
+  +8 -8
+
+backend/src/main/java/com/botfunnel/funnel/dto/FunnelSummaryResponse.java
+  @@ -5,20 +5,19 @@ import com.botfunnel.funnel.FunnelStatus;
+  -// Lightweight list view: funnel metadata WITHOUT the steps array (the editor loads steps lazily via
+  -// the single GET). Returned by GET .../funnels. stepCount is a cheap hint for the list UI so it can
+  -// show "N steps" without shipping the whole array.
+  +// Lightweight list view: funnel metadata + entry triggers WITHOUT the steps array (the editor loads steps
+  +// lazily via the single GET). Returned by GET .../funnels. `triggers` is the multi-entry array that
+  +// replaced the former flat triggerType / triggerValue / keywords trio (Phase 8 / 17-funnel-multi-entry /
+  +// Decision 1, 12); keywords now live per-trigger inside each TriggerDto. stepCount is a cheap hint for the
+  +// list UI so it can show "N steps" without shipping the whole array.
+   public record FunnelSummaryResponse(
+           String id,
+           String projectId,
+           String name,
+           String description,
+           FunnelStatus status,
+  -        String triggerType,
+  -        String triggerValue,
+           boolean allowReEnter,
+  -        // Phase 3 (Decision 3): normalized keyword list (lowercase). Null/empty for non-keyword triggers.
+  -        List<String> keywords,
+  +        List<TriggerDto> triggers,
+           int stepCount,
+           Instant createdAt,
+           Instant updatedAt
+  +6 -7
+
+backend/src/main/java/com/botfunnel/funnel/dto/TriggerDto.java
+  @@ -0,0 +1,40 @@
+  +package com.botfunnel.funnel.dto;
+  +
+  +import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+  +import jakarta.validation.constraints.Size;
+  +
+  +import java.util.List;
+  +
+  +// One entry trigger in the UpdateFunnelRequest / FunnelResponse triggers array (Phase 8 /
+  +// 17-funnel-multi-entry / Decision 1, 12). Mirrors the FunnelStepDto precedent: a flat record (no
+  +// _class discriminator), @JsonIgnoreProperties(ignoreUnknown=true) as mass-assignment defense, and
+  +// fields nullable so the on_start element (triggerValue=""/null, entryStepId=null) and a keyword
+  +// element (triggerValue=""/null) are both expressible by shape alone.
+  +//
+  +// Mirrors the domain Trigger (Task 1) field-for-field so Task 4's entity<->DTO mapping is trivial:
+  +//   - triggerType   — "on_start" | "keyword" | "tag_added" | "custom_field_set" | "event".
+  +//   - triggerValue  — exact-match key for non-keyword triggers; "" (or null) for on_start; unused by keyword.
+  +//   - keywords      — keyword-trigger only: lowercase/trimmed/de-duped list. Null/empty for other types.
+  +//   - entryStepId   — null for on_start (leads a START); a step id for an event mid-entry (leads a REDIRECT).
+  +//
+  +// Per-type and cross-trigger validation (triggerType in the five-value set, triggerValue slug shape,
+  +// keyword required-iff-keyword, duplicate event_name across the array, entryStepId resolves to a real
+  +// step, on_start uniqueness / onStartTriggerValue sync) is conditional on triggerType and therefore
+  +// lives in FunnelService (-> 422 with a business code, Task 4), NOT as field-level bean validation
+  +// (which would fire regardless of triggerType and could only produce 400).
+  +//
+  +// The ONE bean-validation constraint kept here is the per-trigger keyword count cap (Decision 14): a
+  +// hard ceiling so the now-repeatable triggers array cannot multiply the keyword DoS surface. The
+  +// per-keyword length cap + normalization stay in FunnelService (-> 422, Task 4).
+  +@JsonIgnoreProperties(ignoreUnknown = true)
+  +public record TriggerDto(
+  +        String triggerType,
+  +        String triggerValue,
+  +        @Size(max = MAX_KEYWORDS) List<String> keywords,
+  +        String entryStepId
+  +) {
+  +    // Decision 14 / mirrors FunnelService.MAX_KEYWORDS: the per-trigger keyword count cap. Annotated here
+  +    // (vs only in the service) so the cap is enforced at the contract boundary across every element of the
+  +    // triggers array. The per-keyword LENGTH cap and normalization remain service-side (Task 4).
+  +    public static final int MAX_KEYWORDS = 50;
+  +}
+  +40 -0
+
+backend/src/main/java/com/botfunnel/funnel/dto/UpdateFunnelRequest.java
+  @@ -6,23 +6,32 @@ import jakarta.validation.constraints.Size;
+  -// Full-replace update body for a funnel's metadata + trigger + entire step list. The steps array is
+  -// authoritative: its position is the step order (the server rewrites FunnelStep.order from the index),
+  -// so reordering ↑/↓ is simply a new array. triggerType / triggerValue / allowReEnter are nullable —
+  -// FunnelService applies on_start / "" / false defaults and validates triggerValue shape
+  -// (^[A-Za-z0-9_-]{0,64}$ → 422; spaces/specials would break the deep-link). @JsonIgnoreProperties
+  -// drops a hostile {"status":...} body field (mass-assignment defense). @Valid cascades bean-validation
+  -// into each FunnelStepDto (only its @NotNull stepType — the rest is service-level per-type validation).
+  +// Full-replace update body for a funnel's metadata + entry triggers + entire step list. Both arrays are
+  +// authoritative full-replace (no patch/delta endpoint): the steps position IS the step order (the server
+  +// rewrites FunnelStep.order from the index), and `triggers` replaces the funnel's whole entry-trigger set
+  +// in one shot (Phase 8 / 17-funnel-multi-entry / Decision 1, 12).
+  +//
+  +// `triggers` is the multi-entry array (on_start + mid-entry event/keyword/tag/field redirects) that
+  +// replaces the former flat triggerType / triggerValue / keywords trio. Each element is a flat TriggerDto;
+  +// keywords now live per-trigger inside the element (Decision 12), not at the top level. A null/empty array
+  +// is shape-valid here — composition validation (triggerType in the valid set, value slug shape, keyword
+  +// required-iff-keyword, duplicate event_name, entryStepId resolves to a step, on_start uniqueness /
+  +// onStartTriggerValue sync) is conditional on triggerType and lives in FunnelService (-> 422, Task 4).
+  +//
+  +// @JsonIgnoreProperties drops a hostile {"status":...} body field (mass-assignment defense). @Valid
+  +// cascades bean-validation into each TriggerDto (its @Size keyword cap) and each FunnelStepDto (its
+  +// @NotNull stepType). @Size(max=MAX_TRIGGERS) is the Decision 14 array ceiling so the now-repeatable
+  +// triggers array cannot open a DoS surface; a service-side re-check of the same cap is Task 4.
+   @JsonIgnoreProperties(ignoreUnknown = true)
+   public record UpdateFunnelRequest(
+           @Size(max = 128) String name,
+           @Size(max = 1024) String description,
+  -        String triggerType,
+  -        String triggerValue,
+           Boolean allowReEnter,
+  -        // Phase 3 (Decision 3): keyword list — required (non-empty after normalization) iff
+  -        // triggerType=keyword, rejected for any other trigger type (FunnelService → 422). Normalized
+  -        // server-side (lowercase, trim, de-dupe).
+  -        List<String> keywords,
+  +        @Valid @Size(max = MAX_TRIGGERS) List<TriggerDto> triggers,
+           @Valid List<FunnelStepDto> steps
+  -) {}
+  +) {
+  +    // Decision 14: ceiling on the entry-trigger array. Aligned with the same-order caps in FunnelService
+  +    // (max-steps / fan-out = 50). The service re-checks this bound (Task 4); the annotation is the
+  +    // first-line contract guard.
+  +    public static final int MAX_TRIGGERS = 50;
+  +}
+  +23 -14
+
+backend/src/test/java/com/botfunnel/funnel/dto/TriggerDtoTest.java
+  @@ -0,0 +1,166 @@
+  +package com.botfunnel.funnel.dto;
+  +
+  +import com.fasterxml.jackson.databind.ObjectMapper;
+  +import jakarta.validation.ConstraintViolation;
+  +import jakarta.validation.Validation;
+  +import jakarta.validation.Validator;
+  +import jakarta.validation.ValidatorFactory;
+  +import org.junit.jupiter.api.AfterAll;
+  +import org.junit.jupiter.api.BeforeAll;
+  +import org.junit.jupiter.api.Test;
+  +
+  +import java.util.ArrayList;
+  +import java.util.List;
+  +import java.util.Set;
+  +import java.util.stream.Collectors;
+  +import java.util.stream.IntStream;
+  +
+  +import static org.assertj.core.api.Assertions.assertThat;
+  +
+  +/**
+  + * Pure DTO contract test for the multi-entry trigger array (Task 3 / 17-funnel-multi-entry). Two
+  + * concerns only — Jackson (de)serialization round-trip of {@code List<TriggerDto>} and the
+  + * bean-validation surface of {@code UpdateFunnelRequest} (Decision 14 @Size ceiling + @Valid cascade).
+  + * No Spring context: a plain {@link ObjectMapper} (the project round-trip idiom) and a programmatic
+  + * {@link Validator}. Service-level composition validation (duplicate event_name, entryStepId resolve,
+  + * onStartTriggerValue sync) is Task 4 and deliberately out of scope here.
+  + */
+  +class TriggerDtoTest {
+  +
+  +    private final ObjectMapper objectMapper = new ObjectMapper();
+  +
+  +    private static ValidatorFactory validatorFactory;
+  +    private static Validator validator;
+  +
+  +    @BeforeAll
+  +    static void setUpValidator() {
+  +        validatorFactory = Validation.buildDefaultValidatorFactory();
+  +        validator = validatorFactory.getValidator();
+  +    }
+  +
+  +    @AfterAll
+  +    static void tearDownValidator() {
+  +        validatorFactory.close();
+  +    }
+  +
+  +    @Test
+  +    void roundTripsTriggerArray() throws Exception {
+  +        List<TriggerDto> triggers = List.of(
+  +                new TriggerDto("on_start", "", null, null),
+  +                new TriggerDto("event", "purchase", null, "step-7"),
+  +                new TriggerDto("keyword", "", List.of("hello", "hi"), "step-9"));
+  +        UpdateFunnelRequest request = new UpdateFunnelRequest(
+  +                "My funnel", "desc", false, triggers, List.of());
+  +
+  +        String json = objectMapper.writeValueAsString(request);
+  +        UpdateFunnelRequest back = objectMapper.readValue(json, UpdateFunnelRequest.class);
+  +
+  +        assertThat(back.triggers()).hasSize(3);
+  +        assertThat(back.triggers().get(0).triggerType()).isEqualTo("on_start");
+  +        assertThat(back.triggers().get(0).triggerValue()).isEqualTo("");
+  +        assertThat(back.triggers().get(0).entryStepId()).isNull();
+  +        assertThat(back.triggers().get(1).triggerType()).isEqualTo("event");
+  +        assertThat(back.triggers().get(1).triggerValue()).isEqualTo("purchase");
+  +        assertThat(back.triggers().get(1).entryStepId()).isEqualTo("step-7");
+  +        assertThat(back.triggers().get(2).keywords()).containsExactly("hello", "hi");
+  +        assertThat(back.triggers().get(2).entryStepId()).isEqualTo("step-9");
+  +    }
+  +
+  +    @Test
+  +    void deserializeIgnoresUnknownProperties() throws Exception {
+  +        // A hostile body smuggles a `status` field (mass-assignment attempt) and an unknown field inside
+  +        // a TriggerDto element. @JsonIgnoreProperties(ignoreUnknown=true) must drop both without error.
+  +        String json = """
+  +                {
+  +                  "status": "active",
+  +                  "name": "x",
+  +                  "triggers": [
+  +                    {"triggerType": "on_start", "triggerValue": "", "bogus": 1}
+  +                  ],
+  +                  "steps": []
+  +                }
+  +                """;
+  +
+  +        UpdateFunnelRequest back = objectMapper.readValue(json, UpdateFunnelRequest.class);
+  +
+  +        assertThat(back.name()).isEqualTo("x");
+  +        assertThat(back.triggers()).hasSize(1);
+  +        assertThat(back.triggers().get(0).triggerType()).isEqualTo("on_start");
+  +        // `status` is not a field of UpdateFunnelRequest — it cannot leak in (record has no such accessor),
+  +        // and the unknown `bogus` field on the trigger did not break deserialization.
+  +    }
+  +
+  +    @Test
+  +    void funnelResponseRoundTrip() throws Exception {
+  +        List<TriggerDto> triggers = List.of(
+  +                new TriggerDto("on_start", "promo", null, null),
+  +                new TriggerDto("event", "signup", null, "step-2"));
+  +
+  +        FunnelResponse response = new FunnelResponse(
+  +                "f1", "p1", "Name", "Desc", null, false, triggers, List.of(),
+  ... (66 lines truncated)
+  +166 -0
+[full diff: rtk git diff --no-compact]

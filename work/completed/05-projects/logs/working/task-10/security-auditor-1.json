@@ -1,0 +1,49 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "scope_notes": {
+    "file_audited": "frontend/e2e/projects.spec.ts",
+    "commit": "4a1fa23",
+    "lines_audited": 127,
+    "audit_focus": [
+      "Hard-coded secrets / credentials",
+      "Inlined values that should be env-sourced (and vice versa)",
+      "PII / real email leakage in fixtures",
+      "Auth bypass via cookies / sessionStorage / addInitScript",
+      "page.route(...) mocking that would hide backend security checks"
+    ]
+  },
+  "review_checklist": {
+    "hardcoded_secrets": {
+      "result": "pass",
+      "details": "Only credential-like string is `password = 'Test1234!'` (line 20). Generic synthetic test password paired with `@test.local` reserved-style domain — not a real secret. No API keys, tokens, connection strings, private keys, or bearer tokens present. gitleaks default rule set does not match this pattern (no high-entropy/base64/AKIA/sk-/etc. shapes)."
+    },
+    "env_handling": {
+      "result": "pass",
+      "details": "Spec references no `process.env` / `import.meta.env` / `playwright`-level env vars. All values are derived in-process via `Date.now()`, so the test is self-contained and will not silently pass/fail based on missing CI secrets. Base URL is implicit (relative URLs `/auth/register`, `/dashboard`, …) and resolved by `playwright.config.ts`, which is the correct boundary for that value."
+    },
+    "pii_in_fixtures": {
+      "result": "pass",
+      "details": "Email pattern `e2e-projects-${Date.now()}@test.local` uses the `.local` mDNS-reserved suffix (RFC 6762), which cannot be a real, deliverable address. Project names (`Acme`, `Brand X`) are non-personal trademarks/placeholders. No real names, phones, or addresses present."
+    },
+    "auth_bypass": {
+      "result": "pass",
+      "details": "No `context.addCookies`, `page.context().addInitScript`, `sessionStorage`/`localStorage` writes, `setExtraHTTPHeaders`, or storage-state injection. Authentication is exercised end-to-end through the real `/auth/register` form (lines 27–32), which means the test traverses the production code path including any CSRF/session/auth guards. Any future regression in those guards will surface in this spec rather than be masked."
+    },
+    "backend_mocking": {
+      "result": "pass",
+      "details": "No `page.route(...)` / `page.unroute(...)` / `fulfill(...)` / `abort(...)` calls anywhere in the file. All requests hit the real backend, so server-side validation (e.g. name length, RBAC on project ownership, soft-delete authorization) is genuinely exercised."
+    },
+    "owasp_relevance": {
+      "result": "n/a",
+      "details": "OWASP Top 10 categories apply to the system under test, not to a Playwright spec. This spec is a black-box test consumer and does not itself author auth, crypto, queries, deserialization, or SSRF surfaces. It exercises (but does not weaken) those controls in the real backend."
+    }
+  },
+  "verdict_reasoning": "The spec contains no hardcoded secrets, no real PII, no environment-variable leaks, no auth bypass, and no route mocking that would mask backend security checks. The single password literal `Test1234!` is a non-secret synthetic test value paired with a `.local` reserved domain — the explicit pattern AC-T8 permits. The test exercises the real auth and CRUD endpoints end-to-end, which is exactly what a golden-path E2E should do from a security perspective. Approved."
+}

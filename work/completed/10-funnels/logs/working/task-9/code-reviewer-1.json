@@ -1,0 +1,23 @@
+{
+  "task": "9",
+  "reviewer": "code-reviewer",
+  "round": 1,
+  "verdict": "approve",
+  "findings": [
+    {
+      "severity": "low",
+      "file": "frontend/pages/projects/[projectId]/funnels/index.vue",
+      "line": "39-50",
+      "issue": "patterns.md documents that pages routed by [projectId] MUST do an explicit GET on mount + redirect to /projects (setting pendingBannerKey) when the project is absent/404. This list page instead surfaces an inline error banner with a retry button on fetch failure (a /funnels sub-path 404 does not trip the useApi single-resource 404 interceptor either). This is an intentional, task-spec-mandated deviation ('error-стан із retry, не білий екран'), so it is acceptable, but it diverges from the documented project-redirect convention — worth a one-line note in decisions.md as a deliberate deviation.",
+      "fix": "No code change required. Record the inline-error-vs-redirect choice as a deliberate deviation in work/10-funnels/decisions.md (or align with the patterns.md redirect convention in Task 10 when the editor page lands)."
+    },
+    {
+      "severity": "low",
+      "file": "frontend/pages/projects/[projectId]/funnels/index.vue",
+      "line": "174",
+      "issue": "The per-row delete trigger reuses the dialog-confirm key funnels.deleteConfirm.confirm ('Delete'/'Видалити') as its visible label. It renders correctly, but reusing the confirm-button copy for a row action couples two distinct UI affordances to one key; a future copy change to the dialog confirm would silently change the row button too.",
+      "fix": "Optional: add a dedicated key (e.g. funnels.deleteAction / common.delete) for the row trigger label. Not blocking."
+    }
+  ],
+  "summary": "Task 9 frontend (funnels store + list page + create/delete dialog) is solid and meets all acceptance criteria. The CRITICAL store-vs-component error-mapping rule is correctly honored: the store NEVER imports/calls useApiError — actions catch only to flip loading/error flags and re-throw, while CreateFunnelDialog.vue and funnels/index.vue map errors via useApiError in their own setup. DTO TS types in types/funnel.ts accurately mirror the real Task-5 backend records (FunnelSummaryResponse has no steps + stepCount; FunnelResponse has id/steps/deepLink; CreateFunnelRequest is name+optional description). Store structure mirrors stores/projects.ts simple CRUD with the listUrl() useRoute().params.projectId idiom; fetch omits ?status for 'all'; delete filters the local list; create returns the funnel and the dialog navigates to the editor via localePath. Empty-state CTA, loading/error/retry, and delete confirm dialog are all present. i18n funnels.* + errors.funnels.* exist in both uk.json and en.json with full parity (parity check clean, no renamed keys). All 342 frontend Vitest specs pass including the 11 new/updated specs for this task. No critical, high, or major issues found; two low/optional notes only."
+}

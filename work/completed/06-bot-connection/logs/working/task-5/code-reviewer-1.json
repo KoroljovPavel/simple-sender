@@ -1,0 +1,40 @@
+{
+  "summary": "Task 5 is a clean structural refactor. The folder-route split is correctly atomic (delete + create + test-path bump in one commit), index.vue is verbatim copy of the prior settings.vue with only the SettingsSubnav insertion, and the placeholder bot.vue is appropriately minimal. The deviation from `exact-active-class` to manual computed-driven active state is reasonable given the test-setup constraints (mockNuxtImport does not swap Vue Router's internal currentRoute, so RouterLink's built-in active classes would always evaluate against `/` under @nuxt/test-utils mountSuspended). The i18n `@` literal escape in en.json/uk.json is the officially documented vue-i18n syntax (`{'@'}`) and is in-scope as an unblock for Task 4's regression on the vitest pipeline. Findings below are minor: a hardcoded locale list that drifts from NON_DEFAULT_LOCALES, duplicated active-state class strings, and a missing data-test on the bot page root.",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "frontend/components/SettingsSubnav.vue",
+      "line": 17,
+      "issue": "Locale-prefix strip regex hardcodes the literal locale codes `(en|uk)`. The single source of truth is `frontend/shared/i18n-locales.ts` (`NON_DEFAULT_LOCALES = ['en']`) with `defaultLocale: 'uk'` in nuxt.config.ts. Under `strategy: 'prefix_except_default'` only `/en/...` is ever prefixed in production — `/uk/...` cannot appear there. So the regex both lists a code that never reaches it (`uk`) and would need a manual edit if a third locale ships (the patterns.md doc explicitly calls out that adding a locale should only require updating that constant).",
+      "suggestion": "Build the regex from the constant: `import { NON_DEFAULT_LOCALES } from '~/shared/i18n-locales'` and compose `new RegExp(\\`^/(${NON_DEFAULT_LOCALES.join('|')})(?=/|$)\\`)`. Drop `uk` from the alternation entirely. Optional but consistent with the rest of the i18n infra."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/SettingsSubnav.vue",
+      "line": 35,
+      "issue": "Active-state class string `'subnav-link-active border-b-2 border-blue-600 text-blue-600'` is duplicated verbatim on both NuxtLinkLocale elements. Same goes for the base class string `'px-3 py-2 text-sm hover:underline'`. Three-way duplication makes future style changes a search-and-replace.",
+      "suggestion": "Extract to two const strings in `<script setup>` (e.g. `const linkBase = '...'`, `const linkActive = '...'`) and reference both in the template `:class` bindings. Optional — current size is still readable."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/pages/projects/[projectId]/settings/bot.vue",
+      "line": 10,
+      "issue": "Root `<div>` lacks a `data-test` attribute. Every other settings page section in this codebase (`settings-general`, `settings-danger-zone`, `delete-project-modal`) is selectable by a stable test hook. The current spec only asserts the subnav + placeholder, so Task 9 will likely need to add one anyway when the real bot page lands.",
+      "suggestion": "Add `data-test=\"bot-page\"` (or `settings-bot-page`) on the root `<div>` so the placeholder smoke test in Task 9 has a stable selector before any real markup arrives. Trivial change, prevents a churny PR later."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/tests/components/SettingsSubnav.spec.ts",
+      "line": 39,
+      "issue": "First spec asserts `href` equals `/projects/p1/settings` and `/projects/p1/settings/bot` — but the mock for `useLocalePath` is an identity function (line 21). The test therefore validates the path string we already wrote in the component, not the locale-aware composition. If `useLocalePath` were ever dropped from the component, this test would still pass.",
+      "suggestion": "Either (a) swap the mock to a non-identity transform (e.g. `(p) => \\`/locale-prefix${p}\\``) and assert the prefixed href to prove `useLocalePath` is actually invoked, or (b) add an explicit `expect(localePathSpy).toHaveBeenCalledWith('/projects/p1/settings')` style assertion. Optional; the existing test still pins the literal contract."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/i18n/locales/en.json",
+      "line": 224,
+      "issue": "Cross-task scope: the `{'@'}` literal-interpolation fix on `bot.connect.form.tokenHint` and `bot.disconnect.modal.body` is technically Task 4 territory (those strings were authored in Task 4). The fix itself is correct per the vue-i18n v9 docs (literal interpolation `{'@'}` is the canonical escape; the v12 backslash form would require a vue-i18n upgrade). Scope-wise the commit message + task description acknowledge this as an unblock and the change is the minimal viable patch — fine, but should be retroactively reflected in Task 4's decisions log so the fix is not silently lost if Task 4 is re-touched.",
+      "suggestion": "Note in `work/06-bot-connection/decisions.md` that the `{'@'}` escape was applied in Task 5 against Task 4's locale strings to unblock vitest module-resolution. No code change required."
+    }
+  ]
+}

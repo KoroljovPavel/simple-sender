@@ -1,0 +1,24 @@
+{
+  "reviewer": "test-reviewer",
+  "scope": "manual-fix-node-delete",
+  "round": 2,
+  "verdict": "pass",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 7,
+      "passed": 7,
+      "failed": 0
+    },
+    "coverageAssessment": "excellent",
+    "pyramidBalance": {
+      "unit": 0,
+      "integration": 0,
+      "e2e": 0,
+      "component": 7,
+      "assessment": "healthy — all seven additions are component tests, appropriate for UI affordance verification"
+    }
+  },
+  "summary": "All 7 tests added in ebb9296 are value-based and load-bearing. (1) Backspace key: dispatches Backspace on window with a node selected and asserts delete-warning appears — removing Backspace from onKeydown breaks it. (2) contenteditable guard: focuses a real div[contenteditable=true] and dispatches Delete+Backspace on it with bubbles:true so they reach the window listener; event.target is the editable element, isEditableTarget's closest('[contenteditable=true]') branch fires and suppresses the flow — removing that branch would surface the warning and break the test. (3) Trigger delete: selects trigger:1 (evtA), confirms delete, asserts surviving set is exactly [on_start, evtB] with length 2 — a mis-indexed filter would drop the wrong entry and fail the evtA-absent check. (4) Start delete: selects the start node, confirms delete, asserts no on_start remains and the event trigger survives with toMatchObject — removing the on_start filter branch breaks it. (5-7) FunnelStepsList readonly tests: three tests cover the positive case (readonly=true hides move-up/move-down/edit/delete on non-empty and empty lists, shows notice), the contrast case (readonly=false shows all mutators, no notice). The component uses v-if/v-else gating on props.readonly; removing that gating would make the absent-assertions fail. Both round-1 gaps (Backspace path, FunnelStepsList readonly mode) are closed. No critical or major findings."
+}

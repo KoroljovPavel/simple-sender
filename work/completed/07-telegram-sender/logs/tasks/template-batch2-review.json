@@ -1,0 +1,68 @@
+{
+  "validator": "task-validator",
+  "iteration": 2,
+  "batch": [6, 7, 8, 9, 10],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 7,
+      "section": "Required Skills",
+      "issue": "Link text reads `[.claude/skills/code-reviewing/SKILL.md](...)` (with a leading `.claude/` prefix in the link label). Tasks 6, 8, 9, 10 use the shorter convention `[skills/<name>/SKILL.md](...)`. The href itself is correct (`../../../.claude/skills/code-reviewing/SKILL.md` — resolves) so this is purely a label-style inconsistency, not a broken link.",
+      "fix": "Optional cosmetic alignment: change the label from `[.claude/skills/code-reviewing/SKILL.md]` to `[skills/code-reviewing/SKILL.md]` to match the other four tasks in the batch."
+    }
+  ],
+  "previous_findings_verification": {
+    "task_6_required_skills_prefix": "FIXED — line 16 now uses `[skills/documentation-writing/SKILL.md](../../../.claude/skills/documentation-writing/SKILL.md)`. Verified the href resolves from `work/07-telegram-sender/tasks/`.",
+    "task_7_required_skills_prefix": "FIXED — line 16 href is `../../../.claude/skills/code-reviewing/SKILL.md`. Link target verified to exist. Label-text style differs from the rest of the batch (see Findings) — minor cosmetic only.",
+    "task_8_required_skills_prefix": "FIXED — line 16 now uses `../../../.claude/skills/security-auditor/SKILL.md`. Verified resolves.",
+    "task_9_required_skills_prefix": "FIXED — line 16 now uses `../../../.claude/skills/test-master/SKILL.md`. Verified resolves.",
+    "task_7_project_knowledge_prefix": "FIXED — Context Files lines 72-74, 77 all use `../../../.claude/skills/...` form. Verified all targets exist.",
+    "task_8_project_knowledge_prefix": "FIXED — Context Files lines 62-65 all use `../../../.claude/skills/project-knowledge/references/<file>.md` form. Verified all targets exist (project, architecture, patterns, deployment).",
+    "task_6_reviewer_absolute_path": "FIXED — line 113 now reads `work/07-telegram-sender/logs/working/task-6/code-reviewer-{round}.json` (repo-relative; no `/Users/...` prefix anywhere in tasks 6-10).",
+    "task_8_dependencies_misnames_task_6": "FIXED — Details Dependencies (line 117) now reads `Task 6 (Staging-smoke runbook) — Wave 4 must complete so the full feature codebase (Tasks 1-5) and its documentation exist.` Correctly identifies Task 6 as the staging-smoke runbook (no longer conflated with Task 5's BotService wiring).",
+    "task_7_transitive_dependency_note": "RESOLVED — Task 7 now contains an explicit `Dependency ordering note.` paragraph (lines 22-23) explaining that `depends_on: [6]` transitively covers Tasks 1-5 through the chain Task 6 → Task 5 → Task 4 → Wave 1."
+  },
+  "carry_forward_verification": {
+    "task_9_catalog_28_scenarios": "PASS — Task 9 Details (lines 96-158) enumerates the full 28-scenario catalog: 28 unit tests in TelegramSenderTest (happy path 4 + 5xx 3 + 429 6 + 4xx/payload 3 + pre-wire 5 + timeouts 2 + token-leak 5 = 28), 4 integration scenarios in TelegramSenderIT, 2 BotControllerIT cases, 3 BotServiceTest cases, 1 BotRepositoryTest case. Headline-vs-elaboration distinction is explicitly noted (lines 96, 208). The renamed test `sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid` appears at catalog position 19 (line 130) and matches tech-spec line 317 verbatim.",
+    "task_9_scenarios_audited_floor": "PASS — Automated verification line 90 asserts `.scenarios_audited | length >= 28`, matching the 28 catalog entries enumerated above.",
+    "task_10_botresponse_path": "PASS — Task 10 references `backend/src/main/java/com/botfunnel/bot/dto/BotResponse.java` at lines 40, 81, 103 (verified path exists on disk). Tech-spec line 408 carry-forward also references `BotResponse.java` as zero-diff target.",
+    "task_10_ac13_clarification": "PASS — Task 10 carries explicit AC13 reconciliation block (lines 201-204): `BotTokenInvalidException` + `TelegramSendException` extend `AppException`; `TelegramRateLimitException` extends `RuntimeException` (NOT `AppException`); evidence required at QA time; cite Decision 5 in the QA report. AC section (line 59) also points to this reconciliation. Matches tech-spec Decision 5 (lines 120-123) and Data Models entry (line 232-236) verbatim.",
+    "task_10_tech_spec_ac_count": "PASS — Task 10 states `every tech-spec Acceptance Criteria bullet (11 items)`. Tech-spec lines 401-411 enumerate exactly 11 bullets. Counts match.",
+    "task_10_renamed_test_in_pre_wire_guards": "PASS — Task 10 line 211 references `TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull`; cross-checked against tech-spec line 339 — name matches verbatim.",
+    "task_8_decrypt_error_contract": "PASS — Task 8 A02 audit section (line 36) embeds the full updated decrypt-error contract: catch ONLY `IllegalArgumentException` from Base64 decode → `BotTokenInvalidException`; do NOT catch `IllegalStateException` from `TokenEncryptor.decrypt` (both AEADBadTagException-tampered ciphertext and misconfigured-bean propagate as 500); explicitly references the unit test name `sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid`. Risk R7 cited as accepted limitation.",
+    "task_7_decrypt_error_contract": "PASS — Task 7 What-to-do step 3 → Pre-wire token guards (line 44) carries the same decrypt-catch-scope contract and cross-references the unit test by name.",
+    "task_8_owner_resources_dependency": "PASS — Task 8 Dependencies (line 117) cites Task 6 as the upstream wave-4 dependency; the transitive coverage of Task 5 wiring is implicit via the wave-4 → wave-3 chain documented in tech-spec Implementation Tasks.",
+    "tech_spec_implementation_tasks_alignment": "PASS — Each of Tasks 6-10 matches its tech-spec entry (tech-spec lines 469-503): Task 6 documentation-writing for staging-smoke runbook, Task 7 code-reviewing audit, Task 8 security-auditor audit, Task 9 test-master audit, Task 10 pre-deploy-qa. Skills, dependencies, reviewers and waves match tech-spec descriptions."
+  },
+  "structural_checks": {
+    "frontmatter_valid": "PASS — all five tasks have valid YAML frontmatter (status: planned; depends_on: array; wave: number; skills: array; reviewers: array; verify: empty array; teammate_name: blank). Task 6: skills [documentation-writing], reviewers [code-reviewer]. Tasks 7/8/9: single-skill arrays, reviewers []. Task 10: skills [pre-deploy-qa], reviewers [].",
+    "no_template_placeholders": "PASS — no literal `[Task Name]`, `[What we do...]`, `[Concrete steps...]`, `{PK path}`, `{reviewer-name}`, or unfilled placeholders. The `{round}` token in Task 6 Reviewers (line 113) and in the post-completion narrative in Task 10 (line 207) is the intended template convention for parameterized review-round filenames.",
+    "no_todo_fixme_tbd": "PASS — only intentional `TBD` references appear in Task 10 lines 79, 174 inside content explaining `deployment.md TBD` (descriptive content about deployment-platform status, not an unresolved placeholder).",
+    "sections_in_order": "PASS — all five tasks follow the template order: Required Skills → Description → What to do → Acceptance Criteria → Context Files → Verification Steps → Details → Reviewers → Post-completion. No TDD Anchor section in any of these tasks — correct for non-code tasks (documentation, audits, QA).",
+    "tdd_anchor_correctly_absent": "PASS — Tasks 6 (documentation), 7/8/9 (audits), 10 (QA) are all non-code tasks. None has a TDD Anchor section. Test scenarios are referenced inside Details (Task 9 catalog) and Acceptance Criteria (Task 10 evidence map), not as TDD anchors.",
+    "frontmatter_to_body_consistency": "PASS — Task 6 skills [documentation-writing] matches Required Skills line 16. Task 7 skills [code-reviewing] matches line 16. Task 8 skills [security-auditor] matches line 16. Task 9 skills [test-master] matches line 16. Task 10 skills [pre-deploy-qa] matches line 16. Reviewers consistency: Task 6 [code-reviewer] matches Reviewers section line 113; Tasks 7/8/9/10 [] match the `None` Reviewers section in each task.",
+    "dependency_graph": "PASS — Task 6 depends_on [5] (wave 4 > wave 3 of Task 5); Tasks 7, 8, 9 depend_on [6] (wave 5 > wave 4); Task 10 depends_on [7, 8, 9] (wave 6 > wave 5). No cycles, no missing references, wave ordering monotonic with dependencies.",
+    "mandatory_context_files_present": "PASS — user-spec.md, tech-spec.md, decisions.md, project.md, architecture.md all present in every task with correctly-resolving relative paths.",
+    "skill_work_type_alignment": "PASS — documentation-writing → runbook (Task 6); code-reviewing → code audit (Task 7); security-auditor → security audit (Task 8); test-master → test audit (Task 9); pre-deploy-qa → pre-deploy QA (Task 10). All match work product."
+  },
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1,
+    "previous_critical_resolved": 0,
+    "previous_minor_resolved": 8,
+    "previous_minor_carried_forward": 1
+  },
+  "notes": [
+    "All eight findings from iteration 1 (template-batch2-review.json, batch=[6,7,8,9,10]) are FIXED: SKILL.md prefix on Tasks 6/7/8/9, project-knowledge prefix on Tasks 7/8, Task 6 absolute reviewer path, Task 8 Dependencies misname of Task 6.",
+    "One iteration-1 finding (Task 7 transitive dependency note) was informational/optional and is now resolved via the explicit Dependency ordering note paragraph in Task 7 lines 22-23.",
+    "Only one minor cosmetic inconsistency remains: Task 7 Required Skills link label `[.claude/skills/code-reviewing/SKILL.md]` has a leading `.claude/` in the visible label that differs from the convention `[skills/<name>/SKILL.md]` used by Tasks 6/8/9/10. The href itself resolves correctly. Non-blocking.",
+    "Carry-forward from updated tech-spec verified: Task 9 catalog enumerates exactly 28 scenarios (matching the elaborated count in tech-spec Testing Strategy lines 290-330) including the renamed `sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid` test. Task 10 references the correct BotResponse path `backend/src/main/java/com/botfunnel/bot/dto/BotResponse.java` (verified to exist on disk) and carries the explicit AC13 clarification reconciling user-spec AC13 with tech-spec Decision 5.",
+    "Atomicity: each of the five tasks is a single deliverable (one runbook, three audit reports, one QA report). No merge or split candidates.",
+    "Resource sharing: no shared heavy resources introduced in this batch. The implementation-side WebClient sharing (TelegramApiClient.Builder injection) lives in Tasks 1/4 (batch 1) and is verified by Task 7's audit dimension `shared_resources`."
+  ]
+}

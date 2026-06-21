@@ -1,0 +1,70 @@
+{
+  "task": "8 — Code Audit (16-persistent-keyboard)",
+  "auditor": "auditor-code",
+  "date": "2026-06-11",
+  "branch": "dev",
+  "scope": "Holistic full-feature code-quality audit after Tasks 1-7. Read-only. Focus on cross-component contracts invisible to per-task reviewers.",
+  "method": "Read FINAL state of all 23 changed source/test files (dev vs main diff reconciled with decisions.md). Verified the four cross-component axes + architectural/scope invariants across the 11 code-reviewing dimensions.",
+  "verdict": "clean",
+  "axes_verified": {
+    "validation_mirror_parity": {
+      "result": "PASS — byte-for-byte",
+      "detail": "Each Decision 6 backend rule has an exact FunnelStepForm.vue mirror: mandatory non-blank text (FunnelService.requireKeyboardText:1347 ↔ keyboardTextError:631-635); 4096 HARD cap on RAW length (text.length() ↔ keyboardText.value.length, both un-trimmed); parse mode HTML/MarkdownV2/null (shared requireParseMode:1230 ↔ shared PARSE_MODES const :47, used by the keyboard select :1593); 1..10 rows (MAX_KEYBOARD_ROWS=10 ↔ KEYBOARD_MAX_ROWS=10); 1..4 buttons/row (MAX_KEYBOARD_ROW_BUTTONS=4 ↔ KEYBOARD_MAX_BUTTONS_PER_ROW=4); button non-blank ≤64 (MAX_KEYBOARD_BUTTON_TEXT=MAX_KEYWORD_LENGTH=64 ↔ KEYBOARD_BUTTON_TEXT_MAX=64); trimmed-duplicate block via Set, case NOT folded (validateSetKeyboard:1304-1323 ↔ keyboardHasDuplicate:646-657); CLEAR_KEYBOARD strict rejection of keyboardRows/isPersistent/oneTimeKeyboard (validateClearKeyboard:1335-1343 ↔ onSubmit CLEAR case emits ONLY text+parseMode :982-988). All rejections route through invalidStep → 422 funnel_step_invalid (one code, varying message)."
+    },
+    "copyOf_completeness": {
+      "result": "PASS",
+      "detail": "FunnelStep.copyOf (lines 144-152) carries all five new fields: keyboardText/keyboardParseMode/isPersistent/oneTimeKeyboard by reference (immutable String/Boolean, null stays null); keyboardRows → new ArrayList<>(source.keyboardRows) with explicit null guard (null stays null, not empty-list coerced). Shallow list copy is sufficient — KeyboardRow/KeyboardButton are immutable records. No field silently dropped from execution snapshot / duplicate (tech-spec Risk 1 closed)."
+    },
+    "builder_wire_consistency": {
+      "result": "PASS — byte-exact vs Decision 5 / Data Models JSON",
+      "detail": "StepExecutor.buildReplyKeyboardMarkup (396-414): object-form buttons {\"text\": …} via LinkedHashMap (not bare strings); keyboard rows as List<List<Map>>; resize_keyboard HARDCODED true (411, never read from step, never stored/surfaced — grep confirms resize_keyboard exists ONLY here in the builder); is_persistent (410) / one_time_keyboard (412) from step fields with documented form-default fallback (true/false) when null — never emits JSON null. REMOVE_KEYBOARD_MARKUP = Map.of(\"remove_keyboard\", true) constant (387) for CLEAR_KEYBOARD. Both go through shared sendKeyboardText (364-379) whose try/catch is byte-for-byte identical to message() (204-208): TelegramSendException → fromTerminalReason, BotTokenInvalidException → fail(\"invalid_bot_token\"), AppException → fail(codeOrStatus). Text via renderTrimmed (4096 trim+WARN, codes-only). 6-arg sender.sendText with null ownerId. Both return cont() — fire-and-forget. Defensive guard: setKeyboard terminal-fails empty_keyboard_rows on null/empty rows or a row with no buttons (345-347, isEmptyRow:381-383)."
+    },
+    "dto_ts_mirror_consistency": {
+      "result": "PASS",
+      "detail": "FunnelStep ↔ FunnelStepDto ↔ types/funnel.ts field/type/nullability parity confirmed. DTO wired in BOTH directions: toSteps (780-784) and toStepDto (1419-1423) — the historically-missed toStepDto leg is present. Positional FunnelStepDto ctor order (keyboardText, keyboardParseMode, keyboardRows, isPersistent, oneTimeKeyboard) matches toStepDto call order and the updated positional comment in FunnelServiceEmitEventTest.emitStep:75. Preview kind union 'message'|'non_message'|'keyboard' mirrored in PreviewStepResponse (DTO + TS:262); response keyboardRows is List<List<String>> ↔ string[][]|null, non-null only for SET_KEYBOARD. Reply-button TS types (KeyboardButton/KeyboardRow) are DISTINCT from the inline Button (callback/url)."
+    },
+    "architectural_consistency": {
+      "result": "PASS",
+      "detail": "Flat immutable records, no _class (KeyboardRow/KeyboardButton mirror ContentBlock/Button precedent). One shared keyboardText/keyboardParseMode pair for both types (Decision 3). Form uses the *Touched local-reactive-array idiom (keyboardRows ref + keyboardTouched, same as menuButtons/blocks). Fire-and-forget cont() — no park, no per-subscriber keyboard state. Preview clamps echoed rows to validation caps (clampKeyboardLabels:470-498), does not re-validate. Keyword hint is client-side over active keyword funnels (containsAnyKeyword mirror, subscribeInactiveHint amber precedent — keyboardButtonHint:677-687). No v-html anywhere (8 grep hits are all comments asserting the no-v-html convention; render branch uses {{ }} only). Locale keys present in BOTH uk and en (17 keyboard* keys + 2 previewKeyboard* + type/summary labels — full parity)."
+    },
+    "not_modified_invariants": {
+      "result": "PASS",
+      "detail": "git diff --stat main...dev shows TelegramSender, ProcessTelegramUpdateJob, FunnelEventService, FunnelExecutionEngine, and Mongo converters are UNCHANGED. The 23-file change set matches tech-spec scope exactly; no out-of-scope leakage. The 6-arg sendText is consumed as-is (Object replyMarkup serialized verbatim — its Javadoc says 'inline keyboard' but mechanically carries any reply_markup, so the reply keyboard works without a sender change). Task 1's temporary terminal-fail compile-fix executor cases were properly replaced by Task 3's real setKeyboard/clearKeyboard handlers — no dead intermediate code."
+    }
+  },
+  "findings": [
+    {
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/bot/TelegramSender.java:142-148",
+      "description": "The 6-arg sendText Javadoc describes replyMarkup as 'an optional inline keyboard … shaped as {\"inline_keyboard\":...}'. The method mechanically serializes any Object verbatim, so the SET_KEYBOARD/CLEAR_KEYBOARD reply markup works correctly, but the doc no longer reflects the full set of callers.",
+      "recommendation": "Optional: broaden the Javadoc to 'inline OR reply keyboard markup'. No functional impact; TelegramSender is intentionally out of feature scope (Not-modified list) — leave for a future touch or skip."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/components/funnels/FunnelStepForm.vue:963 vs backend FunnelService.toSteps:780",
+      "description": "The form emits keyboardText trimmed (keyboardText.value.trim()), while backend toSteps stores dto.keyboardText() VERBATIM (untrimmed). Harmless: the form already guarantees non-blank+within-cap before emit, and the 4096 cap is checked on raw length on both sides, so a trailing-whitespace divergence cannot produce a save that passes the form but fails the backend. Noted only for completeness of the mirror.",
+      "recommendation": "No action — by design (the form normalizes its own emitted value; the backend keeps author text verbatim, consistent with its 'blank is a validation error not a silent normalization' policy)."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java:437-439",
+      "description": "previewStep discriminates SET_KEYBOARD vs CLEAR_KEYBOARD on the SAVED step type (keyboardRows non-null only for SET_KEYBOARD). This is the documented saved-type gate (Decision 7) — a just-retyped unsaved step previews per the old saved type, identical to MESSAGE↔action behavior today. Not a regression.",
+      "recommendation": "No action — explicitly accepted in Decision 7 and the Risks table."
+    }
+  ],
+  "dimensions_summary": {
+    "architecture": "PASS — flat records, shared text pair, fire-and-forget, distinct reply-button types.",
+    "separation_of_concerns": "PASS — validation only in validateSteps; executor guards but does not re-validate; preview clamps but does not duplicate validation; hint stays client-side.",
+    "readability_maintainability": "PASS — named caps constants (MAX_KEYBOARD_*), thorough doc comments cross-referencing decisions, no magic numbers.",
+    "error_handling_logging": "PASS — send-step error trio identical to message(); defensive empty_keyboard_rows terminal-fail; logs carry ids/codes only (no rendered text/labels — PII rule); validation messages name fields/limits, never echo author content.",
+    "type_safety": "PASS — no `any` abuse in the keyboard code; nullability mirrored backend↔TS; KeyboardButton/KeyboardRow typed shapes; ?? used carefully to avoid default-clobbering (isPersistent/oneTimeKeyboard seed).",
+    "testing_coverage": "Deferred to Task 10 (test audit). Cross-checked signatures/wire shapes only — they align.",
+    "dependencies": "PASS — no new packages; reuses VariableTemplateRenderer/renderTrimmed, useFunnelsStore, 6-arg sendText.",
+    "security": "Coarse cross-check only (depth = Task 9): no v-html; preview labels clamped, never variable-rendered; logs codes/ids only; @JsonIgnoreProperties mass-assignment defense on all new DTOs. No gross violations.",
+    "performance": "PASS — no N+1, no per-request heavy resource; preview debounced 600ms; clamp is O(rows×buttons) bounded by caps.",
+    "cross_file_consistency": "PASS — headline axis; all four sub-axes verified (see axes_verified).",
+    "resource_management": "PASS — no new singletons/clients; REMOVE_KEYBOARD_MARKUP is a shared immutable constant (Jackson reads, never mutates)."
+  },
+  "blocking_or_major": [],
+  "conclusion": "No blocking or major findings. The feature's cross-component contracts (validation mirror parity, copyOf completeness, wire-builder/Decision-5 consistency, DTO↔TS mirrors) all hold byte-for-byte. Architectural patterns match Phases 1-6. Not-modified invariants confirmed via dev↔main diff. Only three informational notes, all by-design. Verdict: CLEAN — ready for Task 9 (security) / Task 11 (pre-deploy QA)."
+}

@@ -1,0 +1,72 @@
+{
+  "validator": "reality-checker",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8],
+  "iteration": 1,
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 2,
+      "issue": "validateSteps signature change is a compile-order coupling that affects Task 3's FunnelStepExecutorTest indirectly and, more directly, affects any caller of FunnelService inside Task 3's engine-IT setup. Task 2 changes the signature of `validateSteps(List<FunnelStep>)` to `validateSteps(List<FunnelStep>, String projectId)` and updates three callsites (update:176, activate:281, testRun:351). Task 3 writes engine-ITs that go through the full `FunnelService.activate` path (seeding active target funnels). If Task 3 executes in parallel with Task 2 and builds against the old signature, `FunnelService.activate` will not yet pass `projectId`, causing IT failures. Both declare `depends_on: [1]`, making them Wave 2 parallel peers — there is no declared dependency between them. The problem is not a file collision (Task 3 does not modify FunnelService.java) but a compile-order coupling: Task 3's ITs call `funnelService.activate(...)` internally (via engine seed helpers), which must already have the new `validateSteps` signature from Task 2. If run truly in parallel on separate branches that merge, Task 3 builds against the pre-Task-2 FunnelService and the ITs will not compile when merged.",
+      "fix": "Add `depends_on: [1, 2]` to Task 3 (engine enroll-path). Task 3's engine-ITs require activating target funnels, which goes through `FunnelService.activate` → `validateSteps(steps, projectId)` — a signature Task 2 introduces. Alternatively, document that Wave 2 tasks must be sequenced 2 → 3 within the wave, or that both are written on the same branch with Task 2 landing first."
+    },
+    {
+      "severity": "critical",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4's TDD Anchor and 'What to do' explicitly require adding `storeMock.fetch` (for `useFunnelsStore().fetch('all')`) and `storeMock.funnels` (a reactive ref seeded with ≥1 active + ≥1 non-active funnel) to the test mock in `funnel-editor.spec.ts`. The current storeMock in that file (verified at line 13-25) has: `fetchOne`, `update`, `activate`, `pause`, `duplicate`, `stopAllExecutions`, `testRun`, `preview` — but NO `fetch` method and NO `funnels` ref. Without these additions, the test for 'SUBSCRIBE inactive-target hint' will pass vacuously (no non-active funnel in picker → hint never appears → assertion `toBeTruthy()` passes on absent element). The `SUBSCRIBE submit shape` test will also fail or be vacuous because `fetch()` is called in the type-change watcher and if it rejects/errors the component may not render the picker at all. This is a hidden cross-task dependency: Task 4's tests depend on storeMock infrastructure that does not yet exist in the spec file.",
+      "fix": "Task 4 must extend `storeMock` in `funnel-editor.spec.ts` to add: (1) `fetch: vi.fn()` method, (2) `funnels: ref([])` reactive ref. In the SUBSCRIBE describe block's `beforeEach`, call `storeMock.fetch.mockImplementation(() => { storeMock.funnels.value = [activeFunnel, draftFunnel]; })` so the inactive-target hint test has real data to assert against. Without this, the inactive-hint test is vacuously green."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 2,
+      "issue": "FunnelStepDto constructor arity mismatch across wave tasks. Task 1 grows `FunnelStepDto` from 17 to 20 arguments (adds `targetFunnelId`, `targetEntryStepId`, `endParentAfter`). Task 2 correctly identifies this and says to update `emitStep()` helper in `FunnelServiceEmitEventTest` (line 71 currently builds a 17-arg constructor). Task 3 uses `FunnelStepExecutorTest` which does NOT use `FunnelStepDto` directly (verified: grep found 0 matches). However, `FunnelExecutionEngineIT` and `FunnelTestRunSendIT` (Task 3) likely build `UpdateFunnelRequest` with steps via `FunnelStepDto` constructor in helper methods — this is not verifiable from grep alone since those test files may use JSON deserialization instead. The risk: if any engine-IT helper constructs `FunnelStepDto` directly (as `FunnelServiceEmitEventTest` does), it will fail to compile after Task 1. Task 3 has no explicit instruction to update such callsites, unlike Task 2 which explicitly calls it out. This is a documentation/awareness gap that could cause Task 3 to fail compilation.",
+      "fix": "Task 3's implementer should search `FunnelExecutionEngineIT.java` and `FunnelTestRunSendIT.java` for any `new FunnelStepDto(...)` constructor calls and update them to the 20-arg signature before adding new tests. Add an explicit note to Task 3's Details section mirroring Task 2's guidance: 'If engine-IT helpers use new FunnelStepDto(...) directly, update to 20-arg signature (null/null/false for non-SUBSCRIBE steps).'"
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "Task 3 instructs adding `Outcome.COMPLETE` to the `Outcome` enum in `StepExecutor` (line 329), then handling it in `FunnelExecutionEngine.drive` switch (line 257). The task correctly notes that `drive` uses a switch-STATEMENT (not expression), so the compiler will NOT enforce exhaustiveness — `case COMPLETE` must be added manually. However, the task does NOT add a corresponding `StepResult.complete()` factory and `COMPLETE` case to the engine switch as atomically required pieces. The instruction is split: Step 4 adds `COMPLETE` to Outcome + `StepResult.complete()`, Step 5 adds the engine case. If a parallel implementer delivers Step 4 without Step 5 (or vice versa), `COMPLETE` outcome will hit the engine's existing switch without a matching case — the current switch has no `default`, so Java will simply fall through after the switch body, causing the engine to neither advance nor terminate the execution (silent no-op). The task's AC note about this is correct but buried. This is an explicit risk of partial delivery in the same task.",
+      "fix": "Add an explicit warning in Task 3's Acceptance Criteria: 'Outcome.COMPLETE in StepExecutor.Outcome enum + StepResult.complete() + case COMPLETE in FunnelExecutionEngine.drive MUST be delivered atomically. Delivering enum value without engine case causes silent no-op that leaves execution stuck — not a compile error.' Consider a single atomic step 4+5 rather than splitting them."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 4 says to load all funnels via `useFunnelsStore().fetch('all')` and explicitly warns about the side-effect of overwriting `funnels.value` (the shared store ref). The tech-spec and task both acknowledge this but accept it. However, the existing `storeMock` in `funnel-editor.spec.ts` does NOT have a `funnels` reactive ref — it only has imperative methods. The inline-hint test (`SUBSCRIBE inactive-target hint`) must assert that selecting a non-active funnel from the picker shows the hint. For this assertion to be non-vacuous, the mock must expose a `funnels` ref that the component template reads (computed `funnelOptions` from `funnelsStore.funnels.value`). If Task 4 implements the form using `storeToRefs(funnelsStore).funnels` for the picker options (the natural approach), but the test mock never sets `storeMock.funnels`, the picker will always be empty and the inactive-hint test will be vacuously green. This is a cross-task dependency between the implementation approach chosen in Task 4 and the test infrastructure — not flagged anywhere in the task decomposition.",
+      "fix": "Task 4 must explicitly document: 'storeMock in funnel-editor.spec.ts needs a funnels reactive ref added. Add funnels: ref([]) to storeMock, and in the SUBSCRIBE describe block seed it via storeMock.fetch.mockImplementation before each test.' This is distinct from the storeMock.fetch finding above — both issues must be fixed together."
+    },
+    {
+      "severity": "major",
+      "category": "cross-task-integration",
+      "task": 3,
+      "issue": "The `enrollSpecificFunnel` parameter signature is defined in Task 3 (Details section) as: `enrollSpecificFunnel(projectId, funnel, subscriberId, targetFunnelId, targetEntryStepId, originDepth, telegramBotId)` — but the StepExecutor callsite instruction in Task 3 (step 3) writes: `enrollSpecificFunnel(execution.getProjectId(), execution.getSubscriberId(), step.getTargetFunnelId(), step.getTargetEntryStepId(), execution.getEnrollDepth() + 1, execution.getTelegramBotId())`. These two parameter orders are inconsistent: the Details section lists `(projectId, funnel, subscriberId, ...)` while the StepExecutor callsite omits `funnel` entirely and uses a different argument order `(projectId, subscriberId, targetFunnelId, ...)`. There is no `funnel` parameter in the callsite — the method is expected to look up the target funnel internally by `targetFunnelId`. This inconsistency within Task 3 could cause the implementer to define the method one way and call it another way, producing a compile error or wrong parameter passing.",
+      "fix": "Reconcile the `enrollSpecificFunnel` signature in Task 3. The correct signature (based on the method's responsibility — it looks up the target funnel internally) should be: `enrollSpecificFunnel(String projectId, String subscriberId, String targetFunnelId, String targetEntryStepId, int originDepth, Long telegramBotId)`. Remove the `Funnel funnel` parameter from the Details description — the method resolves the funnel itself. Ensure TDD Anchor unit test stubs match this signature."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Tasks 2 and 4 both add `errors.funnels.funnel_subscribe_*` i18n keys. Task 2 defines them as backend error codes; Task 4 adds them to `uk.json`/`en.json`. There is no explicit coordination point ensuring the four error code strings are spelled identically: `funnel_subscribe_target_required`, `funnel_subscribe_target_not_found`, `funnel_subscribe_target_step_not_found`, `funnel_subscribe_target_inactive`. If a Task 2 implementer uses e.g. `funnel_subscribe_required` (dropping 'target') and a Task 4 implementer uses `funnel_subscribe_target_required`, the frontend `resolveFunnelError` will show raw error codes instead of translated messages. The tasks are in the same wave (2 and 4 are both wave 2) so this is a parallel-write inconsistency risk.",
+      "fix": "Add a cross-reference note in Task 4's Details: 'Error code strings MUST match exactly what Task 2 defines in FunnelService constants (CODE_SUBSCRIBE_TARGET_REQUIRED etc.). Before adding i18n keys, read the actual constant values from FunnelService.java after Task 1 lands.' Consider adding a backend→frontend codegen or at minimum a test in `required-keys.spec.ts` for all four codes."
+    },
+    {
+      "severity": "minor",
+      "category": "cross-task-integration",
+      "task": 4,
+      "issue": "Task 1 is supposed to add `'SUBSCRIBE_TO_FUNNEL'` to `frontend/types/funnel.ts` (StepType union + FunnelStep fields), but Task 1's `Files to modify` only lists backend files. The frontend `types/funnel.ts` is listed in Task 4's `Files to modify`, with the instruction 'check if Task 1 already added them — if not, add now.' However, Task 1's task file does not list `frontend/types/funnel.ts` as a file to modify at all. This means Task 4 will always need to add the frontend types, but the task description creates ambiguity ('maybe Task 1 did it, check first'). If a Task 4 implementer blindly checks and sees the types are absent (which they will be), then adds them, there is no issue — but the task phrasing wastes cognitive overhead and could cause confusion about ownership.",
+      "fix": "Remove the conditional phrasing from Task 4. State directly: 'Task 1 covers only backend. Add to frontend/types/funnel.ts: StepType union member SUBSCRIBE_TO_FUNNEL, FunnelStep fields targetFunnelId?: string | null, targetEntryStepId?: string | null, endParentAfter?: boolean | null.' This is a minor clarity issue, not a blocking defect."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 8,
+    "claims_verified": 41,
+    "issues_found": 8,
+    "critical": 2,
+    "major": 4,
+    "minor": 2
+  }
+}

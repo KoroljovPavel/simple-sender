@@ -1,0 +1,43 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 3,
+      "section": "Required Skills",
+      "issue": "Skill link path is not relative to the task file: `[skills/code-writing/SKILL.md](.claude/skills/code-writing/SKILL.md)`. From `work/05-projects/tasks/3.md`, this resolves to `work/05-projects/tasks/.claude/skills/code-writing/SKILL.md` which does not exist. Tasks 1, 2, 4, 5 use the correct `../../../.claude/skills/code-writing/SKILL.md` prefix.",
+      "fix": "Change the link target to `../../../.claude/skills/code-writing/SKILL.md` so it resolves from the tasks directory to the project-root `.claude/skills/code-writing/SKILL.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 1,
+      "section": "Required Skills",
+      "issue": "Display text of the skill link starts with `.claude/skills/code-writing/SKILL.md` (an absolute-looking path) while other tasks (2, 4, 5) use `skills/code-writing/SKILL.md`. Cosmetic inconsistency only — the link target itself is correct.",
+      "fix": "For consistency with other tasks, change the display text to `skills/code-writing/SKILL.md` so all tasks use the same shape: `- /skill:code-writing — [skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)`."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 1,
+      "section": "Reviewers",
+      "issue": "Reviewer report paths use absolute paths (`/Users/pavlokorolov/IdeaProjects/simple-sender/work/05-projects/logs/working/task-1/...`), while tasks 2-5 use repo-relative paths (`work/05-projects/logs/working/task-N/...`). Both work, but the absolute path is machine-specific and breaks portability.",
+      "fix": "Replace absolute paths with `work/05-projects/logs/working/task-1/code-reviewer-{round}.json` etc., matching tasks 2-5."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Verification Steps",
+      "issue": "The `User` verification step is conditional on Task 9 having shipped (`If Task 9 has not run yet, the user verification is performed by mounting the component in isolation OR satisfied by the unit specs only`). This is noted in the task itself but means the `verify: [user]` frontmatter value may not be exercisable when the task runs. Acceptable given the wave ordering, but worth flagging.",
+      "fix": "Optional — either keep the conditional note (current state) or downgrade `verify` to `[]` for Task 5 since the unit tests already cover the contract; user verification of the dropdown becomes implicit through Task 9's smoke check after layout integration."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 4
+  }
+}

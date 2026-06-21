@@ -1,0 +1,34 @@
+{
+  "summary": "Task 10 cleanly localizes dashboard.vue (32 LOC) and profile.vue (~480 LOC) according to AC11/12/13 and Decisions 10/11/16. useApiError() is called once at setup top and the returned handler is used in every catch block (saveName, onChangePassword, onTerminateAllSessions, confirmDelete) — no inline status-to-text mapping remains. The Zod schema is wrapped in a ComputedRef and passed to useForm AS-IS without unref() — the documented Decision-11 fix is correctly applied. onResend keeps the 429 state-machine imperative and uses apiError only in the generic branch as authorized. Both navigateTo calls are wrapped in localePath, dashboard's <NuxtLink> is replaced with <NuxtLinkLocale>, the welcome heading is split into welcomeWithName + welcomeAnon with named-parameter interpolation, all empty `catch {}` blocks are rewritten to `catch (err: unknown)`, and both spec files receive exactly one identity-passthrough useLocalePath mock line (Decision 16 authorized exception). Locale parity verified: every contextKey passed to apiError exists under errors.profile.* in both uk.json and en.json. Sanity grep on Cyrillic literals returns empty in both files.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "file": "frontend/pages/profile.vue",
+      "line": 100,
+      "severity": "minor",
+      "category": "maintainability",
+      "issue": "onResend's 429 branch does not clear resendErrorText.value when transitioning from a prior 'error' state into 'cooldown'. The previous generic-error message remains in the ref.",
+      "impact": "Currently invisible because the template gates the error <p> by `resendStatus === 'error' && resendErrorText` and the 429 branch sets resendStatus to 'cooldown', so the stale text never renders. However, if the template predicate is later relaxed (e.g. dropped to a simple v-if on resendErrorText), or if a future state transition needs to surface the ref independently, the stale text would leak. A one-line `resendErrorText.value = null` in the 429 branch (and ideally in the success path too) would make the state-machine self-consistent without changing observable behavior today.",
+      "recommendation": "In onResend's catch (line 100-102), add `resendErrorText.value = null` alongside the cooldown transition. Same goes for the happy-path `resendStatus.value = 'sent'` block (line 95)."
+    },
+    {
+      "file": "frontend/pages/profile.vue",
+      "line": 98,
+      "severity": "minor",
+      "category": "readability",
+      "issue": "The status-extraction in onResend is duplicated logic with extractStatus() inside useApiError.ts — both walk the same `statusCode | status | response.status` shape independently.",
+      "impact": "Two sources of truth for the same parsing concern. If the error envelope shape ever changes (e.g. new field), one will drift. Today this duplication exists because onResend genuinely needs to branch on status before deciding whether to delegate to apiError, which the current factory cannot express. Not a defect, but worth flagging as a candidate for a future refactor — e.g. exporting a tiny `extractApiStatus(err)` helper from useApiError.ts and reusing it here.",
+      "recommendation": "Optional: in a follow-up, extract `extractStatus` from useApiError.ts as a named export and import it in profile.vue's onResend. No action required for this task."
+    },
+    {
+      "file": "frontend/pages/profile.vue",
+      "line": 8,
+      "severity": "minor",
+      "category": "best-practices",
+      "issue": "Composables are auto-imported by Nuxt (useI18n, useLocalePath, useApiError, useAuthStore, ref, computed, watch, onBeforeUnmount, useApi, navigateTo). The page mixes auto-imports with one explicit import block (lines 2-4 for vee-validate / zod). This is consistent with the rest of the project, but it does mean a reader has to know which symbols are auto-imported.",
+      "impact": "Cosmetic. The pattern is consistent with auth pages and Nuxt conventions.",
+      "recommendation": "No change needed."
+    }
+  ],
+  "verdict": "OK"
+}

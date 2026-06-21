@@ -1,0 +1,23 @@
+[
+  {
+    "severity": "minor",
+    "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+    "line": 651,
+    "description": "The setKeyboard() guard rejects rows via isEmptyRow() on THREE conditions (null row, null buttons(), empty buttons()), but the test setKeyboard_nullOrEmptyRows_failsTerminally only exercises the top-level null/empty keyboardRows list. The 'row with null/empty buttons' branch of the guard (rows.stream().anyMatch(isEmptyRow)) has no direct unit coverage. Edge-case note 105 in the task explicitly calls this path out ('A row record with a null/empty buttons list ... do not silently emit an empty wire row'). It is implemented but untested.",
+    "recommendation": "Add a case to the guard test: a SET_KEYBOARD step whose keyboardRows contains a valid row plus one row with an empty/null buttons list, asserting FAIL + 'empty_keyboard_rows' + sender never called. Cheap to add given the existing row()/setKeyboardStep helpers."
+  },
+  {
+    "severity": "info",
+    "file": "backend/src/test/java/com/botfunnel/funnel/FunnelStepExecutorTest.java",
+    "line": 836,
+    "description": "The row() helper uses fully-qualified new java.util.ArrayList<>(...) while java.util.List is imported and used unqualified elsewhere in the same file. Minor stylistic inconsistency only; java.util.ArrayList is not currently imported, so this is functionally fine.",
+    "recommendation": "Optional: import java.util.ArrayList and drop the FQN, or simply use a List literal, to match the file's import-and-use convention. No behavioral impact."
+  },
+  {
+    "severity": "info",
+    "file": "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+    "line": 397,
+    "description": "buildReplyKeyboardMarkup uses a per-button LinkedHashMap with a single 'text' entry, mirroring buildReplyMarkup for forward-compat (future request_contact/web_app fields) exactly as the task requires. Consistent with the documented rationale; no change needed. Recorded as a positive consistency observation.",
+    "recommendation": "No action. Pattern matches buildReplyMarkup (LinkedHashMap/List, object-form buttons, null-safe boxed-Boolean defaults)."
+  }
+]

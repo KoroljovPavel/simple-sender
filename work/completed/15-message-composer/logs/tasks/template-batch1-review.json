@@ -1,0 +1,35 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "Required Skills / Context Files",
+      "issue": "Markdown link paths to project-knowledge use root-relative form `(.claude/skills/code-writing/SKILL.md)` and `(.claude/skills/project-knowledge/...)` without the `../../../` prefix. Tasks 1/2/3 correctly anchor these as `(../../../.claude/...)`. From `work/15-message-composer/tasks/` the bare `.claude/...` link does not resolve.",
+      "fix": "Prefix PK links with `../../../`: e.g. `[skills/code-writing/SKILL.md](../../../.claude/skills/code-writing/SKILL.md)`. The code-file links in the same file already use the correct `../../../` form, so only the SKILL.md line (16) needs fixing in task 4."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Required Skills / Context Files",
+      "issue": "Same root-relative path issue: line 16 `(.claude/skills/code-writing/SKILL.md)`, lines 97-99 `(.claude/skills/project-knowledge/references/project.md|architecture.md|patterns.md)` lack the `../../../` prefix used by tasks 1-3. Links will not resolve from the tasks/ directory.",
+      "fix": "Prefix the SKILL.md link (line 16) and the project.md/architecture.md/patterns.md links (lines 97-99) with `../../../`."
+    },
+    {
+      "severity": "minor",
+      "category": "structure",
+      "task": 1,
+      "section": "What to do",
+      "issue": "The 'What to do' section embeds a fenced code block defining the full `ContentBlock` record signature (lines 60-68). Template/task-creator rules say 'What to do' should be WHAT not HOW with no code blocks. Mitigation: this is a data-shape contract, not algorithm/pseudocode, and is also carried in tech-spec Data Models, so the leak is low-risk.",
+      "fix": "Optional: move the record signature into the Details/Data-Models reference and keep 'What to do' as a prose instruction ('create immutable record ContentBlock with discriminator + nullable per-type fields per tech-spec Data Models')."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 3
+  }
+}

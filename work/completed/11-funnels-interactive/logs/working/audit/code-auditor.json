@@ -1,0 +1,84 @@
+{
+  "auditor": "code-auditor",
+  "verdict": "ISSUES_FOUND",
+  "summary": "Cross-component architecture is sound: graph navigation is uniformly by currentStepId/stepById with a legacy index drain fallback; the at-most-once claim-CAS is preserved (by _id+stepRunStatus, callback-resume additionally scoped by subscriberId per Decision 6); snapshot isolation deep-copies the buttons list of immutable Button records; all 8 waiting_for_reply $in literal sites are present (sweep, claim, claimForCallback, parkForReply, cancelActiveFor, cancelExistingForPair, FunnelService.delete, re-enter partialFilter) and guarded by the static drift assertion; the old size+1 guard is fully replaced by the per-tick budget; the callback_data contract is built and parsed consistently across StepExecutor/webhook/trigger; answerCallbackQuery fires on every no-op path; shared singletons (TelegramSender, Clock, EventService, JobRunr sweep) are reused with no duplicate instantiation; no PII in logs/events. One real major finding: timeoutValue/timeoutUnit reach the engine completely unvalidated, and an unknown timeoutUnit makes durationOf throw before the menu is even sent, leaving the execution stuck in_progress. Remaining findings are minor/info (stale unit comment, missing timeout editor UI vs spec, duplicated stepById, client URL check looser than server).",
+  "files_reviewed": [
+    "backend/src/main/java/com/botfunnel/funnel/FunnelStep.java",
+    "backend/src/main/java/com/botfunnel/funnel/Button.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelExecution.java",
+    "backend/src/main/java/com/botfunnel/funnel/ExecutionStatus.java",
+    "backend/src/main/java/com/botfunnel/funnel/StepType.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelStepIdBackfill.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+    "backend/src/main/java/com/botfunnel/funnel/StepExecutor.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerService.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+    "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/FunnelStepDto.java",
+    "backend/src/main/java/com/botfunnel/funnel/dto/ButtonDto.java",
+    "backend/src/main/java/com/botfunnel/bot/TelegramSender.java",
+    "backend/src/main/java/com/botfunnel/webhook/ProcessTelegramUpdateJob.java",
+    "backend/src/main/java/com/botfunnel/webhook/dto/TelegramUpdate.java",
+    "backend/src/main/java/com/botfunnel/webhook/dto/CallbackQuery.java",
+    "backend/src/main/resources/application.properties",
+    "frontend/types/funnel.ts",
+    "frontend/components/funnels/FunnelStepForm.vue",
+    "frontend/components/funnels/FunnelStepsList.vue",
+    "frontend/components/funnels/AddStepDialog.vue",
+    "frontend/components/funnels/EditStepDialog.vue",
+    "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+    "frontend/i18n/locales/uk.json",
+    "frontend/i18n/locales/en.json"
+  ],
+  "findings": [
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "343-385 (validateMenu) / 285-287 (toSteps)",
+      "issue": "MENU timeout fields (timeoutValue, timeoutUnit) are round-tripped into the domain but NEVER validated. validateMenu validates only buttons; the graph-edge pass validates only timeoutTargetStepId. An author (or any direct API client / seeded doc) can persist and activate a MENU with timeoutValue set and an invalid/legacy timeoutUnit (e.g. the tech-spec Data Models text's own 'minutes'/'hours'/'days', or any garbage string). At runtime StepExecutor.menu() calls menuDeadline(step) -> durationOf(value, unit) which does `default -> throw new IllegalStateException(\"Unknown time unit: \" + unit)`. This throw happens at StepExecutor.java:119, BEFORE the send try/catch (lines 120-130), so it escapes menu() -> execute() -> drive() (no catch) -> runExecution; on the sweep path it is only caught by sweep()'s catch(RuntimeException), leaving the execution stuck in stepRunStatus=in_progress forever (never parked, never re-sent) — a silent dead execution. The menu is never even delivered. This is the inverse of the validate-everything defense-in-depth used for every other step type. Note: the official editor does not currently emit timeout fields (mitigates the UI path), but the DTO accepts them and activate validation passes them through, so this is a real validation/robustness gap and a stuck-execution liveness bug.",
+      "recommendation": "In validateMenu (or the graph-edge pass), validate the timeout pair: if timeoutValue != null then require timeoutUnit in {MIN,HOUR,DAY} and timeoutValue >= 1 (reuse the requireDelay value-set check); reject otherwise with 422 CODE_INVALID_STEP. Additionally consider defensively wrapping menuDeadline so an unexpected unit fails the step (StepResult.fail) rather than throwing out of the engine and stranding the execution."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelStep.java",
+      "line": "29",
+      "issue": "Stale comment: `private String timeoutUnit; // \"minutes\" | \"hours\" | \"days\"` contradicts the actual contract. Per the Task 3 documented deviation, timeoutUnit reuses the delayUnit convention {MIN,HOUR,DAY} (StepExecutor.durationOf, types/funnel.ts DelayUnit). The tech-spec Data Models block (line 239) also still shows the old 'minutes|hours|days' literal. Misleading for the next implementer and a trap that could re-introduce the unvalidated-unit bug above.",
+      "recommendation": "Update the FunnelStep.timeoutUnit comment to `// \"MIN\" | \"HOUR\" | \"DAY\" (reuses delayUnit convention, Task 3 deviation)`; correct the tech-spec Data Models line to match the implemented unit set."
+    },
+    {
+      "severity": "minor",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "line": "557-683 (MENU template)",
+      "issue": "The MENU editor exposes text, parse_mode and buttons, but provides NO UI to set the optional timeout (timeoutValue/timeoutUnit/timeoutTargetStepId). tech-spec How-it-works ('опц. таймаут' in the author flow) and the Data Models describe a configurable menu timeout. onSubmit for MENU emits only {stepType, text, parseMode, buttons, id, next}, so a timeout can never be authored through the product. This is a spec-vs-implementation gap not recorded in decisions.md (Task 6 deviations cover MENU-text-optional and inline broken-edge, not the missing timeout editor).",
+      "recommendation": "Either add timeout inputs to the MENU form (value + unit picker reusing DELAY_UNITS + a SearchableSelect target like the callback picker), or explicitly record in decisions.md / tech-spec that menu timeout is deferred (engine + API support it; editor does not yet). Pair with the validateMenu timeout validation from the major finding above so any future UI is server-guarded."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelTriggerServiceImpl.java",
+      "line": "371-381",
+      "issue": "stepById is duplicated verbatim from FunnelExecutionEngine.stepById (engine line 354). Two independent linear-lookup-by-id helpers can drift (e.g. one gains null-handling the other lacks — already slightly different: the trigger copy null-guards id/snapshot, the engine copy does not). Documented in code as intentional (engine keeps it package-private static), and accepted as a minor in the Task 5 review, but flagged here as cross-component duplication for the holistic record.",
+      "recommendation": "Extract a single package-private static helper (e.g. FunnelGraph.stepById(snapshot, id)) in the funnel package and have both engine and trigger use it, so navigation semantics stay byte-identical. Low priority — current behavior is correct."
+    },
+    {
+      "severity": "info",
+      "file": "frontend/components/funnels/FunnelStepForm.vue",
+      "line": "116-122 (menuButtonUrlError) / 45 (IMAGE_URL_RE)",
+      "issue": "Client URL-button validation reuses IMAGE_URL_RE = /^https?:\\/\\//i (a startsWith-style prefix check), which is intentionally looser than the backend's strict URI scheme-equality + non-empty-host parse (Decision 10). This is a UX mirror only and the server is authoritative, so it is not a security gap (covered in Task 9). Worth noting as a cross-layer consistency observation: a value the client accepts (e.g. an http(s) prefix with an empty/garbage host) will be rejected by the server with 422.",
+      "recommendation": "Optional: tighten the client check toward the server's (require a parseable host) for earlier feedback, or leave as-is and rely on the inline funnel_broken_edge / 422 banner. No action required for correctness."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelService.java",
+      "line": "140-152 (update) / decisions.md Task 4 deviation",
+      "issue": "Graph-edge / MENU validation runs inside the shared validateSteps, so broken_edge blocks BOTH update (draft save) and activate. This is stricter than user-spec phrasing ('чернетку зберегти можна, активувати — ні'). Already explicitly flagged by Task 4 in decisions.md as a deviation for the audit wave — recording here that the audit confirms it: a draft with a broken edge cannot be PATCH-saved. Architecturally consistent with Phase-1 update->validateSteps defense-in-depth.",
+      "recommendation": "Product decision: if drafts with broken edges must be saveable, split the graph-edge pass into an activate-only branch. Otherwise keep as-is (consistent with Phase-1) and update user-spec wording. No code-quality defect."
+    },
+    {
+      "severity": "info",
+      "file": "backend/src/main/java/com/botfunnel/funnel/FunnelExecutionEngine.java",
+      "line": "141-157 (timeout-resume seam)",
+      "issue": "On the timeout sweep seam, a broken/unresolvable menu cursor (menuStep == null) is treated as complete() rather than terminate(failed) with a marker — unlike every other broken-cursor path which fails with FUNNEL_BROKEN_CURSOR. This is the documented Task 3 deviation (a run that already sent the menu reaching a safe terminal state on timeout). Verified consistent and intentional; noted so the asymmetry is on the record.",
+      "recommendation": "None required — behavior is documented in code and decisions.md Task 3. The status=running set on line 153 immediately before complete() is harmless (complete writes status=completed via CAS)."
+    }
+  ]
+}

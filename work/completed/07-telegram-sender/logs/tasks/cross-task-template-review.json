@@ -1,0 +1,73 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task-integration",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  "iteration": "cross-check",
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "resource-sharing",
+      "task": 5,
+      "section": "frontmatter.depends_on",
+      "issue": "Task 5 declares depends_on: [4] only, but its body directly consumes Bot.ownerChatId (Task 2 deliverable) and SentMessage + TelegramSendException (Task 3 deliverables). The dependency is correct transitively (Task 4 depends_on [1,2,3]), and wave ordering still holds (wave 3 > wave 1), but the explicit consumer relationship is not declared. If Task 4 were ever decoupled from Task 2/3 in a refactor, Task 5 would inherit a hidden break.",
+      "fix": "Optionally widen depends_on to [2, 3, 4] to document the direct consumer relationship. Not a blocker — the transitive chain is intact and wave ordering is correct."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 4,
+      "section": "TDD Anchor + Testing Strategy",
+      "issue": "Test scope leak: TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull (Task 4) tests Bot.ownerChatId nullable-read semantics by inserting raw BSON without the ownerChatId field — this is repository/entity-layer behavior, not sender behavior. It belongs naturally in BotRepositoryTest (Task 2's domain), not in TelegramSenderIT (Task 4's domain). Furthermore, Task 2's BotRepositoryTest.findById_legacyDocumentWithoutOwnerChatId_readsAsNull persists via the Java entity (which always serializes the field, possibly as null), so it does NOT actually verify 'missing field' read semantics — only Task 4's IT does. Net result: Task 4 owns a test that should live in Task 2, and Task 2 owns a weaker test that does not prove what its name claims.",
+      "fix": "Move the raw-BSON insertion test from TelegramSenderIT to BotRepositoryTest (Task 2's scope). Task 4's IT should focus on sender behavior. If kept where it is, document why in decisions.md (e.g., 'TelegramSenderIT has the Spring context with ReactiveMongoTemplate already wired, so the raw-BSON test reuses that fixture')."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 5,
+      "section": "What to do",
+      "issue": "Task 4 marks two TelegramSenderIT scenarios @Disabled with the note 'enabled by Task 5 wiring'. Task 5's 'What to do' enumerates BotService, BotServiceTest, and BotControllerIT updates but does NOT explicitly list 'remove @Disabled annotations from TelegramSenderIT.sendText_endToEndViaBotService_emitsBothEvents and TelegramSenderIT.sendText_terminalFailureViaBotService_emitsFailedEventOnly'. The handoff is documented only in Task 4's hints ('Task 5 removes the @Disabled annotation as part of its work') and could be missed when Task 5 executes.",
+      "fix": "Add an explicit step in Task 5 'What to do': 'Remove @Disabled from TelegramSenderIT.sendText_endToEndViaBotService_emitsBothEvents and TelegramSenderIT.sendText_terminalFailureViaBotService_emitsFailedEventOnly (Task 4 deferred them pending this wiring)'. Optionally add to Task 5 AC."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 5,
+      "section": "Description / What to do",
+      "issue": "Task 5 says renaming the existing BotControllerIT test 'postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents' is 'optional' / 'fine — both names work'. Downstream tasks reference the test by its current 'in06' name: Task 4 context (line 453 of tech-spec mentions it), Task 9 audit catalog ('BotControllerIT 2 cases: existing null-branch postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents'), and Task 10 QA report template. If Task 5 chooses to rename, all three downstream tasks must rediscover the new name. Cross-task naming is brittle when optional renames are allowed.",
+      "fix": "Either pin the name explicitly (keep 'in06' suffix, or commit to a new canonical name like 'postTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls_zeroEvents') and propagate to Task 9 audit catalog + Task 10 QA evidence map; or instruct Task 5 NOT to rename to preserve cross-task references."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 7,
+      "section": "frontmatter.depends_on",
+      "issue": "Audit tasks 7 (code), 8 (security), 9 (test) all depends_on: [6]. Task 7 explicitly notes the chain is transitive (6→5→4→1,2,3). Task 8 does not audit the runbook (Task 6's deliverable). Task 9 also does not audit the runbook. Only Task 7 actually needs Task 6 (its 'Documentation' dimension verifies the runbook). Tasks 8 and 9 could depend on Task 5 instead — they would then be able to run one wave earlier (wave 4 in parallel with Task 6 instead of wave 5 after Task 6). Minor optimization opportunity; current design is correct but slower.",
+      "fix": "Optional: change Task 8 and Task 9 depends_on to [5] and place them in a parallel wave with Task 6. Keep Task 7 depends_on [6] because it audits the runbook. Not a blocker — the current ordering is valid and chosen for 'wait until docs settle' consistency."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 2,
+      "section": "TDD Anchor / Acceptance Criteria",
+      "issue": "Task 2's BotRepositoryTest.findById_legacyDocumentWithoutOwnerChatId_readsAsNull persists a Bot via botRepository.save(bot).block() without calling setOwnerChatId(...). However, since Bot.java declares 'private Long ownerChatId' (default null), Spring Data MongoDB will serialize the field with value null into BSON — the resulting document has the key present with null value, NOT the key absent. The test therefore proves 'ownerChatId = null round-trips' rather than 'legacy documents (with the field absent entirely) read as null'. The genuine legacy-document scenario is exercised only by Task 4's TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull (raw BSON insertion via ReactiveMongoTemplate). Misalignment between test name and what it proves.",
+      "fix": "Either (a) update Task 2's test to insert a raw BSON Document without the ownerChatId key via ReactiveMongoTemplate.insert (matching Task 4's IT approach, then Task 2 owns the true legacy-document check and Task 4 can drop its duplicate); or (b) rename Task 2's test to 'findById_botPersistedWithNullOwnerChatId_readsAsNull' so the name matches the actual assertion semantics. Either choice should be coordinated with Task 4 to avoid redundant coverage."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 10,
+    "issues_found": 6,
+    "by_severity": {
+      "critical": 0,
+      "major": 0,
+      "minor": 6
+    },
+    "by_dimension": {
+      "shared_resource_ownership": "passed — each shared resource has one owner; TelegramSender bean (Task 4), Bot.ownerChatId field (Task 2), three exceptions + three records (Task 3), promoted helpers (Task 1) — all owned by distinct tasks with consumers correctly downstream",
+      "no_competing_instances_same_wave": "passed — Wave 1 tasks (1, 2, 3) modify disjoint files; no two tasks in any wave create the same bean/field/class",
+      "wave_ordering_correctness": "passed — dependency graph is acyclic; declared wave numbers are monotonic with respect to depends_on (Task N's wave > max wave of its dependencies)",
+      "consistent_naming": "passed — event constants (telegram_message_sent, telegram_send_failed, bot_test_message_sent), exception names (BotTokenInvalidException, TelegramSendException, TelegramRateLimitException), file paths, gradle command syntax (cd backend && ./gradlew test --tests \"...\"), TEST_MESSAGE_BODY string, and 422 stub message all match verbatim across all tasks that reference them",
+      "test_scope_ownership": "mostly passed — TelegramSenderTest (Task 4), TelegramSenderIT (Task 4 with deferred enablement by Task 5), BotControllerIT (Task 5), BotServiceTest (Task 5), BotRepositoryTest (Task 2) — clearly assigned. Two minor leaks flagged: (1) the sendTestMessage_legacyDocumentReadsAsNull case is in Task 4's IT but tests Task 2's nullable-read contract; (2) Task 2's repository test is weaker than its name claims because save+findById round-trip does not exercise 'missing field' BSON shape"
+    }
+  }
+}

@@ -1,0 +1,88 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task-integration",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  "status": "approved",
+  "wave_structure_verified": {
+    "wave_1_independent": [1, 2, 3, 4],
+    "wave_2_depends_wave_1": [5, 6],
+    "wave_3_depends_wave_2": [7],
+    "wave_4_audit": [8, 9, 10],
+    "wave_5_final": [11]
+  },
+  "dependency_graph": {
+    "1": [],
+    "2": [],
+    "3": [],
+    "4": [],
+    "5": [1, 2],
+    "6": [1],
+    "7": [1, 2, 3, 4, 5, 6],
+    "8": [1, 2, 3, 4, 5, 6, 7],
+    "9": [1, 2, 3, 4, 5, 6, 7],
+    "10": [1, 2, 3, 4, 5, 6, 7],
+    "11": [8, 9, 10]
+  },
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 3,
+      "section": "Details / Dependencies",
+      "issue": "Task 3 (Wave 1) lists `.nvmrc` as a file to read, but `.nvmrc` is created by Task 1 (also Wave 1). In a strict parallel execution model, Task 3 may start before Task 1 has written `.nvmrc`, creating a read-before-create race condition. Task 3 does embed the expected content (Node 24) in its own Details section, making the read advisory rather than load-bearing, but the dependency is undeclared.",
+      "fix": "Add `depends_on: [1]` to Task 3, or explicitly note in Task 3 that the `.nvmrc` content is advisory (Node 24) and does not block execution if the file is not yet present. The cleaner fix is `depends_on: [1]`, which also ensures `.nvmrc` exists before `nvm use` or `pnpm install` is run."
+    },
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 6,
+      "section": "Frontmatter",
+      "issue": "Task 6 (Gitleaks hook) is placed in Wave 2 with `depends_on: [1]`. Since it only requires the `scripts/` directory (created by Task 1, Wave 1), Task 6 could be placed in Wave 1 to maximize parallelism. Wave 2 placement is not incorrect — it will execute correctly — but it delays Task 6 behind the Wave 1 batch unnecessarily.",
+      "fix": "Consider moving Task 6 to Wave 1 (remove from Wave 2). Requires no change to depends_on — `depends_on: [1]` would remain valid if Task 6 is assigned wave 1 only after Task 1 completes. Alternatively, leave as-is since the delay is one wave and correctness is not affected."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 7,
+      "section": "Required Skills / Reviewers",
+      "issue": "Task 7 uses `documentation-writing` skill with `code-reviewer` as the sole reviewer. The standard skill-reviewer mapping does not define a dedicated `documentation-reviewer`, and `code-reviewer` reviewing Markdown documentation is not a natural fit — the code-reviewer skill focuses on source code quality gates (TDD, coupling, patterns), not doc accuracy or completeness. The reviewer is not wrong, but the match is loose.",
+      "fix": "This is acceptable given the skill catalog has no `documentation-reviewer`. No change required — note as acknowledged mismatch. If a documentation-reviewing agent is added to the catalog in future, Task 7 should be updated."
+    }
+  ],
+  "cross_task_checks": {
+    "dependency_cycles": "PASS — no cycles detected in dependency graph (DAG verified)",
+    "wave_ordering_validity": "PASS — for every task, all declared depends_on tasks have wave numbers strictly less than the depending task's wave",
+    "same_wave_dependencies": "PASS — no task declares depends_on on another task in the same wave",
+    "valid_task_references": "PASS — all depends_on values reference task numbers 1-11 which exist",
+    "audit_wave_independence": "PASS — tasks 8, 9, 10 (wave 4) depend on [1-7] but NOT on each other; they can run in parallel within wave 4",
+    "final_wave_correctness": "PASS — task 11 (wave 5) depends only on [8, 9, 10]; does not need to explicitly list 1-7 (transitively satisfied through audit wave)",
+    "task5_excludes_task4": "PASS — task 5 (backend tests) correctly excludes task 4 (Docker Compose) from depends_on; @MockBean strategy allows ./gradlew build to run without Docker",
+    "task5_excludes_task3": "PASS — task 5 (backend) has no dependency on task 3 (frontend Nuxt skeleton); correct separation",
+    "shared_resources": "PASS — tech-spec explicitly declares no Shared Resources for Epic 01; no ownership conflicts exist",
+    "competing_instances": "PASS — no two tasks in the same wave create the same resource",
+    "skill_reviewer_mapping": {
+      "task1_infrastructure_setup": "PASS — reviewers [code-reviewer, security-auditor, infrastructure-reviewer] are valid for infrastructure-setup",
+      "task2_infrastructure_setup": "PASS — same reviewer set as task 1; valid",
+      "task3_infrastructure_setup": "PASS — reviewers [code-reviewer, infrastructure-reviewer]; security-auditor omitted (acceptable, no security surface in frontend skeleton)",
+      "task4_infrastructure_setup": "PASS — reviewers [code-reviewer, security-auditor, infrastructure-reviewer]; correct for Docker security concern",
+      "task5_code_writing": "PASS — reviewers [code-reviewer, security-auditor, test-reviewer]; code-writing requires code-reviewer and test-reviewer; both present",
+      "task6_infrastructure_setup": "PASS — reviewers [code-reviewer, security-auditor, infrastructure-reviewer]; shell script security review appropriate",
+      "task7_documentation_writing": "NOTE — reviewer is code-reviewer only; see finding above",
+      "tasks_8_9_10_audit_wave": "PASS — no reviewers; audit tasks are self-verifying",
+      "task11_final_wave": "PASS — no reviewers; QA is self-verifying"
+    }
+  },
+  "specific_concerns_addressed": {
+    "task3_nvmrc_same_wave_race": "FINDING raised as minor — see findings[0]. Task 3 does not declare depends_on on Task 1, creating a potential read-before-create race on .nvmrc in parallel execution.",
+    "tasks_8_9_10_audit_wave_deps": "PASS — all three correctly depend on tasks [1-7] only, not on each other. Parallel execution within wave 4 is valid.",
+    "task11_final_wave_deps": "PASS — task 11 correctly depends on [8, 9, 10] only. The full transitive dependency chain covers tasks 1-10.",
+    "task5_depends_on_excludes_task4": "PASS — task 5 depends_on [1, 2]. Task 4 (Docker Compose) is correctly excluded because integration tests use @MockBean (Decision 6), not a live Docker environment. This is an intentional and correct design."
+  },
+  "stats": {
+    "tasks_checked": 11,
+    "issues_found": 3,
+    "critical": 0,
+    "major": 0,
+    "minor": 3
+  }
+}

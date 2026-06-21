@@ -1,0 +1,86 @@
+{
+  "validator": "task-validator",
+  "batch": [1, 2, 3, 4, 5],
+  "status": "changes_required",
+  "findings": [
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 1,
+      "section": "Context Files",
+      "issue": "Project-knowledge links point to `../../../.claude/skills/project-knowledge/<file>` which does NOT resolve on disk. The PK reference files actually live under `.claude/skills/project-knowledge/references/`. project.md, architecture.md, patterns.md links are all broken.",
+      "fix": "Insert `references/` segment: `../../../.claude/skills/project-knowledge/references/project.md` (and architecture.md, patterns.md). Match the pattern used correctly by Task 2 and Task 5."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 3,
+      "section": "Context Files",
+      "issue": "Same broken PK path as Task 1: `../../../.claude/skills/project-knowledge/project.md` / architecture.md / patterns.md do not resolve. Real files are under `.../project-knowledge/references/`.",
+      "fix": "Add `references/` segment to project.md, architecture.md, patterns.md links."
+    },
+    {
+      "severity": "critical",
+      "category": "content",
+      "task": 4,
+      "section": "Context Files",
+      "issue": "PK links are doubly wrong: bare `.claude/skills/project-knowledge/project.md` (no `../../../` prefix AND missing `references/`). From the task file location these resolve to neither the correct file nor any existing path. Affects project.md, architecture.md, patterns.md.",
+      "fix": "Use `../../../.claude/skills/project-knowledge/references/project.md` (and architecture.md, patterns.md). Anchor relative path from tasks/ dir and include references/."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 1,
+      "section": "Required Skills",
+      "issue": "code-writing SKILL.md link is `[...](.claude/skills/code-writing/SKILL.md)` — bare path without `../../../` prefix. Inconsistent with Task 2/4/5 which prefix correctly. The link target does not resolve from the task file location (though the skill is loaded by name, not by link, so impact is low).",
+      "fix": "Use `../../../.claude/skills/code-writing/SKILL.md` for consistency with Task 2."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 3,
+      "section": "Required Skills",
+      "issue": "code-writing SKILL.md link `[...](.claude/skills/code-writing/SKILL.md)` lacks `../../../` prefix; does not resolve from task location.",
+      "fix": "Use `../../../.claude/skills/code-writing/SKILL.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 4,
+      "section": "Required Skills",
+      "issue": "code-writing SKILL.md link `[...](.claude/skills/code-writing/SKILL.md)` lacks `../../../` prefix; does not resolve.",
+      "fix": "Use `../../../.claude/skills/code-writing/SKILL.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "content",
+      "task": 5,
+      "section": "Required Skills",
+      "issue": "code-writing SKILL.md link `[...](.claude/skills/code-writing/SKILL.md)` lacks `../../../` prefix; does not resolve (PK links in Task 5 are correct, only the skill link is bare).",
+      "fix": "Use `../../../.claude/skills/code-writing/SKILL.md`."
+    },
+    {
+      "severity": "minor",
+      "category": "frontmatter",
+      "task": 1,
+      "section": "frontmatter",
+      "issue": "Frontmatter retains the verbatim template inline comments (`# planned -> in_progress -> done`, `# номера задач-зависимостей`, etc.). Not placeholders for values, but residual template scaffolding the task-creator was expected to leave clean. Tasks 4 and 5 stripped these comments; Tasks 1, 2, 3 kept them. Cosmetic/stylistic only.",
+      "fix": "Optionally strip the template `#` comments for consistency with Tasks 4-5. Functionally harmless (values are all valid)."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 5,
+    "issues_found": 8,
+    "notes": [
+      "Structure: all 11 sections present and in correct order for every task. TDD Anchor present on all (all are code tasks). No template placeholders ([Task Name], {PK path}, {reviewer-name}) and no TODO/FIXME/TBD markers remain in body content.",
+      "Frontmatter: status=planned everywhere (correct for iteration 1); depends_on arrays valid; wave numbers >= 1; skills=[code-writing] arrays; reviewers arrays of 3; verify field correct vs tech-spec (Task 1/3/5 = [] with no Verify-smoke in tech-spec; Task 2/4 = [smoke] matching tech-spec Verify-smoke). teammate_name empty/optional — ok.",
+      "Reviewer report paths correctly anchored to work/11-funnels-interactive/logs/working/task-N/ (not bare logs/).",
+      "Consistency: frontmatter.skills == Required Skills section; frontmatter.reviewers == Reviewers section for all tasks. code-writing -> code-reviewer+test-reviewer (+security-auditor) satisfied.",
+      "Decomposition: dependency graph valid and acyclic. Task 3 (wave 2) depends_on [1,2] (wave 1); Task 4 (wave 2) depends_on [1]; Task 5 (wave 3) depends_on [3] (wave 2). Every dependency references an existing lower-wave task. No cycles, no missing dependency declarations.",
+      "Traceability: each task's Files-to-modify matches the corresponding tech-spec Implementation Tasks entry (Task 1/2/3/4/5). Task 1 legitimately extends to engine/trigger/service files for additive $in edits and documents the rationale in Details.",
+      "Shared Resources (tech-spec Architecture): all 4 resources (TelegramSender, Clock, EventService, JobRunr sweep) are pre-existing singletons reused, not newly created. No owner-task needed; consumers (Task 3/5) correctly depend on the producing Wave-1 tasks. No competing instances in same wave.",
+      "Carry-forward: tech-spec has a single global Acceptance Criteria section (no per-task AC/TDD blocks). Per-task descriptions and AC are faithfully expanded into each task with no scope dropped.",
+      "Atomicity: each task is a single cohesive unit (Task 1 = model+status foundation; Task 2 = sender; Task 3 = engine; Task 4 = validation+DTO; Task 5 = callback wiring). No merge or split candidates; no over-decomposition."
+    ]
+  }
+}

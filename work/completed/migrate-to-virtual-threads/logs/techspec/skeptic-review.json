@@ -1,0 +1,41 @@
+{
+  "status": "approved",
+  "summary": "Round 2 re-validation: 6 of 7 round 1 findings fully resolved. Only one residual inconsistency: the Solution section (line 16, Phase B paragraph) still says 'drops 16 .block() sites' while Architecture (line 39) and Task 9 (line 427) now correctly say 17. Same load-bearing count is now both correct (twice) and stale (once) in the same document — a reviewer running the grep gate will see drift. Severity: minor (cosmetic internal inconsistency, no executability impact). New issues: none — re-verified BCrypt sites (4 in AuthService), .block() sites (17 active calls + 2 comments at lines 32/221), reactive mock-triple sites (6 files + 2 @WebFluxTest slice files = 8 test classes), extractIp declarations (3 controllers + AuthService = 4), one-way auth → security import direction (zero reverse imports), spring-session-data-mongodb 3.5.0 resolved (matches Boot 3.5.0), CsrfFilter.DEFAULT_CSRF_MATCHER is public static final in spring-security-web 6.5.0 (resolved version). All other previously-verified claims still hold.",
+  "findings": [
+    {
+      "severity": "minor",
+      "type": "name_mismatch",
+      "claim": "Solution / Phase B paragraph (line 16): 'drops 16 .block() sites from ProcessTelegramUpdateJob'.",
+      "reality": "Grep of `\\.block\\(\\)` in ProcessTelegramUpdateJob.java yields 19 raw matches; 2 are inside block comments (lines 32 and 221) and 17 are real call sites (lines 79, 100, 105, 127, 183, 195, 208, 227, 241, 242, 248, 253, 254, 267, 275, 282, 289). Round 1 fix corrected Architecture line 39 and Task 9 line 427 to '17', but the Solution paragraph (line 16) was missed and still says '16'. Internal inconsistency: same load-bearing count appears as '17' twice and '16' once in the same tech-spec.",
+      "source": "tech-spec.md, Solution section, Phase B paragraph, line 16",
+      "fix": "Change 'drops 16 `.block()` sites' to 'drops 17 `.block()` sites' on line 16. One-character edit."
+    }
+  ],
+  "stats": {
+    "total_claims_checked": 28,
+    "confirmed": 27,
+    "mirages_found": 1,
+    "verified_claims": [
+      "Round 1 finding resolved: CsrfFilter.DEFAULT_CSRF_MATCHER is `public static final` in spring-security-web 6.5.0 (resolved version) — tech-spec line 29 now correctly states 'public static final in 6.x' and uses the constant directly inside AndRequestMatcher",
+      "Round 1 finding resolved: 4 Mono.fromCallable BCrypt sites in AuthService.java at lines 366, 420, 522, 532 — Task 6 line 405 now correctly says '4 in AuthService.java'",
+      "Round 1 finding resolved: 17 active .block() call sites in ProcessTelegramUpdateJob.java — Architecture line 39 and Task 9 line 427 now correctly say 17 (residual: Solution line 16 still says 16 — flagged as the one minor finding)",
+      "Round 1 finding resolved: 6 reactive-driver mock-triple test files (WebhookSecurityBlockTest, SecurityBlockTest, SecurityConfigTest, HealthEndpointTest, HealthSecurityTest, MeterRegistryConfigTest) + 2 @WebFluxTest slice tests (AuthControllerSliceTest, ProjectControllerSliceTest) = 8 test classes total — Task 10 line 435 now correctly enumerates this breakdown",
+      "Round 1 finding resolved: extractIp duplicated across 3 controllers + AuthService (ProjectController:138, ProfileController:88, BotController:94, AuthService:642) = 4 sites total — Architecture line 27 now correctly says '3 controllers + AuthService (4 sites total)'",
+      "Round 1 finding resolved: auth → security is one-way (only AuthService.java:12 imports security.RememberMeWebSessionIdResolver; zero security → auth imports) — Solution line 14, Architecture line 26, Decision 7 line 144 all now use 'auth → security' framing rather than 'circular/cycle'",
+      "Round 1 finding resolved: spring-session-data-mongodb 3.5.0 resolved via gradle (matches Boot 3.5.0) — Data Models section line 234 now correctly says '3.5.x (matches Boot 3.5.0 resolved version)'",
+      "spring-session-data-mongodb 3.5.0 ships BOTH MongoIndexedSessionRepository.class and ReactiveMongoSessionRepository.class — confirmed via unzip -l",
+      "Spring Boot version is 3.5.0 (build.gradle line 4) — matches tech-spec references",
+      "spring-web 6.2.7 resolved — ships MethodArgumentNotValidException at org.springframework.web.bind",
+      "spring-security-web 6.5.0 resolved — XorCsrfTokenRequestAttributeHandler (MVC) and XorServerCsrfTokenRequestAttributeHandler (reactive) both ship, in separate packages",
+      "Current SecurityConfig.java references XorServerCsrfTokenRequestAttributeHandler (line 63 comment) — confirms tech-spec line 29 baseline framing",
+      "Current GlobalErrorHandler.java has @ExceptionHandler(WebExchangeBindException.class) at line 26 — confirms the 'WebExchangeBindException → MethodArgumentNotValidException' swap claim",
+      "5 *Repository interfaces all extend ReactiveMongoRepository (Bot, Event, Project, User, RawUpdate) — matches tech-spec Architecture line 32 + Task 4",
+      "12 WebTestClient-based test files (grep count) — matches Testing Strategy line 278",
+      "15 StepVerifier-based test files (grep count) — matches Testing Strategy line 274",
+      "PROJECTS_MAX_PER_USER env var default 5 (application.properties:30 `app.projects.max-per-user=${PROJECTS_MAX_PER_USER:5}`) — matches Decision 6 'MVP cap of 5 projects per user'",
+      "EventService.java has both `public void logEvent(...)` (line 23) and `public Mono<Event> logEventBlocking(...)` (line 34) — matches Decision 12 baseline ('two methods → one')",
+      "REMEMBER_ME_ATTR = 'com.botfunnel.auth.rememberMe' in RememberMeWebSessionIdResolver.java:41 — matches Decision 7 relocation source",
+      "DefaultCookieSerializer in spring-session-core 3.5.0 has `public void writeCookieValue(CookieValue cookieValue)` and `setCookieMaxAge(int cookieMaxAge)` — matches Decision 3 API claims"
+    ]
+  }
+}

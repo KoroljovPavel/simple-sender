@@ -1,0 +1,34 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/Trigger.java",
+      "line": 29,
+      "issue": "Missing `equals`/`hashCode` on the `Trigger` POJO. `FunnelTriggersFieldTest.triggersListRoundTrip` asserts `containsExactly(onStart, keyword)` — this passes only because the list holds the same object references (identity equality), not structural equality. If any future test or service code builds a new `Trigger` instance with the same field values and compares it via a collection assertion, the test will silently pass for the wrong reason (reference match). The `FunnelStep` precedent does not implement `equals/hashCode` either, but `FunnelStep` is never put into a set or used as a map key; `Trigger` is used in an array stored in Mongo and will be re-hydrated as new instances — structural equality is a reasonable expectation downstream.",
+      "fix": "Add `equals` and `hashCode` based on all four fields (`triggerType`, `triggerValue`, `keywords`, `entryStepId`). Use IDE generation or Lombok `@EqualsAndHashCode` (if already in the classpath — confirm). Alternatively, add a comment explicitly acknowledging that identity equality is intended and document why structural equality is not needed."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTriggersFieldTest.java",
+      "line": 38,
+      "issue": "`triggersListRoundTrip` uses `containsExactly(onStart, keyword)` where `onStart` and `keyword` are the identical object references that were put into the list. Because `Trigger` has no `equals` override, this assertion relies on reference identity and will pass even if the getter returns a totally different list that happens to contain those same objects. The assertion does not prove field content is preserved — it only proves object identity is preserved. The test does not provide a meaningful regression guard for serialization or copy-construction scenarios.",
+      "fix": "Either (a) assert field values explicitly (e.g., `assertThat(funnel.getTriggers().get(0).getTriggerType()).isEqualTo(\"on_start\")`), or (b) implement `equals/hashCode` on `Trigger` (preferred for correctness, fixes both this and the finding above), or (c) add a comment that reference-identity is the intended contract here."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelIndexAssertionsTest.java",
+      "line": 51,
+      "issue": "The `def` assertion checks only that the string `contains(\"projectId\")` and `contains(\"onStartTriggerValue\")`. It does not verify the field ordering (`projectId` must come first for the compound index to be selective) or the `1` direction values. A malformed def like `{'onStartTriggerValue': 1, 'projectId': 1}` would still pass. While the actual annotation on `Funnel` is correct, this test offers weaker protection than the task spec intended.",
+      "fix": "Tighten the assertion to verify the exact `def` string, e.g., `assertThat(onStartIndex.def()).isEqualTo(\"{'projectId': 1, 'onStartTriggerValue': 1}\")`."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/FunnelTriggersFieldTest.java",
+      "line": 34,
+      "issue": "The `triggersListRoundTrip` test sets `entryStepId = \"step-2\"` on the `keyword` trigger. Per the tech-spec (Decision 10) and the Javadoc on `Trigger`, `keyword` triggers do NOT carry a non-null `entryStepId` in the intended contract — only `event` triggers are mid-entry. While the POJO itself allows this (validation lives in the service layer, correctly), the test unintentionally models an invalid trigger shape as if it were normal, which could confuse future readers about the field contract.",
+      "fix": "Use an `event` trigger with a non-null `entryStepId` for the list element that exercises `entryStepId`. Add a comment that validation of `entryStepId` vs `triggerType` is enforced at the DTO/service layer (Task 4), not here."
+    }
+  ],
+  "summary": "Task 1 is well-executed. `Trigger.java` correctly mirrors the `FunnelStep` POJO precedent: flat POJO, no `@Document`/`@Id`, no bean-validation, clear field semantics documented in Javadoc. `Funnel.java` cleanly replaces the flat trio with `List<Trigger> triggers` + the denormalized `onStartTriggerValue` scalar. The index annotation shape is exactly right: `{projectId:1, onStartTriggerValue:1}` unique partial with `{status:'active', onStartTriggerValue:{$exists:true}}` — the `$exists:true` guard is critical and correctly included. The static-block assertion was correctly trimmed to only the `'active'` literal guard; the `'on_start'` assertion was appropriately removed with a clear explanation. The comments on both files are accurate and well-scoped. All three TDD test files cover the required anchors. The findings are 4 minors: missing `equals/hashCode` on `Trigger` (the containsExactly assertion in FunnelTriggersFieldTest relies on reference identity), weak index `def` assertion (substring check vs exact string), and a test example that models an invalid trigger shape (keyword with entryStepId). No blocking issues; approved for merge."
+}

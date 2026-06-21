@@ -1,0 +1,166 @@
+{
+  "task": 10,
+  "feature": "07-telegram-sender",
+  "verdict": "NO-GO",
+  "date": "2026-05-16",
+  "qa_agent": "claude-opus-4-7 (task-10 pre-deploy-qa)",
+  "test_suite": {
+    "backend": {
+      "exit_code": 0,
+      "total": 380,
+      "passed": 378,
+      "failed": 0,
+      "skipped": 2,
+      "report_path": "backend/build/reports/tests/test/index.html",
+      "xml_dir": "backend/build/test-results/test/",
+      "feature_classes": {
+        "TelegramSenderTest": {"tests": 28, "failed": 0, "skipped": 0},
+        "TelegramSenderIT": {"tests": 4, "failed": 0, "skipped": 2},
+        "BotServiceTest": {"tests": 25, "failed": 0, "skipped": 0},
+        "BotControllerIT": {"tests": 24, "failed": 0, "skipped": 0},
+        "BotRepositoryTest": {"tests": 5, "failed": 0, "skipped": 0},
+        "BotTokenLeakTest": {"tests": 2, "failed": 0, "skipped": 0},
+        "TelegramApiClientTest": {"tests": 13, "failed": 0, "skipped": 0}
+      },
+      "skipped_methods": [
+        "com.botfunnel.bot.TelegramSenderIT.sendText_endToEndViaBotService_emitsBothEvents",
+        "com.botfunnel.bot.TelegramSenderIT.sendText_terminalFailureViaBotService_emitsFailedEventOnly"
+      ]
+    }
+  },
+  "smoke_checks": {
+    "security_config_zero_diff": true,
+    "bot_controller_zero_diff": true,
+    "bot_response_zero_diff": true,
+    "build_gradle_zero_diff": true,
+    "application_properties_zero_diff": true,
+    "application_test_properties_zero_diff": true,
+    "scrubber_sites_grep": "5 split test methods present in TelegramSenderTest.java at lines 661, 675, 696, 714, 738: sendText_tokenIn4xxDescription_scrubbed_warnLevel, sendText_tokenIn5xxRetryLog_scrubbed_warnLevel, sendText_tokenIn429RetryLog_scrubbed_warnLevel, sendText_tokenInTerminalFailureLog_scrubbed_errorLevel, sendText_tokenInTransportErrorMessage_scrubbed. Positive [REDACTED_TOKEN] assertion in 4xx WARN (line 670), 5xx retry WARN (692), 429 WARN (710); terminal ERROR intentionally omits positive REDACTED_TOKEN assertion (negative-only — the message body is a fixed string with no Telegram description echo at that site; documented at line 730).",
+    "mockitobean_check": "@MockitoBean appears only in 6 pre-existing test files (SecurityBlockTest, SecurityConfigTest, AuthControllerSliceTest, HealthEndpointTest, HealthSecurityTest, ProjectControllerSliceTest); zero of them are modified by this feature (git diff main --name-only returns empty for all six). New test files TelegramSenderTest and TelegramSenderIT do not use @MockitoBean.",
+    "boot_with_key": "NOT_EXECUTED — local boot deferred. AC pinned by test-layer: TelegramSenderIT runs full Spring context with the AbstractIntegrationTest harness against embedded Mongo + MockWebServer; container wiring verified end-to-end including the new TelegramSender component bean. No production-shape boot issue is detectable in the gap between TelegramSenderIT and bootRun beyond environment-variable resolution, which is documented in docs/staging-smoke/07-telegram-sender.md as user-handoff.",
+    "curl_null_branch_422": "NOT_EXECUTED VIA CURL — equivalent canonical evidence via integration tests: BotControllerIT.postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents (line 768) pins HTTP/1.1 422 with body {code: owner_chat_id_unknown, message: 'Send /start to your bot in Telegram first, then try again'} for the null-branch via WebTestClient against the full Spring stack; TelegramSenderIT.sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls (line 178) pins the same verbatim message string against the same stack. BotService.java:127 stores the verbatim message string. Zero Telegram outbound calls and zero new telegram_* events confirmed by IT assertion. The 06 regression test continues to pass.",
+    "telegram_events_absent_on_null_branch": true,
+    "legacy_document_read_succeeds": "TRUE via canonical test BotRepositoryTest.findById_legacyDocumentWithoutOwnerChatId_readsAsNull (line 85): persists a Bot doc without ownerChatId, reads it back via BotRepository.findById, asserts ownerChatId == null. TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull (line 201) is the first explicit Spring-Data-MongoDB-reads-missing-wrapper-as-null verification per tech-spec Decision 14.",
+    "staging_smoke_runbook_present": true,
+    "verbatim_422_message_preserved": "BotService.java:127 stores 'Send /start to your bot in Telegram first, then try again' byte-identical to user-spec Сценарій 2 step 4 and Architecture BotService integration 2; mirrored verbatim in BotControllerIT line 783, BotServiceTest line 581, TelegramSenderIT line 192.",
+    "decision_5_exception_hierarchy": "BotTokenInvalidException (public, extends AppException) — backend/src/main/java/com/botfunnel/bot/BotTokenInvalidException.java:6. TelegramSendException (public, extends AppException) — TelegramSendException.java:6. TelegramRateLimitException (package-private, extends RuntimeException) — TelegramRateLimitException.java:6. Internal-only sentinel confirmed by package-private visibility and the unit test sendText_429RateLimitExceptionNotPropagated (line 329) which asserts .isInstanceOf(TelegramSendException.class).isNotInstanceOf(TelegramRateLimitException.class)."
+  },
+  "audit_gate": {
+    "task_7_code_audit": {
+      "report_path": "work/07-telegram-sender/logs/working/task-7/code-reviewer.json",
+      "verdict": "pass",
+      "findings": "0 BLOCKER / 0 MAJOR / 0 MINOR / 2 NIT (observational)",
+      "resolution": "No remediation required; NITs are observational notes on boxed Integer in failedMetadata (unavoidable for Map<String,Object>) and on the 429-wait log site emitting only numeric delay (no external string flow)."
+    },
+    "task_8_security_audit": {
+      "report_path": "work/07-telegram-sender/logs/working/task-8/security-auditor.json",
+      "verdict": "pass",
+      "findings": "0 critical / 0 high / 0 medium / 0 low / 3 info (accepted-risk confirmations: R7 ops-leak via 422, R11 no per-endpoint rate limit on /test-message, R12 PII retention)",
+      "resolution": "No remediation required; all 3 info entries restate accepted-risk acknowledgements from tech-spec verbatim. OWASP A01/A02/A03/A05/A07/A09 all compliant. Decrypt error contract (R7) honored exactly per tech-spec Architecture step 3."
+    },
+    "task_9_test_audit": {
+      "report_path": "work/07-telegram-sender/logs/working/task-9/test-reviewer.json",
+      "verdict": "needs_work",
+      "findings": "2 HIGH / 2 MEDIUM / 0 LOW",
+      "resolution": "UNRESOLVED — no follow-up fix-task entry exists in work/07-telegram-sender/decisions.md. Per Task 10 spec edge cases: 'If a finding is marked WAIT-FOR-FIX and no fix-task entry exists for a critical finding, NO-GO.' The 2 HIGH findings are deploy blockers (see blockers section below)."
+    }
+  },
+  "ac_mapping": {
+    "user_spec": [
+      {"id": "AC1", "description": "TelegramSender has sendText(botId, chatId, text, parseMode?, ownerId?) → Mono<SentMessage> with chatId/messageId/sentAt", "status": "passed", "evidence": "TelegramSenderTest.sendText_happyPath_returnsSentMessage_attemptsEqualsOne (line 174) asserts SentMessage.messageId == 42, SentMessage.chatId == 5; SentMessage record at backend/src/main/java/com/botfunnel/bot/dto/SentMessage.java carries (Long chatId, Long messageId, Instant sentAt); TelegramSender.java public method signature matches"},
+      {"id": "AC2", "description": "Bot not found or status ≠ CONNECTED → 404 anti-enumeration (uniform shape)", "status": "passed", "evidence": "TelegramSenderTest.sendText_botNotFound_throwsNotFound_noHttp (line 579) + sendText_botDisconnected_throwsNotFound_noHttp (line 596) — both assert 404 with same shape; per Decision 7 + AppException.notFound(MESSAGE_BOT_NOT_FOUND)"},
+      {"id": "AC3", "description": "Decryption failure or post-decrypt shape mismatch → BotTokenInvalidException → 422 invalid_bot_token", "status": "passed", "evidence": "TelegramSenderTest.sendText_invalidBase64Ciphertext_throwsBotTokenInvalidException_beforeHttp (line 522) covers Base64-decode IllegalArgumentException; sendText_malformedTokenInBot_throwsBotTokenInvalidException_beforeHttp (line 489) covers post-decrypt shape via requireValidTokenShape; sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid (line 552) pins the R7 contract (IllegalStateException from TokenEncryptor propagates as 500, NOT 422 — this is documented in tech-spec Architecture step 3 + Risk R7)"},
+      {"id": "AC4", "description": "HTTP body carries chat_id+text+(optional) parse_mode; parse_mode omitted when null", "status": "passed", "evidence": "TelegramSenderTest.sendText_parseModeNull_omitsFieldFromBody (line 201) parses recorded MockWebServer body and asserts NO parse_mode key; sendText_parseModeHtml_includesFieldInBody (line 218) asserts parse_mode == HTML"},
+      {"id": "AC5", "description": "WebClient timeouts 5s connect / 10s read; reuse TelegramApiClient constants", "status": "passed", "evidence": "TelegramSender constructor mirrors TelegramApiClient.java:51-61 using TelegramApiClient.DEFAULT_RESPONSE_TIMEOUT (10s) and TelegramApiClient.CONNECT_TIMEOUT (5s) — both promoted to public static in Task 1 (commit 36bef4f); TelegramSenderTest.sendText_readTimeout_isTransient_retriedThenTerminal (line 617) exercises the response-timeout wiring with setBodyDelay(15s) × 4"},
+      {"id": "AC6", "description": "5xx/network/read-timeout retried with exponential backoff 1s/2s/4s, 3 retries = 4 total; 4xx never retried", "status": "passed", "evidence": "TelegramSenderTest.sendText_5xxThenSuccess_retriesAndReturnsSentMessage_attemptsEqualsTwo (line 246) → success on retry; sendText_5xxRetryExhausted_throwsTelegramSendException_attemptsEqualsFour (line 268) → 4 attempts asserted explicitly; sendText_ioExceptionRetriedThenSuccess_attemptsEqualsTwo (line 295) → IOException via SocketPolicy.DISCONNECT_AT_START; sendText_otherClientError_throwsTelegramSendException_noRetry (line 453) → request count == 1 on 400; sendText_401_throwsBotTokenInvalidException_noRetry (line 434) → request count == 1 on 401"},
+      {"id": "AC7", "description": "429 → wait parameters.retry_after + jitter; not counted in 5xx cap; outer loop wraps 5xx inner loop", "status": "passed", "evidence": "TelegramSenderTest.sendText_429NormalRetryAfter_waitsAndRetries (line 313) → wall-clock ≥ 1s confirms wait fired; sendText_429And5xxInterleaving_succeeds_attemptsEqualsFour (line 405) → [503, 429(retry_after=1), 503, 200] succeeds at attempts=4 proving outer/inner ordering (Decision 10); TelegramSender.java uses Retry.backoff for inner 5xx loop + Retry.from for outer 429 loop"},
+      {"id": "AC8", "description": "retry_after > 30s or missing/negative → outer 30s timeout caps; overall timeout enforced", "status": "passed", "evidence": "TelegramSenderTest.sendText_429LargeRetryAfter_capsAtOverallTimeout (line 346) → TelegramSendException after ~3s SHORT_OVERALL_TIMEOUT (test uses shortened timeout to keep CI fast); sendText_429MissingRetryAfter_capsAtOverallTimeout (line 368); sendText_429NegativeRetryAfter_clampsToZero_thenCapsAtOverallTimeout (line 384) → confirms Math.max(0, Math.min(retryAfter, 30)) clamp; sendText_overallTimeout_throwsTelegramSendException (line 636) covers 30s outer cap"},
+      {"id": "AC9", "description": "200 OK with ok=false → TelegramSendException with scrubbed description", "status": "passed", "evidence": "TelegramSenderTest.sendText_okFalse_throwsTelegramSendException (line 471) → asserts TelegramSendException with scrubbed-message contract from TelegramApiClient.scrubTokens"},
+      {"id": "AC10", "description": "401 → BotTokenInvalidException → 422 invalid_bot_token (no retry)", "status": "passed", "evidence": "TelegramSenderTest.sendText_401_throwsBotTokenInvalidException_noRetry (line 434) → asserts BotTokenInvalidException with botId populated; request count == 1; AppException(UNPROCESSABLE_ENTITY, 'invalid_bot_token', ...) → 422 via GlobalErrorHandler"},
+      {"id": "AC11", "description": "Other 4xx → TelegramSendException with scrubbed description; 400 telegram_send_failed", "status": "passed", "evidence": "TelegramSenderTest.sendText_otherClientError_throwsTelegramSendException_noRetry (line 453) → asserts errorCode == 400 + scrubbed description preserved; no retry; AppException(BAD_REQUEST, 'telegram_send_failed', ...) → 400 via GlobalErrorHandler"},
+      {"id": "AC12", "description": "Retry-exhaustion or 30s timeout → TelegramSendException → 400", "status": "passed", "evidence": "TelegramSenderTest.sendText_5xxRetryExhausted_throwsTelegramSendException_attemptsEqualsFour (line 268) → message 'transient_failure_exhausted', attempts=4; sendText_overallTimeout_throwsTelegramSendException (line 636) → message 'timeout'"},
+      {"id": "AC13", "description": "Three new exceptions; per tech-spec Decision 5 reconciliation — BotTokenInvalidException + TelegramSendException extend AppException; TelegramRateLimitException is internal sentinel extending RuntimeException, never reaches GlobalErrorHandler", "status": "passed", "evidence": "BotTokenInvalidException.java:6 extends AppException; TelegramSendException.java:6 extends AppException; TelegramRateLimitException.java:6 is package-private and extends RuntimeException (NOT AppException) — this is per tech-spec Decision 5 ('two extend AppException, one is internal sentinel'). The user-spec AC13 phrasing 'три нові класи exception, усі extends AppException' is REFINED by Decision 5 + Data Models — see decisions.md Task 3 entry and tech-spec § Data Models lines 232-238. TelegramSenderTest.sendText_429RateLimitExceptionNotPropagated (line 329) pins that the internal sentinel never propagates: assertThatThrownBy(...).isInstanceOf(TelegramSendException.class).isNotInstanceOf(TelegramRateLimitException.class). The 429 internal-loop behavior is exercised by sendText_429NormalRetryAfter_waitsAndRetries (line 313)."},
+      {"id": "AC14", "description": "Sender writes telegram_message_sent on success and telegram_send_failed on terminal failure; attempts counted; userId = ownerId (may be null)", "status": "passed", "evidence": "TelegramSenderTest.sendText_happyPath_returnsSentMessage_attemptsEqualsOne (line 174) — ArgumentCaptor pins {botId, chatId, messageId} metadata + attempts NOT in success metadata (success-shape pin); sendText_5xxRetryExhausted_throwsTelegramSendException_attemptsEqualsFour (line 268) — failure event metadata attempts == 4, errorCode == null; sendText_ownerIdNull_succeeds_eventWrittenWithNullUserId (line 232) — verify(eventService).logEvent(isNull(), eq(EVENT_TELEGRAM_MESSAGE_SENT), ...) confirms null-ownerId propagation per Decision 4"},
+      {"id": "AC15", "description": "Token never in logs — all WARN/ERROR log sites scrub via TelegramApiClient.scrubTokens", "status": "passed", "evidence": "Five split test methods in TelegramSenderTest cover the five external-string log sites (4xx WARN line 661, 5xx-retry WARN line 675, 429-wait WARN line 696, terminal-failure ERROR line 714, transport-error line 738). Positive [REDACTED_TOKEN] assertions present where Telegram description echoes (lines 670, 692, 710); negative 'no raw token' assertions present across all five. Terminal-ERROR positive assertion intentionally omitted because the message body at that site is the fixed 'transient_failure_exhausted' / 'timeout' / similar string with no Telegram description echo (documented at line 730). Security audit (Task 8) verified the 7 required scrubber sites in TelegramSender.java per tech-spec Architecture § Scrubber coverage."},
+      {"id": "AC16", "description": "bots gets nullable ownerChatId (Long, no index, no migration); legacy docs read back as null", "status": "passed", "evidence": "Bot.java line ~93 has 'private Long ownerChatId;' between telegramFirstName and status (no @Indexed, no toString override per BotTokenLeakTest); BotRepositoryTest.findById_legacyDocumentWithoutOwnerChatId_readsAsNull (line 85) round-trips a Bot doc without ownerChatId and asserts null; TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull (line 201) inserts raw BSON without the field and asserts null on read"},
+      {"id": "AC17", "description": "BotService.sendTestMessage rewritten — null branch preserves verbatim 422; non-null branch calls sender + emits bot_test_message_sent on success; HTTP contract unchanged", "status": "passed", "evidence": "BotService.java:126-127 stores the verbatim 422 message string and emits owner_chat_id_unknown; BotServiceTest.sendTestMessage_whenOwnerChatIdNull_returns422_noTelegramCalls_noEvents (line 563) + sendTestMessage_whenOwnerChatIdPresent_callsSenderAndEmitsEvent (line 591) + sendTestMessage_whenOwnerChatIdPresentAndSenderFails_propagatesError_noBotEvent (line 630) cover all three contract paths; BotController.java zero-diff confirms HTTP contract (Mono<ResponseEntity<Void>>) preserved"},
+      {"id": "AC18", "description": "SecurityConfig unchanged", "status": "passed", "evidence": "git diff main -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java returns empty (0 lines)"},
+      {"id": "AC19", "description": "Unit tests cover all sender scenarios (success/retry/429/401/4xx/ok=false/malformed token/timeout + 429+5xx interleaving)", "status": "passed", "evidence": "TelegramSenderTest contains 28 unit scenarios; the interleaving test sendText_429And5xxInterleaving_succeeds_attemptsEqualsFour (line 405) pins R3/Decision 10 exactly per the spec's verbatim scenario script [503, 429(retry_after=1), 503, 200] → attempts=4 → success"},
+      {"id": "AC20", "description": "Token never in logs verified via ListAppender<ILoggingEvent>", "status": "passed", "evidence": "ListAppender declared at TelegramSenderTest line 64 and used across the five split scrubber-site test methods (661/675/696/714/738); pattern mirrors TelegramApiClientTest"},
+      {"id": "AC21", "description": "Integration test with full Spring context + embedded Mongo + MockWebServer; Awaitility for async event writes", "status": "FAILED", "evidence": "TelegramSenderIT exists with 4 declared scenarios, BUT 2 of the 4 are @Disabled with empty bodies (lines 160 and 169 — sendText_endToEndViaBotService_emitsBothEvents and sendText_terminalFailureViaBotService_emitsFailedEventOnly). These are precisely the end-to-end-via-BotService scenarios that AC21 requires. The 2 enabled scenarios (sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls at line 178 and sendTestMessage_legacyDocumentReadsAsNull at line 201) cover the null-branch and legacy-schema cases only — they do NOT cover the end-to-end happy path or the end-to-end terminal-failure path through BotService.sendTestMessage to TelegramSender. Despite Task 5 having shipped (commits f411283 and 3282b95), the @Disabled annotations were not removed and the test bodies were not filled in. This is the Task 9 HIGH-1 and HIGH-2 finding. DEPLOY BLOCKER."},
+      {"id": "AC22", "description": "BotServiceTest split into null + present branches", "status": "passed", "evidence": "BotServiceTest.sendTestMessage_whenOwnerChatIdNull_returns422_noTelegramCalls_noEvents (line 563), sendTestMessage_whenOwnerChatIdPresent_callsSenderAndEmitsEvent (line 591), sendTestMessage_whenOwnerChatIdPresentAndSenderFails_propagatesError_noBotEvent (line 630) — three explicit cases (the third covers the additional 'sender fails' branch per Testing Strategy line 347)"},
+      {"id": "AC23", "description": "BotControllerIT — null-branch case preserved + positive-path test seeds ownerChatId, asserts 200 + bot_test_message_sent event", "status": "passed", "evidence": "BotControllerIT.postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents (line 768) preserves null-branch; postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent (line 794) is the new positive-path test asserting 200 OK + Awaitility on bot_test_message_sent metadata shape"}
+    ],
+    "tech_spec": [
+      {"item": "./gradlew test exits 0", "status": "passed", "evidence": "BUILD SUCCESSFUL in 1m 54s; backend/build/reports/tests/test/index.html — 380 total, 378 passed, 0 failed, 2 skipped"},
+      {"item": "No regressions in BotControllerIT, BotServiceTest, BotRepositoryTest, BotTokenLeakTest", "status": "passed", "evidence": "BotControllerIT 24/24, BotServiceTest 25/25, BotRepositoryTest 5/5, BotTokenLeakTest 2/2 all green"},
+      {"item": "No new @MockitoBean outside new test files", "status": "passed", "evidence": "@MockitoBean appears only in 6 pre-existing test files (SecurityBlockTest, SecurityConfigTest, AuthControllerSliceTest, HealthEndpointTest, HealthSecurityTest, ProjectControllerSliceTest); git diff main --name-only returns empty for all six (none modified by this feature). TelegramSenderTest + TelegramSenderIT do not use @MockitoBean."},
+      {"item": "No new properties in application.properties / application-test.properties", "status": "passed", "evidence": "git diff main -- backend/src/main/resources/application.properties backend/src/test/resources/application-test.properties → empty (0 lines)"},
+      {"item": "No build.gradle changes", "status": "passed", "evidence": "git diff main -- backend/build.gradle → empty (0 lines)"},
+      {"item": "BotTokenLeakTest.botEntityDoesNotDeclareToStringExposingEncryptedTokenFields passes", "status": "passed", "evidence": "BotTokenLeakTest 2/2 green; line 52 method asserts no toString override on Bot — Bot.ownerChatId addition did not introduce one"},
+      {"item": "SecurityConfig.java zero diff vs main", "status": "passed", "evidence": "git diff main -- backend/src/main/java/com/botfunnel/security/SecurityConfig.java → empty"},
+      {"item": "BotResponse.java zero diff vs main", "status": "passed", "evidence": "git diff main -- backend/src/main/java/com/botfunnel/bot/dto/BotResponse.java → empty"},
+      {"item": "BotController.java zero diff vs main", "status": "passed", "evidence": "git diff main -- backend/src/main/java/com/botfunnel/bot/BotController.java → empty"},
+      {"item": "All log lines that include external Telegram strings pass through TelegramApiClient.scrubTokens(...)", "status": "passed", "evidence": "Five split ListAppender test methods (TelegramSenderTest lines 661, 675, 696, 714, 738) verify scrubbing at each external-string log site (4xx WARN, 5xx-retry WARN, 429-wait WARN, terminal ERROR, transport-error). Security audit Task 8 verified the 7 required scrubber sites in TelegramSender.java. Code audit Task 7 verified scrubber_coverage dimension as compliant."},
+      {"item": "HTTP status codes — 200/404/422/400 per user-spec AC2/3/10/12/17 and GlobalErrorHandler mapping", "status": "passed", "evidence": "200: BotControllerIT.postTestMessage_in07_seededOwnerChatId_returns200_emitsEvent (line 794) + TelegramSenderTest.sendText_happyPath_returnsSentMessage_attemptsEqualsOne (line 174); 404: TelegramSenderTest.sendText_botNotFound_throwsNotFound_noHttp + sendText_botDisconnected_throwsNotFound_noHttp (lines 579/596); 422: TelegramSenderTest.sendText_401_throwsBotTokenInvalidException_noRetry (line 434) for invalid_bot_token + BotControllerIT.postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents (line 768) for owner_chat_id_unknown; 400: TelegramSenderTest.sendText_otherClientError_throwsTelegramSendException_noRetry (line 453) + sendText_5xxRetryExhausted_throwsTelegramSendException_attemptsEqualsFour (line 268) for telegram_send_failed"}
+    ]
+  },
+  "agent_verification_table": {
+    "row_1_gradle_test": "OK (380 tests, 378 passed, 0 failed, 2 skipped — the 2 skipped are the @Disabled IT scenarios flagged as deploy blockers)",
+    "row_2_listappender_token_leak": "OK (5 split test methods at TelegramSenderTest lines 661/675/696/714/738; positive [REDACTED_TOKEN] assertions at 4xx WARN/5xx-retry WARN/429-wait WARN; negative 'no raw token' assertions across all five sites)",
+    "row_3_curl_null_branch_regression": "DEFERRED_TO_TEST_LAYER (curl not executed; canonical equivalence via BotControllerIT.postTestMessage_in06_returns422_zeroTelegramCalls_zeroEvents at line 768 + TelegramSenderIT.sendTestMessage_ownerChatIdNull_returns422_zeroTelegramCalls at line 178 — both pin HTTP 422 + verbatim 'owner_chat_id_unknown' message via WebTestClient against the full Spring stack with embedded Mongo; both assert zero Telegram outbound calls; the 06 regression continues to pass)",
+    "row_4_mongosh_seed_smoke": "DEFERRED (documented in docs/staging-smoke/07-telegram-sender.md — opt-in real-Telegram handoff for user post-deploy; 156-line runbook with 9 steps mirroring 06-bot-connection.md structure; per tech-spec Agent Verification Plan, no Post-deploy task because happy path is unobservable until Epic 04b webhook ingestion lands)",
+    "row_5_securityconfig_zero_diff": "OK (git diff main returns empty)",
+    "row_6_nullable_schema_read": "OK (TelegramSenderIT.sendTestMessage_legacyDocumentReadsAsNull at line 201 inserts raw BSON without ownerChatId and asserts null on BotRepository.findById; supplemented by BotRepositoryTest.findById_legacyDocumentWithoutOwnerChatId_readsAsNull at line 85)"
+  },
+  "blockers": [
+    {
+      "id": "BLOCKER-1",
+      "severity": "high",
+      "origin": "Task 9 test audit, finding HIGH-1",
+      "affected_ac": "user-spec AC21 (integration test full Spring context end-to-end via BotService)",
+      "title": "TelegramSenderIT.sendText_endToEndViaBotService_emitsBothEvents is @Disabled with empty body",
+      "expected": "Test enabled, exercises POST /api/v1/projects/{id}/bot/test-message with seeded ownerChatId, asserts 200 OK + Awaitility on both telegram_message_sent and bot_test_message_sent events in the events collection",
+      "actual": "Test is annotated @Disabled('enabled by Task 5 — requires BotService.sendTestMessage to call TelegramSender') and has an empty body. Task 5 has shipped (commits f411283 and 3282b95) but the @Disabled annotation was not removed and the test body was not implemented. Test passes vacuously by skip — asserts nothing.",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java:160-166",
+      "reproduction": "1) Open backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java; 2) Note line 160 @Disabled with stale message; 3) Note empty body lines 163-165; 4) Run cd backend && ./gradlew test --tests com.botfunnel.bot.TelegramSenderIT and observe 'skipped' count == 2 in JUnit XML.",
+      "remediation": "Open a follow-up fix task (Task 11 or similar). The task should: a) remove the @Disabled annotation; b) implement the scenario body per tech-spec Testing Strategy line 336 — seed Bot with encrypted token + ownerChatId, POST /api/v1/projects/{id}/bot/test-message via WebTestClient, enqueue Telegram sendMessage 200 with {ok: true, result: {message_id: 100, chat: {id: <ownerChatId>}}}, assert 200 OK, Awaitility-assert both telegram_message_sent (metadata {botId, chatId, messageId: 100}) and bot_test_message_sent (metadata {projectId, telegramBotId, chatId, messageId: 100}) events in the events collection; c) write decisions.md Task 11 entry linking back to Task 9 test-audit finding HIGH-1; d) re-run Task 10 QA after fix."
+    },
+    {
+      "id": "BLOCKER-2",
+      "severity": "high",
+      "origin": "Task 9 test audit, finding HIGH-2",
+      "affected_ac": "user-spec AC21 (integration test full Spring context terminal-failure path) + tech-spec Testing Strategy line 337",
+      "title": "TelegramSenderIT.sendText_terminalFailureViaBotService_emitsFailedEventOnly is @Disabled with empty body",
+      "expected": "Test enabled, exercises POST /api/v1/projects/{id}/bot/test-message with seeded ownerChatId, enqueues Telegram 401, asserts 422 invalid_bot_token to client, Awaitility-asserts telegram_send_failed event present and bot_test_message_sent NOT written (failure-event-only invariant)",
+      "actual": "Test is annotated @Disabled('enabled by Task 5 — requires BotService.sendTestMessage to call TelegramSender') and has an empty body. Same gap as BLOCKER-1.",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderIT.java:169-174",
+      "reproduction": "Same as BLOCKER-1 — see lines 169-174 of TelegramSenderIT.java.",
+      "remediation": "Same fix task as BLOCKER-1. Implement per tech-spec Testing Strategy line 337 — seed Bot with encrypted token + ownerChatId, enqueue Telegram 401, assert 422 invalid_bot_token to client, Awaitility-assert telegram_send_failed event present, Awaitility-assert bot_test_message_sent NOT written within a 2s settle window."
+    }
+  ],
+  "non_blocker_observations": [
+    {
+      "severity": "medium",
+      "origin": "Task 9 test audit, finding MEDIUM-1",
+      "title": "TelegramSenderTest.sendText_okFalse_throwsTelegramSendException does not pin telegram_send_failed event metadata.errorDescription",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:471",
+      "note": "Tech-spec Testing Strategy line 312 says 'scrubbed description preserved in event metadata' — the test only asserts the exception message + errorCode == null, not the event metadata.errorDescription field. The exception-level assertion is still meaningful coverage; this is a test-tightening gap, not a functional gap. NOT a deploy blocker — tracking forward to next test-quality pass."
+    },
+    {
+      "severity": "medium",
+      "origin": "Task 9 test audit, finding MEDIUM-2",
+      "title": "TelegramSenderTest.sendText_overallTimeout_throwsTelegramSendException uses any() for failure-event metadata",
+      "location": "backend/src/test/java/com/botfunnel/bot/TelegramSenderTest.java:636",
+      "note": "Tech-spec Testing Strategy line 323 says 'audit metadata attempts captured'. Current test verify(eventService, times(1)).logEvent(..., any()) confirms event emission but uses any() for metadata shape. NOT a deploy blocker — the attempts contract is asserted in other scenarios (5xxRetryExhausted line 268 pins attempts == 4); this is a redundant tightening."
+    }
+  ],
+  "notes": [
+    "No Deploy task in this feature (deployment.md → 'TBD' — no production deployment pipeline yet).",
+    "No Post-deploy verification task per tech-spec Agent Verification Plan: the happy path is unobservable in production until Epic 04b webhook ingestion populates Bot.ownerChatId; the 422 null-branch yields the same response as before the feature shipped; the staging-smoke runbook at docs/staging-smoke/07-telegram-sender.md is the user's opt-in handoff.",
+    "Final-Wave QA is read-only; this report stops at the NO-GO verdict and does NOT patch the @Disabled IT scenarios — remediation is a follow-up fix task per Task 10 spec line 22 and the Audit Wave contract.",
+    "Once the two @Disabled IT scenarios are enabled and bodied (via a follow-up fix task with its own decisions.md entry linking back to this report's BLOCKER-1 and BLOCKER-2), Task 10 must be re-run to obtain a GO verdict before deploy decision.",
+    "AC13 reconciled per tech-spec Decision 5: BotTokenInvalidException + TelegramSendException extend AppException (uniform GlobalErrorHandler mapping); TelegramRateLimitException extends RuntimeException as an internal sentinel that never reaches GlobalErrorHandler — pinned by TelegramSenderTest.sendText_429RateLimitExceptionNotPropagated at line 329.",
+    "Risk R7 contract verified: TokenEncryptor.decrypt-thrown IllegalStateException propagates as 500 (not wrapped in BotTokenInvalidException); only Base64-decode IllegalArgumentException is caught and translated to 422 invalid_bot_token. Pinned by TelegramSenderTest.sendText_decryptThrowsIllegalState_propagatesAsInternalError_notBotTokenInvalid at line 552; cited in security audit Task 8 verdict."
+  ]
+}

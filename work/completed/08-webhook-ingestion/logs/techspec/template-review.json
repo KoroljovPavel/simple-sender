@@ -1,0 +1,48 @@
+{
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "major",
+      "category": "structure",
+      "issue": "Decisions 7, 17, 18, and 19 are missing the 'Alternatives considered:' line required by the template (Decision 7 at line 121-123, Decision 17 at line 170-172, Decision 18 at line 174-176, Decision 19 at line 178-180).",
+      "fix": "Add an 'Alternatives considered:' line to each decision. For TECHNICAL decisions where there is genuinely no alternative worth recording, write 'Alternatives considered: None — only viable approach given <constraint>.' rather than omitting the field."
+    },
+    {
+      "severity": "major",
+      "category": "task_quality",
+      "issue": "Task 9 (ProcessTelegramUpdateJob worker) description is very long (~12 sentences) with detailed step-by-step implementation (branching scenarios, atomic writes, log scrubber wrapping, exception handling). Tech-spec tasks should be 2-3 sentence scope descriptions; detailed steps belong in task files during decomposition.",
+      "fix": "Trim T9 description to 2-3 sentences capturing scope (worker handles parsed Telegram updates, populates ownerChatId atomically, calls stub services, writes events, marks raw_updates done/failed). Move scenario-by-scenario branching detail and atomic-write specifics to the decomposed task file."
+    },
+    {
+      "severity": "major",
+      "category": "task_quality",
+      "issue": "Task 10 (TelegramWebhookController + WebhookPayloadSizeFilter + SecurityConfig updates) description is very long (~15+ sentences) containing the entire numbered controller flow, filter wiring details, integration-test mapping. Detailed steps belong in task files during decomposition.",
+      "fix": "Trim T10 description to 2-3 sentences (create controller routing webhook → bot lookup → secret verify → idempotent save → enqueue; add payload size filter; update SecurityConfig with scoped permitAll and CSRF disable). Move numbered controller-flow steps to the decomposed task file."
+    },
+    {
+      "severity": "major",
+      "category": "task_quality",
+      "issue": "Task 2 description contains a line number reference: 'BotService.sha256Hex (private, BotService.java:331-338)'. Implementation details (line numbers) belong in task files, not in tech-spec Implementation Tasks.",
+      "fix": "Remove ':331-338' line range from the T2 description (and from Decision 15 / Decision 7 if line numbers are to be kept out of tech-spec entirely). Line numbers shift over time; keep references at file granularity in tech-spec, exact line numbers in the decomposed task file."
+    },
+    {
+      "severity": "major",
+      "category": "task_quality",
+      "issue": "Task 5 description is ~6 sentences and contains specific configuration values (expireAfterSeconds=7776000, partial filter expression) that are already defined verbatim in Decision 8 and in the Data Models section. Duplication between Decisions and task descriptions for `expireAfterSeconds=7776000` and the partial filter string.",
+      "fix": "Shorten T5 to 2-3 sentences referencing Decisions 4 and 8 by number; drop the inline reproduction of the TTL value and partial filter expression. Decisions section already carries the values authoritatively."
+    },
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "issue": "Specific values (`1_048_576`, `Ordered.HIGHEST_PRECEDENCE + 10`) appear in both Decision 13 and Task 10 description. Configuration values should live in the Decisions section once and be referenced from tasks.",
+      "fix": "In Task 10 description, replace the inline value reproductions with references like 'per Decision 13'. Keeps a single source of truth."
+    },
+    {
+      "severity": "minor",
+      "category": "task_quality",
+      "issue": "Task 3 (TelegramCommandParser), Task 4 (TelegramUpdate records), Task 6 (SubscriberService stub), Task 7 (FunnelTriggerService stub) have no Verify-smoke field. While the criterion allows omission for purely internal logic covered by tests, even a one-line `./gradlew test --tests *<TestName>` would tighten the per-task gate.",
+      "fix": "Optional: add Verify-smoke to T3 (`./gradlew test --tests *TelegramCommandParserTest`), T4 (`./gradlew test --tests *TelegramUpdateDeserializationTest`), T6 (`./gradlew test --tests *NoOpSubscriberServiceTest`), T7 (`./gradlew test --tests *NoOpFunnelTriggerServiceTest`). Not blocking — current omission is within spec."
+    }
+  ],
+  "summary": "Tech-spec is structurally sound and approved: all template sections present (including Shared resources and User-Spec Deviations), frontmatter valid (size=L matches user-spec), 14 tasks within the ≤15 limit, all skills/reviewers from approved catalog, Audit Wave correct (3 tasks, reviewers=none), Final Wave correctly omits Deploy/post-deploy per Decision 19, no wave conflicts (Wave 1: only T2 modifies BotService.java; Wave 3: only T10 modifies SecurityConfig.java), wave dependencies logical, no time estimates. Major issues are task-description verbosity (T9, T10, T2, T5 contain step-by-step implementation detail that belongs in decomposed task files), four decisions missing 'Alternatives considered' line, and one line-number reference in T2 description. Zero critical findings — status=approved; majors are informational for author cleanup before decomposition."
+}

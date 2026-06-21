@@ -1,0 +1,20 @@
+{
+  "status": "passed",
+  "summary": "Round 2 verification: all four round 1 findings on BotRepositoryTest are resolved with litmus-test-discriminating assertions. (1) findByProjectId_returnsAllStatusesForProject now collectList()s into a set assertion that fails on status filtering, duplication, and cross-project bleed (size=2, statuses set = {CONNECTED, DISCONNECTED}, telegramBotIds set = {444L, 555L}, every row projectId == 'proj-4'). (2) findFirstByTelegramBotIdAndStatus seeds a DISCONNECTED twin with the same telegramBotId=123L in proj-3-old; assertions on projectId='proj-3' AND status=CONNECTED would both fail if the repository dropped the status filter. (3) findByProjectIdAndStatus_returnsEmptyWhenNoConnectedBot seeds a CONNECTED row in proj-OTHER before the query — empty result now only holds if both filters are applied. (4) Static AssertJ import added; all four FQN call sites cleaned up. Bonus hardening outside the round 1 scope (also good): @JsonIgnore on the four token-secret fields, a class-load invariant tying the partialFilter literal 'CONNECTED' to BotStatus.CONNECTED.name(), a null-guard in BotStatus.fromString, and a comment in BotStatusJsonTest justifying the bare ObjectMapper. Eleven tests pass; no new findings.",
+  "findings": [],
+  "metrics": {
+    "filesReviewed": 4,
+    "litmusTest": {
+      "checked": 11,
+      "passed": 11,
+      "failed": 0
+    },
+    "coverageAssessment": "adequate",
+    "pyramidBalance": {
+      "unit": 2,
+      "integration": 9,
+      "e2e": 0,
+      "assessment": "healthy"
+    }
+  }
+}

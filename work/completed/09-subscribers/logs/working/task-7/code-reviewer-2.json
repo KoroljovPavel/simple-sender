@@ -1,0 +1,55 @@
+{
+  "status": "approved",
+  "summary": "Round-2 re-review confirms the single round-1 minor finding is fully addressed. The fix commit 8ceec6c touches ProjectHardDeleteJob.java with comment-only changes (verified byte-level: zero non-comment production line changes vs parent) — the GRIDFS_FILES_COLLECTION constant now documents the bucket-sync requirement, and the cascade block now documents the advisory pre-delete count and the accepted non-transactional orphan-chunk window. Cascade logic, ordering, log shape, and null-defensive DeleteResult handling are unchanged from the round-1 approved state. Test reworks (genuine partial-drain recovery test, new GridFS-orphan sweep test, deterministic AtomicLong seeds) do not affect production correctness and strengthen coverage; both ITs run green (12 + 3 = 15 tests, 0 failures/0 errors on a forced --rerun-tasks).",
+  "findings": [],
+  "round1FindingsResolution": [
+    {
+      "round1Severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/jobs/ProjectHardDeleteJob.java",
+      "round1Issue": "fs.files hardcoded as default bucket name; count read (template.count on literal) and delete (gridFsOperations.delete, honors configured bucket) are decoupled — a future custom bucket would silently break the count metric.",
+      "status": "addressed",
+      "evidence": "Lines 39-41: the constant comment now states 'Must stay in sync with the GridFS bucket the delete targets — no custom bucket is configured, so the default holds.' Lines 109-112: the cascade comment now explicitly frames the count as 'an advisory pre-delete snapshot for the log line, not a transactional erasure receipt — the delete re-runs the query independently, so erasure is correct even if the count drifts.' This was a count/observability coupling (not a correctness bug), and documenting the invariant is the appropriate resolution. No code change was required or made."
+    }
+  ],
+  "regressionChecks": [
+    {
+      "area": "production-logic",
+      "result": "no change",
+      "detail": "git diff 8ceec6c~1..8ceec6c on ProjectHardDeleteJob.java filtered to non-comment/non-blank lines yields zero hits. Cascade order (events -> GridFS -> subscriber_exports -> subscriber_events -> subscribers -> tags -> emit project_hard_deleted -> drop projects), the +1ns cutoff, the zero-deletion short-circuit, null-defensive removeByProjectId, and both INFO log shapes are identical to the round-1 approved version."
+    },
+    {
+      "area": "reworked-idempotency-test",
+      "result": "correct",
+      "detail": "cron_cascadeRecoversPartialDrainThenSecondRunIsNoOp now models a real partial-cascade crash: project still soft-deleted, subscribers pre-drained (not seeded), tags/subscriber_events/subscriber_exports/GridFS survive. Asserted log line deletedCount=1 eventsRemovedCount=0 gridFsFilesRemoved=1 exportsRemoved=1 subscriberEventsRemoved=1 subscribersRemoved=0 tagsRemoved=1 is consistent with the seed (no events seeded -> 0; the run-emitted project_hard_deleted row lands AFTER the sweep so is not counted; subscribers never seeded -> 0; four survivors -> 1 each). The second-run no-op uses countOccurrences on the all-zero substring and expects exactly 1 — correct, since only the second run emits an all-zero line."
+    },
+    {
+      "area": "new-gridfs-orphan-test",
+      "result": "correct",
+      "detail": "cron_gridFsFileWithoutExportPointer_isStillSwept seeds a GridFS blob with metadata.projectId but no subscriber_exports pointer row, then asserts the blob is swept. This locks in the GridFS-keyed-by-metadata.projectId / GridFS-before-exports contract (Decision 8) without altering production behavior. gridFsFileExists helper uses gridFsOperations.findOne(metadata.projectId is ...) — matches the production delete criterion."
+    },
+    {
+      "area": "deterministic-seeds",
+      "result": "improvement, no production impact",
+      "detail": "System.nanoTime() seeds replaced with a static AtomicLong SEQ for the unique-compound fields (subscribers (projectId,telegramUserId), tags (projectId,slug)). Removes a latent flaky-seed risk on platforms where nanoTime is not distinct across rapid consecutive calls. Test-only. (seedSubscriberEvent still uses nanoTime for subscriberId, but that field carries no unique index, so collisions are harmless.)"
+    },
+    {
+      "area": "test-helpers-cross-file",
+      "result": "valid",
+      "detail": "New helpers countByProjectId(Class,String), gridFsFileExists(String), and countOccurrences(String,String) are all defined in the IT and used consistently. AtomicLong import added. SubscriberExport status DONE is correctly documented as load-bearing for the (projectId) partial-unique index that only covers in-flight (PENDING/RUNNING) exports."
+    },
+    {
+      "area": "cascade-IT-todo-marker",
+      "result": "cosmetic, aligned with spec",
+      "detail": "ProjectSoftDeleteCascadeIT TODO marker changed from 'Task 8' to 'Task 8/4/5' to match the task spec wording (Task 3/4/5 controllers). Comment-only; the production assertion (requireOwned soft-deleted -> 404) is unchanged."
+    }
+  ],
+  "metrics": {
+    "filesReviewed": 3,
+    "criticalIssuesCount": 0,
+    "majorIssuesCount": 0,
+    "minorIssuesCount": 0,
+    "testCoverageAssessment": "excellent",
+    "testsExecuted": 15,
+    "testFailures": 0
+  }
+}

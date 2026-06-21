@@ -1,0 +1,32 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "notes": {
+    "scope": "Task 9 of feature 05-projects — frontend layout composition only. Reviewed commit af9d401. Single tracked file changed: frontend/layouts/default.vue (+10 lines). The accompanying ux-guidelines.md edit lives under .claude/ which is gitignored locally and contains no executable code, so it is not part of the security surface.",
+    "owaspCoverage": {
+      "A01_BrokenAccessControl": "N/A — layout adds a v-if-guarded sidebar link to /projects/[id]/settings. Access enforcement happens upstream in frontend/middleware/auth.global.ts (unchanged, zero-touch contract held) and on the backend (SecurityConfig.java, ProjectController — also unchanged). The link is purely presentational; it cannot grant access.",
+      "A02_CryptographicFailures": "N/A — no crypto, no secrets, no key material added.",
+      "A03_Injection_XSS": "Verified safe. projectsStore.currentProject.id is a server-issued MongoDB @Id (see backend/src/main/java/com/botfunnel/project/Project.java) populated only from GET /api/v1/projects via the typed Project interface (frontend/types/project.ts). It is not user-controlled free text. The template uses :to binding on NuxtLinkLocale, which routes through vue-router and URL-encodes path segments into an <a href> attribute — not raw HTML interpolation. Vue's {{ }} interpolation is HTML-escaped by default. No XSS risk in this diff.",
+      "A04_InsecureDesign": "N/A — pure UI composition. No business logic, no trust-boundary changes. Conditional render via v-if=\"projectsStore.currentProject\" matches the spec contract (no Settings link when no project is selected).",
+      "A05_SecurityMisconfiguration": "N/A — no headers, CORS, config, or environment changes.",
+      "A06_VulnerableComponents": "N/A — no dependencies added or upgraded. package.json, pnpm-lock.yaml not touched.",
+      "A07_AuthenticationFailures": "Verified safe. The global route middleware (auth.global.ts) runs before any layout renders and fail-closes unauthenticated users to /auth/login. currentProject is only populated after an authenticated /api/v1/projects request resolves; the Settings link cannot render in an unauthenticated context. The destination route /projects/[id]/settings is itself behind the same global middleware. The onLogout flow (lines 10–17) and authStore wiring are unchanged.",
+      "A08_SoftwareAndDataIntegrity": "N/A — no deserialization, no dynamic imports, no CI/CD changes.",
+      "A09_SecurityLoggingAndMonitoring": "N/A — no log surface introduced or removed.",
+      "A10_SSRF": "N/A — client-side template only, no server-side fetch with user-controlled URL."
+    },
+    "focusAreaConfirmations": {
+      "xssViaTemplateInterpolation": "Confirmed not exploitable. id is a server-issued UUID-shaped string from the backend Project entity (@Id, String). Even an attacker-controlled stored value would land URL-encoded in an href attribute via vue-router, not in an HTML body context.",
+      "openRedirectOrLocalePrefixBypass": "Confirmed not exploitable. The :to value is a static-prefix template `/projects/${id}/settings` with hardcoded leading `/projects/` and trailing `/settings`. No scheme, no `//` prefix, no host. NuxtLinkLocale preserves the locale prefix per project i18n pattern (no NuxtLink fallback was introduced).",
+      "preMiddlewareLayoutRender": "Not possible. defineNuxtRouteMiddleware in auth.global.ts is global and runs before page/layout render; layout reads authStore.user/projectsStore.currentProject which are null on the unauthenticated path, so the new Settings link does not render. Even if rendered, the target route is guarded by the same middleware.",
+      "scopeCreepZeroTouch": "Verified by git diff af9d401~1 af9d401 --name-only against frontend/middleware/auth.global.ts, backend/src/main/java/com/botfunnel/security/SecurityConfig.java, backend/src/main/java/com/botfunnel/jobs/JobRunrMongoConfig.java — none of these files appear in the commit. AC-T7 zero-touch contract holds."
+    },
+    "hardcodedSecretsScan": "Clean. The 10-line diff introduces only: a Pinia store import, a store binding, a <ProjectSelector /> tag, and an i18n-keyed NuxtLinkLocale to a server-issued id. No API keys, tokens, passwords, connection strings, private keys, or base64 credential-shaped blobs."
+  }
+}

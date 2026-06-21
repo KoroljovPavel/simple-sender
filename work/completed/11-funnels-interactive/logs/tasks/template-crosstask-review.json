@@ -1,0 +1,53 @@
+{
+  "validator": "task-validator",
+  "mode": "cross-task-integration",
+  "batch": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 1,
+      "section": "depends_on / file ownership",
+      "issue": "FunnelExecutionEngine.java, FunnelTriggerServiceImpl.java and FunnelService.java are owned/modified by Task 1 (additive waiting_for_reply $in one-liners + drift-assertion) AND later by Task 3 (engine rewrite, insertExecution seed) and Task 5. Task 1 is in wave 1, Task 3/5 in wave 2/3, so they are sequenced correctly. Task 1 also notes these files were not listed under its tech-spec 'Files to modify' (tech-spec listed FunnelStep/FunnelExecution/ExecutionStatus/StepType/Button/Backfill/types). The additive $in edits in shared engine/trigger/service files are an intentional refinement, but they widen Task 1's blast radius beyond its tech-spec file list.",
+      "fix": "Acceptable as-is: Task 1 explicitly scopes itself to additive one-liner $in edits + drift-assertion and instructs NOT to touch navigation/cancel logic (left to Task 3/5). Wave ordering (1 < 2 < 3) guarantees Task 3/5 inherit the already-updated $in. No code conflict. Documented divergence from tech-spec file list is justified by the drift-assertion+FunnelIndexesIT build-red mechanism."
+    },
+    {
+      "severity": "minor",
+      "category": "consistency",
+      "task": 5,
+      "section": "Files to modify (test placement)",
+      "issue": "Task 5 adds advanceOnCallback to FunnelTriggerServiceImpl.java but places its integration tests in FunnelExecutionEngineIT.java (also touched by Task 3 in wave 2). Tasks 3 and 5 both append cases to FunnelExecutionEngineIT.java.",
+      "fix": "Acceptable: different waves (T3 w2, T5 w3) sequence the edits; Task 5 explicitly justifies co-locating advanceOnCallback ITs in FunnelExecutionEngineIT to reuse the full-context Testcontainers/MockWebServer/MutableClock harness for full-path (trigger -> engine -> Mongo/Telegram) coverage, and instructs reviewers not to flag as misplacement. No conflict because edits are append-only and wave-ordered."
+    }
+  ],
+  "integration_checks": {
+    "shared_resource_ownership": {
+      "status": "pass",
+      "detail": "Shared Resources table lists only existing singletons (TelegramSender, Clock, EventService, JobRunr @Recurring sweep) — no NEW heavy resource is created by this feature. TelegramSender is owned by bot module; Task 2 extends it (adds 6-arg sendText overload + answerCallbackQuery) and is the single owner of TelegramSender.java edits — Tasks 3/5 only CALL it (depends_on [2]). EventService consumed by Task 5 (funnel_button_clicked) and Task 7 (telegram_callback_query) without re-instantiation. Clock consumed by engine (Task 3) via existing ClockConfig. JobRunr sweep owned by FunnelExecutionEngine (Task 3 extends sweep $in, Task 1 pre-seeds the waiting_for_reply literal). No task creates a competing instance of any shared resource."
+    },
+    "competing_instances_same_wave": {
+      "status": "pass",
+      "detail": "No two tasks in the same wave create/own the same artifact. Wave 1: T1 (model/status/backfill) and T2 (TelegramSender) touch disjoint files. Wave 2: T3 (engine/StepExecutor/trigger-seed/properties) and T4 (FunnelService validateSteps/DTOs) touch disjoint files — T3 owns FunnelExecutionEngine/StepExecutor/FunnelTriggerServiceImpl-insertExecution, T4 owns FunnelService/FunnelStepDto/ButtonDto. Wave 3: T5 (advanceOnCallback in FunnelTriggerServiceImpl) and T6 (frontend) touch disjoint files. Wave 5: T8/T9/T10 are read-only audits."
+    },
+    "file_ownership_conflicts": {
+      "status": "pass",
+      "detail": "FunnelExecutionEngine.java edited by T1(w1, additive $in), T3(w2, graph rewrite), referenced/extended by T5(w3) — strictly wave-ordered, no same-wave overlap. FunnelTriggerServiceImpl.java edited by T1(w1, $in), T3(w2, insertExecution currentStepId seed), T5(w3, advanceOnCallback) — wave-ordered. FunnelExecutionEngineIT.java appended by T3(w2) and T5(w3) — wave-ordered, append-only. StepExecutor.java edited only by T3 (T2 notes the 5-arg sendText call-site at StepExecutor.java:108 stays unchanged; T3 switches the MENU path to the new 6-arg overload). application.properties edited only by T3. TelegramSender.java edited only by T2. FunnelTriggerService.java (interface) edited by T5(w3), read by T7(w4). FunnelService.java edited by T1(w1, $in line ~150) and T4(w2, validateSteps) — wave-ordered, distinct regions. No conflicting concurrent writes."
+    },
+    "signature_contracts": {
+      "status": "pass",
+      "detail": "1) sendText 6-arg overload sendText(botId, chatId, text, parseMode, ownerId, replyMarkup): defined by T2 (explicit signature), consumed by T3 (MENU path); T3 depends_on [2]; both agree on the 6-arg shape and that the existing 5-arg (..., ownerId) stays intact — slot ordering documented to avoid confusing ownerId vs replyMarkup. CONSISTENT. 2) resumeOnCallback(executionId, subscriberId, targetStepId): defined by T3 (3-arg, subscriberId-scoped CAS, anti-IDOR), consumed by T5; T5 depends_on [2,3] and explicitly instructs to confirm the actual signature/return type from Task 3's decisions.md/code before coding. Signatures match across T3 and T5. CONSISTENT. 3) advanceOnCallback(projectId, chatId, callbackData, callbackQueryId): defined by T5, consumed by T7; T7 depends_on [5] and notes to read FunnelTriggerService.java after Task 5. Signature identical in T5 interface decl and T7 call-site. CONSISTENT. 4) Button/ButtonDto 'End' sentinel: backend Button record + frontend Button interface created by T1 (targetStepId optional, null=End); ButtonDto record (type,label,targetStepId,url) created by T4; consumed by T6. T6 depends_on [1,4] and CRITICALLY flags that the frontend must mirror Task 4's exact 'End' encoding (empty-string vs null targetStepId) byte-for-byte, instructing to verify against actual ButtonDto before coding. Dependency chain covers the contract. CONSISTENT (with the correct caveat surfaced in T6). 5) Frontend types (types/funnel.ts MENU/Button/graph fields): created by T1, consumed by T6; T6 depends_on [1]. CONSISTENT."
+    },
+    "dependency_graph": {
+      "status": "pass",
+      "detail": "Edges: T3->{1,2}, T4->{1}, T5->{2,3}, T6->{1,4}, T7->{5}, T8/T9/T10->{1,2,3,4,5,6,7}, T11->{8,9,10}. All referenced task numbers exist. Every consumer's wave is strictly greater than each producer's wave (W1<W2<W3<W4<W5<W6). No circular dependencies. T6 depends on T4 (wave 2) but is wave 3 — correct. T5 depends on T3 (wave 2) at wave 3 — correct."
+    }
+  },
+  "stats": {
+    "tasks_checked": 11,
+    "issues_found": 2,
+    "critical": 0,
+    "major": 0,
+    "minor": 2
+  }
+}

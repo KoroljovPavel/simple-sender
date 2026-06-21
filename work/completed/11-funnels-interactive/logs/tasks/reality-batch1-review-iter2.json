@@ -1,0 +1,117 @@
+{
+  "validator": "reality-checker",
+  "iteration": 2,
+  "batch": [1, 2, 3],
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "Task 1 Details section lists 6 query/$in sites (Вид A) for adding 'waiting_for_reply', but the actual FunnelService.delete (line 150) uses .in(ExecutionStatus.running.name(), ExecutionStatus.waiting.name()) — identical to the other sites, so the count is correct. However, the partialFilter for the re-enter index in FunnelExecution.java (line 27) currently has only ['running','waiting']. FunnelIndexesIT line 105 asserts containsExactly(\"running\",\"waiting\"). The task correctly identifies this as a test-site that needs updating (line 137 in Details). This is accurate — no fix needed, just confirming the trail is complete.",
+      "fix": "No fix required; iteration-1 finding resolved correctly — Вид A and Вид B are now clearly separated, the 6 $in sites are properly enumerated, and FunnelIndexesIT update is explicitly prescribed."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 1,
+      "issue": "FunnelStepTest currently has a 'deepCopyProducesIndependentStep' test that covers all existing scalar fields but no test for deep-copy of a List<Button> field (because 'buttons' doesn't exist yet). The TDD Anchor prescribes 'deepCopyButtonsAreIndependent' and 'deepCopyCopiesGraphScalars' as new tests. However 'deepCopyCopiesGraphScalars' overlaps significantly with existing 'deepCopyProducesIndependentStep' — the task says to \"extend\" it, but id/next/timeout* are new fields absent from the existing test. This is feasible; the hint to extend the existing test rather than create a new one is correct and actionable.",
+      "fix": "No fix required; the overlap is expected. Implementor should extend deepCopyProducesIndependentStep per the TDD Anchor wording."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 1,
+      "issue": "Task 1 Implementation hints say 'FunnelStepIdBackfill: inject MongoTemplate, use $set partial-update (e.g. Update().set(\"steps.$[].id\", ...))'. The array positional-all operator ($[]) sets all array element ids to the SAME value — which is incorrect for assigning unique ids per step. The correct approach for this use-case is either an iterative per-document / per-step update loop or aggregation pipeline update. The hint mentions this as an example ('e.g.'), so it is not a strict prescription, but the cited example is technically wrong and could mislead the implementor.",
+      "fix": "Clarify the hint: $set with positional-all $[] assigns one value to all array positions — use an iterative approach (load document, generate ids per step, $set the updated array) rather than a single $[] update."
+    },
+    {
+      "severity": "minor",
+      "category": "tdd",
+      "task": 1,
+      "issue": "TDD Anchor says FunnelStepIdBackfillTest 'extends AbstractIntegrationTest' (iteration-1 critical finding resolved). AbstractIntegrationTest is confirmed present at AbstractIntegrationTest.java and is used by FunnelIndexesIT — the pattern is valid. However AbstractIntegrationTest starts Mailpit and Redis in addition to Mongo; the backfill test only needs Mongo. This is not a bug — it reuses the established singleton-container base — but worth noting that the extra containers are a cost of the base class, not a problem.",
+      "fix": "No fix required; using AbstractIntegrationTest is the project convention (FunnelIndexesIT does the same)."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 2,
+      "issue": "Task 2 TDD Anchor instructs adding tests that inject TelegramSender via @Autowired directly (bypassing BotService). This is correct and feasible. However TelegramSenderIT currently has @Disabled tests for scenarios 'that depend on Task 7 BotService rewrite'. The task says new tests should be direct TelegramSender injections — this is a valid workaround. The description is accurate.",
+      "fix": "No fix required; approach is sound."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 Details says 'Resume-from-delay seam (rядки 128-131)... ПЕРЕД subscriber/bot гейтами (рядки 133-146)' and prescribes that the timeout-resume branch for waiting_for_reply MUST follow the same pre-gate order (cursor advance before subscriber/bot gates). This is accurate per the actual FunnelExecutionEngine.java lines 128-131 and 133-146. The hint is correct.",
+      "fix": "No fix required."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 instructs 'замінити int guard = size + 1 на @Value...' — the guard at FunnelExecutionEngine.java line 152 is confirmed as 'int guard = size + 1', so the reference is accurate. The proposed @Value field name 'maxStepsPerTick' and property 'app.funnel.max-steps-per-tick' follow the existing naming convention (app.funnel.sweep-batch-size, app.funnel.max-steps, app.funnel.scheduler-interval confirmed in application.properties). Consistent.",
+      "fix": "No fix required."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 'StepResult — поломка call-sites': correctly identifies that StepResult is a Java record with canonical constructor (Outcome outcome, Duration delay, String reasonCode) — confirmed at StepExecutor.java line 236 — and that adding 'Instant nextRunAt' breaks all 4 factory call-sites (cont/delay/cancel/fail at lines 237/241/245/249). The instruction to grep and update them or use static factories is actionable and accurate.",
+      "fix": "No fix required."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "Task 3 prescribes that FunnelStepExecutorTest MENU tests should stub the NEW 6-arg sendText overload. The existing FunnelStepExecutorTest.java at lines 93/242/255/283 uses 'when(sender.sendText(anyString(), any(), anyString(), any(), any()))' — 5-arg matcher. When the 6-arg overload is added, a MENU test must use a 6-arg matcher or Mockito lenient stub that covers both — the task mentions this ('MENU-тести стабають НОВИЙ 6-арг overload; наявні 5-арг sendText-стаби лишаються валідними'). This is correct and complete.",
+      "fix": "No fix required."
+    },
+    {
+      "severity": "minor",
+      "category": "feasibility",
+      "task": 3,
+      "issue": "The timeoutUnit conflict note (tech-spec says 'minutes/hours/days' but existing delayUnit uses 'MIN/HOUR/DAY') is accurately flagged with a required decision in decisions.md. The delayDuration() switch at StepExecutor.java lines 220-224 is confirmed to use MIN/HOUR/DAY. Using the same convention for timeoutUnit is the recommended (and lower-risk) path. The task correctly mandates recording the decision.",
+      "fix": "No fix required; the conflict is properly surfaced with a mandatory decisions.md entry."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 47,
+    "issues_found": 9
+  },
+  "iteration_1_findings_resolution": {
+    "task_1_drift_assertion_vs_query_in": {
+      "status": "RESOLVED",
+      "detail": "Task 1 Details now clearly distinguishes Вид A (6 query/$in array sites) from Вид B (static drift-assertion block in FunnelExecution static{} at lines 34-41). The six $in sites are enumerated with precise file+line references. FunnelIndexesIT update is explicitly prescribed at line 137."
+    },
+    "task_1_backfill_test_extends_abstract": {
+      "status": "RESOLVED",
+      "detail": "TDD Anchor now explicitly states FunnelStepIdBackfillTest 'extends AbstractIntegrationTest' (confirmed present at backend/src/test/java/com/botfunnel/AbstractIntegrationTest.java; used by FunnelIndexesIT as the mirror pattern cited in the task)."
+    },
+    "task_1_backfill_mongotemplate_set": {
+      "status": "RESOLVED",
+      "detail": "Task 1 Details explicitly prescribes '$set partial-update via MongoTemplate rather than full-document save', with rationale about legacy-field preservation. The $[] positional-all example is technically imprecise (sets same value to all array elements) — flagged as minor hint issue above, but the core direction ($set partial update) is correct."
+    },
+    "task_2_sendtext_signature_accuracy": {
+      "status": "RESOLVED",
+      "detail": "Task 2 now accurately describes the current 5-arg signature 'sendText(botId, chatId, text, parseMode, ownerId)' (confirmed at TelegramSender.java line 128-129). All 3 production call-sites are correctly identified: BotService.java:127, SubscriberController.java:250, StepExecutor.java:108 — all confirmed by grep. The task prescribes adding a NEW 6-arg overload 'sendText(..., ownerId, replyMarkup)' while keeping the 5-arg form intact."
+    },
+    "task_3_menu_send_uses_6arg_overload": {
+      "status": "RESOLVED",
+      "detail": "Task 3 explicitly notes 'УВАГА (реальний код): поточний 5-арг sendText(botId, chatId, text, parseMode, ownerId) має 5-й параметр = ownerId... reply_markup додається ВИКЛЮЧНО через новий 6-арг overload з Task 2'. Also notes existing sendMessage in StepExecutor (line 108) stays on 5-arg form. Accurate."
+    },
+    "task_3_timeoutunit_conflict": {
+      "status": "RESOLVED",
+      "detail": "Task 3 explicitly calls out the format conflict between tech-spec data model ('minutes/hours/days') and existing delayUnit ('MIN/HOUR/DAY'), recommends the existing convention, and mandates a decisions.md entry."
+    },
+    "task_3_stepresult_constructor_callsites": {
+      "status": "RESOLVED",
+      "detail": "Task 3 accurately identifies StepResult as a record with canonical constructor (confirmed StepExecutor.java line 236) and the 4 factory methods, with explicit grep instruction and update options."
+    },
+    "task_3_drive_resume_seam_ordering": {
+      "status": "RESOLVED",
+      "detail": "Task 3 prescribes that drive(exec,now) contains the step-loop only, each caller does its own advance before calling drive, and that timeout-resume follows the same pre-gate order as delay-resume seam (cursor advance BEFORE subscriber/bot gates). Lines 128-146 in FunnelExecutionEngine are confirmed."
+    }
+  }
+}

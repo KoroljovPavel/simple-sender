@@ -1,0 +1,25 @@
+{
+  "summary": "Task 7 implements the locale-aware auth middleware refactor cleanly and to-spec. Decision 6 requirements (PUBLIC_ROUTE_NAMES as const at module scope, fail-closed on undefined baseName, all navigateTo wrapped in useLocalePath) are met. Composable lifecycle is correct (useRouteBaseName/useLocalePath called once inside the handler, returned functions cached in locals). TS cast pattern (PUBLIC_ROUTE_NAMES as readonly string[]).includes(baseName) is exactly the recommended shape, with an explicit baseName !== undefined guard. Existing fetchUser try/catch is preserved verbatim. The spec rewrite is justified under the AC18 explicit exception in Decision 16, follows the existing vi.hoisted + mockNuxtImport convention, and covers all 10 TDD-anchor cases. No cross-file consistency issues: RouteBaseNameFunction signature (string | undefined) matches both the middleware contract and the mock shape.",
+  "blocking_findings": [],
+  "non_blocking_findings": [
+    {
+      "file": "frontend/middleware/auth.global.ts",
+      "line": 20,
+      "severity": "minor",
+      "category": "error-handling",
+      "issue": "Empty catch block swallows all non-401 errors from authStore.fetchUser() (network failures, 500s, parser errors). The methodology generally flags swallowed errors as critical, but here it is intentional and pre-existing behavior preserved verbatim (the task description and AC require keeping the try/catch as-is). The store at frontend/stores/auth.ts already clears user-state on 401 and re-throws other errors, so the swallow downgrades transient backend issues to fail-closed (treat as unauthenticated). The added inline comment makes the intent explicit. Optional improvement: consider a console.warn or structured log so transient outages do not silently degrade UX without any signal in dev. Not required for this task.",
+      "impact": "If the backend is unreachable in production, every authenticated user hitting a protected route gets redirected to /auth/login with no telemetry. This is the documented design (fail-closed for security), but observability is zero.",
+      "recommendation": "Out of scope for this task. If revisited, log to console.warn in dev or emit a structured event so transient outages are visible. Do not change the redirect behavior."
+    },
+    {
+      "file": "frontend/middleware/auth.global.ts",
+      "line": 14,
+      "severity": "minor",
+      "category": "readability",
+      "issue": "Local alias getBaseName for what useRouteBaseName() returns (canonically named getRouteBaseName in i18n docs). The task description explicitly authorizes the alias for brevity, so this is conformant — noting only because a future reader unfamiliar with the i18n composable may need a moment to map the name back. Optional: a one-line inline comment near line 14 could short-circuit that lookup.",
+      "impact": "None — pure readability micro-nit.",
+      "recommendation": "No action required."
+    }
+  ],
+  "verdict": "OK"
+}

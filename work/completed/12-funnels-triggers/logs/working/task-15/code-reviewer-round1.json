@@ -1,0 +1,21 @@
+{
+  "reviewer": "code-reviewer",
+  "skill": "code-reviewing",
+  "round": 1,
+  "task": "task-15 finding — funnel trigger auto-save 422 on type switch",
+  "commit": "54ac53dd8db83d21afa509e74173dce89771e476",
+  "files": [
+    "frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+    "frontend/tests/pages/funnel-editor.spec.ts"
+  ],
+  "dimensions_prioritized": ["Cross-File Consistency (server contract)", "Type Safety", "Testing Coverage", "Readability"],
+  "findings": [],
+  "notes": [
+    "triggerReady() mirrors FunnelService.applyTrigger contract: on_start->TRIGGER_VALUE_PATTERN, keyword->>=1 keyword, tag_added/custom_field_set->non-empty (intentionally looser gate; full slug/non-blank validation stays server-side and still 422s on activate), event->EVENT_NAME_PATTERN. Byte-for-byte regex match with backend confirmed.",
+    "Switch is exhaustive over FunnelTriggerType with a default:false fallback — no any, no unsafe assertions.",
+    "persist() payload shape (keyword->triggerValue null + keywords; others->triggerValue + keywords []) is consistent with the readiness gate and asserted by the new tests.",
+    "triggerReady() is a plain function reading reactive refs, invoked inside the watch callback — re-evaluated on every fire, no staleness."
+  ],
+  "verdict": "approve",
+  "summary": "No findings. The fix generalizes the auto-save guard to a per-type readiness check that matches the server contract, gates auto-save without weakening or duplicating server validation, and keeps activate() surfacing the 422 for a genuinely incomplete funnel. Tests cover all required scenarios."
+}

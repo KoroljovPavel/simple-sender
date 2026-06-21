@@ -1,0 +1,85 @@
+{
+  "reviewer": "security-auditor",
+  "round": 1,
+  "findings": [
+    {
+      "severity": "critical",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": 33,
+      "issue": "SecurityConfig instantiates WebSessionServerSecurityContextRepository with `new` instead of `getInstance()`. The task spec (task 2.md edge cases) explicitly mandates `WebSessionServerSecurityContextRepository.getInstance()`. Using `new` creates a throwaway instance that is not the shared Spring Security singleton, which may cause the security context not to be persisted or loaded correctly across the reactive chain — particularly under concurrent requests where the singleton's internal state management matters.",
+      "suggestion": "Replace `new WebSessionServerSecurityContextRepository()` with `WebSessionServerSecurityContextRepository.getInstance()` on line 33."
+    },
+    {
+      "severity": "critical",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 14,
+      "issue": "Session cookie `Secure` flag is not configured. `application.properties` sets `server.reactive.session.cookie.http-only=true` but never sets `server.reactive.session.cookie.secure=true`. In production, the SESSION cookie will be transmitted over plain HTTP connections, exposing it to network interception and session hijacking. This is an OWASP A02 (Cryptographic Failures) and A07 (Authentication Failures) violation for any deployment behind HTTPS termination.",
+      "suggestion": "Add `server.reactive.session.cookie.secure=true` to `application.properties`. If different values are needed per environment, use a Spring profile: set `secure=true` in `application-prod.properties` and `secure=false` in `application-dev.properties`."
+    },
+    {
+      "severity": "critical",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 14,
+      "issue": "Session cookie `SameSite` attribute is not configured. Decision 12 in tech-spec.md explicitly requires `SameSite=Strict` in production and `SameSite=Lax` in development. Neither `server.reactive.session.cookie.same-site` nor any equivalent is set. Without `SameSite`, the browser defaults vary (most modern browsers default to `Lax` but this is not guaranteed), and the intended defense-in-depth CSRF mitigation described in Decision 12 is absent. OWASP A05 (Security Misconfiguration).",
+      "suggestion": "Add `server.reactive.session.cookie.same-site=Strict` to `application.properties` (or to `application-prod.properties`). Add `server.reactive.session.cookie.same-site=Lax` to `application-dev.properties` or as the default. Spring Boot 2.6+ supports `server.reactive.session.cookie.same-site=strict|lax|none`."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": 54,
+      "issue": "CORS `allowedHeaders` does not include `X-XSRF-TOKEN`. Decision 12 specifies that CSRF tokens are submitted via the `X-XSRF-TOKEN` request header (standard for `CookieServerCsrfTokenRepository`). Without `X-XSRF-TOKEN` in `allowedHeaders`, browsers will block preflight (OPTIONS) for cross-origin POST/PATCH/DELETE requests that include this header, silently breaking CSRF protection for the entire API. State-mutating requests from the Nuxt frontend will either be blocked by CORS preflight or succeed without the CSRF header (if the browser skips preflight for simple requests), leaving CSRF validation to fail with 403.",
+      "suggestion": "Add `\"X-XSRF-TOKEN\"` to the allowed headers list: `config.setAllowedHeaders(List.of(\"Content-Type\", \"X-Requested-With\", \"X-XSRF-TOKEN\"))`. Also consider adding `\"Cookie\"` if cross-origin cookie access is needed."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": 29,
+      "issue": "Spring WebFlux CSRF with CookieServerCsrfTokenRepository requires an explicit token load subscription on every request (since Spring Security 6.x). Without a `CsrfRequestAttributeHandler` or explicit `.csrfTokenRequestHandler(new XorServerCsrfTokenRequestAttributeHandler())` — or a custom `WebFilter` that subscribes to the CSRF Mono — the XSRF-TOKEN cookie is never written to the response. The Nuxt frontend will never receive the cookie, and all state-mutating requests will fail with 403 indefinitely. The current config only sets the repository but not the request handler.",
+      "suggestion": "Add a CSRF token request handler to subscribe the CSRF token on every response. In Spring Security 6.x for WebFlux: `.csrf(csrf -> csrf.csrfTokenRepository(CookieServerCsrfTokenRepository.withHttpOnlyFalse()).csrfTokenRequestHandler(new XorServerCsrfTokenRequestAttributeHandler()))`. Additionally, add a `WebFilter` bean that calls `exchange.getAttributes().put(CsrfToken.class.getName(), csrfToken)` and subscribes the token Mono on every request matching non-exempt paths. Refer to Spring Security 6.x WebFlux CSRF documentation."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/user/User.java",
+      "line": 46,
+      "issue": "Email field has no lowercase normalization. The data model spec states `email: String (unique, lowercase)` and a unique index is defined. However, `setEmail()` stores the value verbatim without calling `.toLowerCase(Locale.ROOT)`. MongoDB's string unique index is case-sensitive by default, so `User@example.com` and `user@example.com` would be stored as two distinct users. An attacker could create a second account with a differently-cased version of an existing email, bypassing the uniqueness constraint for practical email identity purposes. OWASP A04 (Insecure Design).",
+      "suggestion": "Normalize email to lowercase in `setEmail`: `public void setEmail(String email) { this.email = email != null ? email.toLowerCase(java.util.Locale.ROOT) : null; }`. Also normalize in any service layer that calls `findByEmail` to ensure query matches: `userRepository.findByEmail(email.toLowerCase(Locale.ROOT))`."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/common/GlobalErrorHandler.java",
+      "line": 28,
+      "issue": "Generic `Throwable` handler does not log the exception. When an unexpected error is caught and returned as a 500, the exception details are silently swallowed. There is no `log.error(...)` call before the generic response. This means production incidents will have no server-side trace of what caused the 500, violating OWASP A09 (Security Logging and Monitoring). The generic error message (`\"Internal server error\"`) is correct for the response body, but the server must log the full stack trace.",
+      "suggestion": "Add a logger and log the exception at ERROR level: `private static final Logger log = LoggerFactory.getLogger(GlobalErrorHandler.class);` and inside `handleThrowable`: `log.error(\"Unhandled exception\", ex);` before returning the response."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/user/UserService.java",
+      "line": 25,
+      "issue": "softDelete() does not guard against already-deleted users. If called on a user with `status=deleted`, it overwrites `deletedAt` with the current time, silently resetting the 30-day hard-delete window. An attacker or bug that calls softDelete twice on the same user would delay hard deletion by resetting the timer. Additionally, `softDelete` returns an empty Mono (via `findById` empty) if the user is not found, with no error signal — callers have no way to distinguish \"deleted successfully\" from \"user not found\".",
+      "suggestion": "Add a guard in `softDelete`: if `user.getStatus() == UserStatus.deleted`, return `Mono.just(user)` (no-op) or `Mono.error(AppException.badRequest(\"User already deleted\"))`. Also consider returning `Mono.error(AppException.notFound(...))` when `findById` returns empty, so callers can handle 404 correctly."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/resources/application.properties",
+      "line": 33,
+      "issue": "`app.super-admin.password=${SUPER_ADMIN_PASSWORD}` has no default value. If the `SUPER_ADMIN_PASSWORD` environment variable is not set in a given environment (CI without secrets, local dev without `.env`), the application fails to start with a `BeanCreationException` or property binding error. This creates an operational risk where devs or CI environments cannot start the application at all. While providing an insecure default password is worse, the complete absence of a default is unnecessarily brittle.",
+      "suggestion": "Either add a safe default for non-production environments (e.g., `${SUPER_ADMIN_PASSWORD:changeme_in_prod}`) with a prominent warning comment, or document clearly in `.env.example` and `local-setup.md` that this variable is required. The `SuperAdminSeeder` could also gracefully skip seeding (log a warning and return) if the env var is blank/absent rather than crashing the entire application startup."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/common/GlobalErrorHandler.java",
+      "line": 20,
+      "issue": "WebExchangeBindException handler does not handle the case where `getFieldErrors()` is empty but global errors exist. Bean Validation can produce object-level (global) errors from class-level constraints. If `getFieldErrors()` returns an empty list but `getGlobalErrors()` is non-empty, the collected message will be an empty string, returning a 400 with `{\"message\": \"\", \"code\": null}`. This is a minor UX/diagnostic issue but could confuse clients debugging validation failures.",
+      "suggestion": "Collect both field errors and global errors: `Stream.concat(ex.getFieldErrors().stream().map(e -> e.getField() + \": \" + e.getDefaultMessage()), ex.getGlobalErrors().stream().map(e -> e.getObjectName() + \": \" + e.getDefaultMessage())).collect(Collectors.joining(\", \"))`. If the result is blank, fall back to `\"Validation failed\"`."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/security/SecurityConfig.java",
+      "line": 35,
+      "issue": "The `/health` endpoint is permitted without auth but is not explicitly scoped — any sub-path under health (e.g., `/health/db`, `/health/redis`) would also be permitted due to the `pathMatchers(\"/health\")` exact match. This is acceptable if health sub-paths are not implemented, but worth noting for future endpoints. Additionally, Spring Boot Actuator health endpoints (if ever added) at `/actuator/**` are not explicitly denied or permitted — they fall through to the final `.anyExchange().authenticated()`, but Actuator's auto-configuration may override this.",
+      "suggestion": "If Spring Boot Actuator is used or planned, explicitly add `.pathMatchers(\"/actuator/**\").denyAll()` or restrict to internal networks. For the current `/health` endpoint, `pathMatchers(\"/health\")` exact match is correct."
+    }
+  ],
+  "summary": "The implementation covers the broad requirements of Task 2 correctly — CSRF is enabled, CORS uses explicit origins with credentials, session-based context repository is wired, auth paths are open, httpBasic/formLogin are disabled, and BCrypt cost 12 is configured. However, three critical issues require fixing before this can be deployed: (1) `WebSessionServerSecurityContextRepository` is constructed with `new` instead of `getInstance()`, contradicting an explicit edge-case warning in the task spec; (2) the session cookie `Secure` flag is not set, which would transmit session tokens over HTTP in production; (3) the session cookie `SameSite` attribute is not configured, leaving out the primary CSRF mitigation layer described in Decision 12. Two additional major issues: the CORS `allowedHeaders` list omits `X-XSRF-TOKEN` (breaks CSRF header submission from the frontend), and in Spring Security 6.x WebFlux, the CSRF token cookie is never written without an explicit `csrfTokenRequestHandler` subscription — the current config sets the repository only. The email case-normalization gap in `User.setEmail()` is a major data integrity and identity security flaw. Non-critical findings include missing error logging in the generic Throwable handler (OWASP A09 violation) and the `softDelete` idempotency gap.",
+  "approved": false
+}

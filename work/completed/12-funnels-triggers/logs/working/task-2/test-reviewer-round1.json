@@ -1,0 +1,31 @@
+{
+  "reviewer": "test-reviewer",
+  "task": "2",
+  "round": 1,
+  "skill": "test-master",
+  "scope": [
+    "backend/src/test/java/com/botfunnel/funnel/FunnelTriggerIndexReconciliationIT.java",
+    "backend/src/test/java/com/botfunnel/funnel/FunnelIndexesIT.java"
+  ],
+  "summary": "All TDD-anchor tests present and well-formed: drop path, new-shape no-op (asserts index UNCHANGED, not just present — catches accidental drop+recreate), fresh-DB no-op + never-throws, Mongo-fault swallow (real dead-address factory, not a mock), and the fan-out coexist/collide proofs in both the runner IT and the task-owned FunnelIndexesIT (the latter against the real auto-index-created shape). funnelsCollectionHasExpectedIndexes updated to assert triggerType='on_start'. Tests assert real Mongo state via Testcontainers (correct test type — no over-mocking). Boot-ordering fix proven by the live boot smoke (not replayable in an IT). One resource-hygiene fix applied.",
+  "findings": [
+    {
+      "id": "TR-1",
+      "severity": "minor",
+      "title": "MongoClient leaked in reconciliationNeverThrowsOnMongoFault",
+      "detail": "The fault test created a MongoClient that was never closed. Wrapped in try-with-resources so the client is closed after the assertion.",
+      "action": "fixed",
+      "status": "resolved"
+    },
+    {
+      "id": "TR-2",
+      "severity": "minor",
+      "title": "Partial overlap between runner-IT and FunnelIndexesIT coexist/collide tests",
+      "detail": "twoActiveEventFunnelsCoexistAfterMigration (runner IT, manually-installed shape) overlaps with twoActiveEventFunnelsWithSameTriggerValueCoexist (FunnelIndexesIT, real auto-index shape). They exercise subtly different shapes (manual vs annotation-driven), and the task explicitly sanctions the proof living in the FunnelIndexesIT sibling. Each earns its place; kept as-is.",
+      "action": "acknowledged-no-change",
+      "status": "accepted-as-is"
+    }
+  ],
+  "verdict": "approve",
+  "blocking": false
+}

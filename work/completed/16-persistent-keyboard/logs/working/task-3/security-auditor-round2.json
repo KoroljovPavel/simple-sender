@@ -1,0 +1,18 @@
+{
+  "status": "approved",
+  "round": 2,
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "scope": "Round 2 re-review of feature 16-persistent-keyboard Task 3 (StepExecutor SET_KEYBOARD/CLEAR_KEYBOARD). Delta since clean round 1: two added unit tests in FunnelStepExecutorTest.java (isEmptyRow defensive-branch coverage + setKeyboard_trimsTextOver4096AndWarns_pii). No production code changed. Parallel-agent build-infra collisions excluded per instruction.",
+  "findings": [],
+  "notes": [
+    "PII test (setKeyboard_trimsTextOver4096AndWarns_pii, FunnelStepExecutorTest.java:683-699) does NOT itself leak: input is synthetic 'a'.repeat(5000), not real credentials/PII; no hardcoded secret. It is a PII-guard verification test that asserts the negative — warnMessages().noneMatch(m -> m.contains(\"aaaa\")) — actively proving the LOG_TEXT_TRIMMED WARN carries no rendered payload. Matches production reality: StepExecutor.renderTrimmed (StepExecutor.java:278-279) logs only logCode/executionId/stepIndex/originalLength/trimmedTo — ids/codes/lengths only, no rendered text (A09 compliant).",
+    "isEmptyRow defensive-branch test (setKeyboard_rowWithNoButtons_failsTerminally, FunnelStepExecutorTest.java:670-681) is pure defensive coverage with no security surface; uses synthetic labels.",
+    "A03 Injection: production rendering unchanged and verified safe — VariableTemplateRenderer applies parse-mode-aware HTML escaping (test setKeyboard_rendersVariablesAndParseMode confirms '<b>' -> '&lt;b&gt;'). ReplyKeyboardMarkup built as LinkedHashMap/List and serialized verbatim by Jackson, no string concatenation into the wire body.",
+    "No hardcoded secrets, no SSRF (no user-controlled URLs in server-side requests), no auth/access-control surface, no insecure deserialization introduced (REMOVE_KEYBOARD_MARKUP is an immutable Map.of constant) in the delta."
+  ]
+}

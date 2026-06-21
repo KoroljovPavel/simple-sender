@@ -1,0 +1,33 @@
+{
+  "validator": "task-validator",
+  "batch": [9, 13],
+  "iteration": 2,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "decomposition",
+      "task": 9,
+      "section": "Context Files / Files to modify",
+      "issue": "`frontend/pages/projects/[projectId]/funnels/[funnelId].vue` is now correctly added to Files-to-modify with strong justification (round-trips triggerType/triggerValue/keywords on load + PATCH), but it is not listed in the tech-spec Task 9 'Files to modify' set (which stops at the two components + types/funnel.ts + the two locale files). This is a justified refinement by the task author, not a regression — flagged only as a traceability note (new file beyond tech-spec = minor per the decomposition rule). No action required; consider back-porting this file into the tech-spec Task 9 entry for traceability.",
+      "fix": "Optional: add `frontend/pages/projects/[projectId]/funnels/[funnelId].vue` to tech-spec Task 9 'Files to modify' so the task and spec agree."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 2,
+    "issues_found": 1,
+    "critical": 0,
+    "major": 0,
+    "minor": 1
+  },
+  "fix_verification": {
+    "task_9_funnelId_vue_added": "confirmed — present in Context Files (line 162), What-to-do, and Details Files subsection; file exists on disk at frontend/pages/projects/[projectId]/funnels/[funnelId].vue",
+    "task_9_vitest_paths_flat": "confirmed — TDD Anchor + Context references now use frontend/tests/components/ (flat). Verified against disk: specs are flat there; only CreateFunnelDialog.spec.ts sits under tests/components/funnels/. The task explicitly documents this layout.",
+    "task_13_funnelindexesit_checkpoint": "confirmed — explicit audit checkpoint in What-to-do step 2 (index-relax bullet names all three required assertions + old-filter-gone), mirrored in Acceptance Criteria and Edge cases.",
+    "task_13_pk_link_paths": "confirmed — PK + test-master reference paths resolve (references/ dir and test-master/references/test-quality-review.md exist on disk)."
+  },
+  "notes": [
+    "Task 9: frontmatter all arrays with correct types; verify:[user] matches tech-spec Verify-user; reviewers [code-reviewer, test-reviewer] correctly omit security-auditor per tech-spec (frontend-only). All 11 sections present and ordered. skills/reviewers frontmatter == body. No placeholders/TODO. TDD anchors carry path+name+description and assert behavior. AC carry-forward from tech-spec intact. Atomic (coupled UI changes sharing types/funnel.ts + locale keys — good cohesion).",
+    "Task 13: non-code read-only audit task. No TDD Anchor section (correct for non-code). skills:[test-master] appropriate; reviewers:[] matches the 'Reviewers: None' body and the Audit-Wave model. Verification Steps present (Automated subsection). All mandatory context files present with valid markdown links. No placeholders."
+  ]
+}

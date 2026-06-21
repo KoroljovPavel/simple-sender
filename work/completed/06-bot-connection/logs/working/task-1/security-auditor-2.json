@@ -1,0 +1,31 @@
+{
+  "status": "approved",
+  "summary": {
+    "totalFindings": 0,
+    "critical": 0,
+    "major": 0,
+    "minor": 0
+  },
+  "findings": [],
+  "notes": {
+    "round1_findings_disposition": {
+      "S1_hex_parse_error_echoes_key_bytes": {
+        "verdict": "fixed",
+        "evidence": "backend/src/main/java/com/botfunnel/common/crypto/TokenEncryptor.java:73-74 now throws IllegalStateException with the static phrase 'not valid hex; expected 0-9 / a-f / A-F only'; the JDK IllegalArgumentException (which embeds the offending character and index, e.g. 'illegal character z at index 0') is retained only as the cause chain — suppressed by default in user-facing/boot-log output and recoverable only at DEBUG via the explanatory comment lines 69-72. The other two failure branches in decodeKey are also safe: the blank-value branch (line 63) is a fixed string, and the wrong-length branch (lines 77-79) reports only decoded.length and hexKey.length() — numeric metadata, no byte content of the misconfigured key value is echoed. A new regression test hexParseErrorMessageDoesNotEchoKeyBytes (TokenEncryptorTest.java:157-166) pins the hardened behavior with hasMessageNotContaining(\"'z'\") and hasMessageNotContaining(\"at index\"), which would fail under the old (round-1) broken behavior — so the test correctly locks the hardening in place and does not pin a regression."
+      },
+      "S2_encryptedvalue_defensive_copy": {
+        "verdict": "skipped_acceptable",
+        "evidence": "EncryptedValue.java unchanged (still a record exposing raw byte[] via auto-generated accessors). Justified by an in-process trust boundary — BotService is the only consumer and Base64-encodes the bytes before persistence — and by the task spec mandating the record shape. Residual best-practice nit only; remains low severity."
+      },
+      "S3_aes_key_on_heap": {
+        "verdict": "skipped_out_of_scope",
+        "evidence": "TokenEncryptor still holds SecretKeySpec on a final field for the singleton bean lifetime. Per D3 the project deliberately defers KMS/HSM integration; this is the standard JCA pattern. Residual risk note only, not a code defect."
+      }
+    },
+    "round2_focus_checks": {
+      "no_new_sensitive_data_paths": "The boot-validation test refactor (TokenEncryptorBootValidationTest.java) collapsed three duplicated assertion blocks into a shared assertKeyValidationFailure helper plus a generic findInCauseChain walker. The walker only checks instanceof IllegalStateException and reads .getMessage() to assert it contains the property name 'BOT_TOKEN_ENCRYPTION_KEY' — it does not inspect or surface key bytes. All test inputs in the boot-validation suite are hard-coded constants ('zz'.repeat(32), 'ab'.repeat(31), the published 00112233.. test key) so no real secret material is involved. The self-reference guard `cur.getCause() == cur` prevents an infinite loop on pathological exception chains; it does not introduce a security concern (longer cycles are impossible from ApplicationContextRunner output).",
+      "test_assertions_do_not_lock_in_weaker_behavior": "Existing nonHexKeyFailsFast (TokenEncryptorTest.java:126-131) only requires the message to *contain* the property name — it does not constrain extra content. The new hexParseErrorMessageDoesNotEchoKeyBytes pairs that positive assertion with the negative one ('z' / 'at index' must NOT appear). Together they correctly bracket the contract and would still pass (and tighten further) if future hardening adds more redaction (e.g. truncating decoded.length out of the wrong-length branch). No assertion currently inspects 'good' bytes of the malformed key in a way that would break under additional masking."
+    },
+    "round2_new_observations": "None that rise to a finding. The wrong-length branch reports hexKey.length() (the character count of the malformed input). For a hex-parseable but wrong-length value this is benign integer metadata. For a non-hex value the parseHex branch fires first and never reaches this line, so the length disclosure cannot interact with byte content. SecureRandom, AES/GCM/NoPadding, 12-byte IV, 128-bit tag, fail-fast key validation, .env.example placeholder + .gitignore exclusion of .env/.env.*/*.key/secrets/ are all unchanged from the round-1 baseline and remain correct."
+  }
+}

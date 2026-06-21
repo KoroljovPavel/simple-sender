@@ -1,0 +1,77 @@
+{
+  "validator": "reality-checker",
+  "batch": [7, 8, 9],
+  "iteration": 1,
+  "status": "approved",
+  "findings": [
+    {
+      "severity": "minor",
+      "category": "missing_file",
+      "task": 7,
+      "issue": "Task 7 has a duplicate 'Context Files' section (lines 108–118) that is leftover boilerplate from the task template. The second block references four non-existent paths: '.claude/skills/project-knowledge/architecture.md', '.claude/skills/project-knowledge/patterns.md', '.claude/skills/project-knowledge/project.md', '.claude/skills/project-knowledge/testing.md'. None of these exist (the correct paths live under the 'references/' subdirectory, which the first Context Files block already lists correctly). Additionally, 'testing.md' does not exist anywhere under '.claude/skills/project-knowledge/' even in the 'references/' subdirectory. The second block also contains a Russian-language placeholder line ('другие файлы по необходимости — БД, API, деплой, конкретные файлы кода') that is clearly template boilerplate.",
+      "fix": "Remove the second 'Context Files' section (lines 108–118) entirely. The first block already lists all correct paths with proper '../../../' prefixes. 'testing.md' has no valid target — omit it from the first block too if it was intended to be included."
+    },
+    {
+      "severity": "minor",
+      "category": "hints",
+      "task": 9,
+      "issue": "Task 9 states the report shape is 'same path/shape as features 13–15'. However feature 13 uses a different filename ('audit-security.json', not 'security-auditor.json') and a very different JSON shape ({auditor, verdict, findings, notes} — no 'task', 'date', 'methodology', 'counts', 'scope_reviewed' fields). Feature 14 uses 'security-auditor.json' but with a 'scope' key not 'scope_reviewed'. Only feature 15 exactly matches the described shape. The mismatch could cause the executing agent to blend incompatible shapes from 13/14 instead of following 15.",
+      "fix": "Change 'features 13–15' to 'feature 15' as the shape precedent, or add a note clarifying that the shape from feature 15 specifically (task/auditor/date/methodology/verdict/counts/scope_reviewed/findings/positive confirmations) is the target, and that 13/14 used earlier conventions."
+    }
+  ],
+  "stats": {
+    "tasks_checked": 3,
+    "claims_verified": 41,
+    "issues_found": 2
+  },
+  "notes": {
+    "task_7": {
+      "verdict": "sound",
+      "verified": [
+        "docs/staging-smoke/09-subscribers.md exists and has the expected sections (Передумови, Кроки, Чек-ліст результатів, Cleanup, Troubleshooting, Sign-off, Notes)",
+        "user-spec.md exists with all three referenced sections: 'Як должно работать', 'Ограничения', 'Пользователь проверяет'",
+        "First Context Files block paths all resolve: user-spec.md, tech-spec.md, decisions.md, project.md, architecture.md, ux-guidelines.md, 09-subscribers.md",
+        "depends_on: [3] is correct — wave 3 depends on wave 2 (Task 3 is StepExecutor, required before writing runtime behavior checklist)",
+        "Reviewer log path convention (logs/working/task-7/code-reviewer-{round}.json) matches established pattern from other tasks",
+        "Documentation-writing skill SKILL.md exists",
+        "Deliverable path (work/16-persistent-keyboard/smoke.md) is net-new — no conflict"
+      ],
+      "issue": "Duplicate 'Context Files' section with broken paths (filed as finding)"
+    },
+    "task_8": {
+      "verdict": "sound",
+      "verified": [
+        "All existing backend files cited: StepType.java, FunnelStep.java, FunnelService.java, StepExecutor.java, FunnelStepDto.java, PreviewStepRequest.java, PreviewStepResponse.java, TelegramSender.java — all exist",
+        "Net-new files (KeyboardRow.java, KeyboardButton.java, KeyboardRowDto.java, KeyboardButtonDto.java) correctly do not exist yet — depends_on [1..7] gates them",
+        "All existing frontend files cited: types/funnel.ts, FunnelStepForm.vue, FunnelMessagePreview.vue, uk.json, en.json, stores/funnels.ts — all exist",
+        "All existing test files cited: FunnelStepTest.java, FunnelStepExecutorTest.java, FunnelControllerIT.java, FunnelExecutionEngineIT.java, FunnelServiceEmitEventTest.java — all exist",
+        "Net-new test files (FunnelServiceKeyboardStepTest.java, FunnelStepForm.keyboard.spec.ts) correctly absent pre-execution; FunnelMessagePreview.spec.ts already exists",
+        "TelegramSenderIT.java and FunnelTestRunSendIT.java exist; method name 'sendText_withReplyMarkup_includesInlineKeyboardInBody' confirmed in TelegramSenderIT; takeRequest/readUtf8 pattern confirmed in FunnelTestRunSendIT",
+        "FunnelEventServiceTest methods 'reEnter_duplicateOnOneFunnel_doesNotAbortOtherMatches' and 'reEnter_allowReEnterFunnel_cancelsExistingThenInserts' exist",
+        "ProcessTelegramUpdateJobTest methods 'plainText_dispatchesKeyword' and 'plainText_keywordSuppressedWhileWaitingForReply' exist",
+        "FunnelServiceEmitEventTest.emitStep() exists with positional constructor comment",
+        "subscribeInactiveHint amber hint precedent confirmed in FunnelStepForm.vue (line 1357–1359)",
+        "menuButtons and *Touched local-reactive-array idiom confirmed in FunnelStepForm.vue",
+        "renderTrimmed and VariableTemplateRenderer confirmed in StepExecutor.java",
+        "6-arg sendText(botId, chatId, text, parseMode, ownerId, replyMarkup) confirmed; existing call uses null for ownerId",
+        "Audit report path (logs/working/audit/code-auditor.json) matches 15-message-composer precedent",
+        "code-reviewing skill SKILL.md exists",
+        "Project-knowledge reference files (patterns.md, architecture.md, ux-guidelines.md, project.md) all exist under references/"
+      ]
+    },
+    "task_9": {
+      "verdict": "sound with minor annotation issue",
+      "verified": [
+        "All backend source files listed as context match task 8 verification (same set)",
+        "FunnelController.java exists (referenced for anti-IDOR verification)",
+        "patterns.md Security Gates section exists and contains: fail-closed projectId via ProjectService.requireOwned, mass-assignment DTO whitelist, PII-free logging conventions",
+        "VariableTemplateRenderer confirmed in codebase",
+        "Audit report path (logs/working/audit/security-auditor.json) matches 15-message-composer exactly",
+        "Feature 15 security-auditor.json shape matches described fields: task, auditor, date, methodology, verdict (PASS), counts, scope_reviewed, findings",
+        "security-auditor skill SKILL.md exists",
+        "code-research.md exists at work/16-persistent-keyboard/code-research.md"
+      ],
+      "issue": "Precedent claim '13–15' overstates — feature 13 used different filename and shape (filed as finding)"
+    }
+  }
+}

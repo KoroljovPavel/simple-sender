@@ -1,0 +1,33 @@
+{
+  "reviewer": "security-auditor",
+  "task": 2,
+  "round": 1,
+  "verdict": "CHANGES_REQUESTED",
+  "findings": [
+    {
+      "severity": "critical",
+      "file": "backend/src/main/java/com/botfunnel/funnel/VariableTemplateRenderer.java:54,185-194",
+      "finding": "MarkdownV2 injection bypass via unescaped backslash. The `MARKDOWN_V2_SPECIALS` string does not include `\\` (backslash). In Telegram MarkdownV2 `\\` followed by a special char is the escape sequence, meaning a bare `\\` in the output escapes the next character. If a subscriber value contains a literal `\\` before any special char (e.g., value = `\\*`), the escaper outputs `\\` + `\\*` = `\\\\*`. MarkdownV2 parses `\\\\` as a literal backslash, then `*` is bare (unescaped) and starts italic/bold formatting. Attack path: subscriber sets `first_name = \"\\\\*injected bold text*\"` and the author uses `{user.first_name}` in a MarkdownV2 message. The rendered output contains unescaped `*` which toggles bold/italic formatting, potentially injecting arbitrary Telegram markup. More severe variant: value `\\\\[click](https://evil.com)` — the `[` and `(` would still be individually escaped to `\\\\[` and `\\\\(`, so direct link injection is harder, but bold/italic toggling and formatting corruption are directly achievable with a single backslash.",
+      "recommendation": "Add `\\\\` (backslash) to the set of characters that must be escaped in MarkdownV2 mode, and ensure it is escaped FIRST (before other special chars) to avoid double-escaping. The corrected constant and method:\n\nprivate static final String MARKDOWN_V2_SPECIALS = \"_*[]()~`>#+-=|{}.!\";\n\n// In escapeMarkdownV2, prepend backslash handling:\nprivate static String escapeMarkdownV2(String value) {\n    StringBuilder sb = new StringBuilder(value.length() + 8);\n    for (int i = 0; i < value.length(); i++) {\n        char c = value.charAt(i);\n        if (c == '\\\\' || MARKDOWN_V2_SPECIALS.indexOf(c) >= 0) {\n            sb.append('\\\\');\n        }\n        sb.append(c);\n    }\n    return sb.toString();\n}\n\nThe loop handles backslash by checking `c == '\\\\'` first (or simply include it in the SPECIALS string as the first character). The corresponding test case must be added: a value containing `\\\\` should render as `\\\\\\\\` (double-escaped)."
+    },
+    {
+      "severity": "major",
+      "file": "backend/src/main/java/com/botfunnel/funnel/VariableTemplateRenderer.java:171-183",
+      "finding": "HTML mode does not escape double-quote (`\"`). The `escapeHtml` method escapes `&`, `<`, `>` but not `\"`. If an author writes a template with an HTML attribute containing a subscriber-controlled value — for example `<a href=\"{custom.website}\">link</a>` — a subscriber value containing `\"` could break out of the attribute context. Example: `custom.website = 'http://x.com\" onclick=\"alert(1)'` yields `<a href=\"http://x.com\" onclick=\"alert(1)\">link</a>`. While Telegram strips most event handlers and JavaScript in its HTML parser, and the Telegram HTML subset is very limited, leaving `\"` unescaped is against the principle of defense-in-depth for injection prevention. The spec (Decision 10) says values must be escaped per mode rules; the HTML spec requires `\"` → `&quot;` in attribute values.",
+      "recommendation": "Add double-quote escaping to `escapeHtml`:\n\ncase '\"' -> sb.append(\"&quot;\");\n\nThis prevents any subscriber value from breaking out of an HTML attribute context, regardless of how the author structures the template. The test `htmlModeEscapesSubstitutedValues` should be extended to verify that a value containing `\"` renders as `&quot;`."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/test/java/com/botfunnel/funnel/VariableTemplateRendererTest.java:132-144",
+      "finding": "The `markdownV2ModeEscapesFullCharset` test does not include `\\\\` (backslash) in the test payload `\"_*[]()~\\`>#+-=|{}.!\"`, so it does not verify that backslash is escaped. This means the critical backslash injection finding (above) is undetected by the test suite.",
+      "recommendation": "Extend the test payload to include a backslash and assert it is doubled: value `\"\\\\<special>\"` should render as `\"\\\\\\\\\\\\<escaped-special>\"`. Add a dedicated test: `markdownV2EscapesBackslash()` that verifies `\\\\` → `\\\\\\\\` in the output."
+    },
+    {
+      "severity": "minor",
+      "file": "backend/src/main/java/com/botfunnel/funnel/VariableTemplateRenderer.java:88-101",
+      "finding": "The `indexOf('}', i + 1)` search for the closing brace does not skip over `}}` (escaped braces) when scanning forward for the closing `}`. Consider a template like `{user.first_name}}` — the parser finds `{` at position 0, then `indexOf('}', 1)` finds the first `}` at position 16 (end of `first_name`), extracts key `user.first_name`, then `}}` at positions 17-18 is processed in the next iteration as an escaped `}` literal. This produces `Ada}` — the trailing `}}` becomes one literal `}`. This is arguably correct behavior (the `}}` after the closing `}` is a standalone `}}` escape), but it is counterintuitive and undocumented. More subtly, the template `{cus}tom.key}` would resolve key `cus` (unknown → empty), then emit `tom.key}` verbatim. This is correct for the single-pass design, but should be covered by a test to lock down the behavior.",
+      "recommendation": "Document this behavior explicitly in the class Javadoc and add a test case covering `{key}}` (closing double-brace after placeholder) to ensure the behavior is stable and intentional."
+    }
+  ],
+  "summary": "One critical injection bypass: MarkdownV2 mode does not escape the backslash character (`\\`), allowing a subscriber with a crafted value (e.g., `\\*`) to produce an unescaped MarkdownV2 special character in the output and inject bold/italic formatting. Fix: add `\\` to the escaped character set, handled before other specials. One major finding: HTML mode omits double-quote escaping, enabling attribute breakout if an author embeds a subscriber value in an `href` or other attribute. Two minor findings: the test suite does not cover the backslash case, and the brace-scanning behavior around `}}` after a placeholder is undocumented. The PII/logging requirement (Decision 16) is correctly implemented — no rendered values or field values are logged. Order-of-operations is correct: escaping is applied after resolution and only to values, before insertion into the output; the single-pass design prevents second-order injection. The `renderValue` type-rendering logic (Double/Instant/Boolean) is correct and does not introduce injection surface."
+}

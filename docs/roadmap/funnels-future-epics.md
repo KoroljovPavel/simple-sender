@@ -160,7 +160,68 @@ re-discovered as "new":
 
 ---
 
-## Epic 9 — Variable picker on text fields
+## Epic 9 — Keyboard button routing (reply-keyboard buttons → steps)
+
+**Screen:** `19-keyboard-button-routing.png` (a `SET_KEYBOARD` "Встановити клавіатуру" node on the
+Phase-9 canvas — keyboard buttons "Кнопка 1 / 2 / 3" listed in the card, with a single `Далі` output
+circle). The author's request: drop the generic `Далі` circle's prominence and give **each keyboard
+button its own output edge that leads to a step of this funnel** — i.e. tapping a keyboard button
+continues THIS execution to a chosen step, the same way a MESSAGE inline-button (`btn:<i>` →
+`Button.targetStepId`) does.
+
+> Surfaced during Phase 9 (`18-funnel-canvas`) manual testing (2026-06-16). Captured here because it
+> is a **model + engine change**, not a canvas tweak — it does not belong inside the canvas phase.
+
+**Why it is NOT how the engine works today (verified in code).**
+- `KeyboardButton` is **text-only** by design — `record KeyboardButton(String text)` (Java) /
+  `interface KeyboardButton { text }` (TS). No `targetStepId`, unlike the inline `Button`
+  (`type,label,targetStepId,url`).
+- `SET_KEYBOARD` is **fire-and-forget**: `StepExecutor.setKeyboard` sends the keyboard text +
+  `ReplyKeyboardMarkup` and returns `StepResult.cont()` → the engine immediately advances along
+  `step.next`. It never parks. So `next` ("Далі") is the only real runtime edge of the node.
+- A reply-keyboard **tap arrives as an ordinary text message** (Telegram echoes the label as
+  `message.text`) and is routed by **keyword dispatch** (`ProcessTelegramUpdateJob.dispatchKeyword` →
+  `FunnelEventService.TRIGGER_KEYWORD`, contains-match against active funnels' `keywords`) — a
+  completely separate flow that can start a **different** funnel. This is the Phase-7
+  (`16-persistent-keyboard`) approved semantic: "tap-routing via Phase-3 keyword funnels, no new
+  branching mechanism."
+- Therefore drawing a per-button edge today would be a **fake edge** — the engine never routes a
+  reply-keyboard tap to a step of the current funnel. The current canvas (one `Далі` output, buttons
+  shown as non-routing chips) is faithful.
+
+**What this epic changes.**
+- **Model:** add `targetStepId` to `KeyboardButton` (Java record + TS) — breaks its "single-component
+  by design" invariant.
+- **Engine — the hard part:** the persistent keyboard **outlives the execution** (fire-and-forget;
+  the execution that set it may already be complete). To route a tap to a button's `targetStepId` you
+  must track, per subscriber, the **active keyboard** (which funnel/step set it) so a later text
+  message can be resolved to that keyboard's button and **start/resume an execution at
+  `targetStepId`**. This is a NEW routing mechanism (active-keyboard text-match), distinct from
+  keyword triggers.
+- **Precedence:** a tapped label may match BOTH a keyboard button (this funnel) AND a keyword trigger
+  (another funnel). Define precedence (likely active-keyboard button wins over global keyword) and the
+  no-match fallback — and reconcile with the existing `waiting_for_reply` inline-menu precedence in
+  `dispatchKeyword`.
+- **Frontend:** per-button output handles on the `SET_KEYBOARD` canvas node (mirror MESSAGE
+  `btn:<i>` edges); the `next`/"Далі" edge stays for the fire-and-forget continuation (sending the
+  keyboard then proceeding is still valid).
+
+**Relationship to other phases.** Builds on Phase 7 (`16-persistent-keyboard`) and Phase 9 canvas
+(`18-funnel-canvas`); it **revises** the Phase-7 decision that reply-keyboard taps route only via
+keyword funnels. If per-button routing lands, the canvas keyboard node gains real per-button edges.
+
+**Alternative (no model change).** For per-button → step branching **today**, use a **MESSAGE node
+with inline callback buttons** — each already carries `targetStepId` and its own drawn output edge.
+Reply keyboards remain the keyword-routed, cross-funnel primitive. This epic only matters if the
+author specifically wants the *persistent bottom keyboard* (not inline) to branch within one funnel.
+
+**Complexity:** Large (model field + new per-subscriber active-keyboard tap-routing in the engine +
+precedence with keyword triggers + canvas edges). **Value:** High — matches the author's mental model
+(buttons that "go somewhere"), but it is an execution-model change, not a UI tweak.
+
+---
+
+## Epic 10 — Variable picker on text fields
 
 **Screens:** `10-variable-affordance.png` (a `$` affordance appears under a text field),
 `11-variable-picker-modal.png` ("Вибір змінної" → pick `firstName`),
@@ -242,10 +303,15 @@ surface three deltas:
   (`improvements.md` "Крок 1" — explicitly half of Phase 3; API event + internal emit share one
   `event_name` namespace). `SUBSCRIBE_TO_FUNNEL` and the trigger-node/multi-entry model are
   **excluded** to keep the "one shippable phase at a time" rule.
-- Epics 5–9 numbers are provisional; priority may be reordered after Phase 3/4.
+- Epics 5–11 numbers are provisional; priority may be reordered after Phase 3/4.
 - Persistent keyboard (Epic 7) is sequenced after Phase 3 because it reuses text-match.
 - Trigger fan-out (one event → N funnels) is **Phase 3** (1:N relax); many trigger nodes inside one
   funnel is **Epic 8**; standalone `Trigger` entity stays deferred (YAGNI) until reuse is needed.
-- Variable picker (Epic 9) is low-risk/mostly additive; its only backend coupling is templating
-  `Button.url`/`label` (a security-reviewed change — URL leaks custom fields by design).
+- Keyboard button routing (Epic 9, roadmap Phase 10 `19-keyboard-button-routing`) is a model+engine
+  change (add `targetStepId` to `KeyboardButton` + per-subscriber active-keyboard tap-routing), NOT a
+  UI tweak — it revises the Phase-7 "reply-keyboard taps route via keyword funnels" decision. Slotted
+  **ahead of** the variable picker (2026-06-16, author request).
+- Variable picker (Epic 10, roadmap Phase 11 `20-variable-picker`) is low-risk/mostly additive; its
+  only backend coupling is templating `Button.url`/`label` (a security-reviewed change — URL leaks
+  custom fields by design). Moved down one slot to sit after keyboard button routing.
 - "Action" block = UI-only step-picker grouping, no data-model change; rides with the editor work.
